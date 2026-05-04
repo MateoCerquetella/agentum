@@ -1,4 +1,9 @@
-//! axum HTTP server for agentum. Plain HTTP only in phase 1.
+//! axum HTTP(S) server for agentum.
+//!
+//! - Phase 1: plain HTTP, no auth.
+//! - Phase 5: HTTPS via rustls (self-signed) + bearer-token middleware on
+//!   `/api/*` (excluding `/api/health` + `/api/cert`). A small plain-HTTP
+//!   cert-server runs on a side port for trust-on-first-use.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -6,13 +11,21 @@ use std::time::Instant;
 
 use agentum_store::Store;
 use axum::Router;
+use axum::body::Body;
+use axum::extract::Request;
+use axum::middleware as axum_mw;
+use axum::response::IntoResponse;
+use axum::routing::get;
+use axum_server::tls_rustls::RustlsConfig;
 use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
+pub mod auth;
 mod embed;
 mod error;
 mod routes;
+pub mod tls;
 
 pub use error::ApiError;
 
@@ -33,6 +46,13 @@ impl AppState {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct ServeOptions {
+    pub addr: SocketAddr,
+    pub cert_addr: SocketAddr,
+    pub tls: bool,
+}
+
 pub fn router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_methods(Any)
@@ -42,18 +62,74 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::health::router())
         .merge(routes::sessions::router())
+        .layer(axum_mw::from_fn(auth::require_token))
         .fallback(embed::static_handler)
         .with_state(state)
         .layer(TraceLayer::new_for_http())
         .layer(cors)
 }
 
-/// Bind to `addr` and serve forever.
-pub async fn serve(addr: SocketAddr, store: Store) -> anyhow::Result<()> {
+/// Bind and serve forever. Drives both the main API server (TLS or plain)
+/// and the small plain-HTTP cert-server side-by-side.
+pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
     let state = AppState::new(store);
+    let _ = auth::ensure_token()?;
+
     let app = router(state);
-    let listener = TcpListener::bind(addr).await?;
-    tracing::info!(%addr, "agentum-server listening");
-    axum::serve(listener, app).await?;
-    Ok(())
+
+    if opts.tls {
+        let artifacts = tls::ensure_artifacts()?;
+        let tls_config =
+            RustlsConfig::from_pem_file(&artifacts.cert_path, &artifacts.key_path).await?;
+
+        let cert_router = cert_server_router(artifacts.cert_pem.clone());
+        let cert_listener = TcpListener::bind(opts.cert_addr).await?;
+        tracing::info!(addr = %opts.cert_addr, "cert-server listening (plain http)");
+        let cert_handle = tokio::spawn(async move {
+            if let Err(e) = axum::serve(cert_listener, cert_router).await {
+                tracing::error!("cert server exited: {e}");
+            }
+        });
+
+        tracing::info!(addr = %opts.addr, "agentum-server listening (https)");
+        let result = axum_server::bind_rustls(opts.addr, tls_config)
+            .serve(app.into_make_service())
+            .await;
+        cert_handle.abort();
+        result.map_err(Into::into)
+    } else {
+        tracing::warn!(addr = %opts.addr, "agentum-server listening (plain http; --no-tls)");
+        let listener = TcpListener::bind(opts.addr).await?;
+        axum::serve(listener, app).await.map_err(Into::into)
+    }
+}
+
+fn cert_server_router(cert_pem: String) -> Router {
+    let pem = Arc::new(cert_pem);
+    let pem_for_route = pem.clone();
+    Router::new()
+        .route(
+            "/api/cert",
+            get(move || {
+                let pem = pem_for_route.clone();
+                async move {
+                    (
+                        [(
+                            axum::http::header::CONTENT_TYPE,
+                            "application/x-pem-file",
+                        )],
+                        pem.as_str().to_string(),
+                    )
+                }
+            }),
+        )
+        .fallback(get(cert_redirect_hint))
+        .layer(TraceLayer::new_for_http())
+}
+
+async fn cert_redirect_hint(_: Request<Body>) -> impl IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        "agentum cert server. GET /api/cert for the PEM. The full app is on the TLS port.\n",
+    )
 }

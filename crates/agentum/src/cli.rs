@@ -72,14 +72,37 @@ pub enum Cmd {
 
     /// Run the agentum dashboard server.
     Serve {
-        /// Port to bind on.
+        /// Port to bind on (HTTPS by default).
         #[arg(long, default_value_t = 8822)]
         port: u16,
 
         /// Bind address.
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
+
+        /// Plain-HTTP cert-server port (PRD §3) — serves the self-signed PEM
+        /// for trust-on-first-use from a phone.
+        #[arg(long, default_value_t = 8823)]
+        cert_port: u16,
+
+        /// Bind plain HTTP instead of HTTPS. Disables the cert-server too.
+        #[arg(long)]
+        no_tls: bool,
     },
+
+    /// Manage the bearer-token used to authenticate against `/api/*`.
+    Auth {
+        #[command(subcommand)]
+        action: AuthCmd,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AuthCmd {
+    /// Print the current bearer token (creates one if missing).
+    Show,
+    /// Generate a fresh bearer token and overwrite the on-disk file.
+    Rotate,
 }
 
 pub async fn dispatch(cli: Cli) -> Result<()> {
@@ -96,10 +119,17 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Cmd::Down { name } => crate::commands::down::run(name).await,
         Cmd::Kill { name } => crate::commands::kill::run(name).await,
         Cmd::Ls { running } => crate::commands::ls::run(running).await,
-        Cmd::Serve { port, host } => {
+        Cmd::Serve {
+            port,
+            host,
+            cert_port,
+            no_tls,
+        } => {
             let addr: SocketAddr = format!("{host}:{port}").parse()?;
-            crate::commands::serve::run(addr).await
+            let cert_addr: SocketAddr = format!("{host}:{cert_port}").parse()?;
+            crate::commands::serve::run(addr, cert_addr, !no_tls).await
         }
+        Cmd::Auth { action } => crate::commands::auth::run(action).await,
     }
 }
 

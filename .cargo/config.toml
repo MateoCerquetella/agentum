@@ -1,0 +1,10 @@
+# Project-level cargo config.
+#
+# Pin the C compiler to /usr/bin/gcc so cc-rs build scripts don't pick up a
+# broken `cc` shim that may live earlier on the user's $PATH (rustls's
+# crypto backends — ring / aws-lc — both compile C and asm).
+#
+# `[env]` does not override variables already present in the user's shell,
+# so a user who runs `CC=clang cargo build` still gets clang.
+[env]
+CC = "/usr/bin/gcc"

@@ -1,7 +1,9 @@
 <script lang="ts">
+  import { get } from 'svelte/store';
   import '../app.css';
   import Sidebar from '$components/Sidebar.svelte';
   import Topbar from '$components/Topbar.svelte';
+  import TokenGate from '$components/TokenGate.svelte';
   import { theme, applyTheme } from '$stores/theme';
   import { onMount } from 'svelte';
 
@@ -11,19 +13,25 @@
   onMount(() => {
     // Re-apply on mount so the persisted theme wins over the hard-coded
     // app.html attribute.
-    let current: typeof $theme = 'terminal-dark';
-    theme.subscribe((t) => (current = t))();
-    applyTheme(current);
+    applyTheme(get(theme));
   });
 </script>
 
-<div class="shell">
-  <Sidebar />
-  <div class="main">
-    <Topbar />
-    <main>{@render children()}</main>
-  </div>
-</div>
+<TokenGate>
+  {#snippet children()}
+    <div class="shell">
+      <Sidebar />
+      <div class="main">
+        <Topbar />
+        <main>{@render originalChildren()}</main>
+      </div>
+    </div>
+  {/snippet}
+</TokenGate>
+
+{#snippet originalChildren()}
+  {@render children()}
+{/snippet}
 
 <style>
   .shell {

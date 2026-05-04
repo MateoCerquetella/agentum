@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod down;
 pub mod kill;
 pub mod ls;

@@ -59,6 +59,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (token) headers.set('authorization', `Bearer ${token}`);
 
   const res = await fetch(path, { ...init, headers });
+  if (res.status === 401) {
+    // Stale or missing token — clear so the gate can re-prompt.
+    setToken(null);
+    throw new ApiError(401, 'unauthorized');
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new ApiError(res.status, text || res.statusText);
@@ -71,6 +76,24 @@ export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(`HTTP ${status}: ${message}`);
     this.name = 'ApiError';
+  }
+}
+
+/// Public probe: does the server accept the current (or absent) token?
+/// Hits `/api/health` (no auth) just to confirm reachability, then
+/// `/api/sessions` to validate the token.
+export async function probeAuth(): Promise<'ok' | 'unauthorized' | 'unreachable'> {
+  try {
+    await request<Health>('/api/health');
+  } catch {
+    return 'unreachable';
+  }
+  try {
+    await request<Session[]>('/api/sessions');
+    return 'ok';
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) return 'unauthorized';
+    return 'unreachable';
   }
 }
 
@@ -104,10 +127,14 @@ export const api = {
   /**
    * Open a WebSocket to the session's pane stream. Caller is responsible for
    * closing it. Resolves the URL relative to the current origin so dev (vite
-   * proxy) and prod (embedded SPA) both work.
+   * proxy) and prod (embedded SPA) both work. Browsers cannot set custom
+   * headers on WS upgrades, so the bearer token is passed as a `?token=`
+   * query param (the backend accepts both forms).
    */
   streamUrl(id: string): string {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${proto}//${location.host}/api/sessions/${encodeURIComponent(id)}/stream`;
+    const base = `${proto}//${location.host}/api/sessions/${encodeURIComponent(id)}/stream`;
+    const token = readToken();
+    return token ? `${base}?token=${encodeURIComponent(token)}` : base;
   }
 };
