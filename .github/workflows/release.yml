@@ -1,0 +1,137 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  BIN_NAME: agentum
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            cross: false
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            cross: true
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            cross: false
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            cross: false
+            archive: tar.gz
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Build web bundle (embedded into the binary)
+        run: pnpm --dir web install --frozen-lockfile && pnpm --dir web build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install --locked cross
+
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --target ${{ matrix.target }} -p agentum
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }} -p agentum
+
+      - name: Stage release
+        shell: bash
+        run: |
+          set -eux
+          OUT="dist/${BIN_NAME}-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir -p "$OUT"
+          cp "target/${{ matrix.target }}/release/${BIN_NAME}" "$OUT/"
+          cp LICENSE README.md CHANGELOG.md "$OUT/"
+          ( cd dist && tar -czf "${BIN_NAME}-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" "${BIN_NAME}-${{ github.ref_name }}-${{ matrix.target }}" )
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: github release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Generate sha256 sums
+        run: |
+          set -eux
+          ( cd dist && sha256sum *.tar.gz > SHA256SUMS )
+          cat dist/SHA256SUMS
+
+      - name: Extract release notes
+        id: notes
+        shell: bash
+        run: |
+          set -eux
+          tag="${GITHUB_REF_NAME}"
+          ver="${tag#v}"
+          # Pull the section for this version out of CHANGELOG.md
+          awk -v ver="$ver" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          echo "----"
+          cat release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: release-notes.md
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS

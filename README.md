@@ -3,16 +3,163 @@
 > A self-hosted control plane for AI coding agents.
 > Rust backend · Svelte frontend · single binary · themeable.
 
-**Status**: planning. See [PRD.md](PRD.md) for the full architecture and execution plan.
+[![release](https://img.shields.io/github/v/release/mateocerquetella/agentum?display_name=tag)](https://github.com/mateocerquetella/agentum/releases)
+[![ci](https://github.com/mateocerquetella/agentum/actions/workflows/ci.yml/badge.svg)](https://github.com/mateocerquetella/agentum/actions/workflows/ci.yml)
+[![license](https://img.shields.io/github/license/mateocerquetella/agentum)](LICENSE)
 
-agentum is a clean-room rewrite — inspired by [mixpeek/amux](https://github.com/mixpeek/amux), built for speed (Rust + axum), polish (Svelte + a real theme system), and frictionless install (one binary, `cargo install`).
+agentum gives you a single dashboard to spawn, watch, and message between
+parallel AI coding agents (Claude Code, Codex, Gemini, Hermes, or any CLI you
+want) — running in tmux on your own machine, browseable from your laptop or
+phone. It's a clean-room rewrite of [mixpeek/amux] for speed (Rust + axum),
+polish (Svelte 5 + a real theme system), and frictionless install
+(one binary, `cargo install`).
 
-## Quick links
-- [PRD.md](PRD.md) — product requirements & execution plan
-- [reference/amux/](reference/) — vendored amux clone for design inheritance (read-only, do not import)
+## Quick start
 
-## Status
-Phase 0 (bootstrap) complete. Phase 1 (Cargo workspace + minimal HTTP server) is next.
+```sh
+# Install (binary)
+curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh | sh
+
+# Install (from source)
+cargo install --git https://github.com/mateocerquetella/agentum agentum
+
+# Spawn an agent in a project directory
+agentum new alpha --tool claude --dir ~/Developer/my-project --up
+
+# Open the dashboard (HTTPS, self-signed cert)
+agentum serve
+# → https://127.0.0.1:8822  (paste the bearer from `agentum auth show`)
+```
+
+## What you get
+
+| Feature        | Details                                                                                                    |
+|----------------|------------------------------------------------------------------------------------------------------------|
+| Sessions       | Spawn agent CLIs in tmux. Live terminal stream over WS, input bar, watchdog auto-compacts on context-low.  |
+| Executors      | First-class adapters for Claude, Codex, Gemini, Hermes — passthrough for any other binary on PATH.          |
+| Board          | Atomic-claim kanban for cross-agent task handoff. Drag-drop columns, optimistic updates, 409 on contention. |
+| Notes          | Markdown notebook with CodeMirror 6, auto-save on idle/blur, persisted to SQLite.                           |
+| Channels       | 1:1 inter-session message channels with live broadcast over `/api/events`.                                  |
+| Watchdog       | Per-session monitor — `Context low.*<\s*50%` → `/compact`, crash signatures → `session.crashed` event.       |
+| Themes         | Pure-CSS theme engine. **Terminal Dark** + **Paperlight** ship in v0.1; system theme follows OS.            |
+| PWA            | Installable on iOS Safari / Chrome Android. Service worker pre-caches the SPA shell for offline read.       |
+| Auth           | Single bearer token in `$XDG_DATA_HOME/agentum/auth_token` (chmod 0600). Rotate live with `agentum auth rotate`. |
+| TLS            | rustls + rcgen self-signed cert auto-generated on first boot. Plain-HTTP cert-server on `:8823` for trust-on-first-use from a phone. |
+| Storage        | SQLite (WAL) at `$XDG_DATA_HOME/agentum/db.sqlite`. XDG-compliant on Linux + macOS.                          |
+| Distribution   | Single static binary. `cargo install`, `curl \| sh`, or download tarball from GitHub Releases.              |
+
+## Screenshots
+
+> Drop PNGs at `docs/screenshots/` and the README will pick them up.
+
+| Sessions list | Live terminal | Kanban |
+|---|---|---|
+| ![](docs/screenshots/sessions-dark.png) | ![](docs/screenshots/terminal-dark.png) | ![](docs/screenshots/board-dark.png) |
+
+## CLI surface
+
+```
+agentum new <name> --tool <cli> --dir <path> [--model <m>] [--arg KEY=VAL]… [--up]
+agentum up   <name>
+agentum down <name>             # SIGTERM → SIGKILL after 5s → kill-session
+agentum kill <name>             # immediate kill-session
+agentum rm   <name> [--force]
+agentum ls   [--running] [--tool <t>]
+agentum ps                      # alias for `ls --running`
+agentum open <name>             # tmux attach passthrough
+agentum tail <name> [-n 30] [-f]
+agentum send <name> <text>
+agentum keys <name> <key-spec>  # raw tmux keys, e.g. 'C-c'
+agentum serve [--port 8822] [--cert-port 8823] [--no-tls] [--no-resume]
+agentum auth show | rotate
+agentum config get | set | edit
+agentum doctor                  # check tmux, XDG dirs, db, cert, port
+```
+
+Run `agentum --help` for full details.
+
+## Architecture
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                  agentum (single binary)                       │
+│                                                                │
+│   axum HTTPS :8822  ◄──────  embedded SvelteKit (rust-embed)   │
+│   tokio runtime                                                │
+│   ├ sessions ─ tmux adapter ─ watchdog ─ event bus ─ store     │
+│   └ /api/events broadcast → UI toasts + channel messages       │
+│                                                                │
+│   plain HTTP :8823  →  /api/cert  (trust-on-first-use)         │
+└────────────────────────────────────────────────────────────────┘
+                                │
+                  ┌─────────────▼──────────────┐
+                  │  tmux server (host)        │
+                  │  $XDG_DATA_HOME/agentum/db │
+                  └────────────────────────────┘
+```
+
+See [PRD.md](PRD.md) for the full design — phases, decisions, schemas, every API.
+
+## Repository layout
+
+```
+crates/
+  agentum/         # binary + clap CLI
+  agentum-server/  # axum HTTP(S) + WS + rust-embed of web/build
+  agentum-tmux/    # tokio process adapter for tmux
+  agentum-watchdog/# per-session pane monitor + event emitter
+  agentum-executor/# ToolAdapter trait + Claude/Codex/Gemini/Hermes adapters
+  agentum-store/   # sqlx + SQLite (WAL) + XDG paths + migrations
+  agentum-core/    # shared domain types
+web/               # SvelteKit 2 + Svelte 5 SPA, embedded into binary
+PRD.md             # full product requirements + phase plan
+```
+
+## Development
+
+```sh
+# Backend dev loop (auto-reload via cargo-watch)
+cargo run -- serve --no-tls
+
+# Frontend dev loop (vite, proxies /api → :8822)
+pnpm --dir web dev
+
+# Build production bundle (web + cargo release)
+pnpm --dir web build && cargo build --release
+
+# Lint + test
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all
+pnpm --dir web check
+```
+
+The `cc` crate's compiler-detect step gets confused by some `~/.local/bin/cc`
+shims, so the project's `.cargo/config.toml` defaults `CC=/usr/bin/gcc`.
+That's a non-overriding default — set `CC` in your shell to override.
+
+## Security
+
+- **Single-user**, **local-network**. No multi-tenant features. Don't expose
+  `:8822` to the internet without a real reverse proxy + cert.
+- Bearer token is a single value at `$XDG_DATA_HOME/agentum/auth_token`,
+  generated from `rand::rng()` (32 bytes URL-safe base64). Rotate with
+  `agentum auth rotate` — the running server picks it up on the next request.
+- TLS cert is self-signed. Browsers will warn. The plain-HTTP cert-server
+  on `:8823` exists so you can pull the PEM and trust it on a phone.
+- All tmux invocations go through `tokio::process::Command` with
+  `.arg(...)` per argument; no shell interpolation in our process invocation.
+- WS authentication accepts both `Authorization: Bearer <token>` and a
+  `?token=<token>` query parameter (browsers can't set custom headers on
+  WebSocket upgrades).
 
 ## License
-MIT
+
+MIT. See [LICENSE](LICENSE).
+
+agentum is a clean-room rewrite — only the *concept* is inherited from
+[mixpeek/amux] (MIT + Commons Clause). Inheritance is read-only;
+[`reference/amux/`](reference/) is vendored for design reading and explicitly
+not imported.
+
+[mixpeek/amux]: https://github.com/mixpeek/amux
