@@ -3,7 +3,7 @@
 
   const items = [
     { href: '/',         label: 'Sessions' },
-    { href: '/board',    label: 'Board',    soon: true },
+    { href: '/board',    label: 'Board' },
     { href: '/notes',    label: 'Notes',    soon: true },
     { href: '/channels', label: 'Channels', soon: true },
     { href: '/settings', label: 'Settings', soon: true }

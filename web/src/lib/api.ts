@@ -103,6 +103,34 @@ export interface SendInput {
   append_enter?: boolean;
 }
 
+export interface BoardItem {
+  id: number;
+  key: string;
+  title: string;
+  body: string | null;
+  status: string;
+  claimed_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NewBoardItem {
+  title: string;
+  body?: string | null;
+  status?: string | null;
+}
+
+export interface BoardPatch {
+  title?: string;
+  body?: string | null;
+  status?: string;
+}
+
+export interface GroupedBoard {
+  columns: Record<string, BoardItem[]>;
+  column_order: string[];
+}
+
 export const api = {
   health: () => request<Health>('/api/health'),
   listSessions: (status?: Status) => {
@@ -136,5 +164,20 @@ export const api = {
     const base = `${proto}//${location.host}/api/sessions/${encodeURIComponent(id)}/stream`;
     const token = readToken();
     return token ? `${base}?token=${encodeURIComponent(token)}` : base;
-  }
+  },
+
+  // ---------- board ----------
+
+  listBoard: () => request<GroupedBoard>('/api/board'),
+  createBoardItem: (body: NewBoardItem) =>
+    request<BoardItem>('/api/board', { method: 'POST', body: JSON.stringify(body) }),
+  patchBoardItem: (id: number, body: BoardPatch) =>
+    request<BoardItem>(`/api/board/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteBoardItem: (id: number) =>
+    request<void>(`/api/board/${id}`, { method: 'DELETE' }),
+  claimBoardItem: (id: number, claimed_by: string) =>
+    request<BoardItem>(`/api/board/${id}/claim`, {
+      method: 'POST',
+      body: JSON.stringify({ claimed_by })
+    })
 };

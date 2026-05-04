@@ -68,6 +68,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::health::router())
         .merge(routes::sessions::router())
+        .merge(routes::board::router())
         .merge(routes::events::router())
         .layer(axum_mw::from_fn(auth::require_token))
         .fallback(embed::static_handler)
