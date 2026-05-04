@@ -68,8 +68,8 @@ agentum keeps the good ideas (single artifact, embedded UI, watchdog, channels, 
 │   ┌────────┴─────────────────────────────────────────────┐    │
 │   │   tokio async runtime                                │    │
 │   ├──────────┬──────────┬──────────┬──────────┬──────────┤    │
-│   │ session  │ tmux     │ watchdog │ events   │ store    │    │
-│   │ service  │ adapter  │ task     │ bus      │ (sqlx)   │    │
+│   │ session  │ executor │ tmux     │ watchdog │ events   │ store    │    │
+│   │ service  │ adapter  │ adapter  │ task     │ bus      │ (sqlx)   │    │
 │   └──────────┴──────────┴──────────┴──────────┴──────────┘    │
 │                              │                                 │
 └──────────────────────────────┼─────────────────────────────────┘
@@ -86,6 +86,7 @@ agentum keeps the good ideas (single artifact, embedded UI, watchdog, channels, 
 - Plain HTTP cert-download on :8823 for trust-on-first-use from a phone.
 - All state in SQLite at `$XDG_DATA_HOME/agentum/db.sqlite`.
 - tmux invoked as a subprocess via `tokio::process::Command`. Long-lived panes captured via `tmux pipe-pane` to a tail-able log per session.
+- Executor adapters translate a shared `Session` identity into the tool-specific command that tmux spawns. Four first-class adapters (Claude, Codex, Gemini, Hermes) plus a passthrough fallback.
 - WebSocket per session for live terminal stream to the browser.
 
 ### Process model
@@ -287,7 +288,7 @@ CREATE TABLE sessions (
     id          TEXT PRIMARY KEY,           -- uuid v4
     name        TEXT NOT NULL UNIQUE,        -- human-friendly slug
     workdir     TEXT NOT NULL,
-    tool        TEXT NOT NULL DEFAULT 'claude',  -- claude | codex | opencode | custom
+    tool        TEXT NOT NULL DEFAULT 'claude',  -- claude | codex | opencode | gemini | hermes | custom
     model       TEXT,                        -- e.g. claude-opus-4-7
     flags       TEXT NOT NULL DEFAULT '[]', -- JSON array of CLI flags
     status      TEXT NOT NULL DEFAULT 'idle',-- idle | running | stopped | crashed
@@ -535,7 +536,17 @@ Every page must have a designed empty state:
 
 ## 9. CLI surface (`agentum`)
 
-Fresh design — not amux-compatible. Verbs are short and noun-free. The CLI is **BYO-tool**: `--tool` is required on `new` and accepts any executable on PATH (`claude`, `codex`, `opencode`, `aider`, `cursor`, custom). agentum ships with **no default tool** — the user picks per session.
+Fresh design — not amux-compatible. Verbs are short and noun-free. The CLI is **BYO-tool**: `--tool` is required on `new` and accepts any executable on PATH. agentum ships with **no default tool** — the user picks per session.
+
+Four first-class interchangeable executors are targeted:
+| Executor     | `--tool` value | Notes                                      |
+|--------------|---------------|--------------------------------------------|
+| Claude Code  | `claude`      | Anthropic's official CLI agent              |
+| Codex        | `codex`       | OpenAI's CLI coding agent                   |
+| Gemini       | `gemini`      | Google's Gemini CLI agent                   |
+| Hermes       | `hermes`      | Open-weights agent (competitor to MoltBot)  |
+
+Additional tools (`opencode`, `aider`, `cursor`, or any custom binary) are supported but treated as unvalidated passthrough — agentum trusts whatever is on PATH.
 
 ### Synopsis
 
@@ -656,6 +667,28 @@ Each phase is a single git commit (or feature branch + squash). Estimates assume
   ```
 - **Commit**: `feat(phase-2): tmux adapter`
 
+### Phase 2b — executor adapter abstraction (bash-bridge pattern) (2–3 h)
+- Introduce the `agentum-executor` crate with a `ToolAdapter` trait:
+  - `fn launch(session: &Session) -> Command` — build the shell invocation
+  - `fn compact_trigger(&self) -> Option<&str>` — tool-specific `/compact` string
+  - `fn crash_signatures(&self) -> &[&str]` — known error patterns for auto-restart
+- Built-in adapters for the four first-class executors:
+  - `ClaudeAdapter` — wraps `claude` CLI, forwards `--model`, `--dangerously-skip-permissions`, etc.
+  - `CodexAdapter` — wraps `codex` CLI, forwards `--model`, `--approval-mode`.
+  - `GeminiAdapter` — wraps `gemini` CLI, forwards `--model`, `--thinking-level`.
+  - `HermesAdapter` — wraps `hermes` CLI (open-weights agent, bash-bridge via `hermes run --model=<m> --workdir=<path>`).
+- **Shared identity**: all adapters receive the same `Session` struct (id, name, workdir, model, flags) and produce a uniform `Command` regardless of which binary implements the execution.
+- `agentum-tmux` calls through the adapter trait instead of constructing commands directly.
+- Custom/unrecognized tools fall back to `PassthroughAdapter` — just `${tool} $flags` with no tool-specific logic.
+- **Acceptance**:
+  ```
+  cargo run -- new demo-claude  --tool claude --dir ~/proj --up  # spans Claude via adapter
+  cargo run -- new demo-hermes  --tool hermes --dir ~/proj --up  # spans Hermes via adapter
+  cargo run -- new demo-custom  --tool weird  --dir ~/proj --up  # spans weird via passthrough
+  tmux ls | wc -l                                                # 3 sessions running
+  ```
+- **Commit**: `feat(phase-2b): executor adapter abstraction + bash-bridge pattern`
+
 ### Phase 3 — SvelteKit static frontend + theme system (4–5 h)
 - `pnpm create svelte@latest web` → SvelteKit + adapter-static + TS + ESLint.
 - Layout, sidebar, topbar.
@@ -717,7 +750,7 @@ Each phase is a single git commit (or feature branch + squash). Estimates assume
 - Announce: `gh repo edit --homepage … --description …`, README badges.
 - **Commit**: `chore: v0.1.0`
 
-**Total estimate**: ~30–35 h of focused work.
+**Total estimate**: ~32–38 h of focused work (includes Phase 2b).
 
 ---
 
@@ -733,6 +766,8 @@ Each phase is a single git commit (or feature branch + squash). Estimates assume
 | 6  | Persistence path        | XDG-aware (see §3 Filesystem layout)          |
 | 7  | Default tool            | None — user picks `--tool` per session (BYO)  |
 | 8  | v0.1 themes             | terminal-dark + paperlight only               |
+| 9  | First-class executors   | Claude Code, Codex, Gemini, Hermes. Each gets a typed adapter implementing `ToolAdapter` (§Phase 2b). Others passthrough via `PassthroughAdapter`. |
+| 10 | Bash-bridge pattern     | All executors share a uniform tmux/bridge interface via the `ToolAdapter` trait — launch, compact, crash-sigs. No executor is special-cased in the core loop. |
 
 Reverse any decision by editing this section, the affected section it touches, and noting the reversal in the commit message.
 
@@ -764,13 +799,17 @@ Reverse any decision by editing this section, the affected section it touches, a
 
 ## 16. Glossary
 
-- **Session** — a tmux session running an AI agent CLI (claude/codex/opencode/aider/cursor/custom) in a project dir.
-- **Tool** — the CLI binary the session runs. Required on `agentum new`; no default.
+- **Session** — a tmux session running an AI agent CLI (Claude Code / Codex / Gemini / Hermes / any custom tool) in a project dir, managed through a bash-bridge adapter.
+- **Tool** — the CLI binary the session runs. Required on `agentum new`; no default. Four first-class tools (Claude, Codex, Gemini, Hermes) get typed adapters; anything else runs via passthrough.
 - **Workdir** — absolute path the agent starts in.
 - **Watchdog** — per-session monitor that auto-compacts and restarts on known failure signatures.
 - **Pane bytes** — raw bytes captured from `tmux pipe-pane`, including ANSI escapes; xterm.js renders them.
 - **Channel** — directed pair of sessions for inter-agent messaging (1:1).
 - **Atomic claim** — board item ownership transfer via SQL CAS.
+- **Executor** — one of the four first-class agent CLIs (Claude Code, Codex, Gemini, Hermes) that implements the `ToolAdapter` trait. Other tools passthrough as-is.
+- **Hermes** — open-weights AI coding agent (competitor to MoltBot, OpenClaude). Wrapped by `HermesAdapter` using the bash-bridge pattern.
+- **Bash-bridge adapter pattern** — each executor is invoked via a typed adapter that translates a shared `Session` identity (name, workdir, model, flags) into a tool-specific `Command` for tmux. The watchdog and UI never know which binary is underneath.
+- **Shared identity** — the `Session` struct that every adapter receives; ensures uniform lifecycle management (start/stop/send/compact) regardless of executor.
 - **XDG** — Base Directory Specification governing where config / data / cache / state live (see §3).
 
 ---
