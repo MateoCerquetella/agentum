@@ -11,6 +11,7 @@ description = "axum HTTP server for agentum."
 [dependencies]
 agentum-core   = { workspace = true }
 agentum-store  = { workspace = true }
+agentum-tmux   = { workspace = true }
 anyhow         = { workspace = true }
 thiserror      = { workspace = true }
 serde          = { workspace = true }
@@ -23,3 +24,4 @@ tower-http     = { workspace = true }
 uuid           = { workspace = true }
 time           = { workspace = true }
 rust-embed     = { version = "8", features = ["mime-guess"] }
+bytes          = "1"

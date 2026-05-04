@@ -74,6 +74,12 @@ export class ApiError extends Error {
   }
 }
 
+export interface SendInput {
+  text?: string;
+  keys?: string;
+  append_enter?: boolean;
+}
+
 export const api = {
   health: () => request<Health>('/api/health'),
   listSessions: (status?: Status) => {
@@ -88,5 +94,20 @@ export const api = {
   stopSession: (id: string) =>
     request<Session>(`/api/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
   deleteSession: (id: string) =>
-    request<void>(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    request<void>(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  sendInput: (id: string, body: SendInput) =>
+    request<void>(`/api/sessions/${encodeURIComponent(id)}/send`, {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+
+  /**
+   * Open a WebSocket to the session's pane stream. Caller is responsible for
+   * closing it. Resolves the URL relative to the current origin so dev (vite
+   * proxy) and prod (embedded SPA) both work.
+   */
+  streamUrl(id: string): string {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${location.host}/api/sessions/${encodeURIComponent(id)}/stream`;
+  }
 };

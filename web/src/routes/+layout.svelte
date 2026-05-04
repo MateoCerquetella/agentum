@@ -42,6 +42,9 @@
     max-width: 1100px;
     width: 100%;
     margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
   }
 
   @media (max-width: 720px) {

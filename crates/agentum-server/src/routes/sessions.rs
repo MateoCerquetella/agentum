@@ -1,12 +1,19 @@
 use std::str::FromStr;
+use std::time::Duration;
 
 use agentum_core::{NewSession, Session, Status};
+use agentum_store::paths;
 use axum::Json;
+use axum::Router;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use axum::Router;
+use bytes::Bytes;
 use serde::Deserialize;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::AppState;
@@ -18,6 +25,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/sessions/{id}", get(get_one).delete(delete))
         .route("/api/sessions/{id}/start", post(start))
         .route("/api/sessions/{id}/stop", post(stop))
+        .route("/api/sessions/{id}/send", post(send))
+        .route("/api/sessions/{id}/stream", get(stream))
 }
 
 #[derive(Deserialize)]
@@ -49,7 +58,7 @@ async fn get_one(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Session>, ApiError> {
-    let id = Uuid::parse_str(&id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let id = parse_uuid(&id)?;
     let s = state
         .store
         .get_session_by_id(id)
@@ -62,7 +71,7 @@ async fn delete(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let id = Uuid::parse_str(&id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let id = parse_uuid(&id)?;
     state.store.delete_session(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -86,7 +95,7 @@ async fn transition(
     id: &str,
     target: Status,
 ) -> Result<Json<Session>, ApiError> {
-    let id = Uuid::parse_str(id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let id = parse_uuid(id)?;
     state.store.update_status(id, target).await?;
     let s = state
         .store
@@ -94,4 +103,167 @@ async fn transition(
         .await?
         .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
     Ok(Json(s))
+}
+
+// ---------- /send ----------
+
+#[derive(Deserialize)]
+struct SendBody {
+    /// Free-form text typed into the pane. Conceptually equivalent to a user typing.
+    #[serde(default)]
+    text: Option<String>,
+    /// Raw tmux key spec (e.g. `C-c`, `Enter`, `M-x`). Sent literally.
+    #[serde(default)]
+    keys: Option<String>,
+    /// Append a tmux `Enter` after the payload — useful for chat-style inputs.
+    #[serde(default)]
+    append_enter: bool,
+}
+
+async fn send(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<SendBody>,
+) -> Result<StatusCode, ApiError> {
+    let id = parse_uuid(&id)?;
+    let session = state
+        .store
+        .get_session_by_id(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
+    let target = session
+        .tmux_target
+        .as_deref()
+        .ok_or_else(|| ApiError::BadRequest("session is not running".into()))?;
+
+    let payload = body
+        .text
+        .as_deref()
+        .or(body.keys.as_deref())
+        .ok_or_else(|| ApiError::BadRequest("must provide `text` or `keys`".into()))?;
+
+    if !agentum_tmux::has_session(target)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+    {
+        return Err(ApiError::BadRequest(
+            "tmux session not active for this session".into(),
+        ));
+    }
+
+    agentum_tmux::send_keys(target, payload, body.append_enter)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------- WS /stream ----------
+
+async fn stream(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let id = parse_uuid(&id)?;
+    let _ = state
+        .store
+        .get_session_by_id(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
+    Ok(ws.on_upgrade(move |socket| stream_session(socket, id)))
+}
+
+const BACKFILL_BYTES: u64 = 4096;
+const READ_CHUNK: usize = 8192;
+
+async fn stream_session(mut socket: WebSocket, id: Uuid) {
+    let log_path = match paths::pane_log(&id.to_string()) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = socket
+                .send(Message::Text(format!("[path error: {e}]").into()))
+                .await;
+            return;
+        }
+    };
+
+    // Wait briefly for pipe-pane to create the file (it appears milliseconds
+    // after `agentum up` returns).
+    let mut waited = 0;
+    while !log_path.exists() && waited < 50 {
+        sleep(Duration::from_millis(100)).await;
+        waited += 1;
+    }
+    if !log_path.exists() {
+        let _ = socket
+            .send(Message::Text(
+                "[no pane log — session not running]".into(),
+            ))
+            .await;
+        return;
+    }
+
+    let mut file = match tokio::fs::File::open(&log_path).await {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = socket
+                .send(Message::Text(format!("[open error: {e}]").into()))
+                .await;
+            return;
+        }
+    };
+
+    // Backfill last 4KB so the user lands on recent context, not a blank pane.
+    if let Ok(end) = file.seek(std::io::SeekFrom::End(0)).await {
+        let backfill = end.min(BACKFILL_BYTES);
+        if backfill > 0
+            && file
+                .seek(std::io::SeekFrom::End(-(backfill as i64)))
+                .await
+                .is_ok()
+        {
+            let mut backfill_buf = vec![0u8; backfill as usize];
+            if file.read_exact(&mut backfill_buf).await.is_ok()
+                && socket
+                    .send(Message::Binary(Bytes::from(backfill_buf)))
+                    .await
+                    .is_err()
+            {
+                return;
+            }
+        }
+    }
+
+    let mut buf = vec![0u8; READ_CHUNK];
+    loop {
+        match file.read(&mut buf).await {
+            Ok(0) => {
+                // Caught up. Sleep, but also watch for client close.
+                tokio::select! {
+                    msg = socket.recv() => match msg {
+                        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                        _ => {}
+                    },
+                    _ = sleep(Duration::from_millis(100)) => {}
+                }
+            }
+            Ok(n) => {
+                let chunk = Bytes::copy_from_slice(&buf[..n]);
+                if socket.send(Message::Binary(chunk)).await.is_err() {
+                    break;
+                }
+            }
+            Err(e) => {
+                let _ = socket
+                    .send(Message::Text(format!("[read error: {e}]").into()))
+                    .await;
+                break;
+            }
+        }
+    }
+}
+
+fn parse_uuid(s: &str) -> Result<Uuid, ApiError> {
+    Uuid::parse_str(s).map_err(|e| ApiError::BadRequest(e.to_string()))
 }
