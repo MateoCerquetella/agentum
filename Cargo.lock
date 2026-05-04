@@ -54,8 +54,10 @@ version = "0.1.0-alpha.0"
 dependencies = [
  "agentum-core",
  "agentum-store",
+ "agentum-tmux",
  "anyhow",
  "axum",
+ "bytes",
  "rust-embed",
  "serde",
  "serde_json",
