@@ -55,6 +55,7 @@ dependencies = [
  "agentum-core",
  "agentum-store",
  "agentum-tmux",
+ "agentum-watchdog",
  "anyhow",
  "axum",
  "axum-server",
@@ -108,9 +109,17 @@ name = "agentum-watchdog"
 version = "0.1.0-alpha.0"
 dependencies = [
  "agentum-core",
+ "agentum-executor",
+ "agentum-store",
+ "agentum-tmux",
+ "regex",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
+ "time",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

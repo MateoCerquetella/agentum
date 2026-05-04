@@ -82,11 +82,12 @@ pub async fn kill_session(target: &str) -> Result<()> {
     run_checked(&mut c).await
 }
 
-/// Capture last `lines` of pane content, ANSI-escapes preserved.
+/// Capture last `lines` of pane content as plain text (no ANSI escapes —
+/// suitable for regex matching by the watchdog).
 pub async fn capture_pane(target: &str, lines: usize) -> Result<String> {
     let start = format!("-{lines}");
     let out = Command::new("tmux")
-        .args(["capture-pane", "-p", "-e", "-S", &start, "-t"])
+        .args(["capture-pane", "-p", "-S", &start, "-t"])
         .arg(target)
         .output()
         .await?;
