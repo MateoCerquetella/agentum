@@ -51,8 +51,14 @@ pub enum Cmd {
         name: String,
     },
 
-    /// Stop a session gracefully (no-op tmux in phase 1; status flips to `stopped`).
+    /// Stop a session gracefully (SIGTERM, then SIGKILL after 5s).
     Down {
+        /// Session name.
+        name: String,
+    },
+
+    /// Kill a session immediately (no graceful shutdown).
+    Kill {
         /// Session name.
         name: String,
     },
@@ -88,6 +94,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         } => crate::commands::new::run(name, tool, dir, model, arg, up).await,
         Cmd::Up { name } => crate::commands::up::run(name).await,
         Cmd::Down { name } => crate::commands::down::run(name).await,
+        Cmd::Kill { name } => crate::commands::kill::run(name).await,
         Cmd::Ls { running } => crate::commands::ls::run(running).await,
         Cmd::Serve { port, host } => {
             let addr: SocketAddr = format!("{host}:{port}").parse()?;

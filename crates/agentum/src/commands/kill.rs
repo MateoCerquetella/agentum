@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use agentum_core::Status;
 use anyhow::Result;
 
@@ -15,10 +13,10 @@ pub async fn run(name: String) -> Result<()> {
         .clone()
         .unwrap_or_else(|| agentum_tmux::target_for(&session.name));
 
-    agentum_tmux::graceful_stop(&target, Duration::from_secs(5)).await?;
+    agentum_tmux::kill_session(&target).await?;
     store
         .update_status_and_target(session.id, Status::Stopped, None)
         .await?;
-    println!("down        {name}");
+    println!("killed      {name}");
     Ok(())
 }

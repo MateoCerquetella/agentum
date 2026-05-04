@@ -1,4 +1,5 @@
 pub mod down;
+pub mod kill;
 pub mod ls;
 pub mod new;
 pub mod serve;

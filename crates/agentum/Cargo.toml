@@ -16,6 +16,7 @@ path = "src/main.rs"
 agentum-core    = { workspace = true }
 agentum-store   = { workspace = true }
 agentum-server  = { workspace = true }
+agentum-tmux    = { workspace = true }
 anyhow          = { workspace = true }
 clap            = { workspace = true }
 tokio           = { workspace = true }
