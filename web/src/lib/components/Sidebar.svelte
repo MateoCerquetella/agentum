@@ -4,8 +4,8 @@
   const items = [
     { href: '/',         label: 'Sessions' },
     { href: '/board',    label: 'Board' },
-    { href: '/notes',    label: 'Notes',    soon: true },
-    { href: '/channels', label: 'Channels', soon: true },
+    { href: '/notes',    label: 'Notes' },
+    { href: '/channels', label: 'Channels' },
     { href: '/settings', label: 'Settings', soon: true }
   ];
 

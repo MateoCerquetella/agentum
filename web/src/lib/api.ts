@@ -131,6 +131,52 @@ export interface GroupedBoard {
   column_order: string[];
 }
 
+export interface Note {
+  id: number;
+  title: string;
+  body: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NewNote {
+  title: string;
+  body?: string;
+  tags?: string[];
+}
+
+export interface NotePatch {
+  title?: string;
+  body?: string;
+  tags?: string[];
+}
+
+export interface Channel {
+  id: number;
+  a_session: string;
+  b_session: string;
+  created_at: string;
+}
+
+export interface NewChannel {
+  a_session: string;
+  b_session: string;
+}
+
+export interface Message {
+  id: number;
+  channel_id: number;
+  sender: string;
+  body: string;
+  ts: string;
+}
+
+export interface NewMessage {
+  sender: string;
+  body: string;
+}
+
 export const api = {
   health: () => request<Health>('/api/health'),
   listSessions: (status?: Status) => {
@@ -179,5 +225,31 @@ export const api = {
     request<BoardItem>(`/api/board/${id}/claim`, {
       method: 'POST',
       body: JSON.stringify({ claimed_by })
+    }),
+
+  // ---------- notes ----------
+
+  listNotes: () => request<Note[]>('/api/notes'),
+  getNote: (id: number) => request<Note>(`/api/notes/${id}`),
+  createNote: (body: NewNote) =>
+    request<Note>('/api/notes', { method: 'POST', body: JSON.stringify(body) }),
+  patchNote: (id: number, body: NotePatch) =>
+    request<Note>(`/api/notes/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteNote: (id: number) =>
+    request<void>(`/api/notes/${id}`, { method: 'DELETE' }),
+
+  // ---------- channels + messages ----------
+
+  listChannels: () => request<Channel[]>('/api/channels'),
+  createChannel: (body: NewChannel) =>
+    request<Channel>('/api/channels', { method: 'POST', body: JSON.stringify(body) }),
+  deleteChannel: (id: number) =>
+    request<void>(`/api/channels/${id}`, { method: 'DELETE' }),
+  listMessages: (channelId: number, limit = 200) =>
+    request<Message[]>(`/api/channels/${channelId}/messages?limit=${limit}`),
+  postMessage: (channelId: number, body: NewMessage) =>
+    request<Message>(`/api/channels/${channelId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify(body)
     })
 };

@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use agentum_core::{
-    BoardItem, BoardPatch, Event, NewBoardItem, NewSession, Session, Status,
+    BoardItem, BoardPatch, Channel, Event, Message, NewBoardItem, NewChannel, NewMessage,
+    NewNote, NewSession, Note, NotePatch, Session, Status,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{FromRow, SqlitePool};
@@ -327,6 +328,199 @@ impl Store {
         self.get_board_item(id).await
     }
 
+    // ---------- notes ----------
+
+    pub async fn create_note(&self, new: NewNote) -> Result<Note> {
+        let now = OffsetDateTime::now_utc();
+        let now_s = now.format(&Rfc3339)?;
+        let tags_json = serde_json::to_string(&new.tags)?;
+        let result = sqlx::query(
+            "INSERT INTO notes (title, body, tags, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&new.title)
+        .bind(&new.body)
+        .bind(&tags_json)
+        .bind(&now_s)
+        .bind(&now_s)
+        .execute(&self.pool)
+        .await?;
+        Ok(Note {
+            id: result.last_insert_rowid(),
+            title: new.title,
+            body: new.body,
+            tags: new.tags,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn list_notes(&self) -> Result<Vec<Note>> {
+        let rows: Vec<NoteRow> = sqlx::query_as::<_, NoteRow>(
+            "SELECT * FROM notes ORDER BY updated_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(Note::try_from).collect()
+    }
+
+    pub async fn get_note(&self, id: i64) -> Result<Option<Note>> {
+        let row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(Note::try_from).transpose()
+    }
+
+    pub async fn patch_note(&self, id: i64, patch: NotePatch) -> Result<Note> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let tags_json = match &patch.tags {
+            Some(t) => Some(serde_json::to_string(t)?),
+            None => None,
+        };
+        let affected = sqlx::query(
+            "UPDATE notes SET
+                title = COALESCE(?, title),
+                body  = COALESCE(?, body),
+                tags  = COALESCE(?, tags),
+                updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(&patch.title)
+        .bind(&patch.body)
+        .bind(&tags_json)
+        .bind(&now_s)
+        .bind(id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if affected == 0 {
+            return Err(StoreError::NotFound(id.to_string()));
+        }
+        self.get_note(id)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(id.to_string()))
+    }
+
+    pub async fn delete_note(&self, id: i64) -> Result<()> {
+        let affected = sqlx::query("DELETE FROM notes WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        if affected == 0 {
+            return Err(StoreError::NotFound(id.to_string()));
+        }
+        Ok(())
+    }
+
+    // ---------- channels ----------
+
+    /// Create a 1:1 channel between two sessions. The pair is canonicalized
+    /// (`a_session < b_session`) so (A,B) and (B,A) collapse to one row.
+    pub async fn create_channel(&self, new: NewChannel) -> Result<Channel> {
+        if new.a_session == new.b_session {
+            return Err(StoreError::Core(agentum_core::CoreError::InvalidName(
+                "channel sessions must differ".into(),
+            )));
+        }
+        let (a, b) = if new.a_session < new.b_session {
+            (new.a_session, new.b_session)
+        } else {
+            (new.b_session, new.a_session)
+        };
+        let now = OffsetDateTime::now_utc();
+        let now_s = now.format(&Rfc3339)?;
+        let res = sqlx::query(
+            "INSERT INTO channels (a_session, b_session, created_at) VALUES (?, ?, ?)",
+        )
+        .bind(a.to_string())
+        .bind(b.to_string())
+        .bind(&now_s)
+        .execute(&self.pool)
+        .await;
+        if let Err(sqlx::Error::Database(db)) = &res {
+            if db.is_unique_violation() {
+                return Err(StoreError::AlreadyExists(format!(
+                    "channel between {a} and {b}"
+                )));
+            }
+        }
+        let id = res?.last_insert_rowid();
+        Ok(Channel {
+            id,
+            a_session: a,
+            b_session: b,
+            created_at: now,
+        })
+    }
+
+    pub async fn list_channels(&self) -> Result<Vec<Channel>> {
+        let rows: Vec<ChannelRow> = sqlx::query_as::<_, ChannelRow>(
+            "SELECT * FROM channels ORDER BY created_at ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(Channel::try_from).collect()
+    }
+
+    pub async fn get_channel(&self, id: i64) -> Result<Option<Channel>> {
+        let row = sqlx::query_as::<_, ChannelRow>("SELECT * FROM channels WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(Channel::try_from).transpose()
+    }
+
+    pub async fn delete_channel(&self, id: i64) -> Result<()> {
+        let affected = sqlx::query("DELETE FROM channels WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        if affected == 0 {
+            return Err(StoreError::NotFound(id.to_string()));
+        }
+        Ok(())
+    }
+
+    // ---------- messages ----------
+
+    pub async fn append_message(&self, channel_id: i64, msg: NewMessage) -> Result<Message> {
+        let now = OffsetDateTime::now_utc();
+        let now_s = now.format(&Rfc3339)?;
+        let res = sqlx::query(
+            "INSERT INTO messages (channel_id, sender, body, ts) VALUES (?, ?, ?, ?)",
+        )
+        .bind(channel_id)
+        .bind(&msg.sender)
+        .bind(&msg.body)
+        .bind(&now_s)
+        .execute(&self.pool)
+        .await?;
+        Ok(Message {
+            id: res.last_insert_rowid(),
+            channel_id,
+            sender: msg.sender,
+            body: msg.body,
+            ts: now,
+        })
+    }
+
+    pub async fn list_messages(&self, channel_id: i64, limit: i64) -> Result<Vec<Message>> {
+        // Most recent `limit` messages, returned oldest-first for chat UI.
+        let rows: Vec<MessageRow> = sqlx::query_as::<_, MessageRow>(
+            "SELECT * FROM (
+                SELECT * FROM messages WHERE channel_id = ? ORDER BY ts DESC LIMIT ?
+             ) ORDER BY ts ASC",
+        )
+        .bind(channel_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(Message::try_from).collect()
+    }
+
     /// Persist an event row. Best-effort (failures should not break callers).
     pub async fn insert_event(&self, ev: &Event) -> Result<()> {
         let payload = serde_json::to_string(&ev.payload)?;
@@ -377,6 +571,72 @@ struct SessionRow {
     created_at: String,
     updated_at: String,
     last_activity_at: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct NoteRow {
+    id: i64,
+    title: String,
+    body: String,
+    tags: String,
+    created_at: String,
+    updated_at: String,
+}
+
+impl TryFrom<NoteRow> for Note {
+    type Error = StoreError;
+    fn try_from(r: NoteRow) -> Result<Self> {
+        Ok(Note {
+            id: r.id,
+            title: r.title,
+            body: r.body,
+            tags: serde_json::from_str(&r.tags)?,
+            created_at: OffsetDateTime::parse(&r.created_at, &Rfc3339)?,
+            updated_at: OffsetDateTime::parse(&r.updated_at, &Rfc3339)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct ChannelRow {
+    id: i64,
+    a_session: String,
+    b_session: String,
+    created_at: String,
+}
+
+impl TryFrom<ChannelRow> for Channel {
+    type Error = StoreError;
+    fn try_from(r: ChannelRow) -> Result<Self> {
+        Ok(Channel {
+            id: r.id,
+            a_session: Uuid::parse_str(&r.a_session)?,
+            b_session: Uuid::parse_str(&r.b_session)?,
+            created_at: OffsetDateTime::parse(&r.created_at, &Rfc3339)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct MessageRow {
+    id: i64,
+    channel_id: i64,
+    sender: String,
+    body: String,
+    ts: String,
+}
+
+impl TryFrom<MessageRow> for Message {
+    type Error = StoreError;
+    fn try_from(r: MessageRow) -> Result<Self> {
+        Ok(Message {
+            id: r.id,
+            channel_id: r.channel_id,
+            sender: r.sender,
+            body: r.body,
+            ts: OffsetDateTime::parse(&r.ts, &Rfc3339)?,
+        })
+    }
 }
 
 #[derive(Debug, FromRow)]
@@ -557,6 +817,113 @@ mod tests {
             .await
             .unwrap();
         assert!(cleared.body.is_none());
+    }
+
+    #[tokio::test]
+    async fn note_crud_and_patch_persists() {
+        let s = tmp_store().await;
+        let note = s
+            .create_note(NewNote {
+                title: "spec".into(),
+                body: "hello".into(),
+                tags: vec!["draft".into()],
+            })
+            .await
+            .unwrap();
+        assert_eq!(note.tags, vec!["draft"]);
+
+        let updated = s
+            .patch_note(
+                note.id,
+                NotePatch {
+                    body: Some("hello world".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.body, "hello world");
+        assert_eq!(updated.title, "spec"); // untouched
+        assert_eq!(updated.tags, vec!["draft"]); // untouched
+
+        // Reload to confirm persistence.
+        let again = s.get_note(note.id).await.unwrap().unwrap();
+        assert_eq!(again.body, "hello world");
+    }
+
+    async fn make_session(s: &Store, name: &str) -> Session {
+        s.create_session(NewSession {
+            name: name.into(),
+            workdir: "/tmp".into(),
+            tool: "bash".into(),
+            model: None,
+            flags: vec![],
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn channel_dedupes_and_sorts_pair() {
+        let s = tmp_store().await;
+        let sa = make_session(&s, "alpha").await;
+        let sb = make_session(&s, "beta").await;
+        let (lo, hi) = if sa.id < sb.id { (sa.id, sb.id) } else { (sb.id, sa.id) };
+
+        let ch = s
+            .create_channel(NewChannel {
+                a_session: sa.id,
+                b_session: sb.id,
+            })
+            .await
+            .unwrap();
+        assert_eq!(ch.a_session, lo);
+        assert_eq!(ch.b_session, hi);
+
+        // Reverse order should collide on the unique pair.
+        let dup = s
+            .create_channel(NewChannel {
+                a_session: sb.id,
+                b_session: sa.id,
+            })
+            .await;
+        assert!(matches!(dup, Err(StoreError::AlreadyExists(_))));
+    }
+
+    #[tokio::test]
+    async fn messages_appended_and_listed_oldest_first() {
+        let s = tmp_store().await;
+        let sa = make_session(&s, "ma").await;
+        let sb = make_session(&s, "mb").await;
+        let ch = s
+            .create_channel(NewChannel {
+                a_session: sa.id,
+                b_session: sb.id,
+            })
+            .await
+            .unwrap();
+        s.append_message(
+            ch.id,
+            NewMessage {
+                sender: "a".into(),
+                body: "first".into(),
+            },
+        )
+        .await
+        .unwrap();
+        s.append_message(
+            ch.id,
+            NewMessage {
+                sender: "b".into(),
+                body: "second".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let list = s.list_messages(ch.id, 10).await.unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].body, "first");
+        assert_eq!(list[1].body, "second");
     }
 
     #[tokio::test]

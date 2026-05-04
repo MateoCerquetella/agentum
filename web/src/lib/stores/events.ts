@@ -70,7 +70,23 @@ function bind(socket: WebSocket) {
   };
 }
 
+type Listener = (ev: BusEvent) => void;
+const listeners: Set<Listener> = new Set();
+
+/** Subscribe to every bus event. Returns an unsubscribe callback. */
+export function onEvent(cb: Listener): () => void {
+  listeners.add(cb);
+  return () => listeners.delete(cb);
+}
+
+function fanOut(ev: BusEvent) {
+  for (const cb of listeners) {
+    try { cb(ev); } catch (e) { console.error('event listener failed:', e); }
+  }
+}
+
 function handle(ev: BusEvent) {
+  fanOut(ev);
   switch (ev.kind) {
     case 'watchdog.compact': {
       const name = ev.session_name ?? 'session';
