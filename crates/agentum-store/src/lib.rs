@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use agentum_core::{NewSession, Session, Status};
+use agentum_core::{Event, NewSession, Session, Status};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{FromRow, SqlitePool};
 use time::OffsetDateTime;
@@ -200,6 +200,22 @@ impl Store {
         if affected == 0 {
             return Err(StoreError::NotFound(id.to_string()));
         }
+        Ok(())
+    }
+
+    /// Persist an event row. Best-effort (failures should not break callers).
+    pub async fn insert_event(&self, ev: &Event) -> Result<()> {
+        let payload = serde_json::to_string(&ev.payload)?;
+        let ts = ev.ts.format(&Rfc3339)?;
+        sqlx::query(
+            "INSERT INTO events (session_id, kind, payload, ts) VALUES (?, ?, ?, ?)",
+        )
+        .bind(ev.session_id.map(|u| u.to_string()))
+        .bind(&ev.kind)
+        .bind(payload)
+        .bind(ts)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 

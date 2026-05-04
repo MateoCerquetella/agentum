@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
+use agentum_core::Event;
 use agentum_store::Store;
 use axum::Router;
 use axum::body::Body;
@@ -18,6 +19,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum_server::tls_rustls::RustlsConfig;
 use tokio::net::TcpListener;
+use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
@@ -29,17 +31,21 @@ pub mod tls;
 
 pub use error::ApiError;
 
+const EVENT_BUS_CAPACITY: usize = 256;
+
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<Store>,
+    pub bus: broadcast::Sender<Event>,
     pub started_at: Instant,
     pub version: &'static str,
 }
 
 impl AppState {
-    pub fn new(store: Store) -> Self {
+    pub fn new(store: Store, bus: broadcast::Sender<Event>) -> Self {
         Self {
             store: Arc::new(store),
+            bus,
             started_at: Instant::now(),
             version: env!("CARGO_PKG_VERSION"),
         }
@@ -62,6 +68,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::health::router())
         .merge(routes::sessions::router())
+        .merge(routes::events::router())
         .layer(axum_mw::from_fn(auth::require_token))
         .fallback(embed::static_handler)
         .with_state(state)
@@ -69,11 +76,15 @@ pub fn router(state: AppState) -> Router {
         .layer(cors)
 }
 
-/// Bind and serve forever. Drives both the main API server (TLS or plain)
-/// and the small plain-HTTP cert-server side-by-side.
+/// Bind and serve forever. Drives both the main API server (TLS or plain),
+/// the small plain-HTTP cert-server, and the watchdog reconcile loop.
 pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
-    let state = AppState::new(store);
+    let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
+    let state = AppState::new(store, bus.clone());
     let _ = auth::ensure_token()?;
+
+    let watchdog = agentum_watchdog::Watchdog::new(bus, state.store.clone());
+    tokio::spawn(watchdog.run());
 
     let app = router(state);
 

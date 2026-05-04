@@ -4,8 +4,11 @@
   import Sidebar from '$components/Sidebar.svelte';
   import Topbar from '$components/Topbar.svelte';
   import TokenGate from '$components/TokenGate.svelte';
+  import ToastStack from '$components/ToastStack.svelte';
   import { theme, applyTheme } from '$stores/theme';
-  import { onMount } from 'svelte';
+  import { authState } from '$stores/auth';
+  import { connect as connectEvents, disconnect as disconnectEvents } from '$stores/events';
+  import { onMount, onDestroy } from 'svelte';
 
   interface Props { children: import('svelte').Snippet }
   let { children }: Props = $props();
@@ -14,7 +17,14 @@
     // Re-apply on mount so the persisted theme wins over the hard-coded
     // app.html attribute.
     applyTheme(get(theme));
+    // Open the events bus once auth is OK; reconnect if state cycles back.
+    return authState.subscribe((s) => {
+      if (s === 'ok') connectEvents();
+      else disconnectEvents();
+    });
   });
+
+  onDestroy(() => disconnectEvents());
 </script>
 
 <TokenGate>
@@ -25,6 +35,7 @@
         <Topbar />
         <main>{@render originalChildren()}</main>
       </div>
+      <ToastStack />
     </div>
   {/snippet}
 </TokenGate>

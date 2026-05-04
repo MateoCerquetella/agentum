@@ -85,6 +85,42 @@ pub struct NewSession {
     pub flags: Vec<String>,
 }
 
+/// Event published on the broadcast bus and persisted to the `events` table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Event {
+    /// Dotted kind, e.g. `watchdog.compact`, `session.crashed`, `session.started`.
+    pub kind: String,
+    pub session_id: Option<Uuid>,
+    pub session_name: Option<String>,
+    /// Optional structured detail. Empty object when no payload.
+    pub payload: serde_json::Value,
+    #[serde(with = "time::serde::rfc3339")]
+    pub ts: OffsetDateTime,
+}
+
+impl Event {
+    pub fn new(kind: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            session_id: None,
+            session_name: None,
+            payload: serde_json::Value::Object(Default::default()),
+            ts: OffsetDateTime::now_utc(),
+        }
+    }
+
+    pub fn with_session(mut self, id: Uuid, name: impl Into<String>) -> Self {
+        self.session_id = Some(id);
+        self.session_name = Some(name.into());
+        self
+    }
+
+    pub fn with_payload(mut self, payload: serde_json::Value) -> Self {
+        self.payload = payload;
+        self
+    }
+}
+
 /// Validate a session name: lowercase alphanumeric, dash, underscore. 1..=64 chars.
 pub fn validate_name(name: &str) -> Result<(), CoreError> {
     if name.is_empty() || name.len() > 64 {

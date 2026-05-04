@@ -9,9 +9,10 @@ authors.workspace = true
 description = "axum HTTP server for agentum."
 
 [dependencies]
-agentum-core   = { workspace = true }
-agentum-store  = { workspace = true }
-agentum-tmux   = { workspace = true }
+agentum-core      = { workspace = true }
+agentum-store     = { workspace = true }
+agentum-tmux      = { workspace = true }
+agentum-watchdog  = { workspace = true }
 anyhow         = { workspace = true }
 thiserror      = { workspace = true }
 serde          = { workspace = true }
