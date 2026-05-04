@@ -10,6 +10,7 @@ use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
+mod embed;
 mod error;
 mod routes;
 
@@ -41,6 +42,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::health::router())
         .merge(routes::sessions::router())
+        .fallback(embed::static_handler)
         .with_state(state)
         .layer(TraceLayer::new_for_http())
         .layer(cors)
