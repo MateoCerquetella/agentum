@@ -3,9 +3,11 @@
 > A self-hosted control plane for AI coding agents.
 > Rust backend, Svelte frontend, single binary, themeable, fast.
 
-**Status**: Draft v1 — execution-ready
+**Status**: Draft v2 — execution-ready, decisions resolved
 **Author**: Mateo Cerquetella
 **Date**: 2026-05-04
+**Repo**: https://github.com/mateocerquetella/agentum
+**License**: MIT
 **Reference**: forked-in-spirit from [mixpeek/amux](https://github.com/mixpeek/amux) (MIT + Commons Clause). agentum is a clean-room rewrite, not a fork — only the *concept* is inherited. agentum ships under MIT.
 
 ---
@@ -72,17 +74,17 @@ agentum keeps the good ideas (single artifact, embedded UI, watchdog, channels, 
 │                              │                                 │
 └──────────────────────────────┼─────────────────────────────────┘
                                ▼
-                    ┌──────────────────────┐
-                    │   tmux server (host) │
-                    │   ~/.agentum/db.sqlite│
-                    └──────────────────────┘
+                    ┌────────────────────────────────────┐
+                    │   tmux server (host)               │
+                    │   $XDG_DATA_HOME/agentum/db.sqlite │
+                    └────────────────────────────────────┘
 ```
 
 ### Runtime topology
 - Single process, single binary.
-- HTTPS on :8822 (rustls + self-signed cert auto-generated to `~/.agentum/tls/`).
+- HTTPS on :8822 (rustls + self-signed cert auto-generated, no Let's Encrypt). Cert lives in `$XDG_DATA_HOME/agentum/tls/`.
 - Plain HTTP cert-download on :8823 for trust-on-first-use from a phone.
-- All state in SQLite at `~/.agentum/db.sqlite`.
+- All state in SQLite at `$XDG_DATA_HOME/agentum/db.sqlite`.
 - tmux invoked as a subprocess via `tokio::process::Command`. Long-lived panes captured via `tmux pipe-pane` to a tail-able log per session.
 - WebSocket per session for live terminal stream to the browser.
 
@@ -91,6 +93,27 @@ agentum keeps the good ideas (single artifact, embedded UI, watchdog, channels, 
 - **Watchdog** task — per-session loop monitoring tmux pane content for `/compact` triggers, stuck prompts, crashes.
 - **Event bus** — `tokio::sync::broadcast` channel; UI subscribes via WebSocket.
 - **Persistence** — sqlx with SQLite. WAL mode for concurrent reads during writes.
+
+### Filesystem layout (XDG-compliant)
+All paths honor the [XDG Base Directory spec](https://specifications.freedesktop.org/basedir-spec/) with sensible Linux/macOS fallbacks. Resolved via the `directories` crate.
+
+| Purpose       | Env var                | Default (Linux)              | Default (macOS)                                       |
+|---------------|------------------------|------------------------------|-------------------------------------------------------|
+| Config        | `XDG_CONFIG_HOME`      | `~/.config/agentum/`         | `~/Library/Application Support/agentum/config/`        |
+| Data (DB, TLS, auth_token) | `XDG_DATA_HOME`     | `~/.local/share/agentum/`     | `~/Library/Application Support/agentum/`               |
+| Cache (pane logs) | `XDG_CACHE_HOME`   | `~/.cache/agentum/`          | `~/Library/Caches/agentum/`                            |
+| State (lockfiles) | `XDG_STATE_HOME`   | `~/.local/state/agentum/`    | `~/Library/Application Support/agentum/state/`         |
+
+Files inside `$XDG_DATA_HOME/agentum/`:
+- `db.sqlite` — primary store (WAL + `db.sqlite-shm`, `db.sqlite-wal`).
+- `auth_token` — single bearer token (chmod 0600). Created on first `serve`.
+- `tls/cert.pem`, `tls/key.pem` — self-signed pair, regenerated yearly.
+
+Files inside `$XDG_CONFIG_HOME/agentum/`:
+- `config.toml` — user config (default port, default theme, configured tool aliases). Optional; defaults baked in.
+
+Files inside `$XDG_CACHE_HOME/agentum/`:
+- `sessions/<session_id>.log` — `pipe-pane` capture, append-only. Rotated when > 10 MB. Safe to delete.
 
 ---
 
@@ -352,7 +375,7 @@ WAL mode + `synchronous=NORMAL` for performance. Run `VACUUM` weekly via watchdo
 
 ## 7. HTTP API surface
 
-All JSON. Auth via `Authorization: Bearer <token>` (token in `~/.agentum/auth_token` on first run).
+All JSON. Auth via `Authorization: Bearer <token>` (single token in `$XDG_DATA_HOME/agentum/auth_token` on first run, mode 0600). Bearer-token-only — no hash-based scheme, no OAuth, no multi-user. Rotation = `agentum auth rotate` (overwrites the file with a new random 32-byte URL-safe token).
 
 ### Sessions
 | Method | Path                              | Body / Query                | Returns |
@@ -489,7 +512,7 @@ Built-in commands:
 ### Empty states
 
 Every page must have a designed empty state:
-- Sessions: hero card "No sessions yet — register a project to start." + button.
+- Sessions: hero card "No sessions yet — `agentum new <name> --tool <cli> --dir <path>`" + button to open the new-session dialog.
 - Board: ASCII-art kanban placeholder + "+ Add task".
 - Notes: notebook icon + "Capture your first thought."
 - Channels: "No channels yet — agents need at least 2 sessions."
@@ -512,26 +535,54 @@ Every page must have a designed empty state:
 
 ## 9. CLI surface (`agentum`)
 
+Fresh design — not amux-compatible. Verbs are short and noun-free. The CLI is **BYO-tool**: `--tool` is required on `new` and accepts any executable on PATH (`claude`, `codex`, `opencode`, `aider`, `cursor`, custom). agentum ships with **no default tool** — the user picks per session.
+
+### Synopsis
+
 ```
-agentum register <name> --dir <path> [--tool claude|codex|opencode] [--model …] [--yolo] [--flag KEY=VAL]…
-agentum start <name>
-agentum stop <name>
-agentum restart <name>
-agentum rm <name>
-agentum ls [--status running]
-agentum attach <name>          # tmux attach passthrough
-agentum send <name> <text>
-agentum send <name> --keys 'C-c'
-agentum peek <name> [-n 30]
-agentum serve [--port 8822] [--no-tls]
-agentum token rotate
+agentum new <name> --tool <cli> --dir <path> [--model <m>] [--arg KEY=VAL]… [--up]
+agentum up <name>                       # start a registered session
+agentum down <name>                     # stop gracefully (SIGTERM, then SIGKILL after 5s)
+agentum kill <name>                     # immediate SIGKILL
+agentum rm <name> [--force]             # remove (must be down unless --force)
+agentum ls [--running] [--tool <t>]     # list sessions
+agentum ps                              # alias for `ls --running`
+agentum open <name>                     # tmux attach passthrough (detach: Ctrl-b d)
+agentum tail <name> [-n 30] [-f]        # show last N lines (or follow)
+agentum send <name> <text>              # send text + Enter
+agentum keys <name> <key-spec>          # raw tmux keys, e.g. 'C-c'
+agentum serve [--port 8822] [--no-tls]  # start dashboard
+agentum auth show                       # print bearer token
+agentum auth rotate                     # generate a new bearer token
+agentum config get <key>
+agentum config set <key> <value>
+agentum config edit                     # open $EDITOR on config.toml
+agentum doctor                          # check tmux, XDG dirs, db, cert, port
 agentum --version
 agentum --help
 ```
 
-`register` and `serve` write to SQLite on first call (creating `~/.agentum/db.sqlite`).
+### Semantics
 
-Exit codes follow conventional semantics (0 ok, 1 generic, 2 usage, 3 not-found, 4 already-exists, 5 backend-down).
+- **No `register`/`start` split** — `agentum new <name> --up` is the equivalent shortcut.
+- **No `--yolo`** — pass agent-specific flags through `--arg`. Example for Claude:
+  `agentum new alpha --tool claude --dir ~/proj --arg dangerously-skip-permissions=true --arg model=opus`.
+  agentum forwards these as `--<key>` (or `--<key>=<value>`) to the configured tool.
+- **No default tool** — `agentum new` errors if `--tool` is omitted. Suggest setting a per-user default via `agentum config set default_tool claude` (still explicit at the CLI).
+- **DB lazy-init** — first `new` or `serve` creates `$XDG_DATA_HOME/agentum/db.sqlite` and the migrations apply.
+
+### Exit codes
+
+| Code | Meaning              |
+|------|----------------------|
+| 0    | ok                   |
+| 1    | generic error        |
+| 2    | usage / bad args     |
+| 3    | not-found (no session by that name) |
+| 4    | already-exists       |
+| 5    | backend not reachable (`serve` down) |
+| 6    | tmux missing / unhealthy |
+| 7    | tool binary not found on PATH |
 
 ---
 
@@ -575,31 +626,35 @@ Each phase is a single git commit (or feature branch + squash). Estimates assume
 
 ### Phase 1 — Cargo workspace + minimal HTTP server (3–4 h)
 - Create workspace + crates per §5.
-- `agentum serve` boots axum on :8822, returns `{"status":"ok"}` on `/api/health`.
+- XDG-aware path resolution via `directories` crate; `$XDG_DATA_HOME/agentum/` created on first run.
+- `agentum serve` boots axum on :8822, returns `{"status":"ok","version":"…"}` on `/api/health`.
 - Plain HTTP first (TLS comes phase 5).
 - SQLite store crate with `sessions` table only; migration runs on boot.
-- `agentum register/start/stop/ls` working end-to-end against the DB (no tmux yet — just status flags).
+- `agentum new`, `agentum up`, `agentum down`, `agentum ls` all working against the DB (no tmux yet — just status flag transitions).
 - **Acceptance**:
   ```
-  cargo run -- register demo --dir ~/Developer/projects/CerqueTech/agentum
-  cargo run -- ls            # demo idle
-  curl http://localhost:8822/api/sessions   # returns demo
+  cargo run -- new demo --tool claude --dir ~/Developer/projects/CerqueTech/agentum
+  cargo run -- ls                         # demo  idle  claude
+  curl http://localhost:8822/api/sessions # returns [demo]
+  test -f ~/.local/share/agentum/db.sqlite
   ```
-- **Commit**: `feat: workspace + http server + register/ls`
+- **Commit**: `feat(phase-1): workspace + http server + new/up/down/ls`
 
 ### Phase 2 — tmux adapter (3 h)
-- `agentum-tmux` crate: `has_session`, `new_session(name, dir, cmd)`, `kill_session`, `capture_pane`, `send_keys`, `pipe_pane(out_path)`.
-- `agentum start <name>` actually spawns a tmux session named `agentum-<name>` with the configured `tool` command.
-- `agentum stop` kills it.
-- DB status updates on start/stop.
+- `agentum-tmux` crate: `has_session`, `new_session(name, dir, cmd, env)`, `kill_session`, `capture_pane`, `send_keys`, `pipe_pane(out_path)`.
+- `agentum up <name>` actually spawns a tmux session `agentum-<name>` running the configured `tool`.
+- `agentum down` graceful (SIGTERM → SIGKILL after 5s); `agentum kill` immediate.
+- DB `status` + `tmux_target` updates on every transition.
+- pane capture via `tmux pipe-pane -o` to `$XDG_CACHE_HOME/agentum/sessions/<id>.log`.
 - **Acceptance**:
   ```
-  cargo run -- start demo
-  tmux ls | grep agentum-demo   # exists
-  cargo run -- stop demo
-  tmux ls | grep agentum-demo   # gone
+  cargo run -- up demo
+  tmux ls | grep agentum-demo             # exists
+  cargo run -- down demo
+  tmux ls | grep agentum-demo             # gone
+  test -f ~/.cache/agentum/sessions/<id>.log
   ```
-- **Commit**: `feat: tmux adapter`
+- **Commit**: `feat(phase-2): tmux adapter`
 
 ### Phase 3 — SvelteKit static frontend + theme system (4–5 h)
 - `pnpm create svelte@latest web` → SvelteKit + adapter-static + TS + ESLint.
@@ -615,18 +670,18 @@ Each phase is a single git commit (or feature branch + squash). Estimates assume
 
 ### Phase 4 — live session terminal (4 h)
 - `xterm.js` integration in `/sessions/[id]/+page.svelte`.
-- WebSocket `/api/sessions/:id/stream` — backend tails the `pipe-pane` output file and forwards bytes.
+- WebSocket `/api/sessions/:id/stream` — backend tails the `pipe-pane` output file at `$XDG_CACHE_HOME/agentum/sessions/<id>.log` and forwards bytes.
 - Input bar sends to `POST /api/sessions/:id/send` with `append_enter=true`.
-- **Acceptance**: register a session running `bash`, start it, open detail page, type `echo hi`, see `hi` in terminal.
-- **Commit**: `feat: live terminal stream`
+- **Acceptance**: `agentum new shell --tool bash --dir ~ --up` then open the detail page, type `echo hi` in the input bar, see `hi` in the terminal pane.
+- **Commit**: `feat(phase-4): live terminal stream`
 
-### Phase 5 — TLS + auth (2 h)
-- rustls + rcgen self-signed cert generation to `~/.agentum/tls/`.
-- Plain HTTP cert-server on :8823 returning the PEM.
-- Bearer-token auth middleware. Token in `~/.agentum/auth_token` (created on first boot, mode 0600).
-- Frontend prompts for token on first load, stores in `localStorage`.
-- **Acceptance**: `https://localhost:8822/` works (with browser warn for self-signed); requests without token return 401.
-- **Commit**: `feat: tls + bearer auth`
+### Phase 5 — TLS + bearer auth (2 h)
+- rustls + rcgen self-signed cert generation to `$XDG_DATA_HOME/agentum/tls/cert.pem` + `key.pem`. Regenerate yearly; serve from disk.
+- Plain HTTP cert-server on :8823 returning the PEM (for trust-on-first-use from a phone).
+- Bearer-token middleware on `/api/*` (excluding `/api/cert` + `/api/health`). Token in `$XDG_DATA_HOME/agentum/auth_token`, chmod 0600, generated by `rand::thread_rng` (32 bytes URL-safe base64). No hashing — bearer token only, single value, rotatable via `agentum auth rotate`.
+- Frontend prompts for token on first load, stores in `localStorage` keyed by origin.
+- **Acceptance**: `https://localhost:8822/` works with browser warn; requests without `Authorization` return 401; `agentum auth rotate` invalidates old token (next request 401 with prior token).
+- **Commit**: `feat(phase-5): tls + bearer auth`
 
 ### Phase 6 — watchdog (3 h)
 - Per-session task implementing rules in §10.
@@ -666,18 +721,20 @@ Each phase is a single git commit (or feature branch + squash). Estimates assume
 
 ---
 
-## 13. Open decisions (need answers before phase 1 starts)
+## 13. Decisions (resolved 2026-05-04)
 
-1. **GitHub user/org**: `mateocerquetella/agentum` or new org?
-2. **License**: confirmed MIT?
-3. **TLS strategy**: rustls + self-signed (default), or also support Let's Encrypt via DNS-01 for users with public domains?
-4. **Auth**: bearer token only for v0.1, or hash-based (so token can be revoked without changing secret)?
-5. **CLI `agentum register` + flag pass-through**: keep amux-style `--yolo` / `--model opus` / `--flag KEY=VAL`, or design fresh?
-6. **Persistence path**: `~/.agentum/` only, or honor `XDG_DATA_HOME` and `XDG_CONFIG_HOME`?
-7. **Default tool**: `claude` like amux, or no default (force explicit `--tool`)?
-8. **Theme set in v0.1**: terminal-dark + paperlight only, or also ship `mono-light` and `catppuccin-mocha`?
+| #  | Question                | Resolution                                    |
+|----|-------------------------|-----------------------------------------------|
+| 1  | GitHub repo             | `mateocerquetella/agentum`                    |
+| 2  | License                 | MIT                                           |
+| 3  | TLS strategy            | rustls + self-signed only (no Let's Encrypt)  |
+| 4  | Auth                    | Bearer token only (single value, rotatable)   |
+| 5  | CLI design              | Fresh — not amux-compatible (see §9)          |
+| 6  | Persistence path        | XDG-aware (see §3 Filesystem layout)          |
+| 7  | Default tool            | None — user picks `--tool` per session (BYO)  |
+| 8  | v0.1 themes             | terminal-dark + paperlight only               |
 
-Default answers if you stay silent: `mateocerquetella/agentum`, MIT, rustls + self-signed only, bearer token, keep amux-style flags, XDG-aware, default `claude`, two themes only.
+Reverse any decision by editing this section, the affected section it touches, and noting the reversal in the commit message.
 
 ---
 
@@ -707,13 +764,14 @@ Default answers if you stay silent: `mateocerquetella/agentum`, MIT, rustls + se
 
 ## 16. Glossary
 
-- **Session** — a tmux session running an AI agent CLI (claude/codex/opencode) in a project dir.
-- **Tool** — the CLI binary. Default `claude`.
+- **Session** — a tmux session running an AI agent CLI (claude/codex/opencode/aider/cursor/custom) in a project dir.
+- **Tool** — the CLI binary the session runs. Required on `agentum new`; no default.
 - **Workdir** — absolute path the agent starts in.
 - **Watchdog** — per-session monitor that auto-compacts and restarts on known failure signatures.
 - **Pane bytes** — raw bytes captured from `tmux pipe-pane`, including ANSI escapes; xterm.js renders them.
 - **Channel** — directed pair of sessions for inter-agent messaging (1:1).
 - **Atomic claim** — board item ownership transfer via SQL CAS.
+- **XDG** — Base Directory Specification governing where config / data / cache / state live (see §3).
 
 ---
 
