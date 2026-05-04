@@ -9,7 +9,10 @@ use clap::{Parser, Subcommand};
     name = "agentum",
     version,
     about = "Self-hosted control plane for AI coding agents.",
-    long_about = None,
+    long_about = "Self-hosted control plane for AI coding agents.\n\n\
+                  Quick start:\n  \
+                  agentum new my-session --tool claude --dir . --up\n  \
+                  agentum serve",
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -18,7 +21,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Cmd {
-    /// Register a new session.
+    /// Create a new agent session.
     New {
         /// Session name (used in tmux target and URLs).
         name: String,
@@ -45,19 +48,19 @@ pub enum Cmd {
         up: bool,
     },
 
-    /// Start a registered session (no-op tmux in phase 1; status flips to `running`).
+    /// Start a session.
     Up {
         /// Session name.
         name: String,
     },
 
-    /// Stop a session gracefully (SIGTERM, then SIGKILL after 5s).
+    /// Stop a session gracefully.
     Down {
         /// Session name.
         name: String,
     },
 
-    /// Kill a session immediately (no graceful shutdown).
+    /// Kill a session immediately.
     Kill {
         /// Session name.
         name: String,
@@ -70,7 +73,7 @@ pub enum Cmd {
         running: bool,
     },
 
-    /// Run the agentum dashboard server.
+    /// Start the dashboard server.
     Serve {
         /// Port to bind on (HTTPS by default).
         #[arg(long, default_value_t = 8822)]
@@ -90,11 +93,17 @@ pub enum Cmd {
         no_tls: bool,
     },
 
-    /// Manage the bearer-token used to authenticate against `/api/*`.
+    /// Show running sessions.
+    Ps,
+
+    /// Manage API authentication.
     Auth {
         #[command(subcommand)]
         action: AuthCmd,
     },
+
+    /// Check system health (tmux, dirs, db, certs, port).
+    Doctor,
 }
 
 #[derive(Debug, Subcommand)]
@@ -119,6 +128,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Cmd::Down { name } => crate::commands::down::run(name).await,
         Cmd::Kill { name } => crate::commands::kill::run(name).await,
         Cmd::Ls { running } => crate::commands::ls::run(running).await,
+        Cmd::Ps => crate::commands::ls::run(true).await,
         Cmd::Serve {
             port,
             host,
@@ -130,6 +140,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             crate::commands::serve::run(addr, cert_addr, !no_tls).await
         }
         Cmd::Auth { action } => crate::commands::auth::run(action).await,
+        Cmd::Doctor => crate::commands::doctor::run().await,
     }
 }
 

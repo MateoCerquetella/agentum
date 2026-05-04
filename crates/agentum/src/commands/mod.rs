@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod doctor;
 pub mod down;
 pub mod kill;
 pub mod ls;
