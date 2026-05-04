@@ -1,10 +1,14 @@
 use agentum_core::Status;
 use anyhow::Result;
 
-pub async fn run(running_only: bool) -> Result<()> {
+pub async fn run(running_only: bool, tool_filter: Option<String>) -> Result<()> {
     let (store, _) = super::open_store().await?;
     let filter = if running_only { Some(Status::Running) } else { None };
-    let sessions = store.list_sessions(filter).await?;
+    let mut sessions = store.list_sessions(filter).await?;
+
+    if let Some(ref tool) = tool_filter {
+        sessions.retain(|s| s.tool == *tool);
+    }
 
     if sessions.is_empty() {
         println!("(no sessions)");

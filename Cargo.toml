@@ -41,6 +41,9 @@ clap              = { version = "4", features = ["derive", "env"] }
 directories       = "5"
 uuid              = { version = "1", features = ["v4", "serde"] }
 time              = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
+toml              = "0.8"
+toml_edit         = "0.22"
+exec              = "0.3"
 
 [profile.release]
 lto = "thin"

@@ -11,8 +11,8 @@ use clap::{Parser, Subcommand};
     about = "Self-hosted control plane for AI coding agents.",
     long_about = "Self-hosted control plane for AI coding agents.\n\n\
                   Quick start:\n  \
-                  agentum new my-session --tool claude --dir . --up\n  \
-                  agentum serve",
+                  agentum new my-session --tool claude --dir .\n  \
+                  agentum serve          # resumes sessions + starts dashboard",
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -66,14 +66,69 @@ pub enum Cmd {
         name: String,
     },
 
+    /// Remove a session (must be stopped unless --force).
+    Rm {
+        /// Session name.
+        name: String,
+
+        /// Kill the session first if it is still running.
+        #[arg(long)]
+        force: bool,
+    },
+
     /// List sessions.
     Ls {
         /// Show only running sessions.
         #[arg(long)]
         running: bool,
+
+        /// Filter by tool name.
+        #[arg(long)]
+        tool: Option<String>,
     },
 
-    /// Start the dashboard server.
+    /// Show running sessions.
+    Ps,
+
+    /// Attach to a session's tmux pane (detach: Ctrl-b d).
+    Open {
+        /// Session name.
+        name: String,
+    },
+
+    /// Show pane log output.
+    Tail {
+        /// Session name.
+        name: String,
+
+        /// Number of lines to show.
+        #[arg(short = 'n', default_value_t = 30)]
+        lines: u32,
+
+        /// Follow output as it grows.
+        #[arg(short = 'f', long)]
+        follow: bool,
+    },
+
+    /// Send text to a session (appends Enter).
+    Send {
+        /// Session name.
+        name: String,
+
+        /// Text to send.
+        text: String,
+    },
+
+    /// Send raw tmux key sequence to a session (e.g. 'C-c', 'Enter').
+    Keys {
+        /// Session name.
+        name: String,
+
+        /// tmux key specification.
+        key_spec: String,
+    },
+
+    /// Start agentum (resumes sessions + launches dashboard).
     Serve {
         /// Port to bind on (HTTPS by default).
         #[arg(long, default_value_t = 8822)]
@@ -91,15 +146,22 @@ pub enum Cmd {
         /// Bind plain HTTP instead of HTTPS. Disables the cert-server too.
         #[arg(long)]
         no_tls: bool,
-    },
 
-    /// Show running sessions.
-    Ps,
+        /// Skip auto-resuming stopped sessions on startup.
+        #[arg(long)]
+        no_resume: bool,
+    },
 
     /// Manage API authentication.
     Auth {
         #[command(subcommand)]
         action: AuthCmd,
+    },
+
+    /// Manage configuration.
+    Config {
+        #[command(subcommand)]
+        action: ConfigCmd,
     },
 
     /// Check system health (tmux, dirs, db, certs, port).
@@ -112,6 +174,24 @@ pub enum AuthCmd {
     Show,
     /// Generate a fresh bearer token and overwrite the on-disk file.
     Rotate,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ConfigCmd {
+    /// Print a configuration value.
+    Get {
+        /// Configuration key.
+        key: String,
+    },
+    /// Set a configuration value.
+    Set {
+        /// Configuration key.
+        key: String,
+        /// Value to set.
+        value: String,
+    },
+    /// Open config file in $EDITOR.
+    Edit,
 }
 
 pub async fn dispatch(cli: Cli) -> Result<()> {
@@ -127,19 +207,30 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Cmd::Up { name } => crate::commands::up::run(name).await,
         Cmd::Down { name } => crate::commands::down::run(name).await,
         Cmd::Kill { name } => crate::commands::kill::run(name).await,
-        Cmd::Ls { running } => crate::commands::ls::run(running).await,
-        Cmd::Ps => crate::commands::ls::run(true).await,
+        Cmd::Rm { name, force } => crate::commands::rm::run(name, force).await,
+        Cmd::Ls { running, tool } => crate::commands::ls::run(running, tool).await,
+        Cmd::Ps => crate::commands::ls::run(true, None).await,
+        Cmd::Open { name } => crate::commands::open::run(name).await,
+        Cmd::Tail {
+            name,
+            lines,
+            follow,
+        } => crate::commands::tail::run(name, lines, follow).await,
+        Cmd::Send { name, text } => crate::commands::send::run(name, text).await,
+        Cmd::Keys { name, key_spec } => crate::commands::keys::run(name, key_spec).await,
         Cmd::Serve {
             port,
             host,
             cert_port,
             no_tls,
+            no_resume,
         } => {
             let addr: SocketAddr = format!("{host}:{port}").parse()?;
             let cert_addr: SocketAddr = format!("{host}:{cert_port}").parse()?;
-            crate::commands::serve::run(addr, cert_addr, !no_tls).await
+            crate::commands::serve::run(addr, cert_addr, !no_tls, no_resume).await
         }
         Cmd::Auth { action } => crate::commands::auth::run(action).await,
+        Cmd::Config { action } => crate::commands::config::run(action).await,
         Cmd::Doctor => crate::commands::doctor::run().await,
     }
 }
