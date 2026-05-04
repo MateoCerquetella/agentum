@@ -177,6 +177,72 @@ pub struct ClaimRequest {
     pub claimed_by: String,
 }
 
+// ---------- notes (Phase 8) ----------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Note {
+    pub id: i64,
+    pub title: String,
+    pub body: String,
+    pub tags: Vec<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewNote {
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NotePatch {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+}
+
+// ---------- channels + messages (Phase 8) ----------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Channel {
+    pub id: i64,
+    pub a_session: Uuid,
+    pub b_session: Uuid,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewChannel {
+    pub a_session: Uuid,
+    pub b_session: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Message {
+    pub id: i64,
+    pub channel_id: i64,
+    pub sender: String,
+    pub body: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub ts: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewMessage {
+    pub sender: String,
+    pub body: String,
+}
+
 /// Validate a session name: lowercase alphanumeric, dash, underscore. 1..=64 chars.
 pub fn validate_name(name: &str) -> Result<(), CoreError> {
     if name.is_empty() || name.len() > 64 {
