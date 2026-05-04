@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>MCP Servers + Parallel Agents: A Force Multiplier — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="How to configure MCP servers in amux sessions to give each agent specialized tool access.">
+  <meta name="keywords" content="MCP server parallel agents, model context protocol amux, claude code MCP tools">
+  <link rel="canonical" href="https://amux.io/blog/mcp-server-agent-orchestration/">
+  <meta property="og:title" content="MCP Servers + Parallel Agents: A Force Multiplier — amux">
+  <meta property="og:description" content="How to configure MCP servers in amux sessions to give each agent specialized tool access.">
+  <meta property="og:url" content="https://amux.io/blog/mcp-server-agent-orchestration/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Blog","item":"https://amux.io/blog/"},{"@type":"ListItem","position":3,"name":"MCP Servers + Parallel Agents: A Force Multiplier","item":"https://amux.io/blog/mcp-server-agent-orchestration/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"MCP Servers + Parallel Agents: A Force Multiplier","description":"How to configure MCP servers in amux sessions to give each agent specialized tool access.","url":"https://amux.io/blog/mcp-server-agent-orchestration/","datePublished":"2026-02-26","dateModified":"2026-02-26","author":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"publisher":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://amux.io/blog/mcp-server-agent-orchestration/"}}</script>
+  </head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">›</span> <a href="/blog/">Blog</a> <span class="sep">›</span> <span>MCP Servers + Parallel Agents: A Force Multiplier</span></div>
+    <h1>MCP Servers + Parallel Agents: A Force Multiplier</h1>
+<p class="subtitle">MCP turns agents from code-writers into systems — with access to databases, APIs, browsers, and internal tools.</p>
+<h2>What MCP Adds to Agent Workflows</h2>
+<p>Model Context Protocol (MCP) lets Claude Code agents connect to specialized tool servers: database access, browser automation, Slack messaging, GitHub API, internal REST APIs, Figma, Linear, and more. When you combine MCP servers with parallel agents, each agent becomes a specialist — not just a code writer, but a system that can query your database, check Slack, and push to GitHub directly.</p>
+<h2>Per-Session MCP Configuration</h2>
+<p>amux uses a centralized <code>mcp.json</code> config that all sessions share. But you can also configure session-specific MCP servers using environment variables or session-level config overrides. This lets you give different agents different tool access:</p>
+<pre><code># mcp.json — centralized for all sessions
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" }
+    },
+    "postgres": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "env": { "DATABASE_URL": "${DATABASE_URL}" }
+    },
+    "browser": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-puppeteer"]
+    }
+  }
+}</code></pre>
+<h2>Specialist Agent Patterns</h2>
+<p>With MCP, you can build specialist agents that have the right tools for their domain:</p>
+<ul>
+<li><strong>Database agent:</strong> Postgres MCP + Filesystem → queries the live schema, reads migrations, writes new ones correctly.</li>
+<li><strong>GitHub agent:</strong> GitHub MCP → creates PRs, reviews open issues, posts comments, creates labels and milestones.</li>
+<li><strong>QA agent:</strong> Puppeteer MCP → runs browser automation tests, takes screenshots, reports visual regressions.</li>
+<li><strong>Documentation agent:</strong> Filesystem + GitHub MCP → reads code, generates docs, commits them to a docs branch automatically.</li>
+</ul>
+<h2>Coordination via REST</h2>
+<p>amux agents coordinate via HTTP API — they can read the shared board, post updates, and message each other. Combined with MCP tool access, this means an orchestrator agent can see what specialist agents have done (via the board) and issue follow-up tasks without any human intervention.</p>
+<p>The pattern looks like: orchestrator reads the task list, assigns sub-tasks to specialist agents via the board, specialist agents complete tasks with their MCP tools, orchestrator verifies and closes the loop. Pure agent orchestration, no human in the loop.</p>
+<div class="cta-box"><h3>Get started with amux</h3><p>Run dozens of Claude Code agents in parallel. Python 3 + tmux. Open source.</p><pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # → https://localhost:8822</code></pre><a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a></div>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

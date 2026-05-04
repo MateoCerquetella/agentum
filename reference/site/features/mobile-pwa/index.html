@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>Mobile PWA — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="How amux's PWA handles offline sync: queue reconciliation, Background Sync, drafts, and auto-retry — manage agents from your phone even without connectivity.">
+  <meta name="keywords" content="amux PWA, mobile AI management, progressive web app, iOS Android agents">
+  <link rel="canonical" href="https://amux.io/features/mobile-pwa/">
+  <meta property="og:title" content="Mobile PWA — amux">
+  <meta property="og:description" content="How amux's PWA handles offline sync: queue reconciliation, Background Sync, drafts, and auto-retry.">
+  <meta property="og:url" content="https://amux.io/features/mobile-pwa/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://amux.io/features/"},{"@type":"ListItem","position":3,"name":"Mobile PWA","item":"https://amux.io/features/mobile-pwa/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebPage","name":"Mobile PWA","description":"Install amux as a Progressive Web App on your phone for mobile agent management.","url":"https://amux.io/features/mobile-pwa/","about":{"@type":"SoftwareApplication","name":"amux","url":"https://amux.io/","featureList":"Mobile PWA"}}</script>
+  </head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">›</span> <a href="/features/">Features</a> <span class="sep">›</span> <span>Mobile PWA</span></div>
+    <h1>Mobile PWA</h1>
+<p class="subtitle">Install amux on your phone. Manage agents from anywhere &mdash; even offline.</p>
+<p>amux&rsquo;s dashboard is a full Progressive Web App. Install it on iOS or Android for native-like access to your agent fleet. Every mutation you make while offline &mdash; starting sessions, moving board items, sending commands &mdash; queues locally and replays automatically when you reconnect.</p>
+
+<h2>How offline sync works</h2>
+<p>Most PWAs just cache static pages. amux goes further: it queues <em>mutations</em> and replays them in order, with smart conflict resolution, so you can manage agents from your phone on a subway or a plane and have everything sync when you surface.</p>
+
+<h3>1. The offline queue</h3>
+<p>Every API call goes through a single wrapper function: <code>apiCall()</code>. When the network is down, mutations (POST, PATCH, DELETE) are pushed onto an offline queue stored in both localStorage and IndexedDB. Read-only GET requests return cached data instead.</p>
+<p>Each queued operation records:</p>
+<ul>
+  <li>The HTTP method and URL</li>
+  <li>The request body</li>
+  <li>A timestamp</li>
+  <li>The operation type (e.g. <code>start-session</code>, <code>board-move</code>, <code>send-command</code>)</li>
+</ul>
+<p>Dual storage (localStorage + IndexedDB) means the queue survives both page refreshes and service worker restarts.</p>
+
+<h3>2. Queue reconciliation</h3>
+<p>Before replaying, amux runs <code>reconcileQueue()</code> to remove contradictory operations. If you started a session then stopped it while offline, both operations are dropped &mdash; the net effect is zero, and replaying them in sequence would waste API calls and potentially leave the session in the wrong state.</p>
+<p>The reconciler walks the queue and removes inverse pairs:</p>
+<ul>
+  <li><strong>start + stop</strong> on the same session &rarr; skip both</li>
+  <li><strong>Multiple board moves</strong> on the same item &rarr; keep only the last</li>
+</ul>
+<p>This keeps replay fast and idempotent.</p>
+
+<h3>3. Background Sync</h3>
+<p>When you queue an operation, amux registers a <code>sync</code> event with the browser&rsquo;s <a href="https://developer.mozilla.org/en-US/docs/Web/API/Background_Synchronization_API">Background Sync API</a>. This means the browser will fire a sync event when connectivity returns &mdash; even if the PWA tab is closed.</p>
+<p>The service worker&rsquo;s sync handler reads the queue from IndexedDB (service workers can&rsquo;t access localStorage), replays each operation in order, and clears the queue on success.</p>
+
+<h3>4. The sync banner</h3>
+<p>When the app comes back online (or you open the PWA after being offline), a progress banner appears at the top of the screen showing each queued operation as it replays:</p>
+<ul>
+  <li>Operation name and target (e.g. &ldquo;Starting session worker-3&rdquo;)</li>
+  <li>Progress count (e.g. &ldquo;2 / 5&rdquo;)</li>
+  <li>Success/failure status for each item</li>
+</ul>
+<p>Drafts (sessions you created while offline) sync first, since other operations may depend on them existing.</p>
+
+<h3>5. Auto-retry on visibility change</h3>
+<p>As a fallback for browsers that don&rsquo;t support Background Sync, amux also listens for <code>visibilitychange</code> events. When you switch back to the amux tab, it checks for queued operations and replays them immediately. This covers Safari on iOS, which has limited Background Sync support.</p>
+
+<h3>6. Service worker caching</h3>
+<p>The service worker uses a two-strategy cache:</p>
+<ul>
+  <li><strong>Cache-first</strong> for static assets (CSS, JS, images, fonts) &mdash; instant loads, updated in the background</li>
+  <li><strong>Network-first</strong> for HTML pages &mdash; always gets fresh content, falls back to cache when offline</li>
+  <li><strong>Skip</strong> for API calls &mdash; the app-level <code>apiCall()</code> wrapper handles offline queueing, so the service worker stays out of the way</li>
+</ul>
+
+<h2>Offline drafts</h2>
+<p>You can create new sessions while offline. These are saved as &ldquo;drafts&rdquo; in IndexedDB with a local UUID. When connectivity returns, drafts are synced first (before the rest of the queue), converting them into real registered sessions. Any commands you queued for a draft session are replayed against the newly-created real session.</p>
+
+<h2>What works offline</h2>
+<table>
+  <thead><tr><th>Action</th><th>Offline behavior</th></tr></thead>
+  <tbody>
+    <tr><td>View sessions</td><td>Shows cached state from last online fetch</td></tr>
+    <tr><td>Start / stop sessions</td><td>Queued, replayed on reconnect</td></tr>
+    <tr><td>Send commands</td><td>Queued, replayed in order</td></tr>
+    <tr><td>Move board items</td><td>Queued, reconciled before replay</td></tr>
+    <tr><td>Create board items</td><td>Queued, replayed on reconnect</td></tr>
+    <tr><td>Create sessions (drafts)</td><td>Saved locally, synced first on reconnect</td></tr>
+    <tr><td>Peek at terminal output</td><td>Shows last cached output</td></tr>
+  </tbody>
+</table>
+
+<h2>Install</h2>
+<p><strong>iOS:</strong> Open amux in Safari &rarr; tap Share &rarr; Add to Home Screen.</p>
+<p><strong>Android:</strong> Open amux in Chrome &rarr; tap the install banner or Menu &rarr; Install app.</p>
+<p>The PWA uses HTTPS with a service worker, so your browser will prompt for installation automatically. For certificate setup on your phone, see the <a href="/guides/getting-started/">getting started guide</a>.</p>
+
+<div class="cta-box"><h3>Get started with amux</h3><p>Run dozens of Claude Code agents in parallel. Python 3 + tmux. Open source.</p><pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # &rarr; https://localhost:8822</code></pre><a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a></div>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

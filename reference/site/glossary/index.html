@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>Glossary — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="Key concepts in AI agent orchestration and parallel development.">
+  <meta name="keywords" content="amux, glossary, claude code, AI coding">
+  <link rel="canonical" href="https://amux.io/glossary/">
+  <meta property="og:title" content="Glossary — amux">
+  <meta property="og:description" content="Key concepts in AI agent orchestration and parallel development.">
+  <meta property="og:url" content="https://amux.io/glossary/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  </head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">›</span> <span>Glossary</span></div>
+    <h1>Glossary</h1><p class="subtitle">Key concepts in AI agent orchestration and parallel development.</p><ul style="list-style:none;margin-left:0"><li style="margin-bottom:1rem"><a href="/glossary/agent-multiplexer/" style="font-weight:500">Agent Multiplexer</a><br><span style="color:var(--muted);font-size:0.85rem">Agent Multiplexer: A tool that runs and manages multiple AI coding agents simultaneously.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/self-healing-agent/" style="font-weight:500">Self-Healing AI Agent</a><br><span style="color:var(--muted);font-size:0.85rem">Self-Healing AI Agent: An AI agent that automatically recovers from crashes, context exhaustion, and stuck states.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/context-compaction/" style="font-weight:500">Context Compaction</a><br><span style="color:var(--muted);font-size:0.85rem">Context Compaction: The process of summarizing conversation history to free up context window space in an AI agent.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/yolo-mode/" style="font-weight:500">YOLO Mode</a><br><span style="color:var(--muted);font-size:0.85rem">YOLO Mode: A configuration that auto-approves tool-use prompts in Claude Code for fully unattended operation.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/agent-orchestration/" style="font-weight:500">Agent Orchestration</a><br><span style="color:var(--muted);font-size:0.85rem">Agent Orchestration: Coordinating multiple AI agents to work together on complex tasks.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/parallel-coding-agents/" style="font-weight:500">Parallel Coding Agents</a><br><span style="color:var(--muted);font-size:0.85rem">Parallel Coding Agents: Multiple AI agents working on different coding tasks at the same time.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/token-accounting/" style="font-weight:500">Token Accounting</a><br><span style="color:var(--muted);font-size:0.85rem">Token Accounting: Tracking token usage and costs across multiple AI coding sessions.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/atomic-task-claiming/" style="font-weight:500">Atomic Task Claiming</a><br><span style="color:var(--muted);font-size:0.85rem">Atomic Task Claiming: A concurrent-safe mechanism for agents to claim tasks without duplicating work.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/session-persistence/" style="font-weight:500">Session Persistence</a><br><span style="color:var(--muted);font-size:0.85rem">Session Persistence: The ability for AI agent sessions to survive restarts and maintain their identity.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/prompt-replay/" style="font-weight:500">Prompt Replay</a><br><span style="color:var(--muted);font-size:0.85rem">Prompt Replay: Automatically re-sending the last message after an AI agent crash to recover progress.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/global-memory/" style="font-weight:500">Global Memory</a><br><span style="color:var(--muted);font-size:0.85rem">Global Memory: A shared knowledge base accessible to all AI agents in a multiplexer.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/background-watchdog/" style="font-weight:500">Background Watchdog</a><br><span style="color:var(--muted);font-size:0.85rem">Background Watchdog: A monitoring process that detects and recovers from AI agent failures automatically.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/conversation-fork/" style="font-weight:500">Conversation Fork</a><br><span style="color:var(--muted);font-size:0.85rem">Conversation Fork: Cloning an AI session's history into multiple new sessions for parallel exploration.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/terminal-peek/" style="font-weight:500">Terminal Peek</a><br><span style="color:var(--muted);font-size:0.85rem">Terminal Peek: Viewing an AI agent's live terminal output without attaching to the session.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/pwa-progressive-web-app/" style="font-weight:500">PWA (Progressive Web App)</a><br><span style="color:var(--muted);font-size:0.85rem">PWA (Progressive Web App): A web application installable on mobile devices with offline support.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/tmux-session-management/" style="font-weight:500">tmux Session Management</a><br><span style="color:var(--muted);font-size:0.85rem">tmux Session Management: Using tmux terminal multiplexer to run persistent background processes.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/rest-api-orchestration/" style="font-weight:500">REST API Orchestration</a><br><span style="color:var(--muted);font-size:0.85rem">REST API Orchestration: Using HTTP endpoints to coordinate AI agent communication and task management.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/ical-sync/" style="font-weight:500">iCal Sync</a><br><span style="color:var(--muted);font-size:0.85rem">iCal Sync: Exporting task deadlines as calendar events via the iCal format.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/sqlite-backed-board/" style="font-weight:500">SQLite-Backed Board</a><br><span style="color:var(--muted);font-size:0.85rem">SQLite-Backed Board: A kanban board using SQLite for concurrent-safe task management.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/git-worktree-isolation/" style="font-weight:500">Git Worktree Isolation</a><br><span style="color:var(--muted);font-size:0.85rem">Git Worktree Isolation: Using git worktrees to give each AI agent its own working copy of a repository.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/headless-coding-agent/" style="font-weight:500">Headless Coding Agent</a><br><span style="color:var(--muted);font-size:0.85rem">A coding agent that runs without a GUI, controlled entirely via CLI or API.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/vibe-coding/" style="font-weight:500">Vibe Coding</a><br><span style="color:var(--muted);font-size:0.85rem">A programming style where developers describe intent in natural language and AI generates the implementation.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/agent-fleet/" style="font-weight:500">Agent Fleet</a><br><span style="color:var(--muted);font-size:0.85rem">A group of AI coding agents running in parallel, coordinated toward a shared goal.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/llm-context-window/" style="font-weight:500">LLM Context Window</a><br><span style="color:var(--muted);font-size:0.85rem">The maximum amount of text an LLM can process in a single request — a key constraint in long-running agent sessions.</span></li>
+<li style="margin-bottom:1rem"><a href="/glossary/unattended-coding/" style="font-weight:500">Unattended Coding</a><br><span style="color:var(--muted);font-size:0.85rem">Running AI coding agents without human supervision — enabled by self-healing, YOLO mode, and atomic task management.</span></li></ul>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

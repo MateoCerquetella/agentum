@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>Building a SaaS MVP Overnight with Agent Fleets — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="How to structure an agent fleet to go from spec to deployed MVP in under 24 hours.">
+  <meta name="keywords" content="SaaS MVP overnight AI, build SaaS with agents, 24 hour MVP AI coding">
+  <link rel="canonical" href="https://amux.io/blog/overnight-saas-mvp/">
+  <meta property="og:title" content="Building a SaaS MVP Overnight with Agent Fleets — amux">
+  <meta property="og:description" content="How to structure an agent fleet to go from spec to deployed MVP in under 24 hours.">
+  <meta property="og:url" content="https://amux.io/blog/overnight-saas-mvp/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Blog","item":"https://amux.io/blog/"},{"@type":"ListItem","position":3,"name":"Building a SaaS MVP Overnight with Agent Fleets","item":"https://amux.io/blog/overnight-saas-mvp/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Building a SaaS MVP Overnight with Agent Fleets","description":"How to structure an agent fleet to go from spec to deployed MVP in under 24 hours.","url":"https://amux.io/blog/overnight-saas-mvp/","datePublished":"2026-02-26","dateModified":"2026-02-26","author":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"publisher":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://amux.io/blog/overnight-saas-mvp/"}}</script>
+  </head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">›</span> <a href="/blog/">Blog</a> <span class="sep">›</span> <span>Building a SaaS MVP Overnight with Agent Fleets</span></div>
+    <h1>Building a SaaS MVP Overnight with Agent Fleets</h1>
+<p class="subtitle">Not a magic trick — a workflow. Here's how to structure it.</p>
+<h2>What "MVP Overnight" Actually Means</h2>
+<p>An overnight MVP isn't a production-ready product. It's a working prototype with the core value proposition implemented: real data, real logic, real UI, deployable and demonstrable. The kind of thing you'd show to a potential customer to validate the idea. That's achievable in 16-24 hours with a well-structured agent fleet.</p>
+<h2>Phase 1: The Spec (2 hours, you)</h2>
+<p>The biggest mistake in overnight MVP builds is underspecifying. Before launching any agents, write:</p>
+<ul>
+<li><strong>User story:</strong> "As a [user], I can [action], so that [outcome]." For every core flow.</li>
+<li><strong>Data model:</strong> The 5-10 entities and their relationships. Draw an ERD.</li>
+<li><strong>API contract:</strong> List every endpoint the frontend will call. Write it as an OpenAPI stub.</li>
+<li><strong>Tech stack decision:</strong> Pick boring tech. Next.js + Postgres + Prisma is a reliable overnight stack.</li>
+</ul>
+<h2>Phase 2: Fleet Launch (30 min, you)</h2>
+<p>Register and launch agents for each domain. Assign tasks to the board with explicit specs:</p>
+<pre><code>amux register db-agent --dir ~/mvp --yolo       # Schema + migrations
+amux register api-agent --dir ~/mvp --yolo      # Route handlers
+amux register auth-agent --dir ~/mvp --yolo     # Auth flow
+amux register frontend-agent --dir ~/mvp --yolo # Pages + components
+amux register deploy-agent --dir ~/mvp --yolo   # Vercel config + CI</code></pre>
+<h2>Phase 3: Overnight Run (8-12 hours, agents)</h2>
+<p>This is the part where you sleep. amux's self-healing watchdog keeps agents running. By morning:</p>
+<ul>
+<li>Database schema is migrated and seeded</li>
+<li>API routes are implemented and tested</li>
+<li>Auth (login, register, session) is working</li>
+<li>Core UI pages are functional</li>
+<li>Vercel deployment is configured</li>
+</ul>
+<h2>Phase 4: Integration and Polish (4-6 hours, you)</h2>
+<p>Morning is integration time. Agents built parts independently — now you wire them together, fix the inevitable integration issues, and add the polish that makes it feel real. This is where your product sense and taste matter most.</p>
+<h2>Phase 5: Deploy and Demo</h2>
+<p><code>git push</code> to main, Vercel deploys automatically. You have a working SaaS MVP by early afternoon the next day. Total time you spent: 8-10 hours. Total wall-clock time: 16-24 hours.</p>
+<div class="cta-box"><h3>Get started with amux</h3><p>Run dozens of Claude Code agents in parallel. Python 3 + tmux. Open source.</p><pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # → https://localhost:8822</code></pre><a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a></div>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

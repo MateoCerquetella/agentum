@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>os.execv: The One-Syscall Way to Hot-Reload a Python Server — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="Replace your running Python process with a new version of itself using os.execv — no process manager, no downtime orchestration, one syscall.">
+  <meta name="keywords" content="python hot reload, os.execv python, python server restart, python file watcher">
+  <link rel="canonical" href="https://amux.io/blog/self-restarting-python-server/">
+  <meta property="og:title" content="os.execv: The One-Syscall Way to Hot-Reload a Python Server — amux">
+  <meta property="og:description" content="Replace your running Python process with a new version of itself using os.execv — no process manager, no downtime orchestration, one syscall.">
+  <meta property="og:url" content="https://amux.io/blog/self-restarting-python-server/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Blog","item":"https://amux.io/blog/"},{"@type":"ListItem","position":3,"name":"os.execv: Hot-Reload a Python Server","item":"https://amux.io/blog/self-restarting-python-server/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"os.execv: The One-Syscall Way to Hot-Reload a Python Server","description":"Replace your running Python process with a new version of itself using os.execv — no process manager, no downtime orchestration, one syscall.","url":"https://amux.io/blog/self-restarting-python-server/","datePublished":"2026-03-18","dateModified":"2026-03-18","author":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"publisher":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://amux.io/blog/self-restarting-python-server/"}}</script>
+  </head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">›</span> <a href="/blog/">Blog</a> <span class="sep">›</span> <span>os.execv Hot-Reload</span></div>
+    <h1>os.execv: The One-Syscall Way to Hot-Reload a Python Server</h1>
+<p class="subtitle">Replace the running process with a new version of itself. Same PID, same port, new code.</p>
+
+<p>amux is a single Python file — about 25,000 lines of server, dashboard HTML/CSS/JS, and agent orchestration logic. During development, this file changes constantly. Sometimes by me, sometimes by the AI agents that amux is orchestrating (they edit the file, the server picks up the changes, and the agents see the new behavior immediately). The server needs to reload without manual intervention, without a process manager, and without losing the port binding for more than a fraction of a second.</p>
+
+<p>The solution is one syscall: <code>os.execv</code>.</p>
+
+<h2>Why not importlib.reload?</h2>
+
+<p><code>importlib.reload(module)</code> re-executes a module's source code and updates the module object in-place. This works for simple cases but falls apart for a server:</p>
+
+<ul>
+<li><strong>Module-level state isn't reset.</strong> Global variables, class definitions, route registrations — reload executes the code again, but existing references to old objects remain. You get a Frankenstein process with some old state and some new state.</li>
+<li><strong>The HTTP server can't re-bind.</strong> The <code>HTTPServer</code> object, its socket, its thread pool — these are all live objects holding resources. Reloading the module doesn't restart them.</li>
+<li><strong>Threads keep running.</strong> Background threads (file watchers, SSE push, session monitors) reference old function objects. You'd need to track and kill every thread, then restart them with new function references.</li>
+</ul>
+
+<p>For a simple library with stateless functions, reload is fine. For a long-running server, it creates more problems than it solves.</p>
+
+<h2>Why not subprocess?</h2>
+
+<p>The classic approach: start a child process with the new code, shut down the old one.</p>
+
+<pre><code># Don't do this
+subprocess.Popen([sys.executable, __file__])
+sys.exit(0)</code></pre>
+
+<p>Problems:</p>
+
+<ul>
+<li><strong>Port conflict.</strong> The old process holds port 8822. The new process tries to bind it and gets <code>EADDRINUSE</code>. You need careful coordination — shut down the old server, wait for the OS to release the port, then start the new one. Or use SO_REUSEADDR/SO_REUSEPORT, which have their own edge cases.</li>
+<li><strong>Two processes.</strong> For a brief window, both are running. If the parent is managed by systemd/launchd, killing it might trigger a restart of the old code.</li>
+<li><strong>PID changes.</strong> Anything monitoring the process by PID (log aggregators, process managers, health checks) sees a new process, not a restart.</li>
+</ul>
+
+<h2>os.execv: replace the process image</h2>
+
+<p><code>os.execv(path, args)</code> is a thin wrapper around the POSIX <code>execv(2)</code> syscall. It replaces the current process image with a new one. The old code is gone — completely, atomically. The new code starts from the top (<code>if __name__ == '__main__'</code>). Same PID, same parent, same environment.</p>
+
+<pre><code>os.execv(sys.executable, [sys.executable] + sys.argv)</code></pre>
+
+<p>That's it. One line. The Python interpreter is replaced by a fresh Python interpreter running the same script with the same arguments. If the script has changed on disk, the new version runs.</p>
+
+<h2>The complete pattern</h2>
+
+<p>Here's a minimal working example:</p>
+
+<pre><code>import os, sys, time, ast, threading
+from pathlib import Path
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Hello from the server\n")
+
+def watch_and_restart(server):
+    """Watch our own source file and restart on change."""
+    script = Path(__file__).resolve()
+    mtime = script.stat().st_mtime
+    DEBOUNCE = 3  # seconds
+
+    while True:
+        time.sleep(1)
+        new_mtime = script.stat().st_mtime
+        if new_mtime == mtime:
+            continue
+
+        # File changed — debounce
+        print(f"[restart] file changed, debouncing {DEBOUNCE}s...")
+        while True:
+            time.sleep(DEBOUNCE)
+            settled = script.stat().st_mtime
+            if settled == new_mtime:
+                break
+            new_mtime = settled
+
+        # Validate syntax before restarting
+        try:
+            ast.parse(script.read_text())
+        except SyntaxError as e:
+            print(f"[restart] ABORTED — syntax error: {e}")
+            mtime = new_mtime
+            continue
+
+        # Shut down the server
+        threading.Thread(target=server.shutdown, daemon=True).start()
+        time.sleep(0.5)
+        try:
+            server.socket.close()
+        except Exception:
+            pass
+
+        # Replace ourselves
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+if __name__ == "__main__":
+    server = HTTPServer(("", 8822), Handler)
+    watcher = threading.Thread(
+        target=watch_and_restart, args=(server,), daemon=True
+    )
+    watcher.start()
+    print("Serving on :8822")
+    server.serve_forever()</code></pre>
+
+<p>That's 50 lines for a self-reloading HTTP server. Let's walk through the important parts.</p>
+
+<h2>The debounce problem</h2>
+
+<p>When an AI agent edits a file, the write isn't atomic from the filesystem's perspective. An editor might:</p>
+
+<ol>
+<li>Write to a temp file</li>
+<li>Rename temp file over the original (atomic on most filesystems)</li>
+</ol>
+
+<p>But some tools do multiple writes in quick succession — format on save, lint fixes, multiple edits. Without debouncing, the watcher sees the first write, restarts, then sees the second write and restarts again.</p>
+
+<p>The debounce logic: when mtime changes, wait 3 seconds. Check mtime again. If it changed during the wait, reset the timer. Keep waiting until the file is stable for a full 3 seconds. Only then proceed with the restart.</p>
+
+<p>3 seconds is a sweet spot — long enough to absorb editor save-format-save cycles, short enough that you're not waiting around.</p>
+
+<h2>Syntax validation: don't restart into a broken file</h2>
+
+<p>This is critical when AI agents are editing your server:</p>
+
+<pre><code>try:
+    ast.parse(script.read_text())
+except SyntaxError as e:
+    print(f"[restart] ABORTED — syntax error: {e}")
+    mtime = new_mtime  # update mtime, wait for next change
+    continue</code></pre>
+
+<p><code>ast.parse</code> parses the Python source without executing it. If the file has a syntax error, we log it and keep running the old version. The watcher continues monitoring — when the file is fixed (next save), it'll pass validation and restart successfully.</p>
+
+<p>Without this check, a partially-written file kills your server. With AI agents that sometimes produce incomplete Python mid-edit, this happens more often than you'd expect.</p>
+
+<h2>The socket cleanup dance</h2>
+
+<p>Before calling <code>os.execv</code>, you must release the listening socket. Otherwise the new process can't bind to the same port.</p>
+
+<pre><code># 1. Shut down the server (stop accepting, finish in-flight)
+t = threading.Thread(target=server.shutdown, daemon=True)
+t.start()
+t.join(timeout=3)  # don't wait forever
+
+# 2. Close the socket explicitly
+try:
+    server.socket.close()
+except Exception:
+    pass
+try:
+    server.server_close()
+except Exception:
+    pass
+
+# 3. Brief pause for the OS to release the socket
+time.sleep(0.5)
+
+# 4. Replace the process
+os.execv(sys.executable, [sys.executable] + sys.argv)</code></pre>
+
+<p>The 3-second timeout on <code>server.shutdown()</code> is important. If a request handler is stuck (slow external API call, deadlock), <code>shutdown()</code> blocks forever waiting for it to finish. The timeout ensures we restart even if something is wedged.</p>
+
+<p>The 0.5-second sleep after closing the socket is a pragmatic concession. Even with <code>SO_REUSEADDR</code>, there's a brief window where the OS hasn't fully released the port. Half a second is enough on every OS I've tested.</p>
+
+<h2>What survives execv</h2>
+
+<table>
+<thead><tr><th>Survives</th><th>Dies</th></tr></thead>
+<tbody>
+<tr><td>Process ID (PID)</td><td>All Python interpreter state</td></tr>
+<tr><td>Parent process</td><td>All variables, objects, classes</td></tr>
+<tr><td>Working directory</td><td>All threads</td></tr>
+<tr><td>Environment variables</td><td>All open connections</td></tr>
+<tr><td>File descriptors (unless CLOEXEC)</td><td>In-flight HTTP requests</td></tr>
+<tr><td>Signal dispositions</td><td>Timers, async tasks</td></tr>
+</tbody>
+</table>
+
+<p>The key insight: <strong>environment variables survive.</strong> This means you can load config from a file at startup using <code>os.environ.setdefault()</code>, and those values persist across restarts. Process-level overrides (<code>export VAR=val</code>) also survive and take precedence, since <code>setdefault</code> doesn't overwrite existing keys.</p>
+
+<pre><code># Load config file at startup — values persist across execv restarts
+for line in Path("~/.myapp/server.env").expanduser().read_text().splitlines():
+    if "=" in line and not line.startswith("#"):
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip())</code></pre>
+
+<h2>The consequence: dropped connections</h2>
+
+<p>Every in-flight HTTP request dies. Every SSE (Server-Sent Events) connection drops. Every WebSocket disconnects. There is no graceful handoff.</p>
+
+<p>For amux, this is acceptable because:</p>
+
+<ul>
+<li>The dashboard uses SSE for real-time updates. The browser's <code>EventSource</code> auto-reconnects within seconds.</li>
+<li>API requests from agents retry on failure.</li>
+<li>The tmux sessions (the actual agents) are completely independent of the Python server — they keep running regardless.</li>
+</ul>
+
+<p>If you need zero-downtime reloads with connection handoff, you want <code>SO_REUSEPORT</code> + a load balancer, or the <code>fork</code>-then-<code>exec</code> pattern with file descriptor passing. Those are complex. <code>os.execv</code> is simple, with a brief (sub-second) interruption.</p>
+
+<h2>Gotchas</h2>
+
+<ul>
+<li><strong>File descriptors leak across execv</strong> unless you set <code>FD_CLOEXEC</code>. Python 3 sets this by default on most file opens, but inherited sockets from <code>socket.accept()</code> might not have it. If you see "address already in use" after restart, a leaked FD is holding the port.</li>
+<li><strong>sys.argv must be correct.</strong> <code>os.execv</code> takes the full argument list. If you modify <code>sys.argv</code> at runtime, the restarted process gets the modified version. Use a snapshot: <code>_original_argv = sys.argv[:]</code> at startup.</li>
+<li><strong>Virtual environments.</strong> <code>sys.executable</code> points to the venv's Python, which is correct. But if you deactivate/change the venv between restarts, the old <code>sys.executable</code> path might be stale.</li>
+<li><strong>Don't execv in a signal handler.</strong> Signal handlers run asynchronously and can interrupt critical sections. Execv from a signal handler can leave locks held, files half-written, etc. Use a flag that the main loop checks.</li>
+</ul>
+
+<h2>When to use this pattern</h2>
+
+<p>This works well for:</p>
+
+<ul>
+<li>Development servers that need instant reload</li>
+<li>Single-process services where brief downtime is acceptable</li>
+<li>Tools that AI agents edit while running (the server picks up agent changes without human intervention)</li>
+<li>Long-running scripts that need to update their own logic</li>
+</ul>
+
+<p>It doesn't work for:</p>
+
+<ul>
+<li>Production services with zero-downtime requirements</li>
+<li>Multi-process worker pools (use gunicorn's HUP signal instead)</li>
+<li>Windows (no <code>execv</code> — use <code>subprocess</code> + exit instead)</li>
+</ul>
+
+<p>For amux, it's been running this pattern in production for months. The server restarts in under a second, the dashboard reconnects automatically, and the AI agents never notice. One syscall, no process manager, no orchestration.</p>
+
+<div class="cta-box"><h3>Get started with amux</h3><p>Run dozens of Claude Code agents in parallel. Python 3 + tmux. Open source.</p><pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # → https://localhost:8822</code></pre><a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a></div>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

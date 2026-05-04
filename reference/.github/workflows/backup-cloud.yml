@@ -1,0 +1,48 @@
+name: Daily backup — cloud containers
+
+on:
+  schedule:
+    # 3:00 AM UTC every day
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.CLOUD_SSH_KEY }}" > ~/.ssh/amux_cloud
+          chmod 600 ~/.ssh/amux_cloud
+          ssh-keyscan -H 5.161.66.217 >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Run backup on server
+        run: |
+          ssh -i ~/.ssh/amux_cloud root@5.161.66.217 'bash -s' << 'ENDSSH'
+            set -e
+            BACKUP_DIR="/var/amux/backups/$(date +%Y-%m-%d)"
+            mkdir -p "$BACKUP_DIR"
+
+            # Back up gateway DB
+            cp /var/amux/gateway.db "$BACKUP_DIR/gateway.db"
+
+            # Back up each user's amux.db from the named volume
+            for vol in $(docker volume ls --format '{{.Name}}' | grep '^amux-data-'); do
+              user_id="${vol#amux-data-}"
+              dest="$BACKUP_DIR/$user_id"
+              mkdir -p "$dest"
+              # Use a temp container to read the named volume
+              docker run --rm \
+                -v "$vol:/data:ro" \
+                -v "$dest:/backup" \
+                alpine sh -c 'cp /data/amux.db /backup/amux.db 2>/dev/null || true'
+            done
+
+            # Keep only the last 30 days of backups
+            find /var/amux/backups -maxdepth 1 -type d -mtime +30 -exec rm -rf {} +
+
+            echo "Backup complete: $BACKUP_DIR"
+            ls -lh "$BACKUP_DIR"
+          ENDSSH

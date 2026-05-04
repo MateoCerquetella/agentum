@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>Self-Healing Watchdog — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="A background watchdog monitors every session and recovers automatically — context compaction, crash restart, stuck prompt unblocking.">
+  <meta name="keywords" content="self-healing AI agent, claude code auto-restart, context compaction fix, amux watchdog, autonomous AI coding">
+  <link rel="canonical" href="https://amux.io/demos/self-healing-watchdog/">
+  <meta property="og:title" content="Self-Healing Watchdog — amux">
+  <meta property="og:description" content="A background watchdog monitors every session and recovers automatically — context compaction, crash restart, stuck prompt unblocking.">
+  <meta property="og:url" content="https://amux.io/demos/self-healing-watchdog/">
+  <meta property="og:image" content="https://amux.io/demos/self-healing-watchdog/demo.mp4">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://amux.io/demos/self-healing-watchdog/demo.mp4">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  </head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb">
+      <a href="/">amux</a> <span class="sep">›</span>
+      <a href="/demos/">Demos</a> <span class="sep">›</span>
+      <span>Self-Healing Watchdog</span>
+    </div>
+    <h1>Self-Healing Watchdog</h1>
+    <p class="subtitle">A background watchdog monitors every session and recovers automatically — context compaction, crash restart, stuck prompt unblocking.</p>
+
+    <video src="demo.mp4" autoplay loop muted playsinline title="Self-Healing Watchdog demo"></video>
+
+    <h2>How it works</h2>
+<ol class="step-list">
+  <li>amux parses ANSI-stripped tmux output to detect: Working / Needs Input / Idle</li>
+  <li>Context < 20%: sends <code>/compact</code> automatically (5-minute cooldown)</li>
+  <li>Thinking-block corruption: restarts session and replays the last message</li>
+  <li>YOLO mode: tool-approval prompts are auto-answered — fully headless operation</li>
+</ol>
+    <h2>When to use this</h2>
+<ul>
+  <li>Running agents overnight while you sleep</li>
+  <li>Claude Code keeps crashing from context compaction</li>
+  <li>Agents getting stuck on tool-approval prompts in batch work</li>
+</ul>
+    
+    <h2>Related demos</h2>
+<div class="related">
+  <a href="/demos/session-cards-overview/">Session cards overview</a>
+  <a href="/use-cases/ai-coding-while-you-sleep/">AI coding while you sleep</a>
+  <a href="/guides/self-healing-configuration/">Self-healing guide</a>
+</div>
+    <div class="cta-box">
+  <h3>Try amux</h3>
+  <p>Run dozens of Claude Code agents in parallel. Python 3 + tmux. Open source.</p>
+  <pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux serve  # → https://localhost:8822</code></pre>
+  <a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a>
+  <a class="btn" href="/guides/getting-started/">Getting started →</a>
+</div>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

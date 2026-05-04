@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>amux Demos — See It in Action</title>
+<meta name="description" content="Interactive demos and GIFs showing amux in action: parallel agents, kanban board, self-healing, mobile PWA, agent orchestration, and more.">
+  <link rel="canonical" href="https://amux.io/demos/">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+<div class="wrap">
+<h1>amux Demos</h1>
+<p class="subtitle">28 demos covering every use case and feature</p>
+<div class="filters">
+    <button class="filter-btn active" onclick="filterDemos('All')">All</button>
+    <button class="filter-btn" onclick="filterDemos('Sessions')">Sessions</button>
+    <button class="filter-btn" onclick="filterDemos('Board')">Board</button>
+    <button class="filter-btn" onclick="filterDemos('Features')">Features</button>
+    <button class="filter-btn" onclick="filterDemos('Use Cases')">Use Cases</button>
+</div>
+<div class="grid" id="demo-grid">
+
+  <div class="demo-card" data-playlist="Sessions">
+    <a href="/demos/session-cards-overview/">
+      <div class="demo-thumb">
+        <video src="/demos/session-cards-overview/demo.mp4" autoplay loop muted playsinline title="Session Cards Overview"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Sessions</span>
+        <h3>Session Cards Overview</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Sessions">
+    <a href="/demos/send-command-dashboard/">
+      <div class="demo-thumb">
+        <video src="/demos/send-command-dashboard/demo.mp4" autoplay loop muted playsinline title="Send Command from Dashboard"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Sessions</span>
+        <h3>Send Command from Dashboard</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Board">
+    <a href="/demos/kanban-board-overview/">
+      <div class="demo-thumb">
+        <video src="/demos/kanban-board-overview/demo.mp4" autoplay loop muted playsinline title="Kanban Board Overview"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Board</span>
+        <h3>Kanban Board Overview</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Board">
+    <a href="/demos/atomic-task-claiming/">
+      <div class="demo-thumb">
+        <video src="/demos/atomic-task-claiming/demo.mp4" autoplay loop muted playsinline title="Atomic Task Claiming"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Board</span>
+        <h3>Atomic Task Claiming</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Sessions">
+    <a href="/demos/self-healing-watchdog/">
+      <div class="demo-thumb">
+        <video src="/demos/self-healing-watchdog/demo.mp4" autoplay loop muted playsinline title="Self-Healing Watchdog"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Sessions</span>
+        <h3>Self-Healing Watchdog</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Sessions">
+    <a href="/demos/workspace-tiled-view/">
+      <div class="demo-thumb">
+        <video src="/demos/workspace-tiled-view/demo.mp4" autoplay loop muted playsinline title="Workspace Tiled View"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Sessions</span>
+        <h3>Workspace Tiled View</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Features">
+    <a href="/demos/agent-orchestration/">
+      <div class="demo-thumb">
+        <video src="/demos/agent-orchestration/demo.mp4" autoplay loop muted playsinline title="Agent Orchestration"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Features</span>
+        <h3>Agent Orchestration</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Board">
+    <a href="/demos/ical-calendar-sync/">
+      <div class="demo-thumb">
+        <video src="/demos/ical-calendar-sync/demo.mp4" autoplay loop muted playsinline title="iCal Calendar Sync"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Board</span>
+        <h3>iCal Calendar Sync</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Sessions">
+    <a href="/demos/conversation-fork/">
+      <div class="demo-thumb">
+        <video src="/demos/conversation-fork/demo.mp4" autoplay loop muted playsinline title="Conversation Fork"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Sessions</span>
+        <h3>Conversation Fork</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Features">
+    <a href="/demos/mobile-pwa/">
+      <div class="demo-thumb">
+        <video src="/demos/mobile-pwa/demo.mp4" autoplay loop muted playsinline title="Mobile PWA"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Features</span>
+        <h3>Mobile PWA</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Use Cases">
+    <a href="/demos/ai-coding-while-you-sleep/">
+      <div class="demo-thumb">
+        <video src="/demos/ai-coding-while-you-sleep/demo.mp4" autoplay loop muted playsinline title="AI Coding While You Sleep"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Use Cases</span>
+        <h3>AI Coding While You Sleep</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Use Cases">
+    <a href="/demos/parallel-feature-development/">
+      <div class="demo-thumb">
+        <video src="/demos/parallel-feature-development/demo.mp4" autoplay loop muted playsinline title="Parallel Feature Development"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Use Cases</span>
+        <h3>Parallel Feature Development</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Use Cases">
+    <a href="/demos/test-generation-at-scale/">
+      <div class="demo-thumb">
+        <video src="/demos/test-generation-at-scale/demo.mp4" autoplay loop muted playsinline title="Test Generation at Scale"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Use Cases</span>
+        <h3>Test Generation at Scale</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Use Cases">
+    <a href="/demos/large-scale-refactoring/">
+      <div class="demo-thumb">
+        <video src="/demos/large-scale-refactoring/demo.mp4" autoplay loop muted playsinline title="Large-Scale Refactoring"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Use Cases</span>
+        <h3>Large-Scale Refactoring</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Use Cases">
+    <a href="/demos/bug-triage-and-fixing/">
+      <div class="demo-thumb">
+        <video src="/demos/bug-triage-and-fixing/demo.mp4" autoplay loop muted playsinline title="Bug Triage & Fixing"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Use Cases</span>
+        <h3>Bug Triage & Fixing</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Use Cases">
+    <a href="/demos/automated-code-review/">
+      <div class="demo-thumb">
+        <video src="/demos/automated-code-review/demo.mp4" autoplay loop muted playsinline title="Automated Code Review"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Use Cases</span>
+        <h3>Automated Code Review</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Use Cases">
+    <a href="/demos/documentation-generation/">
+      <div class="demo-thumb">
+        <video src="/demos/documentation-generation/demo.mp4" autoplay loop muted playsinline title="Documentation Generation"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Use Cases</span>
+        <h3>Documentation Generation</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Use Cases">
+    <a href="/demos/api-endpoint-generation/">
+      <div class="demo-thumb">
+        <video src="/demos/api-endpoint-generation/demo.mp4" autoplay loop muted playsinline title="API Endpoint Generation"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Use Cases</span>
+        <h3>API Endpoint Generation</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Use Cases">
+    <a href="/demos/code-migration/">
+      <div class="demo-thumb">
+        <video src="/demos/code-migration/demo.mp4" autoplay loop muted playsinline title="Code Migration"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Use Cases</span>
+        <h3>Code Migration</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Use Cases">
+    <a href="/demos/legacy-code-modernization/">
+      <div class="demo-thumb">
+        <video src="/demos/legacy-code-modernization/demo.mp4" autoplay loop muted playsinline title="Legacy Code Modernization"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Use Cases</span>
+        <h3>Legacy Code Modernization</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Use Cases">
+    <a href="/demos/monorepo-management/">
+      <div class="demo-thumb">
+        <video src="/demos/monorepo-management/demo.mp4" autoplay loop muted playsinline title="Monorepo Management"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Use Cases</span>
+        <h3>Monorepo Management</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Use Cases">
+    <a href="/demos/dependency-updates/">
+      <div class="demo-thumb">
+        <video src="/demos/dependency-updates/demo.mp4" autoplay loop muted playsinline title="Dependency Updates"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Use Cases</span>
+        <h3>Dependency Updates</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Use Cases">
+    <a href="/demos/security-audit/">
+      <div class="demo-thumb">
+        <video src="/demos/security-audit/demo.mp4" autoplay loop muted playsinline title="Security Audit"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Use Cases</span>
+        <h3>Security Audit</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Use Cases">
+    <a href="/demos/ci-cd-pipeline-creation/">
+      <div class="demo-thumb">
+        <video src="/demos/ci-cd-pipeline-creation/demo.mp4" autoplay loop muted playsinline title="CI/CD Pipeline Creation"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Use Cases</span>
+        <h3>CI/CD Pipeline Creation</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Use Cases">
+    <a href="/demos/research-and-prototyping/">
+      <div class="demo-thumb">
+        <video src="/demos/research-and-prototyping/demo.mp4" autoplay loop muted playsinline title="Research & Prototyping"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Use Cases</span>
+        <h3>Research & Prototyping</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Features">
+    <a href="/demos/agent-coordination/">
+      <div class="demo-thumb">
+        <video src="/demos/agent-coordination/demo.mp4" autoplay loop muted playsinline title="Agent Coordination via REST"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Features</span>
+        <h3>Agent Coordination via REST</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Features">
+    <a href="/demos/single-file-architecture/">
+      <div class="demo-thumb">
+        <video src="/demos/single-file-architecture/demo.mp4" autoplay loop muted playsinline title="Single-File Architecture"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Features</span>
+        <h3>Single-File Architecture</h3>
+      </div>
+    </a>
+  </div>
+  <div class="demo-card" data-playlist="Features">
+    <a href="/demos/web-dashboard/">
+      <div class="demo-thumb">
+        <video src="/demos/web-dashboard/demo.mp4" autoplay loop muted playsinline title="Web Dashboard Overview"></video>
+      </div>
+      <div class="demo-info">
+        <span class="demo-tag">Features</span>
+        <h3>Web Dashboard Overview</h3>
+      </div>
+    </a>
+  </div>
+</div>
+<div class="back"><a href="/">← amux home</a></div>
+</div>
+<script>
+function filterDemos(playlist) {
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b.textContent === playlist));
+  document.querySelectorAll('.demo-card').forEach(c => {
+    c.classList.toggle('hidden', playlist !== 'All' && c.dataset.playlist !== playlist);
+  });
+}
+</script>
+<footer>
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" style="font-size:0.92rem;font-weight:700;color:var(--text);text-decoration:none;">amux</a>
+          <p>Open-source agent multiplexer for Claude Code.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://github.com/mixpeek/amux/issues">Issues</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

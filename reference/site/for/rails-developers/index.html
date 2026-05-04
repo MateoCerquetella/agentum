@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>amux for Ruby on Rails Developers — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="Rails developers use amux to run parallel agents across models, controllers, specs, and migrations — convention over repetition.">
+  <meta name="keywords" content="ruby rails AI agent, claude code rails, parallel rails development">
+  <link rel="canonical" href="https://amux.io/for/rails-developers/">
+  <meta property="og:title" content="amux for Ruby on Rails Developers — amux">
+  <meta property="og:description" content="Rails developers use amux to run parallel agents across models, controllers, specs, and migrations — convention over repetition.">
+  <meta property="og:url" content="https://amux.io/for/rails-developers/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"For","item":"https://amux.io/for/"},{"@type":"ListItem","position":3,"name":"amux for Ruby on Rails Developers","item":"https://amux.io/for/rails-developers/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebPage","name":"amux for Ruby on Rails Developers","description":"Rails developers use amux to run parallel agents across models, controllers, specs, and migrations — convention over repetition.","url":"https://amux.io/for/rails-developers/","audience":{"@type":"Audience","audienceType":"amux for Ruby on Rails Developers"}}</script>
+  </head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">›</span> <a href="/for/">For</a> <span class="sep">›</span> <span>amux for Ruby on Rails Developers</span></div>
+    <h1>amux for Ruby on Rails Developers</h1>
+<p class="subtitle">Rails is opinionated and convention-driven. Agents love conventions — they can follow them at scale.</p>
+<h2>Rails + Parallel Agents</h2>
+<p>Rails' strong conventions make it one of the best frameworks for agent work. The MVC pattern, RESTful routes, Active Record conventions, and RSpec patterns are predictable enough that agents can generate correct code reliably. Run many agents against a Rails app and the output fits together naturally.</p>
+<ul>
+<li><strong>Resource generation at scale:</strong> Building a multi-tenant SaaS? Assign one agent per resource (users, organizations, subscriptions, billing) to generate full MVC stack simultaneously.</li>
+<li><strong>RSpec coverage:</strong> Rails apps often have under-tested controllers and services. Run agents to generate model specs, controller specs, request specs, and system tests in parallel.</li>
+<li><strong>Active Record migrations:</strong> Use agents to write migrations for schema changes, add indices, and create join tables — one agent per migration set.</li>
+<li><strong>Rails 7/8 upgrades:</strong> Hotwire, Turbo, Stimulus, import maps — one agent per upgrade concern, running in parallel.</li>
+</ul>
+<h2>Service Object and Query Object Patterns</h2>
+<p>Modern Rails apps use service objects, query objects, form objects, and decorators. These follow strict patterns that agents implement reliably:</p>
+<pre><code># Assign one agent per domain service
+amux register billing-agent --dir ~/railsapp --yolo
+amux register notifications-agent --dir ~/railsapp --yolo
+amux register reporting-agent --dir ~/railsapp --yolo</code></pre>
+<h2>Background Job Coverage</h2>
+<p>Sidekiq workers are another area where Rails codebases often lack test coverage. A fleet of agents can generate job implementations, tests, and error handling across all background jobs in a codebase simultaneously.</p>
+<div class="cta-box"><h3>Get started with amux</h3><p>Run dozens of Claude Code agents in parallel. Python 3 + tmux. Open source.</p><pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # → https://localhost:8822</code></pre><a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a></div>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

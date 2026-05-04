@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>CLAUDE.md Templates: 20+ Ready-to-Use Configs for Every Project Type</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="Copy-paste CLAUDE.md templates for Python APIs, React apps, monorepos, data pipelines, mobile apps, CLI tools, and more. Each template is battle-tested and explained line by line.">
+  <meta name="keywords" content="CLAUDE.md template, CLAUDE.md examples, CLAUDE.md best practices, claude code config, claude code project instructions, CLAUDE.md file, how to write CLAUDE.md, CLAUDE.md guide, CLAUDE.md for monorepo, CLAUDE.md for React, CLAUDE.md for Python">
+  <link rel="canonical" href="https://amux.io/guides/claude-md-templates/">
+  <meta property="og:title" content="CLAUDE.md Templates: 20+ Ready-to-Use Configs for Every Project Type">
+  <meta property="og:description" content="Copy-paste CLAUDE.md templates for Python APIs, React apps, monorepos, data pipelines, mobile apps, CLI tools, and more.">
+  <meta property="og:url" content="https://amux.io/guides/claude-md-templates/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="CLAUDE.md Templates: 20+ Ready-to-Use Configs">
+  <meta name="twitter:description" content="Copy-paste CLAUDE.md templates for every project type. Battle-tested, explained line by line.">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"CLAUDE.md Templates: 20+ Ready-to-Use Configs for Every Project Type","description":"Copy-paste CLAUDE.md templates for Python APIs, React apps, monorepos, data pipelines, mobile apps, CLI tools, and more.","datePublished":"2026-04-12","dateModified":"2026-04-12","author":{"@type":"Organization","name":"amux"},"publisher":{"@type":"Organization","name":"amux","logo":{"@type":"ImageObject","url":"https://amux.io/icon-512.png"}},"image":"https://amux.io/og-image.png","mainEntityOfPage":{"@type":"WebPage","@id":"https://amux.io/guides/claude-md-templates/"}}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"What is a CLAUDE.md file?","acceptedAnswer":{"@type":"Answer","text":"CLAUDE.md is a markdown file placed in your project root (or ~/.claude/CLAUDE.md for global settings) that gives Claude Code persistent instructions about your project. It defines coding conventions, test commands, deployment workflows, forbidden patterns, and architectural context. Claude reads it at the start of every conversation, so you don't have to repeat yourself."}},{"@type":"Question","name":"Where should I put CLAUDE.md?","acceptedAnswer":{"@type":"Answer","text":"There are three levels: (1) ~/.claude/CLAUDE.md for global personal preferences that apply to all projects, (2) PROJECT_ROOT/CLAUDE.md for project-wide instructions checked into git, and (3) PROJECT_ROOT/subdir/CLAUDE.md for directory-scoped overrides. Claude loads all three, with more specific files taking precedence."}},{"@type":"Question","name":"How long should CLAUDE.md be?","acceptedAnswer":{"@type":"Answer","text":"Keep it under 500 lines. Every line in CLAUDE.md consumes context tokens on every conversation, so conciseness matters. Focus on things Claude gets wrong without the instruction — don't document what it already does correctly. A good CLAUDE.md is 50-200 lines of high-signal rules, not a comprehensive wiki."}},{"@type":"Question","name":"What's the difference between CLAUDE.md and a system prompt?","acceptedAnswer":{"@type":"Answer","text":"CLAUDE.md is file-based and version-controlled. It lives in your repo, gets reviewed in PRs, and evolves with your codebase. A system prompt is set at the API level and can't be inspected by teammates. CLAUDE.md is the standard way to configure Claude Code project behavior — it's loaded automatically without any API configuration."}},{"@type":"Question","name":"Can I use CLAUDE.md with amux multi-agent sessions?","acceptedAnswer":{"@type":"Answer","text":"Yes. Every amux session runs Claude Code in your project directory, so all sessions automatically inherit the same CLAUDE.md. This is one of the key benefits of CLAUDE.md for multi-agent workflows: you define conventions once and every parallel agent follows them. For agent-specific overrides, use subdirectory CLAUDE.md files or per-session hooks."}},{"@type":"Question","name":"Should I commit CLAUDE.md to version control?","acceptedAnswer":{"@type":"Answer","text":"Yes, always commit project-level CLAUDE.md files. They're part of your project's development infrastructure, just like .eslintrc or pyproject.toml. Teammates benefit from the same instructions, and changes are tracked in git history. Only ~/.claude/CLAUDE.md (personal global preferences) stays uncommitted."}}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Guides","item":"https://amux.io/guides/"},{"@type":"ListItem","position":3,"name":"CLAUDE.md Templates","item":"https://amux.io/guides/claude-md-templates/"}]}</script>
+  <style>
+    .tmpl-grid{display:grid;grid-template-columns:1fr;gap:1.5rem;margin:2rem 0}
+    @media(min-width:768px){.tmpl-grid{grid-template-columns:1fr 1fr}}
+    .tmpl-card{border:1px solid var(--border);border-radius:8px;overflow:hidden;transition:border-color .15s}
+    .tmpl-card:hover{border-color:var(--green)}
+    .tmpl-card-head{padding:0.75rem 1rem;background:var(--bg-alt,#f9f9f9);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+    [data-theme=dark] .tmpl-card-head{background:var(--bg-alt,#1a1a1a)}
+    .tmpl-card-head h3{margin:0;font-size:0.95rem;font-weight:600}
+    .tmpl-tag{font-size:0.7rem;padding:2px 8px;border-radius:12px;background:var(--green);color:#000;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+    .tmpl-card pre{margin:0;padding:1rem;font-size:0.78rem;line-height:1.5;overflow-x:auto;max-height:400px;background:var(--bg)}
+    .tmpl-copy{font-size:0.75rem;padding:4px 10px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text);cursor:pointer;font-family:'JetBrains Mono',monospace;transition:background .15s}
+    .tmpl-copy:hover{background:var(--green);color:#000;border-color:var(--green)}
+    .tmpl-copy.copied{background:var(--green);color:#000;border-color:var(--green)}
+    .filter-bar{display:flex;flex-wrap:wrap;gap:0.5rem;margin:1.5rem 0}
+    .filter-btn{font-size:0.8rem;padding:5px 14px;border-radius:20px;border:1px solid var(--border);background:var(--bg);color:var(--muted);cursor:pointer;font-family:'Geist',sans-serif;transition:all .15s}
+    .filter-btn:hover,.filter-btn.active{background:var(--green);color:#000;border-color:var(--green)}
+    .tmpl-note{font-size:0.82rem;color:var(--muted);padding:0.5rem 1rem;border-top:1px solid var(--border);line-height:1.4}
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">›</span> <a href="/guides/">Guides</a> <span class="sep">›</span> <span>CLAUDE.md Templates</span></div>
+    <h1>CLAUDE.md Templates</h1>
+    <p class="subtitle">Copy-paste configs for every project type. Each template is battle-tested across thousands of amux agent sessions and explained line by line.</p>
+
+    <p>A good <code>CLAUDE.md</code> is the single highest-leverage thing you can do for AI coding agent quality. It's loaded at the start of every Claude Code conversation, persists across sessions, and gets version-controlled alongside your code. The difference between a project with a well-tuned <code>CLAUDE.md</code> and one without is the difference between an agent that understands your codebase and one that guesses.</p>
+    <p>These templates are starting points. Copy the one closest to your stack, delete lines Claude already gets right, and add rules for things it gets wrong. A good <code>CLAUDE.md</code> is 50&ndash;200 lines of high-signal corrections, not a comprehensive wiki.</p>
+
+    <h2>How CLAUDE.md works</h2>
+    <p>Claude Code loads instructions from up to three locations, in order of precedence:</p>
+    <table>
+      <thead><tr><th>Location</th><th>Scope</th><th>Commit to git?</th></tr></thead>
+      <tbody>
+        <tr><td><code>~/.claude/CLAUDE.md</code></td><td>Personal &mdash; applies to all projects</td><td>No</td></tr>
+        <tr><td><code>PROJECT_ROOT/CLAUDE.md</code></td><td>Project &mdash; shared with teammates</td><td>Yes</td></tr>
+        <tr><td><code>PROJECT_ROOT/subdir/CLAUDE.md</code></td><td>Directory &mdash; scoped overrides</td><td>Yes</td></tr>
+      </tbody>
+    </table>
+    <p>Every line in <code>CLAUDE.md</code> costs context tokens on every conversation, so keep it tight. The templates below are designed to stay under the 500-line budget while covering the rules that actually change agent behavior.</p>
+
+    <div class="filter-bar" id="filter-bar">
+      <button class="filter-btn active" data-filter="all">All</button>
+      <button class="filter-btn" data-filter="python">Python</button>
+      <button class="filter-btn" data-filter="typescript">TypeScript</button>
+      <button class="filter-btn" data-filter="fullstack">Full-stack</button>
+      <button class="filter-btn" data-filter="infra">Infra / DevOps</button>
+      <button class="filter-btn" data-filter="data">Data / ML</button>
+      <button class="filter-btn" data-filter="mobile">Mobile</button>
+      <button class="filter-btn" data-filter="meta">Meta / Global</button>
+    </div>
+
+    <h2>The templates</h2>
+    <div class="tmpl-grid" id="tmpl-grid">
+
+      <!-- 1. Python FastAPI -->
+      <div class="tmpl-card" data-category="python">
+        <div class="tmpl-card-head"><h3>Python FastAPI Service</h3><span class="tmpl-tag">Python</span></div>
+        <pre><code># my-api
+
+FastAPI service. Python 3.12, uv for dependency management.
+
+## Commands
+- `uv run pytest` — run all tests
+- `uv run pytest tests/test_foo.py::test_bar` — single test
+- `uv run ruff check . --fix && uv run ruff format .` — lint + format
+- `uv run mypy src/` — type check
+
+## Structure
+- `src/app/` — FastAPI app, routers, dependencies
+- `src/app/models/` — SQLAlchemy models
+- `src/app/schemas/` — Pydantic request/response schemas
+- `tests/` — pytest tests (use `TestClient`, not `httpx` directly)
+
+## Rules
+- Always add Pydantic schemas for request AND response bodies.
+- Use `Depends()` for shared logic, never import from route handlers.
+- Database queries go in `src/app/crud/`, not in route handlers.
+- Alembic for migrations. Never edit the models without creating a migration.
+- Return 404 with `detail` message, not empty 200.
+- Tests must not hit external services. Use `respx` for HTTP mocks.
+- Type hints on every function signature. No `Any` unless unavoidable.</code></pre>
+        <div class="tmpl-note">Why: Separates CRUD from routes, enforces migration discipline, and prevents the #1 FastAPI mistake (business logic in route handlers).</div>
+      </div>
+
+      <!-- 2. React / Next.js -->
+      <div class="tmpl-card" data-category="typescript fullstack">
+        <div class="tmpl-card-head"><h3>Next.js App Router</h3><span class="tmpl-tag">TypeScript</span></div>
+        <pre><code># my-app
+
+Next.js 15 with App Router. TypeScript strict mode. Tailwind CSS v4.
+
+## Commands
+- `pnpm dev` — local dev server
+- `pnpm test` — vitest
+- `pnpm lint` — eslint + prettier
+- `pnpm build` — production build (must pass before committing)
+
+## Structure
+- `app/` — App Router pages and layouts
+- `components/` — shared React components
+- `lib/` — utilities, API clients, constants
+- `hooks/` — custom React hooks
+
+## Rules
+- Use Server Components by default. Only add "use client" when you need
+  browser APIs, state, or event handlers.
+- Data fetching happens in Server Components or Route Handlers, never
+  in client components (no useEffect for data loading).
+- Colocate styles with components using Tailwind classes. No CSS modules,
+  no styled-components, no inline style objects.
+- Every component file exports one component. Name the file after the
+  component: `UserCard.tsx` exports `UserCard`.
+- Use `next/image` for all images. Never use raw `&lt;img&gt;` tags.
+- Forms use Server Actions. No client-side form submission to API routes.
+- Error boundaries: every route segment gets a `error.tsx`.
+- Loading states: use `loading.tsx` per route, not manual Suspense.</code></pre>
+        <div class="tmpl-note">Why: Enforces the Server Components mental model and prevents the most common App Router mistakes (useEffect data fetching, missing error boundaries).</div>
+      </div>
+
+      <!-- 3. Django -->
+      <div class="tmpl-card" data-category="python fullstack">
+        <div class="tmpl-card-head"><h3>Django + DRF API</h3><span class="tmpl-tag">Python</span></div>
+        <pre><code># my-project
+
+Django 5.1 with Django REST Framework. PostgreSQL. Celery for async tasks.
+
+## Commands
+- `python manage.py test` — run all tests
+- `python manage.py test app.tests.test_views::ViewTestCase::test_create` — single
+- `ruff check . --fix && ruff format .` — lint
+- `python manage.py makemigrations && python manage.py migrate` — migrations
+
+## Structure
+- Each Django app is a self-contained domain. Don't import models across apps
+  — use signals or a shared `core/` app for cross-cutting concerns.
+- Serializers validate input. Views orchestrate. Models hold business logic.
+- `tasks/` in each app for Celery tasks.
+
+## Rules
+- Never use `Model.objects.raw()` or string-format SQL. Always ORM.
+- Wrap multi-step writes in `transaction.atomic()`.
+- All list endpoints must be paginated. Use `PageNumberPagination`.
+- Celery tasks must be idempotent. Assume they will be retried.
+- Test with `APIClient`, not raw Django test client.
+- Settings split: `settings/base.py`, `settings/dev.py`, `settings/prod.py`.
+  Never `if DEBUG` in application code.
+- Permissions go on the view via `permission_classes`, not in serializers.</code></pre>
+        <div class="tmpl-note">Why: Prevents cross-app coupling, enforces the Django layering model, and catches the two most common DRF bugs (missing pagination, non-idempotent tasks).</div>
+      </div>
+
+      <!-- 4. Go Microservice -->
+      <div class="tmpl-card" data-category="infra">
+        <div class="tmpl-card-head"><h3>Go Microservice</h3><span class="tmpl-tag">Go</span></div>
+        <pre><code># my-service
+
+Go 1.23 microservice. net/http stdlib router. PostgreSQL via pgx.
+
+## Commands
+- `go test ./...` — all tests
+- `go test ./internal/handler/ -run TestCreateUser` — single test
+- `golangci-lint run` — lint
+- `go build -o bin/server ./cmd/server` — build
+
+## Structure
+- `cmd/server/` — main.go, wiring, config loading
+- `internal/handler/` — HTTP handlers (thin: parse, validate, call service, respond)
+- `internal/service/` — business logic (no HTTP types)
+- `internal/repo/` — database layer (pgx queries, no business logic)
+- `internal/model/` — domain types (plain structs, no dependencies)
+
+## Rules
+- Handlers accept interfaces, not concrete types. Wire in main.go.
+- Errors bubble up. Only handlers decide HTTP status codes.
+- Context flows down: `func (s *Service) Create(ctx context.Context, ...)`.
+- No global state. No init() functions. No package-level vars except `var ErrX`.
+- Tests use testcontainers for Postgres. No mocking the DB layer.
+- Every exported function has a one-line GoDoc comment.
+- Use `slog` for structured logging. No fmt.Println, no log.Printf.</code></pre>
+        <div class="tmpl-note">Why: Enforces Go's "accept interfaces, return structs" idiom and the clean handler/service/repo layering that prevents spaghetti in growing services.</div>
+      </div>
+
+      <!-- 5. TypeScript Node.js API -->
+      <div class="tmpl-card" data-category="typescript">
+        <div class="tmpl-card-head"><h3>Node.js Express API</h3><span class="tmpl-tag">TypeScript</span></div>
+        <pre><code># my-api
+
+Express.js REST API. TypeScript 5.5 strict mode. Prisma ORM. pnpm.
+
+## Commands
+- `pnpm test` — vitest
+- `pnpm lint` — eslint
+- `pnpm db:migrate` — prisma migrate dev
+- `pnpm build` — tsc
+
+## Structure
+- `src/routes/` — Express routers (one file per resource)
+- `src/services/` — business logic (no Express types)
+- `src/middleware/` — auth, validation, error handling
+- `prisma/schema.prisma` — database schema (source of truth)
+
+## Rules
+- Route handlers call services. Services call Prisma. Never skip layers.
+- Validate all request bodies with zod schemas in `src/schemas/`.
+- Every route has explicit error handling. Use the global error middleware,
+  don't try/catch in individual routes.
+- Prisma queries use `select` or `include` explicitly. No implicit full-model fetches.
+- Environment variables accessed only through `src/config.ts`. Never
+  inline `process.env.X` in business logic.
+- Integration tests use a test database. `beforeAll` runs migrations,
+  `afterAll` drops the schema.
+- No default exports. Always named exports.</code></pre>
+        <div class="tmpl-note">Why: Prevents the Express.js antipattern of business logic in route handlers and enforces consistent error handling across all endpoints.</div>
+      </div>
+
+      <!-- 6. Monorepo -->
+      <div class="tmpl-card" data-category="typescript fullstack">
+        <div class="tmpl-card-head"><h3>Turborepo Monorepo</h3><span class="tmpl-tag">Full-stack</span></div>
+        <pre><code># my-monorepo
+
+Turborepo monorepo. pnpm workspaces. TypeScript throughout.
+
+## Commands
+- `pnpm test` — run all workspace tests via turbo
+- `pnpm --filter @app/web test` — test one workspace
+- `pnpm lint` — eslint across all packages
+- `pnpm build` — turbo build (respects dependency graph)
+
+## Workspaces
+- `apps/web` — Next.js frontend
+- `apps/api` — Express backend
+- `packages/ui` — shared React component library
+- `packages/shared` — types, utils, constants shared across apps
+- `packages/config-*` — shared ESLint, TypeScript, Tailwind configs
+
+## Rules
+- NEVER import directly between apps (web ↛ api, api ↛ web). Shared
+  code goes in a package under `packages/`.
+- Shared types live in `packages/shared/src/types/`. Both apps import from there.
+- Adding a dependency? Add to the specific workspace, not the root.
+  `pnpm --filter @app/web add lodash`, never `pnpm add lodash` at root.
+- Each package has its own `tsconfig.json` extending the shared base.
+- CI runs `turbo build --filter=[HEAD^1]` for affected-only builds.
+  Don't break the turbo dependency graph.
+- `packages/ui` components are pure. No API calls, no data fetching,
+  no business logic inside UI components.</code></pre>
+        <div class="tmpl-note">Why: The #1 monorepo mistake is cross-app imports. This template makes the boundary rules explicit and prevents turborepo cache invalidation problems.</div>
+      </div>
+
+      <!-- 7. Data Pipeline -->
+      <div class="tmpl-card" data-category="data python">
+        <div class="tmpl-card-head"><h3>Python Data Pipeline</h3><span class="tmpl-tag">Data / ML</span></div>
+        <pre><code># my-pipeline
+
+ETL pipeline. Python 3.12, Airflow for orchestration, Polars for transforms.
+
+## Commands
+- `uv run pytest tests/` — all tests
+- `uv run ruff check . --fix && uv run ruff format .` — lint
+- `uv run mypy src/` — type check
+- `airflow dags test my_dag 2026-01-01` — backfill test
+
+## Structure
+- `dags/` — Airflow DAG definitions (thin: just task wiring)
+- `src/extractors/` — data source connectors
+- `src/transforms/` — Polars transform functions (pure, testable)
+- `src/loaders/` — destination writers (S3, Postgres, BigQuery)
+- `tests/fixtures/` — sample input CSVs/JSONs for deterministic testing
+
+## Rules
+- Transform functions are PURE: take a DataFrame, return a DataFrame.
+  No I/O inside transforms.
+- DAG files only wire tasks. Business logic lives in `src/`, not in DAGs.
+- Every transform has a test with a fixture file. Test the shape AND values.
+- Use Polars, not Pandas. If a library requires Pandas, convert at the
+  boundary: `df.to_pandas()` / `pl.from_pandas()`.
+- Credential loading via `src/config.py` only. No hardcoded keys, no inline
+  `os.environ` calls.
+- Partitioned writes: always write with date partitioning. No full-table
+  overwrites unless the DAG name starts with `rebuild_`.</code></pre>
+        <div class="tmpl-note">Why: Enforces the pure-transform pattern that makes data pipelines testable, and prevents the DAG-as-monolith antipattern.</div>
+      </div>
+
+      <!-- 8. ML / Training -->
+      <div class="tmpl-card" data-category="data python">
+        <div class="tmpl-card-head"><h3>ML Training Project</h3><span class="tmpl-tag">Data / ML</span></div>
+        <pre><code># my-model
+
+ML training codebase. PyTorch 2.x, Hydra for config, W&amp;B for experiment tracking.
+
+## Commands
+- `uv run pytest tests/` — unit tests (fast, no GPU)
+- `uv run python train.py +experiment=baseline` — train with Hydra config
+- `uv run ruff check . --fix && uv run ruff format .` — lint
+
+## Structure
+- `configs/` — Hydra YAML configs (model, data, training, experiment)
+- `src/models/` — model definitions (nn.Module subclasses)
+- `src/data/` — datasets, dataloaders, augmentations
+- `src/training/` — training loop, callbacks, metrics
+- `notebooks/` — exploration only, never imported by src/
+
+## Rules
+- Hyperparameters come from Hydra configs. NEVER hardcode learning rates,
+  batch sizes, or hidden dims in Python files.
+- Every training run logs to W&amp;B. No silent runs.
+- Model forward() takes tensors, returns tensors. No data loading or
+  preprocessing inside model classes.
+- Reproducibility: set seeds in config, log the full Hydra config to W&amp;B.
+- Notebooks are throwaway. Anything worth keeping gets extracted to src/.
+- GPU memory: always use `torch.cuda.amp` for mixed precision. Profile
+  before optimizing — no premature gradient checkpointing.
+- Data loading: `num_workers &gt; 0` and `pin_memory=True` by default.</code></pre>
+        <div class="tmpl-note">Why: Prevents "it worked on my laptop" by enforcing config-driven training and full experiment logging from day one.</div>
+      </div>
+
+      <!-- 9. React Native -->
+      <div class="tmpl-card" data-category="mobile typescript">
+        <div class="tmpl-card-head"><h3>React Native (Expo)</h3><span class="tmpl-tag">Mobile</span></div>
+        <pre><code># my-mobile-app
+
+React Native with Expo SDK 52. TypeScript strict. Expo Router for navigation.
+
+## Commands
+- `npx expo start` — dev server
+- `pnpm test` — jest
+- `pnpm lint` — eslint
+- `eas build --platform ios --profile preview` — build
+
+## Structure
+- `app/` — Expo Router file-based routes
+- `components/` — shared UI components
+- `hooks/` — custom React hooks
+- `lib/` — API client, storage, constants
+- `assets/` — images, fonts
+
+## Rules
+- Use Expo SDK APIs over raw React Native when both exist
+  (e.g., expo-camera, not react-native-camera).
+- Navigation: Expo Router file-based routes. No manual stack configuration.
+- Styles: StyleSheet.create() only. No inline style objects in JSX
+  (performance: inline objects create new refs every render).
+- All API calls go through `lib/api.ts`. Components never call fetch directly.
+- Test components with @testing-library/react-native. No enzyme, no shallow.
+- Platform branching: use `.ios.tsx` / `.android.tsx` file suffixes
+  for platform-specific code, not `Platform.select()` inline.
+- Images must have explicit width/height. No unsized images.</code></pre>
+        <div class="tmpl-note">Why: Enforces Expo best practices and the most impactful performance rule (no inline style objects), which causes 90% of "why is my list janky" bugs.</div>
+      </div>
+
+      <!-- 10. Terraform -->
+      <div class="tmpl-card" data-category="infra">
+        <div class="tmpl-card-head"><h3>Terraform Infrastructure</h3><span class="tmpl-tag">Infra</span></div>
+        <pre><code># my-infra
+
+Terraform infrastructure. AWS. Modules pattern with environment workspaces.
+
+## Commands
+- `terraform fmt -recursive` — format
+- `terraform validate` — syntax check
+- `terraform plan -out=plan.tfplan` — always save plan before apply
+- `tflint --recursive` — lint
+- `checkov -d .` — security scan
+
+## Structure
+- `modules/` — reusable Terraform modules (VPC, ECS, RDS, etc.)
+- `environments/dev/` — dev environment root
+- `environments/staging/` — staging root
+- `environments/prod/` — prod root (NEVER modify without a plan review)
+
+## Rules
+- NEVER run `terraform apply` without saving a plan first.
+- All resources must be tagged: `Environment`, `Team`, `ManagedBy=terraform`.
+- No hardcoded AMI IDs, ARNs, or account numbers. Use data sources or variables.
+- State is in S3 with DynamoDB locking. Never use local state.
+- Secrets go in AWS Secrets Manager, referenced via data source. NEVER
+  put secrets in .tf files or terraform.tfvars.
+- Module outputs must include the resource ID and ARN at minimum.
+- Use `for_each` over `count` for resources that might be removed
+  individually (count reindexing destroys/recreates).
+- Environments share modules but NEVER share state files.</code></pre>
+        <div class="tmpl-note">Why: The for_each vs count rule alone prevents more accidental resource destruction than any other single Terraform practice.</div>
+      </div>
+
+      <!-- 11. CLI Tool -->
+      <div class="tmpl-card" data-category="python">
+        <div class="tmpl-card-head"><h3>Python CLI Tool</h3><span class="tmpl-tag">Python</span></div>
+        <pre><code># my-cli
+
+Python CLI tool distributed via pip. Click for argument parsing. Rich for output.
+
+## Commands
+- `uv run pytest` — tests
+- `uv run ruff check . --fix && uv run ruff format .` — lint
+- `uv run mypy src/` — type check
+- `uv run python -m my_cli --help` — test locally
+
+## Structure
+- `src/my_cli/` — package root
+- `src/my_cli/cli.py` — Click command definitions (thin)
+- `src/my_cli/core.py` — business logic (no Click imports)
+- `src/my_cli/output.py` — Rich formatting and display logic
+
+## Rules
+- Click commands are thin wrappers: parse args, call core, format output.
+  No business logic in cli.py.
+- Core functions return data (dicts, dataclasses). Display logic lives in
+  output.py. This lets us test core functions without capturing stdout.
+- Exit codes: 0 = success, 1 = user error (bad input), 2 = runtime error.
+  Always sys.exit() with a code, never bare exit().
+- Stderr for errors and progress. Stdout for actual output (pipeable).
+- Config file: `~/.config/my-cli/config.toml`. Use tomli to parse.
+  CLI flags override config file values.
+- Never prompt for input in non-interactive mode. Check `sys.stdin.isatty()`.</code></pre>
+        <div class="tmpl-note">Why: The stdout/stderr separation rule is the most commonly broken CLI convention — enforcing it here means your tool works correctly in shell pipelines from day one.</div>
+      </div>
+
+      <!-- 12. Rust -->
+      <div class="tmpl-card" data-category="infra">
+        <div class="tmpl-card-head"><h3>Rust Application</h3><span class="tmpl-tag">Rust</span></div>
+        <pre><code># my-app
+
+Rust application. Cargo workspace. tokio async runtime.
+
+## Commands
+- `cargo test` — all tests
+- `cargo test --package my-core -- test_name` — single test
+- `cargo clippy --all-targets -- -D warnings` — lint (must pass, zero warnings)
+- `cargo build --release` — optimized build
+- `cargo fmt --check` — format check
+
+## Structure
+- `crates/my-core/` — domain logic (no I/O, no async)
+- `crates/my-server/` — HTTP server (axum), wires core to endpoints
+- `crates/my-cli/` — CLI binary (clap), wires core to commands
+
+## Rules
+- Core crate has ZERO I/O dependencies. It operates on types, not connections.
+  Server and CLI crates handle I/O and pass data into core.
+- Use thiserror for library error types, anyhow for binary error types.
+  Never `.unwrap()` outside of tests.
+- Async at the boundary only. Core logic is sync where possible.
+- `#[must_use]` on all functions that return Result or Option.
+- Clippy at deny-warnings level. Fix clippy warnings, don't #[allow] them.
+- Dependencies: check if there's a std equivalent before adding a crate.
+  No leftpad incidents.</code></pre>
+        <div class="tmpl-note">Why: The zero-I/O core crate pattern is the key to testable Rust — it means your business logic compiles and tests in milliseconds without standing up a server.</div>
+      </div>
+
+      <!-- 13. Single-file project -->
+      <div class="tmpl-card" data-category="python meta">
+        <div class="tmpl-card-head"><h3>Single-File Project (amux-style)</h3><span class="tmpl-tag">Meta</span></div>
+        <pre><code># my-project
+
+Single-file project: everything lives in `server.py` (Python server + inline HTML/CSS/JS).
+
+## Workflow
+- Commit after every completed task. Don't batch changes.
+- The server auto-restarts on file save, so changes are live immediately.
+- Always verify syntax after edits: `python3 -c "import ast; ast.parse(open('server.py').read())"`
+
+## Rules
+- One file. Don't extract modules, don't create packages, don't split HTML
+  into templates. Complexity lives in one place where grep works.
+- HTML/CSS/JS is inline in Python string literals. Use f-strings for
+  dynamic content, raw strings for static blocks.
+- Routes are elif chains in the request handler. Don't add a framework.
+- SQLite for persistence. Database file in ~/.my-project/data.db.
+- No external Python dependencies beyond stdlib. If you need something,
+  vendor it or rewrite the 20 lines you actually need.</code></pre>
+        <div class="tmpl-note">Why: For projects that should stay simple. The key rule — "don't extract modules" — fights the instinct to prematurely organize and keeps the whole system greppable.</div>
+      </div>
+
+      <!-- 14. Global personal -->
+      <div class="tmpl-card" data-category="meta">
+        <div class="tmpl-card-head"><h3>Personal Global (~/.claude/CLAUDE.md)</h3><span class="tmpl-tag">Meta</span></div>
+        <pre><code># Global Instructions
+
+## Behavior
+- Don't explain what you're about to do. Just do it.
+- Don't add comments unless the why is non-obvious.
+- Don't refactor adjacent code unless I ask.
+- Commit after finishing each task, not in batches.
+- Use the existing code style, even if you'd do it differently.
+
+## Coding preferences
+- Prefer simple solutions over clever ones.
+- Prefer flat code over nested code (early returns, guard clauses).
+- Prefer explicit imports over wildcards.
+- Prefer composition over inheritance.
+- Three similar lines is better than a premature abstraction.
+
+## Don't
+- Don't add error handling for scenarios that can't happen.
+- Don't add backwards-compatibility shims. Just change the code.
+- Don't write multi-line comments or docstrings.
+- Don't create documentation files unless I ask.
+- Don't add features beyond what I asked for.</code></pre>
+        <div class="tmpl-note">Why: Global config controls agent personality across all projects. These rules eliminate the most common annoyances: over-commenting, scope creep, and unnecessary abstraction.</div>
+      </div>
+
+      <!-- 15. Multi-agent amux -->
+      <div class="tmpl-card" data-category="meta">
+        <div class="tmpl-card-head"><h3>Multi-Agent (amux sessions)</h3><span class="tmpl-tag">Meta</span></div>
+        <pre><code># my-project
+
+Multi-agent project managed by amux. Multiple Claude Code sessions
+work on this codebase simultaneously.
+
+## Coordination
+- Check the board before starting: `amux board list`
+- Claim your task: `amux board doing TASK-ID`
+- Mark done when finished: `amux board done TASK-ID`
+- If you need another session's help, post a board task with their session name.
+
+## Git rules (critical for parallel agents)
+- ALWAYS create a feature branch: `git checkout -b $AMUX_SESSION/feature-name`
+- NEVER push to main directly.
+- NEVER rebase or force-push. Merge main into your branch if needed.
+- Commit early and often. Small commits are easier to merge.
+- If you encounter a merge conflict, stop and describe it on the board.
+
+## Boundaries
+- Only modify files related to your assigned task.
+- If you need to change a shared file (config, schema, migrations),
+  coordinate on the board first.
+- Don't install new dependencies without a board discussion.
+
+## Communication
+- Before starting, peek at active sessions: `amux peek &lt;session&gt;`
+- If stuck for more than 5 minutes, post a help request on the board.</code></pre>
+        <div class="tmpl-note">Why: Multi-agent work fails when agents step on each other. This template enforces the branch-per-agent pattern and coordination-before-shared-file-edits rule.</div>
+      </div>
+
+      <!-- 16. iOS Swift -->
+      <div class="tmpl-card" data-category="mobile">
+        <div class="tmpl-card-head"><h3>iOS Swift (SwiftUI)</h3><span class="tmpl-tag">Mobile</span></div>
+        <pre><code># my-ios-app
+
+iOS app. Swift 6, SwiftUI, Swift Package Manager. Minimum iOS 17.
+
+## Commands
+- `xcodebuild test -scheme MyApp -destination 'platform=iOS Simulator,name=iPhone 16'` — tests
+- `swift build` — build check (SPM packages)
+- `swiftlint` — lint
+
+## Structure
+- `Sources/Features/` — one folder per feature (screen + view model + tests)
+- `Sources/Core/` — shared utilities, networking, persistence
+- `Sources/Design/` — design system components, colors, typography
+
+## Rules
+- MVVM pattern. Views are dumb. ViewModels are @Observable classes.
+- Views never call URLSession, CoreData, or any I/O directly.
+- Navigation via NavigationStack with typed destinations. No NavigationLink
+  with destination views inline.
+- Use Swift concurrency (async/await). No Combine for new code.
+  Existing Combine code can stay, but new reactive code uses AsyncSequence.
+- Structured concurrency: use TaskGroup over detached Tasks.
+- Preview every view. If a view can't be previewed in isolation, its
+  dependencies are too tangled.
+- Accessibility: every interactive element has an accessibilityLabel.</code></pre>
+        <div class="tmpl-note">Why: Enforces @Observable over ObservableObject (Swift 6 standard), prevents the NavigationLink-with-inline-destination antipattern, and mandates previews as a design health check.</div>
+      </div>
+
+      <!-- 17. Chrome Extension -->
+      <div class="tmpl-card" data-category="typescript">
+        <div class="tmpl-card-head"><h3>Chrome Extension (Manifest V3)</h3><span class="tmpl-tag">TypeScript</span></div>
+        <pre><code># my-extension
+
+Chrome Extension. Manifest V3. TypeScript. Vite for bundling.
+
+## Commands
+- `pnpm dev` — build + watch (load unpacked from dist/)
+- `pnpm test` — vitest
+- `pnpm build` — production build
+- `pnpm lint` — eslint
+
+## Structure
+- `src/background/` — service worker (event-driven, no persistent state)
+- `src/content/` — content scripts (runs in page context)
+- `src/popup/` — popup UI (React)
+- `src/options/` — options page
+- `src/shared/` — types and utilities shared across contexts
+
+## Rules
+- Service worker is EVENT-DRIVEN. No persistent state in memory. Use
+  chrome.storage.session for ephemeral state, chrome.storage.local for persistent.
+- Message passing between contexts uses typed messages. Define all message
+  types in `src/shared/messages.ts`.
+- Content scripts must be minimal. Heavy logic runs in the service worker
+  and communicates via chrome.runtime.sendMessage.
+- Never use `chrome.tabs.executeScript` with string code. Always use
+  registered content scripts or `func` parameter.
+- Permissions: request only what you need. Use optional_permissions for
+  features users might not enable.
+- CSP: popup and options pages have strict CSP. No inline scripts, no eval.</code></pre>
+        <div class="tmpl-note">Why: MV3's service worker lifecycle is the biggest foot-gun. This template prevents the #1 extension crash: assuming the service worker stays alive between events.</div>
+      </div>
+
+      <!-- 18. Kubernetes / Helm -->
+      <div class="tmpl-card" data-category="infra">
+        <div class="tmpl-card-head"><h3>Kubernetes + Helm Charts</h3><span class="tmpl-tag">Infra</span></div>
+        <pre><code># my-k8s
+
+Kubernetes manifests and Helm charts. ArgoCD for GitOps deployment.
+
+## Commands
+- `helm template my-app charts/my-app/ -f values-dev.yaml` — render templates
+- `helm lint charts/my-app/` — lint chart
+- `kubeval &lt;(helm template ...)` — validate against K8s schema
+- `kubectl diff -f manifests/` — diff against live cluster
+
+## Structure
+- `charts/my-app/` — Helm chart for the main application
+- `charts/shared/` — shared library chart (templates only)
+- `manifests/` — raw manifests for infra components (cert-manager, ingress)
+- `argocd/` — ArgoCD Application definitions
+
+## Rules
+- NEVER `kubectl apply` to production. All prod changes go through ArgoCD
+  (commit to main → ArgoCD syncs).
+- Resource limits on every container. No unbounded pods.
+- Liveness and readiness probes on every deployment. They must be different
+  endpoints (readiness = can serve traffic, liveness = not deadlocked).
+- Secrets via External Secrets Operator pulling from AWS Secrets Manager.
+  Never put base64 secrets in YAML files.
+- Pod disruption budgets on every production deployment.
+- Anti-affinity rules for multi-replica deployments (spread across nodes).
+- Values files per environment: values-dev.yaml, values-staging.yaml,
+  values-prod.yaml. Never use `--set` in CI.</code></pre>
+        <div class="tmpl-note">Why: The liveness-vs-readiness distinction is the most misunderstood K8s concept. Getting it wrong causes cascading restarts during normal deploys.</div>
+      </div>
+
+      <!-- 19. SvelteKit -->
+      <div class="tmpl-card" data-category="typescript fullstack">
+        <div class="tmpl-card-head"><h3>SvelteKit Full-stack</h3><span class="tmpl-tag">Full-stack</span></div>
+        <pre><code># my-app
+
+SvelteKit 2. TypeScript. Tailwind CSS. Drizzle ORM with PostgreSQL.
+
+## Commands
+- `pnpm dev` — dev server
+- `pnpm test` — playwright e2e + vitest unit
+- `pnpm lint` — eslint + svelte-check
+- `pnpm build` — production build
+
+## Structure
+- `src/routes/` — SvelteKit file-based routes
+- `src/lib/server/` — server-only code (DB, auth, email)
+- `src/lib/components/` — shared Svelte components
+- `src/lib/stores/` — Svelte stores for client state
+
+## Rules
+- Data loading: always use +page.server.ts load functions. No fetch() in
+  component onMount for initial data.
+- Form handling: use SvelteKit form actions. No client-side POST to API routes.
+- Server-only code goes in `$lib/server/`. SvelteKit will error if client
+  code imports from there — don't work around this, fix the architecture.
+- Stores for client state only. Server state comes from load functions.
+- Drizzle queries in `$lib/server/db/queries/`. One file per resource.
+- Use $app/environment for environment checks, not process.env.
+- Every dynamic route has a +error.svelte page.</code></pre>
+        <div class="tmpl-note">Why: SvelteKit's server/client boundary is its strongest feature when respected and its worst bug source when violated. This template makes the boundary explicit.</div>
+      </div>
+
+      <!-- 20. Subdirectory override -->
+      <div class="tmpl-card" data-category="meta">
+        <div class="tmpl-card-head"><h3>Subdirectory Override (tests/)</h3><span class="tmpl-tag">Meta</span></div>
+        <pre><code># Tests directory rules
+
+## When editing files in tests/
+- Test file names: `test_&lt;module&gt;.py` matching the source file they cover.
+- Use pytest fixtures from conftest.py. Don't create test data inline.
+- Integration tests that need a database use the `db` fixture (auto-rollback).
+- Mocking: only mock I/O boundaries (HTTP, filesystem, clock). Never mock
+  internal functions — if the test is hard to write without mocking internals,
+  the production code has a coupling problem.
+- No sleep() in tests. Use `freezegun` for time-dependent tests.
+- Assertion messages on every assert: `assert result == 42, f"Expected 42, got {result}"`.
+- Test names describe the behavior: `test_returns_404_when_user_not_found`,
+  not `test_get_user_3`.</code></pre>
+        <div class="tmpl-note">Why: Place this in `tests/CLAUDE.md` to override project-level rules with test-specific conventions. The "never mock internals" rule prevents brittle tests that break on every refactor.</div>
+      </div>
+
+    </div>
+
+    <h2>Writing your own CLAUDE.md</h2>
+    <p>Start from the template closest to your stack, then iterate using this process:</p>
+    <ol>
+      <li><strong>Run Claude Code for a day without CLAUDE.md.</strong> Take notes on every mistake it makes or convention it misses.</li>
+      <li><strong>Write one rule per mistake.</strong> Be specific: "use uv, not pip" is better than "follow project conventions."</li>
+      <li><strong>Delete rules Claude follows naturally.</strong> If removing a line doesn't change behavior, it's wasting context tokens.</li>
+      <li><strong>Test with multiple sessions.</strong> Run 3&ndash;5 amux sessions on the same task and check if all agents follow the rules consistently.</li>
+      <li><strong>Version control it.</strong> Your CLAUDE.md should evolve with your codebase. Review it in PRs like any other config file.</li>
+    </ol>
+
+    <h2>CLAUDE.md anti-patterns</h2>
+    <table>
+      <thead><tr><th>Anti-pattern</th><th>Why it's bad</th><th>What to do instead</th></tr></thead>
+      <tbody>
+        <tr><td>Documenting the entire architecture</td><td>Burns context tokens on every conversation; Claude can read the code</td><td>Only document things that aren't obvious from reading the code</td></tr>
+        <tr><td>Duplicating README content</td><td>Goes stale when one is updated but not the other</td><td>CLAUDE.md = agent rules. README = human docs. Different audiences.</td></tr>
+        <tr><td>Rules longer than one line</td><td>Agents skim. Long paragraphs get partially followed.</td><td>One rule per line. If it needs explanation, add a "Why:" suffix.</td></tr>
+        <tr><td>Listing every file in the project</td><td>Changes constantly, wastes tokens, Claude can use glob/grep</td><td>Only list files whose role is non-obvious from the filename</td></tr>
+        <tr><td>500+ lines</td><td>Exceeds context budget, rules at the bottom get ignored</td><td>Keep under 200 lines. Move details to subdirectory overrides.</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Using templates with amux multi-agent sessions</h2>
+    <p>The biggest payoff from a good CLAUDE.md is in multi-agent workflows. When you run 10 parallel Claude Code sessions via amux, all of them load the same CLAUDE.md. This means:</p>
+    <ul>
+      <li><strong>Consistent style</strong> across every agent's output without per-session prompting</li>
+      <li><strong>No conflicting approaches</strong> &mdash; agents agree on test frameworks, naming, file structure</li>
+      <li><strong>The Multi-Agent template above</strong> adds git coordination rules that prevent merge conflicts</li>
+      <li><strong>Subdirectory overrides</strong> let you scope different rules to different parts of the codebase</li>
+    </ul>
+    <p>If you're running multiple agents, start with the template for your stack <em>plus</em> the Multi-Agent template as a project-level addition. The combination ensures both code quality and coordination.</p>
+
+    <div class="cta-box"><h3>Run multiple agents with consistent CLAUDE.md</h3><p>amux manages parallel Claude Code sessions that all share your project's CLAUDE.md. Coordinate work via kanban board, monitor output in a web dashboard.</p><pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # &rarr; https://localhost:8822</code></pre><a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a></div>
+  </main>
+  <footer>
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" style="font-size:0.92rem;font-weight:700;color:var(--text);text-decoration:none;">amux</a>
+          <p>Open-source agent multiplexer for Claude Code.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-claude-managed-agents/">vs Claude Managed Agents</a></li>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://github.com/mixpeek/amux/issues">Issues</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+<script>
+(function() {
+  var grid = document.getElementById('tmpl-grid');
+  var btns = document.querySelectorAll('.filter-btn');
+  btns.forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      btns.forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      var f = btn.getAttribute('data-filter');
+      var cards = grid.querySelectorAll('.tmpl-card');
+      cards.forEach(function(c) {
+        if (f === 'all' || (c.getAttribute('data-category') || '').indexOf(f) !== -1) {
+          c.style.display = '';
+        } else {
+          c.style.display = 'none';
+        }
+      });
+    });
+  });
+  grid.addEventListener('click', function(e) {
+    var btn = e.target.closest('.tmpl-copy');
+    if (!btn) return;
+    var pre = btn.closest('.tmpl-card').querySelector('pre code');
+    if (!pre) return;
+    navigator.clipboard.writeText(pre.textContent).then(function() {
+      btn.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+    });
+  });
+  grid.querySelectorAll('.tmpl-card-head').forEach(function(head) {
+    var card = head.closest('.tmpl-card');
+    var btn = document.createElement('button');
+    btn.className = 'tmpl-copy';
+    btn.textContent = 'Copy';
+    head.appendChild(btn);
+  });
+})();
+</script>
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

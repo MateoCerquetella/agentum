@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>Debugging Agent Fleets with amux — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="Tools and techniques for diagnosing stuck, looping, or wrong-output agents in a fleet.">
+  <meta name="keywords" content="debug AI agent, stuck claude code, agent troubleshooting, amux debugging">
+  <link rel="canonical" href="https://amux.io/guides/agent-debugging/">
+  <meta property="og:title" content="Debugging Agent Fleets with amux — amux">
+  <meta property="og:description" content="Tools and techniques for diagnosing stuck, looping, or wrong-output agents in a fleet.">
+  <meta property="og:url" content="https://amux.io/guides/agent-debugging/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Guides","item":"https://amux.io/guides/"},{"@type":"ListItem","position":3,"name":"Debugging Agent Fleets with amux","item":"https://amux.io/guides/agent-debugging/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"Debugging Agent Fleets with amux","description":"Tools and techniques for diagnosing stuck, looping, or wrong-output agents in a fleet.","url":"https://amux.io/guides/agent-debugging/","datePublished":"2026-02-26","dateModified":"2026-02-26","author":{"@type":"Organization","name":"amux","url":"https://amux.io/"}}</script>
+  </head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">›</span> <a href="/guides/">Guides</a> <span class="sep">›</span> <span>Debugging Agent Fleets with amux</span></div>
+    <h1>Debugging Agent Fleets with amux</h1>
+<p class="subtitle">An agent fleet has many failure modes. Here's how to diagnose and fix each one.</p>
+<h2>Your Debugging Tools</h2>
+<ul>
+<li><strong>Live peek:</strong> See any agent's terminal output in real time from the dashboard. The most important debugging tool.</li>
+<li><strong>Board status:</strong> If a task is stuck on "doing" for longer than expected, the agent is either blocked or in a loop.</li>
+<li><strong>Token tracker:</strong> High token spend with no committed code = wasted loop or incorrect file reading.</li>
+<li><strong>Git diff:</strong> Run <code>git diff</code> in the session's working directory to see what the agent has actually changed.</li>
+<li><strong>Send message:</strong> Use the dashboard to send a correction or clarification to any running session.</li>
+</ul>
+<h2>Failure Mode Playbook</h2>
+<h3>Agent is stuck on a compilation error</h3>
+<p><strong>Symptom:</strong> Peek shows the same error repeating, agent is trying different fixes but none work.</p>
+<p><strong>Diagnosis:</strong> The agent has incorrect information about the codebase — wrong import path, wrong function signature, incorrect type.</p>
+<p><strong>Fix:</strong> Send the exact correct information via dashboard message. "The correct import is: <code>import { User } from '../models/user'</code>" — specific is better than general.</p>
+<h3>Agent is reading the wrong files</h3>
+<p><strong>Symptom:</strong> Git diff shows changes to files unrelated to the task.</p>
+<p><strong>Diagnosis:</strong> The task description was ambiguous about scope. The agent found a plausible but incorrect location for the relevant code.</p>
+<p><strong>Fix:</strong> Send a correction with explicit file paths. Reset the git changes, restart with a more specific task description that names exact files.</p>
+<h3>Agent completed the wrong task</h3>
+<p><strong>Symptom:</strong> The code runs and tests pass, but it doesn't implement what you wanted.</p>
+<p><strong>Diagnosis:</strong> Task specification was ambiguous or the agent misinterpreted the intent.</p>
+<p><strong>Fix:</strong> This is the hardest failure mode because the output looks correct. Prevention is the fix: write task specs that include examples, specify the interface explicitly, and include a "success looks like" description.</p>
+<h3>Agent is in a reasoning loop</h3>
+<p><strong>Symptom:</strong> The agent keeps reading the same files, generating the same analysis, not writing any code.</p>
+<p><strong>Diagnosis:</strong> The task is too open-ended. The agent is stuck deciding between approaches.</p>
+<p><strong>Fix:</strong> Break the impasse by sending a specific direction: "Use approach X. Start by editing file Y."</p>
+<h3>Context compaction degraded output quality</h3>
+<p><strong>Symptom:</strong> After an auto-compact, the agent's output quality drops — it seems to have forgotten important context about the codebase.</p>
+<p><strong>Fix:</strong> After compaction, send a brief context summary: "You're implementing the users API in src/api/users/. The User model is in src/models/user.ts. The coding style uses async/await with try-catch error handling."</p>
+<div class="cta-box"><h3>Get started with amux</h3><p>Run dozens of Claude Code agents in parallel. Python 3 + tmux. Open source.</p><pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # → https://localhost:8822</code></pre><a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a></div>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

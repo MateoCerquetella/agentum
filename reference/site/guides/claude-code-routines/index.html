@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>Claude Code Routines vs Self-Hosted Automation: When Cloud Limits Aren't Enough (2026) — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="Claude Code Routines launched April 2026 with daily run caps and no persistent state. This guide compares Routines, OpenAI Codex background agents, and self-hosted automation with amux — with a decision matrix and migration walkthrough.">
+  <meta name="keywords" content="claude code routines, claude code routines limits, claude code automation, claude code scheduled tasks, claude code routines alternative, claude code cron, openai codex vs claude code, self hosted ai agent automation, claude code routines vs amux, claude code background agents, ai agent scheduling, claude code routines caps, claude code routines persistent state">
+  <link rel="canonical" href="https://amux.io/guides/claude-code-routines/">
+  <meta property="og:title" content="Claude Code Routines vs Self-Hosted Automation — amux">
+  <meta property="og:description" content="Routines cap at 25 runs/day with no persistent state. Here's when to use them, when to self-host, and how to migrate.">
+  <meta property="og:url" content="https://amux.io/guides/claude-code-routines/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Guides","item":"https://amux.io/guides/"},{"@type":"ListItem","position":3,"name":"Claude Code Routines","item":"https://amux.io/guides/claude-code-routines/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"Claude Code Routines vs Self-Hosted Automation: When Cloud Limits Aren't Enough","description":"Claude Code Routines launched April 2026 with daily run caps and no persistent state. Compare Routines, OpenAI Codex background agents, and self-hosted automation — with a migration walkthrough.","url":"https://amux.io/guides/claude-code-routines/","datePublished":"2026-04-16","dateModified":"2026-04-16","author":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"publisher":{"@type":"Organization","name":"amux","url":"https://amux.io/","logo":{"@type":"ImageObject","url":"https://amux.io/icon.png"}}}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"What are Claude Code Routines?","acceptedAnswer":{"@type":"Answer","text":"Routines are Anthropic's built-in scheduled automation for Claude Code, launched April 14, 2026 as a research preview. You define a task (like 'review open PRs every morning'), set a trigger (cron schedule, GitHub webhook, or manual), and Claude Code runs it in the cloud without you being present. Routines are included with Max and Enterprise subscriptions at no extra per-run cost."}},{"@type":"Question","name":"What are the limits of Claude Code Routines?","acceptedAnswer":{"@type":"Answer","text":"During the research preview: Max plan subscribers get 5-25 runs per day depending on tier. Each run is stateless — there is no persistent memory or context between invocations. Webhook triggers are rate-limited. Runs execute on Anthropic's cloud infrastructure, not your machine, so they can't access local files, databases, or services behind your firewall. The feature is research-preview, meaning behavior and limits may change."}},{"@type":"Question","name":"How do Claude Code Routines compare to OpenAI Codex?","acceptedAnswer":{"@type":"Answer","text":"Both run coding agents in the cloud on a schedule. Codex runs in a sandboxed VM with full filesystem access per task but no persistent state between tasks. Routines run in Anthropic's cloud with similar statelessness constraints. Codex uses the codex-mini model at API pricing. Routines are included with Max/Enterprise subscriptions. Both are cloud-only — neither can access your local machine."}},{"@type":"Question","name":"Can I run Claude Code Routines on my own server?","acceptedAnswer":{"@type":"Answer","text":"No. Routines execute on Anthropic's infrastructure. If you need scheduled Claude Code automation on your own machine — to access local files, local databases, or services behind a firewall — you need a self-hosted solution like amux's cron scheduler or a custom tmux/systemd setup running Claude Code in headless mode."}},{"@type":"Question","name":"How do I migrate from Routines to self-hosted automation?","acceptedAnswer":{"@type":"Answer","text":"Install amux, register your project with amux register, create a cron job with amux cron add that matches your Routine's schedule and prompt, and optionally set up webhook ingestion via the REST API. Your prompt stays the same — the difference is execution happens on your machine with access to your full local environment."}},{"@type":"Question","name":"Should I use Routines or self-hosted automation?","acceptedAnswer":{"@type":"Answer","text":"Use Routines for simple, low-frequency tasks that don't need local access: daily PR reviews, weekly dependency checks, scheduled code quality scans. Use self-hosted automation when you need more than 25 runs/day, persistent state between runs, access to local files or databases, inter-agent coordination, or full control over the execution environment."}},{"@type":"Question","name":"What is OpenAI Codex and how does it compare?","acceptedAnswer":{"@type":"Answer","text":"OpenAI Codex (launched April 16, 2026) is a cloud-based coding agent that runs tasks in sandboxed VMs linked to your GitHub repos. It uses the codex-mini model, billed per-token at API rates. Unlike Routines, Codex focuses on on-demand tasks rather than scheduled automation. Like Routines, it is cloud-only and stateless between runs."}},{"@type":"Question","name":"Can amux replace Claude Code Routines entirely?","acceptedAnswer":{"@type":"Answer","text":"Yes, for the scheduling and automation use case. amux's cron scheduler, /loop command, and board-driven orchestration cover everything Routines does plus persistent state, unlimited runs, local execution, inter-agent coordination, and a web dashboard. The trade-off is you host it yourself — you need a machine running tmux and Python 3."}}]}</script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">&rsaquo;</span> <a href="/guides/">Guides</a> <span class="sep">&rsaquo;</span> <span>Claude Code Routines</span></div>
+    <h1>Claude Code Routines vs Self-Hosted Automation</h1>
+    <p class="subtitle">Anthropic launched Routines on April 14. OpenAI shipped Codex background agents on April 16. Both run coding agents in the cloud on a schedule. Both have hard limits. Here&rsquo;s when to use them, when to self-host, and how to migrate.</p>
+
+    <nav class="toc" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.2rem 1.6rem;margin:2rem 0;">
+      <strong style="font-size:0.82rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);">Contents</strong>
+      <ol style="margin:0.6rem 0 0;padding-left:1.2rem;font-size:0.88rem;line-height:2;">
+        <li><a href="#what-are-routines" style="color:var(--dim);text-decoration:none;">What Are Claude Code Routines?</a></li>
+        <li><a href="#comparison" style="color:var(--dim);text-decoration:none;">Routines vs Codex vs Self-Hosted</a></li>
+        <li><a href="#limits" style="color:var(--dim);text-decoration:none;">Where Routines Fall Short</a></li>
+        <li><a href="#self-hosted" style="color:var(--dim);text-decoration:none;">Self-Hosted Alternative: Unlimited Automation</a></li>
+        <li><a href="#when-to-use" style="color:var(--dim);text-decoration:none;">When to Use What</a></li>
+        <li><a href="#migration" style="color:var(--dim);text-decoration:none;">Migration: From Routines to Self-Hosted</a></li>
+        <li><a href="#cost" style="color:var(--dim);text-decoration:none;">Cost Comparison</a></li>
+        <li><a href="#faq" style="color:var(--dim);text-decoration:none;">FAQ</a></li>
+      </ol>
+    </nav>
+
+    <!-- ───────────────────────────── SECTION: WHAT ───────────────────────────── -->
+    <h2 id="what-are-routines">What Are Claude Code Routines?</h2>
+
+    <p>Routines are Anthropic&rsquo;s built-in scheduled automation for Claude Code, launched April 14, 2026 as a research preview. The idea: define a task, set a trigger, and Claude Code executes it in the cloud without you being present.</p>
+
+    <p>A Routine has three parts:</p>
+
+    <ul>
+      <li><strong>A prompt.</strong> The task you want Claude to do &mdash; &ldquo;Review all open PRs and post comments,&rdquo; &ldquo;Run the test suite and fix any failures,&rdquo; &ldquo;Update the changelog from this week&rsquo;s commits.&rdquo;</li>
+      <li><strong>A trigger.</strong> Cron schedule (&ldquo;every weekday at 9am&rdquo;), GitHub webhook (on PR open, on push to main), or manual.</li>
+      <li><strong>Execution environment.</strong> Anthropic&rsquo;s cloud &mdash; a fresh checkout of your repo, Claude Code runs the task, results appear in the Routines dashboard or as GitHub comments/PRs.</li>
+    </ul>
+
+    <p>Routines are included with Max and Enterprise subscriptions at no extra per-run cost. They&rsquo;re the first official answer to &ldquo;how do I run Claude Code on a schedule without babysitting a terminal?&rdquo;</p>
+
+    <p>That&rsquo;s the pitch. The reality is more constrained.</p>
+
+    <!-- ───────────────────────────── SECTION: COMPARISON ───────────────────────────── -->
+    <h2 id="comparison">Routines vs Codex vs Self-Hosted</h2>
+
+    <p>Three approaches to the same problem launched in the same week. Here&rsquo;s how they compare:</p>
+
+    <div style="overflow-x:auto;margin:2rem 0;">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th style="width:22%;">Capability</th>
+            <th style="width:26%;">Claude Code Routines</th>
+            <th style="width:26%;">OpenAI Codex</th>
+            <th style="width:26%;">Self-Hosted (amux)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Execution</strong></td>
+            <td>Anthropic&rsquo;s cloud</td>
+            <td>OpenAI sandboxed VMs</td>
+            <td>Your machine / server</td>
+          </tr>
+          <tr>
+            <td><strong>Scheduling</strong></td>
+            <td>Cron + GitHub webhooks</td>
+            <td>On-demand (no scheduler)</td>
+            <td>Cron + webhooks + <code>/loop</code> + REST API triggers</td>
+          </tr>
+          <tr>
+            <td><strong>Daily run cap</strong></td>
+            <td>5&ndash;25 (tier-dependent)</td>
+            <td>No hard cap (API billing)</td>
+            <td>Unlimited</td>
+          </tr>
+          <tr>
+            <td><strong>Persistent state</strong></td>
+            <td>No &mdash; fresh checkout each run</td>
+            <td>No &mdash; sandboxed VM per task</td>
+            <td>Yes &mdash; persistent sessions with full conversation history</td>
+          </tr>
+          <tr>
+            <td><strong>Local file access</strong></td>
+            <td>No &mdash; cloud only</td>
+            <td>No &mdash; cloud only</td>
+            <td>Yes &mdash; full filesystem</td>
+          </tr>
+          <tr>
+            <td><strong>Local DB / services</strong></td>
+            <td>No</td>
+            <td>No</td>
+            <td>Yes &mdash; localhost, Docker, VPN</td>
+          </tr>
+          <tr>
+            <td><strong>Inter-agent coordination</strong></td>
+            <td>No</td>
+            <td>No</td>
+            <td>Yes &mdash; channels, board, REST API</td>
+          </tr>
+          <tr>
+            <td><strong>Model</strong></td>
+            <td>Claude (Anthropic chooses)</td>
+            <td>codex-mini (OpenAI)</td>
+            <td>Claude Code (your choice of model)</td>
+          </tr>
+          <tr>
+            <td><strong>Crash recovery</strong></td>
+            <td>Managed by Anthropic</td>
+            <td>Managed by OpenAI</td>
+            <td>Self-healing watchdog</td>
+          </tr>
+          <tr>
+            <td><strong>Cost</strong></td>
+            <td>Included in Max/Enterprise</td>
+            <td>Per-token API pricing</td>
+            <td>Max subscription or API key &mdash; your choice</td>
+          </tr>
+          <tr>
+            <td><strong>Observability</strong></td>
+            <td>Routines dashboard</td>
+            <td>Codex dashboard</td>
+            <td>Web dashboard + mobile PWA + token tracking</td>
+          </tr>
+          <tr>
+            <td><strong>Open source</strong></td>
+            <td>No</td>
+            <td>No</td>
+            <td>Yes &mdash; MIT licensed</td>
+          </tr>
+          <tr>
+            <td><strong>Status</strong></td>
+            <td>Research preview</td>
+            <td>Research preview</td>
+            <td>Stable, self-hosted</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The short version: Routines and Codex are <strong>managed, cloud-only, and capped</strong>. Self-hosted is <strong>unlimited, local, and yours to operate</strong>. They solve the same problem at different points on the convenience-vs-control spectrum.</p>
+
+    <!-- ───────────────────────────── SECTION: LIMITS ───────────────────────────── -->
+    <h2 id="limits">Where Routines Fall Short</h2>
+
+    <p>Routines are a research preview, and the constraints reflect that. Five limitations matter in practice:</p>
+
+    <h3 style="margin-top:1.5rem;">1. Daily run caps</h3>
+    <p>Max subscribers get 5&ndash;25 Routine runs per day, depending on subscription tier. That&rsquo;s fine for a daily PR review. It&rsquo;s not enough for a CI pipeline that triggers on every push, a test suite that runs on every commit, or an overnight batch of 50 tasks.</p>
+
+    <p>For comparison: a self-hosted setup can run hundreds of agent invocations per day, limited only by your API quota or machine resources.</p>
+
+    <h3 style="margin-top:1.5rem;">2. No persistent state</h3>
+    <p>Each Routine invocation starts fresh. There is no conversation history, no memory of what the last run did, no accumulated context. If your Routine reviews PRs daily, it cannot reference what it said about yesterday&rsquo;s PR. If it tracks a refactoring across multiple days, it starts over each time.</p>
+
+    <p>This is the single biggest architectural limitation. Many useful automations &mdash; incremental refactors, multi-day migration tracking, agents that learn from previous runs &mdash; fundamentally require persistent state.</p>
+
+    <h3 style="margin-top:1.5rem;">3. No local access</h3>
+    <p>Routines execute on Anthropic&rsquo;s infrastructure. They can clone your GitHub repo, but they cannot:</p>
+    <ul>
+      <li>Access files not in the repo (local configs, <code>.env</code>, generated assets)</li>
+      <li>Connect to <code>localhost</code> services (databases, APIs, Docker containers)</li>
+      <li>Reach services behind your VPN or firewall</li>
+      <li>Use tools installed on your machine (custom linters, proprietary CLIs)</li>
+    </ul>
+    <p>If your automation needs any of these, Routines can&rsquo;t help. Self-hosted automation runs on the same machine as your development environment, with full access to everything.</p>
+
+    <h3 style="margin-top:1.5rem;">4. No inter-agent coordination</h3>
+    <p>Each Routine runs in isolation. There is no mechanism for one Routine to trigger another, for Routines to share a task queue, or for a Routine to message another running agent. If you need agents that coordinate &mdash; one finishes the database schema, another starts the API layer &mdash; Routines don&rsquo;t support it.</p>
+
+    <h3 style="margin-top:1.5rem;">5. Research preview instability</h3>
+    <p>Routines are explicitly labeled &ldquo;research preview.&rdquo; Feature behavior, run caps, and availability may change without notice. Building critical infrastructure on a research preview is a calculated risk &mdash; one that self-hosted solutions avoid entirely.</p>
+
+    <!-- ───────────────────────────── SECTION: SELF-HOSTED ───────────────────────────── -->
+    <h2 id="self-hosted">Self-Hosted Alternative: Unlimited Automation</h2>
+
+    <p>The self-hosted approach runs Claude Code on your own machine using the same <a href="/guides/claude-code-headless/">headless mode</a> that powers Routines behind the scenes &mdash; but without the caps, without the cloud lock-in, and with full local access.</p>
+
+    <p>amux provides four automation primitives that cover every Routine use case and more:</p>
+
+    <h3 style="margin-top:1.5rem;">Cron scheduler</h3>
+    <p>Named recurring jobs with cron expressions, managed through a web UI or CLI. The direct equivalent of a Routine&rsquo;s cron trigger, but with no daily cap.</p>
+
+    <pre><code><span class="comment"># Review open PRs every weekday at 9am</span>
+$ amux cron add pr-review "0 9 * * 1-5" \
+    --session reviewer \
+    --prompt "Review all open PRs on main and post comments"
+
+<span class="comment"># Run tests every hour during business hours</span>
+$ amux cron add test-sweep "0 9-17 * * 1-5" \
+    --session tester \
+    --prompt "Run the full test suite. If anything fails, fix it and push."
+
+<span class="comment"># List active cron jobs</span>
+$ amux cron list
+<span class="ok">pr-review    0 9 * * 1-5   reviewer   next: 2026-04-17 09:00</span>
+<span class="ok">test-sweep   0 9-17 * * 1-5  tester   next: 2026-04-16 14:00</span></code></pre>
+
+    <h3 style="margin-top:1.5rem;">/loop for adaptive scheduling</h3>
+    <p>For tasks that shouldn&rsquo;t run on a fixed schedule but should repeat until a condition is met &mdash; like monitoring a deploy, or retrying a flaky migration:</p>
+
+    <pre><code><span class="comment"># Agent self-paces: checks every few minutes until the deploy succeeds</span>
+/loop Check if the staging deploy passed. If it did, run smoke tests and report. If not, wait.</code></pre>
+
+    <p>The agent decides how long to wait between checks based on context. No cron expression needed.</p>
+
+    <h3 style="margin-top:1.5rem;">REST API triggers</h3>
+    <p>Trigger agent runs from any webhook &mdash; GitHub, Slack, your CI pipeline, a custom script. The equivalent of Routines&rsquo; GitHub webhook trigger, but for any HTTP source.</p>
+
+    <pre><code><span class="comment"># Trigger an agent from a GitHub webhook</span>
+$ curl -sk -X POST -H 'Content-Type: application/json' \
+    -d '{"text":"A new PR was opened: #142 - Add retry logic"}' \
+    https://localhost:8822/api/sessions/reviewer/send</code></pre>
+
+    <h3 style="margin-top:1.5rem;">Board-driven orchestration</h3>
+    <p>For complex workflows where multiple agents need to coordinate: post tasks to the kanban board, agents claim and execute them atomically. No duplicate work, no manual assignment.</p>
+
+    <pre><code><span class="comment"># Post a batch of tasks</span>
+$ for task in "Update auth module" "Refactor config" "Add API tests"; do
+    curl -sk -X POST -H 'Content-Type: application/json' \
+      -d "{\"title\":\"$task\",\"status\":\"todo\"}" \
+      https://localhost:8822/api/board
+  done
+
+<span class="comment"># Agents claim tasks automatically via atomic /claim endpoint</span></code></pre>
+
+    <p>All four primitives share the same persistent session infrastructure: agents maintain full conversation history across runs, cost is tracked per-session, and crashes auto-recover via the <a href="/guides/self-healing-configuration/">self-healing watchdog</a>.</p>
+
+    <!-- ───────────────────────────── SECTION: WHEN TO USE ───────────────────────────── -->
+    <h2 id="when-to-use">When to Use What</h2>
+
+    <p>There&rsquo;s no universally better option. The right choice depends on what you need:</p>
+
+    <div style="overflow-x:auto;margin:2rem 0;">
+      <table class="data-table">
+        <thead><tr><th>Use Case</th><th>Best Option</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Daily PR review for a small team</td>
+            <td><strong>Routines</strong></td>
+            <td>Simple, low-frequency, cloud repo access is sufficient</td>
+          </tr>
+          <tr>
+            <td>Weekly dependency update + PR</td>
+            <td><strong>Routines</strong></td>
+            <td>Fits within daily cap, stateless is fine</td>
+          </tr>
+          <tr>
+            <td>CI gate on every push</td>
+            <td><strong>Self-hosted</strong></td>
+            <td>High frequency blows through Routine caps</td>
+          </tr>
+          <tr>
+            <td>Multi-day refactoring across modules</td>
+            <td><strong>Self-hosted</strong></td>
+            <td>Requires persistent state between runs</td>
+          </tr>
+          <tr>
+            <td>Automation that reads local databases</td>
+            <td><strong>Self-hosted</strong></td>
+            <td>Routines can&rsquo;t reach localhost</td>
+          </tr>
+          <tr>
+            <td>10+ agents working overnight</td>
+            <td><strong>Self-hosted</strong></td>
+            <td>Need orchestration, cost tracking, fleet observability</td>
+          </tr>
+          <tr>
+            <td>Quick ad-hoc cloud task</td>
+            <td><strong>Codex</strong></td>
+            <td>No setup, fire-and-forget, GitHub integration</td>
+          </tr>
+          <tr>
+            <td>Team with no DevOps capacity</td>
+            <td><strong>Routines + Codex</strong></td>
+            <td>Zero infrastructure to maintain</td>
+          </tr>
+          <tr>
+            <td>Full control over execution</td>
+            <td><strong>Self-hosted</strong></td>
+            <td>Your machine, your rules, your data</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The pragmatic approach: <strong>start with Routines for the simple stuff.</strong> When you hit a cap &mdash; daily runs, persistent state, local access, or coordination &mdash; migrate that specific workflow to self-hosted. The two aren&rsquo;t mutually exclusive.</p>
+
+    <!-- ───────────────────────────── SECTION: MIGRATION ───────────────────────────── -->
+    <h2 id="migration">Migration: From Routines to Self-Hosted</h2>
+
+    <p>Moving a Routine to amux takes about five minutes. The prompt stays the same &mdash; only the scheduling and execution layer changes.</p>
+
+    <h3 style="margin-top:1.5rem;">Step 1: Install amux</h3>
+    <pre><code>$ git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh</code></pre>
+
+    <h3 style="margin-top:1.5rem;">Step 2: Register your project</h3>
+    <pre><code>$ amux register myproject --dir ~/Dev/myproject --yolo</code></pre>
+    <p>The <code>--yolo</code> flag enables <a href="/guides/setting-up-yolo-mode/">auto-approval mode</a> for headless operation &mdash; the same permission model Routines use implicitly in the cloud.</p>
+
+    <h3 style="margin-top:1.5rem;">Step 3: Create the cron job</h3>
+    <p>Take your Routine&rsquo;s prompt and schedule, and create an amux cron entry:</p>
+    <pre><code><span class="comment"># Your Routine was: "Review open PRs" at 9am weekdays</span>
+$ amux cron add pr-review "0 9 * * 1-5" \
+    --session pr-reviewer \
+    --prompt "Review all open PRs on the main branch. For each PR, post a review comment covering: correctness, test coverage, and potential issues. Approve PRs that look good."</code></pre>
+
+    <h3 style="margin-top:1.5rem;">Step 4: Start the dashboard</h3>
+    <pre><code>$ amux serve
+<span class="ok">Dashboard: https://localhost:8822</span></code></pre>
+    <p>You now have a web dashboard showing the session status, cost tracking, and cron schedule. The same PR review runs on the same schedule, but on your machine, with access to your full environment, and no daily cap.</p>
+
+    <h3 style="margin-top:1.5rem;">Step 5: Add persistent state (optional)</h3>
+    <p>The key advantage of self-hosted: your agent maintains conversation history. If yesterday&rsquo;s PR review identified a pattern (&ldquo;this team keeps forgetting error handling&rdquo;), today&rsquo;s review can reference that context and provide more targeted feedback.</p>
+    <pre><code><span class="comment"># The session persists across cron runs</span>
+$ amux cron add pr-review "0 9 * * 1-5" \
+    --session pr-reviewer \
+    --resume \
+    --prompt "Review new open PRs since your last run. Reference patterns from previous reviews."</code></pre>
+
+    <!-- ───────────────────────────── SECTION: COST ───────────────────────────── -->
+    <h2 id="cost">Cost Comparison</h2>
+
+    <p>The cost model differs significantly between approaches. Here&rsquo;s a realistic breakdown for a team running 10 automated tasks per day:</p>
+
+    <div style="overflow-x:auto;margin:2rem 0;">
+      <table class="data-table">
+        <thead><tr><th>Approach</th><th>Monthly Cost (10 tasks/day)</th><th>Billing Model</th><th>Cost Visibility</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Claude Code Routines</strong></td>
+            <td>$0 beyond Max subscription ($100&ndash;$200/mo)</td>
+            <td>Included in subscription</td>
+            <td>Run count only</td>
+          </tr>
+          <tr>
+            <td><strong>OpenAI Codex</strong></td>
+            <td>~$150&ndash;$500/mo (depends on task complexity)</td>
+            <td>Per-token API pricing</td>
+            <td>API dashboard</td>
+          </tr>
+          <tr>
+            <td><strong>Self-hosted (Max sub)</strong></td>
+            <td>$0 beyond Max subscription ($100&ndash;$200/mo)</td>
+            <td>Included in subscription</td>
+            <td>Per-session + per-day dashboards</td>
+          </tr>
+          <tr>
+            <td><strong>Self-hosted (API key)</strong></td>
+            <td>~$100&ndash;$400/mo (depends on task complexity)</td>
+            <td>Per-token</td>
+            <td>Per-session + per-day dashboards</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>If you&rsquo;re already paying for a Max subscription and your tasks fit within the daily cap, Routines are effectively free. The economics shift when:</p>
+
+    <ul>
+      <li><strong>You exceed the daily cap</strong> and need to add API-key runs to supplement.</li>
+      <li><strong>You need cost visibility per task.</strong> Routines show run counts, not token spend. Self-hosted with amux shows per-session cost, per-day totals, and model breakdowns.</li>
+      <li><strong>You&rsquo;re running a team.</strong> Multiple Max subscriptions at $200/mo each adds up. A single API key shared across a self-hosted fleet with budget caps is often cheaper.</li>
+    </ul>
+
+    <p>For detailed cost tracking strategies, see the <a href="/guides/token-spend-tracking/">Token Spend Tracking</a> guide.</p>
+
+    <!-- ───────────────────────────── SECTION: FAQ ───────────────────────────── -->
+    <h2 id="faq">FAQ</h2>
+
+    <div class="faq-list" style="margin-top:1.5rem;">
+      <details class="faq-item" open>
+        <summary>What are Claude Code Routines?</summary>
+        <p>Anthropic&rsquo;s built-in scheduled automation for Claude Code, launched April 14, 2026 as a research preview. Define a task, set a cron schedule or GitHub webhook trigger, and Claude runs it in the cloud without you present. Included in Max and Enterprise subscriptions.</p>
+      </details>
+      <details class="faq-item">
+        <summary>What are the limits of Routines?</summary>
+        <p>5&ndash;25 daily runs (tier-dependent), no persistent state between runs, cloud-only execution (no local file/DB access), no inter-agent coordination, and research-preview stability. These constraints matter most for high-frequency, stateful, or local-access workflows.</p>
+      </details>
+      <details class="faq-item">
+        <summary>How do Routines compare to OpenAI Codex?</summary>
+        <p>Both run coding agents in the cloud. Codex focuses on on-demand tasks in sandboxed VMs at API pricing. Routines focus on scheduled automation included in the subscription. Both are cloud-only and stateless. Neither supports inter-agent coordination.</p>
+      </details>
+      <details class="faq-item">
+        <summary>Can I run Routines on my own server?</summary>
+        <p>No. Routines execute on Anthropic&rsquo;s infrastructure. For local execution, use Claude Code in <a href="/guides/claude-code-headless/">headless mode</a> with a self-hosted scheduler like amux&rsquo;s cron or systemd timers.</p>
+      </details>
+      <details class="faq-item">
+        <summary>Should I use Routines or self-hosted?</summary>
+        <p>Routines for simple, low-frequency tasks that don&rsquo;t need local access. Self-hosted when you need more than 25 runs/day, persistent state, local file/DB access, inter-agent coordination, or full environment control. They&rsquo;re not mutually exclusive.</p>
+      </details>
+      <details class="faq-item">
+        <summary>How do I migrate from Routines to self-hosted?</summary>
+        <p>Install amux, register your project, create a cron job with the same schedule and prompt, start the dashboard. About five minutes. The prompt stays identical &mdash; only the execution layer changes.</p>
+      </details>
+      <details class="faq-item">
+        <summary>Can amux replace Routines entirely?</summary>
+        <p>For the automation use case, yes. amux&rsquo;s cron scheduler, <code>/loop</code>, board-driven orchestration, and REST API triggers cover everything Routines does plus persistent state, unlimited runs, and local execution. The trade-off: you host it yourself.</p>
+      </details>
+      <details class="faq-item">
+        <summary>What does Codex cost?</summary>
+        <p>Codex uses the codex-mini model at OpenAI&rsquo;s API pricing. Cost depends on task complexity and token usage. There&rsquo;s no flat-rate subscription option &mdash; every run is billed per-token.</p>
+      </details>
+    </div>
+
+    <div class="related-guides" style="margin-top:3rem;padding:1.5rem;background:var(--surface);border:1px solid var(--border);border-radius:8px;">
+      <strong style="font-size:0.82rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);">Related Guides</strong>
+      <ul style="margin:0.6rem 0 0;padding-left:1.2rem;font-size:0.88rem;line-height:2;">
+        <li><a href="/guides/claude-code-headless/" style="color:var(--dim);">Claude Code Headless Mode: The Complete Self-Hosting Guide</a></li>
+        <li><a href="/guides/agent-control-plane/" style="color:var(--dim);">What Is an Agent Control Plane?</a></li>
+        <li><a href="/guides/custom-automation-cron/" style="color:var(--dim);">Custom Automation with Cron</a></li>
+        <li><a href="/guides/setting-up-yolo-mode/" style="color:var(--dim);">Setting Up YOLO Mode for Headless Agents</a></li>
+        <li><a href="/guides/ai-coding-agents-overnight/" style="color:var(--dim);">Running AI Coding Agents Overnight</a></li>
+        <li><a href="/guides/token-spend-tracking/" style="color:var(--dim);">Token Spend Tracking</a></li>
+      </ul>
+    </div>
+
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" style="font-size:0.92rem;font-weight:700;color:var(--text);text-decoration:none;">amux</a>
+          <p>Open-source control plane for AI agents. Runtime, observability, orchestration, and cost control &mdash; in one file.</p>
+        </div>
+        <div class="footer-link-cols">
+          <div class="footer-col">
+            <strong>Product</strong>
+            <a href="/guides/getting-started/">Getting Started</a>
+            <a href="/guides/rest-api-reference/">API Reference</a>
+            <a href="https://cloud.amux.io">Cloud</a>
+            <a href="/pricing/">Pricing</a>
+            <a href="/changelog/">Changelog</a>
+          </div>
+          <div class="footer-col">
+            <strong>Resources</strong>
+            <a href="/guides/">Guides</a>
+            <a href="/blog/">Blog</a>
+            <a href="/faq/">FAQ</a>
+            <a href="/glossary/">Glossary</a>
+            <a href="/demos/">Demos</a>
+          </div>
+          <div class="footer-col">
+            <strong>Compare</strong>
+            <a href="/compare/amux-vs-claude-managed-agents/">vs Managed Agents</a>
+            <a href="/compare/amux-vs-cursor/">vs Cursor</a>
+            <a href="/compare/amux-vs-devin/">vs Devin</a>
+            <a href="/compare/">All comparisons</a>
+          </div>
+          <div class="footer-col">
+            <strong>More</strong>
+            <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+            <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+            <a href="/llms.txt">llms.txt</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </footer>
+  
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>Optimizing Token Costs with Parallel Agents — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="Strategies to get maximum output per dollar when running many Claude Code agents in parallel.">
+  <meta name="keywords" content="claude code token cost, AI coding cost optimization, reduce agent token spend">
+  <link rel="canonical" href="https://amux.io/guides/cost-optimization/">
+  <meta property="og:title" content="Optimizing Token Costs with Parallel Agents — amux">
+  <meta property="og:description" content="Strategies to get maximum output per dollar when running many Claude Code agents in parallel.">
+  <meta property="og:url" content="https://amux.io/guides/cost-optimization/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Guides","item":"https://amux.io/guides/"},{"@type":"ListItem","position":3,"name":"Optimizing Token Costs with Parallel Agents","item":"https://amux.io/guides/cost-optimization/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"Optimizing Token Costs with Parallel Agents","description":"Strategies to get maximum output per dollar when running many Claude Code agents in parallel.","url":"https://amux.io/guides/cost-optimization/","datePublished":"2026-02-26","dateModified":"2026-02-26","author":{"@type":"Organization","name":"amux","url":"https://amux.io/"}}</script>
+  </head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">›</span> <a href="/guides/">Guides</a> <span class="sep">›</span> <span>Optimizing Token Costs with Parallel Agents</span></div>
+    <h1>Optimizing Token Costs with Parallel Agents</h1>
+<p class="subtitle">Running 10 agents in parallel costs 10x per hour. Here's how to maximize what you get for that spend.</p>
+<h2>The Token Cost Model</h2>
+<p>Claude API pricing is per token: input tokens (what the agent reads) and output tokens (what the agent generates). For coding agents, input typically dominates: reading source files, reading error messages, reading test output. The goal of cost optimization is getting maximum useful output per token spent.</p>
+<h2>Biggest Cost Wins</h2>
+<h3>1. Right-size the model</h3>
+<p>This is the single biggest lever. Haiku is ~10-20x cheaper than Opus per token. Most coding tasks don't require Opus-level reasoning. Use Sonnet for the bulk of your work, Opus only for complex architecture decisions.</p>
+<table>
+<thead><tr><th>Task type</th><th>Recommended model</th></tr></thead>
+<tbody>
+<tr><td>Documentation generation</td><td>Haiku</td></tr>
+<tr><td>Test writing (standard patterns)</td><td>Haiku or Sonnet</td></tr>
+<tr><td>Feature implementation</td><td>Sonnet</td></tr>
+<tr><td>Complex refactoring</td><td>Sonnet</td></tr>
+<tr><td>Architecture design + hard bugs</td><td>Opus</td></tr>
+</tbody>
+</table>
+<h3>2. Write precise task descriptions</h3>
+<p>A vague task ("fix the auth stuff") leads to an agent reading many files speculatively before finding the right one. A precise task ("Fix the JWT expiration bug in src/auth/middleware.ts line 47 — the token TTL should use seconds not milliseconds") goes straight to the problem. The precise task uses 5-10x fewer tokens to complete.</p>
+<h3>3. Set explicit file scope</h3>
+<p>Instruct agents to read only the files relevant to their task. "Only read files in src/api/users/ and src/models/user.ts" prevents agents from scanning the whole codebase for context they don't need.</p>
+<h3>4. Use short-horizon tasks</h3>
+<p>A 4-hour task consumes a large context window and may require compaction (losing context quality). Four 1-hour tasks on four agents cost the same in wall-clock time, but each agent operates at full context efficiency. Shorter tasks = better quality per token.</p>
+<h3>5. Don't run agents that are stuck</h3>
+<p>A stuck agent in a loop can burn thousands of tokens making no progress. Set up monitoring — check the dashboard every hour, kill sessions that haven't committed any code in 2 hours, redirect them with clearer instructions.</p>
+<h2>Measuring Your Cost</h2>
+<p>amux tracks per-session token spend in the dashboard. Check it daily. If one session is consuming 5x the tokens of others, it's either working on a legitimately harder task or it's stuck in a loop. Investigate.</p>
+<div class="cta-box"><h3>Get started with amux</h3><p>Run dozens of Claude Code agents in parallel. Python 3 + tmux. Open source.</p><pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # → https://localhost:8822</code></pre><a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a></div>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

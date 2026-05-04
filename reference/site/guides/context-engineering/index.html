@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>Context Engineering for AI Coding Agents: The Complete Guide (2026) — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="The complete guide to context engineering for AI coding agents — CLAUDE.md, hooks, skills, subagents, memory, and specs. How to structure context so agents produce reliable output, especially when running many in parallel.">
+  <meta name="keywords" content="context engineering, context engineering ai agents, claude code context engineering, CLAUDE.md best practices, claude code hooks, claude code skills, ai agent context management, context engineering parallel agents, ai coding agent prompt engineering, context window strategy, context engineering 2026">
+  <link rel="canonical" href="https://amux.io/guides/context-engineering/">
+  <meta property="og:title" content="Context Engineering for AI Coding Agents: The Complete Guide (2026) — amux">
+  <meta property="og:description" content="CLAUDE.md, hooks, skills, subagents, memory, and specs — every context surface that makes AI coding agents reliable. The practitioner's guide.">
+  <meta property="og:url" content="https://amux.io/guides/context-engineering/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Guides","item":"https://amux.io/guides/"},{"@type":"ListItem","position":3,"name":"Context Engineering","item":"https://amux.io/guides/context-engineering/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"Context Engineering for AI Coding Agents: The Complete Guide (2026)","description":"The practitioner's guide to context engineering — structuring CLAUDE.md, hooks, skills, subagents, memory, and specs so AI coding agents produce reliable output at scale.","url":"https://amux.io/guides/context-engineering/","datePublished":"2026-04-09","dateModified":"2026-04-09","author":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"publisher":{"@type":"Organization","name":"amux","url":"https://amux.io/","logo":{"@type":"ImageObject","url":"https://amux.io/icon.png"}}}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"HowTo","name":"How to Set Up Context Engineering for an AI Coding Agent Fleet","description":"Step-by-step guide to structuring context across CLAUDE.md, hooks, skills, subagents, and memory for reliable AI coding agents.","step":[{"@type":"HowToStep","name":"Write a lean CLAUDE.md","text":"Keep it under 500 lines. Include only what the agent cannot infer from code: build commands, test commands, style rules, forbidden patterns, and pointers to deeper docs."},{"@type":"HowToStep","name":"Add hooks for hard guarantees","text":"Move any CLAUDE.md rule that must never be violated into a PreToolUse hook that blocks the action with exit code 2. Hooks enforce at 100%; instructions comply at ~70%."},{"@type":"HowToStep","name":"Create skills for on-demand context","text":"Move large reference docs, API specs, and workflow instructions into .claude/skills/ files. The agent loads them only when relevant, keeping base context small."},{"@type":"HowToStep","name":"Define subagents for specialized roles","text":"Create .claude/agents/ files for recurring delegation patterns (code review, security audit, test writing). Each runs in a fresh context with a focused system prompt."},{"@type":"HowToStep","name":"Structure shared memory for fleet coordination","text":"When running parallel agents, use a shared board or REST API for task state and a per-session memory for agent-specific context. Never rely on filesystem as shared state."},{"@type":"HowToStep","name":"Iterate based on failure modes","text":"When an agent produces bad output, diagnose which context surface failed: missing instruction (CLAUDE.md), violated constraint (needs a hook), missing reference (needs a skill), or polluted context (needs a subagent). Fix the surface, not the symptom."}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"What is context engineering?","acceptedAnswer":{"@type":"Answer","text":"Context engineering is the practice of curating everything an AI agent sees — system prompts, project rules, reference docs, tool outputs, memory — so that it produces reliable, correct output. Unlike prompt engineering (crafting a single input), context engineering designs the entire information environment across multiple surfaces: CLAUDE.md files, hooks, skills, subagents, memory systems, and specs."}},{"@type":"Question","name":"What is the difference between context engineering and prompt engineering?","acceptedAnswer":{"@type":"Answer","text":"Prompt engineering optimizes a single input message. Context engineering designs the entire information architecture around an agent: what it sees at startup (CLAUDE.md), what it can load on demand (skills), what it cannot do (hooks), who it can delegate to (subagents), and what persists across sessions (memory). Prompt engineering is one tool inside context engineering."}},{"@type":"Question","name":"How long should CLAUDE.md be?","acceptedAnswer":{"@type":"Answer","text":"Under 500 lines for the root file. For each line, ask: would removing this cause the agent to make a mistake it cannot recover from by reading the code? If not, cut it. Use nested CLAUDE.md files in subdirectories for context that only matters in specific parts of the codebase. Use skills for large reference docs the agent only needs sometimes."}},{"@type":"Question","name":"When should I use a hook instead of a CLAUDE.md instruction?","acceptedAnswer":{"@type":"Answer","text":"Use a hook when the rule must be enforced 100% of the time with zero exceptions — blocking pushes to main, preventing deletion of production databases, enforcing code formatting. CLAUDE.md instructions are followed roughly 70% of the time. That is fine for style preferences. For safety-critical rules, 70% is a production incident waiting to happen. Hooks close the gap to 100%."}},{"@type":"Question","name":"What are Claude Code skills?","acceptedAnswer":{"@type":"Answer","text":"Skills are markdown files in .claude/skills/ that contain reference documentation, workflow instructions, or specialized knowledge. The agent sees only the skill's frontmatter (name + description, ~200 tokens) at all times, and loads the full content on demand when it judges the skill is relevant. This is progressive disclosure — the agent navigates your knowledge base like a developer reading docs, loading only what the current task requires."}},{"@type":"Question","name":"How does context engineering change when running parallel agents?","acceptedAnswer":{"@type":"Answer","text":"Three things change: (1) shared context must be externalized — a REST API or database instead of local files, because agents run in separate worktrees, (2) per-agent context must be scoped to that agent's task, not the whole project, and (3) fleet-wide rules go in the root CLAUDE.md while task-specific instructions go in the prompt or per-session config. The goal is identical agents with differentiated task context, not bespoke agents with identical tasks."}},{"@type":"Question","name":"Is CLAUDE.md the same as context engineering?","acceptedAnswer":{"@type":"Answer","text":"No. CLAUDE.md is one context surface — the always-loaded project rules. Context engineering encompasses all surfaces: CLAUDE.md (base rules), hooks (hard enforcement), skills (on-demand reference), subagents (delegation with specialized prompts), memory (cross-session persistence), and specs (task-level instructions). Treating CLAUDE.md as the entire context strategy is the most common mistake teams make."}}]}</script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">&rsaquo;</span> <a href="/guides/">Guides</a> <span class="sep">&rsaquo;</span> <span>Context Engineering</span></div>
+    <h1>Context Engineering for AI Coding Agents</h1>
+    <p class="subtitle">The complete guide to structuring what your AI agents see &mdash; CLAUDE.md, hooks, skills, subagents, memory, and specs &mdash; so they produce reliable output, especially when you run many of them in parallel.</p>
+
+    <nav class="toc" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.2rem 1.6rem;margin:2rem 0;">
+      <strong style="font-size:0.82rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);">Contents</strong>
+      <ol style="margin:0.6rem 0 0;padding-left:1.2rem;font-size:0.88rem;line-height:2;">
+        <li><a href="#what" style="color:var(--dim);text-decoration:none;">What Is Context Engineering?</a></li>
+        <li><a href="#surfaces" style="color:var(--dim);text-decoration:none;">The Six Context Surfaces</a></li>
+        <li><a href="#claudemd" style="color:var(--dim);text-decoration:none;">CLAUDE.md: The Base Layer</a></li>
+        <li><a href="#hooks" style="color:var(--dim);text-decoration:none;">Hooks: Hard Enforcement</a></li>
+        <li><a href="#skills" style="color:var(--dim);text-decoration:none;">Skills: On-Demand Knowledge</a></li>
+        <li><a href="#subagents" style="color:var(--dim);text-decoration:none;">Subagents: Delegation With Focused Context</a></li>
+        <li><a href="#memory" style="color:var(--dim);text-decoration:none;">Memory: Cross-Session Persistence</a></li>
+        <li><a href="#specs" style="color:var(--dim);text-decoration:none;">Specs: Task-Level Instructions</a></li>
+        <li><a href="#parallel" style="color:var(--dim);text-decoration:none;">Context Engineering for Parallel Agent Fleets</a></li>
+        <li><a href="#budget" style="color:var(--dim);text-decoration:none;">The Context Budget: Measuring What You Spend</a></li>
+        <li><a href="#diagnosis" style="color:var(--dim);text-decoration:none;">Diagnosing Failures by Context Surface</a></li>
+        <li><a href="#reference" style="color:var(--dim);text-decoration:none;">Quick Reference: What Goes Where</a></li>
+        <li><a href="#faq" style="color:var(--dim);text-decoration:none;">FAQ</a></li>
+      </ol>
+    </nav>
+
+    <h2 id="what">What Is Context Engineering?</h2>
+    <p><strong>Context engineering</strong> is the practice of curating everything an AI coding agent sees &mdash; system prompts, project rules, reference docs, tool outputs, conversation history, memory &mdash; so that it produces reliable, correct output.</p>
+    <p>This is not prompt engineering. Prompt engineering optimizes a single input message. Context engineering designs the <em>entire information architecture</em> around an agent: what it sees at startup, what it can load on demand, what it physically cannot do, who it can delegate to, and what persists across sessions.</p>
+    <pre><code>Prompt engineering:     "Write a function that does X"
+                                    &darr;
+Context engineering:    CLAUDE.md + hooks + skills + subagents + memory + spec
+                        &darr;         &darr;        &darr;         &darr;          &darr;        &darr;
+                     base rules  guardrails  reference  delegation  history  task scope
+                                    &darr;
+                        Agent sees the right things at the right time
+                                    &darr;
+                        Reliable output, not lucky output</code></pre>
+    <p>The difference matters because a single-prompt approach breaks the moment you need agents to work on real codebases over hours or days. Context engineering is what makes agents <em>consistently</em> good, not occasionally impressive.</p>
+
+    <h3>Why it matters now</h3>
+    <p>Three shifts in 2025&ndash;2026 made context engineering the critical developer skill:</p>
+    <ul>
+      <li><strong>Agents got long-running.</strong> Sessions that run for hours need structured context that survives compaction, context overflow, and session restarts &mdash; not just a good opening prompt.</li>
+      <li><strong>Fleets became normal.</strong> Running 5&ndash;50 agents in parallel means your context engineering is multiplied. A bad CLAUDE.md wastes tokens once per session &mdash; across 20 agents, it wastes them 20 times.</li>
+      <li><strong>The tooling matured.</strong> Claude Code now has six distinct context surfaces (CLAUDE.md, hooks, skills, subagents, memory, specs). Knowing <em>which surface to use when</em> is the skill gap.</li>
+    </ul>
+
+    <h2 id="surfaces">The Six Context Surfaces</h2>
+    <p>Every piece of context you give an AI coding agent enters through one of six surfaces. Each has different characteristics:</p>
+
+    <table style="width:100%;border-collapse:collapse;font-size:0.82rem;margin:1.5rem 0;">
+      <thead>
+        <tr style="border-bottom:2px solid var(--border);">
+          <th style="text-align:left;padding:0.6rem;">Surface</th>
+          <th style="text-align:left;padding:0.6rem;">When loaded</th>
+          <th style="text-align:left;padding:0.6rem;">Enforcement</th>
+          <th style="text-align:left;padding:0.6rem;">Scope</th>
+          <th style="text-align:left;padding:0.6rem;">Persists across sessions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;font-weight:600;">CLAUDE.md</td>
+          <td style="padding:0.6rem;">Every session start</td>
+          <td style="padding:0.6rem;">Soft (~70%)</td>
+          <td style="padding:0.6rem;">Project or directory</td>
+          <td style="padding:0.6rem;">Yes (in repo)</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;font-weight:600;">Hooks</td>
+          <td style="padding:0.6rem;">On specific events</td>
+          <td style="padding:0.6rem;">Hard (100%)</td>
+          <td style="padding:0.6rem;">Global or project</td>
+          <td style="padding:0.6rem;">Yes (in settings)</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;font-weight:600;">Skills</td>
+          <td style="padding:0.6rem;">On demand (agent decides)</td>
+          <td style="padding:0.6rem;">Soft</td>
+          <td style="padding:0.6rem;">Project or user</td>
+          <td style="padding:0.6rem;">Yes (in repo or ~/.claude)</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;font-weight:600;">Subagents</td>
+          <td style="padding:0.6rem;">On delegation</td>
+          <td style="padding:0.6rem;">Soft (own context)</td>
+          <td style="padding:0.6rem;">Per invocation</td>
+          <td style="padding:0.6rem;">Definition persists, state doesn't</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;font-weight:600;">Memory</td>
+          <td style="padding:0.6rem;">Session start (auto-memory)</td>
+          <td style="padding:0.6rem;">Soft</td>
+          <td style="padding:0.6rem;">User or project</td>
+          <td style="padding:0.6rem;">Yes</td>
+        </tr>
+        <tr>
+          <td style="padding:0.6rem;font-weight:600;">Specs</td>
+          <td style="padding:0.6rem;">Passed per task</td>
+          <td style="padding:0.6rem;">Soft</td>
+          <td style="padding:0.6rem;">Per task</td>
+          <td style="padding:0.6rem;">Yes (checked into repo)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>The core skill of context engineering is putting information on the right surface. Put too much in CLAUDE.md and you bloat every session. Put safety rules in CLAUDE.md instead of hooks and they get violated 30% of the time. Put reference docs inline instead of in skills and you waste context window on every turn. The rest of this guide covers each surface in depth.</p>
+
+    <h2 id="claudemd">CLAUDE.md: The Base Layer</h2>
+    <p>CLAUDE.md is the always-loaded project configuration. The agent reads it at session start and it stays in context for the entire conversation. This makes it the most expensive surface &mdash; every token here is paid on every turn.</p>
+
+    <h3>What belongs in CLAUDE.md</h3>
+    <ul>
+      <li><strong>Build and test commands</strong> &mdash; <code>npm run test</code>, <code>make lint</code>, <code>python -m pytest tests/</code></li>
+      <li><strong>Style rules the linter doesn't catch</strong> &mdash; naming conventions, import ordering preferences, commit message format</li>
+      <li><strong>Forbidden patterns</strong> &mdash; "never use <code>any</code> in TypeScript", "never push to main directly"</li>
+      <li><strong>Pointers to deeper docs</strong> &mdash; "for API reference, see <code>docs/api.md</code>"; "for deploy instructions, load the deploy skill"</li>
+      <li><strong>Project structure overview</strong> &mdash; what lives where, but only if it's non-obvious from the directory layout</li>
+    </ul>
+
+    <h3>What does NOT belong in CLAUDE.md</h3>
+    <ul>
+      <li><strong>Full API documentation</strong> &mdash; goes in a skill, loaded on demand</li>
+      <li><strong>Safety-critical rules</strong> &mdash; goes in hooks, enforced at 100%</li>
+      <li><strong>Large code examples</strong> &mdash; the agent can read the actual code</li>
+      <li><strong>Deployment runbooks</strong> &mdash; goes in a skill, loaded only during deploy</li>
+      <li><strong>Things the agent can infer from the code</strong> &mdash; file structure, framework choice, language version</li>
+    </ul>
+
+    <h3>The litmus test</h3>
+    <p>For every line in CLAUDE.md, ask: <em>"If I remove this, will the agent make a mistake it cannot recover from by reading the code?"</em> If the answer is no, cut it. A lean CLAUDE.md is a fast CLAUDE.md.</p>
+
+    <h3>Hierarchical CLAUDE.md</h3>
+    <p>You can place CLAUDE.md files in subdirectories. The agent loads the root CLAUDE.md plus any CLAUDE.md in the directory it's currently working in. Use this for context that only matters in one part of the codebase:</p>
+    <pre><code>myproject/
+  CLAUDE.md                  &larr; global rules (always loaded)
+  frontend/
+    CLAUDE.md                &larr; React-specific rules (loaded when working in frontend/)
+  backend/
+    CLAUDE.md                &larr; Python/FastAPI rules (loaded when working in backend/)
+  infrastructure/
+    CLAUDE.md                &larr; Terraform conventions (loaded when working in infra/)</code></pre>
+
+    <h3>Real example: a lean, effective CLAUDE.md</h3>
+    <pre><code># MyProject
+
+Single-page Python app. FastAPI backend, React frontend, PostgreSQL.
+
+## Commands
+- `make test` — run all tests (pytest + vitest)
+- `make lint` — ruff + eslint
+- `make dev` — start dev server on :8000
+
+## Rules
+- Never use `any` in TypeScript. Use `unknown` and narrow.
+- Always run `make lint` before committing.
+- Commit messages: imperative mood, under 72 chars, no period.
+- For deploy instructions, load the `deploy` skill.
+- For API reference, see `docs/openapi.yaml`.</code></pre>
+    <p>That's 14 lines. It tells the agent everything it can't infer. Everything else is either in the code (which it can read), in a skill (loaded on demand), or in a hook (enforced mechanically).</p>
+
+    <h2 id="hooks">Hooks: Hard Enforcement</h2>
+    <p>CLAUDE.md instructions are followed about 70% of the time. For style preferences, that's fine. For rules like <em>"don't push to main"</em> or <em>"don't delete the production database"</em>, 70% is a disaster waiting to happen.</p>
+    <p><strong>Hooks</strong> are shell commands that run automatically at specific points in the agent's lifecycle. They can block actions (exit code 2), modify behavior, or inject context. They enforce at 100% because they execute outside the model &mdash; the agent cannot choose to ignore them.</p>
+
+    <h3>The four hook types</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:1rem 0;">
+      <thead><tr style="border-bottom:2px solid var(--border);"><th style="text-align:left;padding:0.6rem;">Hook</th><th style="text-align:left;padding:0.6rem;">When it runs</th><th style="text-align:left;padding:0.6rem;">Use case</th></tr></thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;"><code>PreToolUse</code></td><td style="padding:0.6rem;">Before a tool call executes</td><td style="padding:0.6rem;">Block dangerous commands, enforce formatting</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;"><code>PostToolUse</code></td><td style="padding:0.6rem;">After a tool call completes</td><td style="padding:0.6rem;">Auto-format after file edits, run tests</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;"><code>Notification</code></td><td style="padding:0.6rem;">When the agent sends a notification</td><td style="padding:0.6rem;">Push alerts to Slack, phone, or dashboard</td></tr>
+        <tr><td style="padding:0.6rem;"><code>SessionStart</code></td><td style="padding:0.6rem;">When a session begins</td><td style="padding:0.6rem;">Inject dynamic context, check prerequisites</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Example: block pushes to main</h3>
+    <pre><code>// .claude/settings.json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "command": "bash -c '[[ \"$CLAUDE_TOOL_INPUT\" =~ \"git push.*main\" ]] && echo \"BLOCKED: never push to main directly\" && exit 2 || exit 0'"
+      }
+    ]
+  }
+}</code></pre>
+    <p>Exit code 2 blocks the tool call and shows the message to the agent. The agent cannot override this &mdash; it's enforced at the harness level, not the model level.</p>
+
+    <h3>Example: auto-format after every file edit</h3>
+    <pre><code>{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "command": "bash -c 'make lint-fix 2>/dev/null || true'"
+      }
+    ]
+  }
+}</code></pre>
+
+    <h3>The decision rule</h3>
+    <p><strong>CLAUDE.md</strong> = "please do this" (soft, ~70% compliance). <strong>Hook</strong> = "you physically cannot do otherwise" (hard, 100%). Move any rule you've seen violated from CLAUDE.md to a hook.</p>
+
+    <h2 id="skills">Skills: On-Demand Knowledge</h2>
+    <p>Skills are the progressive-disclosure layer. Instead of loading a 5,000-line API reference into CLAUDE.md (wasting tokens on every turn), you put it in a skill. The agent sees only the skill's name and description (~200 tokens) at all times, and loads the full content only when it judges the skill is relevant.</p>
+
+    <h3>How skills work</h3>
+    <pre><code>.claude/skills/
+  deploy.md          &larr; deployment runbook
+  api-reference.md   &larr; full API docs
+  database-schema.md &larr; schema reference
+  security-review.md &larr; security checklist</code></pre>
+    <p>Each skill file has YAML frontmatter with a <code>name</code> and <code>description</code>. The description is the routing signal &mdash; the agent reads it and decides whether to load the full content.</p>
+    <pre><code>---
+name: deploy
+description: Use when the user asks to deploy, release, or ship to production. Contains the full deployment runbook with environment-specific steps.
+---
+
+# Deployment Runbook
+
+## Staging
+1. Run `make build`
+2. Run `make test`
+3. Deploy with `make deploy-staging`
+4. Verify at https://staging.example.com
+
+## Production
+1. Ensure staging is green
+2. Create a release tag: `git tag v$(date +%Y%m%d)`
+3. Deploy with `make deploy-prod`
+4. Monitor https://grafana.example.com/d/prod for 15 minutes
+...</code></pre>
+    <p>That entire runbook is loaded <em>only</em> when the user says "deploy." Every other turn, the agent pays only ~30 tokens for the frontmatter.</p>
+
+    <h3>Skills vs CLAUDE.md: the decision</h3>
+    <ul>
+      <li><strong>Needed every turn?</strong> &rarr; CLAUDE.md</li>
+      <li><strong>Needed sometimes?</strong> &rarr; Skill</li>
+      <li><strong>Needed never (agent can read the code)?</strong> &rarr; Neither</li>
+    </ul>
+
+    <h2 id="subagents">Subagents: Delegation With Focused Context</h2>
+    <p>Subagents are the context isolation layer. When a task would generate a lot of intermediate output (20 file reads, 15 grep results), a subagent can do the work in its own fresh context and return a single summarized message to the parent. The parent's context grows by 200 tokens instead of 8,000.</p>
+    <p>See the <a href="/guides/claude-code-subagents/">complete subagent guide</a> for deep coverage. The context engineering perspective:</p>
+
+    <h3>Why subagents are a context strategy</h3>
+    <pre><code>Without subagent:
+  Parent context: [...8KB of grep output, file reads, intermediate reasoning...]
+  &rarr; context fills up fast, earlier instructions get pushed out
+
+With subagent:
+  Subagent context: [...8KB of work...] &rarr; discarded after returning
+  Parent context: [...200-token summary...]
+  &rarr; parent stays focused, instructions stay visible</code></pre>
+
+    <h3>The context math</h3>
+    <p>A 200K context window sounds enormous until you fill it with tool outputs. A single <code>grep</code> across a large codebase can return 5KB. Read 10 files and you've spent 30KB. After 30&ndash;40 tool calls, you're past 100KB and the model starts losing track of your original instructions. Subagents let the parent session stay under 50KB even during complex multi-file tasks, because all the exploratory noise stays in disposable child contexts.</p>
+
+    <h2 id="memory">Memory: Cross-Session Persistence</h2>
+    <p>Every new Claude Code session starts with a blank context window (plus CLAUDE.md). Memory is the mechanism that carries knowledge across sessions &mdash; what the user prefers, what decisions were made, what mistakes to avoid.</p>
+
+    <h3>Two memory systems</h3>
+    <ul>
+      <li><strong>Auto-memory</strong> (<code>~/.claude/projects/&lt;project&gt;/memory/</code>) &mdash; Claude Code's built-in memory that automatically saves facts, preferences, and feedback across conversations.</li>
+      <li><strong>External memory</strong> (amux board, notes API, databases) &mdash; structured memory accessible via REST API that multiple agents can read and write.</li>
+    </ul>
+
+    <h3>Memory for solo sessions</h3>
+    <p>Auto-memory works well for a single developer working with one agent. The agent learns your style preferences, remembers past decisions, and avoids repeating mistakes. No extra setup needed &mdash; just correct the agent when it's wrong and it saves the feedback.</p>
+
+    <h3>Memory for parallel agent fleets</h3>
+    <p>Auto-memory breaks down with parallel agents because each session has its own memory file. Agent 1's learnings aren't visible to agent 5. For fleet-wide context, externalize memory to a shared system:</p>
+    <pre><code># Shared board — all agents can see task state
+curl -sk $AMUX_URL/api/board
+
+# Shared notes — reference docs accessible to any session
+curl -sk $AMUX_URL/api/notes/architecture-decisions
+
+# Per-session state — only this agent's context
+curl -sk $AMUX_URL/api/sessions/$AMUX_SESSION/peek</code></pre>
+    <p>The principle: <strong>shared knowledge goes in shared stores; session-specific knowledge goes in session-specific stores.</strong> Never use the local filesystem as shared state when running parallel agents in separate worktrees.</p>
+
+    <h2 id="specs">Specs: Task-Level Instructions</h2>
+    <p>Specs are the newest context surface and the one gaining the most traction in 2026. A spec is a structured document that describes <em>exactly what a task should produce</em> &mdash; requirements, constraints, acceptance criteria, and sometimes an implementation plan &mdash; before the agent writes any code.</p>
+
+    <h3>Why specs matter for context engineering</h3>
+    <p>Without a spec, the agent infers intent from a one-line prompt. It fills the gaps with guesses &mdash; sometimes brilliant, sometimes wrong. A spec eliminates guessing by pre-loading the agent with everything it needs to make correct decisions.</p>
+    <pre><code># spec: add-pagination-to-users-api.md
+
+## Goal
+Add cursor-based pagination to GET /api/users.
+
+## Requirements
+- Use cursor-based pagination (not offset), keyed on `created_at`
+- Default page size: 50, max: 200
+- Response includes `next_cursor` and `has_more`
+- Backward-compatible: existing clients that don't send cursor get page 1
+
+## Constraints
+- Do NOT change the User model or database schema
+- Do NOT add new dependencies
+- Must pass existing test suite + new pagination tests
+
+## Acceptance criteria
+- `make test` passes
+- `curl /api/users?limit=10` returns 10 users with `next_cursor`
+- `curl /api/users?cursor=X&limit=10` returns the next 10</code></pre>
+    <p>That spec costs ~300 tokens of context but eliminates 90% of the back-and-forth and wrong turns. For parallel agent fleets, specs are essential &mdash; each agent gets a spec in its prompt, works autonomously, and produces output that matches expectations without human supervision.</p>
+
+    <h3>Spec-driven development workflow</h3>
+    <ol>
+      <li><strong>Write specs</strong> for each task (5&ndash;10 minutes per spec)</li>
+      <li><strong>Push specs to the board</strong> as task descriptions or linked files</li>
+      <li><strong>Launch agents</strong> &mdash; each claims a task and loads its spec</li>
+      <li><strong>Review output</strong> against acceptance criteria from the spec</li>
+    </ol>
+    <p>The upfront investment in specs pays for itself because agents run faster (fewer wrong turns), produce more predictable output (clear acceptance criteria), and require less review (you check the spec, not the intent).</p>
+
+    <h2 id="parallel">Context Engineering for Parallel Agent Fleets</h2>
+    <p>Running one agent well is context engineering 101. Running 10 agents well &mdash; each on a different task, in separate git worktrees, for hours at a time &mdash; is where the discipline earns its name.</p>
+
+    <h3>The three-layer model</h3>
+    <pre><code>Layer 1: Fleet-wide context (shared)
+&boxdr;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxur;
+&boxv;  CLAUDE.md (checked into repo, all agents see it)      &boxv;
+&boxv;  Hooks (settings.json, enforced on all sessions)       &boxv;
+&boxv;  Skills (.claude/skills/, loadable by any agent)       &boxv;
+&boxv;  Subagents (.claude/agents/, available to all)         &boxv;
+&boxdl;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxdr;
+
+Layer 2: Task-specific context (per agent)
+&boxdr;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxur;
+&boxv;  Task spec (requirements, constraints, criteria)      &boxv;
+&boxv;  Prompt (what this specific agent should do)           &boxv;
+&boxv;  Working directory (isolated git worktree)             &boxv;
+&boxdl;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxdr;
+
+Layer 3: Runtime context (dynamic)
+&boxdr;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxur;
+&boxv;  Tool outputs (file reads, grep results, test runs)   &boxv;
+&boxv;  Subagent summaries (delegated work returns)           &boxv;
+&boxv;  Board state (shared task coordination)                &boxv;
+&boxv;  External API responses                                &boxv;
+&boxdl;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxdr;</code></pre>
+
+    <h3>Principle 1: identical agents, differentiated tasks</h3>
+    <p>Every agent in your fleet should see the same CLAUDE.md, the same hooks, the same skills, and the same subagents. The <em>only</em> thing that differs is the task spec and working directory. This makes agents interchangeable &mdash; if one crashes, another can pick up its task without special configuration.</p>
+
+    <h3>Principle 2: externalize shared state</h3>
+    <p>Agents in separate worktrees cannot share files. Use a REST API (amux board, notes, or any HTTP endpoint) for any state that multiple agents need to read or write: task assignments, architectural decisions, discovered bugs, coordination signals.</p>
+    <pre><code># Agent claims a task atomically (no two agents grab the same task)
+curl -sk -X POST -H 'Content-Type: application/json' \
+  -d '{"session":"'"$AMUX_SESSION"'"}' \
+  $AMUX_URL/api/board/TASK-ID/claim
+
+# Agent publishes a finding for others to see
+curl -sk -X POST -H 'Content-Type: application/json' \
+  -d '{"title":"Found: auth module uses deprecated bcrypt API","session":"'"$AMUX_SESSION"'","status":"todo"}' \
+  $AMUX_URL/api/board</code></pre>
+
+    <h3>Principle 3: keep per-agent context small</h3>
+    <p>A fleet of 20 agents each consuming 150KB of context is burning through your rate limits fast. Target under 80KB average per session by:</p>
+    <ul>
+      <li>Using subagents for exploratory work (grep, multi-file reads)</li>
+      <li>Keeping CLAUDE.md under 500 lines</li>
+      <li>Putting reference docs in skills, not inline</li>
+      <li>Writing tight specs that preempt wrong turns</li>
+    </ul>
+
+    <h2 id="budget">The Context Budget: Measuring What You Spend</h2>
+    <p>Context has a cost &mdash; both in tokens and in model attention. Think of your 200K context window as a budget:</p>
+
+    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:1rem 0;">
+      <thead><tr style="border-bottom:2px solid var(--border);"><th style="text-align:left;padding:0.6rem;">Context surface</th><th style="text-align:left;padding:0.6rem;">Typical cost</th><th style="text-align:left;padding:0.6rem;">When paid</th></tr></thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">System prompt (Claude Code built-in)</td><td style="padding:0.6rem;">~15K tokens</td><td style="padding:0.6rem;">Every turn</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">CLAUDE.md (root)</td><td style="padding:0.6rem;">200&ndash;2,000 tokens</td><td style="padding:0.6rem;">Every turn</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Memory index</td><td style="padding:0.6rem;">500&ndash;2,000 tokens</td><td style="padding:0.6rem;">Every turn</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Skill frontmatter (all skills)</td><td style="padding:0.6rem;">50&ndash;200 tokens per skill</td><td style="padding:0.6rem;">Every turn</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Skill full content (loaded)</td><td style="padding:0.6rem;">500&ndash;5,000 tokens</td><td style="padding:0.6rem;">When loaded</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Subagent prompt</td><td style="padding:0.6rem;">200&ndash;500 tokens</td><td style="padding:0.6rem;">Once per delegation</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Subagent response</td><td style="padding:0.6rem;">200&ndash;1,000 tokens</td><td style="padding:0.6rem;">Once per delegation</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">File read (tool output)</td><td style="padding:0.6rem;">500&ndash;5,000 tokens</td><td style="padding:0.6rem;">Each read</td></tr>
+        <tr><td style="padding:0.6rem;">Conversation history</td><td style="padding:0.6rem;">Grows per turn</td><td style="padding:0.6rem;">Cumulative</td></tr>
+      </tbody>
+    </table>
+
+    <p>A session with a lean CLAUDE.md, 5 skill frontmatters, and minimal memory starts at ~20K tokens. That leaves 180K for actual work. A session with a bloated 3,000-line CLAUDE.md and 20 skills starts at ~40K, leaving only 160K &mdash; and the model's attention on your instructions is diluted by all the noise.</p>
+
+    <h2 id="diagnosis">Diagnosing Failures by Context Surface</h2>
+    <p>When an agent produces bad output, the question is not <em>"why is the model dumb?"</em> but <em>"which context surface failed?"</em> This reframe is the most important mental shift in context engineering:</p>
+
+    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:1rem 0;">
+      <thead><tr style="border-bottom:2px solid var(--border);"><th style="text-align:left;padding:0.6rem;">Symptom</th><th style="text-align:left;padding:0.6rem;">Likely cause</th><th style="text-align:left;padding:0.6rem;">Fix</th></tr></thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Agent uses wrong build command</td><td style="padding:0.6rem;">Missing from CLAUDE.md</td><td style="padding:0.6rem;">Add build command to CLAUDE.md</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Agent pushes to main despite instruction not to</td><td style="padding:0.6rem;">Soft rule in CLAUDE.md (70% compliance)</td><td style="padding:0.6rem;">Move to PreToolUse hook (100%)</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Agent doesn't know about deploy process</td><td style="padding:0.6rem;">Deploy docs not available</td><td style="padding:0.6rem;">Create a deploy skill</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Agent's context fills up during codebase exploration</td><td style="padding:0.6rem;">No delegation layer</td><td style="padding:0.6rem;">Create an explorer subagent</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Agent repeats a mistake it was corrected on last session</td><td style="padding:0.6rem;">No cross-session persistence</td><td style="padding:0.6rem;">Save feedback to memory</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Agent builds wrong thing despite clear prompt</td><td style="padding:0.6rem;">Ambiguous requirements</td><td style="padding:0.6rem;">Write a spec with acceptance criteria</td></tr>
+        <tr><td style="padding:0.6rem;">Agent ignores CLAUDE.md instructions late in session</td><td style="padding:0.6rem;">Instructions pushed out by context growth</td><td style="padding:0.6rem;">Trim CLAUDE.md, use subagents to reduce tool output</td></tr>
+      </tbody>
+    </table>
+
+    <p><strong>The fix is almost never "write a better prompt."</strong> It's almost always "put the right information on the right context surface."</p>
+
+    <h2 id="reference">Quick Reference: What Goes Where</h2>
+
+    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:1.5rem 0;">
+      <thead>
+        <tr style="border-bottom:2px solid var(--border);">
+          <th style="text-align:left;padding:0.6rem;">Information type</th>
+          <th style="text-align:left;padding:0.6rem;">Surface</th>
+          <th style="text-align:left;padding:0.6rem;">Why</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Build/test/lint commands</td><td style="padding:0.6rem;">CLAUDE.md</td><td style="padding:0.6rem;">Needed every session, can't be inferred</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Style preferences</td><td style="padding:0.6rem;">CLAUDE.md</td><td style="padding:0.6rem;">Needed every session, low cost</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Safety-critical rules</td><td style="padding:0.6rem;">Hook</td><td style="padding:0.6rem;">Must be enforced 100%, not 70%</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Code formatting</td><td style="padding:0.6rem;">PostToolUse hook</td><td style="padding:0.6rem;">Mechanical, should happen every time</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">API reference</td><td style="padding:0.6rem;">Skill</td><td style="padding:0.6rem;">Large, needed only when working on API</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Deployment runbook</td><td style="padding:0.6rem;">Skill</td><td style="padding:0.6rem;">Large, needed only during deploys</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Code review</td><td style="padding:0.6rem;">Subagent</td><td style="padding:0.6rem;">Specialized prompt, noisy output</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Codebase exploration</td><td style="padding:0.6rem;">Subagent</td><td style="padding:0.6rem;">Many tool calls, only summary matters</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">User preferences</td><td style="padding:0.6rem;">Memory</td><td style="padding:0.6rem;">Crosses sessions, learned over time</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Past decisions</td><td style="padding:0.6rem;">Memory</td><td style="padding:0.6rem;">Prevents re-litigating settled questions</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Task requirements</td><td style="padding:0.6rem;">Spec</td><td style="padding:0.6rem;">Eliminates ambiguity, enables autonomous work</td></tr>
+        <tr><td style="padding:0.6rem;">Fleet task coordination</td><td style="padding:0.6rem;">External API (board)</td><td style="padding:0.6rem;">Shared state across isolated worktrees</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="faq">FAQ</h2>
+
+    <h3>What is context engineering?</h3>
+    <p>Context engineering is the practice of curating everything an AI agent sees &mdash; system prompts, project rules, reference docs, tool outputs, memory &mdash; so it produces reliable, correct output. Unlike prompt engineering (crafting a single input), context engineering designs the entire information environment across multiple surfaces.</p>
+
+    <h3>What is the difference between context engineering and prompt engineering?</h3>
+    <p>Prompt engineering optimizes a single input message. Context engineering designs the entire information architecture: what the agent sees at startup (CLAUDE.md), what it can load on demand (skills), what it cannot do (hooks), who it can delegate to (subagents), and what persists across sessions (memory). Prompt engineering is one tool inside context engineering.</p>
+
+    <h3>How long should CLAUDE.md be?</h3>
+    <p>Under 500 lines for the root file. For each line, ask: would removing this cause the agent to make a mistake it cannot recover from by reading the code? If not, cut it. Use subdirectory CLAUDE.md files for directory-specific context. Use skills for large reference docs.</p>
+
+    <h3>When should I use a hook instead of a CLAUDE.md instruction?</h3>
+    <p>When the rule must be enforced 100% of the time. CLAUDE.md compliance is ~70%. For style preferences, that's fine. For <em>"never push to main"</em> or <em>"never delete production data"</em>, 70% means a guaranteed incident eventually. Hooks execute outside the model and cannot be overridden.</p>
+
+    <h3>What are Claude Code skills?</h3>
+    <p>Markdown files in <code>.claude/skills/</code> that contain reference documentation or workflow instructions. The agent sees only the skill's name and description (~200 tokens) at all times, and loads the full content on demand when relevant. Progressive disclosure for your knowledge base.</p>
+
+    <h3>How does context engineering change when running parallel agents?</h3>
+    <p>Three things change: (1) shared context must be externalized to a REST API or database, because agents run in separate worktrees; (2) per-agent context must be scoped to that agent's task via specs; (3) fleet-wide rules go in the root CLAUDE.md while task-specific instructions go in the prompt. The goal: identical agents, differentiated task context.</p>
+
+    <h3>Is CLAUDE.md the same as context engineering?</h3>
+    <p>No. CLAUDE.md is one of six context surfaces. Treating it as the entire strategy is the most common mistake teams make &mdash; they cram everything into CLAUDE.md, bloat the context window, and wonder why agent quality degrades. The fix is distributing information across all six surfaces.</p>
+
+    <div class="cta-box"><h3>Context engineering at scale with amux</h3><p>amux manages CLAUDE.md, hooks, skills, subagents, memory, and task specs across your entire agent fleet. Shared board, REST API, web dashboard, mobile PWA. Open source.</p><pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # &rarr; https://localhost:8822</code></pre><a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a></div>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

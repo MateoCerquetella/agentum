@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>Spec-Driven Development with AI Coding Agents: The Complete Guide (2026) — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="The complete guide to spec-driven development with AI coding agents. Write specs first, then let agents implement in parallel. Covers spec formats, task decomposition, acceptance criteria, parallel execution, and review workflows.">
+  <meta name="keywords" content="spec driven development, spec driven development ai, spec driven development claude code, sdd ai agents, spec first development, ai coding agent specs, task spec ai agent, acceptance criteria ai coding, parallel agent specs, spec driven workflow 2026">
+  <link rel="canonical" href="https://amux.io/guides/spec-driven-development/">
+  <meta property="og:title" content="Spec-Driven Development with AI Coding Agents (2026) — amux">
+  <meta property="og:description" content="Write specs first, then let agents implement in parallel. The practitioner's guide to spec-driven development with AI coding agents.">
+  <meta property="og:url" content="https://amux.io/guides/spec-driven-development/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Guides","item":"https://amux.io/guides/"},{"@type":"ListItem","position":3,"name":"Spec-Driven Development","item":"https://amux.io/guides/spec-driven-development/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"Spec-Driven Development with AI Coding Agents: The Complete Guide (2026)","description":"The practitioner's guide to spec-driven development — writing specs that make AI coding agents produce predictable, reviewable output, especially when running many agents in parallel.","url":"https://amux.io/guides/spec-driven-development/","datePublished":"2026-04-10","dateModified":"2026-04-10","author":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"publisher":{"@type":"Organization","name":"amux","url":"https://amux.io/","logo":{"@type":"ImageObject","url":"https://amux.io/icon.png"}}}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"HowTo","name":"How to Use Spec-Driven Development with AI Coding Agents","description":"Step-by-step guide to writing specs, decomposing them into agent tasks, and running parallel implementation.","step":[{"@type":"HowToStep","name":"Write the spec","text":"Create a markdown file with goal, requirements, constraints, and acceptance criteria. Spend 5-10 minutes per spec. The spec should be complete enough that a competent developer (human or AI) can implement it without asking clarifying questions."},{"@type":"HowToStep","name":"Decompose into independent tasks","text":"Split the spec into tasks that can be implemented in parallel without touching overlapping files. Each task should be completable in 15-45 minutes by one agent."},{"@type":"HowToStep","name":"Push tasks to the board","text":"Create board items linking to each task spec. Each item gets claimed by one agent."},{"@type":"HowToStep","name":"Launch agents in parallel","text":"Start one agent per task, each in its own git worktree. The agent reads the spec and implements against the acceptance criteria."},{"@type":"HowToStep","name":"Review against the spec","text":"Review each agent's output against the spec's acceptance criteria, not against your mental model. If the output meets the criteria, ship it. If not, the spec was incomplete — fix the spec, not the prompt."}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"What is spec-driven development?","acceptedAnswer":{"@type":"Answer","text":"Spec-driven development (SDD) is a workflow where you write a structured specification before any code is written — by you or by an AI agent. The spec defines the goal, requirements, constraints, and acceptance criteria. The agent implements against the spec, and you review against the spec. It replaces the traditional prompt-and-pray approach with a planning-first workflow that produces predictable, reviewable output."}},{"@type":"Question","name":"How is spec-driven development different from prompt engineering?","acceptedAnswer":{"@type":"Answer","text":"A prompt is a one-shot instruction: 'add pagination to the users API.' A spec is a structured document: goal, requirements (cursor-based, keyed on created_at, default 50), constraints (no schema changes, no new dependencies), and acceptance criteria (specific curl commands that must work). Prompts rely on the agent inferring your intent. Specs eliminate inference. The difference in output quality is dramatic."}},{"@type":"Question","name":"How long should a spec be?","acceptedAnswer":{"@type":"Answer","text":"10-30 lines for a typical task. Under 10 lines means you probably left out constraints (and the agent will fill the gaps with guesses). Over 50 lines means you are over-specifying implementation details — let the agent make tactical decisions. The sweet spot: 5-10 minutes of writing that saves 30-60 minutes of back-and-forth and rework."}},{"@type":"Question","name":"What format should specs use?","acceptedAnswer":{"@type":"Answer","text":"Markdown with four sections: Goal (one sentence), Requirements (numbered list of what must be true when done), Constraints (what the agent must NOT do), and Acceptance Criteria (specific commands or tests that prove correctness). Some teams add a fifth section — Context — with pointers to relevant files or docs. The format matters less than completeness."}},{"@type":"Question","name":"Why is spec-driven development important for parallel AI agents?","acceptedAnswer":{"@type":"Answer","text":"Without specs, each agent needs human guidance during implementation — questions, clarifications, course corrections. That does not scale to 10 agents. Specs make agents autonomous: each agent gets a complete description of what to build, works independently in its own git worktree, and produces output you can review against objective criteria. Specs are what make the jump from 1 agent to 10 agents possible."}},{"@type":"Question","name":"Should I write specs for small tasks?","acceptedAnswer":{"@type":"Answer","text":"If the task takes less than 10 minutes for a single agent, a spec is overhead. Just describe it in a prompt. Specs pay off when a task is complex enough that the agent might go in the wrong direction — roughly anything that takes more than 15 minutes or touches more than 2-3 files. For parallel fleets, always write specs because unattended agents cannot ask you questions."}},{"@type":"Question","name":"What tools support spec-driven development?","acceptedAnswer":{"@type":"Answer","text":"Any AI coding agent can consume specs — they are just markdown files. Specialized tools include cc-sdd (spec-driven commands for Claude Code), Kiro (spec-driven IDE), and amux (push specs to a kanban board, launch parallel agents, each claims a spec and implements it). The spec format is tool-agnostic; the orchestration layer is where tools differ."}}]}</script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">&rsaquo;</span> <a href="/guides/">Guides</a> <span class="sep">&rsaquo;</span> <span>Spec-Driven Development</span></div>
+    <h1>Spec-Driven Development with AI Coding Agents</h1>
+    <p class="subtitle">Write the spec first. Let agents implement in parallel. Review against acceptance criteria, not vibes. The workflow that makes AI coding predictable.</p>
+
+    <nav class="toc" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.2rem 1.6rem;margin:2rem 0;">
+      <strong style="font-size:0.82rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);">Contents</strong>
+      <ol style="margin:0.6rem 0 0;padding-left:1.2rem;font-size:0.88rem;line-height:2;">
+        <li><a href="#what" style="color:var(--dim);text-decoration:none;">What Is Spec-Driven Development?</a></li>
+        <li><a href="#why" style="color:var(--dim);text-decoration:none;">Why Specs Beat Prompts</a></li>
+        <li><a href="#anatomy" style="color:var(--dim);text-decoration:none;">Anatomy of a Good Spec</a></li>
+        <li><a href="#examples" style="color:var(--dim);text-decoration:none;">7 Real Spec Examples (Copy-Paste Ready)</a></li>
+        <li><a href="#decomposition" style="color:var(--dim);text-decoration:none;">Decomposing Specs Into Parallel Tasks</a></li>
+        <li><a href="#workflow" style="color:var(--dim);text-decoration:none;">The Full SDD Workflow</a></li>
+        <li><a href="#acceptance" style="color:var(--dim);text-decoration:none;">Writing Acceptance Criteria That Actually Work</a></li>
+        <li><a href="#constraints" style="color:var(--dim);text-decoration:none;">Constraints: The Most Underused Section</a></li>
+        <li><a href="#parallel" style="color:var(--dim);text-decoration:none;">Specs for Parallel Agent Fleets</a></li>
+        <li><a href="#antipatterns" style="color:var(--dim);text-decoration:none;">Anti-Patterns: Specs That Waste Tokens</a></li>
+        <li><a href="#tools" style="color:var(--dim);text-decoration:none;">Tooling: Where Specs Live and How Agents Consume Them</a></li>
+        <li><a href="#faq" style="color:var(--dim);text-decoration:none;">FAQ</a></li>
+      </ol>
+    </nav>
+
+    <h2 id="what">What Is Spec-Driven Development?</h2>
+    <p><strong>Spec-driven development</strong> (SDD) is a workflow where you write a structured specification <em>before</em> any code is written &mdash; by you or by an AI agent. The spec defines the goal, requirements, constraints, and acceptance criteria. The agent implements against the spec. You review against the spec. No vibes, no guessing, no prompt-and-pray.</p>
+    <pre><code>Traditional AI coding:
+  You: "add pagination to the users API"
+  Agent: [guesses what kind, what defaults, what constraints]
+  You: "no, not offset-based, cursor-based"
+  Agent: [rewrites everything]
+  You: "and don't change the schema"
+  Agent: [rewrites again]
+  Total: 3 rounds, 45 minutes, frustration
+
+Spec-driven:
+  You: [write 15-line spec in 5 minutes]
+  Agent: [reads spec, implements exactly once]
+  You: [review against acceptance criteria]
+  Total: 1 round, 15 minutes, done</code></pre>
+    <p>The core insight: the time you spend writing a spec is <em>always</em> less than the time you spend correcting an agent that guessed wrong. And the gap widens with every additional agent &mdash; correcting 10 agents individually is 10x the cost of writing one good spec.</p>
+
+    <h2 id="why">Why Specs Beat Prompts</h2>
+    <p>Prompts and specs are both natural language. The difference is structure:</p>
+
+    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:1.5rem 0;">
+      <thead>
+        <tr style="border-bottom:2px solid var(--border);">
+          <th style="text-align:left;padding:0.6rem;">Dimension</th>
+          <th style="text-align:left;padding:0.6rem;">Prompt</th>
+          <th style="text-align:left;padding:0.6rem;">Spec</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Ambiguity</td><td style="padding:0.6rem;">High &mdash; agent fills gaps with guesses</td><td style="padding:0.6rem;">Low &mdash; requirements and constraints are explicit</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Reviewability</td><td style="padding:0.6rem;">Subjective &mdash; "does this look right?"</td><td style="padding:0.6rem;">Objective &mdash; "do these acceptance criteria pass?"</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Reusability</td><td style="padding:0.6rem;">One-shot, conversation-specific</td><td style="padding:0.6rem;">Checked into git, reusable across sessions</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Parallelization</td><td style="padding:0.6rem;">Requires human in the loop per agent</td><td style="padding:0.6rem;">Agent works autonomously against criteria</td></tr>
+        <tr><td style="padding:0.6rem;">Debugging</td><td style="padding:0.6rem;">"Why did it do that?"</td><td style="padding:0.6rem;">"The spec was incomplete" or "the agent didn't follow the spec"</td></tr>
+      </tbody>
+    </table>
+
+    <h3>The real unlock: autonomous agents</h3>
+    <p>A prompt requires you to be present &mdash; the agent asks questions, you answer, it adjusts. A spec makes the agent autonomous. It has everything it needs to work without you. This is the difference between running 1 agent interactively and running 10 agents overnight. Specs are what make the jump possible.</p>
+
+    <h2 id="anatomy">Anatomy of a Good Spec</h2>
+    <p>A spec has four required sections and one optional one:</p>
+
+    <pre><code># spec: add-cursor-pagination
+
+## Goal
+Add cursor-based pagination to GET /api/users.
+
+## Requirements
+1. Use cursor-based pagination, keyed on `created_at` (not offset)
+2. Default page size: 50, max: 200
+3. Response includes `next_cursor` (opaque base64 string) and `has_more` (boolean)
+4. Backward-compatible: clients that don't send a cursor get page 1
+5. Cursor is stable across concurrent writes (no skipped/duplicated rows)
+
+## Constraints
+- Do NOT change the User model or database schema
+- Do NOT add new dependencies
+- Do NOT modify existing test fixtures
+- Keep the existing GET /api/users response format for the user objects themselves
+
+## Acceptance criteria
+- `make test` passes (all existing + new tests)
+- `curl /api/users?limit=10` returns 10 users with `next_cursor` and `has_more`
+- `curl /api/users?cursor=X&amp;limit=10` returns the next 10 users
+- `curl /api/users?limit=999` returns 200 users (capped at max)
+- `curl /api/users` (no params) returns 50 users (default)
+
+## Context (optional)
+- The User model is in `src/models/user.py`
+- Existing endpoint is in `src/api/users.py:get_users()`
+- We use SQLAlchemy with PostgreSQL
+- See `src/api/orders.py` for an example of cursor pagination on another endpoint</code></pre>
+
+    <h3>Why each section matters</h3>
+    <ul>
+      <li><strong>Goal</strong> &mdash; One sentence. Tells the agent what success looks like at the highest level. If the agent gets confused mid-implementation, it re-reads this.</li>
+      <li><strong>Requirements</strong> &mdash; Numbered list of what must be true when done. Each requirement is independently verifiable. No vague adjectives ("fast", "clean", "modern").</li>
+      <li><strong>Constraints</strong> &mdash; What the agent must NOT do. This is the most underused section and the one with the highest ROI. Agents love to "improve" things you didn't ask for. Constraints prevent scope creep.</li>
+      <li><strong>Acceptance criteria</strong> &mdash; Specific commands, tests, or checks that prove the implementation is correct. These should be copy-pasteable. If you can't write a concrete acceptance criterion, the requirement is too vague.</li>
+      <li><strong>Context</strong> &mdash; Pointers to files, docs, or examples. Not required, but saves the agent 5&ndash;10 minutes of codebase exploration.</li>
+    </ul>
+
+    <h2 id="examples">7 Real Spec Examples (Copy-Paste Ready)</h2>
+
+    <h3>1. API endpoint</h3>
+    <pre><code># spec: create-invoice-endpoint
+
+## Goal
+Add POST /api/invoices to create a new invoice.
+
+## Requirements
+1. Accepts JSON body: { customer_id, line_items: [{ description, amount }], due_date }
+2. Validates: customer_id exists, at least 1 line item, amounts > 0, due_date in future
+3. Returns 201 with the created invoice (including generated `id` and `total`)
+4. Returns 422 with field-level errors for invalid input
+
+## Constraints
+- Do NOT add authentication (handled by middleware)
+- Do NOT send emails or side effects — just create the record
+- Use the existing Invoice model, do not modify the schema
+
+## Acceptance criteria
+- `make test` passes
+- Valid POST returns 201 with `id`, `total`, and `status: "draft"`
+- Missing customer_id returns 422 with `{"errors": {"customer_id": "required"}}`
+- Empty line_items returns 422
+- Negative amount returns 422</code></pre>
+
+    <h3>2. Bug fix</h3>
+    <pre><code># spec: fix-duplicate-notifications
+
+## Goal
+Fix bug where users receive duplicate email notifications for the same event.
+
+## Requirements
+1. Add idempotency check: if a notification with the same (user_id, event_id, channel) exists, skip
+2. Use the existing notifications table — add a unique constraint if needed
+3. Log skipped duplicates at INFO level
+
+## Constraints
+- Do NOT change the notification sending logic itself
+- Do NOT add new tables
+- Migration must be safe for zero-downtime deploy (no table locks > 1s)
+
+## Acceptance criteria
+- `make test` passes
+- Calling `send_notification(user_id=1, event_id=42, channel="email")` twice results in 1 row
+- Existing tests still pass (no regressions in notification delivery)</code></pre>
+
+    <h3>3. Test coverage expansion</h3>
+    <pre><code># spec: tests-for-auth-module
+
+## Goal
+Bring test coverage for src/auth/ from 34% to 85%+.
+
+## Requirements
+1. Cover: login, logout, token refresh, password reset, email verification
+2. Cover edge cases: expired tokens, invalid tokens, locked accounts, rate limiting
+3. Use pytest fixtures consistent with existing test style (see tests/conftest.py)
+4. Mock external services (email sender, Redis) — do not hit real services
+
+## Constraints
+- Do NOT modify any source code in src/auth/
+- Do NOT change existing tests
+- Tests must run in < 30 seconds total
+
+## Acceptance criteria
+- `pytest tests/auth/ -v` — all pass
+- `pytest --cov=src/auth --cov-report=term` shows 85%+ coverage
+- No tests require network access or running services</code></pre>
+
+    <h3>4. Database migration</h3>
+    <pre><code># spec: add-teams-table
+
+## Goal
+Add a teams table and associate users with teams (many-to-many).
+
+## Requirements
+1. New table: teams (id, name, created_at, updated_at)
+2. New join table: team_members (team_id, user_id, role, joined_at)
+3. role is an enum: "owner", "admin", "member"
+4. Alembic migration, reversible (upgrade + downgrade)
+
+## Constraints
+- Do NOT modify the existing users table
+- Do NOT add API endpoints (separate task)
+- Migration must be idempotent (safe to run twice)
+
+## Acceptance criteria
+- `alembic upgrade head` succeeds on a fresh database
+- `alembic downgrade -1` removes both tables cleanly
+- `alembic upgrade head && alembic upgrade head` does not error (idempotent)</code></pre>
+
+    <h3>5. Frontend component</h3>
+    <pre><code># spec: user-avatar-component
+
+## Goal
+Create a reusable UserAvatar React component.
+
+## Requirements
+1. Shows user's profile image if available, otherwise initials on a colored background
+2. Sizes: sm (24px), md (32px), lg (48px), xl (64px)
+3. Color derived deterministically from user's name (same name = same color always)
+4. Accessible: alt text, role="img" for initials variant
+5. Matches design tokens in src/styles/tokens.css
+
+## Constraints
+- No external image libraries
+- No network requests (image URL passed as prop)
+- Must work without JavaScript (SSR-safe)
+
+## Acceptance criteria
+- Storybook stories for all 4 sizes, with image, with initials
+- Same name always produces same background color
+- `npm run test -- UserAvatar` passes
+- Lighthouse accessibility score 100 on Storybook page</code></pre>
+
+    <h3>6. Refactor</h3>
+    <pre><code># spec: extract-email-service
+
+## Goal
+Extract email-sending logic from 6 scattered callsites into a single EmailService class.
+
+## Requirements
+1. New file: src/services/email_service.py with EmailService class
+2. Methods: send_welcome, send_reset, send_invoice, send_notification
+3. All 6 existing callsites refactored to use EmailService
+4. Centralized retry logic (3 attempts, exponential backoff)
+5. Centralized logging (log every send attempt with recipient + template name)
+
+## Constraints
+- Do NOT change email templates
+- Do NOT change the SMTP configuration
+- Preserve exact same behavior for all 6 callsites (no user-visible changes)
+
+## Acceptance criteria
+- `make test` passes
+- `grep -r "smtp\|send_email\|sendmail" src/ --include="*.py"` returns only email_service.py
+- All 6 callsites import from EmailService</code></pre>
+
+    <h3>7. Documentation</h3>
+    <pre><code># spec: api-docs-for-orders
+
+## Goal
+Write OpenAPI 3.1 spec for all /api/orders/* endpoints.
+
+## Requirements
+1. Cover all 5 endpoints: list, get, create, update, cancel
+2. Include request body schemas, response schemas, error responses
+3. Include realistic examples for each endpoint
+4. Document pagination parameters (cursor, limit)
+
+## Constraints
+- Do NOT modify any source code
+- OpenAPI spec goes in docs/openapi/orders.yaml
+- Use $ref for shared schemas (Error, Pagination)
+
+## Acceptance criteria
+- `npx @redocly/cli lint docs/openapi/orders.yaml` passes with no errors
+- All 5 endpoints documented with at least one example each</code></pre>
+
+    <h2 id="decomposition">Decomposing Specs Into Parallel Tasks</h2>
+    <p>A single large spec can often be split into multiple parallel tasks. The rule: if two tasks touch different files, they can run in parallel. If they touch the same file, they must be sequential.</p>
+
+    <h3>Example: splitting a feature spec</h3>
+    <pre><code># Original spec: "Add team management feature"
+# Too big for one agent. Decompose:
+
+Task 1: Database migration (add teams + team_members tables)
+  → Touches: alembic/versions/, src/models/
+  → Agent 1, worktree: agent/teams-migration
+
+Task 2: API endpoints (CRUD for teams)
+  → Touches: src/api/teams.py (new file), tests/api/test_teams.py (new)
+  → Agent 2, worktree: agent/teams-api
+  → Depends on: Task 1 (needs the model)
+
+Task 3: Team invitation flow
+  → Touches: src/api/invitations.py (new), src/services/email_service.py
+  → Agent 3, worktree: agent/teams-invitations
+  → Depends on: Task 1
+
+Task 4: Frontend team settings page
+  → Touches: src/components/TeamSettings/ (new directory)
+  → Agent 4, worktree: agent/teams-frontend
+  → Independent (can mock API)</code></pre>
+
+    <h3>The dependency graph</h3>
+    <pre><code>Task 1 (migration)  ──→  Task 2 (API)     ──→  merge all
+        │                                         ↑
+        └──→  Task 3 (invitations)  ──────────────┘
+                                                   ↑
+Task 4 (frontend)  ────────────────────────────────┘</code></pre>
+    <p>Tasks 1 and 4 can start immediately in parallel. Tasks 2 and 3 wait for Task 1's migration to land. All four merge at the end. Total wall-clock time: ~the time of the longest chain (1 → 2), not the sum of all four.</p>
+
+    <h3>Rules for good decomposition</h3>
+    <ul>
+      <li><strong>No overlapping files.</strong> If two tasks edit the same file, merge conflicts are guaranteed. Either sequence them or split the file first.</li>
+      <li><strong>Each task is independently testable.</strong> If you can't run <code>make test</code> on a task's output alone, the task is too entangled.</li>
+      <li><strong>15&ndash;45 minutes per task.</strong> Under 15 minutes: the spec overhead isn't worth it. Over 45 minutes: the agent's context window fills up and quality drops.</li>
+      <li><strong>Dependencies are explicit.</strong> If Task 2 needs Task 1's model, say so in the spec. The agent can read the model file from Task 1's branch (or you merge Task 1 first).</li>
+    </ul>
+
+    <h2 id="workflow">The Full SDD Workflow</h2>
+    <p>Here's spec-driven development end to end, from backlog to merged PRs:</p>
+
+    <h3>Phase 1: Spec writing (30&ndash;60 minutes for 10 tasks)</h3>
+    <pre><code># You write specs — 5 minutes each, 10 specs
+specs/
+  add-cursor-pagination.md
+  fix-duplicate-notifications.md
+  tests-for-auth-module.md
+  extract-email-service.md
+  add-teams-migration.md
+  add-teams-api.md
+  add-teams-invitations.md
+  teams-frontend.md
+  api-docs-for-orders.md
+  upgrade-react-18.md</code></pre>
+
+    <h3>Phase 2: Push to board (2 minutes)</h3>
+    <pre><code># Push each spec as a board task
+for spec in specs/*.md; do
+  title=$(head -1 "$spec" | sed 's/# spec: //')
+  amux board add "$title" --desc "$(cat $spec)"
+done
+
+# Or via curl:
+curl -sk -X POST -H 'Content-Type: application/json' \
+  -d '{"title":"add-cursor-pagination","desc":"...spec contents...","status":"todo"}' \
+  https://localhost:8822/api/board</code></pre>
+
+    <h3>Phase 3: Launch agents (5 minutes)</h3>
+    <pre><code># Register 10 agents, each in its own worktree
+for i in $(seq 1 10); do
+  amux register worker-$i --dir ~/Dev/myproject --worktree --yolo
+  amux start worker-$i
+done
+
+# Each agent's prompt (automatically from the board):
+# "Claim a task from the board. Read its spec. Implement it.
+#  Run the acceptance criteria. Commit when all pass."</code></pre>
+
+    <h3>Phase 4: Agents work (1&ndash;3 hours, unattended)</h3>
+    <p>Each agent claims a task atomically (no duplicates), reads the spec from the task description, implements in its isolated worktree, runs the acceptance criteria, and commits. The self-healing watchdog restarts any agent that crashes.</p>
+
+    <h3>Phase 5: Review (30&ndash;45 minutes)</h3>
+    <pre><code># Check results on the board
+amux board list
+
+# For each completed task, review the branch:
+git diff main..agent/add-cursor-pagination
+
+# Review is fast because you check against acceptance criteria:
+# ✓ make test passes
+# ✓ curl /api/users?limit=10 returns next_cursor
+# ✓ curl /api/users?cursor=X returns next page
+# Ship it.</code></pre>
+
+    <h3>The math</h3>
+    <p>Writing 10 specs: ~60 minutes. Agent implementation (parallel): ~2 hours wall clock. Review: ~45 minutes. <strong>Total: ~4 hours for 10 tasks.</strong> Without specs, those same 10 tasks take 2&ndash;3 hours each sequentially with a single agent (back-and-forth, corrections, rework) = 20&ndash;30 hours. SDD with parallel agents is a 5&ndash;7x throughput multiplier.</p>
+
+    <h2 id="acceptance">Writing Acceptance Criteria That Actually Work</h2>
+    <p>Acceptance criteria are the most important part of a spec. They are what make review objective instead of subjective, and what let agents self-verify.</p>
+
+    <h3>Rules for good acceptance criteria</h3>
+    <ol>
+      <li><strong>Executable.</strong> Every criterion should be a command you can run: <code>make test</code>, <code>curl ...</code>, <code>grep ...</code>, <code>lighthouse ...</code>. If you can't run it, it's an opinion, not a criterion.</li>
+      <li><strong>Binary.</strong> Pass or fail. No "should be reasonably fast" or "code should be clean." Those are style preferences for CLAUDE.md, not acceptance criteria.</li>
+      <li><strong>Independent.</strong> Each criterion tests one thing. Don't bundle "tests pass AND coverage is 85% AND no network calls" into one criterion — split them so you know exactly what failed.</li>
+      <li><strong>Ordered by importance.</strong> Put the most critical criterion first. If the agent runs out of context, you want it to at least satisfy the top criteria.</li>
+    </ol>
+
+    <h3>Good vs bad acceptance criteria</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:1rem 0;">
+      <thead><tr style="border-bottom:2px solid var(--border);"><th style="text-align:left;padding:0.6rem;">Bad</th><th style="text-align:left;padding:0.6rem;">Good</th></tr></thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">"Code should be clean"</td><td style="padding:0.6rem;"><code>make lint</code> passes with 0 warnings</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">"Should be fast"</td><td style="padding:0.6rem;"><code>time curl /api/users</code> completes in &lt; 200ms</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">"Should handle errors"</td><td style="padding:0.6rem;"><code>curl -X POST /api/users -d '{}'</code> returns 422 with field errors</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">"Tests should pass"</td><td style="padding:0.6rem;"><code>pytest tests/auth/ -v</code> &mdash; all pass, 0 skipped</td></tr>
+        <tr><td style="padding:0.6rem;">"Should be well-documented"</td><td style="padding:0.6rem;"><code>npx @redocly/cli lint docs/openapi.yaml</code> &mdash; 0 errors</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="constraints">Constraints: The Most Underused Section</h2>
+    <p>Requirements tell agents what to build. Constraints tell agents what NOT to do. Constraints have disproportionate impact because AI agents love to "help" by doing extra work you didn't ask for:</p>
+    <ul>
+      <li>Refactoring nearby code that "could be improved"</li>
+      <li>Adding dependencies "to make it easier"</li>
+      <li>Changing the database schema "to be more normalized"</li>
+      <li>Modifying existing tests "to be more comprehensive"</li>
+      <li>Adding error handling you didn't need</li>
+    </ul>
+    <p>Every line in the constraints section prevents one of these scope-creep patterns. Common constraints worth adding to most specs:</p>
+    <pre><code>## Constraints
+- Do NOT add new dependencies
+- Do NOT modify existing tests
+- Do NOT change the database schema
+- Do NOT refactor code outside the specified files
+- Do NOT add features not listed in Requirements
+- Keep the public API surface unchanged (backward-compatible)</code></pre>
+
+    <h2 id="parallel">Specs for Parallel Agent Fleets</h2>
+    <p>Specs become essential when running multiple agents in parallel. Without specs, each agent needs a human babysitter. With specs, agents are autonomous &mdash; they have everything they need to work independently.</p>
+
+    <h3>The fleet workflow</h3>
+    <pre><code>You (30 min)          amux board              10 agents (2 hours)
+─────────────         ──────────              ───────────────────
+Write 10 specs  ──→  Push to board  ──→  Each agent claims a task
+                                          Reads the spec
+                                          Implements in worktree
+                                          Runs acceptance criteria
+                                          Commits and marks done
+                                                  │
+You (45 min)    ←─────────────────────────────────┘
+Review 10 PRs against acceptance criteria
+Merge the clean ones</code></pre>
+
+    <h3>What changes at fleet scale</h3>
+    <ul>
+      <li><strong>Specs must be self-contained.</strong> An agent can't tap you on the shoulder to ask a question. Every ambiguity in the spec becomes a wrong guess multiplied across agents.</li>
+      <li><strong>Constraints prevent merge conflicts.</strong> If you don't constrain which files each agent touches, two agents will edit the same file and create a conflict. Use constraints to define boundaries.</li>
+      <li><strong>Acceptance criteria enable batch review.</strong> Reviewing 10 PRs against vibes takes hours. Reviewing 10 PRs against checklists takes 45 minutes.</li>
+      <li><strong>The board is the spec registry.</strong> Push specs as board task descriptions. Agents claim tasks atomically. No duplicate work.</li>
+    </ul>
+
+    <h2 id="antipatterns">Anti-Patterns: Specs That Waste Tokens</h2>
+
+    <h3>1. Over-specifying implementation</h3>
+    <p>Specs describe <em>what</em>, not <em>how</em>. If you specify "use a for loop on line 42 of file X," you're writing the code yourself with extra steps. Let the agent make tactical decisions.</p>
+    <pre><code># Bad: specifying implementation
+"Use a dictionary comprehension to build the lookup table,
+ then iterate with enumerate()"
+
+# Good: specifying outcome
+"Build a lookup table mapping user_id to email.
+ Must handle 100K users in < 1 second."</code></pre>
+
+    <h3>2. Vague requirements</h3>
+    <p>"Make it better" is not a requirement. "Make it handle 10K concurrent users without degradation" is. Every requirement should be independently verifiable by a machine or a human looking at the output for 10 seconds.</p>
+
+    <h3>3. Missing constraints</h3>
+    <p>An unconstrained agent will "improve" your codebase in ways you didn't want. Always add: what files are off-limits, what dependencies can't be added, what behaviors can't change.</p>
+
+    <h3>4. Specs for trivial tasks</h3>
+    <p>"Fix the typo on line 42" does not need a spec. The overhead of writing Goal/Requirements/Constraints/Acceptance exceeds the task itself. Use specs for tasks that take more than 15 minutes.</p>
+
+    <h3>5. Specs without acceptance criteria</h3>
+    <p>A spec without acceptance criteria is just a prompt with extra formatting. The criteria are what make spec-driven development work &mdash; they give the agent a self-verification loop and give you an objective review framework.</p>
+
+    <h2 id="tools">Tooling: Where Specs Live and How Agents Consume Them</h2>
+
+    <h3>File-based specs (simplest)</h3>
+    <pre><code># Store specs in a directory, check into git
+specs/
+  add-cursor-pagination.md
+  fix-duplicate-notifications.md
+  ...
+
+# Pass to an agent via prompt:
+claude -p "Implement the spec in specs/add-cursor-pagination.md"</code></pre>
+
+    <h3>Board-based specs (best for parallel fleets)</h3>
+    <pre><code># Push specs to the amux board as task descriptions
+amux board add "add-cursor-pagination" --desc "$(cat specs/add-cursor-pagination.md)"
+
+# Agents claim tasks from the board and read the spec from the description
+# Atomic claiming prevents two agents from working on the same spec</code></pre>
+
+    <h3>Spec-driven tools</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:1rem 0;">
+      <thead><tr style="border-bottom:2px solid var(--border);"><th style="text-align:left;padding:0.6rem;">Tool</th><th style="text-align:left;padding:0.6rem;">Approach</th><th style="text-align:left;padding:0.6rem;">Best for</th></tr></thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;"><strong>amux</strong></td><td style="padding:0.6rem;">Specs as board tasks, parallel agents in worktrees, atomic claiming</td><td style="padding:0.6rem;">Parallel fleet execution at scale</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;"><strong>cc-sdd</strong></td><td style="padding:0.6rem;">Slash commands that enforce Requirements &rarr; Design &rarr; Tasks &rarr; Implementation</td><td style="padding:0.6rem;">Single-agent structured workflow</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;"><strong>Kiro</strong></td><td style="padding:0.6rem;">IDE with built-in spec editor and agent executor</td><td style="padding:0.6rem;">Teams wanting an IDE-native experience</td></tr>
+        <tr><td style="padding:0.6rem;"><strong>Plain markdown</strong></td><td style="padding:0.6rem;">Specs in a directory, pass via <code>-p</code> flag</td><td style="padding:0.6rem;">Simple setups, 1&ndash;3 agents</td></tr>
+      </tbody>
+    </table>
+
+    <p>The spec format is tool-agnostic. Any AI coding agent can consume a markdown spec. The orchestration layer &mdash; how agents discover, claim, and report on specs &mdash; is where tools differ. For parallel execution at scale, you need atomic task claiming and isolated worktrees, which is where an orchestrator like amux fits in.</p>
+
+    <p>See the <a href="/guides/context-engineering/">Context Engineering guide</a> for how specs fit into the broader context strategy, and the <a href="/guides/agentmaxxing/">Agentmaxxing guide</a> for the full playbook on running parallel agent fleets.</p>
+
+    <h2 id="faq">FAQ</h2>
+
+    <h3>What is spec-driven development?</h3>
+    <p>A workflow where you write a structured specification (goal, requirements, constraints, acceptance criteria) before any code is written. The agent implements against the spec. You review against the spec. It replaces prompt-and-pray with a planning-first approach that produces predictable output.</p>
+
+    <h3>How is it different from prompt engineering?</h3>
+    <p>A prompt is a one-shot instruction. A spec is a structured document with explicit requirements, constraints, and acceptance criteria. Prompts rely on the agent guessing your intent. Specs eliminate guessing.</p>
+
+    <h3>How long should a spec be?</h3>
+    <p>10&ndash;30 lines. Under 10 means you left out constraints. Over 50 means you're over-specifying implementation details. Sweet spot: 5&ndash;10 minutes of writing.</p>
+
+    <h3>Why is it important for parallel agents?</h3>
+    <p>Without specs, each agent needs human guidance during implementation. That doesn't scale to 10 agents. Specs make agents autonomous: each gets a complete description, works independently, and produces output reviewable against objective criteria.</p>
+
+    <h3>Should I write specs for small tasks?</h3>
+    <p>No. Under 15 minutes of agent work, just use a prompt. Specs pay off for complex tasks (multiple files, many requirements) and especially for unattended parallel agents that can't ask you questions.</p>
+
+    <h3>What tools support spec-driven development?</h3>
+    <p>Any AI coding agent can consume specs &mdash; they're just markdown. Specialized tools include cc-sdd (Claude Code commands), Kiro (IDE-native), and amux (board-based orchestration with parallel agents). The spec format is tool-agnostic; the orchestration layer is where tools differ.</p>
+
+    <div class="cta-box"><h3>Run specs across a fleet of parallel agents</h3><p>amux turns specs into board tasks, launches agents in isolated worktrees, handles atomic claiming, and auto-restarts crashes. Write 10 specs, wake up to 10 PRs.</p><pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # &rarr; https://localhost:8822</code></pre><a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a></div>
+
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

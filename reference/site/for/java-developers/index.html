@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>amux for Java Developers — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="Java developers use amux to handle migrations, boilerplate generation, and test coverage across large enterprise codebases in parallel.">
+  <meta name="keywords" content="java AI coding agent, claude code java, parallel java development">
+  <link rel="canonical" href="https://amux.io/for/java-developers/">
+  <meta property="og:title" content="amux for Java Developers — amux">
+  <meta property="og:description" content="Java developers use amux to handle migrations, boilerplate generation, and test coverage across large enterprise codebases in parallel.">
+  <meta property="og:url" content="https://amux.io/for/java-developers/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"For","item":"https://amux.io/for/"},{"@type":"ListItem","position":3,"name":"amux for Java Developers","item":"https://amux.io/for/java-developers/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebPage","name":"amux for Java Developers","description":"Java developers use amux to handle migrations, boilerplate generation, and test coverage across large enterprise codebases in parallel.","url":"https://amux.io/for/java-developers/","audience":{"@type":"Audience","audienceType":"amux for Java Developers"}}</script>
+  </head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">›</span> <a href="/for/">For</a> <span class="sep">›</span> <span>amux for Java Developers</span></div>
+    <h1>amux for Java Developers</h1>
+<p class="subtitle">Java enterprise codebases are large by nature. Parallel agents tackle the scale.</p>
+<h2>Java's Parallel Opportunities</h2>
+<p>Java projects — especially enterprise ones — are characterized by large codebases, lots of boilerplate (getters/setters, builders, DTOs), complex dependency injection, and significant test coverage requirements. These are exactly the kinds of tasks where parallel agents add the most value.</p>
+<ul>
+<li><strong>Spring Boot migrations:</strong> Migrating from Spring Boot 2 to 3 involves hundreds of deprecation changes. Run agents in parallel across service layers.</li>
+<li><strong>JUnit 5 migration:</strong> Migrating from JUnit 4 to 5? One agent per test class, running simultaneously. A 1000-test codebase done in hours.</li>
+<li><strong>Lombok adoption:</strong> Adding <code>@Data</code>, <code>@Builder</code>, <code>@Slf4j</code> annotations across a codebase and removing manual boilerplate — one agent per package.</li>
+<li><strong>Java 17/21 modernization:</strong> Switch expressions, records, sealed classes, text blocks — use agents to modernize legacy Java code to modern idioms.</li>
+</ul>
+<h2>Maven/Gradle Multi-Module Projects</h2>
+<p>Java enterprise projects often have 10-50 Maven/Gradle modules. Each module can have its own agent:</p>
+<pre><code># One agent per module
+amux register core-module --dir ~/enterprise-app --yolo
+amux register api-module --dir ~/enterprise-app --yolo
+amux register persistence-module --dir ~/enterprise-app --yolo</code></pre>
+<h2>Test Coverage at Enterprise Scale</h2>
+<p>Enterprise Java codebases often have low test coverage — a legacy of deadlines and boilerplate costs. A fleet of 10 agents writing JUnit tests simultaneously can bring a codebase from 20% to 80% coverage in a single working day.</p>
+<div class="cta-box"><h3>Get started with amux</h3><p>Run dozens of Claude Code agents in parallel. Python 3 + tmux. Open source.</p><pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # → https://localhost:8822</code></pre><a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a></div>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>Claude Managed Agents vs amux: The Self-Hosted Alternative (2026)</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="Anthropic's Claude Managed Agents launched April 2026 at $0.08/session-hour. amux is the self-hosted, model-agnostic, free alternative. Feature-by-feature comparison, cost math, and migration path.">
+  <meta name="keywords" content="claude managed agents alternative, self-hosted claude managed agents, claude managed agents vs self-hosted, claude managed agents pricing, open source claude managed agents, anthropic managed agents alternative, claude agent sdk orchestration, claude managed agents cost">
+  <link rel="canonical" href="https://amux.io/compare/amux-vs-claude-managed-agents/">
+  <meta property="og:title" content="Claude Managed Agents vs amux: The Self-Hosted Alternative">
+  <meta property="og:description" content="$0.08/session-hour + lock-in, or $0 on your own box? Feature-by-feature comparison of Anthropic's April 2026 Managed Agents launch vs amux.">
+  <meta property="og:url" content="https://amux.io/compare/amux-vs-claude-managed-agents/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Claude Managed Agents vs amux: The Self-Hosted Alternative">
+  <meta name="twitter:description" content="$0.08/session-hour + lock-in, or $0 on your own box? Full comparison of Anthropic's April 2026 launch vs amux.">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"Claude Managed Agents vs amux: The Self-Hosted Alternative","description":"Feature-by-feature comparison of Anthropic's Claude Managed Agents (launched April 2026) with amux, the open-source self-hosted alternative.","datePublished":"2026-04-10","dateModified":"2026-04-10","author":{"@type":"Organization","name":"amux"},"publisher":{"@type":"Organization","name":"amux","logo":{"@type":"ImageObject","url":"https://amux.io/icon-512.png"}},"image":"https://amux.io/og-image.png","mainEntityOfPage":{"@type":"WebPage","@id":"https://amux.io/compare/amux-vs-claude-managed-agents/"}}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"What is Claude Managed Agents?","acceptedAnswer":{"@type":"Answer","text":"Claude Managed Agents is an Anthropic-hosted runtime for long-running Claude agents, launched in public beta on April 8, 2026. It provides sandboxed execution, session persistence across disconnects, scoped permissions, and tracing for agents built with the Claude Agent SDK. Pricing is $0.08 per session-hour plus standard token costs, gated behind the managed-agents-2026-04-01 beta header."}},{"@type":"Question","name":"What is the self-hosted alternative to Claude Managed Agents?","acceptedAnswer":{"@type":"Answer","text":"amux is the open-source self-hosted alternative. It runs independent Claude Code sessions in tmux on your own machine, with a web dashboard, kanban task board, self-healing watchdog, mobile PWA, and full REST API. It is MIT-licensed, model-agnostic, and costs nothing to run beyond your existing Claude subscription."}},{"@type":"Question","name":"How much does Claude Managed Agents cost vs amux?","acceptedAnswer":{"@type":"Answer","text":"Claude Managed Agents costs $0.08 per session-hour plus token costs. A single agent running 24/7 costs approximately $58 per month in session fees alone, before tokens. amux costs $0 in session fees - you run it on hardware you already own, and pay only for the underlying Claude API or Claude Max subscription you would use anyway."}},{"@type":"Question","name":"Does amux support the Claude Agent SDK?","acceptedAnswer":{"@type":"Answer","text":"Yes. amux sessions can run any command, including Claude Agent SDK scripts, Claude Code CLI, or custom Python harnesses. Because sessions are tmux-backed, they persist through disconnects and survive context compaction. The amux REST API exposes the same primitives as Managed Agents: session lifecycle, message sending, output peeking, and task delegation."}},{"@type":"Question","name":"Can I migrate from Claude Managed Agents to amux?","acceptedAnswer":{"@type":"Answer","text":"Yes. Any script you wrote against the Anthropic Agent SDK runs unchanged inside an amux session. Instead of calling POST /v1/agents, you spawn a session with amux start <project> and send prompts via the /api/sessions/<name>/send endpoint. Task coordination that used Managed Agents' server-side state moves to the amux board, which supports atomic claim and status transitions."}},{"@type":"Question","name":"When should I use Claude Managed Agents instead of amux?","acceptedAnswer":{"@type":"Answer","text":"Use Claude Managed Agents if you want zero infrastructure, are already deep in the Anthropic ecosystem, need Anthropic-backed SLAs for production, or require the specific compliance guarantees Anthropic offers. Use amux if you want zero ongoing session fees, full control over your agent runtime, model-agnostic support (Claude, GPT, local models), a visual dashboard, or the ability to run agents on hardware you already own."}}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Compare","item":"https://amux.io/compare/"},{"@type":"ListItem","position":3,"name":"amux vs Claude Managed Agents","item":"https://amux.io/compare/amux-vs-claude-managed-agents/"}]}</script>
+  </head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">›</span> <a href="/compare/">Compare</a> <span class="sep">›</span> <span>amux vs Claude Managed Agents</span></div>
+    <h1>Claude Managed Agents vs amux: The Self-Hosted Alternative</h1>
+    <p class="subtitle">Anthropic's Managed Agents launched in public beta on April 8, 2026 at $0.08 per session-hour. Here's what you're paying for — and what you get for $0 by running amux on your own box.</p>
+
+    <p><strong>TL;DR.</strong> Claude Managed Agents and amux solve the same problem — keeping long-running Claude agents alive across disconnects, with sandboxing, task coordination, and observability — but they sit at opposite ends of the build-vs-buy spectrum. Managed Agents is Anthropic-hosted, closed, and metered. amux is self-hosted, MIT-licensed, model-agnostic, and free. If you already have a Claude Max or API subscription and a machine that stays online, amux gives you the same capabilities without the $0.08/hr meter running.</p>
+
+    <h2>What Claude Managed Agents actually is</h2>
+    <p>On <strong>April 8, 2026</strong>, Anthropic launched <a href="https://www.anthropic.com/engineering/managed-agents" target="_blank" rel="noopener">Claude Managed Agents</a> as a public beta. It's a hosted runtime for long-running agents built on top of the Claude Agent SDK. You POST to <code>/v1/agents</code>, Anthropic spins up a sandboxed environment, and your agent runs there instead of on your laptop. The pitch: decouple "the brain" (the model) from "the hands" (the execution environment), so an agent can keep working while you close your tab, reboot, or fly to Tokyo.</p>
+    <p>It's a real piece of engineering. The session state survives disconnect, tracing is built in, and you get scoped permissions per session via the <code>managed-agents-2026-04-01</code> beta header. For teams deep in the Anthropic ecosystem, it's the obvious next step. But it's also a product decision: you're trading control and cost for convenience.</p>
+
+    <h2>What you're paying for at $0.08 per session-hour</h2>
+    <p>The pricing structure is straightforward and, for most use cases, more expensive than it looks:</p>
+    <ul>
+      <li><strong>$0.08 / session-hour</strong> billed on wall-clock time the agent is alive — not just when it's doing work. Idle sessions still meter.</li>
+      <li><strong>Standard token costs on top</strong> at Claude Sonnet 4.6 / Opus 4.6 rates. Session fees are in addition to, not instead of, model billing.</li>
+      <li><strong>A single 24/7 agent</strong> = 720 session-hours/month = <strong>~$57.60/month</strong> before a single token is spent.</li>
+      <li><strong>A 10-agent fleet</strong> running overnight builds (8 hours × 30 days × 10 agents × $0.08) = <strong>~$192/month</strong> in session fees alone.</li>
+      <li><strong>A 50-agent team</strong> running full-time = <strong>~$2,880/month</strong> in session fees, on top of your token spend.</li>
+    </ul>
+    <p>If you're running one experimental agent a few hours a week, $0.08/hr is a rounding error. If you're agentmaxxing — running 10, 20, or 50 parallel Claude Code sessions the way amux was built for — you're now paying Anthropic to host what your M1 Mac or a $30/month VPS can run for free.</p>
+
+    <h2>Feature-by-feature: Managed Agents vs amux</h2>
+    <table>
+      <thead><tr><th>Feature</th><th>Claude Managed Agents</th><th>amux</th></tr></thead>
+      <tbody>
+        <tr><td>Launch date</td><td>April 8, 2026 (public beta)</td><td>2024, production</td></tr>
+        <tr><td>License / code</td><td>Proprietary, closed source</td><td>MIT, open source on GitHub</td></tr>
+        <tr><td>Hosting</td><td>Anthropic-hosted (no choice)</td><td>Self-hosted (your laptop, VPS, or a GCP VM via the included Terraform)</td></tr>
+        <tr><td>Session fees</td><td>$0.08 / session-hour</td><td>$0</td></tr>
+        <tr><td>Minimum monthly cost (1 agent 24/7)</td><td>~$58 + tokens</td><td>$0 + tokens</td></tr>
+        <tr><td>Model support</td><td>Claude only</td><td>Claude, GPT, local models via MCP, or any CLI you can run</td></tr>
+        <tr><td>Session persistence</td><td>Server-side state</td><td>tmux-backed sessions with UUID tracking; survive SIGHUP, reboots, and context compaction</td></tr>
+        <tr><td>Web dashboard</td><td>CLI + API only at launch</td><td>Full web UI: sessions, kanban board, calendar, CRM, notes, logs, screenshots</td></tr>
+        <tr><td>Mobile access</td><td>None</td><td>Installable PWA with offline support</td></tr>
+        <tr><td>Task coordination</td><td>Client-side</td><td>Built-in kanban board with atomic claiming and per-session ownership</td></tr>
+        <tr><td>Inter-agent messaging</td><td>Not exposed</td><td><code>POST /api/sessions/&lt;name&gt;/send</code> and <code>/peek</code> for cross-session coordination</td></tr>
+        <tr><td>Self-healing</td><td>Anthropic infrastructure</td><td>Watchdog auto-compacts stuck sessions, restarts crashed ones, and reaps idle browsers</td></tr>
+        <tr><td>Observability</td><td>Built-in tracing dashboard</td><td>Per-session output logs, token spend tracking, live peek, session review skill</td></tr>
+        <tr><td>Git isolation</td><td>Worktree per agent</td><td>Conflict detection + branch helpers; worktree pattern supported</td></tr>
+        <tr><td>Hooks / extensibility</td><td>Scoped permission system</td><td>Hooks, skills, slash commands, MCP servers, cron triggers, custom endpoints</td></tr>
+        <tr><td>Data residency</td><td>Anthropic infrastructure</td><td>Whatever box you run it on</td></tr>
+        <tr><td>Lock-in</td><td>Agent SDK + Anthropic API</td><td>Standard tmux sessions — nothing proprietary</td></tr>
+        <tr><td>Offline capability</td><td>No (cloud-dependent)</td><td>Yes (local-first architecture)</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Cost math: the break-even point</h2>
+    <p>If you run even a single agent continuously, amux pays for itself in the first day. Here's the rough break-even for a handful of common shapes:</p>
+    <table>
+      <thead><tr><th>Scenario</th><th>Managed Agents / month</th><th>amux / month</th><th>Annual savings</th></tr></thead>
+      <tbody>
+        <tr><td>1 agent, 8 hrs/day</td><td>~$19</td><td>$0</td><td>$228</td></tr>
+        <tr><td>1 agent, 24/7</td><td>~$58</td><td>$0</td><td>$696</td></tr>
+        <tr><td>10 agents, overnight builds (8h)</td><td>~$192</td><td>$0</td><td>$2,304</td></tr>
+        <tr><td>10 agents, 24/7</td><td>~$576</td><td>$0</td><td>$6,912</td></tr>
+        <tr><td>50 agents, 24/7 fleet</td><td>~$2,880</td><td>$0</td><td>$34,560</td></tr>
+      </tbody>
+    </table>
+    <p>Token spend is the same on either side — that's your actual work cost. Session fees are the difference, and session fees are what amux eliminates. A $300 refurbished Mac mini or a $30/month Hetzner box pays for itself against a single 24/7 managed agent in under a month.</p>
+
+    <h2>The lock-in angle: why model-agnostic matters in 2026</h2>
+    <p>Managed Agents requires the Anthropic Agent SDK. That's fine until you want to route a cheap task to Haiku, a reasoning task to Opus, a code review to GPT, and a local privacy-sensitive task to a quantized Llama on your box. amux doesn't care what you run inside a session — it just keeps the tmux pane alive and gives you a REST API to talk to it. If Anthropic raises prices, changes terms, or deprecates the SDK (see: every major provider, eventually), your amux workflows keep running unchanged.</p>
+    <p>This matters more than it used to. The coding-agent market in April 2026 has at least four serious options at the frontier (Claude Sonnet/Opus 4.6, GPT-5 Codex, Gemini 2.5 Pro, and strong open models like Qwen3-Coder-480B). Betting your orchestration layer on one vendor's proprietary session format is the exact mistake CI/CD teams made in 2015 with vendor-locked build systems.</p>
+
+    <h2>Migration path: from Agent SDK to amux sessions</h2>
+    <p>Porting existing Agent SDK code to amux is mechanical. Here's the mapping:</p>
+    <pre><code># Managed Agents (before)
+POST /v1/agents
+  { "name": "nightly-refactor", "prompt": "..." }
+POST /v1/agents/{id}/messages
+  { "content": "continue" }
+GET  /v1/agents/{id}/events
+
+# amux (after)
+amux start nightly-refactor                            # boot a session
+curl -sk -X POST $AMUX_URL/api/sessions/nightly-refactor/send \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"..."}'                                  # prompt it
+curl -sk $AMUX_URL/api/sessions/nightly-refactor/peek  # read output</code></pre>
+    <p>If you were using Managed Agents' server-side task state, that's the amux <a href="/guides/kanban-board-for-agents/">kanban board</a>: create an issue, assign it a <code>session</code>, call <code>/api/board/&lt;id&gt;/claim</code> to atomically take it, PATCH to <code>done</code> when finished. It's the same pattern, just running on SQLite in your home directory instead of in Anthropic's datacenter.</p>
+
+    <h2>When Managed Agents is the right call</h2>
+    <p>This comparison is opinionated but not one-sided. Managed Agents is the right choice when:</p>
+    <ul>
+      <li><strong>You have zero infrastructure appetite.</strong> No machine to keep online, no tmux to debug, no port forwarding. Hand Anthropic a credit card and it works.</li>
+      <li><strong>You need Anthropic-backed SLAs.</strong> If "the agent went down" becomes an incident your VP writes a postmortem about, a managed service with a support contract is the sane answer.</li>
+      <li><strong>You're already on every Anthropic product.</strong> Claude Max, Claude Code, Claude for Work — Managed Agents is the path of least resistance and the billing is consolidated.</li>
+      <li><strong>Your compliance team already blessed Anthropic.</strong> Going from "Anthropic API is approved" to "Anthropic-hosted Agent runtime is approved" is usually a one-page addendum. Self-hosting your own agent fleet is a different conversation.</li>
+    </ul>
+    <p>If any of those describe you, use Managed Agents. We'd rather you ship than argue about hosting. But if you're a solo dev, a small team, a bootstrapped founder, or an engineer running your own overnight experiments, the math for amux is brutal: same capabilities, $0 ongoing fees, and you own the runtime.</p>
+
+    <h2>When amux is the right call</h2>
+    <ul>
+      <li><strong>You run 5+ parallel agents.</strong> At that scale, session fees start to dominate and you'll want a dashboard anyway.</li>
+      <li><strong>You want mobile access.</strong> amux ships a PWA you can pin to your home screen and drive agents from your phone during a commute.</li>
+      <li><strong>You need model-agnostic orchestration.</strong> Mix Claude, GPT, and local models in the same fleet.</li>
+      <li><strong>You care about the runtime as infrastructure, not a product.</strong> amux is tmux, SQLite, and a single Python file. You can read the whole server in an afternoon and patch it.</li>
+      <li><strong>Your data can't leave your machine.</strong> Regulated codebases, customer data in logs, client NDAs — self-hosting removes an entire category of compliance work.</li>
+      <li><strong>You want to experiment without a meter.</strong> Agent experiments have a way of ballooning. A metered runtime makes you cautious; a free runtime makes you curious.</li>
+    </ul>
+
+    <h2>The 5-minute setup</h2>
+    <p>Nothing about self-hosting amux is harder than signing up for Managed Agents. You need Python 3, tmux, and one command:</p>
+    <pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # → https://localhost:8822</code></pre>
+    <p>From there you have a web dashboard, a kanban board, mobile PWA, REST API, and inter-session messaging. Spin up as many sessions as your RAM allows. The whole thing is <a href="https://github.com/mixpeek/amux/blob/main/amux-server.py">one Python file</a>, MIT-licensed, and hackable.</p>
+
+    <h2>Related reading</h2>
+    <ul>
+      <li><a href="/guides/agentmaxxing/">Agentmaxxing</a> — the pattern Managed Agents was built for, and what amux was built for first</li>
+      <li><a href="/guides/running-10-plus-agents/">Running 10+ agents in parallel</a></li>
+      <li><a href="/guides/scaling-to-50-agents/">Scaling to 50+ agents on one box</a></li>
+      <li><a href="/guides/cost-optimization/">Cost optimization for agent fleets</a></li>
+      <li><a href="/guides/agent-to-agent-orchestration/">Agent-to-agent orchestration patterns</a></li>
+      <li><a href="/compare/amux-vs-claude-code-agent-teams/">amux vs Claude Code Agent Teams</a></li>
+      <li><a href="/compare/amux-vs-devin/">amux vs Devin</a></li>
+    </ul>
+
+    <div class="cta-box"><h3>Stop paying for idle agents</h3><p>amux runs the same capabilities as Claude Managed Agents on your own box. MIT-licensed. Python 3 + tmux. Five-minute install.</p><pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # → https://localhost:8822</code></pre><a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a></div>
+  </main>
+  <footer>
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" style="font-size:0.92rem;font-weight:700;color:var(--text);text-decoration:none;">amux</a>
+          <p>Open-source agent multiplexer for Claude Code.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-claude-managed-agents/">vs Claude Managed Agents</a></li>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://github.com/mixpeek/amux/issues">Issues</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

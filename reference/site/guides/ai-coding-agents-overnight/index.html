@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>The Complete Guide to Running AI Coding Agents Overnight — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="Step-by-step guide to running AI coding agents unattended while you sleep. Task queues, guardrails, monitoring, and morning review workflows for Claude Code, Codex, and Gemini CLI.">
+  <meta name="keywords" content="ai coding agents overnight, run ai agents while sleeping, unattended ai coding, claude code overnight, autonomous coding agents, agentmaxxing, parallel ai agents unattended, ai coding while you sleep">
+  <link rel="canonical" href="https://amux.io/guides/ai-coding-agents-overnight/">
+  <meta property="og:title" content="The Complete Guide to Running AI Coding Agents Overnight — amux">
+  <meta property="og:description" content="Queue 20 tasks before bed, wake up to 20 PRs. The definitive guide to unattended AI coding with guardrails, monitoring, and failure recovery.">
+  <meta property="og:url" content="https://amux.io/guides/ai-coding-agents-overnight/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Guides","item":"https://amux.io/guides/"},{"@type":"ListItem","position":3,"name":"Running AI Coding Agents Overnight","item":"https://amux.io/guides/ai-coding-agents-overnight/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"The Complete Guide to Running AI Coding Agents Overnight","description":"Step-by-step guide to running AI coding agents unattended while you sleep. Task queues, guardrails, monitoring, and morning review workflows.","url":"https://amux.io/guides/ai-coding-agents-overnight/","datePublished":"2026-04-03","dateModified":"2026-04-03","author":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"publisher":{"@type":"Organization","name":"amux","url":"https://amux.io/","logo":{"@type":"ImageObject","url":"https://amux.io/icon.png"}}}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"HowTo","name":"How to Run AI Coding Agents Overnight","description":"Set up a fleet of AI coding agents that work while you sleep, with guardrails and monitoring.","step":[{"@type":"HowToStep","name":"Decompose tasks","text":"Break work into atomic, verifiable tasks that agents can complete independently."},{"@type":"HowToStep","name":"Configure your fleet","text":"Register sessions, assign directories, and set model preferences per task complexity."},{"@type":"HowToStep","name":"Set guardrails","text":"Configure CLAUDE.md rules, git hooks, file permissions, and cost caps."},{"@type":"HowToStep","name":"Launch and monitor","text":"Start all agents, verify initial progress, then let the watchdog handle failures."},{"@type":"HowToStep","name":"Morning review","text":"Triage overnight output, review PRs, and merge completed work."}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Is it safe to run AI coding agents overnight on production codebases?","acceptedAnswer":{"@type":"Answer","text":"Yes, with proper guardrails. Use separate git branches per agent, restrict file access via CLAUDE.md, enforce pre-commit hooks with linting and tests, and set cost caps. Never give overnight agents access to deployment pipelines, auth systems, or payment code."}},{"@type":"Question","name":"How many AI coding agents can I run overnight?","acceptedAnswer":{"@type":"Answer","text":"On a laptop: 5-7 agents comfortably (constrained by RAM and API rate limits). On a cloud VM (4+ cores, 16GB RAM): 20-50 agents. The bottleneck is usually API rate limits, not local compute. Stagger agent starts by 10-30 seconds to avoid hitting limits simultaneously."}},{"@type":"Question","name":"What tasks should I NOT give to overnight AI agents?","acceptedAnswer":{"@type":"Answer","text":"Avoid tasks that touch authentication, payment processing, infrastructure/deployment, database migrations on production, or anything requiring human judgment about business logic. Also avoid open-ended tasks like 'refactor the codebase' — agents need specific, bounded scope to work unattended."}},{"@type":"Question","name":"How much does it cost to run AI agents overnight?","acceptedAnswer":{"@type":"Answer","text":"With Claude Code on the Max plan ($200/month), you get unlimited usage — running 10 agents for 8 hours costs the same flat rate. On API pricing, expect $5-15 per agent-hour for Opus, $0.50-2 per agent-hour for Sonnet. A typical 8-hour overnight run with 10 agents on mixed models costs $50-100 on API pricing."}},{"@type":"Question","name":"What happens if an agent gets stuck or crashes overnight?","acceptedAnswer":{"@type":"Answer","text":"With amux's self-healing watchdog, crashed agents are automatically restarted and their last message is replayed. Context overflow triggers auto-compaction. Stuck agents (no output for a configurable timeout) are detected and restarted. You can also set hard time limits per agent."}}]}</script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">&rsaquo;</span> <a href="/guides/">Guides</a> <span class="sep">&rsaquo;</span> <span>Running AI Coding Agents Overnight</span></div>
+    <h1>The Complete Guide to Running AI Coding Agents Overnight</h1>
+    <p class="subtitle">Queue tasks before bed. Wake up to pull requests. The definitive playbook for unattended AI coding with guardrails, monitoring, and failure recovery.</p>
+
+    <nav class="toc" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.2rem 1.6rem;margin:2rem 0;">
+      <strong style="font-size:0.82rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);">Contents</strong>
+      <ol style="margin:0.6rem 0 0;padding-left:1.2rem;font-size:0.88rem;line-height:2;">
+        <li><a href="#promise" style="color:var(--dim);text-decoration:none;">The Overnight Agent Promise (and Reality)</a></li>
+        <li><a href="#architecture" style="color:var(--dim);text-decoration:none;">Architecture Overview</a></li>
+        <li><a href="#task-decomposition" style="color:var(--dim);text-decoration:none;">Task Decomposition: The Most Important Step</a></li>
+        <li><a href="#fleet-setup" style="color:var(--dim);text-decoration:none;">Setting Up Your Agent Fleet</a></li>
+        <li><a href="#guardrails" style="color:var(--dim);text-decoration:none;">Guardrails: Safety While You Sleep</a></li>
+        <li><a href="#monitoring" style="color:var(--dim);text-decoration:none;">Monitoring &amp; Observability</a></li>
+        <li><a href="#morning-review" style="color:var(--dim);text-decoration:none;">The Morning Review Workflow</a></li>
+        <li><a href="#cost" style="color:var(--dim);text-decoration:none;">Cost Management at Scale</a></li>
+        <li><a href="#workflows" style="color:var(--dim);text-decoration:none;">5 Real-World Overnight Workflows</a></li>
+        <li><a href="#failure-modes" style="color:var(--dim);text-decoration:none;">Failure Modes &amp; Troubleshooting</a></li>
+        <li><a href="#cloud" style="color:var(--dim);text-decoration:none;">Scaling Beyond a Laptop</a></li>
+        <li><a href="#faq" style="color:var(--dim);text-decoration:none;">FAQ</a></li>
+      </ol>
+    </nav>
+
+    <h2 id="promise">The Overnight Agent Promise (and Reality)</h2>
+    <p>The dream is simple: queue 20 tasks before bed, and wake up to 20 reviewed pull requests. No more choosing between sleep and shipping.</p>
+    <p>A year ago, this was fantasy. AI coding agents would crash from context overflow at 3am, silently loop on the wrong approach for hours, or produce code that looked right but broke in subtle ways. Running agents unattended was a gamble.</p>
+    <p>That has changed. Modern AI models (Claude Opus 4, Sonnet 4) are dramatically more reliable at long-running tasks. And tooling has caught up -- self-healing watchdogs, atomic task boards, and fleet monitoring mean you can set real guardrails instead of crossing your fingers.</p>
+    <p>This guide is the missing manual. Not the pitch -- the playbook. You will learn exactly how to decompose work, configure agents, set safety boundaries, and build a morning review workflow that makes overnight coding practical and safe.</p>
+    <p><strong>Who this is for:</strong> Developers who are already using AI coding agents (Claude Code, Codex CLI, Gemini CLI) and want to run them unattended at scale. If you have never used an AI coding agent, start with <a href="/guides/getting-started/">Getting Started</a> first.</p>
+
+    <h2 id="architecture">Architecture Overview</h2>
+    <p>A reliable overnight agent setup has four layers:</p>
+    <pre><code>Task Board          Agent Orchestrator       Isolated Worktrees       Output
+ ┌─────────┐        ┌──────────────┐          ┌──────────┐          ┌──────┐
+ │ TASK-1   │───────▶│  Agent 1     │─────────▶│ branch-1 │─────────▶│ PR 1 │
+ │ TASK-2   │───────▶│  Agent 2     │─────────▶│ branch-2 │─────────▶│ PR 2 │
+ │ TASK-3   │───────▶│  Agent 3     │─────────▶│ branch-3 │─────────▶│ PR 3 │
+ │  ...     │        │  Watchdog    │          │  ...     │          │ ...  │
+ └─────────┘        └──────────────┘          └──────────┘          └──────┘
+   SQLite              tmux + amux              git worktrees          GitHub</code></pre>
+    <p><strong>Task Board</strong> -- a shared queue (amux's SQLite-backed board, GitHub Issues, or Linear) where each task is atomic and independently verifiable.</p>
+    <p><strong>Agent Orchestrator</strong> -- manages agent lifecycle, restarts crashed sessions, and prevents duplicate work. This is where amux lives -- it wraps tmux with a watchdog, REST API, and web dashboard.</p>
+    <p><strong>Isolated Worktrees</strong> -- each agent works on its own git branch (ideally a <code>git worktree</code>) so agents never conflict with each other.</p>
+    <p><strong>Output</strong> -- each agent produces a PR, a commit, or a well-defined artifact that you review in the morning.</p>
+
+    <h3>Why tmux alone is not enough</h3>
+    <p>You can open 10 tmux panes and start 10 Claude Code sessions. But without an orchestration layer:</p>
+    <ul>
+      <li>If one crashes at 2am, nobody restarts it</li>
+      <li>Two agents might claim the same task</li>
+      <li>You have no idea which agents are still working vs. stuck</li>
+      <li>There is no spending visibility until you check billing the next day</li>
+      <li>You cannot check status from your phone</li>
+    </ul>
+    <p>An orchestrator like amux solves all of these. The rest of this guide assumes you have one set up.</p>
+
+    <h2 id="task-decomposition">Task Decomposition: The Most Important Step</h2>
+    <p>The difference between waking up to 20 clean PRs and waking up to 20 confused agents is entirely in how you define the tasks. This section is worth more than all the tooling combined.</p>
+
+    <h3>The sleeping test</h3>
+    <p>Before queuing a task, ask: <em>"Can I verify this task's output in under 2 minutes in the morning?"</em> If the answer is no, the task is too vague or too large.</p>
+
+    <h3>Good vs. bad overnight tasks</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:0.88rem;margin:1rem 0;">
+      <thead>
+        <tr style="border-bottom:2px solid var(--border);">
+          <th style="text-align:left;padding:0.6rem;color:var(--green);">Good (atomic, verifiable)</th>
+          <th style="text-align:left;padding:0.6rem;color:var(--red);">Bad (vague, unbounded)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;">"Add unit tests for <code>auth/login.py</code> -- target 90% coverage"</td>
+          <td style="padding:0.6rem;">"Improve test coverage"</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;">"Migrate <code>UserService</code> from JavaScript to TypeScript"</td>
+          <td style="padding:0.6rem;">"Convert the project to TypeScript"</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;">"Fix bug #142: login form submits twice on slow connections"</td>
+          <td style="padding:0.6rem;">"Fix the bugs in the login flow"</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;">"Update <code>axios</code> from v0.21 to v1.6 and fix breaking changes"</td>
+          <td style="padding:0.6rem;">"Update all dependencies"</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;">"Write API docs for the <code>/api/users</code> endpoints in OpenAPI format"</td>
+          <td style="padding:0.6rem;">"Document the API"</td>
+        </tr>
+        <tr>
+          <td style="padding:0.6rem;">"Add input validation to the <code>POST /api/orders</code> endpoint"</td>
+          <td style="padding:0.6rem;">"Make the API more robust"</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>The task spec template</h3>
+    <p>For overnight tasks, write more context than you would for a live session. The agent cannot ask clarifying questions at 3am.</p>
+    <pre><code>## Task: Add rate limiting to the public API
+
+### Context
+The /api/v2/* endpoints are public and currently have no rate limiting.
+We've seen abuse from scrapers hitting /api/v2/search at 100+ req/sec.
+
+### Requirements
+- Add rate limiting middleware to all /api/v2/* routes
+- Limit: 60 requests per minute per IP
+- Return 429 with Retry-After header when exceeded
+- Use in-memory store (no Redis dependency)
+- Add tests for the rate limiter
+
+### Files to modify
+- src/middleware/rateLimit.ts (create)
+- src/routes/v2/index.ts (add middleware)
+- tests/middleware/rateLimit.test.ts (create)
+
+### Do NOT
+- Modify any v1 routes
+- Add external dependencies
+- Change the response format of existing endpoints</code></pre>
+
+    <h3>Using the board for task queuing</h3>
+    <p>With amux, queue your overnight tasks on the board before starting agents:</p>
+    <pre><code># Queue tasks for the night
+amux board add "Add unit tests for auth/login.py -- target 90% coverage"
+amux board add "Migrate UserService from JS to TS"
+amux board add "Fix bug #142: double-submit on slow connections"
+amux board add "Update axios v0.21 -> v1.6, fix breaking changes"
+amux board add "Write OpenAPI docs for /api/users endpoints"
+
+# Each agent claims tasks atomically -- no duplicates
+# POST /api/board/TASK-1/claim uses SQLite CAS</code></pre>
+    <p>The atomic claiming API means two agents will never work on the same task, even if 20 agents all start polling the board simultaneously.</p>
+
+    <h2 id="fleet-setup">Setting Up Your Agent Fleet</h2>
+
+    <h3>Install and configure</h3>
+    <pre><code># Install amux (one command)
+git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+
+# Register sessions -- one per task area
+amux register auth-tests --dir ~/Dev/myapp --yolo
+amux register ts-migration --dir ~/Dev/myapp --yolo
+amux register bug-142 --dir ~/Dev/myapp --yolo
+amux register axios-upgrade --dir ~/Dev/myapp --yolo
+amux register api-docs --dir ~/Dev/myapp --yolo</code></pre>
+
+    <h3>Isolate with git branches</h3>
+    <p>Each agent should work on its own branch. If two agents modify the same files on the same branch, you will wake up to merge conflicts instead of PRs.</p>
+    <pre><code># Option 1: amux detects shared branches and warns you
+# The dashboard shows a conflict indicator when two sessions share dir + branch
+
+# Option 2: Set up branches before starting
+cd ~/Dev/myapp
+git worktree add ../myapp-auth-tests -b overnight/auth-tests
+git worktree add ../myapp-ts-migration -b overnight/ts-migration
+git worktree add ../myapp-bug-142 -b overnight/bug-142
+
+# Then register each session with its own worktree directory
+amux register auth-tests --dir ~/Dev/myapp-auth-tests --yolo
+amux register ts-migration --dir ~/Dev/myapp-ts-migration --yolo
+amux register bug-142 --dir ~/Dev/myapp-bug-142 --yolo</code></pre>
+
+    <h3>How many agents to run</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:0.88rem;margin:1rem 0;">
+      <thead>
+        <tr style="border-bottom:2px solid var(--border);">
+          <th style="text-align:left;padding:0.6rem;">Environment</th>
+          <th style="text-align:left;padding:0.6rem;">Comfortable limit</th>
+          <th style="text-align:left;padding:0.6rem;">Bottleneck</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;">Laptop (16GB RAM)</td>
+          <td style="padding:0.6rem;">5-7 agents</td>
+          <td style="padding:0.6rem;">RAM, API rate limits</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;">Desktop (32GB RAM)</td>
+          <td style="padding:0.6rem;">10-15 agents</td>
+          <td style="padding:0.6rem;">API rate limits</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;">Cloud VM (4 cores, 16GB)</td>
+          <td style="padding:0.6rem;">20-30 agents</td>
+          <td style="padding:0.6rem;">API rate limits</td>
+        </tr>
+        <tr>
+          <td style="padding:0.6rem;">Cloud VM (8+ cores, 32GB)</td>
+          <td style="padding:0.6rem;">50+ agents</td>
+          <td style="padding:0.6rem;">API rate limits, cost</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>The bottleneck is almost never local compute -- it is API rate limits. Stagger agent starts by 10-30 seconds to avoid hitting rate limits simultaneously:</p>
+    <pre><code># Staggered start
+for session in auth-tests ts-migration bug-142 axios-upgrade api-docs; do
+  amux start "$session"
+  sleep 15
+done</code></pre>
+
+    <h3>Model selection per task</h3>
+    <p>Not every task needs the most expensive model. Assign models based on task complexity:</p>
+    <table style="width:100%;border-collapse:collapse;font-size:0.88rem;margin:1rem 0;">
+      <thead>
+        <tr style="border-bottom:2px solid var(--border);">
+          <th style="text-align:left;padding:0.6rem;">Task type</th>
+          <th style="text-align:left;padding:0.6rem;">Recommended model</th>
+          <th style="text-align:left;padding:0.6rem;">Why</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;">Writing tests, docs, boilerplate</td>
+          <td style="padding:0.6rem;">Sonnet</td>
+          <td style="padding:0.6rem;">Fast, cheap, reliable for structured output</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;">Bug fixes, small features</td>
+          <td style="padding:0.6rem;">Sonnet or Opus</td>
+          <td style="padding:0.6rem;">Depends on codebase complexity</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;">Complex refactors, migrations</td>
+          <td style="padding:0.6rem;">Opus</td>
+          <td style="padding:0.6rem;">Needs deep reasoning across many files</td>
+        </tr>
+        <tr>
+          <td style="padding:0.6rem;">Architecture decisions, design</td>
+          <td style="padding:0.6rem;">Opus</td>
+          <td style="padding:0.6rem;">Needs judgment, not just execution</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2 id="guardrails">Guardrails: Safety While You Sleep</h2>
+    <p>Guardrails are what separate "agents running overnight" from "agents running amok overnight." Set these up before you start your first overnight run.</p>
+
+    <h3>CLAUDE.md as the constitution</h3>
+    <p>Every agent reads <code>CLAUDE.md</code> in the project root. For overnight runs, make it stricter than usual:</p>
+    <pre><code># CLAUDE.md (overnight-hardened)
+
+## Rules
+- Run `npm test` before committing. Do NOT commit if tests fail.
+- Run `npm run lint` before committing. Fix all lint errors.
+- Never modify files in src/auth/, src/payments/, or infrastructure/
+- Never add new dependencies without explicit approval
+- Never modify .env, docker-compose.yml, or CI/CD configs
+- Create a new git branch for your work: overnight/{task-name}
+- Commit frequently with descriptive messages
+- If you are unsure about an approach, write your reasoning in
+  a comment and move on. Do not block on ambiguity.
+
+## Code standards
+- TypeScript strict mode. No `any` types.
+- All public functions must have JSDoc comments.
+- No console.log in production code (use the logger).</code></pre>
+
+    <h3>Git hooks as safety nets</h3>
+    <p>Pre-commit hooks run automatically, even at 3am:</p>
+    <pre><code># .git/hooks/pre-commit
+#!/bin/sh
+npm run lint --quiet || exit 1
+npm test --quiet || exit 1</code></pre>
+    <p>If the tests fail, the commit is blocked. The agent will see the failure and attempt to fix it, rather than pushing broken code.</p>
+
+    <h3>File-level restrictions</h3>
+    <p>Use <code>.claude/settings.json</code> or <code>CLAUDE.md</code> to restrict which files agents can modify. For overnight runs, be explicit about the boundary:</p>
+    <pre><code># In the task prompt, be explicit:
+"Only modify files in src/services/user/ and tests/services/user/.
+Do NOT touch any other directories."</code></pre>
+
+    <h3>Cost caps</h3>
+    <p>Set spending limits so a runaway agent does not burn through your budget:</p>
+    <ul>
+      <li><strong>Claude Max plan ($200/month):</strong> Unlimited usage -- no cost cap needed, but watch for rate-limited agents spinning on retries</li>
+      <li><strong>API pricing:</strong> Set per-session token limits. amux's token tracking dashboard shows per-session spend in real time</li>
+      <li><strong>Anthropic Console:</strong> Set workspace-level spending limits as a hard backstop</li>
+    </ul>
+
+    <h3>The blast radius principle</h3>
+    <p>Each agent's potential damage should be contained. The worst case for any single agent should be "I have to delete one branch" -- never "I have to restore the whole repo."</p>
+    <ul>
+      <li>Separate git branches (or worktrees) per agent</li>
+      <li>No force-push permissions on main</li>
+      <li>No deployment triggers from agent branches</li>
+      <li>No access to production databases or secrets</li>
+    </ul>
+
+    <h2 id="monitoring">Monitoring &amp; Observability</h2>
+
+    <h3>Before you go to sleep</h3>
+    <p>After starting all agents, spend 5-10 minutes verifying they have started correctly:</p>
+    <pre><code># Check all agents are running
+amux ls
+
+# Peek at each agent's output to confirm they understood the task
+amux peek auth-tests
+amux peek ts-migration
+
+# Or open the dashboard on your phone
+amux serve  # https://localhost:8822 (or your Tailscale address)</code></pre>
+
+    <h3>The watchdog</h3>
+    <p>amux's self-healing watchdog runs automatically and handles the three most common overnight failures:</p>
+    <ol>
+      <li><strong>Context overflow:</strong> Watchdog detects context nearing the limit and triggers <code>/compact</code> automatically</li>
+      <li><strong>Crash/corruption:</strong> Detects thinking-block corruption, restarts the session, and replays the last message</li>
+      <li><strong>Stuck agent:</strong> Detects tool-approval prompts (the "Esc to cancel" marker) and auto-responds, keeping the agent moving</li>
+    </ol>
+    <p>No configuration needed -- the watchdog is always on. It is what makes overnight runs practical instead of theoretical.</p>
+
+    <h3>Mobile monitoring</h3>
+    <p>Install the amux PWA on your phone. If you wake up at 3am and want to check status without opening your laptop:</p>
+    <ul>
+      <li>See which agents are running, idle, or stopped</li>
+      <li>Peek at any agent's latest output</li>
+      <li>Send a quick course correction if needed</li>
+      <li>Check token spend across all sessions</li>
+    </ul>
+    <p>For remote access, use <a href="/guides/remote-access-tailscale/">Tailscale</a> -- amux auto-provisions TLS certs.</p>
+
+    <h2 id="morning-review">The Morning Review Workflow</h2>
+    <p>You have 8 hours of agent output to review. Here is how to do it efficiently without spending all morning on it.</p>
+
+    <h3>Step 1: Triage (2 minutes)</h3>
+    <p>Open the amux dashboard. Glance at status indicators:</p>
+    <ul>
+      <li><span style="color:var(--green);">Green (idle)</span> -- agent finished and is waiting. This is the ideal state.</li>
+      <li><span style="color:var(--amber);">Amber (working)</span> -- still running. Check if it is making progress or stuck.</li>
+      <li><span style="color:var(--red);">Red (stopped)</span> -- crashed and the watchdog could not recover. Review logs.</li>
+    </ul>
+
+    <h3>Step 2: Quick-accept simple tasks (10 minutes)</h3>
+    <p>Tasks like "add tests" or "write docs" are quick to verify:</p>
+    <pre><code># For each completed agent, check the diff
+git diff main..overnight/auth-tests -- '*.test.ts'
+
+# Run the tests locally
+cd ~/Dev/myapp-auth-tests &amp;&amp; npm test
+
+# If tests pass and the diff looks clean, merge
+git checkout main &amp;&amp; git merge overnight/auth-tests</code></pre>
+
+    <h3>Step 3: Deep-review complex tasks (20-30 minutes)</h3>
+    <p>Migrations, refactors, and bug fixes need more attention. For these:</p>
+    <ol>
+      <li>Read the agent's full conversation (peek scrollback) to understand its reasoning</li>
+      <li>Review the diff carefully, focusing on edge cases</li>
+      <li>Run the full test suite, not just the new tests</li>
+      <li>If the agent's approach was wrong, note it for next time -- adjust your CLAUDE.md or task specs</li>
+    </ol>
+
+    <h3>Step 4: Clean up (5 minutes)</h3>
+    <pre><code># Delete merged worktrees
+git worktree remove ../myapp-auth-tests
+git worktree remove ../myapp-ts-migration
+
+# Clear completed tasks from the board
+amux board done TASK-1
+amux board done TASK-2
+
+# Stop all overnight agents
+amux stop auth-tests ts-migration bug-142 axios-upgrade api-docs</code></pre>
+
+    <p><strong>Total morning review time:</strong> 30-45 minutes to process an entire night's worth of coding output. Compare that to the 8-12 developer-hours the agents replaced.</p>
+
+    <h2 id="cost">Cost Management at Scale</h2>
+
+    <h3>The math</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:0.88rem;margin:1rem 0;">
+      <thead>
+        <tr style="border-bottom:2px solid var(--border);">
+          <th style="text-align:left;padding:0.6rem;">Pricing model</th>
+          <th style="text-align:left;padding:0.6rem;">10 agents x 8 hours</th>
+          <th style="text-align:left;padding:0.6rem;">Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;">Claude Max ($200/mo)</td>
+          <td style="padding:0.6rem;">$0 marginal</td>
+          <td style="padding:0.6rem;">Flat rate. Best for heavy overnight users.</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem;">API (Sonnet only)</td>
+          <td style="padding:0.6rem;">$40-160</td>
+          <td style="padding:0.6rem;">~$0.50-2/agent-hour depending on task verbosity</td>
+        </tr>
+        <tr>
+          <td style="padding:0.6rem;">API (mixed Opus + Sonnet)</td>
+          <td style="padding:0.6rem;">$80-300</td>
+          <td style="padding:0.6rem;">Use Opus only for complex tasks</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Optimization strategies</h3>
+    <ul>
+      <li><strong>Route by complexity:</strong> Use Sonnet for test writing, docs, and boilerplate. Reserve Opus for refactors and bug fixes.</li>
+      <li><strong>Prompt caching:</strong> Agents that reference the same codebase context benefit from Anthropic's prompt caching -- subsequent turns are cheaper.</li>
+      <li><strong>Concise task specs:</strong> A 200-word task spec costs less in input tokens than a 2000-word brain dump.</li>
+      <li><strong>CLAUDE.md size:</strong> Keep it focused. A 50-line CLAUDE.md is better than a 500-line one -- every agent reads it on every turn.</li>
+      <li><strong>Set hard limits:</strong> Use the Anthropic Console spending limits as a hard backstop.</li>
+    </ul>
+
+    <h3>ROI calculation</h3>
+    <p>A developer-hour costs $75-200 (fully loaded). If 10 overnight agents each complete the equivalent of 1-2 hours of developer work, that is 10-20 developer-hours saved per night. At even conservative estimates:</p>
+    <ul>
+      <li><strong>Cost:</strong> $0-200/night (depending on pricing model)</li>
+      <li><strong>Value:</strong> $750-4,000 in developer-hours</li>
+      <li><strong>ROI:</strong> 4-20x on API pricing. Infinite on Max plan.</li>
+    </ul>
+
+    <h2 id="workflows">5 Real-World Overnight Workflows</h2>
+
+    <h3>1. Test suite expansion</h3>
+    <p>One of the highest-value overnight workflows. Agents are excellent at writing tests because the expected behavior is already defined by the code.</p>
+    <pre><code># Queue one task per module
+amux board add "Write unit tests for src/services/auth/ -- target 90% coverage"
+amux board add "Write unit tests for src/services/billing/ -- target 90% coverage"
+amux board add "Write integration tests for src/api/v2/ endpoints"
+amux board add "Write e2e tests for the checkout flow"</code></pre>
+    <p><strong>Expected output:</strong> 4 PRs, each adding a comprehensive test file. Morning review: run the tests, check coverage reports, merge.</p>
+
+    <h3>2. Dependency upgrades across a monorepo</h3>
+    <p>Upgrading dependencies is tedious, well-scoped, and perfectly suited for agents.</p>
+    <pre><code>amux board add "Upgrade React from v18 to v19 in packages/web -- fix breaking changes"
+amux board add "Upgrade Express from v4 to v5 in packages/api -- fix breaking changes"
+amux board add "Upgrade TypeScript from 5.3 to 5.6 in all packages -- fix type errors"
+amux board add "Upgrade Jest from v29 to v30 across the monorepo"</code></pre>
+    <p><strong>Expected output:</strong> 4 PRs, each upgrading one dependency with all breaking changes fixed and tests passing.</p>
+
+    <h3>3. Documentation generation</h3>
+    <p>Agents can write docs faster than most humans, and they actually read the source code.</p>
+    <pre><code>amux board add "Generate OpenAPI spec for all /api/v2 endpoints"
+amux board add "Write README.md for the packages/sdk package"
+amux board add "Add JSDoc to all exported functions in src/utils/"
+amux board add "Create architecture decision record for the new caching layer"</code></pre>
+
+    <h3>4. Bug fix queue</h3>
+    <p>Pull bugs from your issue tracker and queue them as overnight tasks. Works best for well-reported bugs with reproduction steps.</p>
+    <pre><code>amux board add "Fix #142: Login form double-submits on slow connections"
+amux board add "Fix #155: CSV export truncates Unicode characters"
+amux board add "Fix #161: Dashboard chart shows wrong timezone"
+amux board add "Fix #167: Email notification sends HTML as plain text"</code></pre>
+    <p><strong>Morning review:</strong> Check each fix against the bug report. Run repro steps. If it works, merge.</p>
+
+    <h3>5. Code migration (JavaScript to TypeScript)</h3>
+    <p>Large migrations are the killer app for overnight agents. Break the migration into one file or module per agent.</p>
+    <pre><code>amux board add "Convert src/services/user.js to TypeScript with strict types"
+amux board add "Convert src/services/order.js to TypeScript with strict types"
+amux board add "Convert src/services/inventory.js to TypeScript with strict types"
+amux board add "Convert src/middleware/*.js to TypeScript with strict types"
+amux board add "Convert src/utils/*.js to TypeScript with strict types"</code></pre>
+    <p><strong>Expected output:</strong> 5 PRs, each converting one module. The key is that each agent works on a separate set of files, so there are no merge conflicts.</p>
+
+    <h2 id="failure-modes">Failure Modes &amp; Troubleshooting</h2>
+
+    <h3>Agent loops</h3>
+    <p><strong>Symptom:</strong> Agent keeps trying the same approach, failing, reverting, and retrying.</p>
+    <p><strong>Cause:</strong> Task is too ambiguous, or the agent does not have enough context to find a different approach.</p>
+    <p><strong>Fix:</strong> More specific task specs. Add a "if X does not work, try Y" fallback in the prompt. Set a max-iteration limit in CLAUDE.md: "If you have tried 3 approaches and none work, commit what you have with a TODO comment and stop."</p>
+
+    <h3>Context window exhaustion</h3>
+    <p><strong>Symptom:</strong> Agent slows down, loses track of earlier work, or crashes with a context error.</p>
+    <p><strong>Cause:</strong> Long-running task filled the context window.</p>
+    <p><strong>Fix:</strong> amux's watchdog auto-compacts before this happens. For very long tasks, break them into smaller sub-tasks. Tell the agent to commit frequently: "Commit after each completed function."</p>
+
+    <h3>Rate limit cascades</h3>
+    <p><strong>Symptom:</strong> All agents stop responding simultaneously.</p>
+    <p><strong>Cause:</strong> Too many agents hit the API at the same moment (common at startup).</p>
+    <p><strong>Fix:</strong> Stagger agent starts by 10-30 seconds. The rate limits recover quickly -- agents will resume automatically after the cooldown.</p>
+
+    <h3>Git conflicts between agents</h3>
+    <p><strong>Symptom:</strong> Agent's branch cannot merge because another agent modified the same file.</p>
+    <p><strong>Cause:</strong> Two agents worked on overlapping files on separate branches.</p>
+    <p><strong>Fix:</strong> Use git worktrees. Assign non-overlapping file scopes. amux's dashboard shows conflict warnings when two sessions share the same directory and branch.</p>
+
+    <h3>The "confidently wrong" problem</h3>
+    <p><strong>Symptom:</strong> Agent produces code that passes tests but introduces a subtle bug.</p>
+    <p><strong>Cause:</strong> Insufficient test coverage for edge cases, or the agent wrote tests that validate its own buggy logic.</p>
+    <p><strong>Fix:</strong> Require agents to run <em>existing</em> tests, not just new ones. Review agent-written tests carefully in your morning review -- check that they are testing the right behavior, not just that the code runs.</p>
+
+    <h2 id="cloud">Scaling Beyond a Laptop</h2>
+    <p>For serious overnight workloads, move to a cloud VM so your laptop can sleep too.</p>
+
+    <h3>Cloud VM setup</h3>
+    <pre><code># Provision a VM (GCP example)
+gcloud compute instances create amux-overnight \
+  --machine-type=e2-standard-4 \
+  --image-family=ubuntu-2404-lts-amd64 \
+  --image-project=ubuntu-os-cloud \
+  --boot-disk-size=50GB
+
+# SSH in and install
+ssh amux-overnight
+git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+
+# Start the dashboard (accessible via Tailscale or SSH tunnel)
+amux serve</code></pre>
+
+    <h3>Always-on agents</h3>
+    <p>On a cloud VM, agents can run 24/7 -- not just overnight. Use amux's built-in cron scheduler to queue tasks at specific times:</p>
+    <pre><code># Schedule a nightly test run at 11pm
+amux cron add --schedule "0 23 * * *" \
+  --session test-runner \
+  --command "Run all unit tests and report failures"</code></pre>
+
+    <h3>Team access</h3>
+    <p>Share the dashboard with your team via Tailscale. Multiple developers can queue tasks on the same board, and agents claim work atomically -- no coordination overhead.</p>
+
+    <h2 id="faq">FAQ</h2>
+
+    <h3>Is it safe to run AI coding agents overnight on production codebases?</h3>
+    <p>Yes, with proper guardrails. Use separate git branches per agent, restrict file access via CLAUDE.md, enforce pre-commit hooks with linting and tests, and set cost caps. Never give overnight agents access to deployment pipelines, auth systems, or payment code.</p>
+
+    <h3>How many AI coding agents can I run overnight?</h3>
+    <p>On a laptop: 5-7 agents comfortably (constrained by RAM and API rate limits). On a cloud VM with 4+ cores and 16GB RAM: 20-50 agents. The bottleneck is usually API rate limits, not local compute. Stagger agent starts by 10-30 seconds to avoid hitting limits simultaneously.</p>
+
+    <h3>What tasks should I NOT give to overnight AI agents?</h3>
+    <p>Avoid tasks that touch authentication, payment processing, infrastructure/deployment, database migrations on production, or anything requiring human judgment about business logic. Also avoid open-ended tasks like "refactor the codebase" -- agents need specific, bounded scope to work unattended.</p>
+
+    <h3>How much does it cost to run AI agents overnight?</h3>
+    <p>With Claude Code on the Max plan ($200/month), you get unlimited usage -- running 10 agents for 8 hours costs the same flat rate. On API pricing, expect $0.50-2 per agent-hour for Sonnet, $5-15 per agent-hour for Opus. A typical 8-hour overnight run with 10 agents on mixed models costs $50-100 on API pricing.</p>
+
+    <h3>What happens if an agent gets stuck or crashes overnight?</h3>
+    <p>With amux's self-healing watchdog, crashed agents are automatically restarted and their last message is replayed. Context overflow triggers auto-compaction. Stuck agents (no output for a configurable timeout) are detected and restarted. You can also set hard time limits per agent.</p>
+
+    <h3>Can I use this with agents other than Claude Code?</h3>
+    <p>amux works with any CLI agent that runs in a terminal: Claude Code, Codex CLI, Gemini CLI, Aider, and others. The orchestration layer (task board, watchdog, dashboard) is agent-agnostic.</p>
+
+    <div class="cta-box">
+      <h3>Start running agents overnight</h3>
+      <p>amux is the orchestration layer that makes unattended AI coding practical. Self-healing watchdog, atomic task board, mobile dashboard, and fleet monitoring.</p>
+      <pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve</code></pre>
+      <a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a>
+    </div>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

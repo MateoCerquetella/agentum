@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+<title>amux — Release Notes</title>
+<meta name="description" content="amux release notes and changelog. Every commit, every feature, every fix.">
+<meta property="og:title" content="amux Release Notes">
+<meta property="og:description" content="Changelog for amux — the Claude session manager. Features, fixes, and everything in between.">
+<meta property="og:url" content="https://amux.io/release-notes/">
+  <link rel="canonical" href="https://amux.io/release-notes/">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+<style>
+.rn-header {
+  text-align: center;
+  padding: 2rem 1.5rem 1.5rem;
+  max-width: 640px;
+  margin: 0 auto;
+}
+.rn-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  font-family: var(--sans);
+}
+.rn-logo-mark {
+  width: 28px; height: 28px;
+  background: var(--accent);
+  color: var(--bg);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.rn-logo-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+}
+.rn-logo-sep {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.rn-logo-sub {
+  font-size: 0.9rem;
+  color: var(--dim);
+}
+.rn-title {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  margin-bottom: 0.4rem;
+}
+.rn-subtitle {
+  font-size: 0.95rem;
+  color: var(--dim);
+}
+.rn-content {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 1.5rem 4rem;
+}
+.rn-spinner {
+  text-align: center;
+  padding: 3rem 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.rn-empty {
+  text-align: center;
+  padding: 3rem 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.rn-entry {
+  border-top: 1px solid var(--border);
+  padding: 1.5rem 0;
+}
+.rn-entry:first-child {
+  border-top: none;
+}
+.rn-entry-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+.rn-date {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+.rn-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-family: var(--sans);
+}
+.rn-badge-feat {
+  background: var(--green-glow);
+  color: var(--green);
+}
+.rn-badge-fix {
+  background: rgba(37,99,235,0.08);
+  color: var(--blue);
+}
+.rn-badge-chore {
+  background: var(--surface);
+  color: var(--dim);
+}
+.rn-tag {
+  font-size: 0.72rem;
+  color: var(--dim);
+  background: var(--surface);
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  font-family: var(--sans);
+}
+.rn-commit {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-family: var(--mono);
+  text-decoration: none;
+  margin-left: auto;
+}
+.rn-commit:hover {
+  color: var(--dim);
+}
+.rn-entry-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-bottom: 0.4rem;
+  line-height: 1.4;
+}
+.rn-entry-desc {
+  font-size: 0.9rem;
+  color: var(--dim);
+  line-height: 1.7;
+  margin-bottom: 1rem;
+}
+
+@media (max-width: 640px) {
+  .rn-commit { display: none; }
+  .rn-entry-title { font-size: 1rem; }
+}
+</style>
+</head>
+<body>
+<header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+<header class="rn-header">
+  <div class="rn-logo">
+    <div class="rn-logo-mark">a</div>
+    <a href="/" class="rn-logo-name">amux</a>
+    <span class="rn-logo-sep">/</span>
+    <span class="rn-logo-sub">release notes</span>
+  </div>
+  <h1 class="rn-title">Release Notes</h1>
+  <p class="rn-subtitle">Every commit. Every feature. Every fix.</p>
+</header>
+<div class="rn-content">
+  <div id="rn-list"><div class="rn-spinner">Loading&hellip;</div></div>
+</div>
+<script>
+var GH_COMMIT = 'https://github.com/mixpeek/amux/commit/';
+
+function typeBadge(type) {
+  var cls = type === 'feat' ? 'feat' : type === 'fix' ? 'fix' : 'chore';
+  return '<span class="rn-badge rn-badge-' + cls + '">' + type + '</span>';
+}
+
+function renderEntry(n) {
+  var tags = (n.tags || []).map(function(t) { return '<span class="rn-tag">' + t + '</span>'; }).join('');
+  var video = '';
+  return '<article class="rn-entry">' +
+    '<div class="rn-entry-meta">' +
+      '<span class="rn-date">' + (n.date || '') + '</span>' +
+      typeBadge(n.type) +
+      tags +
+      '<a class="rn-commit" href="' + GH_COMMIT + n.hash + '" target="_blank" rel="noopener">' + (n.short || '') + '</a>' +
+    '</div>' +
+    '<h2 class="rn-entry-title">' + n.title + '</h2>' +
+    (n.description ? '<p class="rn-entry-desc">' + n.description + '</p>' : '') +
+    video +
+    '</article>';
+}
+
+fetch('/changelog/notes.json?v=' + Date.now())
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    var enriched = data.filter(function(n) { return n.description && n.description.trim(); });
+    var list = document.getElementById('rn-list');
+    if (!enriched.length) {
+      list.innerHTML = '<div class="rn-empty">No release notes yet.</div>';
+      return;
+    }
+    list.innerHTML = enriched.map(renderEntry).join('');
+  })
+  .catch(function() {
+    document.getElementById('rn-list').innerHTML = '<div class="rn-empty">Failed to load release notes.</div>';
+  });
+</script>
+<footer>
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" style="font-size:0.92rem;font-weight:700;color:var(--text);text-decoration:none;">amux</a>
+          <p>Open-source agent multiplexer for Claude Code.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://github.com/mixpeek/amux/issues">Issues</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

@@ -1,0 +1,1053 @@
+#!/usr/bin/env bash
+# amux — phone-friendly Claude Code session manager built on tmux
+# Usage: amux [command] [args...]
+
+set -euo pipefail
+
+CC_VERSION="0.3.0"
+
+# ── Migration from cc/cmux → amux ───────────────────────────────────────────
+# Migrate legacy dirs to ~/.amux if new one doesn't exist
+if [[ ! -d "$HOME/.amux" ]]; then
+  for _old in "$HOME/.cmux" "$HOME/.cc"; do
+    if [[ -d "$_old" ]]; then
+      mv "$_old" "$HOME/.amux"
+      echo "Migrated $_old → ~/.amux"
+      break
+    fi
+  done
+fi
+
+CC_HOME="${CC_HOME:-$HOME/.amux}"
+CC_SESSIONS="$CC_HOME/sessions"
+CC_DEFAULTS="$CC_HOME/defaults.env"
+
+# ── Colors (disabled when not a tty or TERM is dumb) ────────────────────────
+if [[ -t 1 ]] && [[ "${TERM:-dumb}" != "dumb" ]]; then
+  BOLD=$'\033[1m' DIM=$'\033[2m' RESET=$'\033[0m'
+  RED=$'\033[31m' GREEN=$'\033[32m' YELLOW=$'\033[33m'
+  BLUE=$'\033[34m' CYAN=$'\033[36m'
+else
+  BOLD='' DIM='' RESET='' RED='' GREEN='' YELLOW='' BLUE='' CYAN=''
+fi
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+die() { echo "${RED}error:${RESET} $*" >&2; exit 1; }
+
+need_tmux() {
+  command -v tmux &>/dev/null || die "tmux is required. Install with: brew install tmux"
+}
+
+ensure_dirs() {
+  mkdir -p "$CC_SESSIONS"
+  [[ -f "$CC_DEFAULTS" ]] || touch "$CC_DEFAULTS"
+}
+
+# Resolve session name from partial match or alias
+resolve_session() {
+  local query="$1"
+  # Exact match first
+  if [[ -f "$CC_SESSIONS/$query.env" ]]; then
+    echo "$query"
+    return
+  fi
+  # Prefix match
+  local matches=()
+  for f in "$CC_SESSIONS"/*.env; do
+    [[ -f "$f" ]] || continue
+    local name
+    name=$(basename "$f" .env)
+    if [[ "$name" == "$query"* ]]; then
+      matches+=("$name")
+    fi
+  done
+  if [[ ${#matches[@]} -eq 1 ]]; then
+    echo "${matches[0]}"
+    return
+  elif [[ ${#matches[@]} -gt 1 ]]; then
+    die "ambiguous: '$query' matches ${matches[*]}"
+  fi
+  # Number lookup (for dashboard shortcuts)
+  if [[ "$query" =~ ^[0-9]+$ ]]; then
+    local i=1
+    for f in "$CC_SESSIONS"/*.env; do
+      [[ -f "$f" ]] || continue
+      if [[ "$i" -eq "$query" ]]; then
+        basename "$f" .env
+        return
+      fi
+      ((i++))
+    done
+  fi
+  die "session '$query' not found"
+}
+
+# Load session config into env vars
+load_session() {
+  local name="$1"
+  local file="$CC_SESSIONS/$name.env"
+  [[ -f "$file" ]] || die "session '$name' not found"
+  # shellcheck disable=SC1090
+  source "$file"
+}
+
+# Load global defaults
+load_defaults() {
+  [[ -f "$CC_DEFAULTS" ]] && source "$CC_DEFAULTS"
+}
+
+# Get tmux session name (prefixed to avoid conflicts)
+tmux_name() { echo "amux-$1"; }
+
+# Migrate a cmux-* or cc-* tmux session to amux-* if needed
+migrate_tmux() {
+  local name="$1"
+  if tmux has-session -t "amux-$name" 2>/dev/null; then return; fi
+  for old_prefix in "cmux-" "cc-"; do
+    if tmux has-session -t "${old_prefix}${name}" 2>/dev/null; then
+      tmux rename-session -t "${old_prefix}${name}" "amux-$name" 2>/dev/null || true
+      break
+    fi
+  done
+}
+
+# Check if tmux session is alive
+is_running() {
+  migrate_tmux "$1"
+  tmux has-session -t "$(tmux_name "$1")" 2>/dev/null
+}
+
+# ─── Shell-safe flag quoting ─────────────────────────────────────────────────
+#
+# Common runner: spawn python3, isolate stderr to a temp file, check exit
+# code, surface diagnostic on failure. Used by both quote_flags (one-string
+# form) and quote_argv (multi-arg form) so the stderr-isolation pattern
+# lives in one place. SECURITY: never echoes the input arguments back on
+# failure — they may contain secrets — only the input length and python's
+# stderr.
+_run_py_safe() {
+  local script="$1"
+  shift
+  local result err err_file
+  local rc=0
+  err_file=$(mktemp) || {
+    echo "amux: error: mktemp failed (cannot create temp file for python3 stderr)" >&2
+    return 1
+  }
+  # `|| rc=$?` is critical: under set -e (which the source-guard makes
+  # possible if a sourcing script enables it), a naked `result=$(...); rc=$?`
+  # would abort the function on python3 failure BEFORE rc is captured,
+  # bypassing the error handler.
+  result=$(python3 -c "$script" "$@" 2>"$err_file") || rc=$?
+  if (( rc != 0 )); then
+    err=$(<"$err_file")
+    rm -f "$err_file"
+    local n_args=$#
+    echo "amux: error: python3 helper failed (exit $rc, $n_args input args): $err" >&2
+    return 1
+  fi
+  rm -f "$err_file"
+  printf '%s' "$result"
+}
+
+# Tokenize a stored flag string and re-quote each token shell-safely.
+# Mirror of _shell_quote_flags() in amux-server.py — see that function for
+# full rationale. Required because zsh glob-expands unquoted '[1m]' in
+# model IDs like 'claude-opus-4-6[1m]', failing with 'no matches found'
+# before claude is even invoked.
+#
+# Implementation note: this delegates to python3's shlex rather than using
+# native bash word-splitting. Bash's IFS-based splitting (arr=( $s ),
+# read -ra) ignores embedded quotes in multi-word flag values AND triggers
+# pathname expansion (globbing) on the input. xargs has subtle escape-rule
+# differences from shlex on macOS vs GNU. Using python3 guarantees 100%
+# parity with the server's _shell_quote_flags so the same test fixtures
+# verify both code paths.
+#
+# PERFORMANCE: each invocation spawns a python interpreter (~30-50ms).
+# Acceptable for a once-per-session-spawn helper. Do NOT call this inside
+# loops or hot paths.
+quote_flags() {
+  local s="$1"
+  [[ -z "$s" ]] && return 0
+  _run_py_safe '
+import sys, shlex
+s = sys.argv[1]
+try:
+    print(" ".join(shlex.quote(t) for t in shlex.split(s)))
+except ValueError:
+    print(shlex.quote(s))
+' "$s"
+}
+
+# Quote a list of already-tokenized argv elements (each $1, $2, ... is one
+# argument). Used in cmd_start for inline arguments passed via
+# `amux start NAME -- ...`. printf '%q' uses bash-only $'...' syntax that
+# breaks under dash; shlex.quote uses universal POSIX single-quoting.
+quote_argv() {
+  (( $# == 0 )) && return 0
+  _run_py_safe '
+import sys, shlex
+print(" ".join(shlex.quote(a) for a in sys.argv[1:]))
+' "$@"
+}
+
+# Parse Claude Code flags from args, split into CC_FLAGS array and remaining args
+# Sets: CC_FLAGS_STR (for storage), CC_DIR, CC_EXTRA_ARGS
+parse_claude_flags() {
+  CC_FLAGS=()
+  CC_DIR=""
+  CC_EXTRA_ARGS=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      # Flags that take a value
+      --model|--permission-mode|--system-prompt|--append-system-prompt|\
+      --mcp-config|--allowedTools|--allowed-tools|--disallowedTools|--disallowed-tools|\
+      --add-dir|--effort|--settings|--setting-sources|--tools|\
+      --plugin-dir|--agents|--agent|--betas|--debug-file|--json-schema|\
+      --fallback-model|--max-budget-usd|--session-id|--file|--strict-mcp-config)
+        CC_FLAGS+=("$1" "$2")
+        shift 2
+        ;;
+      # Boolean flags
+      --dangerously-skip-permissions|--allow-dangerously-skip-permissions|\
+      --yolo|--verbose|--chrome|--no-chrome|--debug|\
+      --disable-slash-commands|--no-session-persistence|--ide|--fork-session)
+        # --yolo is an alias for --dangerously-skip-permissions
+        if [[ "$1" == "--yolo" ]]; then
+          CC_FLAGS+=("--dangerously-skip-permissions")
+        else
+          CC_FLAGS+=("$1")
+        fi
+        shift
+        ;;
+      # Working directory — resolve to absolute path, create if needed.
+      # We previously fell back to the literal $2 if cd failed, which silently
+      # let relative paths slip into the session env file (CC_DIR=./foo). On
+      # next start the relative path would resolve from whatever pwd happened
+      # to be, and Claude Code would write files into the wrong tree. Now we
+      # die loudly instead.
+      --dir)
+        mkdir -p "$2" || die "cannot create --dir: $2"
+        CC_DIR="$(cd "$2" && pwd)" || die "cannot resolve --dir to absolute path: $2"
+        shift 2
+        ;;
+      # Everything else goes to extra args
+      *)
+        CC_EXTRA_ARGS+=("$1")
+        shift
+        ;;
+    esac
+  done
+  CC_FLAGS_STR="${CC_FLAGS[*]:-}"
+}
+
+# ── Commands ─────────────────────────────────────────────────────────────────
+
+cmd_register() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || die "usage: amux register <name> [--model opus] [--yolo] [--dir /path] [claude flags...]"
+  shift
+
+  parse_claude_flags "$@"
+
+  # Always persist an absolute CC_DIR. If --dir wasn't passed, use $(pwd) which
+  # is already absolute. Refuse to write a relative path because it would be
+  # resolved against pwd at start time — easy way for Claude Code to scribble
+  # files into the wrong tree.
+  local resolved_dir="${CC_DIR:-$(pwd)}"
+  case "$resolved_dir" in
+    /*) ;;  # absolute, ok
+    *) die "CC_DIR must be absolute, got: $resolved_dir" ;;
+  esac
+
+  local file="$CC_SESSIONS/$name.env"
+  cat > "$file" <<EOF
+# amux session: $name
+# registered: $(date -Iseconds)
+CC_NAME="$name"
+CC_DIR="$resolved_dir"
+CC_FLAGS="${CC_FLAGS_STR}"
+EOF
+
+  echo "${GREEN}registered${RESET} ${BOLD}$name${RESET} → $resolved_dir"
+  [[ -n "$CC_FLAGS_STR" ]] && echo "  flags: $CC_FLAGS_STR"
+}
+
+cmd_start() {
+  local name
+  name=$(resolve_session "${1:-}")
+  shift 2>/dev/null || true
+  need_tmux
+  load_defaults
+  load_session "$name"
+
+  local tname
+  tname=$(tmux_name "$name")
+
+  if is_running "$name"; then
+    echo "${YELLOW}already running:${RESET} $name — attaching..."
+    tmux attach-session -t "$tname"
+    return
+  fi
+
+  local dir="${CC_DIR:-$HOME}"
+  # Expand ~ in dir path
+  dir="${dir/#\~/$HOME}"
+  # Hard requirement: dir must be absolute. A relative CC_DIR (from an old
+  # session env file) would resolve against whatever pwd happens to be when
+  # `amux start` is invoked, and Claude Code would silently write files into
+  # the wrong tree. Refuse instead. Re-register with --dir to fix.
+  case "$dir" in
+    /*) ;;
+    *) die "CC_DIR is not absolute ('$dir'). Re-register the session with: amux register $name --dir /absolute/path" ;;
+  esac
+  [[ -d "$dir" ]] || die "directory not found: $dir"
+
+  # Build command. Check CC_PROVIDER to pick codex vs claude.
+  local provider="${CC_PROVIDER:-claude}"
+  local cmd
+  if [[ "$provider" == "codex" ]]; then
+    # Resume from stored codex session ID in meta file
+    local meta_file="$CC_SESSIONS/${name}.meta.json"
+    local codex_sid=""
+    if [[ -f "$meta_file" ]]; then
+      codex_sid=$(python3 -c "import json; print(json.load(open('$meta_file')).get('codex_session_id',''))" 2>/dev/null)
+    fi
+    if [[ -n "$codex_sid" ]]; then
+      cmd="codex resume $codex_sid"
+    else
+      cmd="codex"
+    fi
+  else
+    cmd="claude"
+  fi
+  # Apply global defaults from defaults.env (skip for codex — Claude flags don't apply)
+  if [[ "$provider" != "codex" && -n "${CC_DEFAULT_FLAGS:-}" ]]; then
+    local q
+    q=$(quote_flags "$CC_DEFAULT_FLAGS") || die "failed to quote CC_DEFAULT_FLAGS"
+    [[ -n "$q" ]] && cmd="$cmd $q"
+  fi
+  # Apply session flags from <name>.env
+  if [[ -n "${CC_FLAGS:-}" ]]; then
+    local q
+    q=$(quote_flags "$CC_FLAGS") || die "failed to quote CC_FLAGS"
+    [[ -n "$q" ]] && cmd="$cmd $q"
+  fi
+  # Apply any extra inline args from `amux start NAME -- ...`. These are
+  # already tokenized argv (the user's outer shell parsed them), so we
+  # quote each token via quote_argv. Without this, the v1 plan's $*
+  # would lose quoting boundaries when re-evaluated by the nested shell.
+  if [[ $# -gt 0 ]]; then
+    local q
+    q=$(quote_argv "$@") || die "failed to quote inline arguments"
+    [[ -n "$q" ]] && cmd="$cmd $q"
+  fi
+
+  # Codex-specific defaults
+  if [[ "$provider" == "codex" ]]; then
+    [[ "$cmd" == *"--model"* || "$cmd" == *"-m "* ]] || cmd="$cmd --model gpt-5.5"
+    [[ "$cmd" == *"--full-auto"* || "$cmd" == *"--dangerously-bypass"* || "$cmd" == *"-a "* ]] || cmd="$cmd -a never"
+    if [[ "$cmd" != *"--add-dir"* ]]; then
+      local git_root
+      git_root=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) || true
+      if [[ -n "$git_root" && "$git_root" != "$dir" ]]; then
+        cmd="$cmd --add-dir $(printf '%q' "$git_root")"
+        [[ -d "$git_root/.git" ]] && cmd="$cmd --add-dir $(printf '%q' "$git_root/.git")"
+      fi
+    fi
+  else
+    [[ "$cmd" == *"--model"* ]] || cmd="$cmd --model sonnet"
+  fi
+
+  # Create tmux session and attach
+  # Explicit cd to work dir in case shell profile overrides CWD.
+  # If Claude OAuth is present (Max/claude.ai login), unset ANTHROPIC_API_KEY
+  # to prevent auth conflict — BYO-key users don't have oauthAccount so they're
+  # unaffected.
+  local shell_setup=""
+  if [[ "$provider" != "codex" ]]; then
+    shell_setup="unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; "
+    if [[ -f "$HOME/.claude.json" ]] && grep -q '"oauthAccount"' "$HOME/.claude.json" 2>/dev/null; then
+      shell_setup="${shell_setup}unset ANTHROPIC_API_KEY; "
+    fi
+  fi
+  tmux new-session -d -s "$tname" -n "$name" -c "$dir" "${shell_setup}cd $(printf '%q' "$dir"); $cmd"
+  # Lock the window name so Claude can't overwrite it with escape sequences
+  tmux set-option -t "$tname" allow-rename off 2>/dev/null
+  tmux set-window-option -t "$tname" automatic-rename off 2>/dev/null
+  echo "${GREEN}started${RESET} ${BOLD}$name${RESET} in $dir"
+  echo "  ${DIM}$cmd${RESET}"
+  tmux attach-session -t "$tname"
+}
+
+cmd_exec() {
+  # Register + start in one step
+  local name="${1:-}"
+  [[ -n "$name" ]] || die "usage: amux exec <name> [--model opus] [--yolo] [--dir /path] [claude flags...]"
+  shift
+
+  parse_claude_flags "$@"
+
+  local resolved_dir="${CC_DIR:-$(pwd)}"
+  case "$resolved_dir" in
+    /*) ;;
+    *) die "CC_DIR must be absolute, got: $resolved_dir" ;;
+  esac
+
+  # Register if not exists, or update
+  local file="$CC_SESSIONS/$name.env"
+  cat > "$file" <<EOF
+# amux session: $name
+# registered: $(date -Iseconds)
+CC_NAME="$name"
+CC_DIR="$resolved_dir"
+CC_FLAGS="${CC_FLAGS_STR}"
+EOF
+
+  # Start
+  cmd_start "$name" "${CC_EXTRA_ARGS[@]+"${CC_EXTRA_ARGS[@]}"}"
+}
+
+cmd_attach() {
+  local name
+  name=$(resolve_session "${1:-}")
+  need_tmux
+  local tname
+  tname=$(tmux_name "$name")
+  is_running "$name" || die "session '$name' is not running. Start with: amux start $name"
+  tmux attach-session -t "$tname"
+}
+
+cmd_peek() {
+  local name
+  name=$(resolve_session "${1:-}")
+  local lines="${2:-30}"
+  need_tmux
+
+  local tname
+  tname=$(tmux_name "$name")
+  is_running "$name" || die "session '$name' is not running"
+
+  echo "${BOLD}── $name ──${RESET}"
+  tmux capture-pane -t "$tname" -p -S "-$lines" 2>/dev/null || echo "${DIM}(no output)${RESET}"
+  echo "${BOLD}── end ──${RESET}"
+}
+
+cmd_send() {
+  local name
+  name=$(resolve_session "${1:-}")
+  shift
+  need_tmux
+
+  local tname
+  tname=$(tmux_name "$name")
+  is_running "$name" || die "session '$name' is not running"
+
+  # Check for --keys flag
+  if [[ "${1:-}" == "--keys" ]]; then
+    shift
+    tmux send-keys -t "$tname" "$@"
+    echo "${GREEN}sent keys${RESET} to $name"
+  else
+    local text="$*"
+    [[ -n "$text" ]] || die "usage: amux send <name> <text>  or  amux send <name> --keys 'C-c'"
+    tmux send-keys -t "$tname" "$text" Enter
+    echo "${GREEN}sent${RESET} to $name: $text"
+  fi
+}
+
+cmd_stop() {
+  local name
+  name=$(resolve_session "${1:-}")
+  need_tmux
+
+  local tname
+  tname=$(tmux_name "$name")
+  if is_running "$name"; then
+    tmux kill-session -t "$tname"
+    echo "${RED}stopped${RESET} $name"
+  else
+    echo "${DIM}$name is not running${RESET}"
+  fi
+}
+
+cmd_rm() {
+  local name
+  name=$(resolve_session "${1:-}")
+
+  # Stop if running
+  if is_running "$name" 2>/dev/null; then
+    cmd_stop "$name"
+  fi
+
+  rm -f "$CC_SESSIONS/$name.env"
+  echo "${RED}removed${RESET} $name"
+}
+
+cmd_info() {
+  local name
+  name=$(resolve_session "${1:-}")
+  load_session "$name"
+
+  echo "${BOLD}$name${RESET}"
+  echo "  dir:   ${CC_DIR:-"(not set)"}"
+  echo "  flags: ${CC_FLAGS:-"(none)"}"
+  if is_running "$name" 2>/dev/null; then
+    echo "  status: ${GREEN}running${RESET}"
+  else
+    echo "  status: ${DIM}stopped${RESET}"
+  fi
+}
+
+cmd_ls() {
+  local i=1
+  local has_any=false
+
+  for f in "$CC_SESSIONS"/*.env; do
+    [[ -f "$f" ]] || continue
+    has_any=true
+    local name
+    name=$(basename "$f" .env)
+    load_session "$name"
+
+    local status_icon status_color
+    if is_running "$name" 2>/dev/null; then
+      status_icon="*"
+      status_color="$GREEN"
+    else
+      status_icon=" "
+      status_color="$DIM"
+    fi
+
+    # Build flag summary
+    local flag_summary=""
+    if [[ "${CC_FLAGS:-}" == *"--dangerously-skip-permissions"* ]]; then
+      flag_summary+=" ${YELLOW}YOLO${RESET}"
+    fi
+    local model_match
+    if model_match=$(echo "${CC_FLAGS:-}" | sed -n 's/.*--model \([^ ]*\).*/\1/p' 2>/dev/null) && [[ -n "$model_match" ]]; then
+      flag_summary+=" ${CYAN}$model_match${RESET}"
+    fi
+
+    # Preview last output line if running
+    local preview=""
+    if is_running "$name" 2>/dev/null; then
+      preview=$(tmux capture-pane -t "$(tmux_name "$name")" -p -S -3 2>/dev/null | grep -v '^$' | tail -1 | cut -c1-60)
+      [[ -n "$preview" ]] && preview=" ${DIM}│ $preview${RESET}"
+    fi
+
+    printf " %s${status_color}%s${RESET} ${BOLD}%-16s${RESET} %s%s%s\n" \
+      "$i" "$status_icon" "$name" "${DIM}${CC_DIR:-}${RESET}" "$flag_summary" "$preview"
+    ((i++))
+  done
+
+  if ! $has_any; then
+    echo "${DIM}No sessions registered. Run: amux register <name>${RESET}"
+  fi
+}
+
+cmd_dashboard() {
+  need_tmux
+  clear
+
+  echo "${BOLD}${BLUE}  amux${RESET} ${DIM}v${CC_VERSION}${RESET}"
+  echo ""
+  cmd_ls
+  echo ""
+  echo "${DIM}Commands: [n]umber to attach, p[n] to peek, s[n] to send, q to quit${RESET}"
+  echo ""
+
+  while true; do
+    read -rp "${CYAN}amux>${RESET} " input || break
+    case "$input" in
+      q|quit|exit)
+        break
+        ;;
+      ls|list)
+        cmd_ls
+        ;;
+      p[0-9]*)
+        local num="${input#p}"
+        local name
+        name=$(resolve_session "$num" 2>/dev/null) && cmd_peek "$name" || echo "${RED}invalid${RESET}"
+        ;;
+      s[0-9]*)
+        # s1 fix the bug → send "fix the bug" to session 1
+        local rest="${input#s}"
+        local num="${rest%% *}"
+        local text="${rest#* }"
+        [[ "$text" == "$num" ]] && text=""
+        local name
+        if name=$(resolve_session "$num" 2>/dev/null); then
+          if [[ -n "$text" ]]; then
+            cmd_send "$name" "$text"
+          else
+            read -rp "  msg> " text
+            [[ -n "$text" ]] && cmd_send "$name" "$text"
+          fi
+        else
+          echo "${RED}invalid${RESET}"
+        fi
+        ;;
+      [0-9]*)
+        local name
+        name=$(resolve_session "$input" 2>/dev/null) && cmd_attach "$name" || echo "${RED}invalid${RESET}"
+        ;;
+      "")
+        ;;
+      *)
+        # Try as session name
+        local name
+        if name=$(resolve_session "$input" 2>/dev/null); then
+          cmd_attach "$name"
+        else
+          echo "${RED}unknown:${RESET} $input"
+        fi
+        ;;
+    esac
+  done
+}
+
+cmd_defaults() {
+  local subcmd="${1:-show}"
+  case "$subcmd" in
+    show)
+      if [[ -s "$CC_DEFAULTS" ]]; then
+        echo "${BOLD}Global defaults:${RESET}"
+        cat "$CC_DEFAULTS"
+      else
+        echo "${DIM}No defaults set. Run: amux defaults edit${RESET}"
+      fi
+      ;;
+    edit)
+      "${EDITOR:-vi}" "$CC_DEFAULTS"
+      ;;
+    reset)
+      : > "$CC_DEFAULTS"
+      echo "${GREEN}defaults reset${RESET}"
+      ;;
+    *)
+      die "usage: amux defaults [show|edit|reset]"
+      ;;
+  esac
+}
+
+cmd_stop_all() {
+  for f in "$CC_SESSIONS"/*.env; do
+    [[ -f "$f" ]] || continue
+    local name
+    name=$(basename "$f" .env)
+    if is_running "$name" 2>/dev/null; then
+      cmd_stop "$name"
+    fi
+  done
+}
+
+cmd_start_all() {
+  for f in "$CC_SESSIONS"/*.env; do
+    [[ -f "$f" ]] || continue
+    local name
+    name=$(basename "$f" .env)
+    if ! is_running "$name" 2>/dev/null; then
+      cmd_start "$name"
+    fi
+  done
+}
+
+cmd_board() {
+  local AMUX_API="${AMUX_API:-https://localhost:8822}"
+  local subcmd="${1:-help}"; shift 2>/dev/null || true
+
+  case "$subcmd" in
+    done|doing|todo|backlog|discarded|review)
+      local status="$subcmd"
+      local id="${1:-}"; [[ -n "$id" ]] || die "Usage: amux board $status <ISSUE-ID>"
+      local result
+      result=$(curl -sk -X PATCH \
+        -H 'Content-Type: application/json' \
+        -d "{\"status\":\"$status\"}" \
+        "$AMUX_API/api/board/$id")
+      if echo "$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['id'],'→',d['status'])" 2>/dev/null; then
+        :
+      else
+        echo "$result"
+      fi
+      ;;
+    status)
+      local id="${1:-}"; local new_status="${2:-}";
+      [[ -n "$id" && -n "$new_status" ]] || die "Usage: amux board status <ISSUE-ID> <status>"
+      local result
+      result=$(curl -sk -X PATCH \
+        -H 'Content-Type: application/json' \
+        -d "{\"status\":\"$new_status\"}" \
+        "$AMUX_API/api/board/$id")
+      echo "$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['id'],'→',d['status'])" 2>/dev/null || echo "$result"
+      ;;
+    add|create)
+      local title="$*"; [[ -n "$title" ]] || die "Usage: amux board add <title>"
+      local result
+      result=$(curl -sk -X POST \
+        -H 'Content-Type: application/json' \
+        -d "{\"title\":\"$title\",\"status\":\"todo\"}" \
+        "$AMUX_API/api/board")
+      echo "$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print('Created',d['id'],'→',d['title'])" 2>/dev/null || echo "$result"
+      ;;
+    import)
+      # amux board import gh:owner/repo#N [--workspace W] [--project P]
+      local gh_ref="${1:-}"; [[ -n "$gh_ref" ]] || die "Usage: amux board import gh:<owner>/<repo>#<number> [--workspace W] [--project P]"
+      shift
+      local workspace="" project=""
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --workspace) workspace="${2:-}"; shift 2 ;;
+          --project)   project="${2:-}";   shift 2 ;;
+          *) shift ;;
+        esac
+      done
+      # Parse gh:owner/repo#N format
+      local gh_stripped="${gh_ref#gh:}"
+      local repo_part="${gh_stripped%#*}"
+      local issue_num="${gh_stripped##*#}"
+      if [[ -z "$repo_part" || -z "$issue_num" || "$repo_part" == "$gh_stripped" ]]; then
+        die "Invalid format. Use: gh:<owner>/<repo>#<number> (e.g. gh:Tonal-Photo/ImageIntact#103)"
+      fi
+      echo "Fetching ${repo_part}#${issue_num}..."
+      local issue_json
+      issue_json=$(gh issue view "$issue_num" --repo "$repo_part" --json title,body 2>&1) || die "Failed to fetch issue: $issue_json"
+      # Build tags — normalize to lowercase
+      local ws_lower; ws_lower=$(echo "$workspace" | tr '[:upper:]' '[:lower:]')
+      local pj_lower; pj_lower=$(echo "$project" | tr '[:upper:]' '[:lower:]')
+      # Parse issue body, extract actionable tasks, create board items
+      # The Python script handles: section-aware parsing, checklist detection,
+      # skipping design/notes sections, table row handling, JSON escaping
+      echo "$issue_json" | python3 -c "
+import json, re, sys, subprocess, urllib.request, ssl
+
+data = json.load(sys.stdin)
+title = data['title']
+body = data.get('body', '') or ''
+lines = body.split('\n')
+
+repo = '$repo_part'
+issue_num = '$issue_num'
+gh_ref = '$gh_ref'
+api = '$AMUX_API'
+ws = '$ws_lower'
+pj = '$pj_lower'
+
+# Build tags
+tags = ['gh:' + repo + '#' + issue_num]
+if ws: tags.append('workspace:' + ws)
+if pj: tags.append('project:' + pj)
+
+# ── Strategy ──────────────────────────────────────────────────────
+# 1. If explicit checklists (- [ ]) exist, extract those only
+# 2. Otherwise: section-aware bullet extraction
+#    - Skip bullets under non-actionable headings
+#    - Extract bullets under actionable/neutral headings
+# 3. If nothing found, create single task for the whole issue
+
+# Headings whose bullets should be SKIPPED (informational, not tasks)
+SKIP_RE = re.compile(
+    r'design|note|convention|pattern|context|architecture|overview|'
+    r'background|motivation|reference|prerequisite|requirement|'
+    r'progress|summary|panel.review|approach|decision|constraint|'
+    r'rationale|trade.?off|consideration|assumption|scope|goal|'
+    r'problem|non.?functional',
+    re.IGNORECASE,
+)
+
+# ── Pass 1: look for explicit checklists ──────────────────────────
+checklists = []
+for line in lines:
+    m = re.match(r'^\s*-\s*\[\s\]\s*(.+)', line)
+    if m:
+        checklists.append(m.group(1).strip())
+
+tasks_to_create = []
+
+if checklists:
+    tasks_to_create = checklists
+else:
+    # ── Pass 2: section-aware bullet extraction ───────────────────
+    current_heading = ''
+    for line in lines:
+        # Track headings (any level)
+        hm = re.match(r'^#{1,6}\s+(.+)', line)
+        if hm:
+            current_heading = hm.group(1).strip()
+            continue
+
+        # Skip table rows (contain |) — especially progress tables
+        if '|' in line and not line.strip().startswith('-'):
+            continue
+
+        # Extract bullet items
+        bm = re.match(r'^(\s*)-\s*(?:\[(.)\]\s*)?(.+)', line)
+        if not bm:
+            continue
+
+        indent = len(bm.group(1))
+        checkbox = bm.group(2)
+        text = bm.group(3).strip()
+
+        # Skip checked-off items
+        if checkbox and checkbox.lower() == 'x':
+            continue
+
+        # Skip empty or very short items
+        if len(text) < 5:
+            continue
+
+        # Skip bullets under non-actionable headings
+        if current_heading and SKIP_RE.search(current_heading):
+            continue
+
+        # Skip deeply nested bullets (likely sub-details, not top-level tasks)
+        if indent > 4:
+            continue
+
+        tasks_to_create.append(text)
+
+# ── Create board tasks ────────────────────────────────────────────
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+
+created = 0
+short_ref = '#' + issue_num
+
+if not tasks_to_create:
+    # No structure found — single task for the whole issue
+    payload = json.dumps({
+        'title': short_ref + ': ' + title,
+        'status': 'todo',
+        'owner_type': 'agent',
+        'tags': tags,
+        'desc': 'From ' + repo + '#' + issue_num + ': ' + title + '\n\n' + body[:800],
+    }).encode()
+    req = urllib.request.Request(api + '/api/board', data=payload, method='POST')
+    req.add_header('Content-Type', 'application/json')
+    try:
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+            result = json.loads(resp.read())
+            print(f\"  Created {result['id']} → {title} (single task — no actionable items found)\")
+            print(f\"  ⚠ Consider asking CC to decompose this issue into subtasks\")
+            created = 1
+    except Exception as e:
+        print(f'  ERROR: {e}', file=sys.stderr)
+else:
+    for task_text in tasks_to_create:
+        payload = json.dumps({
+            'title': short_ref + ': ' + task_text,
+            'status': 'todo',
+            'owner_type': 'agent',
+            'tags': tags,
+            'desc': 'From ' + repo + '#' + issue_num + ': ' + title,
+        }).encode()
+        req = urllib.request.Request(api + '/api/board', data=payload, method='POST')
+        req.add_header('Content-Type', 'application/json')
+        try:
+            with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                result = json.loads(resp.read())
+                print(f\"  Created {result['id']} → {task_text}\")
+                created += 1
+        except Exception as e:
+            print(f'  ERROR creating task: {e}', file=sys.stderr)
+
+print(f'Imported {created} task(s) from {repo}#{issue_num}')
+"
+      ;;
+    progress)
+      # amux board progress <ID> "message" — append progress note + post GH comment if gh-linked
+      local id="${1:-}"; shift 2>/dev/null || true
+      local msg="$*"
+      [[ -n "$id" && -n "$msg" ]] || die "Usage: amux board progress <ISSUE-ID> <message>"
+      # Update board task description
+      curl -sk -X PATCH \
+        -H 'Content-Type: application/json' \
+        -d "{\"desc\":$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$msg")}" \
+        "$AMUX_API/api/board/$id" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['id'],'— progress noted')" 2>/dev/null
+      # Check if task has a gh: tag — if so, post comment to GH issue
+      local task_json
+      task_json=$(curl -sk "$AMUX_API/api/board" | python3 -c "
+import sys,json
+items=json.load(sys.stdin)
+match=[i for i in items if i['id']=='$id']
+if match:
+    import json as j
+    print(j.dumps(match[0]))
+" 2>/dev/null)
+      if [[ -n "$task_json" ]]; then
+        local gh_tag
+        gh_tag=$(echo "$task_json" | python3 -c "
+import sys,json,re
+item=json.load(sys.stdin)
+for tag in item.get('tags',[]):
+    m=re.match(r'^gh:([^#]+)#(\d+)$', tag)
+    if m:
+        print(f'{m.group(1)} {m.group(2)}')
+        break
+" 2>/dev/null)
+        if [[ -n "$gh_tag" ]]; then
+          local repo issue_n
+          repo=$(echo "$gh_tag" | cut -d' ' -f1)
+          issue_n=$(echo "$gh_tag" | cut -d' ' -f2)
+          gh issue comment "$issue_n" --repo "$repo" --body "**Board progress** (\`$id\`): $msg" 2>/dev/null && \
+            echo "  → Posted comment to ${repo}#${issue_n}"
+        fi
+      fi
+      ;;
+    ls|list)
+      curl -sk "$AMUX_API/api/board" | python3 -c "
+import sys,json
+items=json.load(sys.stdin)
+for i in sorted(items, key=lambda x: x.get('updated',0), reverse=True):
+    status_sym = {'done':'✓','doing':'▶','todo':'○','backlog':'·','discarded':'✗','review':'◎'}.get(i['status'],'?')
+    tags = ' '.join(f'[{t}]' for t in i.get('tags',[])) if i.get('tags') else ''
+    print(f\"{status_sym} {i['id']:12s} {i['title'][:50]:50s} [{i['status']}] {tags}\")
+"
+      ;;
+    help|*)
+      cat <<EOF
+${BOLD}amux board${RESET} — manage board issues from the CLI
+
+  amux board ls                    List all issues (with tags)
+  amux board add <title>           Create a new todo issue
+  amux board done <ID>             Move issue to done
+  amux board doing <ID>            Move issue to doing (in progress)
+  amux board review <ID>           Move issue to in review
+  amux board todo <ID>             Move issue to todo
+  amux board backlog <ID>          Move issue to backlog
+  amux board status <ID> <status>  Set any status
+  amux board import gh:owner/repo#N [--workspace W] [--project P]
+                                   Import GH issue as board task(s)
+  amux board progress <ID> <msg>   Add progress note (posts to GH if linked)
+EOF
+      ;;
+  esac
+}
+
+cmd_serve() {
+  local port="${1:-8822}"
+  # Resolve cc-server.py relative to the real location of this script
+  local script_dir
+  script_dir="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")")" && pwd)"
+  local server="$script_dir/amux-server.py"
+  # Fall back to old name during migration
+  [[ -f "$server" ]] || server="$script_dir/cc-server.py"
+  [[ -f "$server" ]] || die "amux-server.py not found at $script_dir"
+  command -v python3 &>/dev/null || die "python3 is required for amux serve"
+  exec python3 "$server" "$port"
+}
+
+cmd_help() {
+  cat <<EOF
+${BOLD}amux${RESET} — phone-friendly Claude Code session manager ${DIM}v${CC_VERSION}${RESET}
+
+${BOLD}Session management:${RESET}
+  amux register <name> [flags]   Register a session with Claude Code flags
+  amux start <name>              Start a registered session in tmux
+  amux exec <name> [flags]       Register + start in one step
+  amux stop <name>               Stop a running session
+  amux rm <name>                 Remove a session (stops if running)
+  amux start-all                 Start all registered sessions
+  amux stop-all                  Stop all running sessions
+
+${BOLD}Interaction:${RESET}
+  amux attach <name>             Attach to a running session (detach: Ctrl-b d)
+  amux peek <name> [lines]       View last N lines without attaching (default: 30)
+  amux send <name> <text>        Send text + Enter to a session
+  amux send <name> --keys 'C-c'  Send raw key sequence (e.g., Ctrl-C)
+
+${BOLD}Info:${RESET}
+  amux ls                        List all sessions with status and previews
+  amux info <name>               Show session config details
+  amux defaults [show|edit|reset] Manage global default flags
+
+${BOLD}Dashboard:${RESET}
+  amux                           Interactive dashboard (optimized for phone)
+
+${BOLD}Web Dashboard:${RESET}
+  amux serve [port]              Start web dashboard (default: 8822)
+
+${BOLD}Board:${RESET}
+  amux board ls                  List all board issues
+  amux board add <title>         Create a new issue
+  amux board done <ID>           Mark issue as done
+  amux board doing <ID>          Mark issue as in progress
+  amux board todo <ID>           Mark issue as todo
+  amux board status <ID> <s>     Set any status
+
+${BOLD}Claude Code flags (on register/exec):${RESET}
+  --model <model>              Model: opus, sonnet, haiku, or full ID
+  --yolo                       Alias for --dangerously-skip-permissions
+  --dangerously-skip-permissions  Bypass all permission checks
+  --allow-dangerously-skip-permissions  Enable skip-permissions as option
+  --permission-mode <mode>     acceptEdits, bypassPermissions, default, plan, etc.
+  --system-prompt <prompt>     Override system prompt
+  --append-system-prompt <p>   Append to system prompt
+  --mcp-config <path>          MCP server config file
+  --allowedTools <tools>       Allowed tools list
+  --disallowedTools <tools>    Disallowed tools list
+  --effort <level>             low, medium, high
+  --dir <path>                 Working directory (default: cwd)
+  --verbose                    Verbose mode
+  --chrome / --no-chrome       Browser automation toggle
+  ... and all other claude CLI flags pass through
+
+${BOLD}Session names support fuzzy matching:${RESET}
+  amux peek api                  Matches 'api', 'api-server', etc.
+  amux 3                         Attach to session #3 from amux ls
+
+${BOLD}Examples:${RESET}
+  amux register api --model opus --yolo --dir ~/Dev/myapp
+  amux exec frontend --append-system-prompt "React + Tailwind"
+  amux send api "fix the auth bug in login.ts"
+  amux send api --keys 'C-c'
+  amux peek api 50
+EOF
+}
+
+# ── Main dispatch ────────────────────────────────────────────────────────────
+#
+# Source guard: when this script is run normally as `amux ...`, BASH_SOURCE[0]
+# equals $0 and the dispatch block runs. When sourced (e.g. from tests via
+# `source amux`), $0 is the parent shell's $0 and the guard skips dispatch.
+# This lets the test suite source the script to access helper functions
+# without triggering CLI side effects.
+if [[ "${BASH_SOURCE[0]:-$0}" == "${0}" ]]; then
+  ensure_dirs
+
+  case "${1:-}" in
+    register|reg)     shift; cmd_register "$@" ;;
+    start)            shift; cmd_start "$@" ;;
+    exec|run)         shift; cmd_exec "$@" ;;
+    attach|a)         shift; cmd_attach "$@" ;;
+    peek|p)           shift; cmd_peek "$@" ;;
+    send)             shift; cmd_send "$@" ;;
+    stop|kill)        shift; cmd_stop "$@" ;;
+    rm|remove|del)    shift; cmd_rm "$@" ;;
+    ls|list)          shift; cmd_ls "$@" ;;
+    info)             shift; cmd_info "$@" ;;
+    defaults|config)  shift; cmd_defaults "$@" ;;
+    start-all)        cmd_start_all ;;
+    stop-all)         cmd_stop_all ;;
+    serve|web)        shift; cmd_serve "$@" ;;
+    board|b)          shift; cmd_board "$@" ;;
+    help|--help|-h)   cmd_help ;;
+    version|--version|-v) echo "amux v${CC_VERSION}" ;;
+    "")               cmd_dashboard ;;
+    *)
+      # Try as session name shortcut
+      name=$(resolve_session "$1" 2>/dev/null) && cmd_attach "$name" || {
+        echo "${RED}unknown command:${RESET} $1"
+        echo "Run ${BOLD}amux help${RESET} for usage"
+        exit 1
+      }
+      ;;
+  esac
+fi

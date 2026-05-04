@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>Building with Claude 4: The Parallel Agent Workflow — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="How to structure your development workflow to take full advantage of Claude 4 capabilities in parallel.">
+  <meta name="keywords" content="claude 4 workflow, parallel agent workflow, claude opus 4 coding">
+  <link rel="canonical" href="https://amux.io/blog/claude-4-agent-workflow/">
+  <meta property="og:title" content="Building with Claude 4: The Parallel Agent Workflow — amux">
+  <meta property="og:description" content="How to structure your development workflow to take full advantage of Claude 4 capabilities in parallel.">
+  <meta property="og:url" content="https://amux.io/blog/claude-4-agent-workflow/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Blog","item":"https://amux.io/blog/"},{"@type":"ListItem","position":3,"name":"Building with Claude 4: The Parallel Agent Workflow","item":"https://amux.io/blog/claude-4-agent-workflow/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Building with Claude 4: The Parallel Agent Workflow","description":"How to structure your development workflow to take full advantage of Claude 4 capabilities in parallel.","url":"https://amux.io/blog/claude-4-agent-workflow/","datePublished":"2026-02-26","dateModified":"2026-02-26","author":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"publisher":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://amux.io/blog/claude-4-agent-workflow/"}}</script>
+  </head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">›</span> <a href="/blog/">Blog</a> <span class="sep">›</span> <span>Building with Claude 4: The Parallel Agent Workflow</span></div>
+    <h1>Building with Claude 4: The Parallel Agent Workflow</h1>
+<p class="subtitle">Claude 4's extended thinking and tool use capabilities change what parallel agents can accomplish.</p>
+<p>Claude 4 — specifically Claude Opus 4 — represents a meaningful capability jump for long-horizon agentic tasks. Extended thinking, better tool use reliability, stronger code generation. For parallel agent workflows, this matters because the limiting factor was always agent capability per session, not the ability to run many sessions. With Claude 4, the per-agent output quality is higher, which multiplies across a fleet.</p>
+<h2>What Claude 4 Changes for Agents</h2>
+<p>The most important improvements for agentic workflows:</p>
+<ul>
+<li><strong>Extended thinking:</strong> Claude 4 can reason through complex problems before generating code. This reduces the "plausible but wrong" outputs that required re-prompting.</li>
+<li><strong>Tool use reliability:</strong> Agents use bash, read files, write code, run tests. Claude 4's tool use is more reliable — fewer hallucinated tool calls, better error recovery.</li>
+<li><strong>Context utilization:</strong> Claude 4 makes better use of its context window, meaning agents can hold more of your codebase in mind when making changes.</li>
+<li><strong>Instruction following:</strong> Complex, multi-step task descriptions are executed more faithfully. You can give agents richer specifications and expect better compliance.</li>
+</ul>
+<h2>Structuring Tasks for Claude 4</h2>
+<p>With a more capable model, the bottleneck shifts from agent capability to task specification. Here's how I structure tasks for Claude 4 agents:</p>
+<ul>
+<li><strong>Give context:</strong> Include file paths, relevant existing code patterns, and the overall architecture. Claude 4 uses this effectively.</li>
+<li><strong>Specify constraints:</strong> What should the agent NOT do? Don't modify these files, don't add new dependencies, maintain this interface. Explicit constraints prevent scope creep.</li>
+<li><strong>Define done:</strong> What does success look like? "All tests passing" or "The endpoint returns 200 for these inputs" gives the agent a clear target to verify against.</li>
+</ul>
+<h2>Fleet Configuration for Claude 4</h2>
+<p>In your amux session config, you can specify which model each agent uses. For complex architectural tasks, use Opus 4. For high-volume, pattern-following work (test generation, documentation, boilerplate), use Sonnet 4 or Haiku to keep costs down.</p>
+<pre><code># Complex tasks: Opus 4
+amux register architect --dir ~/project --model claude-opus-4 --yolo
+
+# High-volume tasks: Sonnet for balance
+amux register test-writer --dir ~/project --model claude-sonnet-4 --yolo</code></pre>
+<h2>The Model Mix Strategy</h2>
+<p>The most cost-effective fleet uses mixed models: 1-2 Opus 4 agents for complex reasoning and architecture decisions, 5-10 Sonnet 4 agents for implementation, and Haiku agents for search, triage, and documentation. This gives you frontier capability where it matters and lower cost where it doesn't.</p>
+<div class="cta-box"><h3>Get started with amux</h3><p>Run dozens of Claude Code agents in parallel. Python 3 + tmux. Open source.</p><pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # → https://localhost:8822</code></pre><a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a></div>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

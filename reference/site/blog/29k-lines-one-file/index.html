@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>29,000 Lines of Python in a Single File: How amux Runs an AI Agent Fleet — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="We ship a Python HTTP server, dashboard, kanban board, CRM, file browser, video player, torrent client, and AI agent orchestrator in one file. Here's why.">
+  <meta name="keywords" content="single file architecture, Python server, AI agent orchestration, Claude Code, tmux multiplexer, self-healing agents">
+  <link rel="canonical" href="https://amux.io/blog/29k-lines-one-file/">
+  <meta property="og:title" content="29,000 Lines of Python in a Single File: How amux Runs an AI Agent Fleet">
+  <meta property="og:description" content="We ship a Python HTTP server, dashboard, kanban board, CRM, file browser, video player, torrent client, and AI agent orchestrator in one file. Here's why.">
+  <meta property="og:url" content="https://amux.io/blog/29k-lines-one-file/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Blog","item":"https://amux.io/blog/"},{"@type":"ListItem","position":3,"name":"29,000 Lines of Python in a Single File","item":"https://amux.io/blog/29k-lines-one-file/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"29,000 Lines of Python in a Single File: How amux Runs an AI Agent Fleet","description":"We ship a Python HTTP server, dashboard, kanban board, CRM, file browser, video player, torrent client, and AI agent orchestrator in one file. Here's why.","url":"https://amux.io/blog/29k-lines-one-file/","datePublished":"2026-04-01","dateModified":"2026-04-01","author":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"publisher":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://amux.io/blog/29k-lines-one-file/"}}</script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">&rsaquo;</span> <a href="/blog/">Blog</a> <span class="sep">&rsaquo;</span> <span>29,000 Lines of Python in a Single File</span></div>
+    <h1>29,000 Lines of Python in a Single File: How amux Runs an AI Agent Fleet</h1>
+
+<p class="subtitle">A Python HTTP server, real-time dashboard, kanban board, CRM, file browser, video player, torrent client, and AI agent orchestrator. One file. No build step. No framework. Here's why we did it, and what we learned.</p>
+
+<p><code>amux-server.py</code> is 29,455 lines long. It contains a <code>ThreadingHTTPServer</code>, inline HTML/CSS/JS for the entire dashboard, SQLite queries for 30+ tables, a self-healing watchdog, ffmpeg transcoding, tmux session management, Gemini voice chat, and a complete REST API. When you save the file, the server restarts itself via <code>os.execv</code>. Your running AI agent sessions survive the restart.</p>
+
+<p>This is not how you're supposed to build software. We know. Here's why it works.</p>
+
+<h2>The problem: orchestrating AI coding agents at scale</h2>
+
+<p>Claude Code is powerful. One session can implement a feature, write tests, debug, and commit. But it has failure modes:</p>
+
+<ul>
+<li>Context compaction corrupts the conversation at 3am</li>
+<li>The process silently hangs waiting for a safety prompt</li>
+<li>Two agents push to the same branch and create merge conflicts</li>
+<li>You wake up to find an agent has been stuck for 6 hours</li>
+</ul>
+
+<p>If you're running 10&ndash;20 agents in parallel&mdash;which is where the real leverage is&mdash;these failure modes multiply. You need monitoring, auto-healing, coordination, and a way to manage it all from your phone at midnight.</p>
+
+<p>We tried building this as a proper multi-service architecture. React frontend. FastAPI backend. Redis pub/sub. Postgres. Docker Compose with 6 services. It lasted two weeks before we threw it away.</p>
+
+<h2>Why a single file?</h2>
+
+<p>Three reasons, in order of importance:</p>
+
+<h3>1. The edit-reload loop is zero seconds</h3>
+
+<p>The server watches its own <code>mtime</code>. Save the file, and it validates the Python syntax with <code>ast.parse()</code>, then calls <code>os.execv()</code> to replace itself in-place. The process ID doesn't change. Tmux sessions don't notice. Your 15 running agents keep working.</p>
+
+<pre><code># From amux-server.py — the self-restart mechanism
+script = Path(__file__)
+while True:
+    time.sleep(1)
+    if script.stat().st_mtime != last_mtime:
+        time.sleep(3)  # debounce rapid edits
+        ast.parse(script.read_text())  # syntax check
+        os.execv(sys.executable, [sys.executable, str(script)] + sys.argv[1:])</code></pre>
+
+<p>This means the development loop for the dashboard, the API, and the agent watchdog is: edit &rarr; save &rarr; reload browser. No <code>npm run build</code>. No <code>docker compose up</code>. No waiting for TypeScript compilation. The feedback loop approaches the speed of editing a static HTML file.</p>
+
+<h3>2. Deployment is <code>scp</code></h3>
+
+<p>Our cloud deployment pipeline for multi-tenant containers:</p>
+
+<pre><code>rsync --inplace amux-server.py root@cloud:/opt/amux-cloud/app/amux-server.py
+touch /opt/amux-cloud/app/amux-server.py  # trigger auto-restart in all containers</code></pre>
+
+<p>Every container bind-mounts the same file. Touch it, and every user's server reloads within 3 seconds. No image builds. No rolling deploys. No container registry. The same file runs on your laptop and in production Docker containers&mdash;we enforce this with a rule: <strong>no <code>if IS_CLOUD</code> branches</strong>. Configuration differences come from environment variables and gateway headers, never from code forks.</p>
+
+<h3>3. AI agents can read the entire codebase in one context window</h3>
+
+<p>This was the unexpected win. When a Claude Code session needs to fix a bug in amux itself, it reads one file. It sees the API endpoint, the HTML that calls it, the CSS that styles it, and the JavaScript that handles the response. No jumping between <code>src/components/Board.tsx</code> and <code>server/routes/board.py</code> and <code>shared/types.ts</code>. The full call chain from button click to database write is visible in one scroll.</p>
+
+<p>This matters because <strong>amux is largely built by amux</strong>. We run parallel agents that modify their own orchestrator. The single-file architecture makes self-modification tractable.</p>
+
+<h2>What's actually in the file</h2>
+
+<p>A rough breakdown of the 29,455 lines:</p>
+
+<table>
+<tr><th>Section</th><th>Lines</th><th>What it does</th></tr>
+<tr><td>HTML/CSS</td><td>~9,500</td><td>Full dashboard: session cards, kanban board, notes editor, CRM, file browser, terminal, map view, settings</td></tr>
+<tr><td>JavaScript</td><td>~13,000</td><td>Dashboard logic: SSE real-time updates, Quill editor, XTerm.js terminal, Gridstack layout, video player, voice chat (Gemini Live API), service worker</td></tr>
+<tr><td>Python server</td><td>~5,000</td><td>HTTP handlers, REST API (60+ endpoints), SQLite queries, file streaming, ffmpeg transcode</td></tr>
+<tr><td>Agent watchdog</td><td>~1,500</td><td>Status detection (ANSI parsing), auto-compact, auto-restart, corruption recovery, stuck detection, stale process reaper</td></tr>
+<tr><td>Infrastructure</td><td>~500</td><td>TLS setup, auth, self-restart, server.env loading, signal handling</td></tr>
+</table>
+
+<h2>The watchdog: keeping agents alive at 3am</h2>
+
+<p>The core loop runs every 10 seconds. For each active tmux session, it:</p>
+
+<ol>
+<li><strong>Captures output</strong> &mdash; <code>tmux capture-pane</code>, strip ANSI codes, detect status (working/idle/waiting/error)</li>
+<li><strong>Checks context health</strong> &mdash; parses "context left until auto-compact: 18%" from output, triggers <code>/compact</code> if below 20%</li>
+<li><strong>Detects corruption</strong> &mdash; watches for <code>redacted_thinking ... cannot be modified</code>, auto-restarts and replays last message</li>
+<li><strong>Unblocks stuck prompts</strong> &mdash; detects safety prompts, auto-answers in YOLO mode (with cooldowns to prevent loops)</li>
+<li><strong>Reaps stale processes</strong> &mdash; if a Claude process has been running for 48+ hours in an idle session, kills and restarts it (the API connection dies silently after ~2 days)</li>
+</ol>
+
+<p>Every recovery action has a cooldown (5 minutes for compaction, 1 minute for restart) and pushes a notification to the dashboard. You can review everything that happened overnight from your phone.</p>
+
+<h2>Multi-agent coordination without a message queue</h2>
+
+<p>The conventional approach to agent-to-agent communication would involve Redis pub/sub, or a message queue, or at minimum a shared database with polling. We use SQLite with compare-and-set for task claiming:</p>
+
+<pre><code># Atomic task claim — prevents two agents from grabbing the same work
+cursor.execute("""
+    UPDATE issues SET status='doing', session=?
+    WHERE id=? AND status IN ('todo','backlog')
+""", (session_name, task_id))
+# Verify the claim succeeded (another agent might have claimed it first)
+cursor.execute("SELECT session FROM issues WHERE id=?", (task_id,))
+if cursor.fetchone()[0] != session_name:
+    return self._json({"error": "already claimed"}, 409)</code></pre>
+
+<p>Agents discover each other via REST:</p>
+
+<pre><code># Agent A posts a task for Agent B
+curl -X POST /api/board -d '{"title":"Implement auth","session":"worker-b"}'
+
+# Agent B claims it atomically
+curl -X POST /api/board/PROJ-5/claim -d '{"session":"worker-b"}'
+
+# Agent A peeks at Agent B's progress
+curl /api/sessions/worker-b/peek?lines=50
+
+# Agent B marks it done when finished
+curl -X PATCH /api/board/PROJ-5 -d '{"status":"done","desc":"Implemented OAuth2 flow"}'</code></pre>
+
+<p>No Kafka. No RabbitMQ. No gRPC. Just HTTP endpoints backed by SQLite WAL mode. It handles 20+ concurrent agents without breaking a sweat because agent coordination is fundamentally a low-throughput problem&mdash;you're talking about dozens of task transitions per hour, not thousands per second.</p>
+
+<h2>The dashboard is inline HTML, and that's fine</h2>
+
+<p>The entire frontend is a single string literal inside the Python file. No JSX. No virtual DOM. No component library. The JavaScript is vanilla, with some targeted use of CDN libraries:</p>
+
+<ul>
+<li><strong>Quill.js</strong> for the notes editor (rich text + markdown shortcuts)</li>
+<li><strong>XTerm.js</strong> for terminal emulation in the browser</li>
+<li><strong>Gridstack.js</strong> for the drag-and-drop workspace layout</li>
+<li><strong>Leaflet</strong> for the map view</li>
+<li><strong>marked.js</strong> for Markdown rendering</li>
+</ul>
+
+<p>Real-time updates use Server-Sent Events (SSE), not WebSocket. SSE is simpler, works through proxies and load balancers, and reconnects automatically. The server pushes events on board changes, session status updates, and new notifications. The client subscribes once and stays connected.</p>
+
+<p>Is the JavaScript code beautiful? No. Is it fast to modify and test? Extremely. When an agent needs to add a feature to the dashboard, it edits one file, the server reloads, and the change is live. No webpack. No tree shaking. No hydration.</p>
+
+<h2>Cloud: same file, Docker per user</h2>
+
+<p>The cloud deployment (<a href="https://cloud.amux.io">cloud.amux.io</a>) runs the exact same <code>amux-server.py</code> in per-user Docker containers. A Python gateway handles authentication (Clerk), billing (Stripe), and container lifecycle.</p>
+
+<p>The single-codebase rule is enforced strictly: there are zero <code>if IS_CLOUD</code> branches in the code. Features that differ between self-hosted and cloud are driven by:</p>
+
+<ul>
+<li>HTTP headers injected by the gateway (<code>X-Amux-User-Email</code>)</li>
+<li>Environment variables (<code>AMUX_S3_BUCKET</code> for calendar sync)</li>
+<li>Presence/absence of configuration (no Google API key? voice chat button just doesn't appear)</li>
+</ul>
+
+<p>Data replication uses Litestream to stream SQLite WAL files to Cloudflare R2. Each user's database is continuously replicated. A daily backup job also snapshots everything (retained for 30 days). If a container dies, it restarts with full data intact.</p>
+
+<h2>What we'd do differently</h2>
+
+<p>Honesty about trade-offs:</p>
+
+<ul>
+<li><strong>Git blame is useless.</strong> Every commit touches the same file. You can't bisect a regression to "the auth module" because there is no auth module&mdash;it's line 24,000-something in the same file as the video player.</li>
+<li><strong>IDE performance degrades.</strong> LSP servers struggle with a 29k-line Python file. Autocomplete gets slow. Syntax highlighting occasionally gives up. We use <code>grep</code> more than "Go to Definition."</li>
+<li><strong>Two people can't edit simultaneously.</strong> Merge conflicts on a single file are brutal. This works for us because agents work on features (in other repos), not on amux itself. When we do modify amux, it's sequential.</li>
+<li><strong>Some things don't belong here.</strong> The MCP server configs, Terraform, iOS app, and CI workflows are separate. The single-file rule applies to the runtime, not the entire project.</li>
+</ul>
+
+<h2>Numbers</h2>
+
+<table>
+<tr><td>Lines of code</td><td>29,455</td></tr>
+<tr><td>Build step</td><td>None</td></tr>
+<tr><td>External services required</td><td>None (SQLite for everything)</td></tr>
+<tr><td>Deploy time (cloud, all users)</td><td>~3 seconds</td></tr>
+<tr><td>Server restart on edit</td><td>~1 second</td></tr>
+<tr><td>Parallel agents tested</td><td>20+ on a single machine</td></tr>
+<tr><td>SQLite tables</td><td>30+</td></tr>
+<tr><td>REST API endpoints</td><td>60+</td></tr>
+<tr><td>External runtime dependencies</td><td>Python 3, tmux, Node.js (for Claude Code)</td></tr>
+</table>
+
+<h2>Try it</h2>
+
+<pre><code>git clone https://github.com/mixpeek/amux && cd amux && ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve   # https://localhost:8822</code></pre>
+
+<p>The whole thing is MIT + Commons Clause. Self-host it, read the source, modify it. It's one file.</p>
+
+<p><a href="https://github.com/mixpeek/amux">github.com/mixpeek/amux</a></p>
+
+  </main>
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <a href="/">amux</a> &mdash; Claude Code agent multiplexer
+      &nbsp;|&nbsp; <a href="https://github.com/mixpeek/amux">GitHub</a>
+      &nbsp;|&nbsp; <a href="/blog/">Blog</a>
+      &nbsp;|&nbsp; <a href="/blog/rss.xml">RSS</a>
+    </div>
+  </footer>
+  
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

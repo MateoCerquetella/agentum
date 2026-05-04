@@ -1,0 +1,90 @@
+# Per-user docker-compose — instantiated by gateway.py
+# Variables replaced: USER_ID, USER_PORT, CF_ACCOUNT_ID, R2_ACCESS_KEY, R2_SECRET_KEY, R2_ENDPOINT
+
+services:
+  amux:
+    image: ghcr.io/mixpeek/amux:latest
+    container_name: amux-user-${USER_ID}
+    restart: unless-stopped
+    volumes:
+      - root-home:/root
+      - amux-data:/root/.amux
+      - /opt/amux-cloud/app/amux-server.py:/app/amux-server.py:ro
+      - /opt/amux-cloud/app/icon.svg:/app/icon.svg:ro
+      - /opt/amux-cloud/app/icon.png:/app/icon.png:ro
+      - /opt/amux-cloud/app/icon-192.png:/app/icon-192.png:ro
+      - /opt/amux-cloud/app/icon-512.png:/app/icon-512.png:ro
+    environment:
+      AMUX_PORT: "8822"
+      AMUX_AUTH_TOKEN: "none"
+      POSTHOG_KEY: "${POSTHOG_KEY}"
+      POSTHOG_HOST: "${POSTHOG_HOST}"
+    ports:
+      - "${USER_PORT}:8822"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8822/api/sessions"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+
+  watchdog:
+    image: ghcr.io/mixpeek/amux:latest
+    container_name: amux-watchdog-${USER_ID}
+    restart: unless-stopped
+    volumes:
+      - amux-data:/root/.amux
+      - /opt/amux-cloud/app/amux-server.py:/app/amux-server.py:ro
+      - /opt/amux-cloud/app/scripts/watchdog.py:/app/scripts/watchdog.py:ro
+    environment:
+      AMUX_PORT: "8822"
+      WATCHDOG_HEALTH_URL: "http://amux:8822/health"
+      WATCHDOG_AMUX_DIR: "/app"
+      WATCHDOG_INTERVAL: "30"
+    entrypoint: ["python", "/app/scripts/watchdog.py"]
+    depends_on:
+      amux:
+        condition: service_healthy
+
+  litestream:
+    image: litestream/litestream:latest
+    container_name: amux-litestream-${USER_ID}
+    restart: unless-stopped
+    volumes:
+      - amux-data:/root/.amux
+      - ./litestream.yml:/etc/litestream.yml:ro
+    environment:
+      LITESTREAM_ACCESS_KEY_ID: "${R2_ACCESS_KEY}"
+      LITESTREAM_SECRET_ACCESS_KEY: "${R2_SECRET_KEY}"
+      USER_ID: "${USER_ID}"
+    command: replicate
+    depends_on:
+      amux:
+        condition: service_healthy
+
+  sync:
+    image: amazon/aws-cli:latest
+    container_name: amux-sync-${USER_ID}
+    restart: unless-stopped
+    volumes:
+      - amux-data:/root/.amux
+    environment:
+      AWS_ACCESS_KEY_ID: "${R2_ACCESS_KEY}"
+      AWS_SECRET_ACCESS_KEY: "${R2_SECRET_KEY}"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        while true; do
+          sleep 60
+          aws s3 sync /root/.amux/ s3://amux-cloud-users/users/${USER_ID}/files/ --endpoint-url ${R2_ENDPOINT} --exclude 'amux.db' --exclude 'amux.db-shm' --exclude 'amux.db-wal' --exclude 'logs/*' --exclude 'board/*' --quiet
+        done
+    depends_on:
+      amux:
+        condition: service_healthy
+
+volumes:
+  root-home:
+    name: root-home-${USER_ID}
+  amux-data:
+    name: amux-data-${USER_ID}

@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>How to Review AI-Generated Code: The Playbook for Developers Managing Agent Fleets (2026) — amux</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="The practical guide to reviewing AI-generated code at scale. Checklists, triage patterns, red flags, and workflows for developers reviewing output from 5-20 parallel AI coding agents. With real examples from production agent fleets.">
+  <meta name="keywords" content="review AI generated code, AI code review guide, reviewing agent output, code review AI agents, AI code review checklist, developer reviewing AI code, multi-agent code review workflow, how to review AI code, AI generated code quality, reviewing claude code output, code review at scale AI, developer as reviewer AI agents 2026">
+  <link rel="canonical" href="https://amux.io/guides/reviewing-ai-agent-code/">
+  <meta property="og:title" content="How to Review AI-Generated Code: The Playbook for Agent Fleets (2026) — amux">
+  <meta property="og:description" content="Checklists, triage patterns, and workflows for developers reviewing output from 5-20 parallel AI coding agents. The skill that matters most in 2026.">
+  <meta property="og:url" content="https://amux.io/guides/reviewing-ai-agent-code/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Guides","item":"https://amux.io/guides/"},{"@type":"ListItem","position":3,"name":"Reviewing AI Agent Code","item":"https://amux.io/guides/reviewing-ai-agent-code/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"How to Review AI-Generated Code: The Playbook for Developers Managing Agent Fleets (2026)","description":"Checklists, triage patterns, red flags, and workflows for developers reviewing output from 5-20 parallel AI coding agents.","url":"https://amux.io/guides/reviewing-ai-agent-code/","datePublished":"2026-05-03","dateModified":"2026-05-03","author":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"publisher":{"@type":"Organization","name":"amux","url":"https://amux.io/","logo":{"@type":"ImageObject","url":"https://amux.io/icon.png"}}}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"HowTo","name":"How to Review AI-Generated Code from Parallel Agent Fleets","description":"Step-by-step process for efficiently reviewing code produced by multiple AI coding agents running in parallel.","step":[{"@type":"HowToStep","name":"Triage by signal, not by order","text":"Start with agents that touched shared files or core logic. Skip agents that only generated tests or documentation — review those last. Use your orchestrator's dashboard to sort by risk, not by completion time."},{"@type":"HowToStep","name":"Check the diff, not the file","text":"AI agents produce a lot of code. Review the diff against the base branch, not the full file. Look for what changed and why. If the diff is larger than the spec justified, that is the first red flag."},{"@type":"HowToStep","name":"Run the agent's own tests first","text":"Before reading a single line, run the tests the agent wrote. If they pass, you are reviewing working code. If they fail, send the agent back with the failure output instead of debugging manually."},{"@type":"HowToStep","name":"Apply the AI code review checklist","text":"Check for the 6 common AI code failure modes: hallucinated imports, hardcoded secrets, missing error handling at boundaries, N+1 query patterns, over-abstraction, and test assertions that test the mock instead of the behavior."},{"@type":"HowToStep","name":"Verify integration points","text":"AI agents working in isolation produce code that works alone but breaks when combined. Check every function signature, API contract, and shared type definition against what other agents produced. This is where parallel-agent bugs hide."},{"@type":"HowToStep","name":"Merge sequentially, test incrementally","text":"Merge the lowest-risk branch first, run the full test suite, then merge the next. Never merge all branches simultaneously. Each merge is a checkpoint — if something breaks, you know which branch caused it."}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"How long should it take to review AI-generated code?","acceptedAnswer":{"@type":"Answer","text":"For a well-scoped task (15-45 minutes of agent work), review should take 5-15 minutes. If you are spending longer than 15 minutes on a single agent's output, the task was scoped too broadly. The goal is 3-5 minutes for routine tasks (test generation, documentation, simple endpoints) and 10-15 minutes for complex tasks (business logic, auth, data pipelines). With 10 agents completing work overnight, morning review should take 60-90 minutes total."}},{"@type":"Question","name":"Should I review every line of AI-generated code?","acceptedAnswer":{"@type":"Answer","text":"No. Review every diff, but not every line. Focus on: business logic correctness, security boundaries (auth, input validation, secrets), integration points with other code, and anything the agent flagged as uncertain. Skip reviewing boilerplate, formatting, and import statements — those are what linters and type checkers handle. Your attention is the bottleneck, so spend it where human judgment matters most."}},{"@type":"Question","name":"What are the most common bugs in AI-generated code?","acceptedAnswer":{"@type":"Answer","text":"Six patterns account for the majority of AI code bugs: (1) Hallucinated imports — referencing packages or APIs that don't exist. (2) Subtle logic errors — code that handles the happy path but fails on edge cases. (3) Security vulnerabilities — SQL injection, XSS, hardcoded secrets, missing auth checks. (4) Over-abstraction — creating unnecessary layers, interfaces, or helper functions. (5) N+1 queries — database access patterns that work in tests but kill production performance. (6) Shallow tests — assertions that test the mock or the obvious case but miss the critical behavior."}},{"@type":"Question","name":"How do I review code from agents that worked on related tasks?","acceptedAnswer":{"@type":"Answer","text":"This is the hardest part of parallel-agent code review. Agents working in isolated worktrees cannot see each other's changes, so they may make incompatible assumptions about shared interfaces. The fix: review shared files (types, schemas, API contracts) across all branches before reviewing implementation code. If two agents defined the same type differently, resolve that first. Tools like amux show committed file diffs per session, making it easy to spot overlapping changes."}},{"@type":"Question","name":"Is it safe to let AI agents review each other's code?","acceptedAnswer":{"@type":"Answer","text":"Partially. Cross-model review (Claude writes, GPT reviews) catches 60-70% of defects that self-review misses. Same-model review suffers from sycophancy bias. Use automated agent review as a first pass to catch obvious issues, but a human must still review business logic, security-critical code, and integration points. The pattern that works: agent writes, different agent reviews, human reviews the review. The human review is faster because the agent reviewer already flagged the likely issues."}},{"@type":"Question","name":"What should I do when an agent's output is wrong?","acceptedAnswer":{"@type":"Answer","text":"Three options depending on severity: (1) Minor issues (naming, formatting, small logic fix) — edit the code directly, it's faster than re-prompting. (2) Moderate issues (wrong approach but right direction) — send the agent a follow-up prompt with the specific problem and let it fix it. Include the test failure or the exact line that's wrong. (3) Major issues (fundamentally wrong approach) — close the session, update the spec with clearer constraints, and start a fresh agent. Never iterate more than twice on a bad approach — it's cheaper to restart."}},{"@type":"Question","name":"How does reviewing AI code differ from reviewing human code?","acceptedAnswer":{"@type":"Answer","text":"Three key differences: (1) Volume — AI agents produce 5-10x more code per hour, so you need to triage ruthlessly instead of reading every line. (2) Failure patterns — humans make typos and logic errors; AI makes hallucination errors, over-engineering errors, and security pattern errors. Your review checklist must cover different things. (3) No ego — you can reject AI code with a one-line reason and restart the agent. No feelings to manage, no negotiation. This should make you more decisive, not less rigorous."}}]}</script>
+  <style>
+    .checklist{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.4rem 1.6rem;margin:2rem 0}
+    .checklist h3{margin:0 0 0.8rem;font-size:0.95rem}
+    .checklist ul{list-style:none;padding:0;margin:0;font-size:0.88rem;line-height:1.9}
+    .checklist li{padding-left:1.6rem;position:relative;color:var(--dim)}
+    .checklist li::before{content:"[ ]";position:absolute;left:0;font-family:var(--mono);color:var(--muted);font-size:0.78rem}
+    .checklist li strong{color:var(--text)}
+    .red-flag{background:oklch(0.72 0.20 25 / 0.08);border:1px solid oklch(0.72 0.20 25 / 0.25);border-radius:8px;padding:1.4rem 1.6rem;margin:2rem 0}
+    .red-flag h3{margin:0 0 0.8rem;font-size:0.95rem;color:var(--err)}
+    .red-flag ul{font-size:0.88rem;line-height:1.8;padding-left:1.2rem;color:var(--dim)}
+    .red-flag li strong{color:var(--text)}
+    .time-box{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;margin:1.5rem 0}
+    .time-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.2rem 1.4rem}
+    .time-card h4{margin:0 0 0.3rem;font-size:0.9rem;color:var(--amber)}
+    .time-card .time{font-family:var(--mono);font-size:1.4rem;font-weight:700;color:var(--text);margin:0.3rem 0}
+    .time-card p{font-size:0.82rem;color:var(--dim);margin:0;line-height:1.5}
+    .workflow-step{display:flex;gap:1rem;margin:1.2rem 0;align-items:flex-start}
+    .workflow-num{font-family:var(--mono);font-size:1.4rem;font-weight:700;color:var(--amber);min-width:2rem;text-align:center;line-height:1}
+    .workflow-body{flex:1}
+    .workflow-body h4{margin:0 0 0.2rem;font-size:0.92rem}
+    .workflow-body p{margin:0;font-size:0.85rem;color:var(--dim);line-height:1.6}
+    .pattern-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;margin:1.5rem 0}
+    .pattern-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.2rem 1.4rem}
+    .pattern-card h4{margin:0 0 0.4rem;font-size:0.9rem}
+    .pattern-card p{font-size:0.85rem;color:var(--dim);margin:0;line-height:1.6}
+    .pattern-card code{background:var(--bg);padding:0.15rem 0.4rem;border-radius:3px;font-size:0.8rem}
+    @media(max-width:600px){
+      .time-box{grid-template-columns:1fr}
+      .pattern-grid{grid-template-columns:1fr}
+      .workflow-step{flex-direction:column;gap:0.3rem}
+      .workflow-num{min-width:auto}
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">&rsaquo;</span> <a href="/guides/">Guides</a> <span class="sep">&rsaquo;</span> <span>Reviewing AI Agent Code</span></div>
+    <h1>How to Review AI-Generated Code</h1>
+    <p class="subtitle">Your agents shipped 10 branches overnight. Now you have 90 minutes before standup. This is the playbook for reviewing AI-generated code at scale &mdash; what to check, what to skip, and where the bugs hide.</p>
+
+    <nav class="toc" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.2rem 1.6rem;margin:2rem 0;">
+      <strong style="font-size:0.82rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);">Contents</strong>
+      <ol style="margin:0.6rem 0 0;padding-left:1.2rem;font-size:0.88rem;line-height:2;">
+        <li><a href="#shift" style="color:var(--dim);text-decoration:none;">The Shift: Writer to Reviewer</a></li>
+        <li><a href="#time" style="color:var(--dim);text-decoration:none;">Time Budgets: How Long Each Review Should Take</a></li>
+        <li><a href="#triage" style="color:var(--dim);text-decoration:none;">Triage: What to Review First</a></li>
+        <li><a href="#checklist" style="color:var(--dim);text-decoration:none;">The AI Code Review Checklist</a></li>
+        <li><a href="#red-flags" style="color:var(--dim);text-decoration:none;">Red Flags: When to Reject Immediately</a></li>
+        <li><a href="#patterns" style="color:var(--dim);text-decoration:none;">The 6 AI Code Bug Patterns</a></li>
+        <li><a href="#integration" style="color:var(--dim);text-decoration:none;">Integration Review: The Parallel Agent Problem</a></li>
+        <li><a href="#workflow" style="color:var(--dim);text-decoration:none;">The Morning Review Workflow</a></li>
+        <li><a href="#reject" style="color:var(--dim);text-decoration:none;">How to Reject and Retry</a></li>
+        <li><a href="#tools" style="color:var(--dim);text-decoration:none;">Tooling: Dashboard, Diff, and Automation</a></li>
+        <li><a href="#human-vs-ai" style="color:var(--dim);text-decoration:none;">Human Review vs AI Review: When You Need Each</a></li>
+        <li><a href="#faq" style="color:var(--dim);text-decoration:none;">FAQ</a></li>
+      </ol>
+    </nav>
+
+    <!-- ───── The Shift ───── -->
+    <h2 id="shift">The Shift: Writer to Reviewer</h2>
+    <p>The <a href="https://dora.dev/research/" target="_blank" rel="noopener">DORA 2026 report</a> confirmed what developers already felt: the bottleneck has shifted from writing code to verifying it. With <a href="https://survey.stackoverflow.co/2024/ai" target="_blank" rel="noopener">92% of developers using AI coding tools daily</a> and AI generating over 40% of code at adopting companies, the developer's primary job is no longer authoring &mdash; it's reviewing.</p>
+    <p><a href="https://fortune.com/2026/03/31/ai-agents-vibe-coding-developer-skills-supervisor-class/" target="_blank" rel="noopener">Fortune called it the "supervisor class"</a>. <a href="https://www.jetbrains.com/lp/devecosystem-2025/" target="_blank" rel="noopener">JetBrains found</a> that senior developers now spend more time reviewing agent output than writing code themselves. The problem: most developers were never trained to review 10x more code than they can write.</p>
+    <p>This guide is the practical side. Not the think piece about role transformation. The actual workflow for a developer who wakes up to 10 completed agent branches and needs to ship by lunch.</p>
+
+    <!-- ───── Time Budgets ───── -->
+    <h2 id="time">Time Budgets: How Long Each Review Should Take</h2>
+    <p>The most common mistake is spending equal time on every branch. Not all agent output deserves the same scrutiny. Budget your review time by task type:</p>
+
+    <div class="time-box">
+      <div class="time-card">
+        <h4>Test generation</h4>
+        <div class="time">3-5 min</div>
+        <p>Run the tests. Check coverage numbers. Skim for assertions that test the mock instead of real behavior. If tests pass and coverage improved, merge.</p>
+      </div>
+      <div class="time-card">
+        <h4>Documentation</h4>
+        <div class="time">2-3 min</div>
+        <p>Spot-check factual accuracy against current code. Look for hallucinated function signatures or deprecated API references. Lowest risk.</p>
+      </div>
+      <div class="time-card">
+        <h4>Simple endpoints / CRUD</h4>
+        <div class="time">5-8 min</div>
+        <p>Verify input validation, auth checks, error handling at boundaries. Run the tests. Check the database query patterns for N+1.</p>
+      </div>
+      <div class="time-card">
+        <h4>Business logic</h4>
+        <div class="time">10-15 min</div>
+        <p>This is where human judgment matters most. Trace the logic against the spec. Check edge cases explicitly. Verify that the agent's interpretation of requirements matches yours.</p>
+      </div>
+      <div class="time-card">
+        <h4>Auth / security</h4>
+        <div class="time">12-18 min</div>
+        <p>The highest-risk category. Check every auth boundary, every input sanitization point, every secret reference. AI agents reproduce insecure patterns from training data. Don't trust, verify.</p>
+      </div>
+      <div class="time-card">
+        <h4>Refactoring</h4>
+        <div class="time">5-10 min</div>
+        <p>Verify the refactored code is functionally equivalent. Run the existing tests (they should all still pass). Check that no public API signatures changed unintentionally.</p>
+      </div>
+    </div>
+
+    <p>With these budgets, 10 branches from an overnight run take <strong>60-90 minutes</strong> to review. If you're regularly exceeding that, your task specs need to be more granular.</p>
+
+    <!-- ───── Triage ───── -->
+    <h2 id="triage">Triage: What to Review First</h2>
+    <p>Don't review in completion order. Triage by risk:</p>
+    <ol style="font-size:0.92rem;line-height:1.9;">
+      <li><strong>Shared files first.</strong> If two agents touched the same file (types, schemas, config), review those branches first. Incompatible changes here cascade into every other branch.</li>
+      <li><strong>Core business logic second.</strong> The feature's critical path. If this is wrong, nothing else matters.</li>
+      <li><strong>Security-sensitive code third.</strong> Auth, payment, PII handling. These have the highest blast radius if bugs ship.</li>
+      <li><strong>Endpoints and CRUD fourth.</strong> Standard patterns, lower risk, usually straightforward.</li>
+      <li><strong>Tests and documentation last.</strong> Lowest risk, fastest to review, and if earlier branches need rework, these may need to change anyway.</li>
+    </ol>
+    <p>In <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">amux</a>, the dashboard shows each session's status and the files it modified. Sort by sessions that touched shared directories to identify integration risks before reading any code.</p>
+
+    <!-- ───── Checklist ───── -->
+    <h2 id="checklist">The AI Code Review Checklist</h2>
+    <p>Print this. Use it until the checks become automatic. These are the failure modes specific to AI-generated code &mdash; not general code review advice.</p>
+
+    <div class="checklist">
+      <h3>Before reading any code</h3>
+      <ul>
+        <li><strong>Run the agent's tests.</strong> If they fail, stop reviewing and send the agent back with the failure. Don't debug for the AI.</li>
+        <li><strong>Check the diff size vs spec scope.</strong> A spec that says "add one endpoint" shouldn't produce a 500-line diff. Large diffs from small specs mean the agent over-engineered.</li>
+        <li><strong>Read the agent's commit messages.</strong> AI agents usually summarize what they did. If the summary doesn't match the spec, that's a red flag.</li>
+      </ul>
+    </div>
+
+    <div class="checklist">
+      <h3>While reading the diff</h3>
+      <ul>
+        <li><strong>Verify every import exists.</strong> AI agents hallucinate package names, deprecated APIs, and functions that don't exist in the version you use. <code>grep</code> for any import you don't recognize.</li>
+        <li><strong>Check error handling at system boundaries.</strong> AI writes happy-path code. Look at every external call (database, API, file system) and verify there's error handling. Missing <code>try/catch</code> on I/O is the #1 bug category.</li>
+        <li><strong>Look for hardcoded values.</strong> API keys, URLs, credentials, magic numbers. AI agents copy patterns from training data, including hardcoded examples that should be environment variables.</li>
+        <li><strong>Count the abstraction layers.</strong> AI loves creating unnecessary interfaces, abstract base classes, factory patterns, and helper modules. If you can inline a helper and the code reads better, the abstraction shouldn't exist.</li>
+        <li><strong>Verify test assertions are meaningful.</strong> AI-generated tests often assert that a function returns a value (obvious) but miss asserting the correct value, error cases, or side effects. Check that tests would fail if the code broke.</li>
+        <li><strong>Check database queries.</strong> Look for N+1 patterns: a query inside a loop, or an ORM call that triggers lazy loading. AI generates code that works with 10 records and dies with 10,000.</li>
+      </ul>
+    </div>
+
+    <div class="checklist">
+      <h3>After approving the code</h3>
+      <ul>
+        <li><strong>Run the full test suite, not just the agent's tests.</strong> Agent code that passes its own tests can break existing tests it doesn't know about.</li>
+        <li><strong>Check for unintended file changes.</strong> Agents sometimes reformat files, update lockfiles, or modify configs as side effects. <code>git diff --stat</code> catches these.</li>
+        <li><strong>Verify the branch merges cleanly.</strong> If it doesn't, check whether the conflict is with another agent's branch before resolving.</li>
+      </ul>
+    </div>
+
+    <!-- ───── Red Flags ───── -->
+    <h2 id="red-flags">Red Flags: When to Reject Immediately</h2>
+    <div class="red-flag">
+      <h3>Stop reviewing and restart the agent if you see any of these</h3>
+      <ul>
+        <li><strong>The agent modified files outside the spec scope.</strong> If you asked for an API endpoint and it refactored the auth middleware, that's scope creep. It may have introduced bugs in code that was working.</li>
+        <li><strong>The diff contains commented-out code with "TODO" or "FIXME".</strong> The agent couldn't solve the problem and left a marker. This is half-finished work disguised as a deliverable.</li>
+        <li><strong>Tests pass but don't test the actual requirement.</strong> AI agents sometimes write tests that verify the code runs without errors but never check the output. A test for "create user" that doesn't verify the user was actually created is worthless.</li>
+        <li><strong>The agent created a new abstraction layer that didn't exist before.</strong> Unless the spec explicitly asked for it, a new abstract base class, service layer, or helper module is the agent solving a problem you didn't have.</li>
+        <li><strong>Security-sensitive code with no input validation.</strong> An endpoint that accepts user input and passes it directly to a database query, shell command, or template renderer. Reject. No exceptions.</li>
+        <li><strong>The agent's approach is fundamentally wrong.</strong> If you'd need to rewrite more than 30% of the diff to fix it, restart from scratch with a better spec. Iterating on a bad approach costs more than starting over.</li>
+      </ul>
+    </div>
+
+    <!-- ───── 6 Bug Patterns ───── -->
+    <h2 id="patterns">The 6 AI Code Bug Patterns</h2>
+    <p>Research from <a href="https://labs.cloudsecurityalliance.org/" target="_blank" rel="noopener">CSA</a>, <a href="https://codescene.com/use-cases/ai-code-quality" target="_blank" rel="noopener">CodeScene</a>, and the <a href="https://dora.dev/research/" target="_blank" rel="noopener">DORA team</a> shows that AI-generated code bugs cluster into six patterns. Learn to spot them and your review speed doubles.</p>
+
+    <div class="pattern-grid">
+      <div class="pattern-card">
+        <h4>1. Hallucinated imports</h4>
+        <p>The agent imports a package, function, or API that doesn't exist in your dependency tree. Looks plausible. Compiles in the agent's imagination. Fails on <code>npm install</code> or first import.</p>
+        <p style="margin-top:0.5rem;color:var(--amber);font-size:0.82rem"><strong>Catch it:</strong> Run <code>npm ls</code> / <code>pip freeze</code> and diff against new imports.</p>
+      </div>
+      <div class="pattern-card">
+        <h4>2. Happy-path-only logic</h4>
+        <p>Code that handles the normal case beautifully and crashes on the first edge case. No null checks, no empty array handling, no timeout logic. The agent tested with ideal inputs and declared victory.</p>
+        <p style="margin-top:0.5rem;color:var(--amber);font-size:0.82rem"><strong>Catch it:</strong> Ask "what happens if this is null/empty/huge?"</p>
+      </div>
+      <div class="pattern-card">
+        <h4>3. Security anti-patterns</h4>
+        <p>SQL injection via string concatenation. XSS via <code>innerHTML</code>. Secrets in source. Missing auth middleware on new routes. The agent reproduces patterns from training data, including decades of insecure code.</p>
+        <p style="margin-top:0.5rem;color:var(--amber);font-size:0.82rem"><strong>Catch it:</strong> Search for <code>innerHTML</code>, string interpolation in queries, <code>eval()</code>.</p>
+      </div>
+      <div class="pattern-card">
+        <h4>4. Over-abstraction</h4>
+        <p>A simple task produces a factory, an interface, three helper classes, and a configuration system. AI agents default to "enterprise patterns" when simple code would work. More abstraction = more surface area for bugs.</p>
+        <p style="margin-top:0.5rem;color:var(--amber);font-size:0.82rem"><strong>Catch it:</strong> Count new files. A 1-endpoint spec shouldn't create 5 files.</p>
+      </div>
+      <div class="pattern-card">
+        <h4>5. N+1 and performance traps</h4>
+        <p>ORM calls inside loops. Unbounded queries without pagination. Synchronous operations that should be async. The code works in dev with 10 rows and melts production with 10,000.</p>
+        <p style="margin-top:0.5rem;color:var(--amber);font-size:0.82rem"><strong>Catch it:</strong> Look for database/API calls inside any <code>for</code>/<code>map</code>/<code>forEach</code>.</p>
+      </div>
+      <div class="pattern-card">
+        <h4>6. Shallow test assertions</h4>
+        <p><code>expect(result).toBeTruthy()</code> instead of <code>expect(result.id).toBe(42)</code>. Tests that verify the function didn't throw instead of verifying it did the right thing. Green CI with zero confidence.</p>
+        <p style="margin-top:0.5rem;color:var(--amber);font-size:0.82rem"><strong>Catch it:</strong> Search test files for <code>toBeTruthy</code>, <code>toBeDefined</code>, bare <code>not.toThrow</code>.</p>
+      </div>
+    </div>
+
+    <!-- ───── Integration ───── -->
+    <h2 id="integration">Integration Review: The Parallel Agent Problem</h2>
+    <p>This is the review problem unique to multi-agent workflows. When 5 agents work in isolated <a href="https://git-scm.com/docs/git-worktree" target="_blank" rel="noopener">git worktrees</a>, they can't see each other's changes. Each branch works in isolation. The bugs appear when you merge them together.</p>
+
+    <p><strong>What to check:</strong></p>
+    <ul style="font-size:0.92rem;line-height:1.9;">
+      <li><strong>Type definitions.</strong> Did two agents define the same type/interface differently? Compare all shared type files across branches before merging anything.</li>
+      <li><strong>API contracts.</strong> If Agent A created an endpoint and Agent B consumes it, do the request/response shapes match? Check query parameters, headers, and response body schemas.</li>
+      <li><strong>Database schema.</strong> Did two agents add migrations that conflict? Same table, same column name, incompatible changes?</li>
+      <li><strong>Import paths.</strong> One agent created <code>utils/auth.ts</code> while another expects <code>lib/auth.ts</code>. Both work in their worktree. Neither works when merged.</li>
+      <li><strong>Shared state.</strong> Two agents writing to the same config file, environment variable, or global store. The last merge wins, silently breaking the first.</li>
+    </ul>
+    <p>In amux, the dashboard shows which files each session committed. A quick scan for overlapping file paths across sessions catches 80% of integration issues before you open a single diff.</p>
+
+    <!-- ───── Workflow ───── -->
+    <h2 id="workflow">The Morning Review Workflow</h2>
+    <p>The concrete sequence for reviewing 10 agent branches before standup.</p>
+
+    <div class="workflow-step">
+      <div class="workflow-num">1</div>
+      <div class="workflow-body">
+        <h4>Dashboard scan (5 min)</h4>
+        <p>Open your orchestrator's dashboard. Check: how many agents completed? Any that crashed or stalled? Any that are still running? Note which sessions modified shared files.</p>
+      </div>
+    </div>
+    <div class="workflow-step">
+      <div class="workflow-num">2</div>
+      <div class="workflow-body">
+        <h4>Run all test suites (parallel, 5-10 min)</h4>
+        <p>Before reviewing any code, run tests in every agent's worktree. This immediately tells you which branches have working code and which need rework. Start reviews only on branches where tests pass.</p>
+      </div>
+    </div>
+    <div class="workflow-step">
+      <div class="workflow-num">3</div>
+      <div class="workflow-body">
+        <h4>Integration check (10 min)</h4>
+        <p>Compare type definitions, API contracts, and shared files across all branches. Resolve conflicts before reviewing individual branches. This prevents wasted time reviewing code that will change during merge.</p>
+      </div>
+    </div>
+    <div class="workflow-step">
+      <div class="workflow-num">4</div>
+      <div class="workflow-body">
+        <h4>Review high-risk branches (30-45 min)</h4>
+        <p>Business logic, auth, core features. Use the checklist. Focus on the diff against the spec. Don't read code that hasn't changed.</p>
+      </div>
+    </div>
+    <div class="workflow-step">
+      <div class="workflow-num">5</div>
+      <div class="workflow-body">
+        <h4>Review low-risk branches (15-20 min)</h4>
+        <p>Endpoints, CRUD, tests, docs. These should go fast. If tests pass and the diff matches the spec, merge.</p>
+      </div>
+    </div>
+    <div class="workflow-step">
+      <div class="workflow-num">6</div>
+      <div class="workflow-body">
+        <h4>Sequential merge and validate (15-20 min)</h4>
+        <p>Merge one branch at a time into main. Run the full suite after each merge. If something breaks, you know exactly which branch caused it. Never batch-merge.</p>
+      </div>
+    </div>
+
+    <!-- ───── Reject ───── -->
+    <h2 id="reject">How to Reject and Retry</h2>
+    <p>When agent output doesn't pass review, your response should be proportional to the problem:</p>
+    <table style="width:100%;font-size:0.88rem;border-collapse:collapse;margin:1.5rem 0;">
+      <thead>
+        <tr style="border-bottom:2px solid var(--border);">
+          <th style="text-align:left;padding:0.6rem 0.8rem;color:var(--muted);font-size:0.78rem;text-transform:uppercase;">Severity</th>
+          <th style="text-align:left;padding:0.6rem 0.8rem;color:var(--muted);font-size:0.78rem;text-transform:uppercase;">Action</th>
+          <th style="text-align:left;padding:0.6rem 0.8rem;color:var(--muted);font-size:0.78rem;text-transform:uppercase;">Time cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem 0.8rem;"><strong>Cosmetic</strong> (naming, formatting)</td>
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">Fix it yourself. Faster than re-prompting.</td>
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">1-2 min</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem 0.8rem;"><strong>Localized bug</strong> (logic error in one function)</td>
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">Send the agent the failing test or exact error. Let it fix.</td>
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">5-10 min</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem 0.8rem;"><strong>Wrong approach</strong> (viable but suboptimal)</td>
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">Send a follow-up prompt with the right approach. Include constraints.</td>
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">10-20 min</td>
+        </tr>
+        <tr>
+          <td style="padding:0.6rem 0.8rem;"><strong>Fundamentally wrong</strong> (>30% needs rewriting)</td>
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">Kill the session. Rewrite the spec. Start a fresh agent.</td>
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">20-45 min</td>
+        </tr>
+      </tbody>
+    </table>
+    <p><strong>The two-strike rule:</strong> if an agent fails to fix an issue after two follow-up prompts, restart from scratch. Iterating on a confused agent costs more tokens and time than a clean start with a better spec.</p>
+
+    <!-- ───── Tools ───── -->
+    <h2 id="tools">Tooling: Dashboard, Diff, and Automation</h2>
+    <p>The right tools cut review time in half. Here's what to use at each step:</p>
+    <ul style="font-size:0.92rem;line-height:1.9;">
+      <li><strong>Orchestrator dashboard</strong> (<a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">amux</a>, <a href="https://github.com/smtg-ai/claude-squad" target="_blank" rel="noopener">Claude Squad</a>, <a href="https://www.conductor.build/" target="_blank" rel="noopener">Conductor</a>) &mdash; triage at a glance. See which agents completed, which crashed, what files each touched. amux's peek mode lets you read agent output without leaving the dashboard.</li>
+      <li><strong><code>git diff --stat</code></strong> &mdash; first thing you run on every branch. Shows how many files changed and how many lines. If the numbers don't match the spec's scope, investigate before reading code.</li>
+      <li><strong><a href="https://code.claude.com/docs/en/whats-new" target="_blank" rel="noopener">Claude Code /ultrareview</a></strong> &mdash; launches a cloud-based fleet of reviewer agents to verify the agent's work before you touch it. Best used as a pre-filter: run /ultrareview, read its report, then focus your human review on what it flagged.</li>
+      <li><strong>Linters and type checkers</strong> (<a href="https://eslint.org/" target="_blank" rel="noopener">ESLint</a>, <a href="https://mypy-lang.org/" target="_blank" rel="noopener">mypy</a>, <a href="https://www.typescriptlang.org/" target="_blank" rel="noopener">TypeScript</a>) &mdash; run these automatically on every branch via <a href="https://code.claude.com/docs/en/hooks" target="_blank" rel="noopener">Claude Code hooks</a> or CI. They catch hallucinated imports, type mismatches, and unused code for free.</li>
+      <li><strong>Security scanners</strong> (<a href="https://semgrep.dev/" target="_blank" rel="noopener">Semgrep</a>, <a href="https://github.com/PyCQA/bandit" target="_blank" rel="noopener">Bandit</a>, <a href="https://www.sonarsource.com/products/sonarqube/" target="_blank" rel="noopener">SonarQube</a>) &mdash; automated first pass on security. Configure as a hook so every agent branch gets scanned before you see it.</li>
+    </ul>
+
+    <!-- ───── Human vs AI Review ───── -->
+    <h2 id="human-vs-ai">Human Review vs AI Review: When You Need Each</h2>
+    <p>Cross-model review (one AI reviews another AI's code) catches <a href="https://www.qodo.ai/blog/single-agent-vs-multi-agent-code-review/" target="_blank" rel="noopener">60-70% of defects</a> that self-review misses. But it has blind spots. Here's how to divide the work:</p>
+    <table style="width:100%;font-size:0.88rem;border-collapse:collapse;margin:1.5rem 0;">
+      <thead>
+        <tr style="border-bottom:2px solid var(--border);">
+          <th style="text-align:left;padding:0.6rem 0.8rem;color:var(--muted);font-size:0.78rem;text-transform:uppercase;">Let AI review</th>
+          <th style="text-align:left;padding:0.6rem 0.8rem;color:var(--muted);font-size:0.78rem;text-transform:uppercase;">Human must review</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">Code style, formatting, naming conventions</td>
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">Business logic correctness against requirements</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">Common security patterns (SQL injection, XSS)</td>
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">Authorization logic and access control design</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">Test coverage gaps</td>
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">Whether the right things are being tested</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">Unused imports, dead code, type errors</td>
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">Architecture decisions and integration fit</td>
+        </tr>
+        <tr>
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">Documentation accuracy (API signatures)</td>
+          <td style="padding:0.6rem 0.8rem;color:var(--dim)">Whether the approach matches team conventions</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>The pattern that works: <strong>Agent writes &rarr; Different AI model reviews &rarr; Human reviews the review.</strong> The human pass is faster because the AI reviewer already flagged likely issues. You're reviewing a report, not doing archaeology.</p>
+
+    <!-- ───── FAQ ───── -->
+    <h2 id="faq">FAQ</h2>
+    <div style="margin:1.5rem 0;">
+      <details style="background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:0.8rem;">
+        <summary style="padding:1rem 1.2rem;cursor:pointer;font-weight:600;font-size:0.92rem;">How long should it take to review AI-generated code?</summary>
+        <div style="padding:0 1.2rem 1rem;font-size:0.88rem;color:var(--dim);line-height:1.7;">
+          <p>For a well-scoped task (15-45 minutes of agent work), review should take 5-15 minutes. If you're spending longer than 15 minutes on a single agent's output, the task was scoped too broadly. The goal is 3-5 minutes for routine tasks and 10-15 minutes for complex ones. With 10 agents completing work overnight, morning review should take 60-90 minutes.</p>
+        </div>
+      </details>
+      <details style="background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:0.8rem;">
+        <summary style="padding:1rem 1.2rem;cursor:pointer;font-weight:600;font-size:0.92rem;">Should I review every line of AI-generated code?</summary>
+        <div style="padding:0 1.2rem 1rem;font-size:0.88rem;color:var(--dim);line-height:1.7;">
+          <p>No. Review every diff, but not every line. Focus on: business logic, security boundaries, integration points, and anything the agent flagged as uncertain. Skip reviewing boilerplate, formatting, and imports &mdash; those are what linters and type checkers handle. Your attention is the bottleneck, so spend it where human judgment matters most.</p>
+        </div>
+      </details>
+      <details style="background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:0.8rem;">
+        <summary style="padding:1rem 1.2rem;cursor:pointer;font-weight:600;font-size:0.92rem;">What are the most common bugs in AI-generated code?</summary>
+        <div style="padding:0 1.2rem 1rem;font-size:0.88rem;color:var(--dim);line-height:1.7;">
+          <p>Six patterns cover the majority: (1) hallucinated imports, (2) happy-path-only logic with no edge case handling, (3) security anti-patterns (SQL injection, XSS, hardcoded secrets), (4) over-abstraction creating unnecessary complexity, (5) N+1 query patterns, and (6) shallow test assertions that verify existence instead of correctness.</p>
+        </div>
+      </details>
+      <details style="background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:0.8rem;">
+        <summary style="padding:1rem 1.2rem;cursor:pointer;font-weight:600;font-size:0.92rem;">How do I review code from agents that worked on related tasks?</summary>
+        <div style="padding:0 1.2rem 1rem;font-size:0.88rem;color:var(--dim);line-height:1.7;">
+          <p>Review shared files (types, schemas, API contracts) across all branches before reviewing implementation code. If two agents defined the same type differently, resolve that first. Tools like amux show committed file diffs per session, making it easy to spot overlapping changes before you open a single diff.</p>
+        </div>
+      </details>
+      <details style="background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:0.8rem;">
+        <summary style="padding:1rem 1.2rem;cursor:pointer;font-weight:600;font-size:0.92rem;">Is it safe to let AI agents review each other's code?</summary>
+        <div style="padding:0 1.2rem 1rem;font-size:0.88rem;color:var(--dim);line-height:1.7;">
+          <p>Partially. Cross-model review catches 60-70% of defects that self-review misses. Same-model review suffers from sycophancy bias. Use automated agent review as a first pass, but a human must still review business logic, security-critical code, and integration points.</p>
+        </div>
+      </details>
+      <details style="background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:0.8rem;">
+        <summary style="padding:1rem 1.2rem;cursor:pointer;font-weight:600;font-size:0.92rem;">What should I do when an agent's output is wrong?</summary>
+        <div style="padding:0 1.2rem 1rem;font-size:0.88rem;color:var(--dim);line-height:1.7;">
+          <p>Proportional response: cosmetic issues &mdash; fix yourself (1-2 min). Localized bugs &mdash; send the agent the failing test (5-10 min). Wrong approach &mdash; new prompt with constraints (10-20 min). Fundamentally wrong &mdash; kill the session, rewrite the spec, start fresh (20-45 min). If an agent fails after two follow-up prompts, always restart.</p>
+        </div>
+      </details>
+      <details style="background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:0.8rem;">
+        <summary style="padding:1rem 1.2rem;cursor:pointer;font-weight:600;font-size:0.92rem;">How does reviewing AI code differ from reviewing human code?</summary>
+        <div style="padding:0 1.2rem 1rem;font-size:0.88rem;color:var(--dim);line-height:1.7;">
+          <p>Three key differences: (1) Volume &mdash; AI produces 5-10x more code per hour, so you must triage ruthlessly. (2) Failure patterns &mdash; humans make typos and logic errors; AI makes hallucination, over-engineering, and security pattern errors. Your checklist must cover different things. (3) No ego &mdash; you can reject AI code with a one-line reason. This should make you more decisive, not less rigorous.</p>
+        </div>
+      </details>
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.4rem 1.6rem;margin:2rem 0;">
+      <p style="font-size:0.88rem;color:var(--dim);margin:0;line-height:1.7;">
+        <strong style="color:var(--text);">Related guides:</strong>
+        <a href="/guides/vibe-coding-quality-gates/">AI Agent Quality Gates</a> &mdash; automated validation pipelines.
+        <a href="/guides/agentic-engineering/">Agentic Engineering</a> &mdash; the full parallel agent workflow.
+        <a href="/guides/context-engineering/">Context Engineering</a> &mdash; structuring what agents see.
+        <a href="/guides/spec-driven-development/">Spec-Driven Development</a> &mdash; writing specs that produce reviewable output.
+      </p>
+    </div>
+
+    <div style="background:oklch(0.82 0.17 85 / .12);border:1px solid var(--amber);border-radius:8px;padding:1.4rem 1.6rem;margin:3rem 0 2rem;text-align:center;">
+      <p style="font-size:1rem;font-weight:600;margin:0 0 0.5rem;">Review agent output from your phone</p>
+      <p style="font-size:0.88rem;color:var(--dim);margin:0 0 1rem;">amux's dashboard shows session status, committed diffs, and peek mode &mdash; accessible from any device as a PWA.</p>
+      <a href="/guides/getting-started/" style="display:inline-block;background:var(--amber);color:var(--bg);padding:0.6rem 1.4rem;border-radius:6px;text-decoration:none;font-weight:600;font-size:0.88rem;">Get Started</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" style="display:inline-block;background:var(--surface);color:var(--text);padding:0.6rem 1.4rem;border-radius:6px;text-decoration:none;font-weight:600;font-size:0.88rem;margin-left:0.6rem;border:1px solid var(--border);">View on GitHub</a>
+    </div>
+
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-grid">
+      <div><strong>Product</strong><br><a href="/docs/">Docs</a><br><a href="/guides/">Guides</a><br><a href="/demos/">Demos</a><br><a href="/pricing/">Pricing</a></div>
+      <div><strong>Compare</strong><br><a href="/compare/">All comparisons</a><br><a href="/compare/amux-vs-claude-squad/">vs Claude Squad</a><br><a href="/compare/amux-vs-cursor/">vs Cursor</a><br><a href="/compare/amux-vs-devin/">vs Devin</a></div>
+      <div><strong>Resources</strong><br><a href="/blog/">Blog</a><br><a href="/changelog/">Changelog</a><br><a href="/faq/">FAQ</a><br><a href="/glossary/">Glossary</a></div>
+      <div><strong>Community</strong><br><a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a><br><a href="https://discord.gg/amux" target="_blank" rel="noopener">Discord</a><br><a href="/blog/rss.xml">RSS</a></div>
+    </div>
+    <p style="text-align:center;color:var(--muted);font-size:0.75rem;margin-top:2rem;">amux &mdash; the agent multiplexer. Open source under MIT.</p>
+  </footer>
+  <script>
+    fetch('https://api.github.com/repos/mixpeek/amux')
+      .then(r=>r.json())
+      .then(d=>{if(d.stargazers_count){const e=document.getElementById('gh-stars');if(e)e.textContent='('+d.stargazers_count.toLocaleString()+')'}})
+      .catch(()=>{});
+  </script>
+</body>
+</html>

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>LLM Context Window — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="The maximum amount of text an LLM can process in a single request — a key constraint in long-running agent sessions.">
+  <meta name="keywords" content="LLM context window, context limit, token window AI">
+  <link rel="canonical" href="https://amux.io/glossary/llm-context-window/">
+  <meta property="og:title" content="LLM Context Window — amux">
+  <meta property="og:description" content="The maximum amount of text an LLM can process in a single request — a key constraint in long-running agent sessions.">
+  <meta property="og:url" content="https://amux.io/glossary/llm-context-window/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Glossary","item":"https://amux.io/glossary/"},{"@type":"ListItem","position":3,"name":"LLM Context Window","item":"https://amux.io/glossary/llm-context-window/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"DefinedTerm","name":"LLM Context Window","description":"The maximum amount of text an LLM can process in a single request — a key constraint in long-running agent sessions.","url":"https://amux.io/glossary/llm-context-window/","inDefinedTermSet":{"@type":"DefinedTermSet","name":"amux Glossary","url":"https://amux.io/glossary/"}}</script>
+  </head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">›</span> <a href="/glossary/">Glossary</a> <span class="sep">›</span> <span>LLM Context Window</span></div>
+    <h1>LLM Context Window</h1>
+<p class="subtitle">The context window defines how much an AI agent can "remember" in a single session — and why long-running agents need careful management.</p>
+<h2>Definition</h2>
+<p>The <strong>context window</strong> of a large language model (LLM) is the maximum number of tokens (roughly, words and characters) that the model can process in a single request — including both the input (everything the model has seen) and the output (what it generates). Tokens that exceed the context window are either truncated or cause an error.</p>
+<p>For modern models like Claude: Claude Sonnet and Opus have very large context windows (200k tokens or more). However, the effective working context — the amount the model reliably uses for reasoning — is often smaller in practice.</p>
+<h2>Why It Matters for Coding Agents</h2>
+<p>A long-running coding agent accumulates context over time: the initial task description, every file it has read, every command it has run, every error message and fix attempt. As the session progresses, this context grows. When the context window fills:</p>
+<ul>
+<li>Older context is pushed out (the agent "forgets" early information)</li>
+<li>Or the agent must be compacted (conversation is summarized and condensed)</li>
+<li>Or the agent errors out completely</li>
+</ul>
+<h2>Context Window Management Strategies</h2>
+<ul>
+<li><strong>Short-horizon tasks:</strong> Design tasks to complete within a fraction of the context window. This leaves headroom for error recovery and iteration.</li>
+<li><strong>Explicit file references:</strong> Tell agents exactly which files to read rather than letting them search. Reduces speculative context loading.</li>
+<li><strong>Frequent commits:</strong> Committing progress externalizes it — the agent can reference the committed code without keeping it all in context.</li>
+<li><strong>Auto-compact:</strong> amux automatically sends <code>/compact</code> when context fills, summarizing the conversation and continuing. Quality can drop after compaction — design tasks to avoid it.</li>
+</ul>
+<h2>Context vs. Memory</h2>
+<p>LLM context is not the same as long-term memory. Context is everything within the current session's window. Long-term memory (persisting information across sessions) requires external storage — files, databases, or dedicated memory systems. amux uses <code>.md</code> memory files and a global memory API for cross-session persistence.</p>
+<div class="cta-box"><h3>Get started with amux</h3><p>Run dozens of Claude Code agents in parallel. Python 3 + tmux. Open source.</p><pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # → https://localhost:8822</code></pre><a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a></div>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

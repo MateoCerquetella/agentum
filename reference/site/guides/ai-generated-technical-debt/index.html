@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>AI-Generated Technical Debt: How to Use Agents to Clean Up After Agents</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="40% of AI-generated code gets rewritten within two weeks. Code churn has doubled. Here's how to use parallel AI agents to systematically find and fix the technical debt that vibe coding created — with automated cleanup workflows, scheduling patterns, and real metrics.">
+  <meta name="keywords" content="AI generated technical debt, vibe coding technical debt, AI code cleanup, AI code churn, AI agent refactoring, automated code cleanup, vibe coding debt, AI code rewrite, technical debt AI agents, AI code quality degradation, code churn AI, agent generated code maintenance">
+  <link rel="canonical" href="https://amux.io/guides/ai-generated-technical-debt/">
+  <meta property="og:title" content="AI-Generated Technical Debt: How to Use Agents to Clean Up After Agents">
+  <meta property="og:description" content="40% of AI-generated code gets rewritten within two weeks. Here's the multi-agent workflow for systematic cleanup — automated refactoring, test backfill, and dead code removal.">
+  <meta property="og:url" content="https://amux.io/guides/ai-generated-technical-debt/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="AI-Generated Technical Debt: Agents Cleaning Up After Agents">
+  <meta name="twitter:description" content="Code churn doubled. Refactoring dropped 60%. Here's the multi-agent cleanup workflow that reverses it.">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"AI-Generated Technical Debt: How to Use Agents to Clean Up After Agents","description":"40% of AI-generated code gets rewritten within two weeks. Code churn has doubled. Here's how to use parallel AI agents to systematically find and fix the technical debt that vibe coding created.","datePublished":"2026-04-23","dateModified":"2026-04-23","author":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"publisher":{"@type":"Organization","name":"amux","logo":{"@type":"ImageObject","url":"https://amux.io/icon-512.png"}},"image":"https://amux.io/og-image.png","mainEntityOfPage":{"@type":"WebPage","@id":"https://amux.io/guides/ai-generated-technical-debt/"}}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Guides","item":"https://amux.io/guides/"},{"@type":"ListItem","position":3,"name":"AI-Generated Technical Debt","item":"https://amux.io/guides/ai-generated-technical-debt/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"How much technical debt does AI-generated code actually create?","acceptedAnswer":{"@type":"Answer","text":"Data from early 2026 shows that 40% of AI-generated code gets rewritten within two weeks. Code churn — the percentage of code changed within 14 days of being written — has doubled since widespread AI coding adoption. Refactoring activity has dropped 60% because teams prioritize shipping features, meaning the debt is accumulating faster than it's being addressed."}},{"@type":"Question","name":"What types of technical debt do AI agents create?","acceptedAnswer":{"@type":"Answer","text":"AI agents create five distinct types of debt: structural debt (duplicated code, inconsistent patterns), dependency debt (outdated packages, hallucinated libraries), test debt (missing coverage, superficial assertions), documentation debt (stale comments, misleading docstrings), and integration debt (inconsistent APIs, incompatible assumptions between agent-written modules)."}},{"@type":"Question","name":"Can AI agents fix the technical debt they created?","acceptedAnswer":{"@type":"Answer","text":"Yes — and they're often better at cleanup than humans because they can process large codebases without fatigue. The key is using specialized cleanup agents with different instructions than the implementation agents that created the debt. An audit agent identifies issues, a refactoring agent fixes them, and a test agent validates the fixes. Running these in parallel through an orchestrator like amux makes the process systematic rather than ad-hoc."}},{"@type":"Question","name":"How often should I run cleanup agents?","acceptedAnswer":{"@type":"Answer","text":"Weekly for active codebases. Run an audit agent nightly to detect new debt. Run refactoring agents weekly to address the highest-priority items. For codebases with heavy AI generation (50%+ of commits), consider daily cleanup cycles. The cost is modest — cleanup agents use 10-20% of the tokens that implementation agents use — and the ROI compounds as you prevent debt from snowballing."}},{"@type":"Question","name":"What's the ROI of automated cleanup?","acceptedAnswer":{"@type":"Answer","text":"Teams report that AI-generated technical debt increases total cost of ownership by 12-15%. A weekly cleanup pipeline running 3-4 agents costs roughly $20-50 per week with API keys (or $0 marginal with a Max subscription). The break-even point is typically within the first month — preventing one production incident from accumulated debt pays for months of automated cleanup."}}]}</script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">&rsaquo;</span> <a href="/guides/">Guides</a> <span class="sep">&rsaquo;</span> <span>AI-Generated Technical Debt</span></div>
+    <h1>AI-Generated Technical Debt: How to Use Agents to Clean Up After Agents</h1>
+<p class="subtitle">Your codebase has six months of agent-written code. 40% of it will be rewritten. Here's the systematic cleanup workflow.</p>
+
+<p>The AI coding boom created a new category of technical debt — and it's accumulating faster than anyone expected.</p>
+
+<p>The numbers are stark: <strong>40% of AI-generated code gets rewritten within two weeks</strong> of being committed. Code churn has doubled. Refactoring activity dropped 60% as teams prioritize shipping features over cleanup. Developers spend 42% of their week managing technical debt, and now that debt is being generated at machine speed.</p>
+
+<p>The irony is that vibe coding was supposed to <em>eliminate</em> the boring parts of software engineering. Instead, it created a new boring part: cleaning up after agents that optimize for "it compiles and looks right" rather than "it's maintainable for the next two years."</p>
+
+<p>This guide covers the <strong>systematic cleanup workflow</strong> — using the same parallel agent infrastructure that created the debt to methodically pay it down. Not one-off refactors. An ongoing process that keeps AI-generated code from becoming a time bomb.</p>
+
+<h2>The five types of AI-generated debt</h2>
+
+<p>AI agents create debt differently than humans. Understanding the categories helps you target cleanup effectively.</p>
+
+<table class="data-table">
+<thead><tr><th>Debt type</th><th>What it looks like</th><th>Why agents create it</th><th>Cleanup difficulty</th></tr></thead>
+<tbody>
+<tr><td><strong>Structural debt</strong></td><td>Duplicated logic across files, inconsistent naming, God classes, 500-line functions</td><td>Each agent session starts fresh — it doesn't know what other agents already wrote</td><td>Medium</td></tr>
+<tr><td><strong>Dependency debt</strong></td><td>Outdated packages, hallucinated libraries, pinned versions from 2024, conflicting version ranges</td><td>Models suggest packages from training data, not the current registry</td><td>Easy</td></tr>
+<tr><td><strong>Test debt</strong></td><td>Missing coverage, superficial happy-path tests, tests that test the mock instead of the code</td><td>Agents skip tests unless explicitly told to write them, and when they do, they test the obvious path</td><td>Medium-Hard</td></tr>
+<tr><td><strong>Documentation debt</strong></td><td>Stale comments describing old behavior, misleading docstrings, README sections that reference removed features</td><td>Agents add verbose comments on first write, then modify code without updating them</td><td>Easy</td></tr>
+<tr><td><strong>Integration debt</strong></td><td>Inconsistent API patterns, incompatible assumptions between modules, tangled state management</td><td>Parallel agents build features independently — their code works alone but clashes together</td><td>Hard</td></tr>
+</tbody>
+</table>
+
+<p>The most dangerous is <strong>integration debt</strong>. When five agents each build a feature in isolation, they each make reasonable but incompatible assumptions about shared state, error handling, and API contracts. The code works in each agent's test — and breaks when combined.</p>
+
+<h2>Detecting AI-generated debt</h2>
+
+<p>Before you clean up, you need to know what to clean. Here's a three-agent audit workflow:</p>
+
+<h3>Agent 1: The code health auditor</h3>
+
+<p>This agent scans the codebase for structural problems. It doesn't fix anything — it creates an inventory.</p>
+
+<pre><code># Code health auditor's CLAUDE.md instructions
+# "You are a code health auditor. Scan the entire codebase and report:
+#
+# 1. DUPLICATION: Find functions/methods with >70% similarity across files.
+#    Report pairs with file paths and line numbers.
+#
+# 2. COMPLEXITY: Find functions over 50 lines or with cyclomatic complexity >10.
+#    These are the 'God functions' that agents love to create.
+#
+# 3. DEAD CODE: Find exported functions/classes with zero callers.
+#    Agents often write helper functions that nothing uses.
+#
+# 4. INCONSISTENCY: Find places where the same pattern is implemented
+#    differently (e.g., error handling, logging, API response format).
+#
+# 5. STALE COMMENTS: Find comments that contradict the code they describe.
+#
+# Post results as a board task with severity ratings (critical/high/medium/low).
+# Do NOT fix anything. Audit only."</code></pre>
+
+<pre><code># Run the auditor
+curl -sk -X POST -H 'Content-Type: application/json' \
+  -d '{"title":"Code health audit — full codebase","status":"todo","session":"auditor"}' \
+  $AMUX_URL/api/board</code></pre>
+
+<h3>Agent 2: The dependency auditor</h3>
+
+<pre><code># Dependency auditor's CLAUDE.md instructions
+# "You are a dependency auditor. Check all dependency files and report:
+#
+# 1. OUTDATED: Packages more than 2 major versions behind
+# 2. VULNERABLE: Packages with known CVEs (check npm audit / pip-audit / cargo audit)
+# 3. UNUSED: Packages in the manifest that nothing imports
+# 4. HALLUCINATED: Package names that don't exist in the registry
+#    (agents sometimes invent plausible-sounding package names)
+# 5. CONFLICTING: Version ranges that could resolve to incompatible versions
+#
+# Post results to the board. Include the exact command to fix each issue."</code></pre>
+
+<h3>Agent 3: The test coverage auditor</h3>
+
+<pre><code># Test coverage auditor's CLAUDE.md instructions
+# "You are a test coverage auditor. Analyze test quality and report:
+#
+# 1. UNCOVERED: Functions/methods with zero test coverage
+# 2. SHALLOW: Tests that only cover the happy path — no error cases,
+#    no edge cases, no boundary conditions
+# 3. MOCK-HEAVY: Tests where the mocks are more complex than the code
+#    they test — these often pass even when the real code is broken
+# 4. BRITTLE: Tests that depend on implementation details (exact string
+#    matches, specific call counts, private method spying)
+# 5. MISSING INTEGRATION: Features that have unit tests but no
+#    integration tests — the most common AI test gap
+#
+# Post results to the board with a prioritized list of what needs tests first."</code></pre>
+
+<p>Run all three auditors in parallel. They examine different aspects of the codebase and don't conflict with each other. With amux, this takes minutes instead of the hours a human audit would take.</p>
+
+<pre><code># Launch all three audits in parallel
+for agent in auditor dep-auditor test-auditor; do
+  curl -sk -X POST -H 'Content-Type: application/json' \
+    -d "{\"title\":\"Audit: $agent\",\"status\":\"todo\",\"session\":\"$agent\"}" \
+    $AMUX_URL/api/board
+done</code></pre>
+
+<h2>The cleanup pipeline</h2>
+
+<p>Once auditors have reported, cleanup agents address each category. The key principle: <strong>one agent per cleanup type, one PR per fix</strong>. Atomic changes are easier to review and safer to revert.</p>
+
+<h3>Phase 1: Quick wins (1-2 hours)</h3>
+
+<p>Start with the easy, high-impact items that a single agent can fix without risk:</p>
+
+<table class="data-table">
+<thead><tr><th>Cleanup task</th><th>Agent approach</th><th>Risk level</th></tr></thead>
+<tbody>
+<tr><td>Remove dead code</td><td>Delete unused exports identified by auditor. Run test suite after each deletion.</td><td>Low</td></tr>
+<tr><td>Update dependencies</td><td>Bump outdated packages one at a time. Run tests between each bump.</td><td>Low</td></tr>
+<tr><td>Fix stale comments</td><td>Delete comments that contradict code. Remove auto-generated boilerplate comments.</td><td>Very low</td></tr>
+<tr><td>Remove unused imports</td><td>Simple tree-shaking pass. No behavior change.</td><td>Very low</td></tr>
+</tbody>
+</table>
+
+<pre><code># Dead code cleanup agent
+# "You are a dead code cleanup agent. For each item in the audit report:
+# 1. Verify the function/class truly has zero callers (grep the entire codebase)
+# 2. Delete it
+# 3. Run the full test suite
+# 4. If tests pass: commit with message 'cleanup: remove unused FUNCTION_NAME'
+# 5. If tests fail: revert and flag as false positive on the board
+# IMPORTANT: One commit per deletion. Never batch multiple deletions."</code></pre>
+
+<h3>Phase 2: Structural refactoring (2-4 hours)</h3>
+
+<p>Address the duplicated code, inconsistent patterns, and oversized functions:</p>
+
+<pre><code># Deduplication agent
+# "You are a deduplication agent. For each pair of duplicated functions:
+# 1. Determine which version is better (more complete, better error handling)
+# 2. Extract to a shared module if both are in different files
+# 3. Replace all callers to use the single canonical version
+# 4. Run tests
+# 5. Commit: 'refactor: deduplicate FUNCTION_NAME into SHARED_MODULE'
+#
+# RULE: Write characterization tests BEFORE refactoring if the function
+# has no existing tests. Never refactor untested code."</code></pre>
+
+<pre><code># Pattern consistency agent
+# "You are a pattern consistency agent. For each inconsistency found:
+# 1. Identify the dominant pattern (most common implementation)
+# 2. Refactor outliers to match the dominant pattern
+# 3. If no dominant pattern exists, pick the cleanest one and standardize
+# 4. Run tests after each change
+# 5. Commit: 'refactor: standardize ERROR_HANDLING/LOGGING/API_PATTERN'
+#
+# Examples of what to standardize:
+# - Error handling: try/catch vs .catch() vs result types
+# - Logging: console.log vs logger.info vs custom wrapper
+# - API responses: {data, error} vs {result, status} vs raw returns
+# - Null handling: optional chaining vs explicit checks vs defaults"</code></pre>
+
+<h3>Phase 3: Test backfill (2-4 hours)</h3>
+
+<p>The highest-ROI cleanup activity. AI-generated code without tests is a liability. AI-generated tests for that code turn it into an asset.</p>
+
+<pre><code># Test backfill agent
+# "You are a test backfill agent. For each uncovered function in the audit:
+# 1. Read the function and understand its contract
+# 2. Write tests that cover:
+#    - Happy path with realistic inputs
+#    - Edge cases: empty inputs, null, undefined, zero, max values
+#    - Error paths: what happens when dependencies throw?
+#    - Boundary conditions: off-by-one, integer overflow, empty arrays
+# 3. Run tests — if any fail, you found a BUG. Report it on the board
+#    as a separate issue instead of fixing it.
+# 4. Target: branch coverage > 80% for each function
+# 5. Commit: 'test: add coverage for FUNCTION_NAME'
+#
+# IMPORTANT: Do NOT fix bugs you discover. Report them. Your job is
+# to add tests, not change production code. Mixing test additions with
+# bug fixes makes both harder to review."</code></pre>
+
+<p>The test backfill agent frequently <strong>discovers bugs</strong>. This is the single best argument for running it: existing AI-generated code that "works" often has subtle bugs that only surface when you write edge-case tests. Finding these during cleanup is 10-50x cheaper than finding them in production.</p>
+
+<h3>Phase 4: Integration cleanup (4-8 hours)</h3>
+
+<p>The hardest category. Integration debt requires understanding how modules interact, which usually means reading code across the entire codebase. This is where parallel agents shine — each agent can focus on one integration boundary.</p>
+
+<pre><code># API consistency agent
+# "You are an API consistency agent. Review all internal API boundaries:
+# 1. List all REST endpoints / RPC methods / function interfaces
+# 2. Check for inconsistencies:
+#    - Different error formats (some return {error: string}, others throw)
+#    - Different auth patterns (some check tokens, others assume auth)
+#    - Different pagination approaches (cursor vs offset vs none)
+#    - Different naming conventions (camelCase in some, snake_case in others)
+# 3. Propose a canonical pattern for each inconsistency
+# 4. Post proposals to a note at /api/notes/api-cleanup-plan
+# 5. Wait for human approval before making changes
+#
+# IMPORTANT: Do NOT refactor APIs without human approval.
+# Breaking API changes affect every consumer."</code></pre>
+
+<p>Integration cleanup always requires <strong>human review</strong>. The agent proposes changes and writes them to a shared note; a human reviews the plan before the agent executes. This is the one place where fully autonomous cleanup is too risky.</p>
+
+<h2>Scheduling recurring cleanup</h2>
+
+<p>One-off cleanup is a bandaid. The debt comes back because the same agents keep generating it. The solution is <strong>scheduled cleanup cycles</strong> that run automatically.</p>
+
+<h3>Nightly: audit only</h3>
+
+<pre><code># Schedule nightly audit at 2am
+# Auditors run in parallel, post findings to the board
+# Cost: ~$5-10 per night with API keys, $0 with Max subscription
+
+# In amux, use the scheduler:
+curl -sk -X POST -H 'Content-Type: application/json' \
+  -d '{
+    "name": "nightly-code-audit",
+    "cron": "0 2 * * *",
+    "action": "send",
+    "session": "auditor",
+    "message": "Run a full code health audit. Post findings to the board. Focus on changes from the last 24 hours."
+  }' \
+  $AMUX_URL/api/scheduler</code></pre>
+
+<h3>Weekly: audit + cleanup</h3>
+
+<pre><code># Schedule weekly cleanup on Sunday at midnight
+# Full pipeline: audit → quick wins → structural refactoring → test backfill
+# Cost: ~$20-50 per week with API keys, $0 with Max subscription
+
+curl -sk -X POST -H 'Content-Type: application/json' \
+  -d '{
+    "name": "weekly-cleanup",
+    "cron": "0 0 * * 0",
+    "action": "send",
+    "session": "cleanup-lead",
+    "message": "Run the full cleanup pipeline: 1) Launch audit agents 2) Wait for audit results 3) Assign cleanup tasks to available agents 4) Verify all cleanup PRs pass tests 5) Post summary to /api/notes/weekly-cleanup-report"
+  }' \
+  $AMUX_URL/api/scheduler</code></pre>
+
+<h3>Monthly: deep integration review</h3>
+
+<pre><code># Monthly deep review — includes integration debt, which needs human approval
+curl -sk -X POST -H 'Content-Type: application/json' \
+  -d '{
+    "name": "monthly-integration-review",
+    "cron": "0 9 1 * *",
+    "action": "send",
+    "session": "integration-auditor",
+    "message": "Run a full integration consistency audit. Post the API cleanup plan to /api/notes/api-cleanup-plan. Flag items that need human approval on the board."
+  }' \
+  $AMUX_URL/api/scheduler</code></pre>
+
+<h2>Measuring debt over time</h2>
+
+<p>You can't manage what you don't measure. Track these metrics weekly:</p>
+
+<table class="data-table">
+<thead><tr><th>Metric</th><th>What it tells you</th><th>How to measure</th><th>Healthy trend</th></tr></thead>
+<tbody>
+<tr><td><strong>Code churn rate</strong></td><td>% of lines changed within 14 days of being written</td><td><code>git log</code> analysis — compare line ages</td><td>Decreasing</td></tr>
+<tr><td><strong>Duplication ratio</strong></td><td>% of codebase that's duplicated logic</td><td>Audit agent report</td><td>&lt; 5%</td></tr>
+<tr><td><strong>Test coverage</strong></td><td>Branch coverage of production code</td><td>Coverage tool output</td><td>Increasing</td></tr>
+<tr><td><strong>Dead code volume</strong></td><td>Exported symbols with zero callers</td><td>Audit agent report</td><td>Decreasing</td></tr>
+<tr><td><strong>Dependency freshness</strong></td><td>Average age of pinned dependency versions</td><td>Dependency auditor</td><td>&lt; 6 months</td></tr>
+<tr><td><strong>Cleanup velocity</strong></td><td>Debt items resolved per week</td><td>Board task completion rate</td><td>Stable or increasing</td></tr>
+<tr><td><strong>Debt-to-feature ratio</strong></td><td>Cleanup commits vs feature commits</td><td><code>git log</code> categorization</td><td>1:3 to 1:5</td></tr>
+</tbody>
+</table>
+
+<p>The <strong>debt-to-feature ratio</strong> is the most important long-term metric. A healthy codebase generates roughly one cleanup commit for every 3-5 feature commits. If the ratio drops below 1:10, debt is accumulating. If it's above 1:2, you're spending more time cleaning than building — scale back AI code generation until the debt is under control.</p>
+
+<h3>Storing metrics in amux</h3>
+
+<p>Use amux notes to maintain a running log:</p>
+
+<pre><code># Weekly metrics agent posts to a persistent note
+curl -sk -X POST -H 'Content-Type: application/json' \
+  -d '{
+    "content": "## Week of 2026-04-21\n- Churn rate: 18% (down from 24%)\n- Duplication: 3.2% (down from 4.1%)\n- Test coverage: 72% (up from 68%)\n- Dead code: 14 unused exports (down from 31)\n- Cleanup velocity: 23 items resolved\n- Debt-to-feature ratio: 1:4"
+  }' \
+  $AMUX_URL/api/notes/debt-metrics</code></pre>
+
+<h2>The feedback loop: preventing new debt</h2>
+
+<p>Cleanup without prevention is a treadmill. The most impactful step is feeding audit findings back into your implementation agents' instructions.</p>
+
+<h3>Pattern: audit-driven CLAUDE.md updates</h3>
+
+<pre><code># After each weekly cleanup, update the implementer's CLAUDE.md:
+# If the auditor finds duplicated error handling patterns 3+ times:
+# → Add to CLAUDE.md: "Use the shared errorHandler from src/utils/errors.ts
+#   for all error handling. Do not create new try/catch patterns."
+
+# If the auditor finds inconsistent API responses:
+# → Add to CLAUDE.md: "All API responses must use the format
+#   {data: T, error: string | null, status: number}.
+#   See src/types/api.ts for the type definition."
+
+# If the test auditor finds missing integration tests:
+# → Add to CLAUDE.md: "Every new API endpoint must include at least one
+#   integration test that hits the real database. No mocked DB tests."</code></pre>
+
+<p>Over time, the implementation agents learn from past mistakes. The auditor finds fewer issues. The cleanup pipeline gets faster. This is the <strong>self-improving loop</strong> — the same principle from quality gates, applied to long-term codebase health.</p>
+
+<h3>Pattern: cleanup-agent-generated rules</h3>
+
+<p>Take it a step further — have the cleanup agent itself propose CLAUDE.md rules:</p>
+
+<pre><code># Rule generation agent
+# "After completing a cleanup task, consider whether the issue
+# could have been prevented. If yes, propose a CLAUDE.md rule:
+#
+# Format:
+# - RULE: [one sentence describing what to do]
+# - EVIDENCE: [the cleanup you just did that motivated this rule]
+# - LOCATION: [which CLAUDE.md file this should go in]
+#
+# Post proposed rules to /api/notes/proposed-rules.
+# A human will review and merge them into CLAUDE.md."</code></pre>
+
+<h2>Real-world cleanup workflow</h2>
+
+<p>Here's a concrete example of running the full pipeline on a codebase with six months of agent-generated code:</p>
+
+<pre><code># Monday morning: launch the full audit (3 agents in parallel)
+amux register myproject --dir ~/Dev/myproject --yolo --sessions 8
+amux start myproject
+
+# Assign audit tasks
+for role in "code-health" "dependencies" "test-coverage"; do
+  curl -sk -X POST -H 'Content-Type: application/json' \
+    -d "{\"title\":\"Audit: $role\",\"status\":\"todo\",\"session\":\"auditor\"}" \
+    $AMUX_URL/api/board
+done
+
+# Audits complete in 15-30 minutes
+# Results appear as board tasks with severity ratings
+
+# Monday afternoon: launch cleanup agents for quick wins
+# Dead code removal, dependency updates, stale comments
+# These are safe for fully autonomous operation
+
+# Tuesday: structural refactoring
+# Deduplication, pattern consistency
+# Agents work on separate git worktrees to avoid conflicts
+
+# Wednesday: test backfill
+# Highest-priority uncovered functions get tests
+# Bugs discovered during testing get reported as new board tasks
+
+# Thursday: human reviews integration cleanup proposals
+# Agent posted plan to /api/notes/api-cleanup-plan
+# Human approves/rejects each proposed change
+
+# Friday: integration cleanup executes approved changes
+# Agent implements only the approved items
+# Human does final review of the PR
+
+# Weekly summary posted to /api/notes/weekly-cleanup-report</code></pre>
+
+<h2>Cost and ROI</h2>
+
+<table class="data-table">
+<thead><tr><th>Pipeline</th><th>Agents</th><th>Weekly cost (API)</th><th>Weekly cost (Max)</th><th>What it catches</th></tr></thead>
+<tbody>
+<tr><td>Nightly audit only</td><td>3</td><td>$35-70</td><td>$0</td><td>Detects new debt daily. No cleanup.</td></tr>
+<tr><td>Weekly audit + quick wins</td><td>5</td><td>$50-100</td><td>$0</td><td>Dead code, stale deps, unused imports. ~30% debt reduction.</td></tr>
+<tr><td>Weekly full pipeline</td><td>8</td><td>$100-200</td><td>$0</td><td>All categories except integration. ~60% debt reduction.</td></tr>
+<tr><td>Weekly full + monthly integration</td><td>8</td><td>$120-250</td><td>$0</td><td>Everything. ~80% debt reduction over 3 months.</td></tr>
+</tbody>
+</table>
+
+<p>For context: unmanaged AI-generated technical debt increases total cost of ownership by <strong>12-15%</strong> over a year. A $200/week cleanup pipeline on a project with four developers ($40k+/month in salary) pays for itself in the first week.</p>
+
+<p>With a Claude Code Max subscription ($100-200/month), the marginal cost of cleanup agents is <strong>zero</strong>. You're already paying for the compute — running cleanup agents off-hours is pure ROI.</p>
+
+<h2>Anti-patterns</h2>
+
+<h3>1. Big-bang cleanup</h3>
+<p><strong>Wrong:</strong> Let debt accumulate for months, then do a massive refactoring sprint.</p>
+<p><strong>Right:</strong> Continuous small cleanups. One PR per fix. Never a 50-file refactor.</p>
+<p>Big-bang refactors break things, are impossible to review, and demoralize the team. Continuous cleanup is safer, more reviewable, and maintains momentum.</p>
+
+<h3>2. Cleanup without tests</h3>
+<p><strong>Wrong:</strong> Refactor code that has no test coverage.</p>
+<p><strong>Right:</strong> Always write characterization tests <em>before</em> refactoring.</p>
+<p>If you refactor untested code, you have no way to verify the refactoring preserved behavior. The cleanup might introduce more bugs than the debt it removed.</p>
+
+<h3>3. Fixing everything at once</h3>
+<p><strong>Wrong:</strong> Assign all audit findings to cleanup agents simultaneously.</p>
+<p><strong>Right:</strong> Prioritize by severity. Fix critical items first. Leave low-severity items for next cycle.</p>
+<p>Flooding the board with 200 cleanup tasks overwhelms agents and creates merge conflicts. Process 20-30 items per weekly cycle.</p>
+
+<h3>4. Cleaning without preventing</h3>
+<p><strong>Wrong:</strong> Run cleanup weekly but never update implementation agent instructions.</p>
+<p><strong>Right:</strong> Every recurring issue becomes a CLAUDE.md rule.</p>
+<p>If you clean up the same pattern every week, you're paying for the same fix repeatedly. Update the source — the implementer's instructions — so the debt stops being generated.</p>
+
+<div class="cta-box">
+  <h3>Automate your technical debt cleanup</h3>
+  <p>Run audit, refactoring, and test agents in parallel. Schedule nightly scans. Track debt metrics over time. All through one control plane.</p>
+  <pre><code>git clone https://github.com/mixpeek/amux && cd amux && ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # &rarr; https://localhost:8822</code></pre>
+  <div style="display:flex;gap:12px;margin-top:16px;flex-wrap:wrap;">
+    <a class="btn btn-primary" href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">Get iOS App</a>
+    <a class="btn btn-primary" href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">View on GitHub</a>
+  </div>
+</div>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='★ '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

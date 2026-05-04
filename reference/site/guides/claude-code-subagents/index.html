@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>Claude Code Subagents: The Complete Guide (2026) — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="The complete guide to Claude Code subagents — what they are, when to use them, how to write them, and how they compare to running multiple parallel Claude sessions. With real examples and pitfalls.">
+  <meta name="keywords" content="claude code subagents, claude subagents, claude code agent sdk, subagent vs session, claude code task tool, claude code parallel agents, claude code best practices, anthropic subagent, subagent yaml, claude subagent example">
+  <link rel="canonical" href="https://amux.io/guides/claude-code-subagents/">
+  <meta property="og:title" content="Claude Code Subagents: The Complete Guide (2026) — amux">
+  <meta property="og:description" content="What Claude Code subagents are, when they help, when they hurt, and how they relate to running parallel Claude sessions with amux.">
+  <meta property="og:url" content="https://amux.io/guides/claude-code-subagents/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Guides","item":"https://amux.io/guides/"},{"@type":"ListItem","position":3,"name":"Claude Code Subagents","item":"https://amux.io/guides/claude-code-subagents/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"Claude Code Subagents: The Complete Guide (2026)","description":"A practical, opinionated guide to Claude Code subagents — definitions, configuration, real examples, anti-patterns, and how they relate to running multiple parallel Claude sessions.","url":"https://amux.io/guides/claude-code-subagents/","datePublished":"2026-04-08","dateModified":"2026-04-08","author":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"publisher":{"@type":"Organization","name":"amux","url":"https://amux.io/","logo":{"@type":"ImageObject","url":"https://amux.io/icon.png"}}}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"HowTo","name":"How to Create a Claude Code Subagent","description":"Step-by-step guide to creating, configuring, and invoking a Claude Code subagent.","step":[{"@type":"HowToStep","name":"Create the subagent file","text":"Add a new markdown file under .claude/agents/ in your project (or ~/.claude/agents/ for a personal global subagent)."},{"@type":"HowToStep","name":"Write YAML frontmatter","text":"Define name, description, allowed tools, and (optionally) model. The description is what Claude reads when deciding whether to delegate."},{"@type":"HowToStep","name":"Write the system prompt","text":"Below the frontmatter, write the system prompt that will be loaded into the subagent's fresh context window when it runs."},{"@type":"HowToStep","name":"Invoke the subagent","text":"Either let Claude auto-delegate based on the description, or explicitly call it with the Task tool by name."},{"@type":"HowToStep","name":"Iterate on results","text":"Subagents return a single text reply to the parent. Refine the description and prompt until delegation behavior is reliable."}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"What is a Claude Code subagent?","acceptedAnswer":{"@type":"Answer","text":"A Claude Code subagent is a specialized AI assistant defined as a markdown file in .claude/agents/ that runs in its own isolated context window with a specific system prompt and a restricted set of tools. The parent Claude session can delegate work to a subagent via the Task tool, get a single summarized reply back, and continue without polluting its own context with the subagent's intermediate steps."}},{"@type":"Question","name":"How are subagents different from running multiple Claude Code sessions in parallel?","acceptedAnswer":{"@type":"Answer","text":"Subagents are inside one Claude session — they share the same terminal, the same working directory, and run sequentially under one parent agent's coordination. Multiple parallel Claude Code sessions (the amux model) run as separate processes, each in its own git worktree, each with its own dashboard pane, each able to run for hours without a parent. Subagents are best for context-window hygiene; parallel sessions are best for true throughput multiplication."}},{"@type":"Question","name":"When should I use a subagent instead of just doing the work directly?","acceptedAnswer":{"@type":"Answer","text":"Use a subagent when (1) the task generates a lot of intermediate output you do not want polluting the main context, (2) it benefits from a specialized system prompt you do not want loaded in your main session, or (3) you want to run multiple lookups concurrently without serializing them. Do not use a subagent for trivial reads or single-file edits — the delegation overhead exceeds the benefit."}},{"@type":"Question","name":"Can subagents run in parallel?","acceptedAnswer":{"@type":"Answer","text":"Yes. Within a single Claude Code session, a parent can spawn multiple subagents in parallel by issuing several Task tool calls in the same response. They all execute concurrently and return their results to the parent. This is parallelism within one session — distinct from running multiple top-level Claude Code sessions in parallel via amux."}},{"@type":"Question","name":"Do subagents share memory with the parent?","acceptedAnswer":{"@type":"Answer","text":"No. Each subagent invocation starts with a fresh context window seeded only by its system prompt and the prompt the parent passes in. Subagents cannot see the parent's prior tool results, other subagents' output, or any conversation history. They return one final message to the parent and then terminate."}},{"@type":"Question","name":"What tools can subagents use?","acceptedAnswer":{"@type":"Answer","text":"Whatever tools you list in the subagent's YAML frontmatter under the tools field. By default, subagents inherit the parent's full toolset. You can restrict a subagent to a narrower set (e.g., only Read and Grep for a researcher) or grant it specialized tools the parent does not have. Restricting tools is a form of safety — a research subagent cannot accidentally write files."}},{"@type":"Question","name":"Where do I save subagent files?","acceptedAnswer":{"@type":"Answer","text":"Two locations: project-level at .claude/agents/ in your repo (checked into git, shared with the team), or user-level at ~/.claude/agents/ (personal, available across all projects). Project-level subagents take precedence when names collide."}},{"@type":"Question","name":"Should I use subagents or amux for parallel coding?","acceptedAnswer":{"@type":"Answer","text":"Use both — they solve different problems. Use subagents inside a session to keep context clean and run fast lookups concurrently. Use amux to run multiple top-level Claude Code sessions in parallel across git worktrees so you can knock out 10 tickets in the time one ticket would normally take. Subagents multiply context efficiency; amux multiplies wall-clock throughput."}}]}</script>
+  </head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">&rsaquo;</span> <a href="/guides/">Guides</a> <span class="sep">&rsaquo;</span> <span>Claude Code Subagents</span></div>
+    <h1>Claude Code Subagents: The Complete Guide</h1>
+    <p class="subtitle">What subagents actually are, when they help, when they hurt, how to write good ones, and how they relate to running many Claude Code sessions in parallel.</p>
+
+    <nav class="toc" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.2rem 1.6rem;margin:2rem 0;">
+      <strong style="font-size:0.82rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);">Contents</strong>
+      <ol style="margin:0.6rem 0 0;padding-left:1.2rem;font-size:0.88rem;line-height:2;">
+        <li><a href="#what" style="color:var(--dim);text-decoration:none;">What Is a Claude Code Subagent?</a></li>
+        <li><a href="#mental-model" style="color:var(--dim);text-decoration:none;">The Mental Model: A Disposable Coworker With No Memory</a></li>
+        <li><a href="#anatomy" style="color:var(--dim);text-decoration:none;">Anatomy of a Subagent File</a></li>
+        <li><a href="#delegation" style="color:var(--dim);text-decoration:none;">How Delegation Actually Works</a></li>
+        <li><a href="#examples" style="color:var(--dim);text-decoration:none;">5 Production-Ready Subagent Examples</a></li>
+        <li><a href="#parallel" style="color:var(--dim);text-decoration:none;">Running Subagents in Parallel</a></li>
+        <li><a href="#vs-sessions" style="color:var(--dim);text-decoration:none;">Subagents vs Parallel Claude Code Sessions</a></li>
+        <li><a href="#anti" style="color:var(--dim);text-decoration:none;">Anti-Patterns That Waste Tokens</a></li>
+        <li><a href="#best" style="color:var(--dim);text-decoration:none;">Writing Subagent Descriptions That Actually Get Picked</a></li>
+        <li><a href="#combo" style="color:var(--dim);text-decoration:none;">Combining Subagents With amux for Real Throughput</a></li>
+        <li><a href="#faq" style="color:var(--dim);text-decoration:none;">FAQ</a></li>
+      </ol>
+    </nav>
+
+    <h2 id="what">What Is a Claude Code Subagent?</h2>
+    <p>A <strong>Claude Code subagent</strong> is a specialized AI assistant you define as a markdown file with YAML frontmatter. The parent Claude session can delegate work to it via the <code>Task</code> tool, the subagent runs in its own fresh context window with its own system prompt and (optionally) a restricted toolset, and it returns a single text reply to the parent.</p>
+    <p>The point is not to add more intelligence. Subagents use the same underlying model as the parent. The point is <strong>context isolation</strong>: keep the parent session focused, hand off noisy or specialized work, get back a clean summary, and continue.</p>
+    <pre><code>Parent session                    Subagent
+─────────────                    ────────
+"Find every place we use         &darr;
+ the legacy auth helper"     ──&gt;  [fresh context]
+                                  Grep, Read, Read, Read...
+                                  (15 tool calls, 8KB of output)
+                                  &darr;
+"Found 12 callsites in       &lt;──  [returns one message]
+ 4 files: ..."
+[parent context grew by 200      [subagent context discarded]
+ tokens, not 8000]</code></pre>
+    <p>That asymmetry — many internal steps in, one summarized message out — is the entire value proposition.</p>
+
+    <h2 id="mental-model">The Mental Model: A Disposable Coworker With No Memory</h2>
+    <p>The most common mistake newcomers make is treating subagents like long-lived assistants with state. They are not. Each invocation:</p>
+    <ul>
+      <li>Starts with an empty context window</li>
+      <li>Sees only its system prompt + the prompt the parent passes</li>
+      <li>Cannot read prior conversation, other subagents' output, or what the parent did before</li>
+      <li>Returns one final message and immediately terminates</li>
+      <li>Has no persistent memory across invocations</li>
+    </ul>
+    <p>Think of a subagent as a coworker you tap on the shoulder: <em>"Hey, look up X and tell me what you find."</em> They walk away, do the work, come back with the answer, and forget the entire interaction. The next time you tap them, it's a new person.</p>
+
+    <h2 id="anatomy">Anatomy of a Subagent File</h2>
+    <p>Subagents live in one of two places:</p>
+    <ul>
+      <li><code>.claude/agents/&lt;name&gt;.md</code> &mdash; project-level, checked into git, shared with the team</li>
+      <li><code>~/.claude/agents/&lt;name&gt;.md</code> &mdash; user-level, personal, available across all projects</li>
+    </ul>
+    <p>Project-level wins on name conflicts. Both are plain markdown with YAML frontmatter:</p>
+    <pre><code>---
+name: code-reviewer
+description: Use proactively after writing or modifying code to catch bugs, security issues, and style problems before commit. Specializes in defensive review with concrete fix suggestions.
+tools: Read, Grep, Glob, Bash
+model: sonnet
+---
+
+You are a senior code reviewer with twenty years of experience.
+
+Your job is to review the diff the parent agent just produced and report:
+
+1. Bugs or logic errors (with file:line references)
+2. Security issues (injection, auth bypasses, secret leaks)
+3. Style and consistency problems
+4. Missing tests for new branches
+5. Anything that would block this from shipping
+
+Be terse. Lead with severity. Skip praise. If the code is clean, say so in one sentence.
+End with a verdict: SHIP / FIX FIRST / NEEDS DISCUSSION.</code></pre>
+
+    <h3>The frontmatter fields</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:0.88rem;margin:1rem 0;">
+      <thead><tr style="border-bottom:2px solid var(--border);"><th style="text-align:left;padding:0.6rem;">Field</th><th style="text-align:left;padding:0.6rem;">Required</th><th style="text-align:left;padding:0.6rem;">Notes</th></tr></thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;"><code>name</code></td><td style="padding:0.6rem;">Yes</td><td style="padding:0.6rem;">Lowercase, kebab-case. How you call it from the Task tool.</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;"><code>description</code></td><td style="padding:0.6rem;">Yes</td><td style="padding:0.6rem;">The most important field. Claude reads this when deciding whether to auto-delegate. Be specific about <em>when</em> to use it.</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;"><code>tools</code></td><td style="padding:0.6rem;">No</td><td style="padding:0.6rem;">Comma-separated list. Omit to inherit all parent tools. Restrict for safety (e.g., a researcher gets Read+Grep only).</td></tr>
+        <tr><td style="padding:0.6rem;"><code>model</code></td><td style="padding:0.6rem;">No</td><td style="padding:0.6rem;">Override the model. Use <code>haiku</code> for cheap lookups, <code>opus</code> for hard reasoning, or omit to inherit.</td></tr>
+      </tbody>
+    </table>
+    <p>The body below the frontmatter is the system prompt. It loads into the subagent's context every time it runs, so keep it tight &mdash; every token here is paid on every invocation.</p>
+
+    <h2 id="delegation">How Delegation Actually Works</h2>
+    <p>There are two ways a subagent gets invoked:</p>
+
+    <h3>1. Auto-delegation (the parent decides)</h3>
+    <p>When you ask the parent Claude to do something, it scans the available subagents' <code>description</code> fields and decides whether any match. If your description starts with "Use proactively when..." or "Use whenever..." Claude is more likely to reach for it without being told. This is why the description is the most important field in the file &mdash; it's literally the routing signal.</p>
+
+    <h3>2. Explicit invocation (you decide)</h3>
+    <p>You can tell the parent: <em>"Use the code-reviewer subagent on this diff"</em> or <em>"Spawn three explorer subagents in parallel to map the codebase."</em> The parent then issues <code>Task</code> tool calls naming the subagent.</p>
+    <pre><code># In your prompt to the parent
+"Use the code-reviewer subagent to check the changes I just made"
+
+# What the parent does internally
+Task(subagent_type="code-reviewer", prompt="Review the diff in src/auth.py and report findings")
+
+# What you see
+[code-reviewer reports back: 2 bugs, 1 style issue, SHIP after fixes]</code></pre>
+
+    <h2 id="examples">5 Production-Ready Subagent Examples</h2>
+
+    <h3>1. Code reviewer (defensive second pair of eyes)</h3>
+    <pre><code>---
+name: code-reviewer
+description: Use proactively after writing or modifying code. Reviews diffs for bugs, security issues, and missing tests with concrete file:line references.
+tools: Read, Grep, Glob, Bash
+---
+
+You are a senior code reviewer. Read the diff or files the parent points you at.
+Report only: bugs, security issues, missing tests, breaking changes.
+Skip praise. Use file:line refs. End with SHIP / FIX FIRST / NEEDS DISCUSSION.</code></pre>
+
+    <h3>2. Codebase explorer (pattern hunting without polluting context)</h3>
+    <pre><code>---
+name: explorer
+description: Use when the user asks an open-ended question about the codebase that requires exploring multiple files. Returns a concise summary instead of dumping raw file contents into the parent context.
+tools: Read, Grep, Glob
+---
+
+You are a codebase navigator. Explore the project to answer the parent's question.
+Read files, grep for patterns, follow imports.
+Return ONE summary message: what you found, where, and the implications.
+Never paste large file contents. Use file:line references and 2-line excerpts only.</code></pre>
+
+    <h3>3. Test writer (specialized prompt the parent doesn't need loaded)</h3>
+    <pre><code>---
+name: test-writer
+description: Use when the user asks to add or expand tests for a specific module or function. Writes idiomatic tests matching the project's existing test style.
+tools: Read, Write, Edit, Bash, Grep
+---
+
+You write tests that match the project's existing conventions.
+Before writing anything: read 2-3 existing test files to learn the style.
+Cover happy path, edge cases, and at least one failure mode.
+Run the test suite when done. Return only: files added, what they cover, pass/fail status.</code></pre>
+
+    <h3>4. Migration planner (heavy reasoning, single answer)</h3>
+    <pre><code>---
+name: migration-planner
+description: Use when the user wants to plan a non-trivial migration (framework upgrade, database schema change, language port). Produces a step-by-step plan, not code.
+tools: Read, Grep, Glob
+model: opus
+---
+
+You are a migration architect. Do NOT write code. Produce a plan.
+Read the relevant files. Identify risks, breaking changes, and ordering constraints.
+Output: numbered step list, dependency graph, estimated risk per step, rollback strategy.</code></pre>
+
+    <h3>5. Security auditor (restricted tools = safety boundary)</h3>
+    <pre><code>---
+name: security-auditor
+description: Use when the user asks for a security review of code touching auth, secrets, user input, or external APIs. Read-only — cannot modify anything.
+tools: Read, Grep, Glob
+---
+
+You are a security auditor. You have READ-ONLY access on purpose.
+Look for: SQL injection, XSS, command injection, auth bypass, secret leakage,
+unsafe deserialization, missing authz checks, IDOR, SSRF, open redirects.
+Report severity (Critical / High / Medium / Low) with file:line and a fix sketch.</code></pre>
+
+    <h2 id="parallel">Running Subagents in Parallel</h2>
+    <p>A parent Claude session can spawn multiple subagents <strong>in parallel</strong> by issuing several <code>Task</code> tool calls in the same response. They all execute concurrently, each in its own fresh context window, and the parent receives all the results when they finish.</p>
+    <pre><code># Parent issues three Task calls in one turn:
+Task(subagent_type="explorer", prompt="Map the auth subsystem")
+Task(subagent_type="explorer", prompt="Map the billing subsystem")
+Task(subagent_type="explorer", prompt="Map the notifications subsystem")
+
+# All three run concurrently. Parent receives three summaries.
+# Total wall time: ~time of the slowest one, not the sum.</code></pre>
+    <p>This is how you scan a large codebase in 30 seconds instead of 2 minutes &mdash; and the parent context only grows by the three summaries, not by every file each subagent read.</p>
+    <p>This is parallelism <em>inside one Claude Code session</em>. It is distinct from running multiple top-level Claude Code sessions concurrently (the next section).</p>
+
+    <h2 id="vs-sessions">Subagents vs Parallel Claude Code Sessions</h2>
+    <p>The single most common confusion: <em>"If I can run subagents in parallel, why would I ever need amux or multiple Claude Code sessions?"</em></p>
+    <p>Because they solve fundamentally different problems.</p>
+
+    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:1.5rem 0;">
+      <thead>
+        <tr style="border-bottom:2px solid var(--border);">
+          <th style="text-align:left;padding:0.6rem;">Dimension</th>
+          <th style="text-align:left;padding:0.6rem;">Subagents (within one session)</th>
+          <th style="text-align:left;padding:0.6rem;">Parallel sessions (amux)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Lifetime</td><td style="padding:0.6rem;">Seconds to a few minutes</td><td style="padding:0.6rem;">Minutes to hours, can run overnight</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Goal</td><td style="padding:0.6rem;">Context hygiene, specialization</td><td style="padding:0.6rem;">Wall-clock throughput multiplication</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Coordination</td><td style="padding:0.6rem;">Parent orchestrates synchronously</td><td style="padding:0.6rem;">Independent sessions, no parent</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">File system</td><td style="padding:0.6rem;">Same working directory as parent</td><td style="padding:0.6rem;">Separate git worktrees per session</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Conflict risk</td><td style="padding:0.6rem;">High if multiple subagents write</td><td style="padding:0.6rem;">Zero — isolated branches</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Observability</td><td style="padding:0.6rem;">Lives in parent transcript</td><td style="padding:0.6rem;">Web dashboard + mobile PWA</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Self-healing</td><td style="padding:0.6rem;">If parent dies, subagents die</td><td style="padding:0.6rem;">Watchdog auto-restarts crashed sessions</td></tr>
+        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem;">Output</td><td style="padding:0.6rem;">One text reply each</td><td style="padding:0.6rem;">Full PRs, commits, branches</td></tr>
+        <tr><td style="padding:0.6rem;">Best for</td><td style="padding:0.6rem;">Lookups, reviews, planning</td><td style="padding:0.6rem;">Shipping 10 tickets in parallel</td></tr>
+      </tbody>
+    </table>
+
+    <p><strong>Rule of thumb:</strong> if the subtask is short, read-mostly, and feeds back into the parent's reasoning, use a subagent. If the subtask is a self-contained ticket that ends in a commit or PR, run it in its own Claude Code session. The two are complementary, not competitive.</p>
+
+    <h2 id="anti">Anti-Patterns That Waste Tokens</h2>
+
+    <h3>1. Subagents for one-line lookups</h3>
+    <p>If you just need to read a single file, the parent can do it in one tool call. Spinning up a subagent costs you the system prompt overhead plus a delegation roundtrip. Bad trade.</p>
+
+    <h3>2. Multiple subagents writing to the same files</h3>
+    <p>Subagents share the parent's working directory. Two subagents editing <code>src/auth.py</code> simultaneously will clobber each other &mdash; there is no git worktree isolation. If two units of work touch overlapping files, run them as separate amux sessions in separate worktrees, not parallel subagents.</p>
+
+    <h3>3. Vague descriptions</h3>
+    <p>If your description is <em>"helps with code"</em>, the parent will never auto-delegate. Make it imperative and specific: <em>"Use proactively after writing Python tests to verify they actually run and assert something meaningful."</em> Descriptions are the routing layer.</p>
+
+    <h3>4. Bloated system prompts</h3>
+    <p>Every token in the body of the subagent file is loaded on every single invocation. A 3KB system prompt called 20 times is 60KB of context overhead. Trim ruthlessly.</p>
+
+    <h3>5. Subagents that try to be the parent</h3>
+    <p>If your subagent ends up doing 30 tool calls, planning multi-step refactors, and asking for clarification &mdash; it should just be the main session, not a subagent. Subagents should be focused: one job, one return value.</p>
+
+    <h3>6. Ignoring the &ldquo;no memory&rdquo; rule</h3>
+    <p>Trying to have a subagent &ldquo;remember&rdquo; what happened in a previous invocation will silently fail. Pass any required context in the prompt, or use a real persistence layer (the board, notes, files on disk).</p>
+
+    <h2 id="best">Writing Subagent Descriptions That Actually Get Picked</h2>
+    <p>The description field is the entire interface between the parent and your subagent. Claude reads it, decides relevance, and either delegates or doesn't. Three rules:</p>
+
+    <h3>Lead with the trigger condition</h3>
+    <p>Start with <em>when</em> to use the subagent, not <em>what</em> it is.</p>
+    <pre><code># Bad
+description: A code reviewer that finds bugs and style issues.
+
+# Good
+description: Use proactively after the user writes or modifies code. Reviews
+the diff for bugs, security issues, and missing tests.</code></pre>
+
+    <h3>Use the words &ldquo;use proactively&rdquo; or &ldquo;use whenever&rdquo;</h3>
+    <p>These phrases bias the parent toward auto-delegation. Without them, the parent often waits to be asked.</p>
+
+    <h3>Be narrow, not broad</h3>
+    <p>A subagent that does &ldquo;general code things&rdquo; will be picked at random. A subagent that does <em>&ldquo;security review of code touching auth, secrets, or user input&rdquo;</em> will be picked exactly when relevant.</p>
+
+    <h2 id="combo">Combining Subagents With amux for Real Throughput</h2>
+    <p>The strongest setup uses both layers:</p>
+    <ul>
+      <li><strong>amux</strong> at the outer layer: 10 Claude Code sessions running in parallel across 10 git worktrees, each owning a separate ticket from the kanban board.</li>
+      <li><strong>Subagents</strong> at the inner layer: each session uses a <code>code-reviewer</code> subagent before committing, an <code>explorer</code> subagent for codebase questions, and a <code>test-writer</code> subagent for coverage.</li>
+    </ul>
+    <p>The outer layer multiplies wall-clock throughput &mdash; you ship 10 things in the time of one. The inner layer keeps each session's context clean and specialized so quality stays high. Subagents prevent each session from drowning in its own intermediate output; amux prevents you from drowning in sequential work.</p>
+
+    <pre><code># 1. Define a reusable code-reviewer subagent (checked into the repo)
+echo '---
+name: code-reviewer
+description: Use proactively before committing. Reviews diffs for bugs and missing tests.
+tools: Read, Grep, Bash
+---
+You are a senior code reviewer. Be terse. Lead with severity. End with SHIP / FIX FIRST.
+' &gt; .claude/agents/code-reviewer.md
+
+# 2. Push 10 tickets to the amux board
+amux board add "Add tests for auth/login.py"
+amux board add "Migrate api/users.py to async"
+amux board add "Fix bug #423 — duplicate notifications"
+# ...etc
+
+# 3. Spin up 10 amux sessions, each on its own worktree
+for i in $(seq 1 10); do
+  amux register worker-$i --dir ../myproject --worktree --yolo
+  amux start worker-$i
+done
+
+# 4. Each worker claims a ticket, calls the code-reviewer subagent before
+#    committing, and ships a clean PR — all in parallel.</code></pre>
+
+    <p>See the <a href="/guides/agentmaxxing/">Agentmaxxing guide</a> for the full playbook on running parallel sessions, and <a href="/guides/scaling-to-50-agents/">Scaling to 50 Agents</a> for what changes when you push past a single machine.</p>
+
+    <h2 id="faq">FAQ</h2>
+
+    <h3>How are subagents different from running multiple Claude Code sessions in parallel?</h3>
+    <p>Subagents live <em>inside</em> one Claude Code session. They share the same terminal, the same working directory, and run under one parent's coordination. Multiple parallel Claude Code sessions (the amux model) are separate processes with their own git worktrees, their own dashboards, and the ability to run for hours without a parent. Subagents are best for context hygiene; parallel sessions are best for true throughput multiplication.</p>
+
+    <h3>When should I use a subagent instead of just doing the work directly?</h3>
+    <p>Use a subagent when (1) the task generates a lot of intermediate output you do not want polluting the main context, (2) it benefits from a specialized system prompt you do not want loaded in your main session, or (3) you want to run multiple lookups concurrently. Don't use a subagent for trivial reads &mdash; the delegation overhead exceeds the benefit.</p>
+
+    <h3>Can subagents call other subagents?</h3>
+    <p>In current versions, no &mdash; subagents do not have access to the Task tool. Treat the parent as the only orchestrator. If you find yourself wanting nested delegation, the work probably belongs in a separate top-level Claude Code session via amux instead.</p>
+
+    <h3>Do subagents share memory with the parent?</h3>
+    <p>No. Each invocation starts with a fresh context window seeded only by its system prompt and the prompt the parent passes in. Subagents cannot see prior tool results, other subagents' output, or conversation history.</p>
+
+    <h3>What tools can subagents use?</h3>
+    <p>Whatever you list under <code>tools</code> in the YAML frontmatter. Omit the field to inherit the parent's full toolset, or restrict it for safety (e.g., a research subagent gets only <code>Read</code> and <code>Grep</code> &mdash; it physically cannot modify files).</p>
+
+    <h3>Where do I save subagent files?</h3>
+    <p>Project-level at <code>.claude/agents/</code> in your repo (checked into git, shared with the team) or user-level at <code>~/.claude/agents/</code> (personal, available across all projects). Project-level wins on name conflicts.</p>
+
+    <h3>Should I use subagents or amux for parallel coding?</h3>
+    <p>Both. Subagents inside a session for context efficiency and concurrent lookups. amux outside for true parallel throughput across isolated git worktrees with self-healing, monitoring, and per-session token tracking. They compose; they do not compete.</p>
+
+    <div class="cta-box"><h3>Run dozens of Claude Code sessions in parallel with amux</h3><p>Subagents keep one session focused. amux multiplies sessions. Open source, Python 3 + tmux, web dashboard + mobile PWA.</p><pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # &rarr; https://localhost:8822</code></pre><a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a></div>
+
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

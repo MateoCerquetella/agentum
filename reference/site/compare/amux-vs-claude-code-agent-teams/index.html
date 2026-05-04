@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>amux vs Claude Code Agent Teams — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="Compare amux with Anthropic's built-in Agent Teams feature for running parallel Claude Code sessions.">
+  <meta name="keywords" content="amux vs agent teams, claude code agent teams, parallel claude code, multi-agent claude">
+  <link rel="canonical" href="https://amux.io/compare/amux-vs-claude-code-agent-teams/">
+  <meta property="og:title" content="amux vs Claude Code Agent Teams — amux">
+  <meta property="og:description" content="Compare amux with Anthropic's built-in Agent Teams feature for running parallel Claude Code sessions.">
+  <meta property="og:url" content="https://amux.io/compare/amux-vs-claude-code-agent-teams/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"amux vs Claude Code Agent Teams","description":"Compare amux with Anthropic Agent Teams for parallel Claude Code sessions"}</script>
+  </head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">›</span> <a href="/compare/">Compare</a> <span class="sep">›</span> <span>amux vs Claude Code Agent Teams</span></div>
+    <h1>amux vs Claude Code Agent Teams</h1>
+<p class="subtitle">Both run multiple Claude Code sessions in parallel. Here's how they differ.</p>
+<p>Anthropic's <strong>Agent Teams</strong> is an experimental built-in feature that lets Claude Code spawn sub-agents. amux takes a different approach: it manages independent tmux sessions with a web dashboard, self-healing watchdog, and shared kanban board.</p>
+<h2>Key differences</h2>
+<table><thead><tr><th>Feature</th><th>amux</th><th>Agent Teams</th></tr></thead><tbody><tr><td>Parallel sessions</td><td>Unlimited independent sessions</td><td>Sub-agents spawned by parent</td></tr><tr><td>Self-healing</td><td>Auto-compact, restart, unstick</td><td>Relies on parent session</td></tr><tr><td>Web dashboard</td><td>Full UI with peek, board, calendar</td><td>CLI only</td></tr><tr><td>Mobile access</td><td>PWA with offline support</td><td>No mobile support</td></tr><tr><td>Task coordination</td><td>SQLite kanban with atomic claiming</td><td>Parent delegates to children</td></tr><tr><td>Session persistence</td><td>Survives restarts with UUID tracking</td><td>Tied to parent lifecycle</td></tr><tr><td>Git isolation</td><td>Conflict detection + branch helpers</td><td>Git worktree per agent</td></tr><tr><td>Token tracking</td><td>Per-session daily spend dashboards</td><td>Aggregated in parent</td></tr></tbody></table>
+<h2>When to use Agent Teams</h2>
+<p>Agent Teams works well for <strong>short-lived, tightly-coupled tasks</strong> where a parent agent needs to fan out work and collect results. It requires no setup beyond Claude Code itself.</p>
+<h2>When to use amux</h2>
+<p>amux is built for <strong>long-running, independent agents</strong> that work on separate concerns. The web dashboard, self-healing, and mobile access make it ideal for running agents overnight or managing a fleet of workers across multiple projects.</p>
+<ul>
+<li>You want agents that survive context compaction crashes</li>
+<li>You need a visual dashboard to monitor 10+ sessions</li>
+<li>You want to manage agents from your phone</li>
+<li>You need a shared task board with atomic claiming</li>
+</ul>
+<div class="cta-box"><h3>Get started with amux</h3><p>Run dozens of Claude Code agents in parallel. Python 3 + tmux. Open source.</p><pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # → https://localhost:8822</code></pre><a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a></div>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

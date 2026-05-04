@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>amux for FastAPI Developers — amux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="FastAPI developers use amux to run parallel agents for endpoint implementation, Pydantic schemas, dependency injection, and test coverage.">
+  <meta name="keywords" content="fastapi AI coding agent, claude code fastapi, parallel python API development">
+  <link rel="canonical" href="https://amux.io/for/fastapi-developers/">
+  <meta property="og:title" content="amux for FastAPI Developers — amux">
+  <meta property="og:description" content="FastAPI developers use amux to run parallel agents for endpoint implementation, Pydantic schemas, dependency injection, and test coverage.">
+  <meta property="og:url" content="https://amux.io/for/fastapi-developers/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"For","item":"https://amux.io/for/"},{"@type":"ListItem","position":3,"name":"amux for FastAPI Developers","item":"https://amux.io/for/fastapi-developers/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebPage","name":"amux for FastAPI Developers","description":"FastAPI developers use amux to run parallel agents for endpoint implementation, Pydantic schemas, dependency injection, and test coverage.","url":"https://amux.io/for/fastapi-developers/","audience":{"@type":"Audience","audienceType":"amux for FastAPI Developers"}}</script>
+  </head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">›</span> <a href="/for/">For</a> <span class="sep">›</span> <span>amux for FastAPI Developers</span></div>
+    <h1>amux for FastAPI Developers</h1>
+<p class="subtitle">FastAPI is the fastest-growing Python API framework. amux makes building large FastAPI services equally fast.</p>
+<h2>FastAPI + Parallel Agents</h2>
+<p>FastAPI's design — Pydantic models, dependency injection, automatic OpenAPI docs, async support — creates clear separation of concerns that maps well to parallel agent work. Each router, each set of schemas, each service layer can be worked on independently.</p>
+<ul>
+<li><strong>Router per domain:</strong> A FastAPI app with 10 domains (users, products, orders, billing, etc.) can have 10 agents building each router simultaneously — with Pydantic schemas, service layer, and tests.</li>
+<li><strong>Pydantic v2 migration:</strong> Migrating from Pydantic v1 to v2 involves updating validators, field definitions, and model configs everywhere. One agent per module, running in parallel.</li>
+<li><strong>Dependency injection chains:</strong> Use agents to implement authentication dependencies, database session handling, and permission checking — one agent per dependency concern.</li>
+<li><strong>pytest + httpx test coverage:</strong> FastAPI testing with <code>TestClient</code> or async <code>AsyncClient</code> follows clear patterns. Agents generate thorough test suites for every endpoint.</li>
+</ul>
+<h2>OpenAPI-Driven Development</h2>
+<p>FastAPI generates OpenAPI specs automatically. Use agents to:</p>
+<ul>
+<li>Generate client SDKs from the OpenAPI spec</li>
+<li>Write contract tests against the spec</li>
+<li>Generate postman collections and documentation</li>
+<li>Implement mock servers for frontend development</li>
+</ul>
+<h2>Async All the Way</h2>
+<p>FastAPI's async nature means you're already thinking in concurrent terms. amux brings that concurrency to the development process itself — async agents for your async API.</p>
+<div class="cta-box"><h3>Get started with amux</h3><p>Run dozens of Claude Code agents in parallel. Python 3 + tmux. Open source.</p><pre><code>git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # → https://localhost:8822</code></pre><a class="btn btn-primary" href="https://github.com/mixpeek/amux">View on GitHub</a></div>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>

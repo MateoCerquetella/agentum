@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e2330">
+  <title>How to Build a Multi-Agent Coding Orchestrator — Architecture Guide</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="description" content="The architecture behind multi-agent coding systems: task boards, inter-agent messaging, atomic claiming, self-healing, and cost control. Build the coordination layer that Claude Code Agent Teams doesn't include.">
+  <meta name="keywords" content="multi-agent orchestrator, multi-agent coding architecture, agent coordination layer, agent task board, inter-agent messaging, claude code orchestration, agent fleet management, build agent orchestrator, multi-agent system design, AI agent infrastructure, agent control plane architecture, parallel agent coordination">
+  <link rel="canonical" href="https://amux.io/guides/multi-agent-orchestrator-architecture/">
+  <meta property="og:title" content="How to Build a Multi-Agent Coding Orchestrator — Architecture Guide">
+  <meta property="og:description" content="The architecture behind multi-agent coding systems. Task boards, inter-agent messaging, self-healing, and cost control — the layer that turns parallel agents into a coordinated system.">
+  <meta property="og:url" content="https://amux.io/guides/multi-agent-orchestrator-architecture/">
+  <meta property="og:image" content="https://amux.io/og-image.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="How to Build a Multi-Agent Coding Orchestrator">
+  <meta name="twitter:description" content="The missing infrastructure layer for parallel AI coding agents. Task boards, messaging, self-healing, and cost control.">
+  <link rel="alternate" type="application/rss+xml" title="amux Blog" href="https://amux.io/blog/rss.xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"How to Build a Multi-Agent Coding Orchestrator — Architecture Guide","description":"The architecture behind multi-agent coding systems: task boards, inter-agent messaging, atomic claiming, self-healing, and cost control.","datePublished":"2026-04-18","dateModified":"2026-04-18","author":{"@type":"Organization","name":"amux","url":"https://amux.io/"},"publisher":{"@type":"Organization","name":"amux","logo":{"@type":"ImageObject","url":"https://amux.io/icon-512.png"}},"image":"https://amux.io/og-image.png","mainEntityOfPage":{"@type":"WebPage","@id":"https://amux.io/guides/multi-agent-orchestrator-architecture/"}}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"amux","item":"https://amux.io/"},{"@type":"ListItem","position":2,"name":"Guides","item":"https://amux.io/guides/"},{"@type":"ListItem","position":3,"name":"Multi-Agent Orchestrator Architecture","item":"https://amux.io/guides/multi-agent-orchestrator-architecture/"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"What is a multi-agent coding orchestrator?","acceptedAnswer":{"@type":"Answer","text":"A multi-agent coding orchestrator is the infrastructure layer that coordinates parallel AI coding agents. It handles task distribution, inter-agent messaging, conflict avoidance, fault tolerance, and cost tracking — the problems that emerge when you run more than one agent at a time."}},{"@type":"Question","name":"Why can't I just use Claude Code Agent Teams?","acceptedAnswer":{"@type":"Answer","text":"Agent Teams handles spawning and worktree isolation, but it doesn't provide persistent task tracking, inter-session messaging, a web dashboard, mobile access, cost control, or self-healing for long-running sessions. It's the runtime layer — you still need the orchestration layer on top."}},{"@type":"Question","name":"How do agents coordinate without conflicts?","acceptedAnswer":{"@type":"Answer","text":"Through three mechanisms: atomic task claiming (SQLite CAS prevents two agents from taking the same work), git worktree isolation (each agent works on a separate branch), and inter-agent messaging (agents can notify peers about shared state changes)."}},{"@type":"Question","name":"What happens when an agent crashes at 3am?","acceptedAnswer":{"@type":"Answer","text":"A self-healing watchdog monitors all sessions. Context overflow triggers automatic compaction. Process crashes trigger restart with message replay. Stuck permission prompts get auto-answered in YOLO mode. The agent resumes without human intervention."}},{"@type":"Question","name":"How much does it cost to run 10 agents overnight?","acceptedAnswer":{"@type":"Answer","text":"With Claude Code Max subscription, 10 agents typically cost $0 beyond the subscription. With API keys, expect $30-150 per overnight run depending on task complexity. Per-session token tracking lets you identify expensive agents and set kill thresholds."}}]}</script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/">amux</a>
+    <nav>
+      <a href="/docs/" class="hide-mobile">docs</a>
+      <a href="/guides/" class="hide-mobile">guides</a>
+      <a href="/compare/" class="hide-mobile">compare</a>
+      <a href="/demos/" class="hide-mobile">demos</a>
+      <a href="/blog/" class="hide-mobile">blog</a>
+      <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" class="nav-cta-primary nav-cta">iOS app</a>
+      <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta">GitHub <span class="gh-stars" id="gh-stars"></span></a>
+    </nav>
+  </header>
+  <main>
+    <div class="breadcrumb"><a href="/">amux</a> <span class="sep">&rsaquo;</span> <a href="/guides/">Guides</a> <span class="sep">&rsaquo;</span> <span>Multi-Agent Orchestrator Architecture</span></div>
+    <h1>How to Build a Multi-Agent Coding Orchestrator</h1>
+<p class="subtitle">The missing infrastructure layer between "run more agents" and "ship reliable code overnight."</p>
+
+<p>Every guide about multi-agent coding starts with the same advice: use worktrees, give each agent a clear task, review the PRs in the morning. None of them explain what happens when agent 7 crashes at 2am, agent 3 picks up the same task as agent 5, and agent 9 burns $40 on a circular refactor nobody asked for.</p>
+
+<p>This guide covers the <strong>coordination architecture</strong> — the layer between your agents and your codebase that prevents multi-agent coding from becoming multi-agent chaos. We built <a href="https://github.com/mixpeek/amux">amux</a> to solve these problems; the patterns here apply whether you use amux, build your own, or bolt orchestration onto Claude Code Agent Teams.</p>
+
+<h2>The five layers of a multi-agent system</h2>
+
+<p>Most people think about multi-agent coding as "run N agents in parallel." That's layer 1 of 5.</p>
+
+<table class="data-table">
+<thead><tr><th>Layer</th><th>What it does</th><th>What happens without it</th></tr></thead>
+<tbody>
+<tr><td><strong>1. Runtime</strong></td><td>Start/stop agent processes, isolate workspaces</td><td>Can't run more than one agent</td></tr>
+<tr><td><strong>2. Task distribution</strong></td><td>Assign work, prevent duplicates, track progress</td><td>Agents duplicate each other's work</td></tr>
+<tr><td><strong>3. Communication</strong></td><td>Inter-agent messaging, shared state, notifications</td><td>Agents work in silos, miss dependencies</td></tr>
+<tr><td><strong>4. Fault tolerance</strong></td><td>Crash recovery, context compaction, self-healing</td><td>Overnight runs die at 2am, you wake up to nothing</td></tr>
+<tr><td><strong>5. Governance</strong></td><td>Cost tracking, kill switches, observability</td><td>Runaway costs, no visibility into what agents are doing</td></tr>
+</tbody>
+</table>
+
+<p>Claude Code gives you layer 1. Agent Teams adds worktree isolation to layer 1. Everything above that — you need to build or use an orchestrator.</p>
+
+<h2>Layer 1: Runtime — process isolation and lifecycle</h2>
+
+<p>The runtime layer manages agent processes. Each agent needs:</p>
+<ul>
+  <li><strong>An isolated workspace.</strong> Git worktrees are the standard approach — each agent gets its own branch and working directory. No merge conflicts during development; conflicts resolve at PR time.</li>
+  <li><strong>A stable process container.</strong> tmux sessions work well for this. Each agent runs in its own tmux pane with a persistent conversation ID. The session survives terminal disconnects.</li>
+  <li><strong>Environment injection.</strong> Every agent needs to know its own identity (<code>$AMUX_SESSION</code>) and how to reach the orchestrator (<code>$AMUX_URL</code>). Inject these as environment variables at session startup.</li>
+</ul>
+
+<pre><code># Register a project with 8 parallel agent sessions
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+
+# Each session gets its own tmux pane, conversation ID, and env vars
+# $AMUX_SESSION=worker-1, $AMUX_URL=https://localhost:8822</code></pre>
+
+<p><strong>The key design decision:</strong> agents should be <em>long-running</em>, not ephemeral. Short-lived agents lose their conversation context on every task. Long-running agents accumulate project understanding across tasks — they learn the codebase, remember past failures, and make better decisions over time.</p>
+
+<h2>Layer 2: Task distribution — the shared board</h2>
+
+<p>This is where most DIY multi-agent setups fail. Without a shared task board, you either:</p>
+<ul>
+  <li>Manually assign tasks to each agent (doesn't scale, blocks on you)</li>
+  <li>Let agents self-assign from a list (race conditions, duplicated work)</li>
+  <li>Use a parent agent to delegate (single point of failure, context overhead)</li>
+</ul>
+
+<p>The solution is a <strong>shared board with atomic task claiming</strong>.</p>
+
+<h3>Atomic claiming via Compare-and-Swap</h3>
+
+<p>When an agent wants to pick up a task, it doesn't just update the status — it performs a CAS (Compare-and-Swap) operation. The claim only succeeds if the task is still unclaimed at the moment of the write.</p>
+
+<pre><code># Agent attempts to claim a task
+curl -sk -X POST -H 'Content-Type: application/json' \
+  -d '{"session":"worker-3"}' \
+  $AMUX_URL/api/board/TASK-42/claim
+
+# Returns 200 if claimed, 409 if another agent got there first</code></pre>
+
+<p>With SQLite, this is a single UPDATE with a WHERE clause:</p>
+
+<pre><code>UPDATE board SET session = ?, status = 'doing'
+WHERE id = ? AND status = 'todo' AND session IS NULL</code></pre>
+
+<p>If <code>rowcount == 0</code>, someone else claimed it. No locks, no Redis, no distributed consensus — just SQLite's built-in transaction isolation. This works reliably for 50+ agents on a single machine.</p>
+
+<h3>Task lifecycle</h3>
+
+<p>Every task flows through four states:</p>
+<ol>
+  <li><strong>todo</strong> — created, waiting for an agent to claim it</li>
+  <li><strong>doing</strong> — claimed by an agent, work in progress</li>
+  <li><strong>done</strong> — completed, results written to the task description</li>
+  <li><strong>blocked</strong> — waiting on a dependency or human decision</li>
+</ol>
+
+<p>Agents write their results back to the task when they finish. Other agents can read those results to inform their own work. This creates an asynchronous information flow that doesn't require direct messaging.</p>
+
+<pre><code># Mark task done with results
+curl -sk -X PATCH -H 'Content-Type: application/json' \
+  -d '{"status":"done","desc":"Refactored auth module. PR #412 opened. Breaking change: session token format changed from JWT to opaque."}' \
+  $AMUX_URL/api/board/TASK-42</code></pre>
+
+<h2>Layer 3: Communication — inter-agent messaging</h2>
+
+<p>Some coordination requires real-time communication. An agent discovers a breaking change that affects a peer's work. A triage agent needs to reassign a stuck task. A test agent wants to notify the feature agent that tests are failing.</p>
+
+<h3>Direct messaging</h3>
+
+<p>The simplest pattern: one agent sends a message directly to another agent's terminal input.</p>
+
+<pre><code># Agent worker-1 notifies worker-3 about a breaking change
+curl -sk -X POST -H 'Content-Type: application/json' \
+  -d '{"text":"@worker-3 heads up: I changed the session token format from JWT to opaque. You may need to update the auth middleware tests."}' \
+  $AMUX_URL/api/sessions/worker-3/send</code></pre>
+
+<p>The receiving agent sees this as a new message in its conversation. It can decide whether to act on it immediately or finish its current task first.</p>
+
+<h3>Peek — non-intrusive observation</h3>
+
+<p>Sometimes an agent needs to check what another agent is doing without interrupting it. Peek reads the last N lines of a session's terminal output:</p>
+
+<pre><code># Check what worker-5 is currently doing
+curl -sk "$AMUX_URL/api/sessions/worker-5/peek?lines=50" \
+  | python3 -c "import json,sys; print(json.load(sys.stdin).get('output',''))"</code></pre>
+
+<p>This is critical for <strong>triage agents</strong> — agents whose sole job is to monitor other agents, reassign stuck tasks, and escalate blockers.</p>
+
+<h3>Shared notes</h3>
+
+<p>For information that multiple agents need to reference — API contracts, migration plans, shared decisions — use a notes system rather than broadcasting messages:</p>
+
+<pre><code># Agent writes a shared decision to notes
+curl -sk -X POST -H 'Content-Type: application/json' \
+  -d '{"content":"# Auth Migration Plan\n\nAll endpoints now use opaque tokens.\nOld JWT validation removed in PR #412.\nTest fixtures updated in fixtures/auth.json."}' \
+  $AMUX_URL/api/notes/auth-migration
+
+# Any other agent can read it
+curl -sk $AMUX_URL/api/notes/auth-migration</code></pre>
+
+<h2>Layer 4: Fault tolerance — self-healing</h2>
+
+<p>This is the layer that separates "I ran 10 agents for a demo" from "I run 10 agents every night and ship the PRs in the morning."</p>
+
+<h3>Failure mode 1: Context overflow</h3>
+
+<p>Claude Code has a context window. Long-running agents hit it. When they do, the agent stalls with a compaction prompt. An unattended agent that hits context overflow at 2am just stops.</p>
+
+<p><strong>Solution:</strong> A watchdog process monitors terminal output. When it detects context overflow patterns (e.g., "context is getting large"), it automatically triggers the <code>/compact</code> command. The agent resumes with a compressed context.</p>
+
+<pre><code># Watchdog detects context overflow and triggers compaction
+# The agent sees: "Context compacted. Resuming from turn 42."
+# No human intervention needed.</code></pre>
+
+<h3>Failure mode 2: Process crashes</h3>
+
+<p>Claude Code crashes. The tmux pane dies. An unattended setup loses the session permanently.</p>
+
+<p><strong>Solution:</strong> The watchdog detects dead sessions and restarts them. It replays the last message to restore the agent's state. The agent picks up where it left off.</p>
+
+<h3>Failure mode 3: Stuck permission prompts</h3>
+
+<p>Claude Code asks "Allow this tool?" The agent can't proceed because nobody is there to approve. In YOLO mode, the orchestrator auto-answers these prompts.</p>
+
+<h3>Failure mode 4: Circular behavior</h3>
+
+<p>An agent gets stuck in a loop — refactoring the same file, running the same failing test, or writing and deleting the same code. Without monitoring, this burns tokens forever.</p>
+
+<p><strong>Solution:</strong> Track per-session token spend. Set kill thresholds. If an agent burns more than X tokens without producing a commit or moving a task to "done," flag it for human review.</p>
+
+<h2>Layer 5: Governance — cost control and observability</h2>
+
+<h3>Per-session cost tracking</h3>
+
+<p>Every agent should report its token consumption. Parse JSONL transcripts to extract input/output token counts, deduplicate across restarts, and compute per-session cost:</p>
+
+<pre><code># Check per-session token spend
+curl -sk $AMUX_URL/api/sessions | python3 -c "
+import json, sys
+for s in json.load(sys.stdin):
+    cost = s.get('total_cost', 0)
+    if cost > 0:
+        print(f\"{s['name']:20s} \${cost:.2f}\")
+"</code></pre>
+
+<h3>The dashboard</h3>
+
+<p>Running 10+ agents without a dashboard is like running 10 servers without monitoring. You need to see:</p>
+<ul>
+  <li>Which agents are active, idle, or stuck</li>
+  <li>What task each agent is working on</li>
+  <li>Terminal output (peek) without SSH-ing into each session</li>
+  <li>Token spend per session and total</li>
+  <li>Board status: how many tasks are done, in progress, blocked</li>
+</ul>
+
+<p>Mobile access matters more than you'd expect. If you kick off 10 agents at 11pm, you want to check progress from your phone at midnight — not walk back to your desk.</p>
+
+<h3>Kill switches</h3>
+
+<p>You need the ability to stop any agent instantly, stop all agents, or pause the entire system. API-driven, accessible from the dashboard and from your phone.</p>
+
+<h2>Architecture diagram</h2>
+
+<p>Here's how the five layers stack:</p>
+
+<pre><code>                    ┌─────────────────────────────┐
+                    │       Your Codebase          │
+                    │   (git repo, worktrees)       │
+                    └──────────────┬──────────────┘
+                                   │
+        ┌──────────────────────────┼──────────────────────────┐
+        │                   Orchestrator                       │
+        │                                                      │
+        │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐   │
+        │  │ Task      │  │ Messaging│  │ Self-Healing     │   │
+        │  │ Board     │  │ Bus      │  │ Watchdog         │   │
+        │  │ (SQLite)  │  │ (REST)   │  │ (process monitor)│   │
+        │  └──────────┘  └──────────┘  └──────────────────┘   │
+        │                                                      │
+        │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐   │
+        │  │ Dashboard │  │ Cost     │  │ Notes /          │   │
+        │  │ (Web+PWA) │  │ Tracker  │  │ Shared State     │   │
+        │  └──────────┘  └──────────┘  └──────────────────┘   │
+        └──────────────────────────┬──────────────────────────┘
+                                   │
+              ┌────────────────────┼────────────────────┐
+              │                    │                    │
+        ┌─────┴─────┐       ┌─────┴─────┐       ┌─────┴─────┐
+        │  Agent 1   │       │  Agent 2   │       │  Agent N   │
+        │  (tmux)    │       │  (tmux)    │       │  (tmux)    │
+        │  worktree  │       │  worktree  │       │  worktree  │
+        └───────────┘       └───────────┘       └───────────┘</code></pre>
+
+<h2>How this compares to Claude Code Agent Teams</h2>
+
+<p>Agent Teams (shipped April 2026) handles layer 1: spawning sub-agents with worktree isolation. It's good for short-lived parallel tasks within a single conversation.</p>
+
+<table class="data-table">
+<thead><tr><th>Capability</th><th>Agent Teams</th><th>Full Orchestrator</th></tr></thead>
+<tbody>
+<tr><td>Spawn parallel agents</td><td>Yes</td><td>Yes</td></tr>
+<tr><td>Git worktree isolation</td><td>Yes</td><td>Yes</td></tr>
+<tr><td>Persistent task board</td><td>No</td><td>Yes</td></tr>
+<tr><td>Atomic task claiming</td><td>No</td><td>Yes (SQLite CAS)</td></tr>
+<tr><td>Inter-agent messaging</td><td>No</td><td>Yes (REST API)</td></tr>
+<tr><td>Self-healing / crash recovery</td><td>No</td><td>Yes (watchdog)</td></tr>
+<tr><td>Context overflow handling</td><td>No</td><td>Yes (auto-compact)</td></tr>
+<tr><td>Per-session cost tracking</td><td>No</td><td>Yes</td></tr>
+<tr><td>Web dashboard</td><td>No</td><td>Yes</td></tr>
+<tr><td>Mobile access</td><td>No</td><td>Yes (PWA + iOS)</td></tr>
+<tr><td>Long-running (overnight)</td><td>No (parent session scoped)</td><td>Yes</td></tr>
+<tr><td>Scheduling / cron</td><td>No</td><td>Yes</td></tr>
+</tbody>
+</table>
+
+<p>Agent Teams and a full orchestrator are complementary. Use Agent Teams for short parallel tasks within a conversation. Use an orchestrator for long-running agent fleets that operate overnight.</p>
+
+<h2>Real-world orchestration patterns</h2>
+
+<h3>Pattern 1: The decomposition pattern</h3>
+
+<p>One human (or one "lead" agent) breaks work into tasks on the board. Worker agents claim tasks independently.</p>
+
+<pre><code># Human or lead agent creates tasks
+curl -sk -X POST -H 'Content-Type: application/json' \
+  -d '{"title":"Refactor auth module to use opaque tokens","status":"todo"}' \
+  $AMUX_URL/api/board
+
+curl -sk -X POST -H 'Content-Type: application/json' \
+  -d '{"title":"Update API tests for new token format","status":"todo"}' \
+  $AMUX_URL/api/board
+
+curl -sk -X POST -H 'Content-Type: application/json' \
+  -d '{"title":"Update OpenAPI spec with new auth schema","status":"todo"}' \
+  $AMUX_URL/api/board
+
+# Worker agents claim tasks atomically — no coordination needed</code></pre>
+
+<h3>Pattern 2: The triage pattern</h3>
+
+<p>A dedicated triage agent monitors the board and other agents. It reassigns stuck tasks, splits tasks that are too large, and escalates blockers.</p>
+
+<pre><code># Triage agent's CLAUDE.md instructions:
+# "You are a triage agent. Every 5 minutes:
+# 1. Check the board for tasks stuck in 'doing' for >30 minutes
+# 2. Peek at the agent working on each stuck task
+# 3. If the agent is stuck, send it a helpful nudge
+# 4. If the agent has crashed, move the task back to 'todo'
+# 5. Report status to the #triage note"</code></pre>
+
+<h3>Pattern 3: The pipeline pattern</h3>
+
+<p>Tasks have dependencies. Agent A's output feeds into Agent B's input. The board tracks dependencies; agents only claim tasks whose prerequisites are "done."</p>
+
+<pre><code># Task with a dependency
+curl -sk -X POST -H 'Content-Type: application/json' \
+  -d '{"title":"Write integration tests for new auth flow","status":"todo","desc":"Depends on: TASK-42 (auth refactor). Do not start until TASK-42 is done."}' \
+  $AMUX_URL/api/board</code></pre>
+
+<h2>Implementation checklist</h2>
+
+<p>Building your own orchestrator? Here's what you need, in priority order:</p>
+
+<ol>
+  <li><strong>Process manager</strong> — start/stop agents in tmux sessions with env var injection</li>
+  <li><strong>Task board with atomic claiming</strong> — SQLite is perfect for single-machine orchestration</li>
+  <li><strong>Watchdog</strong> — monitor terminal output, detect crashes and context overflow, auto-recover</li>
+  <li><strong>REST API</strong> — so agents can interact with the board and each other</li>
+  <li><strong>Token tracking</strong> — parse JSONL transcripts for cost visibility</li>
+  <li><strong>Dashboard</strong> — web UI for monitoring all sessions at a glance</li>
+  <li><strong>Inter-agent messaging</strong> — send text to another session's terminal input</li>
+  <li><strong>Notes / shared state</strong> — persistent documents any agent can read/write</li>
+  <li><strong>Scheduling</strong> — cron-style recurring tasks for overnight runs</li>
+  <li><strong>Mobile access</strong> — PWA for monitoring from your phone</li>
+</ol>
+
+<p>Or skip the build and use <a href="https://github.com/mixpeek/amux">amux</a>, which implements all 10 in a single Python file with zero dependencies.</p>
+
+<div class="cta-box">
+  <h3>Get started with amux</h3>
+  <p>The open-source multi-agent orchestrator. All five layers in one file.</p>
+  <pre><code>git clone https://github.com/mixpeek/amux && cd amux && ./install.sh
+amux register myproject --dir ~/Dev/myproject --yolo
+amux start myproject
+amux serve  # &rarr; https://localhost:8822</code></pre>
+  <div style="display:flex;gap:12px;margin-top:16px;flex-wrap:wrap;">
+    <a class="btn btn-primary" href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">Get iOS App</a>
+    <a class="btn btn-primary" href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">View on GitHub</a>
+  </div>
+</div>
+  </main>
+  <footer class="sub-footer">
+    <div class="footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand-col">
+          <a href="/" class="footer-logo">amux</a>
+          <p>Open-source control plane for AI agents.</p>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Resources</div>
+          <ul>
+            <li><a href="/guides/">Guides</a></li>
+            <li><a href="/blog/">Blog</a></li>
+            <li><a href="/demos/">Demos</a></li>
+            <li><a href="/glossary/">Glossary</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">Compare</div>
+          <ul>
+            <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
+            <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
+            <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
+            <li><a href="/compare/">All comparisons</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <div class="footer-col-label">More</div>
+          <ul>
+            <li><a href="/use-cases/">Use Cases</a></li>
+            <li><a href="/solutions/">Solutions</a></li>
+            <li><a href="/for/">For your stack</a></li>
+            <li><a href="/changelog/">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+        <div class="footer-bottom-links">
+          <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener">iOS App</a>
+          <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+<script>fetch('https://api.github.com/repos/mixpeek/amux').then(function(r){return r.json()}).then(function(d){var el=document.getElementById('gh-stars');if(el&&d.stargazers_count) el.textContent='\u2605 '+d.stargazers_count}).catch(function(){})</script>
+</body>
+</html>
