@@ -1,0 +1,18 @@
+[package]
+name = "agentum-executor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Tool-adapter abstraction so every supported AI CLI maps to a uniform launch contract."
+
+[dependencies]
+agentum-core  = { workspace = true }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }
+
+[dev-dependencies]
+time          = { workspace = true }
+uuid          = { workspace = true }
