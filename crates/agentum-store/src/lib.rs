@@ -179,6 +179,30 @@ impl Store {
         Ok(())
     }
 
+    /// Atomically flip status + tmux_target (use `None` to clear).
+    pub async fn update_status_and_target(
+        &self,
+        id: Uuid,
+        status: Status,
+        tmux_target: Option<&str>,
+    ) -> Result<()> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let affected = sqlx::query(
+            "UPDATE sessions SET status = ?, tmux_target = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(status.as_str())
+        .bind(tmux_target)
+        .bind(now_s)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if affected == 0 {
+            return Err(StoreError::NotFound(id.to_string()));
+        }
+        Ok(())
+    }
+
     pub async fn count_by_status(&self, status: Status) -> Result<i64> {
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE status = ?")
             .bind(status.as_str())

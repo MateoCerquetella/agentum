@@ -15,6 +15,7 @@ dependencies = [
  "agentum-core",
  "agentum-server",
  "agentum-store",
+ "agentum-tmux",
  "anyhow",
  "clap",
  "serde_json",
@@ -77,6 +78,7 @@ name = "agentum-tmux"
 version = "0.1.0-alpha.0"
 dependencies = [
  "agentum-core",
+ "shlex",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
