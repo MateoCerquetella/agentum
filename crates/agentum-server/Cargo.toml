@@ -25,3 +25,7 @@ uuid           = { workspace = true }
 time           = { workspace = true }
 rust-embed     = { version = "8", features = ["mime-guess"] }
 bytes          = "1"
+axum-server    = { version = "0.7", features = ["tls-rustls"] }
+rcgen          = "0.13"
+rand           = "0.9"
+base64         = "0.22"
