@@ -1,0 +1,25 @@
+[package]
+name = "agentum"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Self-hosted control plane for AI coding agents."
+
+[[bin]]
+name = "agentum"
+path = "src/main.rs"
+
+[dependencies]
+agentum-core    = { workspace = true }
+agentum-store   = { workspace = true }
+agentum-server  = { workspace = true }
+anyhow          = { workspace = true }
+clap            = { workspace = true }
+tokio           = { workspace = true }
+tracing         = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json      = { workspace = true }
+time            = { workspace = true }
