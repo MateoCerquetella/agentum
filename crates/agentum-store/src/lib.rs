@@ -5,7 +5,9 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use agentum_core::{Event, NewSession, Session, Status};
+use agentum_core::{
+    BoardItem, BoardPatch, Event, NewBoardItem, NewSession, Session, Status,
+};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{FromRow, SqlitePool};
 use time::OffsetDateTime;
@@ -203,6 +205,128 @@ impl Store {
         Ok(())
     }
 
+    // ---------- board ----------
+
+    pub async fn create_board_item(&self, new: NewBoardItem) -> Result<BoardItem> {
+        let now = OffsetDateTime::now_utc();
+        let now_s = now.format(&Rfc3339)?;
+        let status = new.status.unwrap_or_else(|| "todo".to_string());
+
+        let mut tx = self.pool.begin().await?;
+        let result = sqlx::query(
+            "INSERT INTO board_items (key, title, body, status, created_at, updated_at)
+             VALUES ('', ?, ?, ?, ?, ?)",
+        )
+        .bind(&new.title)
+        .bind(&new.body)
+        .bind(&status)
+        .bind(&now_s)
+        .bind(&now_s)
+        .execute(&mut *tx)
+        .await?;
+        let id = result.last_insert_rowid();
+        let key = format!("AG-{id}");
+        sqlx::query("UPDATE board_items SET key = ? WHERE id = ?")
+            .bind(&key)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+
+        Ok(BoardItem {
+            id,
+            key,
+            title: new.title,
+            body: new.body,
+            status,
+            claimed_by: None,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn list_board_items(&self) -> Result<Vec<BoardItem>> {
+        let rows: Vec<BoardItemRow> = sqlx::query_as::<_, BoardItemRow>(
+            "SELECT * FROM board_items ORDER BY created_at ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(BoardItem::try_from).collect()
+    }
+
+    pub async fn get_board_item(&self, id: i64) -> Result<Option<BoardItem>> {
+        let row = sqlx::query_as::<_, BoardItemRow>("SELECT * FROM board_items WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(BoardItem::try_from).transpose()
+    }
+
+    pub async fn patch_board_item(&self, id: i64, patch: BoardPatch) -> Result<BoardItem> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let body_set = patch.body.is_some();
+        let body_value = patch.body.unwrap_or(None);
+        let affected = sqlx::query(
+            "UPDATE board_items SET
+                title  = COALESCE(?, title),
+                status = COALESCE(?, status),
+                body   = CASE WHEN ? = 1 THEN ? ELSE body END,
+                updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(&patch.title)
+        .bind(&patch.status)
+        .bind(if body_set { 1i32 } else { 0i32 })
+        .bind(&body_value)
+        .bind(&now_s)
+        .bind(id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if affected == 0 {
+            return Err(StoreError::NotFound(id.to_string()));
+        }
+        self.get_board_item(id)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(id.to_string()))
+    }
+
+    pub async fn delete_board_item(&self, id: i64) -> Result<()> {
+        let affected = sqlx::query("DELETE FROM board_items WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        if affected == 0 {
+            return Err(StoreError::NotFound(id.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Atomic CAS claim: succeeds only if `claimed_by` is currently NULL.
+    /// Returns the updated row on success, `None` on conflict (caller maps
+    /// to 409). PRD §7.
+    pub async fn claim_board_item(
+        &self,
+        id: i64,
+        claimed_by: &str,
+    ) -> Result<Option<BoardItem>> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let result = sqlx::query(
+            "UPDATE board_items SET claimed_by = ?, updated_at = ?
+             WHERE id = ? AND claimed_by IS NULL",
+        )
+        .bind(claimed_by)
+        .bind(&now_s)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get_board_item(id).await
+    }
+
     /// Persist an event row. Best-effort (failures should not break callers).
     pub async fn insert_event(&self, ev: &Event) -> Result<()> {
         let payload = serde_json::to_string(&ev.payload)?;
@@ -253,6 +377,34 @@ struct SessionRow {
     created_at: String,
     updated_at: String,
     last_activity_at: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct BoardItemRow {
+    id: i64,
+    key: String,
+    title: String,
+    body: Option<String>,
+    status: String,
+    claimed_by: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+impl TryFrom<BoardItemRow> for BoardItem {
+    type Error = StoreError;
+    fn try_from(r: BoardItemRow) -> Result<Self> {
+        Ok(BoardItem {
+            id: r.id,
+            key: r.key,
+            title: r.title,
+            body: r.body,
+            status: r.status,
+            claimed_by: r.claimed_by,
+            created_at: OffsetDateTime::parse(&r.created_at, &Rfc3339)?,
+            updated_at: OffsetDateTime::parse(&r.updated_at, &Rfc3339)?,
+        })
+    }
 }
 
 impl TryFrom<SessionRow> for Session {
@@ -332,6 +484,79 @@ mod tests {
         s.create_session(new.clone()).await.unwrap();
         let err = s.create_session(new).await.unwrap_err();
         assert!(matches!(err, StoreError::AlreadyExists(_)));
+    }
+
+    #[tokio::test]
+    async fn board_create_and_claim_cas() {
+        let s = tmp_store().await;
+        let item = s
+            .create_board_item(NewBoardItem {
+                title: "ship phase 7".into(),
+                body: Some("kanban + atomic claim".into()),
+                status: None,
+            })
+            .await
+            .unwrap();
+        assert!(item.key.starts_with("AG-"));
+        assert_eq!(item.status, "todo");
+        assert!(item.claimed_by.is_none());
+
+        // First claim wins.
+        let won = s.claim_board_item(item.id, "actor-A").await.unwrap();
+        assert!(won.is_some(), "first claim should succeed");
+        assert_eq!(won.as_ref().unwrap().claimed_by.as_deref(), Some("actor-A"));
+
+        // Second claim by anyone else loses.
+        let lost = s.claim_board_item(item.id, "actor-B").await.unwrap();
+        assert!(lost.is_none(), "second claim should be rejected");
+
+        // Even the same actor can't re-claim.
+        let again = s.claim_board_item(item.id, "actor-A").await.unwrap();
+        assert!(again.is_none(), "re-claim by same actor should also fail");
+
+        // Listing returns it.
+        let all = s.list_board_items().await.unwrap();
+        assert_eq!(all.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn board_patch_and_clear_body() {
+        let s = tmp_store().await;
+        let item = s
+            .create_board_item(NewBoardItem {
+                title: "x".into(),
+                body: Some("orig".into()),
+                status: None,
+            })
+            .await
+            .unwrap();
+
+        // status-only patch leaves body alone
+        let patched = s
+            .patch_board_item(
+                item.id,
+                BoardPatch {
+                    status: Some("doing".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(patched.status, "doing");
+        assert_eq!(patched.body.as_deref(), Some("orig"));
+
+        // explicit body=null clears it
+        let cleared = s
+            .patch_board_item(
+                item.id,
+                BoardPatch {
+                    body: Some(None),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(cleared.body.is_none());
     }
 
     #[tokio::test]

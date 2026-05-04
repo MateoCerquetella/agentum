@@ -121,6 +121,62 @@ impl Event {
     }
 }
 
+// ---------- board items (Phase 7) ----------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoardItem {
+    pub id: i64,
+    /// Human-friendly identifier, e.g. `AG-7`. Derived from `id` at insert.
+    pub key: String,
+    pub title: String,
+    pub body: Option<String>,
+    /// Free-form column name. `todo` | `doing` | `done` are the conventional
+    /// columns; users can introduce custom ones.
+    pub status: String,
+    /// Identifier of whoever currently holds the item. Free-form so both
+    /// agent sessions (a session id) and web actors (`web-…`) can claim.
+    pub claimed_by: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewBoardItem {
+    pub title: String,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BoardPatch {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    pub body: Option<Option<String>>,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+/// Distinguishes "field omitted" from "field set to null" so a PATCH can
+/// explicitly clear `body`.
+fn deserialize_optional_field<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Some(Option::<T>::deserialize(de)?))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaimRequest {
+    /// Free-form actor identifier. Server stores it in `claimed_by` as-is.
+    pub claimed_by: String,
+}
+
 /// Validate a session name: lowercase alphanumeric, dash, underscore. 1..=64 chars.
 pub fn validate_name(name: &str) -> Result<(), CoreError> {
     if name.is_empty() || name.len() > 64 {
