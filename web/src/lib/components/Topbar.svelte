@@ -1,5 +1,6 @@
 <script lang="ts">
   import ThemeSwitcher from './ThemeSwitcher.svelte';
+  import { openPalette } from '$stores/palette';
 
   interface Props { title?: string }
   let { title = 'agentum' }: Props = $props();
@@ -8,7 +9,7 @@
 <header class="topbar">
   <h1>{title}</h1>
   <div class="actions">
-    <button class="ghost" disabled title="Command palette (phase 9)">⌘K</button>
+    <button class="ghost" type="button" onclick={openPalette} title="Command palette (⌘K)">⌘K</button>
     <ThemeSwitcher />
   </div>
 </header>
@@ -42,9 +43,14 @@
     padding: 0.4rem 0.6rem;
     border: 1px solid var(--border);
     border-radius: 6px;
-    color: var(--muted);
+    color: var(--text-2);
     font-family: var(--font-mono);
     font-size: 0.8rem;
-    cursor: not-allowed;
+    cursor: pointer;
+    background: var(--surface-2);
+  }
+  .ghost:hover {
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
   }
 </style>

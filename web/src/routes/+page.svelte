@@ -3,6 +3,7 @@
   import { sessions, loadSessions } from '$stores/sessions';
   import SessionCard from '$components/SessionCard.svelte';
   import EmptyState from '$components/EmptyState.svelte';
+  import Skeleton from '$components/Skeleton.svelte';
 
   onMount(() => {
     loadSessions();
@@ -22,7 +23,7 @@
 {#if $sessions.error}
   <div class="error">Failed to load sessions: <code>{$sessions.error}</code></div>
 {:else if $sessions.loading && $sessions.items.length === 0}
-  <div class="loading muted">loading…</div>
+  <div class="grid"><Skeleton rows={6} height="5rem" /></div>
 {:else if $sessions.items.length === 0}
   <EmptyState
     title="No sessions yet"
@@ -77,5 +78,4 @@
     margin-bottom: 1rem;
   }
   .error code { font-family: var(--font-mono); color: var(--text); }
-  .loading { padding: 3rem; text-align: center; }
 </style>
