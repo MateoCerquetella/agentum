@@ -1,0 +1,122 @@
+//! Shared domain types for agentum.
+//!
+//! Kept dependency-light so every crate can pull this in without inheriting
+//! a database, runtime, or HTTP stack.
+
+use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::str::FromStr;
+use time::OffsetDateTime;
+use uuid::Uuid;
+
+#[derive(Debug, thiserror::Error)]
+pub enum CoreError {
+    #[error("invalid session status: {0}")]
+    InvalidStatus(String),
+    #[error("invalid session name: {0}")]
+    InvalidName(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Status {
+    Idle,
+    Running,
+    Stopped,
+    Crashed,
+}
+
+impl Status {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Status::Idle => "idle",
+            Status::Running => "running",
+            Status::Stopped => "stopped",
+            Status::Crashed => "crashed",
+        }
+    }
+}
+
+impl fmt::Display for Status {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for Status {
+    type Err = CoreError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "idle" => Ok(Status::Idle),
+            "running" => Ok(Status::Running),
+            "stopped" => Ok(Status::Stopped),
+            "crashed" => Ok(Status::Crashed),
+            other => Err(CoreError::InvalidStatus(other.to_string())),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Session {
+    pub id: Uuid,
+    pub name: String,
+    pub workdir: String,
+    pub tool: String,
+    pub model: Option<String>,
+    pub flags: Vec<String>,
+    pub status: Status,
+    pub tmux_target: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub last_activity_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewSession {
+    pub name: String,
+    pub workdir: String,
+    pub tool: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub flags: Vec<String>,
+}
+
+/// Validate a session name: lowercase alphanumeric, dash, underscore. 1..=64 chars.
+pub fn validate_name(name: &str) -> Result<(), CoreError> {
+    if name.is_empty() || name.len() > 64 {
+        return Err(CoreError::InvalidName(name.to_string()));
+    }
+    let ok = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !ok {
+        return Err(CoreError::InvalidName(name.to_string()));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_roundtrip() {
+        for s in ["idle", "running", "stopped", "crashed"] {
+            let parsed: Status = s.parse().unwrap();
+            assert_eq!(parsed.as_str(), s);
+        }
+    }
+
+    #[test]
+    fn name_validation() {
+        assert!(validate_name("alpha-1").is_ok());
+        assert!(validate_name("ALPHA").is_ok());
+        assert!(validate_name("").is_err());
+        assert!(validate_name("has space").is_err());
+        assert!(validate_name("dot.dot").is_err());
+    }
+}
