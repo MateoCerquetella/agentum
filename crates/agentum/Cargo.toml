@@ -13,10 +13,11 @@ name = "agentum"
 path = "src/main.rs"
 
 [dependencies]
-agentum-core    = { workspace = true }
-agentum-store   = { workspace = true }
-agentum-server  = { workspace = true }
-agentum-tmux    = { workspace = true }
+agentum-core      = { workspace = true }
+agentum-store     = { workspace = true }
+agentum-server    = { workspace = true }
+agentum-tmux      = { workspace = true }
+agentum-executor  = { workspace = true }
 anyhow          = { workspace = true }
 clap            = { workspace = true }
 tokio           = { workspace = true }

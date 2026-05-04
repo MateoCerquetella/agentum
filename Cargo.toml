@@ -7,6 +7,7 @@ members = [
     "crates/agentum-watchdog",
     "crates/agentum-store",
     "crates/agentum-core",
+    "crates/agentum-executor",
 ]
 
 [workspace.package]
@@ -22,6 +23,7 @@ agentum-core      = { path = "crates/agentum-core" }
 agentum-store     = { path = "crates/agentum-store" }
 agentum-tmux      = { path = "crates/agentum-tmux" }
 agentum-watchdog  = { path = "crates/agentum-watchdog" }
+agentum-executor  = { path = "crates/agentum-executor" }
 agentum-server    = { path = "crates/agentum-server" }
 
 anyhow            = "1"

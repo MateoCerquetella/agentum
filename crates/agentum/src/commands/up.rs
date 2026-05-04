@@ -13,7 +13,6 @@ pub async fn run(name: String) -> Result<()> {
 
     let target = agentum_tmux::target_for(&session.name);
 
-    // If the DB says running and tmux confirms, we're done.
     if matches!(session.status, Status::Running)
         && agentum_tmux::has_session(&target).await?
     {
@@ -21,7 +20,6 @@ pub async fn run(name: String) -> Result<()> {
         return Ok(());
     }
 
-    // Refuse to clobber a stranger holding the same tmux name.
     if agentum_tmux::has_session(&target).await? {
         bail!("tmux session {target} already exists outside agentum; refuse to clobber");
     }
@@ -31,17 +29,21 @@ pub async fn run(name: String) -> Result<()> {
         bail!("workdir does not exist: {}", workdir.display());
     }
 
-    let mut cmd = vec![session.tool.clone()];
-    if let Some(model) = &session.model {
-        cmd.push(format!("--model={model}"));
-    }
-    cmd.extend(session.flags.clone());
+    // Dispatch through the executor abstraction. Unknown tools transparently
+    // get a PassthroughAdapter — same shape as the old direct construction.
+    let adapter = agentum_executor::adapter_for(&session.tool);
+    let launch = adapter.launch(&session);
+    tracing::debug!(
+        tool = session.tool,
+        adapter = adapter.name(),
+        argv = ?launch.argv,
+        "spawning tmux session"
+    );
 
-    agentum_tmux::new_session(&target, &workdir, &cmd, &[]).await?;
+    agentum_tmux::new_session(&target, &workdir, &launch.argv, &launch.env).await?;
 
     let log = paths::pane_log(&session.id.to_string())?;
     if let Err(e) = agentum_tmux::pipe_pane(&target, &log).await {
-        // Pipe failure should not orphan the tmux session.
         let _ = agentum_tmux::kill_session(&target).await;
         return Err(e.into());
     }
@@ -49,6 +51,10 @@ pub async fn run(name: String) -> Result<()> {
     store
         .update_status_and_target(session.id, Status::Running, Some(&target))
         .await?;
-    println!("up          {name}  → tmux:{target}  log:{}", log.display());
+    println!(
+        "up          {name}  → tmux:{target}  via:{}  log:{}",
+        adapter.name(),
+        log.display()
+    );
     Ok(())
 }
