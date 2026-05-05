@@ -4,6 +4,45 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-05-05
+
+The remote-access release. Lets you actually use `agentum terminal` against
+a daemon on your VPS / Tailscale node — previously the TUI's TLS verifier
+only accepted self-signed certs from loopback hosts, so anything off the
+local box failed the handshake with `invalid peer certificate: UnknownIssuer`.
+
+### Added
+- **SSH-style trust-on-first-use for remote daemons.** First contact with
+  a non-loopback `https://` host fetches the server cert, prints its
+  SHA-256 fingerprint, and asks you to confirm it matches the line
+  `agentum serve` prints on the host TTY. Accepting persists the pin to
+  `$XDG_CONFIG_HOME/agentum/known_hosts.toml` (mode 0600). Subsequent
+  connects verify silently; mismatches abort loudly.
+- **`--fingerprint AB:CD:…`** to skip the prompt (CI / scripted setup).
+- **`--insecure`** as the explicit escape hatch for throwaway local
+  testing. Prints a yellow `WARNING` to stderr.
+- **Per-host token cache.** Single-file `cli_token` is replaced by
+  `credentials.toml` keyed by `host:port` so logging into your VPS no
+  longer clobbers your local-dev token. Mode 0600.
+- **First-run onboarding wizard** in the SPA + Settings pane with a
+  remote-access info panel (fingerprint, install hints).
+- **`agentum hosts`** subcommand to list and remove pinned hosts.
+- New server modules: `headers`, `logging`, `ratelimit`, `routes/cert`.
+- New migration `0006_auth_session_expiry.sql` so auth tokens expire.
+- `docs/REMOTE-ACCESS.md`.
+
+### Changed
+- WS auth path: previously accepted any cert without verification (the
+  opposite extreme). Now uses the same per-host pin as HTTP requests.
+- Server-side auth, transport, and on-disk surface hardened: stricter
+  password hashing, expiring sessions, and tighter cookie / header
+  policy.
+
+### Fixed
+- `agentum terminal --api https://<remote>:8822` against a host with a
+  self-signed cert no longer bails with `UnknownIssuer`. With the TOFU
+  pin it Just Works (after the first y/N).
+
 ## [0.4.3] — 2026-05-05
 
 Command palette now matches the **Fresh** terminal IDE

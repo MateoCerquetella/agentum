@@ -3,6 +3,11 @@
 //! Bearer token is injected as `Authorization: Bearer <token>` for HTTP and
 //! as a `?token=…` query parameter for WS upgrades (browsers can't set
 //! custom headers on WS, the server accepts both).
+//!
+//! TLS verification: SSH-style trust-on-first-use. For `https://` URLs we
+//! pin to the SHA-256 fingerprint the user accepted on first contact (see
+//! [`crate::commands::terminal::trust`]). Plain `http://` is accepted as-is
+//! and assumed to live on a trusted network.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,6 +17,7 @@ use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Client as HttpClient;
+use rustls::ClientConfig;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -19,27 +25,114 @@ use tokio_tungstenite::{Connector, connect_async_tls_with_config, tungstenite::M
 use url::Url;
 use uuid::Uuid;
 
-use rustls::ClientConfig;
-use rustls::DigitallySignedStruct;
-use rustls::SignatureScheme;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use super::trust;
+
+/// Optional pinned fingerprint, plus an "insecure" escape hatch. The
+/// escape hatch is *only* exposed via an explicit CLI flag and only
+/// covers the user's own machine in throwaway test setups.
+#[derive(Clone, Debug)]
+pub enum TlsTrust {
+    /// `http://` URL — no TLS at all.
+    Plain,
+    /// `https://` URL — pin to this SHA-256 fingerprint.
+    Pinned(String),
+    /// `https://` URL — accept any cert. NOT enabled by default; user must
+    /// pass `--insecure`.
+    AcceptAny,
+}
+
+impl TlsTrust {
+    fn rustls_config(&self) -> Option<Arc<ClientConfig>> {
+        match self {
+            TlsTrust::Plain => None,
+            TlsTrust::Pinned(fp) => Some(trust::pinned_tls_config(fp.clone())),
+            TlsTrust::AcceptAny => {
+                Some(trust::pinned_tls_config(String::new())).map(|_| accept_any_config())
+            }
+        }
+    }
+}
+
+fn accept_any_config() -> Arc<ClientConfig> {
+    // We deliberately don't expose this anywhere except via --insecure.
+    // It's the same shape as before but only reached on explicit opt-in.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let verifier = Arc::new(NoVerify);
+    let cfg = ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
+    Arc::new(cfg)
+}
+
+#[derive(Debug)]
+struct NoVerify;
+impl rustls::client::danger::ServerCertVerifier for NoVerify {
+    fn verify_server_cert(
+        &self,
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &[rustls::pki_types::CertificateDer<'_>],
+        _: &rustls::pki_types::ServerName<'_>,
+        _: &[u8],
+        _: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+    fn verify_tls12_signature(
+        &self,
+        _: &[u8],
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+    fn verify_tls13_signature(
+        &self,
+        _: &[u8],
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        use rustls::SignatureScheme::*;
+        vec![
+            RSA_PSS_SHA256,
+            RSA_PSS_SHA384,
+            RSA_PSS_SHA512,
+            RSA_PKCS1_SHA256,
+            RSA_PKCS1_SHA384,
+            RSA_PKCS1_SHA512,
+            ECDSA_NISTP256_SHA256,
+            ECDSA_NISTP384_SHA384,
+            ED25519,
+        ]
+    }
+}
 
 #[derive(Clone)]
 pub struct Client {
     http: HttpClient,
     base: Url,
     token: String,
+    trust: TlsTrust,
+}
+
+fn build_http(trust: &TlsTrust) -> Result<HttpClient> {
+    let mut b = HttpClient::builder().timeout(Duration::from_secs(15));
+    if let Some(cfg) = trust.rustls_config() {
+        // We pass an owned ClientConfig (reqwest expects the unwrapped form
+        // because it stuffs it into a `dyn Any`).
+        let owned = (*cfg).clone();
+        b = b.use_preconfigured_tls(owned);
+    }
+    b.build().context("build reqwest client")
 }
 
 /// Standalone POST /api/auth/login. Returns the bearer token.
-pub async fn login(base: &Url, username: &str, password: &str) -> Result<String> {
+pub async fn login(base: &Url, trust: &TlsTrust, username: &str, password: &str) -> Result<String> {
     let url = base.join("/api/auth/login")?;
-    let http = HttpClient::builder()
-        .timeout(Duration::from_secs(15))
-        .danger_accept_invalid_certs(is_localhost(base))
-        .build()
-        .context("build reqwest client")?;
+    let http = build_http(trust)?;
     #[derive(Serialize)]
     struct Body<'a> {
         username: &'a str,
@@ -65,13 +158,14 @@ pub async fn login(base: &Url, username: &str, password: &str) -> Result<String>
 }
 
 impl Client {
-    pub fn new(base: Url, token: String) -> Result<Self> {
-        let http = HttpClient::builder()
-            .timeout(Duration::from_secs(15))
-            .danger_accept_invalid_certs(is_localhost(&base))
-            .build()
-            .context("build reqwest client")?;
-        Ok(Self { http, base, token })
+    pub fn new(base: Url, token: String, trust: TlsTrust) -> Result<Self> {
+        let http = build_http(&trust)?;
+        Ok(Self {
+            http,
+            base,
+            token,
+            trust,
+        })
     }
 
     pub async fn health(&self) -> Result<()> {
@@ -142,9 +236,10 @@ impl Client {
     ) -> JoinHandle<()> {
         let base = self.base.clone();
         let token = self.token.clone();
+        let trust = self.trust.clone();
         tokio::spawn(async move {
             let url = ws_url(&base, &format!("/api/sessions/{id}/stream"), &token);
-            let connector = ws_connector(&url);
+            let connector = ws_connector(&url, &trust);
             let result = connect_async_tls_with_config(url.as_str(), None, false, connector).await;
             let stream = match result {
                 Ok((s, _)) => s,
@@ -195,9 +290,10 @@ impl Client {
     pub fn open_event_stream(&self, tx: mpsc::UnboundedSender<EventMsg>) -> JoinHandle<()> {
         let base = self.base.clone();
         let token = self.token.clone();
+        let trust = self.trust.clone();
         tokio::spawn(async move {
             let url = ws_url(&base, "/api/events", &token);
-            let connector = ws_connector(&url);
+            let connector = ws_connector(&url, &trust);
             let result = connect_async_tls_with_config(url.as_str(), None, false, connector).await;
             let mut stream = match result {
                 Ok((s, _)) => {
@@ -261,11 +357,12 @@ pub enum EventMsg {
     Closed,
 }
 
-pub async fn probe_health(base: &Url, timeout: Duration) -> Result<()> {
-    let http = HttpClient::builder()
-        .timeout(timeout)
-        .danger_accept_invalid_certs(is_localhost(base))
-        .build()?;
+pub async fn probe_health(base: &Url, trust: &TlsTrust, timeout: Duration) -> Result<()> {
+    let mut b = HttpClient::builder().timeout(timeout);
+    if let Some(cfg) = trust.rustls_config() {
+        b = b.use_preconfigured_tls((*cfg).clone());
+    }
+    let http = b.build()?;
     let url = base.join("/api/health")?;
     let resp = http.get(url).send().await?;
     if resp.status().is_success() {
@@ -288,72 +385,9 @@ fn ws_url(base: &Url, path: &str, token: &str) -> Url {
     url
 }
 
-fn ws_connector(url: &Url) -> Option<Connector> {
-    if url.scheme() == "wss" {
-        Some(Connector::Rustls(accept_any_rustls_config()))
-    } else {
-        None
+fn ws_connector(url: &Url, trust: &TlsTrust) -> Option<Connector> {
+    if url.scheme() != "wss" {
+        return None;
     }
-}
-
-fn is_localhost(url: &Url) -> bool {
-    matches!(
-        url.host_str(),
-        Some("127.0.0.1") | Some("::1") | Some("localhost")
-    )
-}
-
-fn accept_any_rustls_config() -> Arc<ClientConfig> {
-    // Install a default crypto provider once; ignore "already installed".
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let config = ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(AcceptAny))
-        .with_no_client_auth();
-    Arc::new(config)
-}
-
-#[derive(Debug)]
-struct AcceptAny;
-
-impl ServerCertVerifier for AcceptAny {
-    fn verify_server_cert(
-        &self,
-        _: &CertificateDer<'_>,
-        _: &[CertificateDer<'_>],
-        _: &ServerName<'_>,
-        _: &[u8],
-        _: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-    fn verify_tls12_signature(
-        &self,
-        _: &[u8],
-        _: &CertificateDer<'_>,
-        _: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-    fn verify_tls13_signature(
-        &self,
-        _: &[u8],
-        _: &CertificateDer<'_>,
-        _: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        vec![
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::RSA_PKCS1_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::ED25519,
-        ]
-    }
+    trust.rustls_config().map(Connector::Rustls)
 }

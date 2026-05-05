@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, thiserror::Error)]
 pub enum TlsError {
@@ -18,6 +19,49 @@ pub enum TlsError {
     Io(#[from] std::io::Error),
     #[error("path: {0}")]
     Path(#[from] agentum_store::paths::PathError),
+    #[error("cert decode: {0}")]
+    Decode(String),
+}
+
+/// Compute the SHA-256 fingerprint of the leaf cert in `pem`, formatted as
+/// colon-separated hex pairs (`AB:CD:…`). Operators paste this into their
+/// second device's "verify cert" UI to confirm there's no MITM serving a
+/// substitute cert on the LAN.
+pub fn cert_fingerprint(pem: &str) -> Result<String, TlsError> {
+    let der =
+        pem_to_der(pem).ok_or_else(|| TlsError::Decode("no CERTIFICATE block found".into()))?;
+    let digest = Sha256::digest(der);
+    let mut s = String::with_capacity(digest.len() * 3);
+    for (i, b) in digest.iter().enumerate() {
+        if i > 0 {
+            s.push(':');
+        }
+        s.push_str(&format!("{b:02X}"));
+    }
+    Ok(s)
+}
+
+fn pem_to_der(pem: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let mut in_block = false;
+    let mut b64 = String::new();
+    for line in pem.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("-----BEGIN CERTIFICATE-----") {
+            in_block = true;
+            continue;
+        }
+        if trimmed.starts_with("-----END CERTIFICATE-----") {
+            break;
+        }
+        if in_block {
+            b64.push_str(trimmed);
+        }
+    }
+    if b64.is_empty() {
+        return None;
+    }
+    base64::engine::general_purpose::STANDARD.decode(b64).ok()
 }
 
 pub struct TlsArtifacts {

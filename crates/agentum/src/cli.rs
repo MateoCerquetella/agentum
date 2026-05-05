@@ -180,9 +180,35 @@ pub enum Cmd {
     #[command(alias = "tui")]
     Terminal {
         /// Override API base URL (defaults to https://127.0.0.1:8822 → http fallback).
+        /// To connect to a remote agentum, e.g. `--api https://my-vps:8822`.
         #[arg(long)]
         api: Option<String>,
+
+        /// Pre-pin the server's SHA-256 cert fingerprint (e.g. `AB:CD:…` as
+        /// printed by `agentum serve` on the host). Skips the interactive
+        /// trust prompt on first contact.
+        #[arg(long)]
+        fingerprint: Option<String>,
+
+        /// Skip TLS certificate verification entirely. Strongly discouraged;
+        /// here only for local throwaway test setups.
+        #[arg(long)]
+        insecure: bool,
     },
+
+    /// Manage the SSH-style known_hosts file used by `agentum terminal`.
+    Hosts {
+        #[command(subcommand)]
+        action: HostsCmd,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum HostsCmd {
+    /// List pinned hosts and their fingerprints.
+    List,
+    /// Forget a pinned host (also drops its cached login token).
+    Forget { host: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -259,7 +285,19 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Cmd::Auth { action } => crate::commands::auth::run(action).await,
         Cmd::Config { action } => crate::commands::config::run(action).await,
         Cmd::Doctor => crate::commands::doctor::run().await,
-        Cmd::Terminal { api } => crate::commands::terminal::run(api).await,
+        Cmd::Terminal {
+            api,
+            fingerprint,
+            insecure,
+        } => {
+            crate::commands::terminal::run(crate::commands::terminal::Options {
+                api,
+                fingerprint,
+                insecure,
+            })
+            .await
+        }
+        Cmd::Hosts { action } => crate::commands::hosts::run(action).await,
     }
 }
 
@@ -291,11 +329,39 @@ mod tests {
     fn terminal_parses() {
         use clap::Parser;
         let cli = Cli::parse_from(["agentum", "terminal"]);
-        assert!(matches!(cli.command, Cmd::Terminal { api: None }));
+        assert!(matches!(cli.command, Cmd::Terminal { api: None, .. }));
 
         let cli = Cli::parse_from(["agentum", "terminal", "--api", "http://1.2.3.4:9000"]);
         match cli.command {
-            Cmd::Terminal { api } => assert_eq!(api.as_deref(), Some("http://1.2.3.4:9000")),
+            Cmd::Terminal { api, .. } => {
+                assert_eq!(api.as_deref(), Some("http://1.2.3.4:9000"));
+            }
+            _ => panic!("expected Terminal"),
+        }
+    }
+
+    #[test]
+    fn terminal_accepts_fingerprint_and_insecure() {
+        use clap::Parser;
+        let cli = Cli::parse_from([
+            "agentum",
+            "terminal",
+            "--api",
+            "https://vps:8822",
+            "--fingerprint",
+            "AB:CD",
+            "--insecure",
+        ]);
+        match cli.command {
+            Cmd::Terminal {
+                api,
+                fingerprint,
+                insecure,
+            } => {
+                assert_eq!(api.as_deref(), Some("https://vps:8822"));
+                assert_eq!(fingerprint.as_deref(), Some("AB:CD"));
+                assert!(insecure);
+            }
             _ => panic!("expected Terminal"),
         }
     }
@@ -304,6 +370,6 @@ mod tests {
     fn tui_alias_still_works() {
         use clap::Parser;
         let cli = Cli::parse_from(["agentum", "tui"]);
-        assert!(matches!(cli.command, Cmd::Terminal { api: None }));
+        assert!(matches!(cli.command, Cmd::Terminal { api: None, .. }));
     }
 }

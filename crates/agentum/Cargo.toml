@@ -50,7 +50,9 @@ tokio-tungstenite  = { version = "0.24", default-features = false, features = ["
 futures-util       = "0.3"
 url                = "2"
 rustls             = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls       = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 bytes              = "1"
+sha2               = "0.10"
 
 # Workdir picker (`agentum new --pick`)
 which              = "7"

@@ -47,6 +47,12 @@ export interface AuthStatus {
   register_open: boolean;
 }
 
+export interface CertFingerprint {
+  /// Empty when running with --no-tls.
+  sha256: string;
+  tls: boolean;
+}
+
 export interface AuthResp {
   token: string;
   username: string;
@@ -227,6 +233,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ username, password })
     }),
+  certFingerprint: () => request<CertFingerprint>('/api/cert/fingerprint'),
   logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
   me: () => request<MeResp>('/api/auth/me'),
   listSessions: (status?: Status) => {

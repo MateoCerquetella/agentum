@@ -71,6 +71,11 @@ impl Store {
 
         sqlx::migrate!("./migrations").run(&pool).await?;
 
+        // The DB holds Argon2id password hashes and live bearer tokens.
+        // Force 0600 on the file + WAL/SHM sidecars so a permissive umask
+        // doesn't leak them to other local accounts.
+        restrict_db_perms(db_path);
+
         Ok(Self { pool })
     }
 
@@ -610,34 +615,93 @@ impl Store {
         }
     }
 
-    pub async fn create_auth_session(&self, user_id: i64, token: &str) -> Result<()> {
-        let now = OffsetDateTime::now_utc().format(&Rfc3339)?;
+    pub async fn create_auth_session(
+        &self,
+        user_id: i64,
+        token: &str,
+        ttl: time::Duration,
+    ) -> Result<()> {
+        let now = OffsetDateTime::now_utc();
+        let expires = now + ttl;
+        let now_s = now.format(&Rfc3339)?;
+        let exp_s = expires.format(&Rfc3339)?;
         sqlx::query(
-            "INSERT INTO auth_sessions (token, user_id, created_at, last_used_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO auth_sessions (token, user_id, created_at, last_used_at, expires_at) VALUES (?, ?, ?, ?, ?)",
         )
         .bind(token)
         .bind(user_id)
-        .bind(&now)
-        .bind(&now)
+        .bind(&now_s)
+        .bind(&now_s)
+        .bind(&exp_s)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
     /// Look up the user behind a session token and bump `last_used_at`.
-    pub async fn touch_auth_session(&self, token: &str) -> Result<Option<User>> {
-        let user_id: Option<i64> =
-            sqlx::query_scalar("SELECT user_id FROM auth_sessions WHERE token = ?")
+    /// Returns `None` for unknown tokens AND for expired ones — expired
+    /// rows are deleted as a side effect so the table self-heals.
+    ///
+    /// `slide_ttl`, when `Some`, refreshes `expires_at` to `now + ttl` on
+    /// each touch (sliding expiration). Use `None` for absolute expiry.
+    pub async fn touch_auth_session(
+        &self,
+        token: &str,
+        slide_ttl: Option<time::Duration>,
+    ) -> Result<Option<User>> {
+        let row: Option<(i64, Option<String>)> =
+            sqlx::query_as("SELECT user_id, expires_at FROM auth_sessions WHERE token = ?")
                 .bind(token)
                 .fetch_optional(&self.pool)
                 .await?;
-        let Some(uid) = user_id else { return Ok(None) };
-        let now = OffsetDateTime::now_utc().format(&Rfc3339)?;
-        let _ = sqlx::query("UPDATE auth_sessions SET last_used_at = ? WHERE token = ?")
-            .bind(&now)
+        let Some((uid, expires_at)) = row else {
+            return Ok(None);
+        };
+
+        // Treat NULL expires_at as "infinite" for forward compat (the migration
+        // backfills, but a future cleanup might null it). The current default
+        // is "if missing, accept" rather than reject — flip if you'd rather be
+        // strict.
+        let now = OffsetDateTime::now_utc();
+        if let Some(exp_s) = expires_at.as_deref() {
+            match OffsetDateTime::parse(exp_s, &Rfc3339) {
+                Ok(exp) if exp <= now => {
+                    let _ = sqlx::query("DELETE FROM auth_sessions WHERE token = ?")
+                        .bind(token)
+                        .execute(&self.pool)
+                        .await;
+                    return Ok(None);
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    // Malformed timestamp — treat as expired and clean up.
+                    let _ = sqlx::query("DELETE FROM auth_sessions WHERE token = ?")
+                        .bind(token)
+                        .execute(&self.pool)
+                        .await;
+                    return Ok(None);
+                }
+            }
+        }
+
+        let now_s = now.format(&Rfc3339)?;
+        if let Some(ttl) = slide_ttl {
+            let new_exp = (now + ttl).format(&Rfc3339)?;
+            let _ = sqlx::query(
+                "UPDATE auth_sessions SET last_used_at = ?, expires_at = ? WHERE token = ?",
+            )
+            .bind(&now_s)
+            .bind(&new_exp)
             .bind(token)
             .execute(&self.pool)
             .await;
+        } else {
+            let _ = sqlx::query("UPDATE auth_sessions SET last_used_at = ? WHERE token = ?")
+                .bind(&now_s)
+                .bind(token)
+                .execute(&self.pool)
+                .await;
+        }
         self.get_user_by_id(uid).await
     }
 
@@ -647,6 +711,19 @@ impl Store {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// Delete every auth_session row whose `expires_at` is in the past.
+    /// Returns the number of rows deleted. Cheap to call on a timer.
+    pub async fn sweep_expired_auth_sessions(&self) -> Result<u64> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let res = sqlx::query(
+            "DELETE FROM auth_sessions WHERE expires_at IS NOT NULL AND expires_at <= ?",
+        )
+        .bind(&now_s)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
     }
 
     pub async fn list_users(&self) -> Result<Vec<User>> {
@@ -682,6 +759,51 @@ impl Store {
         Ok(())
     }
 }
+
+/// Best-effort 0600 on the SQLite file and its WAL/SHM sidecars. Logs a
+/// warning on failure rather than aborting boot — on weird filesystems
+/// (NFS, FAT) chmod may fail but the server should still come up.
+#[cfg(unix)]
+fn restrict_db_perms(db_path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let candidates = [
+        db_path.to_path_buf(),
+        db_path.with_extension(
+            db_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| format!("{e}-wal"))
+                .unwrap_or_else(|| "sqlite-wal".to_string()),
+        ),
+        db_path.with_extension(
+            db_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| format!("{e}-shm"))
+                .unwrap_or_else(|| "sqlite-shm".to_string()),
+        ),
+    ];
+    for p in &candidates {
+        if !p.exists() {
+            continue;
+        }
+        match std::fs::metadata(p) {
+            Ok(m) => {
+                let mut perm = m.permissions();
+                perm.set_mode(0o600);
+                if let Err(e) = std::fs::set_permissions(p, perm) {
+                    tracing::warn!(path = %p.display(), error = %e, "could not chmod 0600");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(path = %p.display(), error = %e, "stat failed");
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn restrict_db_perms(_db_path: &Path) {}
 
 #[derive(Debug, FromRow)]
 struct SessionRow {
