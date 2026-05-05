@@ -4,6 +4,24 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] — 2026-05-05
+
+### Added
+- **`system` theme** — inherits the host terminal's actual colour scheme.
+  Backgrounds resolve to `Color::Reset` (the host's bg paints through),
+  foreground / accent slots use the **named** ANSI colours
+  (`Cyan`, `Yellow`, `Red`, …) which terminals colourise from their own
+  16-colour palette. Set Alacritty / iTerm / WezTerm / Ghostty to your
+  preferred theme and agentum follows automatically — same model
+  alacritty uses for its own UI chrome and the one
+  [opencode](https://github.com/sst/opencode) ships under the
+  `system` name.
+- `system` is now the default theme. The previous "system" sentinel
+  (which sniffed `COLORFGBG` and resolved to `midnight` / `paper`) is
+  gone — `system` is a real registry entry now.
+- `auto` accepted as an alias for `system` in saved files and
+  `$AGENTUM_THEME` for back-compat.
+
 ## [0.5.1] — 2026-05-05
 
 Session lifecycle from inside the TUI. Previously the dashboard could

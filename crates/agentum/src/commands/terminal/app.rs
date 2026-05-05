@@ -143,10 +143,23 @@ pub enum NewSessionField {
 /// rather than referring to a UUID.
 #[derive(Clone, PartialEq, Eq)]
 pub enum PendingAction {
-    Start { id: Uuid, name: String },
-    Stop { id: Uuid, name: String },
-    Kill { id: Uuid, name: String },
-    Delete { id: Uuid, name: String, running: bool },
+    Start {
+        id: Uuid,
+        name: String,
+    },
+    Stop {
+        id: Uuid,
+        name: String,
+    },
+    Kill {
+        id: Uuid,
+        name: String,
+    },
+    Delete {
+        id: Uuid,
+        name: String,
+        running: bool,
+    },
 }
 
 impl PendingAction {
@@ -161,7 +174,9 @@ impl PendingAction {
             }
             PendingAction::Delete { name, running, .. } => {
                 if *running {
-                    format!("delete session `{name}`? It is currently running — will be killed first.")
+                    format!(
+                        "delete session `{name}`? It is currently running — will be killed first."
+                    )
                 } else {
                     format!("delete session `{name}`?")
                 }
@@ -867,9 +882,7 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         PendingAction::Start { id, .. } => client.start_session(*id).await,
         PendingAction::Stop { id, .. } => client.stop_session(*id).await,
         PendingAction::Kill { id, .. } => client.kill_session(*id).await,
-        PendingAction::Delete { id, running, .. } => {
-            client.delete_session(*id, *running).await
-        }
+        PendingAction::Delete { id, running, .. } => client.delete_session(*id, *running).await,
     };
     let label = match &action {
         PendingAction::Start { name, .. } => format!("started `{name}`"),

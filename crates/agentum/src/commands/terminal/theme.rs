@@ -1,12 +1,24 @@
 //! Themes — name-keyed palette registry with real backgrounds.
 //!
-//! Five built-ins: `midnight` (Tokyo Night-ish, default), `dusk` (One Dark
-//! warm charcoal), `slate` (cool charcoal with neon cyan accents), `paper`
-//! (Solarized-light-ish), `mono` (high-contrast B/W). Persisted in
-//! `~/.local/share/agentum/theme`, overridable via `$AGENTUM_THEME`. `T`
-//! cycles forward; the command palette (Ctrl-P / Ctrl-K) lets you pick by
-//! name. Everything ui.rs draws goes through `Palette` — there are no
-//! hardcoded `Color::*` in draw code.
+//! Six built-ins: `system` (default — inherits the host terminal's colour
+//! scheme exactly the way alacritty / opencode do), `midnight` (Tokyo
+//! Night-ish), `dusk` (One Dark warm charcoal), `slate` (cool charcoal +
+//! neon cyan), `paper` (Solarized-light-ish), `mono` (high-contrast B/W).
+//! Persisted in `~/.local/share/agentum/theme`, overridable via
+//! `$AGENTUM_THEME`. `T` cycles forward; the command palette
+//! (Ctrl-P / Ctrl-K) lets you pick by name. Everything ui.rs draws goes
+//! through `Palette` — there are no hardcoded `Color::*` in draw code.
+//!
+//! ## How `system` works
+//!
+//! Backgrounds resolve to `Color::Reset` so the host terminal's actual
+//! background paints through — if you've set Alacritty / iTerm /
+//! WezTerm / Ghostty to a custom bg, agentum just inherits it. Foreground
+//! / accent slots use the **named** ANSI colours (Cyan, Yellow, …),
+//! which terminals colourise from their own scheme. Result: change your
+//! terminal theme and agentum follows automatically. Same model
+//! alacritty itself uses for its UI chrome and the one
+//! [opencode](https://github.com/sst/opencode) ships under "system".
 
 use std::path::PathBuf;
 
@@ -82,6 +94,41 @@ pub fn all() -> &'static [Theme] {
 // Order matters: the first entry is the default and the cycle starts here.
 
 const BUILTINS: &[Theme] = &[
+    // `system` — inherit the host terminal's palette. All backgrounds are
+    // `Color::Reset` (the host bg shows through), and foreground / accent
+    // slots use named ANSI colours that the terminal renders from its own
+    // 16-colour scheme. Change your terminal theme → agentum follows.
+    // This is the same approach alacritty uses for its own UI and the
+    // model opencode ships under the "system" name.
+    Theme {
+        name: "system",
+        palette: Palette {
+            body_bg: Color::Reset,
+            panel_bg: Color::Reset,
+            surface_bg: Color::Reset,
+            chrome_bg: Color::Reset,
+
+            fg: Color::Reset,
+            fg_strong: Color::White,
+            muted: Color::DarkGray,
+            subtle: Color::DarkGray,
+
+            accent: Color::Cyan,
+            accent_alt: Color::Magenta,
+            idle_border: Color::DarkGray,
+            focus_border: Color::Cyan,
+
+            cursor_bg: Color::DarkGray,
+            cursor_fg: Color::White,
+
+            success: Color::Green,
+            warning: Color::Yellow,
+            error: Color::Red,
+
+            chip_bg: Color::DarkGray,
+            chip_fg: Color::White,
+        },
+    },
     Theme {
         name: "midnight",
         palette: Palette {
@@ -229,29 +276,7 @@ const BUILTINS: &[Theme] = &[
     },
 ];
 
-// ---------- system detection + persistence ----------
-
-const SYSTEM_SENTINEL: &str = "system";
-
-/// Resolve a stored name to a concrete theme. `system` sniffs `COLORFGBG`
-/// and falls back to `midnight` for dark hosts, `paper` for light.
-fn resolve(name: &str) -> &'static Theme {
-    if name.eq_ignore_ascii_case(SYSTEM_SENTINEL) {
-        return Theme::by_name(if detect_light() { "paper" } else { "midnight" });
-    }
-    Theme::by_name(name)
-}
-
-fn detect_light() -> bool {
-    if let Ok(s) = std::env::var("COLORFGBG")
-        && let Some(bg) = s.split(';').nth(1)
-        && let Ok(n) = bg.trim().parse::<u32>()
-        && (7..=15).contains(&n)
-    {
-        return true;
-    }
-    false
-}
+// ---------- persistence ----------
 
 fn theme_file() -> Option<PathBuf> {
     let dir = agentum_store::paths::data_dir().ok()?;
@@ -259,15 +284,25 @@ fn theme_file() -> Option<PathBuf> {
 }
 
 pub fn load() -> &'static Theme {
+    // `auto` is accepted as an alias for `system` for back-compat with
+    // older saved files / scripts.
+    let normalize = |s: &str| -> String {
+        let t = s.trim();
+        if t.eq_ignore_ascii_case("auto") {
+            "system".into()
+        } else {
+            t.to_string()
+        }
+    };
     if let Ok(s) = std::env::var("AGENTUM_THEME") {
-        return resolve(s.trim());
+        return Theme::by_name(&normalize(&s));
     }
     if let Some(path) = theme_file()
         && let Ok(raw) = std::fs::read_to_string(&path)
     {
-        return resolve(raw.trim());
+        return Theme::by_name(&normalize(&raw));
     }
-    Theme::by_name("midnight")
+    Theme::by_name("system")
 }
 
 pub fn save(name: &str) {

@@ -415,10 +415,16 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         body("  Ctrl-G           release focused pane → tree", p),
         Line::from(""),
         head("  Sessions", p),
-        body("  n                new session (form: name / workdir / tool / model)", p),
+        body(
+            "  n                new session (form: name / workdir / tool / model)",
+            p,
+        ),
         body("  u                start (up) the selected session", p),
         body("  s                stop the selected session (graceful)", p),
-        body("  K                kill the selected session (immediate)", p),
+        body(
+            "  K                kill the selected session (immediate)",
+            p,
+        ),
         body("  D                delete the selected session", p),
         Line::from(""),
         head("  Extensions & appearance", p),
@@ -630,7 +636,14 @@ fn draw_new_session_overlay(f: &mut Frame<'_>, area: Rect, form: &NewSessionForm
     let mut lines: Vec<Line<'_>> = Vec::new();
     lines.push(head("new session", p));
     lines.push(Line::from(""));
-    push_form_field(&mut lines, "name", &form.name, form.field == NewSessionField::Name, "alpha, my-feature, …", p);
+    push_form_field(
+        &mut lines,
+        "name",
+        &form.name,
+        form.field == NewSessionField::Name,
+        "alpha, my-feature, …",
+        p,
+    );
     push_form_field(
         &mut lines,
         "workdir",
@@ -687,7 +700,9 @@ fn push_form_field(
     let label_color = if focused { p.accent } else { p.muted };
     lines.push(Line::from(Span::styled(
         format!("  {label}"),
-        Style::default().fg(label_color).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(label_color)
+            .add_modifier(Modifier::BOLD),
     )));
     let value_line = if value.is_empty() && !focused {
         Line::from(Span::styled(
@@ -726,7 +741,10 @@ fn draw_confirm_overlay(f: &mut Frame<'_>, area: Rect, action: &PendingAction, p
         )),
         Line::from(""),
         Line::from(vec![
-            Span::styled("  y / Enter", Style::default().fg(p.accent).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "  y / Enter",
+                Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+            ),
             Span::styled("  yes      ", Style::default().fg(p.muted)),
             Span::styled("n / Esc", Style::default().fg(p.accent)),
             Span::styled("  cancel", Style::default().fg(p.muted)),

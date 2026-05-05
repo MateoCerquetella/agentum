@@ -282,12 +282,7 @@ impl Client {
 
     async fn post_session_action(&self, id: Uuid, action: &str) -> Result<()> {
         let url = self.base.join(&format!("/api/sessions/{id}/{action}"))?;
-        let resp = self
-            .http
-            .post(url)
-            .bearer_auth(&self.token)
-            .send()
-            .await?;
+        let resp = self.http.post(url).bearer_auth(&self.token).send().await?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
