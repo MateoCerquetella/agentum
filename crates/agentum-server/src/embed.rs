@@ -35,9 +35,8 @@ pub async fn static_handler(uri: Uri) -> Response {
             .status(StatusCode::OK)
             .header(
                 header::CONTENT_TYPE,
-                HeaderValue::from_str(mime).unwrap_or(HeaderValue::from_static(
-                    "application/octet-stream",
-                )),
+                HeaderValue::from_str(mime)
+                    .unwrap_or(HeaderValue::from_static("application/octet-stream")),
             )
             .header(header::CACHE_CONTROL, cache)
             .body(Body::from(file.data.into_owned()))

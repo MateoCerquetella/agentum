@@ -95,9 +95,9 @@ async fn delete(
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
     state.store.delete_board_item(id).await?;
-    let _ = state.bus.send(
-        Event::new("board.deleted").with_payload(json!({"id": id})),
-    );
+    let _ = state
+        .bus
+        .send(Event::new("board.deleted").with_payload(json!({"id": id})));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -115,13 +115,13 @@ async fn claim(
         .await?
     {
         Some(item) => {
-            let _ = state.bus.send(
-                Event::new("board.claimed").with_payload(json!({
+            let _ = state
+                .bus
+                .send(Event::new("board.claimed").with_payload(json!({
                     "id": item.id,
                     "key": item.key,
                     "claimed_by": item.claimed_by,
-                })),
-            );
+                })));
             Ok(Json(item))
         }
         None => Err(ApiError::Conflict(format!(

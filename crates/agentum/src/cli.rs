@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
     long_about = "Self-hosted control plane for AI coding agents.\n\n\
                   Quick start:\n  \
                   agentum new my-session --tool claude --dir .\n  \
-                  agentum serve          # resumes sessions + starts dashboard",
+                  agentum serve          # resumes sessions + starts dashboard"
 )]
 pub struct Cli {
     #[command(subcommand)]

@@ -75,7 +75,10 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::channels::router())
         .merge(routes::events::router())
         .merge(routes::fs::router())
-        .layer(axum_mw::from_fn_with_state(state.clone(), auth::require_token))
+        .layer(axum_mw::from_fn_with_state(
+            state.clone(),
+            auth::require_token,
+        ))
         .fallback(embed::static_handler)
         .with_state(state)
         .layer(TraceLayer::new_for_http())
@@ -141,10 +144,7 @@ fn cert_server_router(cert_pem: String) -> Router {
                 let pem = pem_for_route.clone();
                 async move {
                     (
-                        [(
-                            axum::http::header::CONTENT_TYPE,
-                            "application/x-pem-file",
-                        )],
+                        [(axum::http::header::CONTENT_TYPE, "application/x-pem-file")],
                         pem.as_str().to_string(),
                     )
                 }
@@ -156,7 +156,10 @@ fn cert_server_router(cert_pem: String) -> Router {
 
 async fn cert_redirect_hint(_: Request<Body>) -> impl IntoResponse {
     (
-        [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
         "agentum cert server. GET /api/cert for the PEM. The full app is on the TLS port.\n",
     )
 }

@@ -30,17 +30,17 @@ pub const LAZYGIT: Extension = Extension {
     args: &["-p", "{cwd}"],
     blurb: "Fast, keyboard-first git UI. Stages, commits, branches, rebases, cherry-picks.",
     cheatsheet: &[
-        ("switch panel",     "1 2 3 4 5"),
-        ("up / down",        "k j   or ↑ ↓"),
-        ("stage / unstage",  "space"),
-        ("commit",           "c"),
-        ("amend",            "A"),
-        ("push / pull",      "P / p"),
-        ("checkout branch",  "space  (in branches)"),
-        ("new branch",       "n"),
-        ("merge / rebase",   "M / r"),
+        ("switch panel", "1 2 3 4 5"),
+        ("up / down", "k j   or ↑ ↓"),
+        ("stage / unstage", "space"),
+        ("commit", "c"),
+        ("amend", "A"),
+        ("push / pull", "P / p"),
+        ("checkout branch", "space  (in branches)"),
+        ("new branch", "n"),
+        ("merge / rebase", "M / r"),
         ("show keybindings", "?"),
-        ("quit lazygit",     "q"),
+        ("quit lazygit", "q"),
     ],
     homepage: "https://github.com/jesseduffield/lazygit",
 };
@@ -73,22 +73,25 @@ pub fn install_hints(ext: &Extension) -> Vec<(&'static str, String)> {
     } else if cfg!(target_os = "linux") {
         hints.push(("Homebrew (Linux)", format!("brew install {bin}")));
         hints.push(("Arch / pacman", format!("sudo pacman -S {bin}")));
-        hints.push(("Debian / Ubuntu (recent)", format!("sudo apt install {bin}")));
+        hints.push((
+            "Debian / Ubuntu (recent)",
+            format!("sudo apt install {bin}"),
+        ));
         hints.push(("Fedora", format!("sudo dnf install {bin}")));
         hints.push(("Alpine", format!("sudo apk add {bin}")));
     } else if cfg!(target_os = "windows") {
         hints.push(("Scoop", format!("scoop install {bin}")));
         hints.push(("Chocolatey", format!("choco install {bin}")));
-        hints.push((
-            "winget",
-            "winget install JesseDuffield.lazygit".to_string(),
-        ));
+        hints.push(("winget", "winget install JesseDuffield.lazygit".to_string()));
     } else {
         hints.push(("Homebrew", format!("brew install {bin}")));
     }
 
     if ext.id == "lazygit" {
-        hints.push(("Go", format!("go install github.com/jesseduffield/{bin}@latest")));
+        hints.push((
+            "Go",
+            format!("go install github.com/jesseduffield/{bin}@latest"),
+        ));
     }
     hints
 }

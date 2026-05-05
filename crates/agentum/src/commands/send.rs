@@ -13,9 +13,7 @@ pub async fn run(name: String, text: String) -> Result<()> {
         .clone()
         .unwrap_or_else(|| agentum_tmux::target_for(&session.name));
 
-    if !matches!(session.status, Status::Running)
-        || !agentum_tmux::has_session(&target).await?
-    {
+    if !matches!(session.status, Status::Running) || !agentum_tmux::has_session(&target).await? {
         bail!("session {name} is not running");
     }
 

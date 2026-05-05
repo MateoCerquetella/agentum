@@ -83,7 +83,10 @@ async fn cmd_edit() -> Result<()> {
     }
     // Touch the file so the editor opens something even if it doesn't exist yet.
     if !path.exists() {
-        fs::write(&path, "# agentum configuration\n# see: agentum config set <key> <value>\n")?;
+        fs::write(
+            &path,
+            "# agentum configuration\n# see: agentum config set <key> <value>\n",
+        )?;
     }
 
     let editor = std::env::var("EDITOR")

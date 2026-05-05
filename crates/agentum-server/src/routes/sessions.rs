@@ -142,8 +142,8 @@ async fn start(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    let log = paths::pane_log(&session.id.to_string())
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let log =
+        paths::pane_log(&session.id.to_string()).map_err(|e| ApiError::Internal(e.to_string()))?;
     if let Err(e) = agentum_tmux::pipe_pane(&target, &log).await {
         let _ = agentum_tmux::kill_session(&target).await;
         return Err(ApiError::Internal(e.to_string()));
@@ -297,9 +297,7 @@ async fn stream_session(mut socket: WebSocket, id: Uuid) {
     }
     if !log_path.exists() {
         let _ = socket
-            .send(Message::Text(
-                "[no pane log — session not running]".into(),
-            ))
+            .send(Message::Text("[no pane log — session not running]".into()))
             .await;
         return;
     }

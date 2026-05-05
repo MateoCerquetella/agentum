@@ -4,7 +4,12 @@ use agentum_core::Status;
 use agentum_server::ServeOptions;
 use anyhow::Result;
 
-pub async fn run(addr: SocketAddr, cert_addr: SocketAddr, tls: bool, no_resume: bool) -> Result<()> {
+pub async fn run(
+    addr: SocketAddr,
+    cert_addr: SocketAddr,
+    tls: bool,
+    no_resume: bool,
+) -> Result<()> {
     let (store, db_path) = super::open_store().await?;
     tracing::info!(?db_path, %addr, %cert_addr, tls, "store opened");
 

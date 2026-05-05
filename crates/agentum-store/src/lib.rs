@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use agentum_core::{
-    BoardItem, BoardPatch, Channel, Event, Message, NewBoardItem, NewChannel, NewMessage,
-    NewNote, NewSession, Note, NotePatch, Session, Status, User,
+    BoardItem, BoardPatch, Channel, Event, Message, NewBoardItem, NewChannel, NewMessage, NewNote,
+    NewSession, Note, NotePatch, Session, Status, User,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{FromRow, SqlitePool};
@@ -139,11 +139,9 @@ impl Store {
                 .await?
             }
             None => {
-                sqlx::query_as::<_, SessionRow>(
-                    "SELECT * FROM sessions ORDER BY created_at DESC",
-                )
-                .fetch_all(&self.pool)
-                .await?
+                sqlx::query_as::<_, SessionRow>("SELECT * FROM sessions ORDER BY created_at DESC")
+                    .fetch_all(&self.pool)
+                    .await?
             }
         };
         rows.into_iter().map(Session::try_from).collect()
@@ -167,15 +165,13 @@ impl Store {
 
     pub async fn update_status(&self, id: Uuid, status: Status) -> Result<()> {
         let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
-        let affected = sqlx::query(
-            "UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?",
-        )
-        .bind(status.as_str())
-        .bind(now_s)
-        .bind(id.to_string())
-        .execute(&self.pool)
-        .await?
-        .rows_affected();
+        let affected = sqlx::query("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?")
+            .bind(status.as_str())
+            .bind(now_s)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
         if affected == 0 {
             return Err(StoreError::NotFound(id.to_string()));
         }
@@ -247,11 +243,10 @@ impl Store {
     }
 
     pub async fn list_board_items(&self) -> Result<Vec<BoardItem>> {
-        let rows: Vec<BoardItemRow> = sqlx::query_as::<_, BoardItemRow>(
-            "SELECT * FROM board_items ORDER BY created_at ASC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows: Vec<BoardItemRow> =
+            sqlx::query_as::<_, BoardItemRow>("SELECT * FROM board_items ORDER BY created_at ASC")
+                .fetch_all(&self.pool)
+                .await?;
         rows.into_iter().map(BoardItem::try_from).collect()
     }
 
@@ -307,11 +302,7 @@ impl Store {
     /// Atomic CAS claim: succeeds only if `claimed_by` is currently NULL.
     /// Returns the updated row on success, `None` on conflict (caller maps
     /// to 409).
-    pub async fn claim_board_item(
-        &self,
-        id: i64,
-        claimed_by: &str,
-    ) -> Result<Option<BoardItem>> {
+    pub async fn claim_board_item(&self, id: i64, claimed_by: &str) -> Result<Option<BoardItem>> {
         let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
         let result = sqlx::query(
             "UPDATE board_items SET claimed_by = ?, updated_at = ?
@@ -356,11 +347,10 @@ impl Store {
     }
 
     pub async fn list_notes(&self) -> Result<Vec<Note>> {
-        let rows: Vec<NoteRow> = sqlx::query_as::<_, NoteRow>(
-            "SELECT * FROM notes ORDER BY updated_at DESC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows: Vec<NoteRow> =
+            sqlx::query_as::<_, NoteRow>("SELECT * FROM notes ORDER BY updated_at DESC")
+                .fetch_all(&self.pool)
+                .await?;
         rows.into_iter().map(Note::try_from).collect()
     }
 
@@ -431,14 +421,13 @@ impl Store {
         };
         let now = OffsetDateTime::now_utc();
         let now_s = now.format(&Rfc3339)?;
-        let res = sqlx::query(
-            "INSERT INTO channels (a_session, b_session, created_at) VALUES (?, ?, ?)",
-        )
-        .bind(a.to_string())
-        .bind(b.to_string())
-        .bind(&now_s)
-        .execute(&self.pool)
-        .await;
+        let res =
+            sqlx::query("INSERT INTO channels (a_session, b_session, created_at) VALUES (?, ?, ?)")
+                .bind(a.to_string())
+                .bind(b.to_string())
+                .bind(&now_s)
+                .execute(&self.pool)
+                .await;
         if let Err(sqlx::Error::Database(db)) = &res {
             if db.is_unique_violation() {
                 return Err(StoreError::AlreadyExists(format!(
@@ -456,11 +445,10 @@ impl Store {
     }
 
     pub async fn list_channels(&self) -> Result<Vec<Channel>> {
-        let rows: Vec<ChannelRow> = sqlx::query_as::<_, ChannelRow>(
-            "SELECT * FROM channels ORDER BY created_at ASC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows: Vec<ChannelRow> =
+            sqlx::query_as::<_, ChannelRow>("SELECT * FROM channels ORDER BY created_at ASC")
+                .fetch_all(&self.pool)
+                .await?;
         rows.into_iter().map(Channel::try_from).collect()
     }
 
@@ -489,15 +477,14 @@ impl Store {
     pub async fn append_message(&self, channel_id: i64, msg: NewMessage) -> Result<Message> {
         let now = OffsetDateTime::now_utc();
         let now_s = now.format(&Rfc3339)?;
-        let res = sqlx::query(
-            "INSERT INTO messages (channel_id, sender, body, ts) VALUES (?, ?, ?, ?)",
-        )
-        .bind(channel_id)
-        .bind(&msg.sender)
-        .bind(&msg.body)
-        .bind(&now_s)
-        .execute(&self.pool)
-        .await?;
+        let res =
+            sqlx::query("INSERT INTO messages (channel_id, sender, body, ts) VALUES (?, ?, ?, ?)")
+                .bind(channel_id)
+                .bind(&msg.sender)
+                .bind(&msg.body)
+                .bind(&now_s)
+                .execute(&self.pool)
+                .await?;
         Ok(Message {
             id: res.last_insert_rowid(),
             channel_id,
@@ -525,15 +512,13 @@ impl Store {
     pub async fn insert_event(&self, ev: &Event) -> Result<()> {
         let payload = serde_json::to_string(&ev.payload)?;
         let ts = ev.ts.format(&Rfc3339)?;
-        sqlx::query(
-            "INSERT INTO events (session_id, kind, payload, ts) VALUES (?, ?, ?, ?)",
-        )
-        .bind(ev.session_id.map(|u| u.to_string()))
-        .bind(&ev.kind)
-        .bind(payload)
-        .bind(ts)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("INSERT INTO events (session_id, kind, payload, ts) VALUES (?, ?, ?, ?)")
+            .bind(ev.session_id.map(|u| u.to_string()))
+            .bind(&ev.kind)
+            .bind(payload)
+            .bind(ts)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -598,7 +583,11 @@ impl Store {
         .await?;
         match row {
             Some((id, username, pw_hash, created_at)) => Ok(Some((
-                User { id, username, created_at: OffsetDateTime::parse(&created_at, &Rfc3339)? },
+                User {
+                    id,
+                    username,
+                    created_at: OffsetDateTime::parse(&created_at, &Rfc3339)?,
+                },
                 pw_hash,
             ))),
             None => Ok(None),
@@ -661,11 +650,10 @@ impl Store {
     }
 
     pub async fn list_users(&self) -> Result<Vec<User>> {
-        let rows: Vec<(i64, String, String)> = sqlx::query_as(
-            "SELECT id, username, created_at FROM users ORDER BY id",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows: Vec<(i64, String, String)> =
+            sqlx::query_as("SELECT id, username, created_at FROM users ORDER BY id")
+                .fetch_all(&self.pool)
+                .await?;
         rows.into_iter()
             .map(|(id, username, created_at)| {
                 Ok(User {
@@ -690,9 +678,7 @@ impl Store {
         sqlx::query("DELETE FROM auth_sessions")
             .execute(&self.pool)
             .await?;
-        sqlx::query("DELETE FROM users")
-            .execute(&self.pool)
-            .await?;
+        sqlx::query("DELETE FROM users").execute(&self.pool).await?;
         Ok(())
     }
 }
@@ -1007,7 +993,11 @@ mod tests {
         let s = tmp_store().await;
         let sa = make_session(&s, "alpha").await;
         let sb = make_session(&s, "beta").await;
-        let (lo, hi) = if sa.id < sb.id { (sa.id, sb.id) } else { (sb.id, sa.id) };
+        let (lo, hi) = if sa.id < sb.id {
+            (sa.id, sb.id)
+        } else {
+            (sb.id, sa.id)
+        };
 
         let ch = s
             .create_channel(NewChannel {

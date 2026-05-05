@@ -41,7 +41,10 @@ pub async fn login(base: &Url, username: &str, password: &str) -> Result<String>
         .build()
         .context("build reqwest client")?;
     #[derive(Serialize)]
-    struct Body<'a> { username: &'a str, password: &'a str }
+    struct Body<'a> {
+        username: &'a str,
+        password: &'a str,
+    }
     let resp = http
         .post(url)
         .json(&Body { username, password })
@@ -54,7 +57,9 @@ pub async fn login(base: &Url, username: &str, password: &str) -> Result<String>
         bail!("{} — {}", status, body);
     }
     #[derive(serde::Deserialize)]
-    struct Resp { token: String }
+    struct Resp {
+        token: String,
+    }
     let r: Resp = resp.json().await?;
     Ok(r.token)
 }
@@ -81,17 +86,14 @@ impl Client {
 
     pub async fn me(&self) -> Result<String> {
         let url = self.base.join("/api/auth/me")?;
-        let resp = self
-            .http
-            .get(url)
-            .bearer_auth(&self.token)
-            .send()
-            .await?;
+        let resp = self.http.get(url).bearer_auth(&self.token).send().await?;
         if !resp.status().is_success() {
             bail!("me returned {}", resp.status());
         }
         #[derive(serde::Deserialize)]
-        struct Me { username: String }
+        struct Me {
+            username: String,
+        }
         let me: Me = resp.json().await?;
         Ok(me.username)
     }
@@ -135,8 +137,7 @@ impl Client {
         tokio::spawn(async move {
             let url = ws_url(&base, &format!("/api/sessions/{id}/stream"), &token);
             let connector = ws_connector(&url);
-            let result =
-                connect_async_tls_with_config(url.as_str(), None, false, connector).await;
+            let result = connect_async_tls_with_config(url.as_str(), None, false, connector).await;
             let mut stream = match result {
                 Ok((s, _)) => s,
                 Err(e) => {
@@ -175,8 +176,7 @@ impl Client {
         tokio::spawn(async move {
             let url = ws_url(&base, "/api/events", &token);
             let connector = ws_connector(&url);
-            let result =
-                connect_async_tls_with_config(url.as_str(), None, false, connector).await;
+            let result = connect_async_tls_with_config(url.as_str(), None, false, connector).await;
             let mut stream = match result {
                 Ok((s, _)) => {
                     let _ = tx.send(EventMsg::Connected);
@@ -255,7 +255,11 @@ pub async fn probe_health(base: &Url, timeout: Duration) -> Result<()> {
 
 fn ws_url(base: &Url, path: &str, token: &str) -> Url {
     let mut url = base.clone();
-    let target = if base.scheme() == "https" { "wss" } else { "ws" };
+    let target = if base.scheme() == "https" {
+        "wss"
+    } else {
+        "ws"
+    };
     url.set_scheme(target).expect("valid ws scheme");
     url.set_path(path);
     url.query_pairs_mut().clear().append_pair("token", token);
@@ -331,4 +335,3 @@ impl ServerCertVerifier for AcceptAny {
         ]
     }
 }
-

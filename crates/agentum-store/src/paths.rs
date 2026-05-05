@@ -33,7 +33,9 @@ pub fn cache_dir() -> Result<PathBuf, PathError> {
 /// State falls back to data on platforms where it is not defined (macOS).
 pub fn state_dir() -> Result<PathBuf, PathError> {
     let d = dirs()?;
-    Ok(d.state_dir().map(|p| p.to_path_buf()).unwrap_or_else(|| d.data_dir().to_path_buf()))
+    Ok(d.state_dir()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| d.data_dir().to_path_buf()))
 }
 
 pub fn db_path() -> Result<PathBuf, PathError> {
@@ -49,5 +51,7 @@ pub fn tls_dir() -> Result<PathBuf, PathError> {
 }
 
 pub fn pane_log(session_id: &str) -> Result<PathBuf, PathError> {
-    Ok(cache_dir()?.join("sessions").join(format!("{session_id}.log")))
+    Ok(cache_dir()?
+        .join("sessions")
+        .join(format!("{session_id}.log")))
 }

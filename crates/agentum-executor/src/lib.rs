@@ -12,9 +12,7 @@ use agentum_core::Session;
 
 mod adapters;
 
-pub use adapters::{
-    ClaudeAdapter, CodexAdapter, GeminiAdapter, HermesAdapter, PassthroughAdapter,
-};
+pub use adapters::{ClaudeAdapter, CodexAdapter, GeminiAdapter, HermesAdapter, PassthroughAdapter};
 
 /// What tmux actually launches: argv plus per-session environment overrides.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,7 +23,10 @@ pub struct LaunchCommand {
 
 impl LaunchCommand {
     pub fn argv_only(argv: Vec<String>) -> Self {
-        Self { argv, env: Vec::new() }
+        Self {
+            argv,
+            env: Vec::new(),
+        }
     }
 }
 

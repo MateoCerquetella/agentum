@@ -12,10 +12,18 @@ struct Check {
 
 impl Check {
     fn ok(label: &'static str, detail: impl Into<String>) -> Self {
-        Self { label, passed: true, detail: detail.into() }
+        Self {
+            label,
+            passed: true,
+            detail: detail.into(),
+        }
     }
     fn fail(label: &'static str, detail: impl Into<String>) -> Self {
-        Self { label, passed: false, detail: detail.into() }
+        Self {
+            label,
+            passed: false,
+            detail: detail.into(),
+        }
     }
 }
 
@@ -33,7 +41,11 @@ pub async fn run() -> Result<()> {
     println!();
     let mut failures = 0u32;
     for c in &checks {
-        let icon = if c.passed { "\x1b[32m✓\x1b[0m" } else { "\x1b[31m✗\x1b[0m" };
+        let icon = if c.passed {
+            "\x1b[32m✓\x1b[0m"
+        } else {
+            "\x1b[31m✗\x1b[0m"
+        };
         println!("  {:<12} {}  {}", c.label, icon, c.detail);
         if !c.passed {
             failures += 1;
@@ -44,7 +56,10 @@ pub async fn run() -> Result<()> {
     if failures == 0 {
         println!("all checks passed");
     } else {
-        println!("{failures} problem{} found", if failures == 1 { "" } else { "s" });
+        println!(
+            "{failures} problem{} found",
+            if failures == 1 { "" } else { "s" }
+        );
         std::process::exit(1);
     }
     Ok(())
@@ -67,27 +82,34 @@ fn check_dir(
 ) -> Check {
     match f() {
         Ok(p) if p.is_dir() => Check::ok(label, p.display().to_string()),
-        Ok(p) => Check::ok(label, format!("{} (will be created on first use)", p.display())),
+        Ok(p) => Check::ok(
+            label,
+            format!("{} (will be created on first use)", p.display()),
+        ),
         Err(e) => Check::fail(label, format!("could not resolve: {e}")),
     }
 }
 
 async fn check_db() -> Check {
     match paths::db_path() {
-        Ok(p) if p.exists() => {
-            match agentum_store::Store::open(&p).await {
-                Ok(store) => {
-                    let n = store
-                        .list_sessions(None)
-                        .await
-                        .map(|v| v.len())
-                        .unwrap_or(0);
-                    Check::ok("database", format!("db.sqlite ({n} session{})", if n == 1 { "" } else { "s" }))
-                }
-                Err(e) => Check::fail("database", format!("exists but failed to open: {e}")),
+        Ok(p) if p.exists() => match agentum_store::Store::open(&p).await {
+            Ok(store) => {
+                let n = store
+                    .list_sessions(None)
+                    .await
+                    .map(|v| v.len())
+                    .unwrap_or(0);
+                Check::ok(
+                    "database",
+                    format!("db.sqlite ({n} session{})", if n == 1 { "" } else { "s" }),
+                )
             }
-        }
-        Ok(p) => Check::ok("database", format!("{} (will be created on first use)", p.display())),
+            Err(e) => Check::fail("database", format!("exists but failed to open: {e}")),
+        },
+        Ok(p) => Check::ok(
+            "database",
+            format!("{} (will be created on first use)", p.display()),
+        ),
         Err(e) => Check::fail("database", format!("could not resolve path: {e}")),
     }
 }
@@ -99,7 +121,10 @@ fn check_tls() -> Check {
             if cert.exists() {
                 Check::ok("tls cert", cert.display().to_string())
             } else {
-                Check::ok("tls cert", "not yet generated (created on first `agentum serve`)")
+                Check::ok(
+                    "tls cert",
+                    "not yet generated (created on first `agentum serve`)",
+                )
             }
         }
         Err(e) => Check::fail("tls cert", format!("could not resolve path: {e}")),

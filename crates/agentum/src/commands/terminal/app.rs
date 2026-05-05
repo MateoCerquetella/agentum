@@ -697,4 +697,3 @@ pub fn status_dot(s: Status) -> (&'static str, ratatui::style::Color) {
         Status::Crashed => ("✗", Color::Red),
     }
 }
-

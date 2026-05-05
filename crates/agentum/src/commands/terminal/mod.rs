@@ -33,9 +33,7 @@ pub async fn run(api_override: Option<String>) -> Result<()> {
 
     let client = api::Client::new(base.clone(), token)?;
     client.health().await.with_context(|| {
-        format!(
-            "agentum daemon not reachable at {base} — start it with `agentum serve`"
-        )
+        format!("agentum daemon not reachable at {base} — start it with `agentum serve`")
     })?;
 
     let sessions = client
@@ -65,8 +63,7 @@ impl Drop for TerminalGuard {
 
 /// CLI-cached login token. Lives next to the SQLite db. Permission 0600.
 fn cli_token_path() -> Result<std::path::PathBuf> {
-    let dir = agentum_store::paths::data_dir()
-        .map_err(|e| anyhow!("resolve data dir: {e}"))?;
+    let dir = agentum_store::paths::data_dir().map_err(|e| anyhow!("resolve data dir: {e}"))?;
     Ok(dir.join("cli_token"))
 }
 
@@ -116,9 +113,7 @@ async fn obtain_token(base: &Url) -> Result<String> {
     io::stdin().read_line(&mut pw).context("read password")?;
     let pw = pw.trim_end_matches(['\n', '\r']).to_string();
 
-    let token = api::login(base, &user, &pw)
-        .await
-        .context("login failed")?;
+    let token = api::login(base, &user, &pw).await.context("login failed")?;
     let _ = write_cached_token(&token);
     Ok(token)
 }

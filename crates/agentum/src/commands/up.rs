@@ -13,9 +13,7 @@ pub async fn run(name: String) -> Result<()> {
 
     let target = agentum_tmux::target_for(&session.name);
 
-    if matches!(session.status, Status::Running)
-        && agentum_tmux::has_session(&target).await?
-    {
+    if matches!(session.status, Status::Running) && agentum_tmux::has_session(&target).await? {
         println!("{name} already running  → tmux:{target}");
         return Ok(());
     }

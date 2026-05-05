@@ -153,5 +153,7 @@ async fn me(
         .touch_auth_session(token.trim())
         .await?
         .ok_or_else(|| ApiError::Unauthorized("invalid token".into()))?;
-    Ok(Json(MeResp { username: user.username }))
+    Ok(Json(MeResp {
+        username: user.username,
+    }))
 }

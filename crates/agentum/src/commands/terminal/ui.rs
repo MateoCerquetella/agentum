@@ -223,8 +223,8 @@ fn draw_lazygit(f: &mut Frame<'_>, area: Rect, app: &App) {
         let pseudo = PseudoTerminal::new(lg.screen());
         f.render_widget(pseudo, inner);
     } else {
-        let hint = Paragraph::new("lazygit not running")
-            .style(Style::default().fg(Color::DarkGray));
+        let hint =
+            Paragraph::new("lazygit not running").style(Style::default().fg(Color::DarkGray));
         f.render_widget(hint, inner);
     }
 }
@@ -394,10 +394,7 @@ fn draw_install_overlay(f: &mut Frame<'_>, area: Rect, ext: &Extension) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from(Span::styled(
-            ext.blurb,
-            Style::default().fg(Color::Gray),
-        )),
+        Line::from(Span::styled(ext.blurb, Style::default().fg(Color::Gray))),
         Line::from(""),
         Line::from(Span::styled(
             "Install with one of:",

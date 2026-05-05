@@ -91,12 +91,25 @@ fn check_dir(
 }
 
 async fn check_db(state: &AppState) -> Check {
-    let n = state.store.list_sessions(None).await.map(|v| v.len()).unwrap_or(0);
+    let n = state
+        .store
+        .list_sessions(None)
+        .await
+        .map(|v| v.len())
+        .unwrap_or(0);
     let detail = match paths::db_path() {
-        Ok(p) => format!("{} ({n} session{})", p.display(), if n == 1 { "" } else { "s" }),
+        Ok(p) => format!(
+            "{} ({n} session{})",
+            p.display(),
+            if n == 1 { "" } else { "s" }
+        ),
         Err(_) => format!("({n} session{})", if n == 1 { "" } else { "s" }),
     };
-    Check { label: "database".into(), passed: true, detail }
+    Check {
+        label: "database".into(),
+        passed: true,
+        detail,
+    }
 }
 
 fn check_tls() -> Check {
@@ -148,7 +161,11 @@ async fn check_users(state: &AppState) -> Check {
 fn check_port(port: u16) -> Check {
     let label = format!("port {port}");
     match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(_) => Check { label, passed: true, detail: "available".into() },
+        Ok(_) => Check {
+            label,
+            passed: true,
+            detail: "available".into(),
+        },
         Err(_) => Check {
             label,
             passed: true,

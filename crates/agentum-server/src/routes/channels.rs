@@ -37,11 +37,13 @@ async fn create(
     Json(payload): Json<NewChannel>,
 ) -> Result<(StatusCode, Json<Channel>), ApiError> {
     let ch = state.store.create_channel(payload).await?;
-    let _ = state.bus.send(Event::new("channel.created").with_payload(json!({
-        "id": ch.id,
-        "a_session": ch.a_session,
-        "b_session": ch.b_session,
-    })));
+    let _ = state
+        .bus
+        .send(Event::new("channel.created").with_payload(json!({
+            "id": ch.id,
+            "a_session": ch.a_session,
+            "b_session": ch.b_session,
+        })));
     Ok((StatusCode::CREATED, Json(ch)))
 }
 
@@ -102,12 +104,14 @@ async fn post_message(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("channel {id}")))?;
     let msg = state.store.append_message(id, payload).await?;
-    let _ = state.bus.send(Event::new("message.posted").with_payload(json!({
-        "channel_id": msg.channel_id,
-        "message_id": msg.id,
-        "sender": msg.sender,
-        "body": msg.body,
-        "ts": msg.ts,
-    })));
+    let _ = state
+        .bus
+        .send(Event::new("message.posted").with_payload(json!({
+            "channel_id": msg.channel_id,
+            "message_id": msg.id,
+            "sender": msg.sender,
+            "body": msg.body,
+            "ts": msg.ts,
+        })));
     Ok((StatusCode::CREATED, Json(msg)))
 }
