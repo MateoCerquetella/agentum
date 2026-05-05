@@ -30,7 +30,8 @@ pub async fn run(action: AuthCmd) -> Result<()> {
             if pw.len() < 8 {
                 return Err(anyhow!("password must be at least 8 characters"));
             }
-            let hash = agentum_server::auth::hash_password(&pw)
+            let hash = agentum_server::auth::hash_password(pw)
+                .await
                 .map_err(|e| anyhow!("hash failed: {e}"))?;
             let user = store.create_user(&username, &hash).await?;
             println!("created user {} (id={})", user.username, user.id);
