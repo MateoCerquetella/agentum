@@ -369,11 +369,24 @@ async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
             },
             msg = socket.recv() => match msg {
                 Some(Ok(Message::Binary(b))) if !b.is_empty() => {
-                    let _ = agentum_tmux::send_bytes(&target, &b).await;
+                    if let Err(e) = agentum_tmux::send_bytes(&target, &b).await
+                        && socket
+                            .send(Message::Text(format!("[input dropped: {e}]").into()))
+                            .await
+                            .is_err()
+                    {
+                        break;
+                    }
                 }
                 Some(Ok(Message::Text(t))) => {
-                    // Text frames are also accepted and forwarded as raw UTF-8.
-                    let _ = agentum_tmux::send_bytes(&target, t.as_bytes()).await;
+                    if let Err(e) = agentum_tmux::send_bytes(&target, t.as_bytes()).await
+                        && socket
+                            .send(Message::Text(format!("[input dropped: {e}]").into()))
+                            .await
+                            .is_err()
+                    {
+                        break;
+                    }
                 }
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                 _ => {}

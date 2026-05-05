@@ -42,7 +42,10 @@ impl Mode {
     pub fn keep(self, group: &str) -> bool {
         match self {
             Self::All => true,
-            Self::Commands => matches!(group, "general" | "focus" | "extensions"),
+            Self::Commands => matches!(
+                group,
+                "general" | "focus" | "extensions" | "session-lifecycle"
+            ),
             Self::Sessions => group == "sessions",
         }
     }
@@ -70,6 +73,11 @@ pub enum ActionKind {
     FocusInput,
     FocusLazygit,
     SelectSession(Uuid),
+    NewSession,
+    StartSelected,
+    StopSelected,
+    KillSelected,
+    DeleteSelected,
 }
 
 pub struct Catalog {

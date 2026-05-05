@@ -4,6 +4,23 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.7] — 2026-05-05
+
+### Changed
+- **`web/` is now fully decoupled from the server.** The frontend lives
+  on Netlify (or any static host); `agentum-server` is a JSON-only API.
+  Dropped `rust-embed`, the build-time `web/build/` mirror, and the
+  static-handler fallback. CSP tightened to `default-src 'none'` since
+  the server no longer renders HTML. CI no longer runs `pnpm`. Operators
+  who hit the API from a different origin will need to add a CORS layer
+  scoped to their Netlify domain.
+
+### Fixed
+- **Terminal WS surfaces input errors.** When `agentum_tmux::send_bytes`
+  failed (target gone, pipe closed) the byte was dropped silently. The
+  WS handler now reports `[input dropped: …]` back to the client and
+  closes the socket cleanly if the report itself can't be sent.
+
 ## [0.5.6] — 2026-05-05
 
 ### Fixed
