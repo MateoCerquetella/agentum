@@ -103,11 +103,8 @@ fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         Some(s) => format!("agentum terminal · {} · {}", s.name, s.workdir),
         None => "agentum terminal · no session selected".to_string(),
     };
-    let para = Paragraph::new(title).style(
-        Style::default()
-            .fg(p.title_fg)
-            .add_modifier(Modifier::BOLD),
-    );
+    let para =
+        Paragraph::new(title).style(Style::default().fg(p.title_fg).add_modifier(Modifier::BOLD));
     f.render_widget(para, area);
 }
 
@@ -172,7 +169,10 @@ fn render_tree_row(app: &App, row: Row, is_cursor: bool, p: &Palette) -> ListIte
             };
             let mut spans = vec![
                 Span::raw("   "),
-                Span::styled(format!("{:<14}", truncate(&name, 14)), Style::default().fg(p.fg)),
+                Span::styled(
+                    format!("{:<14}", truncate(&name, 14)),
+                    Style::default().fg(p.fg),
+                ),
                 Span::raw(" "),
                 Span::styled(dot, Style::default().fg(dot_color)),
                 Span::raw(" "),
@@ -341,11 +341,7 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         Span::raw("   "),
         Span::styled("? help", Style::default().fg(p.muted)),
     ]);
-    let para = Paragraph::new(bar).style(
-        Style::default()
-            .bg(p.status_bar_bg)
-            .fg(p.status_bar_fg),
-    );
+    let para = Paragraph::new(bar).style(Style::default().bg(p.status_bar_bg).fg(p.status_bar_fg));
     f.render_widget(para, area);
 }
 
@@ -431,9 +427,7 @@ fn draw_install_overlay(f: &mut Frame<'_>, area: Rect, ext: &Extension, p: &Pale
     let mut lines = vec![
         Line::from(Span::styled(
             format!("{} not found on PATH", ext.display_name),
-            Style::default()
-                .fg(p.warning)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(p.warning).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(ext.blurb, Style::default().fg(p.fg))),
@@ -524,4 +518,3 @@ fn truncate(s: &str, max: usize) -> String {
         out
     }
 }
-
