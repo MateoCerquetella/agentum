@@ -4,6 +4,17 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-05-05
+
+### Fixed
+- Release builds for macOS (both Intel and Apple Silicon) and `aarch64`
+  Linux were failing because `sqlx-sqlite-unbundled` couldn't link against
+  the runners' system libsqlite3 (Apple's shipped sqlite is too old; the
+  cross-build container has no `sqlite3.h`). Switched the `sqlx-sqlite`
+  feature to `sqlite` (bundled) so cargo compiles libsqlite3 inline.
+  Adds ~30s to the first build but produces a fully self-contained binary
+  with no system sqlite dependency.
+
 ## [0.2.0] — 2026-05-05
 
 Adds an interactive terminal dashboard alongside the existing browser SPA,
