@@ -1,4 +1,4 @@
-//! `/api/board` — kanban CRUD + atomic CAS claim (PRD §7).
+//! `/api/board` — kanban CRUD + atomic CAS claim.
 
 use std::collections::BTreeMap;
 

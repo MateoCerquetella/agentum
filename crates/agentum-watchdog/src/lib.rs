@@ -1,4 +1,4 @@
-//! Per-session watchdog (PRD §10).
+//! Per-session watchdog.
 //!
 //! Spawned by the server. Reconciles the running-task set against the DB
 //! every tick: a session that becomes `running` gets its own watch task,
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn context_low_regex() {
-        // Regex per PRD §10: must have `<` followed by `50%` (with optional ws).
+        // Regex: must have `<` followed by `50%` (with optional ws).
         let re = Regex::new(r"Context low.*<\s*50%").unwrap();
         assert!(re.is_match("Context low: <50%"));
         assert!(re.is_match("Context low: < 50%"));

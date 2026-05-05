@@ -2,7 +2,7 @@
 //!
 //! Every method shells out to `tmux` via `tokio::process::Command` with one
 //! `.arg()` per argument — no shell-string interpolation in our process
-//! invocation (PRD §14). The single shell-command string we pass to
+//! invocation. The single shell-command string we pass to
 //! `tmux new-session` / `tmux pipe-pane` is safely quoted with [`shlex`].
 
 use std::path::Path;

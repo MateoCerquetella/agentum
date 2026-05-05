@@ -1,8 +1,6 @@
--- Phase 8: notes + channels + messages (PRD §6).
+-- Phase 8: notes + channels + messages.
 --
--- Note: PRD §6 has a typo — messages.channel_id was shown as
--- `FOREIGN KEY(channel_id) REFERENCES messages(id)`. The intent is
--- obviously `REFERENCES channels(id)`; that's what we implement.
+-- `messages.channel_id` references `channels(id)` (cascading delete).
 
 CREATE TABLE IF NOT EXISTS notes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,

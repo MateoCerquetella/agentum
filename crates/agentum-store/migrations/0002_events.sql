@@ -1,4 +1,4 @@
--- Phase 6: events table for the broadcast bus / persisted history (PRD §6).
+-- Phase 6: events table for the broadcast bus / persisted history.
 
 CREATE TABLE IF NOT EXISTS events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

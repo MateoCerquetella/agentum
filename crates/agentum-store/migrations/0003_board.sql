@@ -1,4 +1,4 @@
--- Phase 7: kanban board with atomic claim (PRD §6 + §7).
+-- Phase 7: kanban board with atomic claim.
 --
 -- `key` is set post-insert from the row id (AG-1, AG-2, …). NOT NULL but
 -- not UNIQUE-constrained at the table level — generation is monotonic by

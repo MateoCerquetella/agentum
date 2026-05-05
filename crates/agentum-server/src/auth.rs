@@ -1,4 +1,4 @@
-//! Bearer-token auth (PRD §7).
+//! Bearer-token auth.
 //!
 //! Single-value bearer token stored at `$XDG_DATA_HOME/agentum/auth_token`
 //! (chmod 0600). Generated lazily on first serve. Rotation = overwrite the
@@ -24,7 +24,7 @@ pub enum AuthError {
     Path(#[from] agentum_store::paths::PathError),
 }
 
-/// Generate a 32-byte URL-safe base64 token (PRD §7).
+/// Generate a 32-byte URL-safe base64 token.
 pub fn new_token() -> String {
     let mut buf = [0u8; 32];
     rand::rng().fill_bytes(&mut buf);

@@ -98,7 +98,7 @@ Run `agentum --help` for full details.
                   └────────────────────────────┘
 ```
 
-See [PRD.md](PRD.md) for the full design — phases, decisions, schemas, every API.
+See [`docs/`](docs/) for architecture, data model, HTTP API, and CLI reference.
 
 ## Repository layout
 
@@ -112,7 +112,7 @@ crates/
   agentum-store/   # sqlx + SQLite (WAL) + XDG paths + migrations
   agentum-core/    # shared domain types
 web/               # SvelteKit 2 + Svelte 5 SPA, embedded into binary
-PRD.md             # full product requirements + phase plan
+docs/              # architecture, data model, API, CLI reference
 ```
 
 ## Development
