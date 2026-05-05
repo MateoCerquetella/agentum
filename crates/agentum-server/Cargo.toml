@@ -12,6 +12,7 @@ description = "axum HTTP server for agentum."
 agentum-core      = { workspace = true }
 agentum-store     = { workspace = true }
 agentum-tmux      = { workspace = true }
+agentum-executor  = { workspace = true }
 agentum-watchdog  = { workspace = true }
 anyhow         = { workspace = true }
 thiserror      = { workspace = true }
@@ -30,3 +31,6 @@ axum-server    = { version = "0.7", features = ["tls-rustls"] }
 rcgen          = "0.13"
 rand           = "0.9"
 base64         = "0.22"
+argon2         = "0.5"
+password-hash  = "0.5"
+rustls         = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

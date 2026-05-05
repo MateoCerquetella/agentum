@@ -243,6 +243,28 @@ pub struct NewMessage {
     pub body: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct User {
+    pub id: i64,
+    pub username: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+/// Validate a username: lowercase alphanumeric, dash, underscore, dot. 1..=64 chars.
+pub fn validate_username(name: &str) -> Result<(), CoreError> {
+    if name.is_empty() || name.len() > 64 {
+        return Err(CoreError::InvalidName(name.to_string()));
+    }
+    let ok = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
+    if !ok {
+        return Err(CoreError::InvalidName(name.to_string()));
+    }
+    Ok(())
+}
+
 /// Validate a session name: lowercase alphanumeric, dash, underscore. 1..=64 chars.
 pub fn validate_name(name: &str) -> Result<(), CoreError> {
     if name.is_empty() || name.len() > 64 {

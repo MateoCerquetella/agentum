@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -19,12 +20,15 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::error::ApiError;
 
+const GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/sessions", get(list).post(create))
         .route("/api/sessions/{id}", get(get_one).delete(delete))
         .route("/api/sessions/{id}/start", post(start))
         .route("/api/sessions/{id}/stop", post(stop))
+        .route("/api/sessions/{id}/kill", post(kill))
         .route("/api/sessions/{id}/send", post(send))
         .route("/api/sessions/{id}/stream", get(stream))
 }
@@ -50,6 +54,13 @@ async fn create(
     State(state): State<AppState>,
     Json(payload): Json<NewSession>,
 ) -> Result<(StatusCode, Json<Session>), ApiError> {
+    let workdir = PathBuf::from(&payload.workdir);
+    if !workdir.exists() {
+        return Err(ApiError::BadRequest(format!(
+            "workdir does not exist: {}",
+            workdir.display()
+        )));
+    }
     let s = state.store.create_session(payload).await?;
     Ok((StatusCode::CREATED, Json(s)))
 }
@@ -67,11 +78,30 @@ async fn get_one(
     Ok(Json(s))
 }
 
+#[derive(Deserialize)]
+struct DeleteQuery {
+    #[serde(default)]
+    force: bool,
+}
+
 async fn delete(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(q): Query<DeleteQuery>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
+    let session = load(&state, id).await?;
+    if matches!(session.status, Status::Running) {
+        if !q.force {
+            return Err(ApiError::BadRequest(
+                "session is running; pass ?force=true to kill and remove".into(),
+            ));
+        }
+        let target = tmux_target(&session);
+        agentum_tmux::kill_session(&target)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+    }
     state.store.delete_session(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -80,29 +110,99 @@ async fn start(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Session>, ApiError> {
-    transition(&state, &id, Status::Running).await
+    let id = parse_uuid(&id)?;
+    let session = load(&state, id).await?;
+    let target = agentum_tmux::target_for(&session.name);
+
+    let already = agentum_tmux::has_session(&target)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    if matches!(session.status, Status::Running) && already {
+        return Ok(Json(session));
+    }
+    if already {
+        return Err(ApiError::BadRequest(format!(
+            "tmux session {target} already exists outside agentum; refuse to clobber"
+        )));
+    }
+
+    let workdir = PathBuf::from(&session.workdir);
+    if !workdir.exists() {
+        return Err(ApiError::BadRequest(format!(
+            "workdir does not exist: {}",
+            workdir.display()
+        )));
+    }
+
+    let adapter = agentum_executor::adapter_for(&session.tool);
+    let launch = adapter.launch(&session);
+
+    agentum_tmux::new_session(&target, &workdir, &launch.argv, &launch.env)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let log = paths::pane_log(&session.id.to_string())
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if let Err(e) = agentum_tmux::pipe_pane(&target, &log).await {
+        let _ = agentum_tmux::kill_session(&target).await;
+        return Err(ApiError::Internal(e.to_string()));
+    }
+
+    state
+        .store
+        .update_status_and_target(id, Status::Running, Some(&target))
+        .await?;
+    Ok(Json(load(&state, id).await?))
 }
 
 async fn stop(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Session>, ApiError> {
-    transition(&state, &id, Status::Stopped).await
+    let id = parse_uuid(&id)?;
+    let session = load(&state, id).await?;
+    let target = tmux_target(&session);
+    agentum_tmux::graceful_stop(&target, GRACEFUL_STOP_TIMEOUT)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    state
+        .store
+        .update_status_and_target(id, Status::Stopped, None)
+        .await?;
+    Ok(Json(load(&state, id).await?))
 }
 
-async fn transition(
-    state: &AppState,
-    id: &str,
-    target: Status,
+async fn kill(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
 ) -> Result<Json<Session>, ApiError> {
-    let id = parse_uuid(id)?;
-    state.store.update_status(id, target).await?;
-    let s = state
+    let id = parse_uuid(&id)?;
+    let session = load(&state, id).await?;
+    let target = tmux_target(&session);
+    agentum_tmux::kill_session(&target)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    state
+        .store
+        .update_status_and_target(id, Status::Stopped, None)
+        .await?;
+    Ok(Json(load(&state, id).await?))
+}
+
+async fn load(state: &AppState, id: Uuid) -> Result<Session, ApiError> {
+    state
         .store
         .get_session_by_id(id)
         .await?
-        .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
-    Ok(Json(s))
+        .ok_or_else(|| ApiError::NotFound(id.to_string()))
+}
+
+fn tmux_target(session: &Session) -> String {
+    session
+        .tmux_target
+        .clone()
+        .unwrap_or_else(|| agentum_tmux::target_for(&session.name))
 }
 
 // ---------- /send ----------
