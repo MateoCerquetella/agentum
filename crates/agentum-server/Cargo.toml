@@ -32,5 +32,5 @@ rcgen          = "0.13"
 rand           = "0.9"
 base64         = "0.22"
 argon2         = "0.5"
-password-hash  = "0.5"
+password-hash  = { version = "0.5", features = ["getrandom"] }
 rustls         = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

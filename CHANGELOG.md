@@ -4,6 +4,63 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-05-05
+
+The interactive-terminal release. The dashboard's terminal pane is now
+two-way (you can actually use claude code from inside `agentum terminal`),
+the lazygit side pane works, the SPA gets a fullscreen mode + multi-pane
+canvas, and the TUI ships dark/light/system themes plus lazydocker-style
+panel navigation.
+
+### Added
+- **Bidirectional terminal stream.** `WS /api/sessions/{id}/stream` now
+  accepts inbound binary/text frames and forwards them to the tmux pane via
+  `tmux send-keys -H` (raw hex bytes). xterm.js in the SPA and the ratatui
+  TUI both round-trip keystrokes — including Ctrl-C, arrow keys, and
+  paste — into the running pty.
+- `agentum_tmux::send_bytes` — chunked hex-pair `send-keys -H` helper used
+  by the WS handler so every byte is delivered literally without tmux's
+  key-name parsing in the way.
+- **TUI themes.** `dark` / `light` / `system` palettes in
+  `agentum/commands/terminal/theme.rs`. `system` sniffs `COLORFGBG` and
+  falls back to dark. Persisted to `$XDG_DATA_HOME/agentum/theme`,
+  overridable via `$AGENTUM_THEME`. `T` cycles at runtime.
+- **Lazydocker-style navigation in the TUI.** `1`/`2`/`3`/`4` jump to the
+  tree / terminal / input / lazygit panel; `[` and `]` (or `Tab` /
+  `Shift-Tab`) cycle. Panel titles are numbered for discoverability.
+- **Fullscreen mode in the SPA.** `Shift+F` toggles a chrome-less layout
+  (sidebar + topbar hidden, page body fills the viewport). Persisted in
+  localStorage, exitable via `Esc` or the floating `⤢ exit` button.
+- **`/terminals` canvas route.** Multi-pane terminal arrangement with
+  draggable/resizable panels and per-session layout persisted in
+  localStorage (`agentum_canvas_layout_v1`). `bringToFront` z-order,
+  optional maximize.
+- New `TerminalPanel.svelte` wrapper around `Terminal.svelte` for canvas
+  use. Sidebar gains a Terminals entry; Topbar gains a fullscreen button.
+
+### Changed
+- **TUI key model.** `Ctrl-C` now only quits when no pane is focused;
+  inside the terminal or lazygit pane it's a real SIGINT to whatever's
+  running. `Ctrl-G` releases focus from either pane back to the tree
+  (previously lazygit-only).
+- **Server stream loop refactor.** Pane-log tailing moved to a dedicated
+  task feeding an mpsc; the request loop multiplexes inbound socket frames
+  and outbound pane bytes so a chatty pane never starves keystrokes (and
+  vice versa).
+- `password-hash` enables the `getrandom` feature so first-boot credential
+  generation works on hosts without an explicit RNG dependency in scope.
+
+### Fixed
+- **Lazygit side pane was input-dead after the first keystroke.**
+  `LocalPty::write` called `portable_pty::take_writer` on every key, but
+  that API is one-shot — every call after the first failed with
+  `cannot take writer more than once`. The writer is now taken once at
+  spawn time and cached behind a `Mutex`, with a `flush()` after each
+  write so keys can't get stuck in an internal buffer.
+- The remote terminal pane in the TUI was effectively read-only — pressing
+  keys with `Focus::Term` did nothing. The pane now forwards every key
+  through the WS to the running process.
+
 ## [0.2.2] — 2026-05-05
 
 ### Fixed

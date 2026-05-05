@@ -10,7 +10,7 @@ use std::time::Duration;
 use agentum_core::{Event, Session};
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use reqwest::Client as HttpClient;
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -127,10 +127,18 @@ impl Client {
         Ok(())
     }
 
+    /// Open a bidirectional terminal stream.
+    ///
+    /// Server → client: tmux pane bytes arrive on `tx` as `TerminalMsg`s.
+    /// Client → server: each `Vec<u8>` pulled off `key_rx` is sent as a
+    /// binary WS frame, which the server forwards to the tmux pane via
+    /// `send-keys -H`. This is what makes the terminal pane interactive
+    /// (typing into claude code, sending Ctrl-C, arrow keys, etc.).
     pub fn open_terminal_stream(
         &self,
         id: Uuid,
         tx: mpsc::UnboundedSender<TerminalMsg>,
+        mut key_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     ) -> JoinHandle<()> {
         let base = self.base.clone();
         let token = self.token.clone();
@@ -138,7 +146,7 @@ impl Client {
             let url = ws_url(&base, &format!("/api/sessions/{id}/stream"), &token);
             let connector = ws_connector(&url);
             let result = connect_async_tls_with_config(url.as_str(), None, false, connector).await;
-            let mut stream = match result {
+            let stream = match result {
                 Ok((s, _)) => s,
                 Err(e) => {
                     let _ = tx.send(TerminalMsg::Error(format!("ws connect: {e}")));
@@ -146,7 +154,20 @@ impl Client {
                     return;
                 }
             };
-            while let Some(msg) = stream.next().await {
+            let (mut sink, mut src) = stream.split();
+
+            // Pump outbound keystrokes onto the WS until the channel closes.
+            // Detached so a chatty pane never starves keystrokes.
+            let writer = tokio::spawn(async move {
+                while let Some(bytes) = key_rx.recv().await {
+                    if sink.send(WsMsg::Binary(bytes)).await.is_err() {
+                        break;
+                    }
+                }
+                let _ = sink.close().await;
+            });
+
+            while let Some(msg) = src.next().await {
                 match msg {
                     Ok(WsMsg::Binary(b)) => {
                         if tx.send(TerminalMsg::Bytes(b.into())).is_err() {
@@ -166,6 +187,7 @@ impl Client {
                     }
                 }
             }
+            writer.abort();
             let _ = tx.send(TerminalMsg::Closed);
         })
     }

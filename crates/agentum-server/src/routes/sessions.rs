@@ -266,18 +266,19 @@ async fn stream(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let id = parse_uuid(&id)?;
-    let _ = state
+    let session = state
         .store
         .get_session_by_id(id)
         .await?
         .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
-    Ok(ws.on_upgrade(move |socket| stream_session(socket, id)))
+    let target = tmux_target(&session);
+    Ok(ws.on_upgrade(move |socket| stream_session(socket, id, target)))
 }
 
 const BACKFILL_BYTES: u64 = 4096;
 const READ_CHUNK: usize = 8192;
 
-async fn stream_session(mut socket: WebSocket, id: Uuid) {
+async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
     let log_path = match paths::pane_log(&id.to_string()) {
         Ok(p) => p,
         Err(e) => {
@@ -333,33 +334,55 @@ async fn stream_session(mut socket: WebSocket, id: Uuid) {
         }
     }
 
-    let mut buf = vec![0u8; READ_CHUNK];
-    loop {
-        match file.read(&mut buf).await {
-            Ok(0) => {
-                // Caught up. Sleep, but also watch for client close.
-                tokio::select! {
-                    msg = socket.recv() => match msg {
-                        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
-                        _ => {}
-                    },
-                    _ = sleep(Duration::from_millis(100)) => {}
+    // Tail the pane log on a dedicated task and pipe chunks through an mpsc.
+    // The main loop multiplexes `tail_rx` (output) and `socket.recv()` (input)
+    // so a chatty pane never starves keystrokes — and vice versa.
+    let (tail_tx, mut tail_rx) = tokio::sync::mpsc::channel::<Bytes>(64);
+    let tail_handle = tokio::spawn(async move {
+        let mut buf = vec![0u8; READ_CHUNK];
+        loop {
+            match file.read(&mut buf).await {
+                Ok(0) => sleep(Duration::from_millis(80)).await,
+                Ok(n) => {
+                    if tail_tx
+                        .send(Bytes::copy_from_slice(&buf[..n]))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
-            }
-            Ok(n) => {
-                let chunk = Bytes::copy_from_slice(&buf[..n]);
-                if socket.send(Message::Binary(chunk)).await.is_err() {
-                    break;
-                }
-            }
-            Err(e) => {
-                let _ = socket
-                    .send(Message::Text(format!("[read error: {e}]").into()))
-                    .await;
-                break;
+                Err(_) => break,
             }
         }
+    });
+
+    loop {
+        tokio::select! {
+            chunk = tail_rx.recv() => match chunk {
+                Some(bytes) => {
+                    if socket.send(Message::Binary(bytes)).await.is_err() {
+                        break;
+                    }
+                }
+                None => break, // tail task ended (file error / eof on dead pane)
+            },
+            msg = socket.recv() => match msg {
+                Some(Ok(Message::Binary(b))) => {
+                    if !b.is_empty() {
+                        let _ = agentum_tmux::send_bytes(&target, &b).await;
+                    }
+                }
+                Some(Ok(Message::Text(t))) => {
+                    // Text frames are also accepted and forwarded as raw UTF-8.
+                    let _ = agentum_tmux::send_bytes(&target, t.as_bytes()).await;
+                }
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                _ => {}
+            },
+        }
     }
+    tail_handle.abort();
 }
 
 fn parse_uuid(s: &str) -> Result<Uuid, ApiError> {

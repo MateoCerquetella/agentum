@@ -106,6 +106,28 @@ pub async fn send_keys(target: &str, keys: &str, append_enter: bool) -> Result<(
     run_checked(&mut c).await
 }
 
+/// Send raw bytes verbatim to a pane via `tmux send-keys -H` (hex pairs).
+/// This bypasses tmux's key-name parsing — every byte is delivered literally,
+/// including control chars and escape sequences. Used by the interactive WS
+/// terminal so xterm.js keystrokes round-trip into the running pty.
+///
+/// Splits into chunks to stay under typical argv limits when a paste is huge.
+pub async fn send_bytes(target: &str, bytes: &[u8]) -> Result<()> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    // ARG_MAX is system-dependent; 4 KiB of bytes = 8 KiB of hex args, safe.
+    for chunk in bytes.chunks(4096) {
+        let mut c = Command::new("tmux");
+        c.arg("send-keys").arg("-H").arg("-t").arg(target);
+        for b in chunk {
+            c.arg(format!("{b:02x}"));
+        }
+        run_checked(&mut c).await?;
+    }
+    Ok(())
+}
+
 /// Pipe the pane's output to `out_path` (append). Uses `-o`: noop if a pipe
 /// is already active for this pane.
 ///

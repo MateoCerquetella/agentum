@@ -25,11 +25,13 @@ pub enum PtyMsg {
 
 /// A locally-spawned child process attached to a pseudoterminal.
 ///
-/// Kept simple on purpose: one writer (the master, behind a mutex), one
-/// reader thread that pumps bytes into an mpsc, and a vt100 `Parser` that
-/// the UI reads from each frame. Dropping the struct kills the child.
+/// Kept simple on purpose: one persistent writer taken at spawn time
+/// (portable_pty's `take_writer` may only be called once), one reader
+/// thread that pumps bytes into an mpsc, and a vt100 `Parser` that the UI
+/// reads from each frame. Dropping the struct kills the child.
 pub struct LocalPty {
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
     parser: Parser,
     rows: u16,
@@ -77,14 +79,24 @@ impl LocalPty {
         let master = Arc::new(Mutex::new(pair.master));
         let child = Arc::new(Mutex::new(child));
 
-        // Reader thread: pump master → mpsc until EOF.
-        let reader_master = master.clone();
-        let mut reader = match reader_master.lock() {
-            Ok(m) => m
-                .try_clone_reader()
-                .map_err(|e| anyhow!("clone pty reader: {e}"))?,
+        // Reader thread + persistent writer: take both up-front. portable_pty
+        // only allows `take_writer` to be called once, so caching it here is
+        // mandatory — re-taking on each write fails with "cannot take writer
+        // more than once" after the first keystroke.
+        let (reader, writer) = match master.lock() {
+            Ok(m) => {
+                let r = m
+                    .try_clone_reader()
+                    .map_err(|e| anyhow!("clone pty reader: {e}"))?;
+                let w = m
+                    .take_writer()
+                    .map_err(|e| anyhow!("take pty writer: {e}"))?;
+                (r, w)
+            }
             Err(_) => return Err(anyhow!("pty master mutex poisoned")),
         };
+        let writer = Arc::new(Mutex::new(writer));
+        let mut reader = reader;
         thread::spawn(move || {
             let mut buf = [0u8; 8192];
             loop {
@@ -108,6 +120,7 @@ impl LocalPty {
 
         Ok(Self {
             master,
+            writer,
             child,
             parser: Parser::new(rows.max(1), cols.max(1), SCROLLBACK),
             rows: rows.max(1),
@@ -144,14 +157,12 @@ impl LocalPty {
 
     /// Forward bytes to the child's stdin (its PTY master).
     pub fn write(&self, bytes: &[u8]) -> Result<()> {
-        let m = self
-            .master
+        let mut writer = self
+            .writer
             .lock()
-            .map_err(|_| anyhow!("pty master mutex poisoned"))?;
-        let mut writer = m
-            .take_writer()
-            .map_err(|e| anyhow!("take pty writer: {e}"))?;
+            .map_err(|_| anyhow!("pty writer mutex poisoned"))?;
         writer.write_all(bytes).context("write to pty")?;
+        writer.flush().context("flush pty writer")?;
         Ok(())
     }
 

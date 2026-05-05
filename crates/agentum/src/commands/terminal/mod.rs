@@ -10,6 +10,7 @@ mod app;
 mod extensions;
 mod pty;
 mod term;
+mod theme;
 mod ui;
 
 use std::io;

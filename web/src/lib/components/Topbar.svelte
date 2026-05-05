@@ -2,6 +2,7 @@
   import ThemeSwitcher from './ThemeSwitcher.svelte';
   import Icon from './Icon.svelte';
   import { openPalette } from '$stores/palette';
+  import { toggleFullscreen } from '$stores/fullscreen';
   import { currentUser, logout } from '$stores/auth';
   import { page } from '$app/state';
 
@@ -16,6 +17,7 @@
   function pageLabel(): string {
     const p = page.url.pathname;
     if (p === '/' || p.startsWith('/sessions')) return 'Agents';
+    if (p.startsWith('/terminals')) return 'Terminals';
     if (p.startsWith('/settings')) return 'Settings';
     return 'agentum';
   }
@@ -33,6 +35,15 @@
     <button class="ghost" type="button" onclick={openPalette} title="Command palette (⌘K)">
       <Icon name="search" size={14} />
       <span class="kb-hint">⌘K</span>
+    </button>
+    <button
+      class="ghost"
+      type="button"
+      onclick={toggleFullscreen}
+      title="Fullscreen (Shift+F)"
+    >
+      ⤢
+      <span class="kb-hint">⇧F</span>
     </button>
     <ThemeSwitcher />
     {#if $currentUser}

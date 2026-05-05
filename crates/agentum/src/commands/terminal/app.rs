@@ -22,6 +22,7 @@ use super::api::{Client, EventMsg, TerminalMsg};
 use super::extensions::{self, LAZYGIT};
 use super::pty::{LocalPty, PtyMsg};
 use super::term::TerminalPane;
+use super::theme::{self, Theme};
 use super::ui;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
@@ -66,6 +67,10 @@ pub struct App {
     pub overlay: Overlay,
     /// `Some` while a lazygit child is alive in the side pane.
     pub lazygit: Option<LocalPty>,
+    /// Outbound key channel for the active terminal stream. `None` while
+    /// no session is selected; recreated each time the stream is reopened.
+    pub term_in: Option<mpsc::UnboundedSender<Vec<u8>>>,
+    pub theme: Theme,
 }
 
 impl App {
@@ -85,7 +90,16 @@ impl App {
             should_quit: false,
             overlay: Overlay::None,
             lazygit: None,
+            term_in: None,
+            theme: Theme::new(theme::load()),
         }
+    }
+
+    pub fn cycle_theme(&mut self) {
+        let next = self.theme.mode.cycle();
+        self.theme = Theme::new(next);
+        theme::save(next);
+        self.status_msg = Some(format!("theme: {}", self.theme.mode.label()));
     }
 
     pub fn selected_session(&self) -> Option<&Session> {
@@ -288,9 +302,14 @@ pub async fn run_loop(
     let _events_handle: JoinHandle<()> = client.open_event_stream(event_tx);
 
     // Open the terminal stream for the initial selection.
-    let mut stream_handle: Option<JoinHandle<()>> = app
-        .selected
-        .map(|id| client.open_terminal_stream(id, term_tx.clone()));
+    let mut stream_handle: Option<JoinHandle<()>> = if let Some(id) = app.selected {
+        let (key_tx, key_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let h = client.open_terminal_stream(id, term_tx.clone(), key_rx);
+        app.term_in = Some(key_tx);
+        Some(h)
+    } else {
+        None
+    };
 
     let mut crossterm_events = EventStream::new();
     let mut tick = interval(TICK_INTERVAL);
@@ -391,19 +410,35 @@ async fn handle_key(
     lg_tx: &mpsc::UnboundedSender<PtyMsg>,
     stream_handle: &mut Option<JoinHandle<()>>,
 ) {
-    // Global: Ctrl-C always quits.
+    // Ctrl-C only quits when no pane is focused. Inside a pane it's a real
+    // SIGINT to whatever's running (claude code, shells, etc.) — otherwise
+    // you could never interrupt a long-running task without killing the TUI.
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        app.should_quit = true;
-        return;
+        match app.focus {
+            Focus::Term | Focus::Lazygit => {} // fall through to pane forwarding
+            _ => {
+                app.should_quit = true;
+                return;
+            }
+        }
     }
 
-    // Global escape from lazygit pane back to host: Ctrl-G.
+    // Ctrl-G: universal "release pane focus → tree" hotkey for both the
+    // remote terminal pane and the local lazygit pane.
     if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        if app.focus == Focus::Lazygit {
-            app.focus = Focus::Tree;
-            app.status_msg = Some("released lazygit focus (Ctrl-G)".into());
+        match app.focus {
+            Focus::Lazygit => {
+                app.focus = Focus::Tree;
+                app.status_msg = Some("released lazygit focus (Ctrl-G)".into());
+                return;
+            }
+            Focus::Term => {
+                app.focus = Focus::Tree;
+                app.status_msg = Some("released terminal focus (Ctrl-G)".into());
+                return;
+            }
+            _ => return,
         }
-        return;
     }
 
     // Overlays consume input first.
@@ -426,6 +461,19 @@ async fn handle_key(
                 app.status_msg = Some(format!("lazygit write: {e}"));
                 app.error_count += 1;
             }
+        }
+        return;
+    }
+
+    // While the remote terminal pane is focused, forward raw bytes over the
+    // WS so they hit the running process (claude code, shell, etc.).
+    if app.focus == Focus::Term {
+        if let Some(tx) = app.term_in.as_ref()
+            && let Some(bytes) = key_to_bytes(&key)
+            && tx.send(bytes).is_err()
+        {
+            app.status_msg = Some("terminal stream closed".into());
+            app.error_count += 1;
         }
         return;
     }
@@ -462,8 +510,18 @@ async fn handle_key(
         KeyCode::Char('?') => app.overlay = Overlay::Help,
         KeyCode::Char('g') => toggle_lazygit(app, lg_tx).await,
         KeyCode::Char('G') => app.overlay = Overlay::LazygitCheats,
-        KeyCode::Tab => {
+        KeyCode::Char('T') => app.cycle_theme(),
+        // lazydocker parity: 1..=4 jump straight to a panel.
+        KeyCode::Char('1') => app.focus = Focus::Tree,
+        KeyCode::Char('2') => app.focus = Focus::Term,
+        KeyCode::Char('3') => app.focus = Focus::Input,
+        KeyCode::Char('4') if app.lazygit_open() => app.focus = Focus::Lazygit,
+        // [ / ] cycle focus, like lazydocker's prev/next tab.
+        KeyCode::Char(']') | KeyCode::Tab => {
             app.focus = next_focus(app.focus, app.lazygit_open());
+        }
+        KeyCode::Char('[') | KeyCode::BackTab => {
+            app.focus = prev_focus(app.focus, app.lazygit_open());
         }
         KeyCode::Char('i') => app.focus = Focus::Input,
         KeyCode::Char('r') => {
@@ -502,6 +560,24 @@ fn next_focus(current: Focus, lazygit_open: bool) -> Focus {
             Focus::Tree => Focus::Term,
             Focus::Term => Focus::Input,
             Focus::Input => Focus::Tree,
+            Focus::Lazygit => Focus::Tree,
+        }
+    }
+}
+
+fn prev_focus(current: Focus, lazygit_open: bool) -> Focus {
+    if lazygit_open {
+        match current {
+            Focus::Tree => Focus::Input,
+            Focus::Input => Focus::Lazygit,
+            Focus::Lazygit => Focus::Term,
+            Focus::Term => Focus::Tree,
+        }
+    } else {
+        match current {
+            Focus::Tree => Focus::Input,
+            Focus::Input => Focus::Term,
+            Focus::Term => Focus::Tree,
             Focus::Lazygit => Focus::Tree,
         }
     }
@@ -617,10 +693,13 @@ fn update_selection(
     if let Some(handle) = stream_handle.take() {
         handle.abort();
     }
+    app.term_in = None;
     app.selected = new_id;
     app.term.reset();
     if let Some(id) = new_id {
-        *stream_handle = Some(client.open_terminal_stream(id, term_tx.clone()));
+        let (key_tx, key_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        *stream_handle = Some(client.open_terminal_stream(id, term_tx.clone(), key_rx));
+        app.term_in = Some(key_tx);
     }
 }
 

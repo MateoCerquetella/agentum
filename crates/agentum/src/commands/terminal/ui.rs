@@ -2,16 +2,15 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use tui_term::widget::PseudoTerminal;
 
 use super::app::{App, ConnState, Focus, Overlay, Row, status_dot};
 use super::extensions::{self, Extension, LAZYGIT};
+use super::theme::Palette;
 
-const FOCUS_BORDER: Color = Color::Cyan;
-const IDLE_BORDER: Color = Color::DarkGray;
 const TREE_WIDTH: u16 = 32;
 
 /// Computed pane rectangles. Mirrored by `app::run_loop` so the vt100
@@ -80,55 +79,56 @@ pub fn compute_layout(area: Rect, lazygit_open: bool) -> Areas {
 
 pub fn draw(f: &mut Frame<'_>, app: &App) {
     let areas = compute_layout(f.area(), app.lazygit_open());
+    let p = &app.theme.palette;
 
-    draw_title(f, areas.title, app);
-    draw_tree(f, areas.tree, app);
-    draw_terminal(f, areas.terminal, app);
+    draw_title(f, areas.title, app, p);
+    draw_tree(f, areas.tree, app, p);
+    draw_terminal(f, areas.terminal, app, p);
     if let Some(lg_area) = areas.lazygit {
-        draw_lazygit(f, lg_area, app);
+        draw_lazygit(f, lg_area, app, p);
     }
-    draw_input(f, areas.input, app);
-    draw_status(f, areas.status, app);
+    draw_input(f, areas.input, app, p);
+    draw_status(f, areas.status, app, p);
 
     match app.overlay {
         Overlay::None => {}
-        Overlay::Help => draw_help_overlay(f, f.area(), app.lazygit_open()),
-        Overlay::LazygitCheats => draw_cheatsheet_overlay(f, f.area(), &LAZYGIT),
-        Overlay::LazygitInstall => draw_install_overlay(f, f.area(), &LAZYGIT),
+        Overlay::Help => draw_help_overlay(f, f.area(), app.lazygit_open(), p),
+        Overlay::LazygitCheats => draw_cheatsheet_overlay(f, f.area(), &LAZYGIT, p),
+        Overlay::LazygitInstall => draw_install_overlay(f, f.area(), &LAZYGIT, p),
     }
 }
 
-fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App) {
+fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let title = match app.selected_session() {
         Some(s) => format!("agentum terminal · {} · {}", s.name, s.workdir),
         None => "agentum terminal · no session selected".to_string(),
     };
     let para = Paragraph::new(title).style(
         Style::default()
-            .fg(Color::White)
+            .fg(p.title_fg)
             .add_modifier(Modifier::BOLD),
     );
     f.render_widget(para, area);
 }
 
-fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App) {
+fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Tree;
     let block = Block::default()
-        .title(" sessions ")
+        .title(" 1 sessions ")
         .borders(Borders::ALL)
-        .border_style(border_style(focused));
+        .border_style(border_style(focused, p));
 
     let mut items: Vec<ListItem> = Vec::new();
     let cursor = app.tree.cursor;
     for (i, row) in app.tree.rows().iter().enumerate() {
         let is_cursor = i == cursor;
-        items.push(render_tree_row(app, *row, is_cursor));
+        items.push(render_tree_row(app, *row, is_cursor, p));
     }
 
     if items.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
             "  (no sessions — `agentum new …`)",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(p.muted),
         ))));
     }
 
@@ -136,9 +136,9 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App) {
     f.render_widget(list, area);
 }
 
-fn render_tree_row(app: &App, row: Row, is_cursor: bool) -> ListItem<'static> {
+fn render_tree_row(app: &App, row: Row, is_cursor: bool, p: &Palette) -> ListItem<'static> {
     let cursor_bg = if is_cursor {
-        Style::default().bg(Color::Rgb(40, 60, 70))
+        Style::default().bg(p.cursor_bg)
     } else {
         Style::default()
     };
@@ -149,7 +149,10 @@ fn render_tree_row(app: &App, row: Row, is_cursor: bool) -> ListItem<'static> {
             let label = collapse_home(&g.workdir);
             ListItem::new(Line::from(vec![
                 Span::raw(format!("{arrow} ")),
-                Span::styled(label, Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    label,
+                    Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
+                ),
             ]))
             .style(cursor_bg)
         }
@@ -165,15 +168,15 @@ fn render_tree_row(app: &App, row: Row, is_cursor: bool) -> ListItem<'static> {
                     };
                     (s.name.clone(), dot, color, tool)
                 }
-                None => ("?".into(), "?", Color::Red, "".into()),
+                None => ("?".into(), "?", p.error, "".into()),
             };
             let mut spans = vec![
                 Span::raw("   "),
-                Span::styled(format!("{:<14}", truncate(&name, 14)), Style::default()),
+                Span::styled(format!("{:<14}", truncate(&name, 14)), Style::default().fg(p.fg)),
                 Span::raw(" "),
                 Span::styled(dot, Style::default().fg(dot_color)),
                 Span::raw(" "),
-                Span::styled(tool_label, Style::default().fg(Color::DarkGray)),
+                Span::styled(tool_label, Style::default().fg(p.muted)),
             ];
             if is_cursor {
                 spans[1].style = spans[1].style.add_modifier(Modifier::BOLD);
@@ -183,19 +186,24 @@ fn render_tree_row(app: &App, row: Row, is_cursor: bool) -> ListItem<'static> {
     }
 }
 
-fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App) {
+fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Term;
+    let title = if focused {
+        " 2 terminal · typing → pane · Ctrl-G to release "
+    } else {
+        " 2 terminal · Tab/2 to focus "
+    };
     let block = Block::default()
-        .title(" terminal ")
+        .title(title)
         .borders(Borders::ALL)
-        .border_style(border_style(focused));
+        .border_style(border_style(focused, p));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     if app.selected.is_none() {
         let hint = Paragraph::new("Select a session on the left and press Enter.")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(p.muted))
             .wrap(Wrap { trim: true });
         f.render_widget(hint, inner);
         return;
@@ -205,17 +213,17 @@ fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App) {
     f.render_widget(pseudo, inner);
 }
 
-fn draw_lazygit(f: &mut Frame<'_>, area: Rect, app: &App) {
+fn draw_lazygit(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Lazygit;
     let title = if focused {
-        " lazygit · Ctrl-G to release · G for cheat sheet "
+        " 4 lazygit · Ctrl-G to release · G for cheat sheet "
     } else {
-        " lazygit · Tab to focus · g to close "
+        " 4 lazygit · Tab/4 to focus · g to close "
     };
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(border_style(focused));
+        .border_style(border_style(focused, p));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -223,16 +231,15 @@ fn draw_lazygit(f: &mut Frame<'_>, area: Rect, app: &App) {
         let pseudo = PseudoTerminal::new(lg.screen());
         f.render_widget(pseudo, inner);
     } else {
-        let hint =
-            Paragraph::new("lazygit not running").style(Style::default().fg(Color::DarkGray));
+        let hint = Paragraph::new("lazygit not running").style(Style::default().fg(p.muted));
         f.render_widget(hint, inner);
     }
 }
 
-fn draw_input(f: &mut Frame<'_>, area: Rect, app: &App) {
+fn draw_input(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Input;
     let placeholder = if app.input.is_empty() && !focused {
-        "Press i to type a message or @path/to/file"
+        "Press i (or 3) to type a message or @path/to/file"
     } else {
         ""
     };
@@ -240,14 +247,18 @@ fn draw_input(f: &mut Frame<'_>, area: Rect, app: &App) {
     let line = if app.input.is_empty() && !focused {
         Line::from(vec![
             Span::raw(prompt),
-            Span::styled(placeholder, Style::default().fg(Color::DarkGray)),
+            Span::styled(placeholder, Style::default().fg(p.muted)),
         ])
     } else {
-        Line::from(vec![Span::raw(prompt), Span::raw(app.input.clone())])
+        Line::from(vec![
+            Span::raw(prompt),
+            Span::styled(app.input.clone(), Style::default().fg(p.fg)),
+        ])
     };
     let block = Block::default()
+        .title(" 3 input ")
         .borders(Borders::ALL)
-        .border_style(border_style(focused));
+        .border_style(border_style(focused, p));
     let para = Paragraph::new(line).block(block);
     f.render_widget(para, area);
 
@@ -259,7 +270,7 @@ fn draw_input(f: &mut Frame<'_>, area: Rect, app: &App) {
     }
 }
 
-fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App) {
+fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let workdir = app
         .selected_session()
         .map(|s| collapse_home(&s.workdir))
@@ -273,13 +284,13 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App) {
         .unwrap_or_else(|| "—".to_string());
 
     let (conn_label, conn_color) = match app.conn {
-        ConnState::Connected => ("● connected", Color::Green),
-        ConnState::Connecting => ("◌ connecting", Color::Yellow),
-        ConnState::Disconnected => ("✗ disconnected", Color::Red),
+        ConnState::Connected => ("● connected", p.success),
+        ConnState::Connecting => ("◌ connecting", p.warning),
+        ConnState::Disconnected => ("✗ disconnected", p.error),
     };
 
     let err_text = if app.error_count == 0 {
-        Span::styled("0 errors", Style::default().fg(Color::DarkGray))
+        Span::styled("0 errors", Style::default().fg(p.muted))
     } else {
         Span::styled(
             format!(
@@ -287,7 +298,7 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App) {
                 app.error_count,
                 if app.error_count == 1 { "" } else { "s" }
             ),
-            Style::default().fg(Color::Red),
+            Style::default().fg(p.error),
         )
     };
 
@@ -295,13 +306,18 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App) {
         Span::styled(
             " lazygit ",
             Style::default()
-                .bg(Color::Rgb(60, 30, 70))
-                .fg(Color::White)
+                .bg(p.chip_active_bg)
+                .fg(p.chip_active_fg)
                 .add_modifier(Modifier::BOLD),
         )
     } else {
-        Span::styled("g lazygit", Style::default().fg(Color::DarkGray))
+        Span::styled("g lazygit", Style::default().fg(p.muted))
     };
+
+    let theme_chip = Span::styled(
+        format!(" T {} ", app.theme.mode.label()),
+        Style::default().fg(p.muted),
+    );
 
     let extra = match &app.status_msg {
         Some(m) => format!(" · {m}"),
@@ -310,120 +326,157 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App) {
 
     let bar = Line::from(vec![
         Span::raw(" "),
-        Span::raw(workdir),
+        Span::styled(workdir, Style::default().fg(p.status_bar_fg)),
         Span::raw("  "),
-        Span::styled(tool_label, Style::default().fg(Color::DarkGray)),
+        Span::styled(tool_label, Style::default().fg(p.muted)),
         Span::raw("    "),
         Span::styled(conn_label, Style::default().fg(conn_color)),
         Span::raw("   "),
         err_text,
         Span::raw("   "),
         lg_chip,
-        Span::raw(extra),
+        Span::raw("  "),
+        theme_chip,
+        Span::styled(extra, Style::default().fg(p.muted)),
         Span::raw("   "),
-        Span::styled("? help", Style::default().fg(Color::DarkGray)),
+        Span::styled("? help", Style::default().fg(p.muted)),
     ]);
-    let para = Paragraph::new(bar).style(Style::default().bg(Color::Rgb(20, 25, 35)));
+    let para = Paragraph::new(bar).style(
+        Style::default()
+            .bg(p.status_bar_bg)
+            .fg(p.status_bar_fg),
+    );
     f.render_widget(para, area);
 }
 
-fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool) {
+fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Palette) {
     let mut lines = vec![
         Line::from(Span::styled(
             "agentum terminal — keys",
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from("  j / k / ↑ / ↓   move selection"),
+        Line::from(Span::styled(
+            "  Navigation",
+            Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
+        )),
+        Line::from("  1 / 2 / 3 / 4   jump straight to panel (lazydocker-style)"),
+        Line::from("  Tab / ]         next panel"),
+        Line::from("  Shift-Tab / [   previous panel"),
+        Line::from("  j / k / ↑ / ↓   move selection in tree"),
         Line::from("  h / l           collapse / expand workdir group"),
         Line::from("  Enter           select session (start streaming)"),
-        Line::from("  i               focus the input bar"),
-        Line::from("  Enter (input)   send + append Enter to the pane"),
-        Line::from("  Esc             leave input"),
-        Line::from("  Tab             cycle focus tree → term → (lazygit) → input"),
         Line::from("  r               refresh sessions"),
         Line::from(""),
         Line::from(Span::styled(
-            "  Extensions",
-            Style::default().add_modifier(Modifier::BOLD),
+            "  Terminal & input",
+            Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
+        )),
+        Line::from("  i / 3           focus the input bar"),
+        Line::from("  Enter (input)   send + append Enter to the pane"),
+        Line::from("  Esc             leave input"),
+        Line::from("  2               focus terminal — typing forwards to claude code"),
+        Line::from("  Ctrl-C          interrupt focused pane (else quit)"),
+        Line::from("  Ctrl-G          release focused pane → tree"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Extensions & appearance",
+            Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
         )),
         Line::from("  g               toggle lazygit side pane"),
         Line::from("  G               lazygit cheat sheet"),
-        Line::from("  Ctrl-G          release lazygit focus → tree"),
+        Line::from("  T               cycle theme (dark / light / system)"),
         Line::from(""),
         Line::from("  ?               toggle this help"),
-        Line::from("  q / Ctrl-C      quit"),
+        Line::from("  q               quit"),
     ];
     if lazygit_open {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "  (lazygit is open — keys forward to it when focused)",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(p.muted),
         )));
     }
-    overlay_box(f, area, " help ", lines, 64);
+    overlay_box(f, area, " help ", lines, 64, p);
 }
 
-fn draw_cheatsheet_overlay(f: &mut Frame<'_>, area: Rect, ext: &Extension) {
+fn draw_cheatsheet_overlay(f: &mut Frame<'_>, area: Rect, ext: &Extension, p: &Palette) {
     let mut lines = vec![
         Line::from(Span::styled(
             format!("{} — cheat sheet", ext.display_name),
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
     ];
     for (label, keys) in ext.cheatsheet {
-        lines.push(Line::from(format!("  {:<22} {}", label, keys)));
+        lines.push(Line::from(Span::styled(
+            format!("  {:<22} {}", label, keys),
+            Style::default().fg(p.fg),
+        )));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         format!("  {}", ext.homepage),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(p.muted),
     )));
     lines.push(Line::from(""));
-    lines.push(Line::from("  Esc / Enter to dismiss"));
-    overlay_box(f, area, &format!(" {} ", ext.display_name), lines, 64);
+    lines.push(Line::from(Span::styled(
+        "  Esc / Enter to dismiss",
+        Style::default().fg(p.muted),
+    )));
+    overlay_box(f, area, &format!(" {} ", ext.display_name), lines, 64, p);
 }
 
-fn draw_install_overlay(f: &mut Frame<'_>, area: Rect, ext: &Extension) {
+fn draw_install_overlay(f: &mut Frame<'_>, area: Rect, ext: &Extension, p: &Palette) {
     let mut lines = vec![
         Line::from(Span::styled(
             format!("{} not found on PATH", ext.display_name),
             Style::default()
-                .fg(Color::Yellow)
+                .fg(p.warning)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from(Span::styled(ext.blurb, Style::default().fg(Color::Gray))),
+        Line::from(Span::styled(ext.blurb, Style::default().fg(p.fg))),
         Line::from(""),
         Line::from(Span::styled(
             "Install with one of:",
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
         )),
     ];
     for (name, cmd) in extensions::install_hints(ext) {
         lines.push(Line::from(vec![
-            Span::styled(format!("  {:<22} ", name), Style::default().fg(Color::Cyan)),
-            Span::raw(cmd),
+            Span::styled(format!("  {:<22} ", name), Style::default().fg(p.accent)),
+            Span::styled(cmd, Style::default().fg(p.fg)),
         ]));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         format!("  {}", ext.homepage),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(p.muted),
     )));
     lines.push(Line::from(""));
-    lines.push(Line::from("  Esc / Enter to dismiss"));
+    lines.push(Line::from(Span::styled(
+        "  Esc / Enter to dismiss",
+        Style::default().fg(p.muted),
+    )));
     overlay_box(
         f,
         area,
         &format!(" install {} ", ext.display_name),
         lines,
         72,
+        p,
     );
 }
 
-fn overlay_box(f: &mut Frame<'_>, area: Rect, title: &str, lines: Vec<Line<'_>>, width: u16) {
+fn overlay_box(
+    f: &mut Frame<'_>,
+    area: Rect,
+    title: &str,
+    lines: Vec<Line<'_>>,
+    width: u16,
+    p: &Palette,
+) {
     let h = (lines.len() as u16).saturating_add(2);
     let w = width.min(area.width);
     let h = h.min(area.height);
@@ -438,17 +491,17 @@ fn overlay_box(f: &mut Frame<'_>, area: Rect, title: &str, lines: Vec<Line<'_>>,
     let block = Block::default()
         .title(title.to_string())
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(p.accent));
     let para = Paragraph::new(lines).block(block);
     f.render_widget(Clear, r);
     f.render_widget(para, r);
 }
 
-fn border_style(focused: bool) -> Style {
+fn border_style(focused: bool, p: &Palette) -> Style {
     if focused {
-        Style::default().fg(FOCUS_BORDER)
+        Style::default().fg(p.focus_border)
     } else {
-        Style::default().fg(IDLE_BORDER)
+        Style::default().fg(p.idle_border)
     }
 }
 
@@ -471,3 +524,4 @@ fn truncate(s: &str, max: usize) -> String {
         out
     }
 }
+

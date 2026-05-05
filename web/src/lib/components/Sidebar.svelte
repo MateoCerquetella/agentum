@@ -12,13 +12,18 @@
   }
 
   const items: NavItem[] = [
-    { href: '/',         label: 'Agents',    icon: 'monitor' },
-    { href: '/settings', label: 'Settings',  icon: 'settings' }
+    { href: '/',          label: 'Agents',    icon: 'monitor' },
+    { href: '/terminals', label: 'Terminals', icon: 'terminal' },
+    { href: '/settings',  label: 'Settings',  icon: 'settings' }
   ];
 
   function isActive(href: string): boolean {
     const p = page.url.pathname;
-    if (href === '/') return p === '/' || p.startsWith('/sessions');
+    if (href === '/') {
+      // Sessions list + per-session pages light up "Agents".
+      // /terminals has its own nav entry, so it must NOT match here.
+      return p === '/' || p.startsWith('/sessions');
+    }
     return p === href || p.startsWith(href + '/');
   }
 
