@@ -4,6 +4,14 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] — 2026-05-05
+
+### Fixed
+- One more pre-existing clippy issue surfaced by rustc 1.95's newer
+  `collapsible_match` lint (CI uses `dtolnay/rust-toolchain@stable`,
+  local dev was on 1.94 which didn't ship this lint yet). Collapsed the
+  command-palette `KeyCode::Char` arm into a match-guard form.
+
 ## [0.4.1] — 2026-05-05
 
 ### Fixed

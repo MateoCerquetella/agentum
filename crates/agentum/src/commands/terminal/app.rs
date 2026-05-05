@@ -616,12 +616,11 @@ async fn handle_palette_key(
             app.palette.query.pop();
             app.palette.cursor = 0;
         }
-        KeyCode::Char(c) => {
-            // Ctrl-modified chars besides p/k were handled upstream.
-            if !key.modifiers.contains(KeyModifiers::CONTROL) {
-                app.palette.query.push(c);
-                app.palette.cursor = 0;
-            }
+        // Ctrl-modified chars besides p/k were handled upstream, so this
+        // arm only fires for plain typing.
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.palette.query.push(c);
+            app.palette.cursor = 0;
         }
         KeyCode::Enter => {
             let cat = palette_catalog(app);
