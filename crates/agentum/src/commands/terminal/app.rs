@@ -673,6 +673,26 @@ async fn handle_key(
         }
     }
 
+    // Global panel switch — works *even with a pane focused* so you can
+    // escape Term/Lazygit without first releasing focus. Ctrl-] / Ctrl-[
+    // are the modifier-protected versions; F6 / F5 are alternates that
+    // mirror lazydocker's "next/previous panel" bindings. Plain `[` / `]`
+    // remain available in non-pane focus (handled lower down) so they
+    // don't get swallowed when typing into claude code.
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let cycle_next =
+        (ctrl && matches!(key.code, KeyCode::Char(']'))) || matches!(key.code, KeyCode::F(6));
+    let cycle_prev =
+        (ctrl && matches!(key.code, KeyCode::Char('['))) || matches!(key.code, KeyCode::F(5));
+    if cycle_next {
+        app.focus = next_focus(app.focus, app.lazygit_open());
+        return;
+    }
+    if cycle_prev {
+        app.focus = prev_focus(app.focus, app.lazygit_open());
+        return;
+    }
+
     // Ctrl-G: universal "release pane focus → tree" hotkey for both the
     // remote terminal pane and the local lazygit pane.
     if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {

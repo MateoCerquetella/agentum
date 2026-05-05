@@ -4,6 +4,32 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.4] — 2026-05-05
+
+### Added
+- **Global panel-cycle hotkeys that work even with a pane focused.**
+  Until now, pressing `1`/`2`/`3`/`4` or `[`/`]` while focus was on the
+  Term or Lazygit pane forwarded the keystroke to claude code instead of
+  switching panel — you had to press `Ctrl-G` first to release. Two new
+  bindings cycle globally, intercepted before the pane-forward branch:
+  - `Ctrl-]` / `F6` — next panel
+  - `Ctrl-[` / `F5` — previous panel
+
+  These mirror the "next/previous panel" intent from
+  [lazydocker](https://github.com/jesseduffield/lazydocker)'s
+  keybindings doc. Plain `[` / `]` still work in the tree (and still get
+  swallowed by claude code when typing) so we don't break terminal-side
+  bracket usage in vim/neovim/etc.
+
+### Fixed
+- **Themes now apply to the inner terminal pane.** Empty cells inside
+  `tui_term::PseudoTerminal` were rendering at `Color::Reset`, leaving
+  "holes" through to the host terminal background on every theme other
+  than `system`. Both `draw_terminal` and `draw_lazygit` now pass a base
+  style (`bg(panel_bg).fg(fg)`) so untouched cells take the theme's
+  panel colours. The `system` theme is unaffected (its `panel_bg` is
+  already `Color::Reset` by design).
+
 ## [0.5.3] — 2026-05-05
 
 TUI new-session form reaches feature parity with the web `NewSessionDialog`.

@@ -227,12 +227,7 @@ impl Client {
         if let Some(p) = path {
             url.query_pairs_mut().append_pair("path", p);
         }
-        let resp = self
-            .http
-            .get(url)
-            .bearer_auth(&self.token)
-            .send()
-            .await?;
+        let resp = self.http.get(url).bearer_auth(&self.token).send().await?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
