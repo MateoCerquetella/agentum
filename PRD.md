@@ -270,8 +270,6 @@ agentum/
 │   ├── architecture.md
 │   ├── theming.md
 │   └── api.md
-├── reference/                     # vendored amux clone for inheritance reading
-│   └── amux/...                   # do NOT import code from here
 └── scripts/
     ├── install.sh
     └── dev.sh

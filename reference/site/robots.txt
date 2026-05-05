@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-Sitemap: https://amux.io/sitemap.xml
-Sitemap: https://amux.io/video-sitemap.xml

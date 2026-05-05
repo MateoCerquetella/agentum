@@ -158,8 +158,7 @@ That's a non-overriding default — set `CC` in your shell to override.
 MIT. See [LICENSE](LICENSE).
 
 agentum is a clean-room rewrite — only the *concept* is inherited from
-[mixpeek/amux] (MIT + Commons Clause). Inheritance is read-only;
-[`reference/amux/`](reference/) is vendored for design reading and explicitly
+[mixpeek/amux] (MIT + Commons Clause). Inheritance is read-only and explicitly
 not imported.
 
 [mixpeek/amux]: https://github.com/mixpeek/amux
