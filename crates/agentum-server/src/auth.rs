@@ -19,10 +19,17 @@ use rand::RngCore;
 
 use crate::AppState;
 
+/// How long a freshly minted bearer token stays valid. Refreshed on every
+/// authenticated request (sliding expiry), so an active session stays live
+/// indefinitely while idle ones get reaped.
+pub const SESSION_TTL: time::Duration = time::Duration::days(30);
+
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
     #[error("hash: {0}")]
     Hash(String),
+    #[error("join: {0}")]
+    Join(#[from] tokio::task::JoinError),
 }
 
 /// Generate a 32-byte URL-safe base64 token (43 chars, no padding).
@@ -32,7 +39,17 @@ pub fn new_token() -> String {
     URL_SAFE_NO_PAD.encode(buf)
 }
 
-pub fn hash_password(plain: &str) -> Result<String, AuthError> {
+/// Argon2id is intentionally CPU-expensive (~100ms+ per call). Run it on the
+/// blocking pool so we don't stall the async runtime under concurrent logins.
+pub async fn hash_password(plain: String) -> Result<String, AuthError> {
+    tokio::task::spawn_blocking(move || hash_password_sync(&plain)).await?
+}
+
+pub async fn verify_password(plain: String, stored_hash: String) -> Result<bool, AuthError> {
+    Ok(tokio::task::spawn_blocking(move || verify_password_sync(&plain, &stored_hash)).await?)
+}
+
+fn hash_password_sync(plain: &str) -> Result<String, AuthError> {
     let salt = SaltString::generate(&mut OsRng);
     let argon = Argon2::default();
     argon
@@ -41,7 +58,7 @@ pub fn hash_password(plain: &str) -> Result<String, AuthError> {
         .map_err(|e| AuthError::Hash(e.to_string()))
 }
 
-pub fn verify_password(plain: &str, stored_hash: &str) -> bool {
+fn verify_password_sync(plain: &str, stored_hash: &str) -> bool {
     let Ok(parsed) = PasswordHash::new(stored_hash) else {
         return false;
     };
@@ -57,7 +74,12 @@ pub fn verify_password(plain: &str, stored_hash: &str) -> bool {
 fn is_public(path: &str) -> bool {
     matches!(
         path,
-        "/api/health" | "/api/cert" | "/api/auth/status" | "/api/auth/login" | "/api/auth/register"
+        "/api/health"
+            | "/api/cert"
+            | "/api/cert/fingerprint"
+            | "/api/auth/status"
+            | "/api/auth/login"
+            | "/api/auth/register"
     )
 }
 
@@ -122,6 +144,7 @@ fn hex_val(b: u8) -> Option<u8> {
 
 /// axum middleware. Looks up the bearer token in `auth_sessions`. If the
 /// token resolves to a user, the request continues; otherwise 401.
+/// Sliding expiry: each touch extends the row's `expires_at` by `SESSION_TTL`.
 pub async fn require_token(
     axum::extract::State(state): axum::extract::State<AppState>,
     req: Request<Body>,
@@ -136,9 +159,13 @@ pub async fn require_token(
         return unauthorized("missing bearer token");
     };
 
-    match state.store.touch_auth_session(&token).await {
+    match state
+        .store
+        .touch_auth_session(&token, Some(SESSION_TTL))
+        .await
+    {
         Ok(Some(_user)) => next.run(req).await,
-        Ok(None) => unauthorized("invalid bearer token"),
+        Ok(None) => unauthorized("invalid or expired bearer token"),
         Err(e) => {
             tracing::warn!(error = %e, "auth lookup failed");
             unauthorized("auth lookup failed")
@@ -172,11 +199,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn hash_roundtrip() {
-        let h = hash_password("hunter2").unwrap();
-        assert!(verify_password("hunter2", &h));
-        assert!(!verify_password("wrong", &h));
+    #[tokio::test]
+    async fn hash_roundtrip() {
+        let h = hash_password("hunter2".to_string()).await.unwrap();
+        assert!(
+            verify_password("hunter2".to_string(), h.clone())
+                .await
+                .unwrap()
+        );
+        assert!(!verify_password("wrong".to_string(), h).await.unwrap());
     }
 
     #[test]
