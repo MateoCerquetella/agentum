@@ -1,9 +1,15 @@
 <script lang="ts">
-  import type { Session } from '$lib/api';
+  import { api, type Session } from '$lib/api';
   import StatusPill from './StatusPill.svelte';
 
-  interface Props { session: Session }
-  let { session }: Props = $props();
+  interface Props {
+    session: Session;
+    onChanged?: () => void;
+  }
+  let { session, onChanged }: Props = $props();
+
+  let busy = $state<null | 'start' | 'stop' | 'kill' | 'delete'>(null);
+  let error = $state<string | null>(null);
 
   function shortenPath(p: string, max = 36): string {
     if (p.length <= max) return p;
@@ -19,25 +25,74 @@
     if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
     return d.toLocaleDateString();
   }
+
+  async function run<T>(label: typeof busy, fn: () => Promise<T>) {
+    busy = label;
+    error = null;
+    try {
+      await fn();
+      onChanged?.();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = null;
+    }
+  }
+
+  function start(e: MouseEvent)  { e.preventDefault(); run('start',  () => api.startSession(session.id)); }
+  function stop(e: MouseEvent)   { e.preventDefault(); run('stop',   () => api.stopSession(session.id)); }
+  function kill(e: MouseEvent)   { e.preventDefault(); run('kill',   () => api.killSession(session.id)); }
+
+  function del(e: MouseEvent) {
+    e.preventDefault();
+    const force = session.status === 'running';
+    const verb = force ? 'kill and remove' : 'remove';
+    if (!confirm(`${verb} session "${session.name}"?`)) return;
+    run('delete', () => api.deleteSession(session.id, force));
+  }
 </script>
 
-<a class="card" href={`/sessions/${session.id}`} data-status={session.status}>
-  <header>
-    <div class="name">{session.name}</div>
-    <StatusPill status={session.status} />
-  </header>
+<div class="card" data-status={session.status}>
+  <a class="link" href={`/sessions/${session.id}`}>
+    <header>
+      <div class="name">{session.name}</div>
+      <StatusPill status={session.status} />
+    </header>
 
-  <div class="meta">
-    <span class="tool" title="tool">{session.tool}</span>
-    <span class="dot" aria-hidden="true">·</span>
-    <span class="workdir mono" title={session.workdir}>{shortenPath(session.workdir)}</span>
+    <div class="meta">
+      <span class="tool" title="tool">{session.tool}</span>
+      <span class="dot" aria-hidden="true">·</span>
+      <span class="workdir mono" title={session.workdir}>{shortenPath(session.workdir)}</span>
+    </div>
+
+    <footer>
+      <span class="muted">last activity</span>
+      <span>{rel(session.last_activity_at ?? session.updated_at)}</span>
+    </footer>
+  </a>
+
+  <div class="actions">
+    {#if session.status === 'running'}
+      <button type="button" onclick={stop} disabled={busy !== null} title="Graceful stop (CLI: agentum down)">
+        {busy === 'stop' ? '…' : 'stop'}
+      </button>
+      <button type="button" onclick={kill} disabled={busy !== null} title="Force kill (CLI: agentum kill)">
+        {busy === 'kill' ? '…' : 'kill'}
+      </button>
+    {:else}
+      <button type="button" onclick={start} disabled={busy !== null} title="Start session (CLI: agentum up)">
+        {busy === 'start' ? '…' : 'start'}
+      </button>
+    {/if}
+    <button type="button" class="danger" onclick={del} disabled={busy !== null} title="Remove (CLI: agentum rm)">
+      {busy === 'delete' ? '…' : 'rm'}
+    </button>
   </div>
 
-  <footer>
-    <span class="muted">last activity</span>
-    <span>{rel(session.last_activity_at ?? session.updated_at)}</span>
-  </footer>
-</a>
+  {#if error}
+    <div class="error" title={error}>{error}</div>
+  {/if}
+</div>
 
 <style>
   .card {
@@ -50,12 +105,17 @@
     border-radius: var(--radius);
     box-shadow: var(--shadow);
     color: var(--text);
-    transition: transform 80ms ease, border-color 120ms ease, background 120ms ease;
-    text-decoration: none;
+    transition: border-color 120ms ease, background 120ms ease;
   }
   .card:hover {
     border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-    transform: translateY(-1px);
+  }
+  .link {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    color: var(--text);
+    text-decoration: none;
   }
   header {
     display: flex;
@@ -88,4 +148,43 @@
   }
   .muted { color: var(--muted); }
   .mono { font-family: var(--font-mono); }
+
+  .actions {
+    display: flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+  }
+  .actions button {
+    flex: 1;
+    min-width: 3.2rem;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--bg);
+    color: var(--text-2);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+  .actions button:hover:not(:disabled) {
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  }
+  .actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .actions .danger:hover:not(:disabled) {
+    color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  }
+
+  .error {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+    padding: 0.3rem 0.5rem;
+    border-radius: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 </style>

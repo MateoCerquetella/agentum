@@ -30,6 +30,32 @@ export interface NewSession {
   flags?: string[];
 }
 
+export interface DoctorCheck {
+  label: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface DoctorReport {
+  ok: boolean;
+  failures: number;
+  checks: DoctorCheck[];
+}
+
+export interface AuthStatus {
+  needs_setup: boolean;
+  register_open: boolean;
+}
+
+export interface AuthResp {
+  token: string;
+  username: string;
+}
+
+export interface MeResp {
+  username: string;
+}
+
 export interface Health {
   status: 'ok';
   version: string;
@@ -179,6 +205,19 @@ export interface NewMessage {
 
 export const api = {
   health: () => request<Health>('/api/health'),
+  authStatus: () => request<AuthStatus>('/api/auth/status'),
+  login: (username: string, password: string) =>
+    request<AuthResp>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password })
+    }),
+  register: (username: string, password: string) =>
+    request<AuthResp>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ username, password })
+    }),
+  logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
+  me: () => request<MeResp>('/api/auth/me'),
   listSessions: (status?: Status) => {
     const qs = status ? `?status=${encodeURIComponent(status)}` : '';
     return request<Session[]>(`/api/sessions${qs}`);
@@ -190,8 +229,14 @@ export const api = {
     request<Session>(`/api/sessions/${encodeURIComponent(id)}/start`, { method: 'POST' }),
   stopSession: (id: string) =>
     request<Session>(`/api/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
-  deleteSession: (id: string) =>
-    request<void>(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  killSession: (id: string) =>
+    request<Session>(`/api/sessions/${encodeURIComponent(id)}/kill`, { method: 'POST' }),
+  deleteSession: (id: string, force = false) =>
+    request<void>(
+      `/api/sessions/${encodeURIComponent(id)}${force ? '?force=true' : ''}`,
+      { method: 'DELETE' }
+    ),
+  doctor: () => request<DoctorReport>('/api/doctor'),
   sendInput: (id: string, body: SendInput) =>
     request<void>(`/api/sessions/${encodeURIComponent(id)}/send`, {
       method: 'POST',

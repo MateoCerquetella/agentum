@@ -7,6 +7,8 @@
   import ToastStack from '$components/ToastStack.svelte';
   import CommandPalette from '$components/CommandPalette.svelte';
   import ShortcutSheet from '$components/ShortcutSheet.svelte';
+  import NewSessionDialog from '$components/NewSessionDialog.svelte';
+  import { newSessionOpen, closeNewSession } from '$stores/newSession';
   import { theme, applyTheme } from '$stores/theme';
   import { authState } from '$stores/auth';
   import { connect as connectEvents, disconnect as disconnectEvents } from '$stores/events';
@@ -83,6 +85,7 @@
       <ToastStack />
       <CommandPalette />
       <ShortcutSheet />
+      <NewSessionDialog open={$newSessionOpen} onClose={closeNewSession} />
     </div>
   {/snippet}
 </TokenGate>

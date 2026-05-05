@@ -7,7 +7,7 @@ use std::str::FromStr;
 
 use agentum_core::{
     BoardItem, BoardPatch, Channel, Event, Message, NewBoardItem, NewChannel, NewMessage,
-    NewNote, NewSession, Note, NotePatch, Session, Status,
+    NewNote, NewSession, Note, NotePatch, Session, Status, User,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{FromRow, SqlitePool};
@@ -554,6 +554,145 @@ impl Store {
         if affected == 0 {
             return Err(StoreError::NotFound(id.to_string()));
         }
+        Ok(())
+    }
+
+    // ------------- users + auth sessions -------------
+
+    pub async fn count_users(&self) -> Result<i64> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(n)
+    }
+
+    pub async fn create_user(&self, username: &str, pw_hash: &str) -> Result<User> {
+        let now = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (username, pw_hash, created_at) VALUES (?, ?, ?) RETURNING id",
+        )
+        .bind(username)
+        .bind(pw_hash)
+        .bind(&now)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| match &e {
+            sqlx::Error::Database(db) if db.is_unique_violation() => {
+                StoreError::AlreadyExists(username.to_string())
+            }
+            _ => StoreError::Sqlx(e),
+        })?;
+        Ok(User {
+            id,
+            username: username.to_string(),
+            created_at: OffsetDateTime::parse(&now, &Rfc3339)?,
+        })
+    }
+
+    pub async fn get_user_by_username(&self, username: &str) -> Result<Option<(User, String)>> {
+        let row: Option<(i64, String, String, String)> = sqlx::query_as(
+            "SELECT id, username, pw_hash, created_at FROM users WHERE username = ?",
+        )
+        .bind(username)
+        .fetch_optional(&self.pool)
+        .await?;
+        match row {
+            Some((id, username, pw_hash, created_at)) => Ok(Some((
+                User { id, username, created_at: OffsetDateTime::parse(&created_at, &Rfc3339)? },
+                pw_hash,
+            ))),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn get_user_by_id(&self, id: i64) -> Result<Option<User>> {
+        let row: Option<(i64, String, String)> =
+            sqlx::query_as("SELECT id, username, created_at FROM users WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+        match row {
+            Some((id, username, created_at)) => Ok(Some(User {
+                id,
+                username,
+                created_at: OffsetDateTime::parse(&created_at, &Rfc3339)?,
+            })),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn create_auth_session(&self, user_id: i64, token: &str) -> Result<()> {
+        let now = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        sqlx::query(
+            "INSERT INTO auth_sessions (token, user_id, created_at, last_used_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(token)
+        .bind(user_id)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Look up the user behind a session token and bump `last_used_at`.
+    pub async fn touch_auth_session(&self, token: &str) -> Result<Option<User>> {
+        let user_id: Option<i64> =
+            sqlx::query_scalar("SELECT user_id FROM auth_sessions WHERE token = ?")
+                .bind(token)
+                .fetch_optional(&self.pool)
+                .await?;
+        let Some(uid) = user_id else { return Ok(None) };
+        let now = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let _ = sqlx::query("UPDATE auth_sessions SET last_used_at = ? WHERE token = ?")
+            .bind(&now)
+            .bind(token)
+            .execute(&self.pool)
+            .await;
+        self.get_user_by_id(uid).await
+    }
+
+    pub async fn delete_auth_session(&self, token: &str) -> Result<()> {
+        sqlx::query("DELETE FROM auth_sessions WHERE token = ?")
+            .bind(token)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn list_users(&self) -> Result<Vec<User>> {
+        let rows: Vec<(i64, String, String)> = sqlx::query_as(
+            "SELECT id, username, created_at FROM users ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|(id, username, created_at)| {
+                Ok(User {
+                    id,
+                    username,
+                    created_at: OffsetDateTime::parse(&created_at, &Rfc3339)?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn delete_user_by_username(&self, username: &str) -> Result<bool> {
+        let affected = sqlx::query("DELETE FROM users WHERE username = ?")
+            .bind(username)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        Ok(affected > 0)
+    }
+
+    pub async fn wipe_users(&self) -> Result<()> {
+        sqlx::query("DELETE FROM auth_sessions")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("DELETE FROM users")
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 }

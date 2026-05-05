@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::process::Command;
 
 use agentum_core::NewSession;
 use anyhow::{Context, Result, bail};
@@ -8,11 +9,14 @@ use crate::cli::arg_to_flag;
 pub async fn run(
     name: String,
     tool: String,
-    dir: PathBuf,
+    dir: Option<PathBuf>,
+    pick: bool,
     model: Option<String>,
     args: Vec<String>,
     up: bool,
 ) -> Result<()> {
+    let dir = resolve_workdir(dir, pick)?;
+
     if !dir.exists() {
         bail!("workdir does not exist: {}", dir.display());
     }
@@ -46,4 +50,47 @@ pub async fn run(
         super::up::run(name).await?;
     }
     Ok(())
+}
+
+fn resolve_workdir(dir: Option<PathBuf>, pick: bool) -> Result<PathBuf> {
+    if let Some(d) = dir {
+        return Ok(d);
+    }
+    if pick {
+        return pick_with_lf();
+    }
+    std::env::current_dir().context("could not read current working directory")
+}
+
+fn pick_with_lf() -> Result<PathBuf> {
+    if which::which("lf").is_err() {
+        bail!(
+            "`lf` is not installed or not on PATH. Install it from \
+             https://github.com/gokcehan/lf and try again, or pass --dir <path>."
+        );
+    }
+
+    let tmp = tempfile::NamedTempFile::new().context("could not create temp file for lf")?;
+    let tmp_path = tmp.path().to_path_buf();
+
+    let status = Command::new("lf")
+        .arg("-last-dir-path")
+        .arg(&tmp_path)
+        .status()
+        .context("failed to spawn lf")?;
+
+    if !status.success() {
+        bail!("lf exited with status {}", status);
+    }
+
+    let picked = std::fs::read_to_string(&tmp_path)
+        .context("could not read lf's last-dir output")?
+        .trim()
+        .to_string();
+
+    if picked.is_empty() {
+        bail!("no directory was picked");
+    }
+
+    Ok(PathBuf::from(picked))
 }

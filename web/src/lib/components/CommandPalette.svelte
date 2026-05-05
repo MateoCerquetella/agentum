@@ -7,6 +7,7 @@
   import { sessions, loadSessions } from '$stores/sessions';
   import { notes, loadNotes } from '$stores/notes';
   import { board, loadBoard } from '$stores/board';
+  import { openNewSession } from '$stores/newSession';
 
   type Entry = {
     id: string;
@@ -27,16 +28,22 @@
     // Built-in commands
     out.push({ id: 'cmd:theme:terminal-dark', title: 'Switch theme: terminal-dark', badge: 'cmd', action: () => applyTheme('terminal-dark') });
     out.push({ id: 'cmd:theme:paperlight',     title: 'Switch theme: paperlight',     badge: 'cmd', action: () => applyTheme('paperlight') });
+    out.push({ id: 'cmd:theme:obsidian-dark',  title: 'Switch theme: obsidian-dark',  badge: 'cmd', action: () => applyTheme('obsidian-dark') });
     out.push({ id: 'cmd:theme:system',          title: 'Switch theme: system',          badge: 'cmd', action: () => applyTheme('system') });
     out.push({ id: 'cmd:shortcuts',             title: 'Show keyboard shortcuts (?)',   badge: 'cmd', action: () => { closePalette(); openShortcuts(); } });
+    out.push({ id: 'cmd:new-session',            title: 'New session…',                  badge: 'cmd', subtitle: 'agentum new', action: () => { closePalette(); openNewSession(); } });
+    out.push({ id: 'cmd:doctor',                 title: 'Run doctor',                    badge: 'cmd', subtitle: 'agentum doctor', action: () => goto('/doctor') });
     out.push({ id: 'cmd:settings',              title: 'Open settings',                 badge: 'cmd', subtitle: '(soon)', action: () => goto('/settings') });
 
     // Pages
     const pages: Array<[string, string]> = [
       ['/',         'Sessions'],
       ['/board',    'Board'],
+      ['/graph',    'Graph'],
+      ['/tools',    'Tools'],
       ['/notes',    'Notes'],
       ['/channels', 'Channels'],
+      ['/doctor',   'Doctor'],
       ['/settings', 'Settings'],
     ];
     for (const [href, label] of pages) {

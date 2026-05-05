@@ -67,12 +67,14 @@ pub fn router(state: AppState) -> Router {
 
     Router::new()
         .merge(routes::health::router())
+        .merge(routes::doctor::router())
+        .merge(routes::auth::router())
         .merge(routes::sessions::router())
         .merge(routes::board::router())
         .merge(routes::notes::router())
         .merge(routes::channels::router())
         .merge(routes::events::router())
-        .layer(axum_mw::from_fn(auth::require_token))
+        .layer(axum_mw::from_fn_with_state(state.clone(), auth::require_token))
         .fallback(embed::static_handler)
         .with_state(state)
         .layer(TraceLayer::new_for_http())
@@ -82,9 +84,19 @@ pub fn router(state: AppState) -> Router {
 /// Bind and serve forever. Drives both the main API server (TLS or plain),
 /// the small plain-HTTP cert-server, and the watchdog reconcile loop.
 pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
+    // rustls 0.23 requires picking a CryptoProvider when both ring and
+    // aws-lc-rs are pulled in transitively. We don't care which one wins;
+    // ring is the smaller of the two.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
     let state = AppState::new(store, bus.clone());
-    let _ = auth::ensure_token()?;
+
+    if state.store.count_users().await.unwrap_or(0) == 0 {
+        tracing::warn!(
+            "no users registered yet — visit the dashboard to create the first one (or run `agentum auth add <name>`)"
+        );
+    }
 
     let watchdog = agentum_watchdog::Watchdog::new(bus, state.store.clone());
     tokio::spawn(watchdog.run());

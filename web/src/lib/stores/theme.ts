@@ -1,9 +1,9 @@
 import { writable } from 'svelte/store';
 
-export type Theme = 'terminal-dark' | 'paperlight' | 'system';
+export type Theme = 'terminal-dark' | 'paperlight' | 'obsidian-dark' | 'system';
 const STORAGE_KEY = 'agentum_theme';
-const ORDER: Theme[] = ['terminal-dark', 'paperlight', 'system'];
-const DEFAULT: Theme = 'terminal-dark';
+const ORDER: Theme[] = ['terminal-dark', 'paperlight', 'obsidian-dark', 'system'];
+const DEFAULT: Theme = 'obsidian-dark';
 
 function readInitial(): Theme {
   if (typeof localStorage === 'undefined') return DEFAULT;

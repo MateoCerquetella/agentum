@@ -30,9 +30,15 @@ pub enum Cmd {
         #[arg(long)]
         tool: String,
 
-        /// Working directory the agent starts in. Required.
-        #[arg(long)]
-        dir: PathBuf,
+        /// Working directory the agent starts in. Defaults to the current
+        /// directory. Mutually exclusive with `--pick`.
+        #[arg(long, conflicts_with = "pick")]
+        dir: Option<PathBuf>,
+
+        /// Interactively pick the workdir with `lf` (terminal file manager).
+        /// `lf` must be installed on `PATH`.
+        #[arg(long, short = 'P')]
+        pick: bool,
 
         /// Optional model identifier passed through to the tool.
         #[arg(long)]
@@ -166,14 +172,30 @@ pub enum Cmd {
 
     /// Check system health (tmux, dirs, db, certs, port).
     Doctor,
+
+    /// Launch the interactive terminal dashboard.
+    Tui {
+        /// Override API base URL (defaults to https://127.0.0.1:8822 → http fallback).
+        #[arg(long)]
+        api: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
 pub enum AuthCmd {
-    /// Print the current bearer token (creates one if missing).
-    Show,
-    /// Generate a fresh bearer token and overwrite the on-disk file.
-    Rotate,
+    /// List registered users.
+    List,
+    /// Add a user. Prompts for password unless --password is given.
+    Add {
+        username: String,
+        /// Set the password non-interactively (e.g. for scripts).
+        #[arg(long)]
+        password: Option<String>,
+    },
+    /// Delete a user (and all their sessions).
+    Rm { username: String },
+    /// Wipe ALL users + sessions. Next register on the dashboard re-bootstraps.
+    Reset,
 }
 
 #[derive(Debug, Subcommand)]
@@ -200,10 +222,11 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             name,
             tool,
             dir,
+            pick,
             model,
             arg,
             up,
-        } => crate::commands::new::run(name, tool, dir, model, arg, up).await,
+        } => crate::commands::new::run(name, tool, dir, pick, model, arg, up).await,
         Cmd::Up { name } => crate::commands::up::run(name).await,
         Cmd::Down { name } => crate::commands::down::run(name).await,
         Cmd::Kill { name } => crate::commands::kill::run(name).await,
@@ -232,6 +255,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Cmd::Auth { action } => crate::commands::auth::run(action).await,
         Cmd::Config { action } => crate::commands::config::run(action).await,
         Cmd::Doctor => crate::commands::doctor::run().await,
+        Cmd::Tui { api } => crate::commands::tui::run(api).await,
     }
 }
 
@@ -257,5 +281,18 @@ mod tests {
             "--dangerously-skip-permissions"
         );
         assert_eq!(arg_to_flag("verbose"), "--verbose");
+    }
+
+    #[test]
+    fn tui_parses() {
+        use clap::Parser;
+        let cli = Cli::parse_from(["agentum", "tui"]);
+        assert!(matches!(cli.command, Cmd::Tui { api: None }));
+
+        let cli = Cli::parse_from(["agentum", "tui", "--api", "http://1.2.3.4:9000"]);
+        match cli.command {
+            Cmd::Tui { api } => assert_eq!(api.as_deref(), Some("http://1.2.3.4:9000")),
+            _ => panic!("expected Tui"),
+        }
     }
 }

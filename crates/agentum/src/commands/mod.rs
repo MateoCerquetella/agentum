@@ -11,6 +11,7 @@ pub mod rm;
 pub mod send;
 pub mod serve;
 pub mod tail;
+pub mod tui;
 pub mod up;
 
 use agentum_store::Store;

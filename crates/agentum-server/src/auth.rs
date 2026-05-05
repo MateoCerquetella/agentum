@@ -1,12 +1,12 @@
-//! Bearer-token auth.
+//! Username/password auth.
 //!
-//! Single-value bearer token stored at `$XDG_DATA_HOME/agentum/auth_token`
-//! (chmod 0600). Generated lazily on first serve. Rotation = overwrite the
-//! file via `agentum auth rotate`; the running server picks it up because
-//! the middleware re-reads the file every request.
+//! Replaces the old static bearer-token file. Passwords are hashed with
+//! Argon2id (default OWASP-aligned params from the `argon2` crate). Each
+//! login mints a 32-byte URL-safe random token, stored in `auth_sessions`,
+//! and the client presents it as `Authorization: Bearer …` (or `?token=`
+//! on WS upgrades, since browsers can't set headers there).
 
-use std::path::{Path, PathBuf};
-
+use argon2::Argon2;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::StatusCode;
@@ -14,92 +14,57 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng};
 use rand::RngCore;
+
+use crate::AppState;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
-    #[error("io: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("path: {0}")]
-    Path(#[from] agentum_store::paths::PathError),
+    #[error("hash: {0}")]
+    Hash(String),
 }
 
-/// Generate a 32-byte URL-safe base64 token.
+/// Generate a 32-byte URL-safe base64 token (43 chars, no padding).
 pub fn new_token() -> String {
     let mut buf = [0u8; 32];
     rand::rng().fill_bytes(&mut buf);
     URL_SAFE_NO_PAD.encode(buf)
 }
 
-/// Read the current token, generating + writing one if the file is missing.
-pub fn ensure_token() -> Result<String, AuthError> {
-    let path = agentum_store::paths::auth_token_path()?;
-    if let Ok(s) = std::fs::read_to_string(&path) {
-        let trimmed = s.trim();
-        if !trimmed.is_empty() {
-            return Ok(trimmed.to_string());
-        }
-    }
-    let token = new_token();
-    write_token(&path, &token)?;
-    Ok(token)
+pub fn hash_password(plain: &str) -> Result<String, AuthError> {
+    let salt = SaltString::generate(&mut OsRng);
+    let argon = Argon2::default();
+    argon
+        .hash_password(plain.as_bytes(), &salt)
+        .map(|h| h.to_string())
+        .map_err(|e| AuthError::Hash(e.to_string()))
 }
 
-/// Overwrite the auth token file with a freshly generated value. Returns
-/// the new token.
-pub fn rotate_token() -> Result<String, AuthError> {
-    let path = agentum_store::paths::auth_token_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let token = new_token();
-    write_token(&path, &token)?;
-    Ok(token)
+pub fn verify_password(plain: &str, stored_hash: &str) -> bool {
+    let Ok(parsed) = PasswordHash::new(stored_hash) else {
+        return false;
+    };
+    Argon2::default()
+        .verify_password(plain.as_bytes(), &parsed)
+        .is_ok()
 }
 
-pub fn token_path() -> Result<PathBuf, AuthError> {
-    Ok(agentum_store::paths::auth_token_path()?)
-}
-
-fn write_token(path: &Path, token: &str) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, format!("{token}\n"))?;
-    set_mode_0600(path)
-}
-
-#[cfg(unix)]
-fn set_mode_0600(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let mut perm = std::fs::metadata(path)?.permissions();
-    perm.set_mode(0o600);
-    std::fs::set_permissions(path, perm)
-}
-
-#[cfg(not(unix))]
-fn set_mode_0600(_path: &Path) -> std::io::Result<()> {
-    Ok(())
-}
-
-/// Read the current on-disk token (no caching). Returns `None` if missing
-/// or empty so the middleware can short-circuit to 401.
-fn read_current_token() -> Option<String> {
-    let path = agentum_store::paths::auth_token_path().ok()?;
-    let s = std::fs::read_to_string(path).ok()?;
-    let t = s.trim();
-    if t.is_empty() { None } else { Some(t.to_string()) }
-}
-
-/// Paths that bypass auth: liveness probe + cert-download (the cert server
-/// is on a separate port but we exempt /api/cert here too in case both
-/// listeners share the same router, e.g. `--no-tls`).
+/// Endpoints reachable without auth.
+///
+/// `/api/auth/register` is also public-ish, but only behaves as such when no
+/// users exist yet; the route handler enforces that.
 fn is_public(path: &str) -> bool {
-    matches!(path, "/api/health" | "/api/cert")
+    matches!(
+        path,
+        "/api/health"
+            | "/api/cert"
+            | "/api/auth/status"
+            | "/api/auth/login"
+            | "/api/auth/register"
+    )
 }
 
-/// Pull the bearer token from `Authorization: Bearer …` or, for WS upgrades
-/// where browsers can't set custom headers, from the `?token=` query param.
 fn extract_token(req: &Request<Body>) -> Option<String> {
     if let Some(auth) = req
         .headers()
@@ -121,8 +86,6 @@ fn extract_token(req: &Request<Body>) -> Option<String> {
 }
 
 fn urldecode(s: &str) -> String {
-    // Lightweight: `%XX` and `+`. Token is base64-url so usually no encoding,
-    // but be defensive.
     let mut out = Vec::with_capacity(s.len());
     let bytes = s.as_bytes();
     let mut i = 0;
@@ -161,38 +124,30 @@ fn hex_val(b: u8) -> Option<u8> {
     }
 }
 
-/// axum middleware. Apply AFTER routes are merged so it covers all `/api/*`.
-pub async fn require_token(req: Request<Body>, next: Next) -> Response {
+/// axum middleware. Looks up the bearer token in `auth_sessions`. If the
+/// token resolves to a user, the request continues; otherwise 401.
+pub async fn require_token(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
     let path = req.uri().path();
     if !path.starts_with("/api/") || is_public(path) {
         return next.run(req).await;
     }
 
-    let Some(expected) = read_current_token() else {
-        return unauthorized("auth token not configured on server");
-    };
-    let Some(provided) = extract_token(&req) else {
+    let Some(token) = extract_token(&req) else {
         return unauthorized("missing bearer token");
     };
 
-    // Constant-time compare. Tokens are short enough that a naive compare is
-    // fine for a local-only single-user tool, but use subtle-style anyway.
-    if eq_const_time(provided.as_bytes(), expected.as_bytes()) {
-        next.run(req).await
-    } else {
-        unauthorized("invalid bearer token")
+    match state.store.touch_auth_session(&token).await {
+        Ok(Some(_user)) => next.run(req).await,
+        Ok(None) => unauthorized("invalid bearer token"),
+        Err(e) => {
+            tracing::warn!(error = %e, "auth lookup failed");
+            unauthorized("auth lookup failed")
+        }
     }
-}
-
-fn eq_const_time(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff: u8 = 0;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
 }
 
 fn unauthorized(msg: &'static str) -> Response {
@@ -211,17 +166,15 @@ mod tests {
     #[test]
     fn token_format() {
         let t = new_token();
-        // 32 bytes -> base64-url-no-pad → 43 chars
         assert_eq!(t.len(), 43);
-        // URL-safe alphabet only
         assert!(t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'));
     }
 
     #[test]
-    fn const_time_eq() {
-        assert!(eq_const_time(b"abc", b"abc"));
-        assert!(!eq_const_time(b"abc", b"abd"));
-        assert!(!eq_const_time(b"abc", b"abcd"));
+    fn hash_roundtrip() {
+        let h = hash_password("hunter2").unwrap();
+        assert!(verify_password("hunter2", &h));
+        assert!(!verify_password("wrong", &h));
     }
 
     #[test]
@@ -229,12 +182,5 @@ mod tests {
         assert_eq!(urldecode("abc"), "abc");
         assert_eq!(urldecode("abc%20def"), "abc def");
         assert_eq!(urldecode("a+b"), "a b");
-    }
-
-    #[test]
-    fn public_paths() {
-        assert!(is_public("/api/health"));
-        assert!(is_public("/api/cert"));
-        assert!(!is_public("/api/sessions"));
     }
 }

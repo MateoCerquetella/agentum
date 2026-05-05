@@ -26,7 +26,7 @@ pub async fn run() -> Result<()> {
         check_dir("config dir", paths::config_dir),
         check_db().await,
         check_tls(),
-        check_auth_token(),
+        check_users().await,
         check_port(8822),
     ];
 
@@ -106,11 +106,18 @@ fn check_tls() -> Check {
     }
 }
 
-fn check_auth_token() -> Check {
-    match paths::auth_token_path() {
-        Ok(p) if p.exists() => Check::ok("auth token", "present"),
-        Ok(_) => Check::ok("auth token", "not yet created (created on first `agentum serve`)"),
-        Err(e) => Check::fail("auth token", format!("could not resolve path: {e}")),
+async fn check_users() -> Check {
+    match paths::db_path() {
+        Ok(p) if p.exists() => match agentum_store::Store::open(&p).await {
+            Ok(store) => match store.count_users().await {
+                Ok(0) => Check::ok("users", "0 (register on first dashboard visit)"),
+                Ok(n) => Check::ok("users", format!("{n} registered")),
+                Err(e) => Check::fail("users", format!("query failed: {e}")),
+            },
+            Err(e) => Check::fail("users", format!("could not open db: {e}")),
+        },
+        Ok(_) => Check::ok("users", "(db not yet created)"),
+        Err(e) => Check::fail("users", format!("could not resolve db path: {e}")),
     }
 }
 

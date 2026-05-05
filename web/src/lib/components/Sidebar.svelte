@@ -1,12 +1,25 @@
 <script lang="ts">
   import { page } from '$app/state';
+  import { sessions } from '$stores/sessions';
+  import { get } from 'svelte/store';
+  import Icon from './Icon.svelte';
 
-  const items = [
-    { href: '/',         label: 'Sessions' },
-    { href: '/board',    label: 'Board' },
-    { href: '/notes',    label: 'Notes' },
-    { href: '/channels', label: 'Channels' },
-    { href: '/settings', label: 'Settings', soon: true }
+  interface NavItem {
+    href: string;
+    label: string;
+    icon: string;
+    soon?: boolean;
+  }
+
+  const items: NavItem[] = [
+    { href: '/',         label: 'Sessions',  icon: 'monitor' },
+    { href: '/board',    label: 'Board',     icon: 'columns' },
+    { href: '/graph',    label: 'Graph',     icon: 'share-2' },
+    { href: '/tools',    label: 'Tools',     icon: 'tool' },
+    { href: '/notes',    label: 'Notes',     icon: 'file-text' },
+    { href: '/channels', label: 'Channels',  icon: 'message-circle' },
+    { href: '/doctor',   label: 'Doctor',    icon: 'stethoscope' },
+    { href: '/settings', label: 'Settings',  icon: 'settings', soon: true }
   ];
 
   function isActive(href: string): boolean {
@@ -14,12 +27,23 @@
     if (href === '/') return p === '/' || p.startsWith('/sessions');
     return p === href || p.startsWith(href + '/');
   }
+
+  let runningCount = $state(0);
+  $effect(() => {
+    const v = get(sessions);
+    runningCount = v.items.filter(s => s.status === 'running').length;
+  });
 </script>
 
 <aside class="sidebar">
   <a class="brand" href="/">
-    <span class="mark mono">⟁</span>
-    <span class="name">agentum</span>
+    <span class="logo" aria-hidden="true">
+      <Icon name="cpu" size={22} />
+    </span>
+    <span class="name">
+      <span class="dot" class:alive={runningCount > 0}></span>
+      agentum
+    </span>
   </a>
 
   <nav>
@@ -31,6 +55,7 @@
         href={item.href}
         aria-current={isActive(item.href) ? 'page' : undefined}
       >
+        <Icon name={item.icon} size={16} />
         <span>{item.label}</span>
         {#if item.soon}<span class="badge">soon</span>{/if}
       </a>
@@ -46,8 +71,8 @@
   .sidebar {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-    padding: 1rem 0.75rem;
+    gap: 0.25rem;
+    padding: 0.75rem 0.5rem;
     width: 220px;
     min-width: 220px;
     border-right: 1px solid var(--border);
@@ -59,57 +84,89 @@
   .brand {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
-    padding: 0.4rem 0.6rem 0.9rem;
+    gap: 0.5rem;
+    padding: 0.5rem 0.6rem 0.7rem;
+    margin-bottom: 0.25rem;
     border-bottom: 1px solid var(--border);
     color: var(--text);
+    text-decoration: none;
+    transition: opacity var(--transition, 150ms ease);
   }
-  .mark {
+  .brand:hover { opacity: 0.85; }
+  .logo {
     color: var(--accent);
-    font-size: 1.4rem;
-    line-height: 1;
+    display: flex;
+    align-items: center;
   }
   .name {
     font-family: var(--font-display);
     font-weight: 600;
-    letter-spacing: 0.02em;
+    font-size: 0.95rem;
+    letter-spacing: -0.01em;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
   }
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--muted);
+    display: inline-block;
+    flex-shrink: 0;
+    transition: background var(--transition, 150ms ease);
+  }
+  .dot.alive { background: var(--success); box-shadow: 0 0 4px var(--success); }
   nav {
     display: flex;
     flex-direction: column;
-    gap: 0.15rem;
-    margin-top: 0.4rem;
+    gap: 0.1rem;
     flex: 1;
   }
   .nav-item {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 0.5rem 0.7rem;
+    gap: 0.55rem;
+    padding: 0.45rem 0.6rem;
     border-radius: 6px;
     color: var(--text-2);
+    text-decoration: none;
+    font-size: 0.85rem;
+    transition: background var(--transition, 150ms ease), color var(--transition, 150ms ease);
+    position: relative;
   }
-  .nav-item:hover { background: var(--surface-2); color: var(--text); }
-  .nav-item.active {
-    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  .nav-item:hover {
+    background: var(--surface-2);
     color: var(--text);
   }
-  .nav-item.soon { color: var(--muted); }
+  .nav-item.active {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--text);
+    font-weight: 500;
+  }
+  .nav-item.active :global(.icon) {
+    opacity: 1;
+    color: var(--accent);
+  }
+  .nav-item.soon { color: var(--muted); cursor: default; }
+  .nav-item.soon:hover { background: transparent; color: var(--muted); }
   .badge {
-    font-size: 0.7rem;
-    padding: 0.05em 0.45em;
+    font-size: 0.65rem;
+    padding: 0.05em 0.4em;
     border-radius: 999px;
     background: var(--surface-2);
     border: 1px solid var(--border);
     color: var(--muted);
     font-family: var(--font-mono);
+    margin-left: auto;
   }
   footer {
-    padding: 0.6rem 0.7rem;
+    padding: 0.5rem 0.6rem;
     font-family: var(--font-mono);
-    font-size: 0.75rem;
+    font-size: 0.72rem;
+    border-top: 1px solid var(--border);
+    margin-top: 0.25rem;
   }
-  .mono { font-family: var(--font-mono); }
   .muted { color: var(--muted); }
 
   @media (max-width: 720px) {
@@ -120,11 +177,19 @@
       flex-direction: row;
       position: static;
       align-items: center;
-      gap: 0.75rem;
-      padding: 0.6rem;
+      gap: 0.5rem;
+      padding: 0.5rem;
+      border-right: 0;
+      border-bottom: 1px solid var(--border);
     }
-    nav { flex-direction: row; overflow-x: auto; flex: 1; }
-    .brand { padding: 0.4rem 0.6rem; border-bottom: 0; border-right: 1px solid var(--border); }
+    nav {
+      flex-direction: row;
+      overflow-x: auto;
+      flex: 1;
+    }
+    .brand { padding: 0.3rem 0.5rem; border-bottom: 0; border-right: 1px solid var(--border); margin-bottom: 0; }
+    .nav-item { white-space: nowrap; padding: 0.35rem 0.5rem; font-size: 0.78rem; }
+    .badge { display: none; }
     footer { display: none; }
   }
 </style>

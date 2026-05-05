@@ -2,8 +2,9 @@
   import { theme, applyTheme, nextTheme, THEMES, type Theme } from '$stores/theme';
 
   const labels: Record<Theme, string> = {
-    'terminal-dark': 'Dark',
+    'terminal-dark': 'Terminal',
     paperlight: 'Paper',
+    'obsidian-dark': 'Obsidian',
     system: 'Auto'
   };
 </script>
