@@ -22,7 +22,6 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 
 pub mod auth;
-pub mod bootstrap;
 mod embed;
 mod error;
 mod headers;
@@ -48,7 +47,6 @@ pub struct AppState {
     pub bus: broadcast::Sender<Event>,
     pub started_at: Instant,
     pub version: &'static str,
-    pub bootstrap_pin: Arc<bootstrap::BootstrapPin>,
     pub auth_limiter: Arc<ratelimit::RateLimiter>,
     /// SHA-256 fingerprint of the active TLS cert, formatted `AB:CD:…`.
     /// Empty when running with `--no-tls`. The dashboard wizard needs
@@ -72,7 +70,6 @@ impl AppState {
             bus,
             started_at: Instant::now(),
             version: env!("CARGO_PKG_VERSION"),
-            bootstrap_pin: Arc::new(bootstrap::BootstrapPin::new()),
             auth_limiter: Arc::new(ratelimit::RateLimiter::new(
                 AUTH_RATE_LIMIT_ATTEMPTS,
                 AUTH_RATE_LIMIT_WINDOW,
@@ -138,19 +135,9 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
     let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
     let state = AppState::with_fingerprint(store, bus.clone(), cert_fingerprint);
 
-    // First-run gate: arm the bootstrap PIN if zero users exist. The PIN is
-    // printed to TTY (stderr in normal `tracing` output) so an attacker on
-    // the LAN who hits `/api/auth/register` can't claim the admin slot
-    // before the operator does.
     if state.store.count_users().await.unwrap_or(0) == 0 {
-        let pin = bootstrap::generate_pin();
-        state.bootstrap_pin.set(pin.clone());
         tracing::warn!(
-            "no users registered yet — open the dashboard, register the first user, and enter this PIN:"
-        );
-        tracing::warn!("    bootstrap PIN: {pin}");
-        tracing::warn!(
-            "  (the PIN lives in process memory only; restart `agentum serve` to rotate it)"
+            "no users registered yet — open the dashboard to register the first one (or run `agentum auth add <name>` on the host)"
         );
     }
 
