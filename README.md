@@ -10,9 +10,8 @@
 agentum gives you a single dashboard to spawn, watch, and message between
 parallel AI coding agents (Claude Code, Codex, Gemini, Hermes, or any CLI you
 want) — running in tmux on your own machine, browseable from your laptop or
-phone. It's a clean-room rewrite of [mixpeek/amux] for speed (Rust + axum),
-polish (Svelte 5 + a real theme system), and frictionless install
-(one binary, `cargo install`).
+phone. Rust + axum on the backend, Svelte 5 with a real theme system on the
+front, one binary, `cargo install`.
 
 ## Quick start
 
@@ -157,8 +156,6 @@ That's a non-overriding default — set `CC` in your shell to override.
 
 MIT. See [LICENSE](LICENSE).
 
-agentum is a clean-room rewrite — only the *concept* is inherited from
-[mixpeek/amux] (MIT + Commons Clause). Inheritance is read-only and explicitly
-not imported.
+## Credits
 
-[mixpeek/amux]: https://github.com/mixpeek/amux
+Concept inspired by [mixpeek/amux](https://github.com/mixpeek/amux).
