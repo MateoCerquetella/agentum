@@ -4,6 +4,44 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] — 2026-05-05
+
+TUI navigation overhaul. The pane focus model fought the user — once inside
+the terminal the bottom Input bar took two keystrokes to reach, the chrome
+duplicated workdir/theme/palette hints in both top and bottom bars, and
+lazygit silently failed against remote sessions. This release rebuilds the
+keyboard map around two universal modifiers and trims the surface area.
+
+### Changed
+- **Universal panel cycle.** `Ctrl-]` next, `Ctrl-[` previous — work even
+  when the terminal or lazygit pane is focused. Replaces the old
+  `Ctrl-G` "release" / `F5`/`F6` alternates.
+- **Project jump.** `Ctrl-1` … `Ctrl-9` moves the tree cursor to the Nth
+  project (workdir) group, expands it, focuses the tree. Then arrows +
+  `Enter` to pick a session.
+- **Enter focuses the terminal.** Selecting a session leaf with `Enter`
+  now also moves focus into the terminal pane, so the common
+  pick-and-type flow is a single keypress.
+- **Top bar slimmed.** Just `agentum · <session>`. Theme chip and
+  `Ctrl-P palette` hint live exclusively in the bottom status bar — no
+  more two-bar duplication.
+- **Panel border titles** advertise the new shortcuts (`Ctrl-]` next, `2`
+  / `3` direct focus).
+
+### Removed
+- **Bottom Input pane.** The terminal pane is already an interactive PTY,
+  so the "compose-and-send" bar was redundant. `Focus::Input`, `app.input`,
+  and `api::send_text` are gone.
+- **`Ctrl-G`, `F5`/`F6`, and `i`** keybindings.
+
+### Fixed
+- **Lazygit on remote sessions.** `toggle_lazygit` now validates the
+  selected session's workdir locally before spawning. If the path
+  doesn't exist on this machine (typical when connected to
+  `agentum serve` on another host), it falls back to `env::current_dir()`
+  and surfaces the substitution in the status bar — instead of silently
+  spawning a doomed child that exits milliseconds later.
+
 ## [0.6.0] — 2026-05-05
 
 Dashboard UI overhaul — coherent execution of `docs/DESIGN-SYSTEM.md`.
