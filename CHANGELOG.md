@@ -4,6 +4,25 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.9] — 2026-05-05
+
+### Changed
+- **Dashboard restyled to the canonical design system.** Single dark
+  palette tokens (`#0b0b0b` canvas, `#212121` surface, `#0052ef`
+  electric blue interactive, `#f36458` coral CTA, `#19d600` neon green
+  success). Space Grotesk + IBM Plex Mono pulled from Google Fonts to
+  match the marketing landing. xterm.js panes now render with the
+  same palette.
+
+### Removed
+- **Multi-theme dashboard registry.** Dropped the `terminal-dark`,
+  `paperlight`, `obsidian-dark`, and `system` themes along with the
+  ThemeSwitcher component, the `theme.ts` store, and the
+  `Switch theme: …` entries in the command palette. Single canonical
+  theme matches the TUI's `sanity` reduction. Server CSP allows
+  `https://fonts.googleapis.com` and `https://fonts.gstatic.com` for
+  the new font stack.
+
 ## [0.5.8] — 2026-05-05
 
 ### Added

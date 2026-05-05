@@ -9,7 +9,6 @@
   import ShortcutSheet from '$components/ShortcutSheet.svelte';
   import NewSessionDialog from '$components/NewSessionDialog.svelte';
   import { newSessionOpen, closeNewSession } from '$stores/newSession';
-  import { theme, applyTheme } from '$stores/theme';
   import { authState } from '$stores/auth';
   import { connect as connectEvents, disconnect as disconnectEvents } from '$stores/events';
   import {
@@ -61,7 +60,6 @@
   }
 
   onMount(() => {
-    applyTheme(get(theme));
     window.addEventListener('keydown', onKey);
     const unsub = authState.subscribe((s) => {
       if (s === 'ok') connectEvents();

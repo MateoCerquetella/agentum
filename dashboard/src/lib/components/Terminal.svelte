@@ -4,8 +4,6 @@
   import { FitAddon } from '@xterm/addon-fit';
   import '@xterm/xterm/css/xterm.css';
   import { api } from '$lib/api';
-  import { get } from 'svelte/store';
-  import { theme as themeStore, type Theme } from '$stores/theme';
 
   interface Props {
     sessionId: string;
@@ -26,22 +24,15 @@
   let focused = $state(false);
   const encoder = new TextEncoder();
 
-  function palette(t: Theme) {
-    if (t === 'paperlight') {
-      return { background: '#fdfaf3', foreground: '#1a1411', cursor: '#c2410c' };
-    }
-    return { background: '#0a0a0c', foreground: '#e8e8ec', cursor: '#ff8a4c' };
-  }
-
-  function applyPalette() {
-    if (!term) return;
-    let t: Theme = get(themeStore);
-    if (t === 'system') {
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      t = prefersDark ? 'terminal-dark' : 'paperlight';
-    }
-    term.options.theme = palette(t);
-  }
+  // Single canonical palette — see docs/DESIGN-SYSTEM.md.
+  const TERM_THEME = {
+    background: '#0b0b0b',
+    foreground: '#b9b9b9',
+    cursor: '#0052ef',
+    cursorAccent: '#ffffff',
+    selectionBackground: '#0052ef',
+    selectionForeground: '#ffffff',
+  };
 
   function sendBytes(data: ArrayBuffer | Uint8Array) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -56,7 +47,7 @@
       lineHeight: 1.2,
       cursorBlink: true,
       scrollback: 5000,
-      theme: palette($themeStore),
+      theme: TERM_THEME,
       allowProposedApi: false,
       convertEol: false,
       disableStdin: readonly
@@ -81,8 +72,6 @@
 
     resizeObserver = new ResizeObserver(() => fit?.fit());
     resizeObserver.observe(host);
-
-    const themeUnsub = themeStore.subscribe(() => applyPalette());
 
     ws = new WebSocket(api.streamUrl(sessionId));
     ws.binaryType = 'arraybuffer';
@@ -109,8 +98,6 @@
       connected = false;
       connectionMsg = 'stream error';
     };
-
-    return () => themeUnsub();
   });
 
   onDestroy(() => {

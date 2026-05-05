@@ -1,5 +1,4 @@
 <script lang="ts">
-  import ThemeSwitcher from './ThemeSwitcher.svelte';
   import Icon from './Icon.svelte';
   import { openPalette } from '$stores/palette';
   import { toggleFullscreen } from '$stores/fullscreen';
@@ -45,7 +44,6 @@
       ⤢
       <span class="kb-hint">⇧F</span>
     </button>
-    <ThemeSwitcher />
     {#if $currentUser}
       <button class="user" type="button" onclick={onLogout} title="Sign out">
         <Icon name="user" size={14} />

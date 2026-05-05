@@ -408,7 +408,7 @@
     font-family: var(--mono);
     font-size: 13px;
     line-height: 1.6;
-    padding: 18px 20px 60px;
+    padding: 18px 20px 92px;
     flex: 1;
     overflow: hidden;
     position: relative;
@@ -441,6 +441,50 @@
     margin-left: 2px;
   }
   @keyframes caret { 50% { opacity: 0; } }
+
+  /* Claude Code header (mascot + meta) */
+  .term .cc-header {
+    display: flex; align-items: flex-start; gap: 14px;
+    padding: 4px 0 12px;
+  }
+  .term .cc-header .cc-mascot {
+    flex: 0 0 auto;
+    width: 56px; height: 56px;
+    image-rendering: pixelated;
+  }
+  .term .cc-header .cc-meta {
+    display: flex; flex-direction: column; gap: 2px;
+    font-family: var(--mono); font-size: 13px; line-height: 1.45;
+  }
+  .term .cc-header .cc-title {
+    color: #fff; font-weight: 700; letter-spacing: 0.01em;
+  }
+  .term .cc-header .cc-title .v { color: var(--fg-3); font-weight: 500; }
+  .term .cc-header .cc-model { color: var(--fg-2); }
+  .term .cc-header .cc-cwd { color: var(--fg-3); }
+
+  /* Claude Code prompt box */
+  .term .cc-input {
+    position: absolute; left: 16px; right: 16px; bottom: 14px;
+    background: #050505;
+    border: 1px solid var(--border-2);
+    border-radius: 6px;
+    padding: 10px 14px 8px;
+  }
+  .term .cc-input .row { display: flex; align-items: center; gap: 8px; }
+  .term .cc-input .prompt { color: var(--cta); font-weight: 600; }
+  .term .cc-input .ph { color: var(--fg-3); }
+  .term .cc-input .caret {
+    width: 7px; height: 14px; background: var(--fg);
+    display: inline-block; vertical-align: -2px;
+    animation: caret 1s steps(1,end) infinite;
+    margin-left: 1px;
+  }
+  .term .cc-input .hint {
+    color: var(--fg-3); font-size: 12px; margin-top: 6px;
+    border-top: 1px solid var(--border);
+    padding-top: 6px;
+  }
 
   /* ---------- generic section header ---------- */
   .sec-head { display: grid; gap: 18px; max-width: 920px; }
@@ -1071,7 +1115,22 @@
           </div>
 
           <div class="term" id="term">
-            <div class="ln"><span class="c-amber">✻ Welcome to Claude Code</span> <span class="c-fg3">v2.0.14 · cwd: ~/Developer/agentum</span></div>
+            <div class="cc-header">
+              <svg class="cc-mascot" width="56" height="56" viewBox="0 0 16 16" shape-rendering="crispEdges" aria-hidden="true">
+                <rect x="3"  y="2"  width="2" height="2" fill="#d99491"/>
+                <rect x="11" y="2"  width="2" height="2" fill="#d99491"/>
+                <rect x="3"  y="3"  width="10" height="2" fill="#d99491"/>
+                <rect x="2"  y="4"  width="12" height="1" fill="#d99491"/>
+                <rect x="2"  y="5"  width="12" height="9" fill="#d99491"/>
+                <rect x="5"  y="7"  width="2" height="2" fill="#000"/>
+                <rect x="9"  y="7"  width="2" height="2" fill="#000"/>
+              </svg>
+              <div class="cc-meta">
+                <div class="cc-title">Claude Code <span class="v">v2.1.128</span></div>
+                <div class="cc-model">Opus 4.7 (1M context) with xhigh effort · Claude Max</div>
+                <div class="cc-cwd">~/Developer/projects/agentum</div>
+              </div>
+            </div>
             <div class="ln">&nbsp;</div>
             <div class="ln"><span class="c-fg3">&gt;</span> <span class="c-fg2">refactor the auth middleware to expire tokens after 30 days,</span></div>
             <div class="ln"><span class="c-fg3"> </span> <span class="c-fg2">add a migration, and write a clippy-clean test for it.</span></div>
@@ -1099,10 +1158,13 @@
             <div class="ln">&nbsp;</div>
             <div class="ln"><span class="c-amber">●</span> Done — 3 files changed, 1 migration added, 14 tests pass.</div>
             <div class="ln"><span class="c-fg3">  Shall I push to </span><span class="c-blu">feat/session-expiry</span><span class="c-fg3">?</span></div>
-            <div class="input">
-              <span class="prompt mono">›</span>
-              <span class="ph mono">type a message, or press <span style="color:var(--fg-2)">⌘K</span> to open the palette</span>
-              <span class="caret"></span>
+            <div class="cc-input">
+              <div class="row mono">
+                <span class="prompt">›</span>
+                <span class="ph">Try "how do I log an error?"</span>
+                <span class="caret"></span>
+              </div>
+              <div class="hint mono">? for shortcuts</div>
             </div>
           </div>
         </div>

@@ -3,7 +3,6 @@
   import { goto } from '$app/navigation';
   import { palette, closePalette } from '$stores/palette';
   import { openShortcuts } from '$stores/palette';
-  import { applyTheme, type Theme } from '$stores/theme';
   import { sessions, loadSessions } from '$stores/sessions';
   import { openNewSession } from '$stores/newSession';
 
@@ -24,10 +23,6 @@
     const out: Entry[] = [];
 
     // Built-in commands
-    out.push({ id: 'cmd:theme:terminal-dark', title: 'Switch theme: terminal-dark', badge: 'cmd', action: () => applyTheme('terminal-dark') });
-    out.push({ id: 'cmd:theme:paperlight',     title: 'Switch theme: paperlight',     badge: 'cmd', action: () => applyTheme('paperlight') });
-    out.push({ id: 'cmd:theme:obsidian-dark',  title: 'Switch theme: obsidian-dark',  badge: 'cmd', action: () => applyTheme('obsidian-dark') });
-    out.push({ id: 'cmd:theme:system',          title: 'Switch theme: system',          badge: 'cmd', action: () => applyTheme('system') });
     out.push({ id: 'cmd:shortcuts',             title: 'Show keyboard shortcuts (?)',   badge: 'cmd', action: () => { closePalette(); openShortcuts(); } });
     out.push({ id: 'cmd:new-session',            title: 'New agent…',                    badge: 'cmd', subtitle: 'agentum new', action: () => { closePalette(); openNewSession(); } });
     out.push({ id: 'cmd:settings',               title: 'Open settings',                 badge: 'cmd', action: () => goto('/settings') });

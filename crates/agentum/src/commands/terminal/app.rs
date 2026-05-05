@@ -23,7 +23,7 @@ use super::extensions::{self, LAZYGIT};
 use super::palette::{ActionKind, Catalog};
 use super::pty::{LocalPty, PtyMsg};
 use super::term::TerminalPane;
-use super::theme::Theme;
+use super::theme::{self, Theme};
 use super::ui;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
@@ -326,8 +326,20 @@ impl App {
             palette: PaletteState::new(),
             lazygit: None,
             term_in: None,
-            theme: super::theme::load(),
+            theme: theme::load(),
         }
+    }
+
+    pub fn set_theme(&mut self, name: &str) {
+        self.theme = Theme::by_name(name);
+        theme::save(self.theme.name);
+        self.status_msg = Some(format!("theme: {}", self.theme.name));
+    }
+
+    pub fn cycle_theme(&mut self) {
+        self.theme = Theme::next(self.theme.name);
+        theme::save(self.theme.name);
+        self.status_msg = Some(format!("theme: {}", self.theme.name));
     }
 
     pub fn selected_session(&self) -> Option<&Session> {
@@ -648,9 +660,9 @@ async fn handle_key(
         return;
     }
 
-    // Ctrl-Q is a universal hard-quit. It is never forwarded to a pane so the
+    // Ctrl-Q is a universal hard-quit. Never forwarded to a pane so the
     // user always has an escape hatch — even if the WS terminal stream is
-    // dead (in which case Ctrl-C would silently disappear into nothing).
+    // dead and Ctrl-C would otherwise disappear into the SIGINT pipe.
     if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
         app.should_quit = true;
         return;
@@ -748,9 +760,9 @@ async fn handle_key(
     }
 
     // While the remote terminal pane is focused, forward raw bytes over the
-    // WS so they hit the running process (claude code, shell, etc.). When the
-    // stream isn't connected, surface that loudly — silently swallowing keys
-    // is what makes the pane feel "frozen" to the user.
+    // WS so they hit the running process (claude code, shell, etc.). Surface
+    // both failure modes loudly — silent swallowing was the original "frozen
+    // pane" symptom.
     if app.focus == Focus::Term {
         let Some(bytes) = key_to_bytes(&key) else {
             return;
@@ -759,13 +771,13 @@ async fn handle_key(
             Some(tx) => {
                 if tx.send(bytes).is_err() {
                     app.status_msg =
-                        Some("terminal stream closed — Ctrl-G to release, Ctrl-Q to quit".into());
+                        Some("terminal stream closed — Ctrl-G release · Ctrl-Q quit".into());
                     app.error_count += 1;
                 }
             }
             None => {
                 app.status_msg = Some(
-                    "no terminal stream (select a running session) — Ctrl-G release, Ctrl-Q quit"
+                    "no terminal stream (no session selected?) — Ctrl-G release · Ctrl-Q quit"
                         .into(),
                 );
             }
@@ -776,24 +788,10 @@ async fn handle_key(
     if app.focus == Focus::Input {
         match key.code {
             KeyCode::Esc => app.focus = Focus::Tree,
-            // Tab / Shift-Tab cycle focus instead of being trapped in the
-            // input field — matches the behaviour every other pane has and
-            // mirrors the global `]` / `[` cycling.
-            KeyCode::Tab | KeyCode::Char(']') => {
-                app.focus = next_focus(app.focus, app.lazygit_open());
-            }
-            KeyCode::BackTab | KeyCode::Char('[') => {
-                app.focus = prev_focus(app.focus, app.lazygit_open());
-            }
             KeyCode::Backspace => {
                 app.input.pop();
             }
-            // Plain character — but not Ctrl-modified ones. Ctrl-A/Ctrl-W
-            // etc. were being inserted as bare letters (the `Char(c)` arm
-            // ignored modifiers), which made meta-commands unusable.
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                app.input.push(c);
-            }
+            KeyCode::Char(c) => app.input.push(c),
             KeyCode::Enter => {
                 if let Some(id) = app.selected {
                     let text = app.input.clone();
@@ -819,6 +817,7 @@ async fn handle_key(
         KeyCode::Char('?') => app.overlay = Overlay::Help,
         KeyCode::Char('g') => toggle_lazygit(app, lg_tx).await,
         KeyCode::Char('G') => app.overlay = Overlay::LazygitCheats,
+        KeyCode::Char('T') => app.cycle_theme(),
         // lazydocker parity: 1..=4 jump straight to a panel.
         KeyCode::Char('1') => app.focus = Focus::Tree,
         KeyCode::Char('2') => app.focus = Focus::Term,
@@ -1230,56 +1229,13 @@ async fn run_palette_action(
                 app.focus = Focus::Lazygit;
             }
         }
+        ActionKind::SetTheme(name) => app.set_theme(name),
+        ActionKind::CycleTheme => app.cycle_theme(),
         ActionKind::SelectSession(id) => {
             // Move tree cursor + reopen the stream for this id.
             app.tree.select_session(id);
             update_selection(app, client, term_tx, stream_handle);
         }
-        ActionKind::NewSession => {
-            let workdir = app
-                .selected_session()
-                .map(|s| s.workdir.clone())
-                .or_else(|| std::env::var("HOME").ok())
-                .unwrap_or_default();
-            app.overlay = Overlay::NewSession(Box::new(NewSessionForm::new(workdir)));
-        }
-        ActionKind::StartSelected => match app.selected_session() {
-            Some(s) => {
-                app.overlay = Overlay::Confirm(PendingAction::Start {
-                    id: s.id,
-                    name: s.name.clone(),
-                });
-            }
-            None => app.status_msg = Some("no session selected".into()),
-        },
-        ActionKind::StopSelected => match app.selected_session() {
-            Some(s) => {
-                app.overlay = Overlay::Confirm(PendingAction::Stop {
-                    id: s.id,
-                    name: s.name.clone(),
-                });
-            }
-            None => app.status_msg = Some("no session selected".into()),
-        },
-        ActionKind::KillSelected => match app.selected_session() {
-            Some(s) => {
-                app.overlay = Overlay::Confirm(PendingAction::Kill {
-                    id: s.id,
-                    name: s.name.clone(),
-                });
-            }
-            None => app.status_msg = Some("no session selected".into()),
-        },
-        ActionKind::DeleteSelected => match app.selected_session() {
-            Some(s) => {
-                app.overlay = Overlay::Confirm(PendingAction::Delete {
-                    id: s.id,
-                    name: s.name.clone(),
-                    running: matches!(s.status, Status::Running),
-                });
-            }
-            None => app.status_msg = Some("no session selected".into()),
-        },
     }
 }
 

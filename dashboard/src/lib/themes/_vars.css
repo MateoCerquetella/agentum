@@ -1,22 +1,47 @@
 /*
- * Theme variable contract. Every theme file must set these.
- * Component CSS only reads from these custom properties — never literal colors.
+ * Single canonical theme — see docs/DESIGN-SYSTEM.md.
+ * Component CSS reads only from these custom properties.
+ *
+ * Design tokens:
+ *   #0b0b0b near-black canvas      #f36458 coral CTA
+ *   #212121 elevated surface       #0052ef electric blue (interactive)
+ *   #353535 medium dark            #19d600 neon green (success)
+ *   #b9b9b9 silver body            #dd0000 error red
+ *   #797979 metadata gray
+ *   #ffffff white
  */
 :root {
-  --bg:          #0a0a0c;
-  --surface:     #111114;
-  --surface-2:   #1a1a1f;
-  --border:      #2a2a30;
-  --text:        #e8e8ec;
-  --text-2:      #a0a0b8;
-  --muted:       #707088;
-  --accent:      #ff8a4c;
-  --success:     #4ade80;
-  --warn:        #fbbf24;
-  --danger:      #f87171;
-  --font-sans:   "DM Sans", system-ui, -apple-system, sans-serif;
-  --font-mono:   "JetBrains Mono", "SF Mono", Consolas, monospace;
-  --font-display: var(--font-mono);
-  --radius:      10px;
-  --shadow:      0 1px 0 0 rgba(255,255,255,0.04) inset;
+  /* Surfaces */
+  --bg:          #0b0b0b;
+  --surface:     #212121;
+  --surface-2:   #353535;
+  --border:      #212121;
+  --border-2:    #353535;
+
+  /* Text ramp */
+  --text:        #ffffff;
+  --text-2:      #b9b9b9;
+  --muted:       #797979;
+
+  /* Interactive */
+  --accent:      #0052ef;   /* electric blue — universal hover/active signal */
+  --cta:         #f36458;   /* coral — primary CTAs */
+
+  /* Semantic */
+  --success:     #19d600;
+  --warn:        #f36458;
+  --danger:      #dd0000;
+
+  /* Type */
+  --font-sans:    "Space Grotesk", waldenburgNormal, ui-sans-serif, system-ui, sans-serif;
+  --font-mono:    "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-display: var(--font-sans);
+
+  /* Geometry — 3-6px small radii, jump straight to pill (99999px) */
+  --radius:      6px;
+  --radius-sm:   3px;
+  --radius-pill: 99999px;
+
+  /* Depth — colorimetric, no offset shadows */
+  --shadow:      0 0 0 1px var(--border-2);
 }
