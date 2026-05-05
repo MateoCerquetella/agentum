@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -36,7 +36,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 axum              = { version = "0.8", features = ["ws", "macros"] }
 tower             = "0.5"
 tower-http        = { version = "0.6", features = ["cors", "trace", "compression-gzip"] }
-sqlx              = { version = "0.8", features = ["runtime-tokio", "sqlite-unbundled", "macros", "migrate"], default-features = false }
+# sqlx is consumed only by agentum-store; pinned there directly with the
+# `sqlite` (bundled) feature so prebuilt release binaries don't need
+# system libsqlite3 headers/library.
 clap              = { version = "4", features = ["derive", "env"] }
 directories       = "5"
 uuid              = { version = "1", features = ["v4", "serde"] }
