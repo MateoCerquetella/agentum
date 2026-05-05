@@ -4,6 +4,15 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-05-05
+
+### Fixed
+- The README's recommended installer one-liner —
+  `curl -fsSL https://github.com/.../releases/latest/download/install.sh | sh`
+  — has been broken since v0.1.0 because `install.sh` was never attached
+  to releases (only the per-target tarballs and `SHA256SUMS` were).
+  `release.yml` now uploads `scripts/install.sh` alongside the tarballs.
+
 ## [0.3.0] — 2026-05-05
 
 The interactive-terminal release. The dashboard's terminal pane is now

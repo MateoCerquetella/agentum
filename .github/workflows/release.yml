@@ -112,6 +112,13 @@ jobs:
           ( cd dist && sha256sum *.tar.gz > SHA256SUMS )
           cat dist/SHA256SUMS
 
+      - name: Stage installer
+        run: |
+          set -eux
+          # Attached to the release so `…/releases/latest/download/install.sh`
+          # works (the README's recommended one-liner).
+          cp scripts/install.sh dist/install.sh
+
       - name: Extract release notes
         id: notes
         shell: bash
@@ -137,3 +144,4 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS
+            dist/install.sh
