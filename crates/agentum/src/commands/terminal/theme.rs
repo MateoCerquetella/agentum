@@ -58,20 +58,20 @@ pub struct Theme {
 const PALETTE: Theme = Theme {
     palette: Palette {
         // Surfaces — colorimetric depth, no shadows.
-        body_bg: Color::Rgb(0x0b, 0x0b, 0x0b),    // #0b0b0b near-black canvas
-        panel_bg: Color::Rgb(0x21, 0x21, 0x21),   // #212121 elevated surface
+        body_bg: Color::Rgb(0x0b, 0x0b, 0x0b), // #0b0b0b near-black canvas
+        panel_bg: Color::Rgb(0x21, 0x21, 0x21), // #212121 elevated surface
         surface_bg: Color::Rgb(0x35, 0x35, 0x35), // #353535 medium dark
-        chrome_bg: Color::Rgb(0x00, 0x00, 0x00),  // pure black for status bar
+        chrome_bg: Color::Rgb(0x00, 0x00, 0x00), // pure black for status bar
 
         // Text ramp.
-        fg: Color::Rgb(0xb9, 0xb9, 0xb9),         // #b9b9b9 silver (body)
-        fg_strong: Color::Rgb(0xff, 0xff, 0xff),  // white (titles)
-        muted: Color::Rgb(0x79, 0x79, 0x79),      // #797979 metadata
-        subtle: Color::Rgb(0x35, 0x35, 0x35),     // #353535 dimmed
+        fg: Color::Rgb(0xb9, 0xb9, 0xb9), // #b9b9b9 silver (body)
+        fg_strong: Color::Rgb(0xff, 0xff, 0xff), // white (titles)
+        muted: Color::Rgb(0x79, 0x79, 0x79), // #797979 metadata
+        subtle: Color::Rgb(0x35, 0x35, 0x35), // #353535 dimmed
 
         // Interactive — electric blue is the universal activation signal,
         // coral-red is the warm CTA punctuation.
-        accent: Color::Rgb(0x00, 0x52, 0xef),     // #0052ef electric blue
+        accent: Color::Rgb(0x00, 0x52, 0xef), // #0052ef electric blue
         accent_alt: Color::Rgb(0xf3, 0x64, 0x58), // #f36458 coral CTA
         idle_border: Color::Rgb(0x21, 0x21, 0x21),
         focus_border: Color::Rgb(0x00, 0x52, 0xef),
@@ -81,9 +81,9 @@ const PALETTE: Theme = Theme {
         cursor_fg: Color::Rgb(0xff, 0xff, 0xff),
 
         // Semantic.
-        success: Color::Rgb(0x19, 0xd6, 0x00),    // #19d600 neon green sRGB
-        warning: Color::Rgb(0xf3, 0x64, 0x58),    // #f36458 coral
-        error: Color::Rgb(0xdd, 0x00, 0x00),      // #dd0000 pure red
+        success: Color::Rgb(0x19, 0xd6, 0x00), // #19d600 neon green sRGB
+        warning: Color::Rgb(0xf3, 0x64, 0x58), // #f36458 coral
+        error: Color::Rgb(0xdd, 0x00, 0x00),   // #dd0000 pure red
 
         // Chips / pills.
         chip_bg: Color::Rgb(0x21, 0x21, 0x21),

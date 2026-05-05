@@ -8,8 +8,8 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use tui_term::widget::PseudoTerminal;
 
 use super::app::{
-    App, ConnState, DirPickerState, Focus, NewSessionField, NewSessionForm, Overlay,
-    PendingAction, Row, palette_catalog, status_dot,
+    App, ConnState, DirPickerState, Focus, NewSessionField, NewSessionForm, Overlay, PendingAction,
+    Row, palette_catalog, status_dot,
 };
 use super::extensions::{self, Extension, LAZYGIT};
 use super::theme::Palette;
@@ -724,13 +724,12 @@ fn push_form_field_with_hint(
     let label_color = if focused { p.accent } else { p.muted };
     let mut label_spans = vec![Span::styled(
         format!("  {label}"),
-        Style::default().fg(label_color).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(label_color)
+            .add_modifier(Modifier::BOLD),
     )];
     if let Some(h) = hint {
-        label_spans.push(Span::styled(
-            format!("  {h}"),
-            Style::default().fg(p.muted),
-        ));
+        label_spans.push(Span::styled(format!("  {h}"), Style::default().fg(p.muted)));
     }
     lines.push(Line::from(label_spans));
     let value_line = if value.is_empty() && !focused {
@@ -782,7 +781,10 @@ fn draw_dir_picker_overlay(f: &mut Frame<'_>, area: Rect, picker: &DirPickerStat
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled("  current  ", Style::default().fg(p.muted)),
-        Span::styled(picker.path.clone(), Style::default().fg(p.fg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            picker.path.clone(),
+            Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
+        ),
     ]));
     if picker.parent.is_some() {
         lines.push(Line::from(Span::styled(

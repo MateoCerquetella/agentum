@@ -157,6 +157,40 @@ impl Catalog {
             kind: ActionKind::LazygitCheats,
         });
 
+        // Session lifecycle — same actions the keys n / u / s / K / D run.
+        // Surfacing them in the palette means every dashboard action has a
+        // discoverable, searchable entry point.
+        a.push(Action {
+            label: "Session: new…".into(),
+            hint: "n".into(),
+            group: "session-lifecycle",
+            kind: ActionKind::NewSession,
+        });
+        a.push(Action {
+            label: "Session: start (up) selected".into(),
+            hint: "u".into(),
+            group: "session-lifecycle",
+            kind: ActionKind::StartSelected,
+        });
+        a.push(Action {
+            label: "Session: stop selected (graceful)".into(),
+            hint: "s".into(),
+            group: "session-lifecycle",
+            kind: ActionKind::StopSelected,
+        });
+        a.push(Action {
+            label: "Session: kill selected (immediate)".into(),
+            hint: "K".into(),
+            group: "session-lifecycle",
+            kind: ActionKind::KillSelected,
+        });
+        a.push(Action {
+            label: "Session: delete selected".into(),
+            hint: "D".into(),
+            group: "session-lifecycle",
+            kind: ActionKind::DeleteSelected,
+        });
+
         // Sessions.
         for (id, name, workdir) in sessions {
             a.push(Action {

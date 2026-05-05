@@ -1221,6 +1221,51 @@ async fn run_palette_action(
             app.tree.select_session(id);
             update_selection(app, client, term_tx, stream_handle);
         }
+        ActionKind::NewSession => {
+            let workdir = app
+                .selected_session()
+                .map(|s| s.workdir.clone())
+                .or_else(|| std::env::var("HOME").ok())
+                .unwrap_or_default();
+            app.overlay = Overlay::NewSession(Box::new(NewSessionForm::new(workdir)));
+        }
+        ActionKind::StartSelected => match app.selected_session() {
+            Some(s) => {
+                app.overlay = Overlay::Confirm(PendingAction::Start {
+                    id: s.id,
+                    name: s.name.clone(),
+                });
+            }
+            None => app.status_msg = Some("no session selected".into()),
+        },
+        ActionKind::StopSelected => match app.selected_session() {
+            Some(s) => {
+                app.overlay = Overlay::Confirm(PendingAction::Stop {
+                    id: s.id,
+                    name: s.name.clone(),
+                });
+            }
+            None => app.status_msg = Some("no session selected".into()),
+        },
+        ActionKind::KillSelected => match app.selected_session() {
+            Some(s) => {
+                app.overlay = Overlay::Confirm(PendingAction::Kill {
+                    id: s.id,
+                    name: s.name.clone(),
+                });
+            }
+            None => app.status_msg = Some("no session selected".into()),
+        },
+        ActionKind::DeleteSelected => match app.selected_session() {
+            Some(s) => {
+                app.overlay = Overlay::Confirm(PendingAction::Delete {
+                    id: s.id,
+                    name: s.name.clone(),
+                    running: matches!(s.status, Status::Running),
+                });
+            }
+            None => app.status_msg = Some("no session selected".into()),
+        },
     }
 }
 
