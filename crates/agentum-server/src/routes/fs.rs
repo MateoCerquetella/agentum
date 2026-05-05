@@ -118,9 +118,7 @@ fn resolve(raw: &str) -> Result<PathBuf, ApiError> {
         .ok_or_else(|| ApiError::Internal("HOME not set".into()))?;
 
     let trimmed = raw.trim();
-    let path = if trimmed.is_empty() {
-        home
-    } else if trimmed == "~" {
+    let path = if trimmed.is_empty() || trimmed == "~" {
         home
     } else if let Some(rest) = trimmed.strip_prefix("~/") {
         home.join(rest)
