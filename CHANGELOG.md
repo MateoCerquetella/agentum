@@ -4,6 +4,35 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-05-05
+
+Session lifecycle from inside the TUI. Previously the dashboard could
+only watch sessions; you'd drop back to the shell and run
+`agentum new …` / `agentum kill …` to actually manage them. Now the
+whole loop lives in the dashboard.
+
+### Added
+- **`n` — new session**. Opens an inline form with four fields
+  (name / workdir / tool / model). Tab/↓ moves between fields,
+  Shift-Tab/↑ goes back, Enter creates **and** auto-starts the session.
+  The workdir defaults to the currently-selected session's workdir,
+  so "another agent in the same repo" is two keystrokes.
+- **`u` — start (up)** the selected session, with a confirm dialog.
+- **`s` — stop** the selected session (graceful: SIGTERM → SIGKILL after
+  5s), with a confirm dialog.
+- **`K` — kill** immediately. Confirm dialog uses a red border to
+  distinguish destructive actions.
+- **`D` — delete**. Confirm dialog. Auto-passes `force=true` when the
+  session is currently running so you don't have to stop-then-delete.
+- API client gained matching `create_session`, `start_session`,
+  `stop_session`, `kill_session`, `delete_session` methods.
+
+### Internal
+- `Overlay` enum lost its `Copy` derive (the new `NewSession(Form)` and
+  `Confirm(PendingAction)` variants own owned strings). Existing call
+  sites only rely on `==` and `Clone`, both still derived.
+- Help overlay updated with the five new keys.
+
 ## [0.5.0] — 2026-05-05
 
 The remote-access release. Lets you actually use `agentum terminal` against
