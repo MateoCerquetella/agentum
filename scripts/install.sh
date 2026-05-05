@@ -8,7 +8,7 @@
 
 set -eu
 
-REPO="anthropics/agentum"
+REPO="mateocerquetella/agentum"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 
 info()  { printf '  \033[1;34m%s\033[0m %s\n' "$1" "$2"; }
@@ -20,19 +20,15 @@ detect_platform() {
     OS="$(uname -s)"
     ARCH="$(uname -m)"
 
-    case "$OS" in
-        Linux)   OS="linux" ;;
-        Darwin)  OS="darwin" ;;
-        *)       err "unsupported OS: $OS" ;;
+    # Map (uname -s, uname -m) → Rust target triple, matching the asset
+    # names produced by .github/workflows/release.yml.
+    case "$OS-$ARCH" in
+        Darwin-x86_64|Darwin-amd64)        PLATFORM="x86_64-apple-darwin" ;;
+        Darwin-arm64|Darwin-aarch64)       PLATFORM="aarch64-apple-darwin" ;;
+        Linux-x86_64|Linux-amd64)          PLATFORM="x86_64-unknown-linux-gnu" ;;
+        Linux-aarch64|Linux-arm64)         PLATFORM="aarch64-unknown-linux-gnu" ;;
+        *)                                 err "unsupported platform: $OS $ARCH" ;;
     esac
-
-    case "$ARCH" in
-        x86_64|amd64)   ARCH="x86_64" ;;
-        aarch64|arm64)  ARCH="aarch64" ;;
-        *)              err "unsupported architecture: $ARCH" ;;
-    esac
-
-    PLATFORM="${OS}-${ARCH}"
 }
 
 detect_latest_version() {
@@ -51,34 +47,49 @@ detect_latest_version() {
 
 download() {
     ASSET="agentum-${VERSION}-${PLATFORM}.tar.gz"
-    URL="https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
-    CHECKSUM_URL="${URL}.sha256"
+    BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
 
     TMPDIR="$(mktemp -d)"
     trap 'rm -rf "$TMPDIR"' EXIT
 
     info "downloading" "$ASSET"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$URL" -o "$TMPDIR/$ASSET"
-        # best-effort checksum — don't fail if the sidecar doesn't exist yet
-        curl -fsSL "$CHECKSUM_URL" -o "$TMPDIR/${ASSET}.sha256" 2>/dev/null || true
-    else
-        wget -q "$URL" -O "$TMPDIR/$ASSET"
-        wget -q "$CHECKSUM_URL" -O "$TMPDIR/${ASSET}.sha256" 2>/dev/null || true
-    fi
+    fetch "$BASE_URL/$ASSET" "$TMPDIR/$ASSET"
+    # SHA256SUMS is a single sidecar listing every asset; pull it once.
+    fetch "$BASE_URL/SHA256SUMS" "$TMPDIR/SHA256SUMS" || true
 
-    if [ -f "$TMPDIR/${ASSET}.sha256" ] && command -v sha256sum >/dev/null 2>&1; then
+    if [ -f "$TMPDIR/SHA256SUMS" ] && command -v sha256sum >/dev/null 2>&1; then
         info "verifying" "sha256 checksum"
-        (cd "$TMPDIR" && sha256sum -c "${ASSET}.sha256" >/dev/null 2>&1) \
-            || err "checksum verification failed"
+        expected="$(grep " ${ASSET}\$" "$TMPDIR/SHA256SUMS" | awk '{print $1}')"
+        if [ -z "$expected" ]; then
+            warn "skipped" "no checksum entry for $ASSET in SHA256SUMS"
+        else
+            actual="$(sha256sum "$TMPDIR/$ASSET" | awk '{print $1}')"
+            [ "$expected" = "$actual" ] || err "checksum mismatch for $ASSET"
+        fi
     fi
 
     tar -xzf "$TMPDIR/$ASSET" -C "$TMPDIR"
+    EXTRACTED="$TMPDIR/agentum-${VERSION}-${PLATFORM}"
+}
+
+# Unified curl/wget wrapper.
+fetch() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$1" -o "$2"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "$1" -O "$2"
+    else
+        err "curl or wget required"
+    fi
 }
 
 install_binary() {
     mkdir -p "$INSTALL_DIR"
-    mv "$TMPDIR/agentum" "$INSTALL_DIR/agentum"
+    # release.yml stages files under agentum-<ver>-<target>/agentum
+    src="$EXTRACTED/agentum"
+    [ -f "$src" ] || src="$TMPDIR/agentum"
+    [ -f "$src" ] || err "binary not found in extracted tarball"
+    mv "$src" "$INSTALL_DIR/agentum"
     chmod +x "$INSTALL_DIR/agentum"
 }
 
