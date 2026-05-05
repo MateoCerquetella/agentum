@@ -46,13 +46,132 @@ pub enum ConnState {
 }
 
 /// Modal overlays. At most one is up at a time.
-#[derive(Clone, Copy, PartialEq, Eq)]
+///
+/// `Copy` was dropped here when `NewSession` and `Confirm` were added —
+/// they own owned-string fields. The handful of `Overlay` comparisons
+/// that need to fit in a constraint use `==` against the `None` /
+/// `Palette` variants only and still work fine via `PartialEq`.
+#[derive(Clone, PartialEq, Eq)]
 pub enum Overlay {
     None,
     Help,
     LazygitCheats,
     LazygitInstall,
     Palette,
+    /// New-session form (n key on the tree).
+    NewSession(NewSessionForm),
+    /// Generic confirmation prompt for destructive session actions.
+    Confirm(PendingAction),
+}
+
+/// Inline new-session form. Fields owned so the user can type into them.
+#[derive(Clone, PartialEq, Eq)]
+pub struct NewSessionForm {
+    pub field: NewSessionField,
+    pub name: String,
+    pub workdir: String,
+    pub tool: String,
+    pub model: String,
+    pub error: Option<String>,
+    pub submitting: bool,
+}
+
+impl NewSessionForm {
+    pub fn new(default_workdir: String) -> Self {
+        Self {
+            field: NewSessionField::Name,
+            name: String::new(),
+            workdir: default_workdir,
+            tool: "claude".into(),
+            model: String::new(),
+            error: None,
+            submitting: false,
+        }
+    }
+
+    pub fn next_field(&mut self) {
+        self.field = match self.field {
+            NewSessionField::Name => NewSessionField::Workdir,
+            NewSessionField::Workdir => NewSessionField::Tool,
+            NewSessionField::Tool => NewSessionField::Model,
+            NewSessionField::Model => NewSessionField::Name,
+        };
+    }
+
+    pub fn prev_field(&mut self) {
+        self.field = match self.field {
+            NewSessionField::Name => NewSessionField::Model,
+            NewSessionField::Workdir => NewSessionField::Name,
+            NewSessionField::Tool => NewSessionField::Workdir,
+            NewSessionField::Model => NewSessionField::Tool,
+        };
+    }
+
+    pub fn field_value_mut(&mut self) -> &mut String {
+        match self.field {
+            NewSessionField::Name => &mut self.name,
+            NewSessionField::Workdir => &mut self.workdir,
+            NewSessionField::Tool => &mut self.tool,
+            NewSessionField::Model => &mut self.model,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.name.trim().is_empty() {
+            return Err("name is required");
+        }
+        if self.workdir.trim().is_empty() {
+            return Err("workdir is required");
+        }
+        if self.tool.trim().is_empty() {
+            return Err("tool is required (e.g. claude, codex, gemini, hermes)");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum NewSessionField {
+    Name,
+    Workdir,
+    Tool,
+    Model,
+}
+
+/// A destructive session action waiting on user confirmation. Carries the
+/// target session's id + display name so the prompt reads "kill alpha?"
+/// rather than referring to a UUID.
+#[derive(Clone, PartialEq, Eq)]
+pub enum PendingAction {
+    Start { id: Uuid, name: String },
+    Stop { id: Uuid, name: String },
+    Kill { id: Uuid, name: String },
+    Delete { id: Uuid, name: String, running: bool },
+}
+
+impl PendingAction {
+    pub fn prompt(&self) -> String {
+        match self {
+            PendingAction::Start { name, .. } => format!("start session `{name}`?"),
+            PendingAction::Stop { name, .. } => {
+                format!("stop session `{name}`? (graceful, SIGTERM then kill after 5s)")
+            }
+            PendingAction::Kill { name, .. } => {
+                format!("kill session `{name}` immediately? (no graceful stop)")
+            }
+            PendingAction::Delete { name, running, .. } => {
+                if *running {
+                    format!("delete session `{name}`? It is currently running — will be killed first.")
+                } else {
+                    format!("delete session `{name}`?")
+                }
+            }
+        }
+    }
+
+    pub fn is_destructive(&self) -> bool {
+        !matches!(self, PendingAction::Start { .. })
+    }
 }
 
 /// Command-palette state. Driven by Ctrl-P / Ctrl-K. The action list is
@@ -477,22 +596,31 @@ async fn handle_key(
         }
     }
 
-    // Command-palette overlay: full input capture (typing edits the query,
-    // Up/Down moves the cursor, Enter runs the action).
-    if app.overlay == Overlay::Palette {
-        handle_palette_key(app, key, client, term_tx, lg_tx, stream_handle).await;
-        return;
-    }
-
-    // Other overlays consume input first.
-    if app.overlay != Overlay::None {
-        if matches!(
-            key.code,
-            KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter
-        ) {
-            app.overlay = Overlay::None;
+    // Stateful overlays (own input fully).
+    match &app.overlay {
+        Overlay::Palette => {
+            handle_palette_key(app, key, client, term_tx, lg_tx, stream_handle).await;
+            return;
         }
-        return;
+        Overlay::NewSession(_) => {
+            handle_new_session_key(app, key, client).await;
+            return;
+        }
+        Overlay::Confirm(_) => {
+            handle_confirm_key(app, key, client).await;
+            return;
+        }
+        Overlay::None => {}
+        // Help / cheatsheet / install: any of these dismiss it.
+        _ => {
+            if matches!(
+                key.code,
+                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter
+            ) {
+                app.overlay = Overlay::None;
+            }
+            return;
+        }
     }
 
     // While the lazygit pane is focused, forward raw bytes to its PTY.
@@ -586,7 +714,178 @@ async fn handle_key(
         KeyCode::Enter => {
             update_selection(app, client, term_tx, stream_handle);
         }
+
+        // Session lifecycle ------------------------------------------------
+        KeyCode::Char('n') => {
+            // Default the workdir to the selected session's workdir if any,
+            // else the user's $HOME. Saves typing for "another agent in
+            // the same repo" — by far the most common case.
+            let workdir = app
+                .selected_session()
+                .map(|s| s.workdir.clone())
+                .or_else(|| std::env::var("HOME").ok())
+                .unwrap_or_default();
+            app.overlay = Overlay::NewSession(NewSessionForm::new(workdir));
+        }
+        KeyCode::Char('u') => {
+            if let Some(s) = app.selected_session() {
+                app.overlay = Overlay::Confirm(PendingAction::Start {
+                    id: s.id,
+                    name: s.name.clone(),
+                });
+            } else {
+                app.status_msg = Some("no session selected".into());
+            }
+        }
+        KeyCode::Char('s') => {
+            if let Some(s) = app.selected_session() {
+                app.overlay = Overlay::Confirm(PendingAction::Stop {
+                    id: s.id,
+                    name: s.name.clone(),
+                });
+            } else {
+                app.status_msg = Some("no session selected".into());
+            }
+        }
+        KeyCode::Char('K') => {
+            if let Some(s) = app.selected_session() {
+                app.overlay = Overlay::Confirm(PendingAction::Kill {
+                    id: s.id,
+                    name: s.name.clone(),
+                });
+            } else {
+                app.status_msg = Some("no session selected".into());
+            }
+        }
+        KeyCode::Char('D') => {
+            if let Some(s) = app.selected_session() {
+                app.overlay = Overlay::Confirm(PendingAction::Delete {
+                    id: s.id,
+                    name: s.name.clone(),
+                    running: matches!(s.status, Status::Running),
+                });
+            } else {
+                app.status_msg = Some("no session selected".into());
+            }
+        }
+
         _ => {}
+    }
+}
+
+async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
+    let Overlay::NewSession(mut form) = std::mem::replace(&mut app.overlay, Overlay::None) else {
+        return;
+    };
+    if form.submitting {
+        app.overlay = Overlay::NewSession(form);
+        return;
+    }
+
+    match key.code {
+        KeyCode::Esc => {
+            // Drop overlay, dropping the form.
+            return;
+        }
+        KeyCode::Tab | KeyCode::Down => form.next_field(),
+        KeyCode::BackTab | KeyCode::Up => form.prev_field(),
+        KeyCode::Backspace => {
+            form.field_value_mut().pop();
+        }
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            form.field_value_mut().push(c);
+        }
+        KeyCode::Enter => {
+            if let Err(msg) = form.validate() {
+                form.error = Some(msg.into());
+                app.overlay = Overlay::NewSession(form);
+                return;
+            }
+            let model = if form.model.trim().is_empty() {
+                None
+            } else {
+                Some(form.model.trim().to_string())
+            };
+            match client
+                .create_session(
+                    form.name.trim(),
+                    form.workdir.trim(),
+                    form.tool.trim(),
+                    model.as_deref(),
+                )
+                .await
+            {
+                Ok(created) => {
+                    let id = created.id;
+                    let name = created.name.clone();
+                    if let Err(e) = client.start_session(id).await {
+                        app.status_msg = Some(format!("created `{name}` but start failed: {e}"));
+                        app.error_count += 1;
+                    } else {
+                        app.status_msg = Some(format!("created + started `{name}`"));
+                    }
+                    if let Ok(fresh) = client.list_sessions().await {
+                        app.refresh_sessions(fresh);
+                        app.tree.select_session(id);
+                        app.selected = Some(id);
+                    }
+                    return;
+                }
+                Err(e) => {
+                    form.error = Some(format!("{e}"));
+                    app.overlay = Overlay::NewSession(form);
+                    return;
+                }
+            }
+        }
+        _ => {}
+    }
+    app.overlay = Overlay::NewSession(form);
+}
+
+async fn handle_confirm_key(app: &mut App, key: KeyEvent, client: &Client) {
+    let Overlay::Confirm(action) = std::mem::replace(&mut app.overlay, Overlay::None) else {
+        return;
+    };
+
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+            execute_action(app, action, client).await;
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+            // Cancelled — overlay already cleared via mem::replace.
+        }
+        _ => {
+            // Other keys: keep prompt up.
+            app.overlay = Overlay::Confirm(action);
+        }
+    }
+}
+
+async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
+    let result = match &action {
+        PendingAction::Start { id, .. } => client.start_session(*id).await,
+        PendingAction::Stop { id, .. } => client.stop_session(*id).await,
+        PendingAction::Kill { id, .. } => client.kill_session(*id).await,
+        PendingAction::Delete { id, running, .. } => {
+            client.delete_session(*id, *running).await
+        }
+    };
+    let label = match &action {
+        PendingAction::Start { name, .. } => format!("started `{name}`"),
+        PendingAction::Stop { name, .. } => format!("stopped `{name}`"),
+        PendingAction::Kill { name, .. } => format!("killed `{name}`"),
+        PendingAction::Delete { name, .. } => format!("deleted `{name}`"),
+    };
+    match result {
+        Ok(()) => app.status_msg = Some(label),
+        Err(e) => {
+            app.status_msg = Some(format!("{label}: {e}"));
+            app.error_count += 1;
+        }
+    }
+    if let Ok(fresh) = client.list_sessions().await {
+        app.refresh_sessions(fresh);
     }
 }
 

@@ -7,7 +7,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use tui_term::widget::PseudoTerminal;
 
-use super::app::{App, ConnState, Focus, Overlay, Row, palette_catalog, status_dot};
+use super::app::{
+    App, ConnState, Focus, NewSessionField, NewSessionForm, Overlay, PendingAction, Row,
+    palette_catalog, status_dot,
+};
 use super::extensions::{self, Extension, LAZYGIT};
 use super::theme::Palette;
 
@@ -89,12 +92,14 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
     draw_input(f, areas.input, app, p);
     draw_status(f, areas.status, app, p);
 
-    match app.overlay {
+    match &app.overlay {
         Overlay::None => {}
         Overlay::Help => draw_help_overlay(f, f.area(), app.lazygit_open(), p),
         Overlay::LazygitCheats => draw_cheatsheet_overlay(f, f.area(), &LAZYGIT, p),
         Overlay::LazygitInstall => draw_install_overlay(f, f.area(), &LAZYGIT, p),
         Overlay::Palette => draw_palette_overlay(f, f.area(), app, p),
+        Overlay::NewSession(form) => draw_new_session_overlay(f, f.area(), form, p),
+        Overlay::Confirm(action) => draw_confirm_overlay(f, f.area(), action, p),
     }
 }
 
@@ -409,6 +414,13 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         body("  Ctrl-C           interrupt focused pane (else quit)", p),
         body("  Ctrl-G           release focused pane → tree", p),
         Line::from(""),
+        head("  Sessions", p),
+        body("  n                new session (form: name / workdir / tool / model)", p),
+        body("  u                start (up) the selected session", p),
+        body("  s                stop the selected session (graceful)", p),
+        body("  K                kill the selected session (immediate)", p),
+        body("  D                delete the selected session", p),
+        Line::from(""),
         head("  Extensions & appearance", p),
         body("  g                toggle lazygit side pane", p),
         body("  G                lazygit cheat sheet", p),
@@ -612,6 +624,115 @@ fn draw_palette_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     ]);
     let hints_para = Paragraph::new(hints).style(Style::default().bg(p.chrome_bg));
     f.render_widget(hints_para, rows[2]);
+}
+
+fn draw_new_session_overlay(f: &mut Frame<'_>, area: Rect, form: &NewSessionForm, p: &Palette) {
+    let mut lines: Vec<Line<'_>> = Vec::new();
+    lines.push(head("new session", p));
+    lines.push(Line::from(""));
+    push_form_field(&mut lines, "name", &form.name, form.field == NewSessionField::Name, "alpha, my-feature, …", p);
+    push_form_field(
+        &mut lines,
+        "workdir",
+        &form.workdir,
+        form.field == NewSessionField::Workdir,
+        "absolute path",
+        p,
+    );
+    push_form_field(
+        &mut lines,
+        "tool",
+        &form.tool,
+        form.field == NewSessionField::Tool,
+        "claude · codex · gemini · hermes · any cli on PATH",
+        p,
+    );
+    push_form_field(
+        &mut lines,
+        "model",
+        &form.model,
+        form.field == NewSessionField::Model,
+        "optional",
+        p,
+    );
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  Tab/↓", Style::default().fg(p.accent)),
+        Span::styled(" next   ", Style::default().fg(p.muted)),
+        Span::styled("Shift-Tab/↑", Style::default().fg(p.accent)),
+        Span::styled(" prev   ", Style::default().fg(p.muted)),
+        Span::styled("Enter", Style::default().fg(p.accent)),
+        Span::styled(" create   ", Style::default().fg(p.muted)),
+        Span::styled("Esc", Style::default().fg(p.accent)),
+        Span::styled(" cancel", Style::default().fg(p.muted)),
+    ]));
+    if let Some(err) = &form.error {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  ! {err}"),
+            Style::default().fg(p.error),
+        )));
+    }
+    overlay_box(f, area, " new session ", lines, 64, p);
+}
+
+fn push_form_field(
+    lines: &mut Vec<Line<'static>>,
+    label: &str,
+    value: &str,
+    focused: bool,
+    placeholder: &str,
+    p: &Palette,
+) {
+    let label_color = if focused { p.accent } else { p.muted };
+    lines.push(Line::from(Span::styled(
+        format!("  {label}"),
+        Style::default().fg(label_color).add_modifier(Modifier::BOLD),
+    )));
+    let value_line = if value.is_empty() && !focused {
+        Line::from(Span::styled(
+            format!("    {placeholder}"),
+            Style::default().fg(p.muted),
+        ))
+    } else {
+        let mut spans = vec![Span::styled(
+            format!("    {value}"),
+            Style::default().fg(p.fg),
+        )];
+        if focused {
+            spans.push(Span::styled("▍", Style::default().fg(p.accent)));
+        }
+        Line::from(spans)
+    };
+    lines.push(value_line);
+}
+
+fn draw_confirm_overlay(f: &mut Frame<'_>, area: Rect, action: &PendingAction, p: &Palette) {
+    let title = if action.is_destructive() {
+        " confirm — destructive "
+    } else {
+        " confirm "
+    };
+    let prompt_color = if action.is_destructive() {
+        p.error
+    } else {
+        p.fg
+    };
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  {}", action.prompt()),
+            Style::default().fg(prompt_color),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  y / Enter", Style::default().fg(p.accent).add_modifier(Modifier::BOLD)),
+            Span::styled("  yes      ", Style::default().fg(p.muted)),
+            Span::styled("n / Esc", Style::default().fg(p.accent)),
+            Span::styled("  cancel", Style::default().fg(p.muted)),
+        ]),
+    ];
+    overlay_box(f, area, title, lines, 70, p);
 }
 
 fn overlay_box(

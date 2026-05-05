@@ -204,6 +204,98 @@ impl Client {
         Ok(resp.json::<Vec<Session>>().await?)
     }
 
+    /// `POST /api/sessions` — create a new session row. The server records
+    /// it as `Idle`; call `start_session` to actually spawn the tmux process.
+    pub async fn create_session(
+        &self,
+        name: &str,
+        workdir: &str,
+        tool: &str,
+        model: Option<&str>,
+    ) -> Result<Session> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            name: &'a str,
+            workdir: &'a str,
+            tool: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            model: Option<&'a str>,
+            #[serde(skip_serializing_if = "Vec::is_empty")]
+            flags: Vec<String>,
+        }
+        let url = self.base.join("/api/sessions")?;
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .json(&Body {
+                name,
+                workdir,
+                tool,
+                model,
+                flags: Vec::new(),
+            })
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("{status} — {body}");
+        }
+        Ok(resp.json::<Session>().await?)
+    }
+
+    pub async fn start_session(&self, id: Uuid) -> Result<()> {
+        self.post_session_action(id, "start").await
+    }
+
+    pub async fn stop_session(&self, id: Uuid) -> Result<()> {
+        self.post_session_action(id, "stop").await
+    }
+
+    pub async fn kill_session(&self, id: Uuid) -> Result<()> {
+        self.post_session_action(id, "kill").await
+    }
+
+    /// DELETE /api/sessions/{id}. Pass `force=true` to also kill a running
+    /// session as part of the delete (server does the SIGTERM dance).
+    pub async fn delete_session(&self, id: Uuid, force: bool) -> Result<()> {
+        let path = if force {
+            format!("/api/sessions/{id}?force=true")
+        } else {
+            format!("/api/sessions/{id}")
+        };
+        let url = self.base.join(&path)?;
+        let resp = self
+            .http
+            .delete(url)
+            .bearer_auth(&self.token)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("{status} — {body}");
+        }
+        Ok(())
+    }
+
+    async fn post_session_action(&self, id: Uuid, action: &str) -> Result<()> {
+        let url = self.base.join(&format!("/api/sessions/{id}/{action}"))?;
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("{status} — {body}");
+        }
+        Ok(())
+    }
+
     pub async fn send_text(&self, id: Uuid, text: &str, append_enter: bool) -> Result<()> {
         #[derive(Serialize)]
         struct Body<'a> {
