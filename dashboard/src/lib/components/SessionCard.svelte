@@ -39,9 +39,9 @@
     }
   }
 
-  function start(e: MouseEvent)  { e.preventDefault(); run('start',  () => api.startSession(session.id)); }
-  function stop(e: MouseEvent)   { e.preventDefault(); run('stop',   () => api.stopSession(session.id)); }
-  function kill(e: MouseEvent)   { e.preventDefault(); run('kill',   () => api.killSession(session.id)); }
+  function start(e: MouseEvent) { e.preventDefault(); run('start', () => api.startSession(session.id)); }
+  function stop(e: MouseEvent)  { e.preventDefault(); run('stop',  () => api.stopSession(session.id)); }
+  function kill(e: MouseEvent)  { e.preventDefault(); run('kill',  () => api.killSession(session.id)); }
 
   function del(e: MouseEvent) {
     e.preventDefault();
@@ -52,137 +52,144 @@
   }
 </script>
 
-<div class="card" data-status={session.status}>
+<article class="card surface" data-status={session.status}>
   <a class="link" href={`/sessions/${session.id}`}>
-    <header>
-      <div class="name">{session.name}</div>
+    <div class="row">
+      <span class="eyebrow">Session</span>
       <StatusPill status={session.status} />
-    </header>
+    </div>
+
+    <h3 class="name">{session.name}</h3>
 
     <div class="meta">
-      <span class="tool" title="tool">{session.tool}</span>
-      <span class="dot" aria-hidden="true">·</span>
+      <span class="tool mono">{session.tool}</span>
+      <span class="sep" aria-hidden="true">·</span>
       <span class="workdir mono" title={session.workdir}>{shortenPath(session.workdir)}</span>
     </div>
 
-    <footer>
+    <div class="footer">
       <span class="muted">last activity</span>
-      <span>{rel(session.last_activity_at ?? session.updated_at)}</span>
-    </footer>
+      <span class="rel mono">{rel(session.last_activity_at ?? session.updated_at)}</span>
+    </div>
   </a>
 
   <div class="actions">
     {#if session.status === 'running'}
-      <button type="button" onclick={stop} disabled={busy !== null} title="Graceful stop (CLI: agentum down)">
+      <button class="btn-subtle" type="button" onclick={stop} disabled={busy !== null} title="Graceful stop (CLI: agentum down)">
         {busy === 'stop' ? '…' : 'stop'}
       </button>
-      <button type="button" onclick={kill} disabled={busy !== null} title="Force kill (CLI: agentum kill)">
+      <button class="btn-subtle" type="button" onclick={kill} disabled={busy !== null} title="Force kill (CLI: agentum kill)">
         {busy === 'kill' ? '…' : 'kill'}
       </button>
     {:else}
-      <button type="button" onclick={start} disabled={busy !== null} title="Start session (CLI: agentum up)">
+      <button class="btn-subtle" type="button" onclick={start} disabled={busy !== null} title="Start session (CLI: agentum up)">
         {busy === 'start' ? '…' : 'start'}
       </button>
     {/if}
-    <button type="button" class="danger" onclick={del} disabled={busy !== null} title="Remove (CLI: agentum rm)">
+    <button class="btn-subtle danger" type="button" onclick={del} disabled={busy !== null} title="Remove (CLI: agentum rm)">
       {busy === 'delete' ? '…' : 'rm'}
     </button>
   </div>
 
   {#if error}
-    <div class="error" title={error}>{error}</div>
+    <div class="error mono" title={error}>{error}</div>
   {/if}
-</div>
+</article>
 
 <style>
   .card {
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
-    padding: 1rem 1.1rem;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow);
+    gap: 14px;
+    padding: 18px;
     color: var(--text);
     transition: border-color 120ms ease, background 120ms ease;
+    position: relative;
+    overflow: hidden;
   }
-  .card:hover {
-    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  .card::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: transparent;
+    transition: background 120ms ease;
   }
+  .card:hover { border-color: var(--accent); }
+  .card[data-status="running"]::after { background: var(--success); }
+  .card[data-status="crashed"]::after { background: var(--danger); }
+
   .link {
     display: flex;
     flex-direction: column;
-    gap: 0.55rem;
+    gap: 12px;
     color: var(--text);
     text-decoration: none;
   }
-  header {
+  .row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.5rem;
+    gap: 8px;
   }
   .name {
     font-family: var(--font-display);
-    font-size: 1.05rem;
+    font-size: 18px;
     font-weight: 600;
-    letter-spacing: -0.005em;
+    letter-spacing: -0.02em;
+    margin: 0;
+    line-height: 1.15;
   }
   .meta {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 8px;
     color: var(--text-2);
-    font-size: 0.85rem;
+    font-size: 12.5px;
   }
-  .tool { color: var(--accent); }
-  .workdir { font-size: 0.8rem; }
-  footer {
+  .tool {
+    color: var(--cta);
+    font-size: 12px;
+    letter-spacing: 0.02em;
+  }
+  .sep { color: var(--muted); }
+  .workdir {
+    color: var(--text-2);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .footer {
     display: flex;
     justify-content: space-between;
+    align-items: center;
     color: var(--muted);
-    font-size: 0.78rem;
-    padding-top: 0.4rem;
-    border-top: 1px solid var(--border);
+    font-size: 11.5px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-2);
   }
-  .muted { color: var(--muted); }
-  .mono { font-family: var(--font-mono); }
+  .muted { color: var(--muted); text-transform: lowercase; }
+  .rel { color: var(--text-2); font-size: 11.5px; }
 
   .actions {
     display: flex;
-    gap: 0.35rem;
+    gap: 6px;
     flex-wrap: wrap;
   }
-  .actions button {
+  .actions .btn-subtle {
     flex: 1;
-    min-width: 3.2rem;
-    padding: 0.35rem 0.5rem;
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    background: var(--bg);
-    color: var(--text-2);
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    cursor: pointer;
-  }
-  .actions button:hover:not(:disabled) {
-    color: var(--text);
-    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-  }
-  .actions button:disabled { opacity: 0.5; cursor: not-allowed; }
-  .actions .danger:hover:not(:disabled) {
-    color: var(--danger);
-    border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+    min-width: 56px;
   }
 
   .error {
-    font-family: var(--font-mono);
-    font-size: 0.72rem;
+    font-size: 11px;
     color: var(--danger);
     background: color-mix(in srgb, var(--danger) 10%, transparent);
-    padding: 0.3rem 0.5rem;
-    border-radius: 4px;
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

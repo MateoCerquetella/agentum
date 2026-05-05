@@ -4,54 +4,6 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0] — 2026-05-05
-
-Dashboard UI overhaul — coherent execution of `docs/DESIGN-SYSTEM.md`.
-
-### Changed
-- **Coral CTAs.** The "+ New session" button is the coral pill the
-  design system specifies, not the activation-blue it accidentally
-  inherited. Every primary action now hovers to electric blue —
-  the universal activation signal — with the coral reserved for
-  resting state.
-- **Editorial typography.** New `eyebrow` / `display-1` / `display-2`
-  utilities. Section headings now lead with an IBM Plex Mono uppercase
-  micro-tag (`Overview`, `Activity`, `Empty`, `Build`) followed by a
-  Space Grotesk display headline with `-0.035em` tracking — the
-  "compressed, engineered" quality from § 3.
-- **Status pill.** Real `<span class="status-dot">` element instead of
-  glyph characters. Running state pulses subtly with a halo in the
-  neon green token.
-- **Sidebar active state.** Coral 2px rail slides in from the left on
-  the active nav item; icon shifts to coral; eyebrow group label
-  ("Navigation") sits above the link list. Brand wordmark gets a
-  living status dot.
-- **Topbar.** Sticky, backdrop-blurred over the canvas. Breadcrumb
-  uses IBM Plex Mono with the active leaf in electric blue. Action
-  buttons (palette / fullscreen / user) hover to the activation
-  blue with full-pill geometry on the user chip.
-- **Stat tiles.** Bigger Space Grotesk numerals with negative tracking,
-  separate from uppercase mono labels. Live totals tint to neon green
-  / red only when non-zero — the "signal lights" pattern.
-- **Empty state.** Restructured as a refined card with a top-edge
-  accent halo, eyebrow tag, display headline, monospace shell
-  example, and a primary coral CTA inline.
-- **Session card.** Status accent rail on the left edge (green for
-  running, red for crashed), eyebrow tag, larger display name,
-  coral tool badge, mono workdir, mono `last activity` timestamp.
-  Action row uses the new `btn-subtle` 5px rectangles that hover to
-  blue (or red for `rm`).
-- **Atmosphere.** Faint scanline texture across the canvas, masked
-  to fade out at the edges — the "nocturnal command center" feel.
-- **Universal hover-to-blue.** Every interactive surface — links,
-  pills, ghost buttons, chips — shifts to `#0052ef` on hover. One
-  signal, used consistently.
-
-### Removed
-- Old `--accent` tinted active states that conflated CTA color with
-  activation color. The two are now separate roles (`--cta` and
-  `--accent`).
-
 ## [0.5.9] — 2026-05-05
 
 ### Changed

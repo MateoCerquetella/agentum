@@ -19,11 +19,7 @@
 
   function isActive(href: string): boolean {
     const p = page.url.pathname;
-    if (href === '/') {
-      // Sessions list + per-session pages light up "Agents".
-      // /terminals has its own nav entry, so it must NOT match here.
-      return p === '/' || p.startsWith('/sessions');
-    }
+    if (href === '/') return p === '/' || p.startsWith('/sessions');
     return p === href || p.startsWith(href + '/');
   }
 
@@ -37,32 +33,37 @@
 <aside class="sidebar">
   <a class="brand" href="/">
     <span class="logo" aria-hidden="true">
-      <Icon name="cpu" size={22} />
+      <Icon name="cpu" size={20} />
     </span>
-    <span class="name">
-      <span class="dot" class:alive={runningCount > 0}></span>
-      agentum
+    <span class="wordmark">
+      <span class="status-dot" data-status={runningCount > 0 ? 'running' : 'idle'}></span>
+      <span class="name">agentum</span>
     </span>
   </a>
 
-  <nav>
-    {#each items as item}
-      <a
-        class="nav-item"
-        class:active={isActive(item.href)}
-        class:soon={item.soon}
-        href={item.href}
-        aria-current={isActive(item.href) ? 'page' : undefined}
-      >
-        <Icon name={item.icon} size={16} />
-        <span>{item.label}</span>
-        {#if item.soon}<span class="badge">soon</span>{/if}
-      </a>
-    {/each}
-  </nav>
+  <div class="nav-group">
+    <span class="eyebrow nav-heading">Navigation</span>
+    <nav>
+      {#each items as item}
+        <a
+          class="nav-item"
+          class:active={isActive(item.href)}
+          class:soon={item.soon}
+          href={item.href}
+          aria-current={isActive(item.href) ? 'page' : undefined}
+        >
+          <span class="rail" aria-hidden="true"></span>
+          <Icon name={item.icon} size={15} />
+          <span class="label">{item.label}</span>
+          {#if item.soon}<span class="badge mono">soon</span>{/if}
+        </a>
+      {/each}
+    </nav>
+  </div>
 
-  <footer class="muted">
-    <span>v{__APP_VERSION__}</span>
+  <footer>
+    <span class="eyebrow">Build</span>
+    <span class="ver mono">v{__APP_VERSION__}</span>
   </footer>
 </aside>
 
@@ -70,103 +71,113 @@
   .sidebar {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
-    padding: 0.75rem 0.5rem;
-    width: 220px;
-    min-width: 220px;
+    width: 224px;
+    min-width: 224px;
     border-right: 1px solid var(--border);
     background: var(--surface);
     height: 100vh;
     position: sticky;
     top: 0;
+    padding: 18px 14px;
+    gap: 28px;
   }
   .brand {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 0.6rem 0.7rem;
-    margin-bottom: 0.25rem;
-    border-bottom: 1px solid var(--border);
+    gap: 12px;
+    padding: 4px 6px 18px;
+    border-bottom: 1px solid var(--border-2);
     color: var(--text);
     text-decoration: none;
-    transition: opacity var(--transition, 150ms ease);
+    transition: opacity 120ms ease;
   }
   .brand:hover { opacity: 0.85; }
   .logo {
-    color: var(--accent);
+    color: var(--text);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    background: var(--bg);
+    border: 1px solid var(--border-2);
+    border-radius: var(--radius-sm);
+  }
+  .wordmark {
     display: flex;
     align-items: center;
+    gap: 8px;
   }
   .name {
     font-family: var(--font-display);
+    font-size: 15px;
     font-weight: 600;
-    font-size: 0.95rem;
-    letter-spacing: -0.01em;
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
+    letter-spacing: -0.02em;
+    color: var(--text);
   }
-  .dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--muted);
-    display: inline-block;
-    flex-shrink: 0;
-    transition: background var(--transition, 150ms ease);
-  }
-  .dot.alive { background: var(--success); box-shadow: 0 0 4px var(--success); }
-  nav {
-    display: flex;
-    flex-direction: column;
-    gap: 0.1rem;
-    flex: 1;
-  }
+
+  .nav-group { display: flex; flex-direction: column; gap: 10px; flex: 1; }
+  .nav-heading { padding: 0 8px; }
+
+  nav { display: flex; flex-direction: column; gap: 2px; }
+
   .nav-item {
+    position: relative;
     display: flex;
     align-items: center;
-    gap: 0.55rem;
-    padding: 0.45rem 0.6rem;
-    border-radius: 6px;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
     color: var(--text-2);
     text-decoration: none;
-    font-size: 0.85rem;
-    transition: background var(--transition, 150ms ease), color var(--transition, 150ms ease);
-    position: relative;
+    font-size: 13.5px;
+    transition: background 120ms ease, color 120ms ease;
+  }
+  .rail {
+    position: absolute;
+    left: -14px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 2px;
+    height: 0;
+    background: var(--cta);
+    transition: height 160ms cubic-bezier(0.2, 0.7, 0.2, 1);
   }
   .nav-item:hover {
-    background: var(--surface-2);
+    background: var(--bg);
     color: var(--text);
   }
   .nav-item.active {
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
     color: var(--text);
-    font-weight: 500;
+    background: var(--bg);
   }
+  .nav-item.active .rail { height: 18px; }
   .nav-item.active :global(.icon) {
-    opacity: 1;
-    color: var(--accent);
+    color: var(--cta);
   }
+  .label { letter-spacing: -0.005em; }
   .nav-item.soon { color: var(--muted); cursor: default; }
   .nav-item.soon:hover { background: transparent; color: var(--muted); }
+
   .badge {
-    font-size: 0.65rem;
-    padding: 0.05em 0.4em;
-    border-radius: 999px;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    color: var(--muted);
-    font-family: var(--font-mono);
     margin-left: auto;
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 2px 6px;
+    border-radius: 99999px;
+    background: var(--surface-2);
+    color: var(--muted);
   }
+
   footer {
-    padding: 0.5rem 0.6rem;
-    font-family: var(--font-mono);
-    font-size: 0.72rem;
-    border-top: 1px solid var(--border);
-    margin-top: 0.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 8px 0;
+    border-top: 1px solid var(--border-2);
   }
-  .muted { color: var(--muted); }
+  .ver { font-size: 11px; color: var(--muted); }
 
   @media (max-width: 720px) {
     .sidebar {
@@ -176,18 +187,17 @@
       flex-direction: row;
       position: static;
       align-items: center;
-      gap: 0.5rem;
-      padding: 0.5rem;
+      gap: 10px;
+      padding: 8px 10px;
       border-right: 0;
       border-bottom: 1px solid var(--border);
     }
-    nav {
-      flex-direction: row;
-      overflow-x: auto;
-      flex: 1;
-    }
-    .brand { padding: 0.3rem 0.5rem; border-bottom: 0; border-right: 1px solid var(--border); margin-bottom: 0; }
-    .nav-item { white-space: nowrap; padding: 0.35rem 0.5rem; font-size: 0.78rem; }
+    .brand { padding: 0 8px 0 0; border-bottom: 0; border-right: 1px solid var(--border-2); }
+    .nav-group { flex-direction: row; gap: 0; }
+    .nav-heading { display: none; }
+    nav { flex-direction: row; overflow-x: auto; }
+    .rail { display: none; }
+    .nav-item { white-space: nowrap; padding: 6px 10px; font-size: 12.5px; }
     .badge { display: none; }
     footer { display: none; }
   }

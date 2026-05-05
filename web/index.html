@@ -831,14 +831,14 @@
   .col-comp h3 { margin: 8px 0 18px; font-size: 26px; letter-spacing: -0.02em; font-weight: 500; line-height: 1.18; }
   .col-comp ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
   .col-comp li {
-    display: grid; grid-template-columns: 18px 1fr;
-    gap: 12px; align-items: start;
+    position: relative;
+    padding: 0 0 12px 30px;
     color: var(--fg-2); font-size: 15px;
-    padding-bottom: 12px;
     border-bottom: 1px solid var(--border);
   }
   .col-comp li:last-child { border-bottom: 0; padding-bottom: 0; }
   .col-comp .ic {
+    position: absolute; left: 0; top: 2px;
     width: 18px; height: 18px;
     border-radius: 99999px;
     display: inline-grid; place-items: center;
@@ -877,11 +877,12 @@
   .install-card .desc { color: var(--fg-2); margin: 12px 0 24px; font-size: 15px; line-height: 1.5; max-width: 36ch; }
   .install-card ul { list-style: none; margin: 0 0 28px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
   .install-card li {
-    display: grid; grid-template-columns: 18px 1fr;
-    gap: 10px; align-items: start;
+    position: relative;
+    padding-left: 28px;
     color: var(--fg-2); font-size: 14.5px;
   }
   .install-card .check {
+    position: absolute; left: 0; top: 2px;
     width: 18px; height: 18px;
     color: var(--cta);
   }
@@ -1584,7 +1585,6 @@
     </div>
     <div class="legal">
       <span>© 2026 agentum · MIT</span>
-      <span>v0.5.1 · built with rustc 1.95 · ⚡ tmux-native</span>
     </div>
   </div>
 </footer>
