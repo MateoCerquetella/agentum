@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.5.7] — 2026-05-05
 
+### Added
+- **Command palette covers every dashboard action.** The palette
+  (`Ctrl-P` / `Ctrl-K`) now exposes the full session lifecycle —
+  *new*, *start (up)*, *stop*, *kill*, *delete* — alongside focus,
+  lazygit, refresh, and quit. The keybinds (`n` / `u` / `s` / `K` /
+  `D`) still work; the palette gives every action a discoverable,
+  searchable entry point. New `session-lifecycle` group; included in
+  the `>commands` filter.
+
 ### Changed
 - **`web/` is now fully decoupled from the server.** The frontend lives
   on Netlify (or any static host); `agentum-server` is a JSON-only API.
@@ -20,6 +29,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   failed (target gone, pipe closed) the byte was dropped silently. The
   WS handler now reports `[input dropped: …]` back to the client and
   closes the socket cleanly if the report itself can't be sent.
+- **Release / CI workflows no longer try to build the deleted SvelteKit
+  bundle.** `pnpm` setup and `web/pnpm-lock.yaml` cache key were
+  failing the v0.5.6 release pipeline immediately. Both jobs are now
+  Rust-only.
 
 ## [0.5.6] — 2026-05-05
 
