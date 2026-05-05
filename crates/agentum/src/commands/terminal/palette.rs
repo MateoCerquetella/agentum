@@ -1,13 +1,60 @@
-//! Command palette — VSCode-style action picker.
+//! Command palette — Fresh-IDE-style prefix-routed picker.
 //!
-//! Opened with Ctrl-P or Ctrl-K. Type to filter, ↑/↓ to move, Enter to
-//! run. Actions are produced fresh each frame so dynamic entries (active
-//! sessions, theme registry) reflect current state. Filtering is a cheap
-//! case-insensitive subsequence match so "thmid" matches "Theme: midnight".
+//! Opened with Ctrl-P or Ctrl-K. Prefix routing matches Fresh:
+//!
+//!   (no prefix)  fuzzy across everything (default)
+//!   `>`          commands only (focus, theme, lazygit, refresh, quit)
+//!   `#`          sessions only — like Fresh's buffer switcher
+//!   `@`          themes only
+//!
+//! Type to filter, ↑/↓ to move, Enter to run. Catalogue is rebuilt every
+//! frame so dynamic entries (sessions, themes) stay current. Filtering
+//! is a cheap case-insensitive subsequence match so "thmid" matches
+//! "Theme: midnight".
 
 use uuid::Uuid;
 
 use super::theme;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    All,
+    Commands,
+    Sessions,
+    Themes,
+}
+
+impl Mode {
+    /// Inspect the leading char of `raw` and return (mode, remaining_query).
+    /// The prefix character itself is consumed. An empty/no-prefix string
+    /// stays in `All` mode.
+    pub fn from_query(raw: &str) -> (Self, &str) {
+        match raw.chars().next() {
+            Some('>') => (Self::Commands, raw[1..].trim_start()),
+            Some('#') => (Self::Sessions, raw[1..].trim_start()),
+            Some('@') => (Self::Themes, raw[1..].trim_start()),
+            _ => (Self::All, raw),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Commands => "commands",
+            Self::Sessions => "sessions",
+            Self::Themes => "themes",
+        }
+    }
+
+    pub fn keep(self, group: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Commands => matches!(group, "general" | "focus" | "extensions" | "appearance"),
+            Self::Sessions => group == "sessions",
+            Self::Themes => group == "appearance",
+        }
+    }
+}
 
 /// A single picker entry. The action is a tagged enum so the key handler
 /// can dispatch without holding a closure (which would borrow App).
@@ -141,29 +188,34 @@ impl Catalog {
         Catalog { actions: a }
     }
 
-    /// Subsequence-match filter. Returns indices into `self.actions` so
-    /// the caller can render with original indexes preserved if needed.
-    pub fn filtered<'a>(&'a self, query: &str) -> Vec<&'a Action> {
-        if query.trim().is_empty() {
-            return self.actions.iter().collect();
-        }
-        let needle: String = query.to_lowercase();
-        self.actions
+    /// Apply prefix routing + subsequence filter. Returns the slice of
+    /// actions matching the active mode and query in order. Whitespace-
+    /// separated tokens in the query each must match (Fresh's behaviour).
+    pub fn filtered<'a>(&'a self, raw_query: &str) -> (Mode, Vec<&'a Action>) {
+        let (mode, rest) = Mode::from_query(raw_query);
+        let needle = rest.trim().to_lowercase();
+        let tokens: Vec<&str> = needle.split_whitespace().collect();
+        let out: Vec<&Action> = self
+            .actions
             .iter()
             .filter(|a| {
+                if !mode.keep(a.group) {
+                    return false;
+                }
+                if tokens.is_empty() {
+                    return true;
+                }
                 let hay = format!("{} {} {}", a.group, a.label, a.hint).to_lowercase();
-                subsequence_match(&hay, &needle)
+                tokens.iter().all(|t| subsequence_match(&hay, t))
             })
-            .collect()
+            .collect();
+        (mode, out)
     }
 }
 
 fn subsequence_match(haystack: &str, needle: &str) -> bool {
     let mut hay = haystack.chars();
     'outer: for n in needle.chars() {
-        if n.is_whitespace() {
-            continue;
-        }
         for h in hay.by_ref() {
             if h == n {
                 continue 'outer;

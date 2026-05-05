@@ -4,6 +4,27 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3] — 2026-05-05
+
+Command palette now matches the **Fresh** terminal IDE
+([getfresh.dev](https://getfresh.dev/) · [sinelaw/fresh](https://github.com/sinelaw/fresh))
+prefix-routing model that I should have looked at before shipping v0.4.0.
+
+### Changed
+- **Prefix-routed palette.** `Ctrl-P` (or `Ctrl-K`) opens the picker; the
+  first character of the query routes to a slice:
+  - (no prefix) — fuzzy across everything
+  - `>` — commands only (focus / theme / lazygit / refresh / quit)
+  - `#` — sessions only (Fresh's buffer-switcher analog)
+  - `@` — themes only
+- The active mode is shown as a chip next to the query (`commands`,
+  `sessions`, `themes`, `all`) and as a suffix in the title bar.
+- Bottom of the overlay shows a Fresh-style hints line:
+  `> commands  # sessions  @ themes  ↑↓ move  ⏎ run  Esc close`.
+- Multi-token queries match independently — typing `theme mid` finds
+  "Theme: midnight" the same way Fresh's `feat group` matches
+  `features/groups/view.tsx`.
+
 ## [0.4.2] — 2026-05-05
 
 ### Fixed

@@ -624,7 +624,7 @@ async fn handle_palette_key(
         }
         KeyCode::Enter => {
             let cat = palette_catalog(app);
-            let filtered = cat.filtered(&app.palette.query);
+            let (_mode, filtered) = cat.filtered(&app.palette.query);
             let chosen = filtered.get(app.palette.cursor).cloned().cloned();
             app.overlay = Overlay::None;
             if let Some(action) = chosen {

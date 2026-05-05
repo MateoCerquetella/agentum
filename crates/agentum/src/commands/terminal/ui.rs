@@ -481,12 +481,12 @@ fn draw_install_overlay(f: &mut Frame<'_>, area: Rect, ext: &Extension, p: &Pale
 
 fn draw_palette_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let cat = palette_catalog(app);
-    let filtered = cat.filtered(&app.palette.query);
+    let (mode, filtered) = cat.filtered(&app.palette.query);
     let max = filtered.len().saturating_sub(1);
     let cursor = app.palette.cursor.min(max);
 
     let w = 80.min(area.width.saturating_sub(4));
-    let h = 22.min(area.height.saturating_sub(4));
+    let h = 24.min(area.height.saturating_sub(4));
     let x = area.x + area.width.saturating_sub(w) / 2;
     let y = area.y + area.height.saturating_sub(h) / 2;
     let r = Rect {
@@ -498,7 +498,7 @@ fn draw_palette_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
 
     let block = Block::default()
         .title(Span::styled(
-            " command palette ",
+            format!(" command palette · {} ", mode.label()),
             Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
@@ -510,19 +510,32 @@ fn draw_palette_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let inner = block.inner(r);
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Min(1)])
+        .constraints([
+            Constraint::Length(2), // query
+            Constraint::Min(1),    // results
+            Constraint::Length(1), // hints
+        ])
         .split(inner);
 
-    // Query line.
+    // Query line — mode chip + typed bytes + cursor.
+    let mode_chip = Span::styled(
+        format!(" {} ", mode.label()),
+        Style::default()
+            .fg(p.chip_fg)
+            .bg(p.chip_bg)
+            .add_modifier(Modifier::BOLD),
+    );
     let query_line = Line::from(vec![
         Span::styled(" › ", Style::default().fg(p.accent)),
+        mode_chip,
+        Span::raw(" "),
         Span::styled(
             app.palette.query.clone(),
             Style::default()
                 .fg(p.fg_strong)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" █", Style::default().fg(p.accent)),
+        Span::styled("█", Style::default().fg(p.accent)),
     ]);
     let query = Paragraph::new(query_line).style(Style::default().bg(p.surface_bg));
     f.render_widget(query, rows[0]);
@@ -579,6 +592,26 @@ fn draw_palette_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         let list = List::new(items).style(Style::default().bg(p.surface_bg));
         f.render_widget(list, rows[1]);
     }
+
+    // Hints line — Fresh-style prefix legend.
+    let hints = Line::from(vec![
+        Span::styled(" › ", Style::default().fg(p.subtle)),
+        Span::styled("type", Style::default().fg(p.muted)),
+        Span::styled("  >", Style::default().fg(p.accent)),
+        Span::styled(" commands", Style::default().fg(p.muted)),
+        Span::styled("  #", Style::default().fg(p.accent)),
+        Span::styled(" sessions", Style::default().fg(p.muted)),
+        Span::styled("  @", Style::default().fg(p.accent)),
+        Span::styled(" themes", Style::default().fg(p.muted)),
+        Span::styled("    ↑↓ ", Style::default().fg(p.subtle)),
+        Span::styled("move", Style::default().fg(p.muted)),
+        Span::styled("  ⏎ ", Style::default().fg(p.subtle)),
+        Span::styled("run", Style::default().fg(p.muted)),
+        Span::styled("  Esc ", Style::default().fg(p.subtle)),
+        Span::styled("close", Style::default().fg(p.muted)),
+    ]);
+    let hints_para = Paragraph::new(hints).style(Style::default().bg(p.chrome_bg));
+    f.render_widget(hints_para, rows[2]);
 }
 
 fn overlay_box(
