@@ -249,6 +249,8 @@ export const api = {
     request<Session>(`/api/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
   killSession: (id: string) =>
     request<Session>(`/api/sessions/${encodeURIComponent(id)}/kill`, { method: 'POST' }),
+  patchSession: (id: string, body: { flags?: string[]; model?: string | null }) =>
+    request<Session>(`/api/sessions/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteSession: (id: string, force = false) =>
     request<void>(
       `/api/sessions/${encodeURIComponent(id)}${force ? '?force=true' : ''}`,

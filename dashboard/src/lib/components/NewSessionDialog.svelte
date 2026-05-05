@@ -12,10 +12,12 @@
   let model = $state('');
   let argsRaw = $state('');
   let upAfter = $state(true);
+  let yolo = $state(false);
   let submitting = $state(false);
   let error = $state<string | null>(null);
 
   const tools = ['claude', 'codex', 'opencode', 'aider'];
+  const yoloTools = new Set(['claude', 'codex', 'opencode']);
 
   function reset() {
     name = '';
@@ -24,6 +26,7 @@
     model = '';
     argsRaw = '';
     upAfter = true;
+    yolo = false;
     submitting = false;
     error = null;
   }
@@ -56,12 +59,22 @@
     submitting = true;
     error = null;
     try {
+      // Drop the trailing slash that the picker adds while drilling in,
+      // so backend storage shows a canonical path. `/` itself stays as-is.
+      const cleanWorkdir = (() => {
+        const w = workdir.trim();
+        return w.length > 1 && w.endsWith('/') ? w.replace(/\/+$/, '') : w;
+      })();
+      const flags = parseArgs(argsRaw);
+      if (yolo && yoloTools.has(tool.trim())) {
+        flags.push('--dangerously-skip-permissions');
+      }
       const body: NewSession = {
         name: name.trim(),
         tool: tool.trim(),
-        workdir: workdir.trim(),
+        workdir: cleanWorkdir,
         model: model.trim() || null,
-        flags: parseArgs(argsRaw)
+        flags
       };
       const created = await api.createSession(body);
       if (upAfter) {
@@ -169,6 +182,11 @@
       <label class="checkbox">
         <input type="checkbox" bind:checked={upAfter} />
         <span>Start immediately (<code>--up</code>)</span>
+      </label>
+
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={yolo} />
+        <span>YOLO mode (<code>--dangerously-skip-permissions</code>)</span>
       </label>
 
       {#if error}

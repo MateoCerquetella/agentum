@@ -10,8 +10,12 @@
   let error = $state<string | null>(null);
   let inputText = $state('');
   let sending = $state(false);
-  let lifecycleBusy = $state<null | 'start' | 'stop' | 'kill' | 'delete'>(null);
+  let lifecycleBusy = $state<null | 'start' | 'stop' | 'kill' | 'delete' | 'yolo'>(null);
   let rawKeys = $state('');
+
+  const YOLO_FLAG = '--dangerously-skip-permissions';
+  const isYolo = $derived(session ? session.flags.includes(YOLO_FLAG) : false);
+  const canToggleYolo = $derived(session ? (session.status === 'idle' || session.status === 'stopped') : false);
 
   // Common tmux key specs surfaced as one-click buttons. The CLI exposes
   // `agentum keys <name> <spec>`; this is the same thing visually.
@@ -108,6 +112,22 @@
     if (!confirm(`Force-kill "${session.name}"? Any in-flight work will be lost.`)) return;
     lifecycle('kill', () => api.killSession(session!.id));
   }
+  async function toggleYolo() {
+    if (!session || !canToggleYolo) return;
+    lifecycleBusy = 'yolo';
+    error = null;
+    try {
+      const newFlags = isYolo
+        ? session.flags.filter(f => f !== YOLO_FLAG)
+        : [...session.flags, YOLO_FLAG];
+      await api.patchSession(session.id, { flags: newFlags });
+      await reload();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      lifecycleBusy = null;
+    }
+  }
   async function onDelete() {
     if (!session) return;
     const force = session.status === 'running';
@@ -147,7 +167,12 @@
         {/if}
       </p>
     </div>
-    <StatusPill status={session.status} />
+    <div class="head-badges">
+      {#if isYolo}
+        <span class="yolo-pill" title="YOLO mode — permissions auto-approved">⚡ YOLO</span>
+      {/if}
+      <StatusPill status={session.status} />
+    </div>
   </header>
 
   <div class="lifecycle">
@@ -161,6 +186,17 @@
     {:else}
       <button onclick={onStart} disabled={lifecycleBusy !== null}>
         {lifecycleBusy === 'start' ? 'starting…' : 'start'}
+      </button>
+    {/if}
+    {#if canToggleYolo}
+      <button
+        class="yolo-toggle"
+        class:active={isYolo}
+        onclick={toggleYolo}
+        disabled={lifecycleBusy !== null}
+        title={isYolo ? 'Disable YOLO mode' : 'Enable YOLO mode'}
+      >
+        {lifecycleBusy === 'yolo' ? '…' : isYolo ? '⚡ yolo: on' : 'yolo: off'}
       </button>
     {/if}
     <button class="danger" onclick={onDelete} disabled={lifecycleBusy !== null}>
@@ -245,6 +281,23 @@
     gap: 1rem;
     margin-bottom: 0.6rem;
   }
+  .head-badges {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+  }
+  .yolo-pill {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 2px 8px;
+    border-radius: 5px;
+    color: var(--bg);
+    background: var(--warning, #e6a817);
+  }
   h2 {
     font-family: var(--font-display);
     margin: 0 0 0.25rem;
@@ -277,6 +330,24 @@
   .lifecycle .danger:hover:not(:disabled) {
     color: var(--danger);
     border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  }
+  .lifecycle .yolo-toggle {
+    padding: 0.4rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--surface);
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+  .lifecycle .yolo-toggle.active {
+    color: var(--bg, #222);
+    background: var(--warning, #e6a817);
+    border-color: var(--warning, #e6a817);
+  }
+  .lifecycle .yolo-toggle:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--warning, #e6a817) 60%, var(--border));
   }
 
   .input-bar {

@@ -4,6 +4,29 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] — 2026-05-05
+
+YOLO mode and dashboard polish.
+
+### Added
+- **YOLO mode.** A checkbox in the New Session dialog and a toggle on the
+  session detail page that appends `--dangerously-skip-permissions` for
+  opencode, Claude Code, and Codex sessions. A `⚡ YOLO` badge appears on
+  session cards, canvas tiles, and the detail header so you can see at a
+  glance which agents are running with permissions auto-approved.
+- **PATCH `/api/sessions/{id}`** endpoint to update session flags (only on
+  idle/stopped sessions).
+
+### Changed
+- **DirPicker improved.** ArrowRight now drills into highlighted
+  directories, and directory entries get separate click targets for
+  "enter" (`›`) vs "select" (name). Hint bar updated accordingly.
+- **Web mascot refreshed** with a new pixel-art look.
+
+### Fixed
+- **DirPicker Enter key** now commits the highlighted directory instead
+  of drilling in, matching the double-click behavior.
+
 ## [0.6.1] — 2026-05-05
 
 TUI navigation overhaul. The pane focus model fought the user — once inside

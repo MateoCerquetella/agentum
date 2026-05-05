@@ -25,7 +25,7 @@ const GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/sessions", get(list).post(create))
-        .route("/api/sessions/{id}", get(get_one).delete(delete))
+        .route("/api/sessions/{id}", get(get_one).patch(patch_session).delete(delete))
         .route("/api/sessions/{id}/start", post(start))
         .route("/api/sessions/{id}/stop", post(stop))
         .route("/api/sessions/{id}/kill", post(kill))
@@ -82,6 +82,37 @@ async fn get_one(
 struct DeleteQuery {
     #[serde(default)]
     force: bool,
+}
+
+#[derive(Deserialize)]
+struct PatchBody {
+    #[serde(default)]
+    flags: Option<Vec<String>>,
+    #[serde(default)]
+    model: Option<Option<String>>,
+}
+
+async fn patch_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<PatchBody>,
+) -> Result<Json<Session>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let session = load(&state, id).await?;
+    if matches!(session.status, Status::Running) {
+        return Err(ApiError::BadRequest(
+            "cannot patch a running session; stop it first".into(),
+        ));
+    }
+    if let Some(flags) = body.flags {
+        let updated = state.store.patch_session_flags(id, &flags).await?;
+        return Ok(Json(updated));
+    }
+    if let Some(model) = body.model {
+        // Future: patch model — not yet implemented in store
+        let _ = model;
+    }
+    Ok(Json(session))
 }
 
 async fn delete(

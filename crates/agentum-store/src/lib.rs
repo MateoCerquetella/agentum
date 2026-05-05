@@ -207,6 +207,28 @@ impl Store {
         Ok(())
     }
 
+    /// Patch session flags (JSON array). Returns the updated session.
+    pub async fn patch_session_flags(&self, id: Uuid, flags: &[String]) -> Result<Session> {
+        let now = OffsetDateTime::now_utc();
+        let now_s = now.format(&Rfc3339)?;
+        let flags_json = serde_json::to_string(&flags)?;
+        let affected = sqlx::query(
+            "UPDATE sessions SET flags = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(&flags_json)
+        .bind(now_s)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if affected == 0 {
+            return Err(StoreError::NotFound(id.to_string()));
+        }
+        self.get_session_by_id(id)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(id.to_string()))
+    }
+
     // ---------- board ----------
 
     pub async fn create_board_item(&self, new: NewBoardItem) -> Result<BoardItem> {

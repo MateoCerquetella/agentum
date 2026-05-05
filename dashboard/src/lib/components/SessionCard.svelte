@@ -39,6 +39,9 @@
     }
   }
 
+  const YOLO_FLAG = '--dangerously-skip-permissions';
+  const isYolo = $derived(session.flags.includes(YOLO_FLAG));
+
   function start(e: MouseEvent) { e.preventDefault(); run('start', () => api.startSession(session.id)); }
   function stop(e: MouseEvent)  { e.preventDefault(); run('stop',  () => api.stopSession(session.id)); }
   function kill(e: MouseEvent)  { e.preventDefault(); run('kill',  () => api.killSession(session.id)); }
@@ -56,7 +59,12 @@
   <a class="link" href={`/sessions/${session.id}`}>
     <div class="row">
       <span class="eyebrow">Session</span>
-      <StatusPill status={session.status} />
+      <div class="badges">
+        {#if isYolo}
+          <span class="yolo-badge" title="YOLO mode — permissions auto-approved">YOLO</span>
+        {/if}
+        <StatusPill status={session.status} />
+      </div>
     </div>
 
     <h3 class="name">{session.name}</h3>
@@ -133,6 +141,22 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+  }
+  .badges {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .yolo-badge {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: var(--bg);
+    background: var(--warning, #e6a817);
   }
   .name {
     font-family: var(--font-display);

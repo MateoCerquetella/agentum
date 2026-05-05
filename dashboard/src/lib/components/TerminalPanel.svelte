@@ -27,6 +27,9 @@
   let startLayout: PanelLayout = { x: 0, y: 0, w: 0, h: 0, z: 0 };
   let pointerId: number | null = null;
 
+  const YOLO_FLAG = '--dangerously-skip-permissions';
+  const isYolo = $derived(session.flags.includes(YOLO_FLAG));
+
   function captureStart(e: PointerEvent, mode: 'drag' | 'r' | 'b' | 'br') {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -103,6 +106,9 @@
     <span class="grip" aria-hidden="true">⋮⋮</span>
     <span class="name" title={session.workdir}>{session.name}</span>
     <span class="tool mono">{session.tool}</span>
+    {#if isYolo}
+      <span class="yolo-dot" title="YOLO mode — permissions auto-approved">⚡</span>
+    {/if}
     <span class="spacer"></span>
     <StatusPill status={session.status} />
     <button

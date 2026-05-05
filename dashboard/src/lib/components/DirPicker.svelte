@@ -118,9 +118,13 @@
     } else if (e.key === 'Enter') {
       if (highlight >= 0 && visible[highlight]) {
         e.preventDefault();
-        pick(visible[highlight]);
+        commit(visible[highlight]);
       }
-      // else let the form submit
+      // else let the form submit with whatever's typed
+    } else if (e.key === 'ArrowRight' && highlight >= 0 && visible[highlight]) {
+      // Drill into the highlighted dir (autocomplete-style).
+      e.preventDefault();
+      pick(visible[highlight]);
     } else if (e.key === 'Tab' && visible[0]) {
       e.preventDefault();
       pick(visible[highlight >= 0 ? highlight : 0]);
@@ -175,24 +179,35 @@
           <span class="path mono">{listedFor || '~'}</span>
         </div>
         {#each visible as d, i (d.path)}
-          <button
-            type="button"
+          <div
             class="row item"
             class:active={i === highlight}
             onmouseenter={() => (highlight = i)}
-            onmousedown={(e) => { e.preventDefault(); pick(d); }}
-            ondblclick={() => commit(d)}
-            title={d.path}
+            role="presentation"
           >
-            <span class="caret" aria-hidden="true">›</span>
-            <span class="name mono">{d.name}</span>
-          </button>
+            <button
+              type="button"
+              class="enter"
+              onmousedown={(e) => { e.preventDefault(); pick(d); }}
+              title="enter {d.name}/"
+              aria-label="enter {d.name}"
+            >›</button>
+            <button
+              type="button"
+              class="name-btn"
+              onmousedown={(e) => { e.preventDefault(); commit(d); }}
+              ondblclick={() => commit(d)}
+              title={d.path}
+            >
+              <span class="name mono">{d.name}</span>
+            </button>
+          </div>
         {/each}
       {/if}
       <div class="row hint mono">
-        <span>↩ enter dir</span>
-        <span>tab autocomplete</span>
-        <span>dbl-click pick</span>
+        <span>click select</span>
+        <span>› drill in</span>
+        <span>↩ pick · → drill</span>
       </div>
     </div>
   {/if}
@@ -250,11 +265,32 @@
   .row.err { color: var(--danger); cursor: default; }
   .row.meta { cursor: default; padding-bottom: 0.25rem; border-bottom: 1px solid var(--border); margin-bottom: 0.15rem; }
   .row.meta .path { color: var(--accent); }
+  .row.item { padding: 0; gap: 0; }
   .row.item:hover, .row.item.active {
     background: color-mix(in srgb, var(--accent) 12%, var(--surface));
     color: var(--text);
   }
-  .caret { color: var(--muted); font-family: var(--font-mono); }
+  .row.item .enter,
+  .row.item .name-btn {
+    background: transparent;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    padding: 0.35rem 0.55rem;
+    text-align: left;
+  }
+  .row.item .enter {
+    color: var(--muted);
+    font-family: var(--font-mono);
+    padding-right: 0.3rem;
+    border-radius: 4px 0 0 4px;
+  }
+  .row.item .enter:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); }
+  .row.item .name-btn {
+    flex: 1;
+    border-radius: 0 4px 4px 0;
+  }
   .name { font-family: var(--font-mono); font-size: 0.82rem; }
   .mono { font-family: var(--font-mono); }
   .hint {
