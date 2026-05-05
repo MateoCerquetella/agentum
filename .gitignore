@@ -26,3 +26,4 @@ web/dist
 
 # Claude Code workspace metadata
 .claude/
+.syncthing.*
