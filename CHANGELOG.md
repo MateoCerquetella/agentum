@@ -4,6 +4,45 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-05-05
+
+Adds an interactive terminal dashboard alongside the existing browser SPA,
+plus a username/password auth refactor and a working `curl | sh` install path.
+
+### Added
+- `agentum terminal` (alias `agentum tui`) — ratatui-based terminal dashboard
+  that talks to a running `agentum serve` over the same HTTP/WS API the
+  Svelte SPA uses. Workdir-grouped session tree on the left, live ANSI
+  terminal pane on the right, message input at the bottom, status bar with
+  connection state + error counter. Mirrors the agentmux look on top of
+  agentum's existing data model.
+- `lazyagentum` shim binary — drops you straight into the dashboard with
+  no subcommands, the way `lazygit` works.
+- `--api <URL>` flag for pointing the dashboard at a non-default daemon.
+- `agentum new --pick / -P` — interactive workdir picker via `lf`.
+- New session dialog in the web UI with directory browsing.
+
+### Changed
+- **Auth refactor.** Replaces the static `$XDG_DATA_HOME/agentum/auth_token`
+  file with username/password + Argon2id-hashed credentials and per-user
+  session tokens stored in `auth_sessions`. First run prompts for
+  registration. Session tokens are cached in
+  `$XDG_DATA_HOME/agentum/cli_token` (chmod 0600) for subsequent CLI runs.
+- `agentum` is now a `lib` + `bin` crate so multiple binaries
+  (`agentum`, `lazyagentum`) share the same CLI plumbing.
+
+### Fixed
+- `scripts/install.sh` now matches the asset names produced by
+  `release.yml` (Rust target triples) and verifies against the published
+  `SHA256SUMS` file.
+
+### Notes
+- The TUI accepts the daemon's self-signed cert only for localhost. Remote
+  HTTPS daemons (Tailscale, SSH-tunneled, etc.) need either an `--insecure`
+  opt-in (not yet implemented) or trust-on-first-use cert pinning.
+- Lazygit-style side pane (local PTY) modules are present but not yet
+  wired into the layout; ship target is v0.3.0.
+
 ## [0.1.0] — 2026-05-04
 
 The first release. Implements every phase of the original PRD v2.

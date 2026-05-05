@@ -3,6 +3,7 @@ pub mod board;
 pub mod channels;
 pub mod doctor;
 pub mod events;
+pub mod fs;
 pub mod health;
 pub mod notes;
 pub mod sessions;

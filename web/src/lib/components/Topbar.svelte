@@ -15,13 +15,7 @@
 
   function pageLabel(): string {
     const p = page.url.pathname;
-    if (p === '/' || p.startsWith('/sessions')) return 'Sessions';
-    if (p.startsWith('/board')) return 'Board';
-    if (p.startsWith('/graph')) return 'Graph';
-    if (p.startsWith('/tools')) return 'Tools';
-    if (p.startsWith('/notes')) return 'Notes';
-    if (p.startsWith('/channels')) return 'Channels';
-    if (p.startsWith('/doctor')) return 'Doctor';
+    if (p === '/' || p.startsWith('/sessions')) return 'Agents';
     if (p.startsWith('/settings')) return 'Settings';
     return 'agentum';
   }

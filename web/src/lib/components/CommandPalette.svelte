@@ -5,8 +5,6 @@
   import { openShortcuts } from '$stores/palette';
   import { applyTheme, type Theme } from '$stores/theme';
   import { sessions, loadSessions } from '$stores/sessions';
-  import { notes, loadNotes } from '$stores/notes';
-  import { board, loadBoard } from '$stores/board';
   import { openNewSession } from '$stores/newSession';
 
   type Entry = {
@@ -31,19 +29,12 @@
     out.push({ id: 'cmd:theme:obsidian-dark',  title: 'Switch theme: obsidian-dark',  badge: 'cmd', action: () => applyTheme('obsidian-dark') });
     out.push({ id: 'cmd:theme:system',          title: 'Switch theme: system',          badge: 'cmd', action: () => applyTheme('system') });
     out.push({ id: 'cmd:shortcuts',             title: 'Show keyboard shortcuts (?)',   badge: 'cmd', action: () => { closePalette(); openShortcuts(); } });
-    out.push({ id: 'cmd:new-session',            title: 'New session…',                  badge: 'cmd', subtitle: 'agentum new', action: () => { closePalette(); openNewSession(); } });
-    out.push({ id: 'cmd:doctor',                 title: 'Run doctor',                    badge: 'cmd', subtitle: 'agentum doctor', action: () => goto('/doctor') });
-    out.push({ id: 'cmd:settings',              title: 'Open settings',                 badge: 'cmd', subtitle: '(soon)', action: () => goto('/settings') });
+    out.push({ id: 'cmd:new-session',            title: 'New agent…',                    badge: 'cmd', subtitle: 'agentum new', action: () => { closePalette(); openNewSession(); } });
+    out.push({ id: 'cmd:settings',               title: 'Open settings',                 badge: 'cmd', action: () => goto('/settings') });
 
     // Pages
     const pages: Array<[string, string]> = [
-      ['/',         'Sessions'],
-      ['/board',    'Board'],
-      ['/graph',    'Graph'],
-      ['/tools',    'Tools'],
-      ['/notes',    'Notes'],
-      ['/channels', 'Channels'],
-      ['/doctor',   'Doctor'],
+      ['/',         'Agents'],
       ['/settings', 'Settings'],
     ];
     for (const [href, label] of pages) {
@@ -58,32 +49,6 @@
         subtitle: `${s.tool} · ${s.status}`,
         badge: 'session',
         action: () => goto(`/sessions/${s.id}`)
-      });
-    }
-
-    // Board items (across all columns)
-    if ($board.data) {
-      for (const col of $board.data.column_order) {
-        for (const it of $board.data.columns[col] ?? []) {
-          out.push({
-            id: `board:${it.id}`,
-            title: `${it.key}  ${it.title}`,
-            subtitle: `[${it.status}]`,
-            badge: 'board',
-            action: () => goto('/board')
-          });
-        }
-      }
-    }
-
-    // Notes
-    for (const n of $notes.items) {
-      out.push({
-        id: `note:${n.id}`,
-        title: n.title || '(untitled)',
-        subtitle: n.body.slice(0, 60),
-        badge: 'note',
-        action: () => goto('/notes')
       });
     }
 
@@ -133,8 +98,6 @@
       if (s.open) {
         // refresh data & entries each open
         loadSessions();
-        loadNotes();
-        loadBoard();
         rebuild();
         queueMicrotask(() => inputEl?.focus());
       }

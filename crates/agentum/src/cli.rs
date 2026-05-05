@@ -174,7 +174,11 @@ pub enum Cmd {
     Doctor,
 
     /// Launch the interactive terminal dashboard.
-    Tui {
+    ///
+    /// Aliased as `tui` for back-compat. The standalone `lazyagentum` binary
+    /// drops you straight into the same UI.
+    #[command(alias = "tui")]
+    Terminal {
         /// Override API base URL (defaults to https://127.0.0.1:8822 → http fallback).
         #[arg(long)]
         api: Option<String>,
@@ -255,7 +259,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Cmd::Auth { action } => crate::commands::auth::run(action).await,
         Cmd::Config { action } => crate::commands::config::run(action).await,
         Cmd::Doctor => crate::commands::doctor::run().await,
-        Cmd::Tui { api } => crate::commands::tui::run(api).await,
+        Cmd::Terminal { api } => crate::commands::terminal::run(api).await,
     }
 }
 
@@ -284,15 +288,22 @@ mod tests {
     }
 
     #[test]
-    fn tui_parses() {
+    fn terminal_parses() {
+        use clap::Parser;
+        let cli = Cli::parse_from(["agentum", "terminal"]);
+        assert!(matches!(cli.command, Cmd::Terminal { api: None }));
+
+        let cli = Cli::parse_from(["agentum", "terminal", "--api", "http://1.2.3.4:9000"]);
+        match cli.command {
+            Cmd::Terminal { api } => assert_eq!(api.as_deref(), Some("http://1.2.3.4:9000")),
+            _ => panic!("expected Terminal"),
+        }
+    }
+
+    #[test]
+    fn tui_alias_still_works() {
         use clap::Parser;
         let cli = Cli::parse_from(["agentum", "tui"]);
-        assert!(matches!(cli.command, Cmd::Tui { api: None }));
-
-        let cli = Cli::parse_from(["agentum", "tui", "--api", "http://1.2.3.4:9000"]);
-        match cli.command {
-            Cmd::Tui { api } => assert_eq!(api.as_deref(), Some("http://1.2.3.4:9000")),
-            _ => panic!("expected Tui"),
-        }
+        assert!(matches!(cli.command, Cmd::Terminal { api: None }));
     }
 }

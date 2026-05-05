@@ -56,6 +56,17 @@ export interface MeResp {
   username: string;
 }
 
+export interface DirEntry {
+  name: string;
+  path: string;
+}
+
+export interface DirListing {
+  path: string;
+  parent: string | null;
+  dirs: DirEntry[];
+}
+
 export interface Health {
   status: 'ok';
   version: string;
@@ -237,6 +248,13 @@ export const api = {
       { method: 'DELETE' }
     ),
   doctor: () => request<DoctorReport>('/api/doctor'),
+
+  // ---------- filesystem (workdir picker) ----------
+
+  listDir: (path?: string) => {
+    const qs = path ? `?path=${encodeURIComponent(path)}` : '';
+    return request<DirListing>(`/api/fs/list${qs}`);
+  },
   sendInput: (id: string, body: SendInput) =>
     request<void>(`/api/sessions/${encodeURIComponent(id)}/send`, {
       method: 'POST',

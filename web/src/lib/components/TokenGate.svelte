@@ -10,8 +10,10 @@
   let confirm = $state('');
   let submitting = $state(false);
   let error = $state<string | null>(null);
-  let demoMode = $state(false);
 
+  // The first-time `needs-setup` state always shows the register form.
+  // Subsequent visits land on login; users with admin access to the host
+  // can add additional accounts via `agentum auth add <name>` from the CLI.
   let mode = $derived<'login' | 'register'>(
     $authState === 'needs-setup' ? 'register' : 'login'
   );
@@ -49,22 +51,12 @@
 {:else if $authState === 'unreachable'}
   <div class="full-screen">
     <div class="card">
-      <div class="logo-area">
-        <span class="logo-icon">⟁</span>
-      </div>
-      <h2>agentum</h2>
-      <p class="muted">Self-hosted control plane for AI coding agents.</p>
-      <p class="muted warn-msg">Backend not detected — browsing in demo mode.</p>
-      <button type="button" class="primary" onclick={() => (demoMode = true)}>
-        Explore the dashboard →
-      </button>
-      <p class="hint muted">
-        Run <code>agentum serve</code> on this host to connect a real backend.
-      </p>
+      <h2>backend unreachable</h2>
+      <p class="muted">Could not reach <code>/api/auth/status</code> on this host.</p>
+      <p class="muted">Make sure <code>agentum serve</code> is running, then refresh.</p>
+      <a href="/" class="back-link mono">← back to landing page</a>
     </div>
   </div>
-{:else if demoMode || $authState === 'ok'}
-  {@render children()}
 {:else if $authState === 'needs-setup' || $authState === 'needs-login'}
   <div class="full-screen">
     <form class="card" onsubmit={submit}>
@@ -145,7 +137,6 @@
     background: var(--bg);
     padding: 1rem;
   }
-  .full-screen.err { color: var(--danger); }
   .card {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -210,22 +201,12 @@
     margin-top: 0.5rem;
     font-size: 0.75rem;
   }
-  .warn-msg {
-    padding: 0.5rem 0.8rem;
-    background: color-mix(in srgb, var(--warn) 12%, transparent);
-    border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--border));
-    border-radius: 6px;
-    color: var(--warn);
-  }
-  .logo-area {
-    display: flex;
-    justify-content: center;
-    margin-bottom: 0.25rem;
-  }
-  .logo-icon {
-    font-size: 2.4rem;
+  .back-link {
+    display: inline-block;
+    margin-top: 0.5rem;
+    font-size: 0.82rem;
     color: var(--accent);
-    font-family: var(--font-mono);
-    line-height: 1;
+    text-decoration: none;
   }
+  .back-link:hover { text-decoration: underline; }
 </style>

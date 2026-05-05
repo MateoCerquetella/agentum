@@ -26,7 +26,7 @@
     const tag = t.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
     if ((t as HTMLElement).isContentEditable) return true;
-    if (t.closest('.cm-editor')) return true; // CodeMirror
+    if (t.closest('.cm-editor')) return true;
     return false;
   }
 
@@ -46,21 +46,9 @@
     }
   }
 
-  function registerServiceWorker() {
-    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
-    if (location.hostname === 'localhost' && import.meta.env?.DEV) return;
-    navigator.serviceWorker
-      .register('/service-worker.js', { scope: '/' })
-      .catch((e) => console.warn('service worker register failed:', e));
-  }
-
   onMount(() => {
-    // Re-apply on mount so the persisted theme wins over the hard-coded
-    // app.html attribute.
     applyTheme(get(theme));
-    registerServiceWorker();
     window.addEventListener('keydown', onKey);
-    // Open the events bus once auth is OK; reconnect if state cycles back.
     const unsub = authState.subscribe((s) => {
       if (s === 'ok') connectEvents();
       else disconnectEvents();
@@ -80,7 +68,7 @@
       <Sidebar />
       <div class="main">
         <Topbar />
-        <main>{@render originalChildren()}</main>
+        <main>{@render children()}</main>
       </div>
       <ToastStack />
       <CommandPalette />
@@ -89,10 +77,6 @@
     </div>
   {/snippet}
 </TokenGate>
-
-{#snippet originalChildren()}
-  {@render children()}
-{/snippet}
 
 <style>
   .shell {

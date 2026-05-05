@@ -1,11 +1,14 @@
-//! `agentum tui` — interactive terminal dashboard.
+//! `agentum terminal` — interactive terminal dashboard (also reachable as
+//! the `lazyagentum` shim binary, and aliased as `agentum tui`).
 //!
 //! Thin client. Talks to a running `agentum serve` over the same HTTP/WS
-//! API the Svelte SPA uses. The TUI never opens the database or touches
-//! tmux directly.
+//! API the Svelte SPA uses. It never opens the database or touches tmux
+//! directly. The lazygit side pane spawns a *local* PTY independently.
 
 mod api;
 mod app;
+mod extensions;
+mod pty;
 mod term;
 mod ui;
 

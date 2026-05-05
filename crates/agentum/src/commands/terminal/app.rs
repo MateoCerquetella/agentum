@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::io::Stdout;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use agentum_core::{Event, Session, Status};
@@ -18,6 +19,8 @@ use tokio::time::{Instant, interval};
 use uuid::Uuid;
 
 use super::api::{Client, EventMsg, TerminalMsg};
+use super::extensions::{self, LAZYGIT};
+use super::pty::{LocalPty, PtyMsg};
 use super::term::TerminalPane;
 use super::ui;
 
@@ -29,6 +32,7 @@ pub enum Focus {
     Tree,
     Term,
     Input,
+    Lazygit,
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +41,15 @@ pub enum ConnState {
     Connecting,
     Connected,
     Disconnected,
+}
+
+/// Modal overlays. At most one is up at a time.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Overlay {
+    None,
+    Help,
+    LazygitCheats,
+    LazygitInstall,
 }
 
 pub struct App {
@@ -50,7 +63,9 @@ pub struct App {
     pub conn: ConnState,
     pub status_msg: Option<String>,
     pub should_quit: bool,
-    pub help: bool,
+    pub overlay: Overlay,
+    /// `Some` while a lazygit child is alive in the side pane.
+    pub lazygit: Option<LocalPty>,
 }
 
 impl App {
@@ -68,7 +83,8 @@ impl App {
             conn: ConnState::Connecting,
             status_msg: None,
             should_quit: false,
-            help: false,
+            overlay: Overlay::None,
+            lazygit: None,
         }
     }
 
@@ -97,6 +113,10 @@ impl App {
         if let Some(id) = self.selected {
             self.tree.select_session(id);
         }
+    }
+
+    pub fn lazygit_open(&self) -> bool {
+        self.lazygit.is_some()
     }
 }
 
@@ -262,6 +282,7 @@ pub async fn run_loop(
 
     let (term_tx, mut term_rx) = mpsc::unbounded_channel::<TerminalMsg>();
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<EventMsg>();
+    let (lg_tx, mut lg_rx) = mpsc::unbounded_channel::<PtyMsg>();
 
     // Subscribe to the daemon's event bus.
     let _events_handle: JoinHandle<()> = client.open_event_stream(event_tx);
@@ -276,17 +297,33 @@ pub async fn run_loop(
     let mut last_refresh = Instant::now();
 
     loop {
-        // Resize the vt100 parser to match the actual terminal pane area
-        // (terminal width minus 32-col tree minus 2 borders, height minus
-        // title (1) + status (1) + input (3) + 2 borders).
+        // Resize each PTY parser to the actual pane area before drawing.
         let size = terminal.size()?;
-        let cols = size.width.saturating_sub(32 + 2).max(1);
-        let rows = size.height.saturating_sub(1 + 1 + 3 + 2).max(1);
-        app.term.resize(rows, cols);
+        let areas = ui::compute_layout(
+            ratatui::layout::Rect::new(0, 0, size.width, size.height),
+            app.lazygit_open(),
+        );
+        let (term_rows, term_cols) = inner_size(areas.terminal);
+        app.term.resize(term_rows, term_cols);
+        if let Some(lg) = app.lazygit.as_mut() {
+            let (rows, cols) = inner_size(areas.lazygit.unwrap_or(areas.terminal));
+            lg.resize(rows, cols);
+        }
 
         terminal.draw(|f| ui::draw(f, &app))?;
         if app.should_quit {
             return Ok(());
+        }
+
+        // If lazygit exited on its own, drop it and revert focus.
+        if let Some(lg) = app.lazygit.as_ref()
+            && lg.finished()
+        {
+            app.lazygit = None;
+            if app.focus == Focus::Lazygit {
+                app.focus = Focus::Tree;
+            }
+            app.status_msg = Some("lazygit exited".into());
         }
 
         tokio::select! {
@@ -294,7 +331,7 @@ pub async fn run_loop(
 
             maybe_input = crossterm_events.next() => {
                 if let Some(Ok(ev)) = maybe_input {
-                    handle_crossterm(&mut app, ev, &client, &term_tx, &mut stream_handle).await;
+                    handle_crossterm(&mut app, ev, &client, &term_tx, &lg_tx, &mut stream_handle).await;
                 }
             }
 
@@ -304,6 +341,10 @@ pub async fn run_loop(
 
             Some(msg) = event_rx.recv() => {
                 handle_event_msg(&mut app, msg, &client).await;
+            }
+
+            Some(msg) = lg_rx.recv() => {
+                handle_lazygit_msg(&mut app, msg);
             }
 
             _ = tick.tick() => {
@@ -318,16 +359,24 @@ pub async fn run_loop(
     }
 }
 
+/// Pane size in `(rows, cols)` once we strip the 1-cell border on each side.
+fn inner_size(r: ratatui::layout::Rect) -> (u16, u16) {
+    let rows = r.height.saturating_sub(2).max(1);
+    let cols = r.width.saturating_sub(2).max(1);
+    (rows, cols)
+}
+
 async fn handle_crossterm(
     app: &mut App,
     ev: CtEvent,
     client: &Client,
     term_tx: &mpsc::UnboundedSender<TerminalMsg>,
+    lg_tx: &mpsc::UnboundedSender<PtyMsg>,
     stream_handle: &mut Option<JoinHandle<()>>,
 ) {
     match ev {
         CtEvent::Key(key) if key.kind == KeyEventKind::Press => {
-            handle_key(app, key, client, term_tx, stream_handle).await;
+            handle_key(app, key, client, term_tx, lg_tx, stream_handle).await;
         }
         CtEvent::Resize(_, _) => {}
         _ => {}
@@ -339,6 +388,7 @@ async fn handle_key(
     key: KeyEvent,
     client: &Client,
     term_tx: &mpsc::UnboundedSender<TerminalMsg>,
+    lg_tx: &mpsc::UnboundedSender<PtyMsg>,
     stream_handle: &mut Option<JoinHandle<()>>,
 ) {
     // Global: Ctrl-C always quits.
@@ -347,9 +397,35 @@ async fn handle_key(
         return;
     }
 
-    if app.help {
-        if matches!(key.code, KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q')) {
-            app.help = false;
+    // Global escape from lazygit pane back to host: Ctrl-G.
+    if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if app.focus == Focus::Lazygit {
+            app.focus = Focus::Tree;
+            app.status_msg = Some("released lazygit focus (Ctrl-G)".into());
+        }
+        return;
+    }
+
+    // Overlays consume input first.
+    if app.overlay != Overlay::None {
+        if matches!(
+            key.code,
+            KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter
+        ) {
+            app.overlay = Overlay::None;
+        }
+        return;
+    }
+
+    // While the lazygit pane is focused, forward raw bytes to its PTY.
+    if app.focus == Focus::Lazygit {
+        if let Some(lg) = app.lazygit.as_ref()
+            && let Some(bytes) = key_to_bytes(&key)
+        {
+            if let Err(e) = lg.write(&bytes) {
+                app.status_msg = Some(format!("lazygit write: {e}"));
+                app.error_count += 1;
+            }
         }
         return;
     }
@@ -383,13 +459,11 @@ async fn handle_key(
 
     match key.code {
         KeyCode::Char('q') => app.should_quit = true,
-        KeyCode::Char('?') => app.help = true,
+        KeyCode::Char('?') => app.overlay = Overlay::Help,
+        KeyCode::Char('g') => toggle_lazygit(app, lg_tx).await,
+        KeyCode::Char('G') => app.overlay = Overlay::LazygitCheats,
         KeyCode::Tab => {
-            app.focus = match app.focus {
-                Focus::Tree => Focus::Term,
-                Focus::Term => Focus::Input,
-                Focus::Input => Focus::Tree,
-            }
+            app.focus = next_focus(app.focus, app.lazygit_open());
         }
         KeyCode::Char('i') => app.focus = Focus::Input,
         KeyCode::Char('r') => {
@@ -413,6 +487,121 @@ async fn handle_key(
         }
         _ => {}
     }
+}
+
+fn next_focus(current: Focus, lazygit_open: bool) -> Focus {
+    if lazygit_open {
+        match current {
+            Focus::Tree => Focus::Term,
+            Focus::Term => Focus::Lazygit,
+            Focus::Lazygit => Focus::Input,
+            Focus::Input => Focus::Tree,
+        }
+    } else {
+        match current {
+            Focus::Tree => Focus::Term,
+            Focus::Term => Focus::Input,
+            Focus::Input => Focus::Tree,
+            Focus::Lazygit => Focus::Tree,
+        }
+    }
+}
+
+/// Toggle the lazygit side pane.
+///
+/// On open: confirm the binary is on PATH (else show the install overlay),
+/// resolve the active session's workdir, spawn a PTY, and steal focus to it.
+/// On close: drop the `LocalPty` (its `Drop` kills the child).
+async fn toggle_lazygit(app: &mut App, lg_tx: &mpsc::UnboundedSender<PtyMsg>) {
+    if app.lazygit.is_some() {
+        app.lazygit = None;
+        if app.focus == Focus::Lazygit {
+            app.focus = Focus::Tree;
+        }
+        app.status_msg = Some("closed lazygit".into());
+        return;
+    }
+
+    if !extensions::is_installed(&LAZYGIT) {
+        app.overlay = Overlay::LazygitInstall;
+        return;
+    }
+
+    let cwd: PathBuf = match app.selected_session() {
+        Some(s) => PathBuf::from(&s.workdir),
+        None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    };
+    let args = extensions::resolve_args(&LAZYGIT, &cwd);
+
+    // Use a placeholder size; the run-loop resizes on the next frame.
+    match LocalPty::spawn(LAZYGIT.binary, &args, &cwd, 24, 80, lg_tx.clone()) {
+        Ok(pty) => {
+            app.lazygit = Some(pty);
+            app.focus = Focus::Lazygit;
+            app.status_msg = Some(format!("lazygit @ {}", cwd.display()));
+        }
+        Err(e) => {
+            app.status_msg = Some(format!("lazygit spawn failed: {e}"));
+            app.error_count += 1;
+        }
+    }
+}
+
+/// Translate a crossterm key event into bytes the lazygit PTY understands.
+/// Mirrors the subset agentmux/wezterm/etc. handle for embedded TUIs.
+fn key_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let mut out = Vec::new();
+    match key.code {
+        KeyCode::Char(c) => {
+            if ctrl {
+                let lower = c.to_ascii_lowercase();
+                if lower.is_ascii_alphabetic() {
+                    out.push((lower as u8) - b'a' + 1);
+                } else {
+                    out.push(c as u8);
+                }
+            } else if alt {
+                out.push(0x1b);
+                out.extend(c.to_string().as_bytes());
+            } else {
+                out.extend(c.to_string().as_bytes());
+            }
+        }
+        KeyCode::Enter => out.push(b'\r'),
+        KeyCode::Tab => out.push(b'\t'),
+        KeyCode::BackTab => out.extend(b"\x1b[Z"),
+        KeyCode::Backspace => out.push(0x7f),
+        KeyCode::Esc => out.push(0x1b),
+        KeyCode::Up => out.extend(b"\x1b[A"),
+        KeyCode::Down => out.extend(b"\x1b[B"),
+        KeyCode::Right => out.extend(b"\x1b[C"),
+        KeyCode::Left => out.extend(b"\x1b[D"),
+        KeyCode::Home => out.extend(b"\x1b[H"),
+        KeyCode::End => out.extend(b"\x1b[F"),
+        KeyCode::PageUp => out.extend(b"\x1b[5~"),
+        KeyCode::PageDown => out.extend(b"\x1b[6~"),
+        KeyCode::Delete => out.extend(b"\x1b[3~"),
+        KeyCode::Insert => out.extend(b"\x1b[2~"),
+        KeyCode::F(n) => match n {
+            1 => out.extend(b"\x1bOP"),
+            2 => out.extend(b"\x1bOQ"),
+            3 => out.extend(b"\x1bOR"),
+            4 => out.extend(b"\x1bOS"),
+            5 => out.extend(b"\x1b[15~"),
+            6 => out.extend(b"\x1b[17~"),
+            7 => out.extend(b"\x1b[18~"),
+            8 => out.extend(b"\x1b[19~"),
+            9 => out.extend(b"\x1b[20~"),
+            10 => out.extend(b"\x1b[21~"),
+            11 => out.extend(b"\x1b[23~"),
+            12 => out.extend(b"\x1b[24~"),
+            _ => return None,
+        },
+        _ => return None,
+    }
+    Some(out)
 }
 
 fn update_selection(
@@ -446,6 +635,20 @@ fn handle_terminal_msg(app: &mut App, msg: TerminalMsg) {
         TerminalMsg::Closed => {
             let line = "\r\n[stream closed]\r\n";
             app.term.feed(line.as_bytes());
+        }
+    }
+}
+
+fn handle_lazygit_msg(app: &mut App, msg: PtyMsg) {
+    match msg {
+        PtyMsg::Bytes(b) => {
+            if let Some(lg) = app.lazygit.as_mut() {
+                lg.feed(&b);
+            }
+        }
+        PtyMsg::Closed => {
+            // Don't drop here; the run-loop's `finished()` poll will tidy
+            // up so we keep the parser visible until the user moves on.
         }
     }
 }
@@ -494,3 +697,4 @@ pub fn status_dot(s: Status) -> (&'static str, ratatui::style::Color) {
         Status::Crashed => ("✗", Color::Red),
     }
 }
+

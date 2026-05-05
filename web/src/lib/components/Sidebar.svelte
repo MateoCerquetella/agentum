@@ -12,14 +12,8 @@
   }
 
   const items: NavItem[] = [
-    { href: '/',         label: 'Sessions',  icon: 'monitor' },
-    { href: '/board',    label: 'Board',     icon: 'columns' },
-    { href: '/graph',    label: 'Graph',     icon: 'share-2' },
-    { href: '/tools',    label: 'Tools',     icon: 'tool' },
-    { href: '/notes',    label: 'Notes',     icon: 'file-text' },
-    { href: '/channels', label: 'Channels',  icon: 'message-circle' },
-    { href: '/doctor',   label: 'Doctor',    icon: 'stethoscope' },
-    { href: '/settings', label: 'Settings',  icon: 'settings', soon: true }
+    { href: '/',         label: 'Agents',    icon: 'monitor' },
+    { href: '/settings', label: 'Settings',  icon: 'settings' }
   ];
 
   function isActive(href: string): boolean {

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type NewSession } from '$lib/api';
   import { loadSessions } from '$stores/sessions';
+  import DirPicker from './DirPicker.svelte';
 
   type Props = { open: boolean; onClose: () => void };
   let { open, onClose }: Props = $props();
@@ -146,12 +147,10 @@
 
       <label>
         <span>Working directory</span>
-        <input
-          type="text"
+        <DirPicker
           bind:value={workdir}
-          placeholder="/home/you/projects/foo"
-          autocomplete="off"
-          spellcheck="false"
+          onChange={(v) => (workdir = v)}
+          placeholder="~/projects/foo"
           required
         />
       </label>
