@@ -23,3 +23,6 @@ web/dist
 .env
 .env.local
 *.log
+
+# Claude Code workspace metadata
+.claude/
