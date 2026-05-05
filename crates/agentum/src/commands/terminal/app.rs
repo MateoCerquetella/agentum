@@ -1399,13 +1399,17 @@ fn handle_terminal_msg(app: &mut App, msg: TerminalMsg) {
     match msg {
         TerminalMsg::Bytes(b) => app.term.feed(&b),
         TerminalMsg::Error(s) => {
-            // Show as a soft notice in the pane itself.
-            let line = format!("\r\n[stream] {s}\r\n");
-            app.term.feed(line.as_bytes());
+            // Server-sent text frames are diagnostic — typically
+            // `[input dropped: tmux exited with status 1 (stderr: …)]`
+            // when `tmux send-keys` rejects the target. Surface to the
+            // status bar so the actual pane (claude code, etc.) doesn't
+            // get garbled mid-render. Bump error_count so it's visible
+            // even when the user isn't reading the chrome line.
+            app.status_msg = Some(s.trim().to_string());
+            app.error_count += 1;
         }
         TerminalMsg::Closed => {
-            let line = "\r\n[stream closed]\r\n";
-            app.term.feed(line.as_bytes());
+            app.status_msg = Some("terminal stream closed".into());
         }
     }
 }
