@@ -2,14 +2,14 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use tui_term::widget::PseudoTerminal;
 
 use super::app::{
-    App, ConnState, DirPickerState, Focus, NewSessionField, NewSessionForm, Overlay,
-    PendingAction, Row, palette_catalog, status_dot,
+    App, ConnState, DirPickerState, Focus, NewSessionField, NewSessionForm, Overlay, PendingAction,
+    Row, palette_catalog, status_dot,
 };
 use super::extensions::{self, Extension, LAZYGIT};
 use super::theme::Palette;
@@ -248,9 +248,13 @@ fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         return;
     }
 
-    let pseudo = PseudoTerminal::new(app.term.screen());
+    // Base style threads the theme through to *empty* terminal cells —
+    // tui_term's default leaves untouched cells at Color::Reset, which on
+    // a themed agentum looks like "holes" through the host bg. With the
+    // base style, empty space inside the pane takes panel_bg + fg.
+    let pseudo =
+        PseudoTerminal::new(app.term.screen()).style(Style::default().bg(p.panel_bg).fg(p.fg));
     f.render_widget(pseudo, inner);
-    fill_default_bg(f, inner, p.panel_bg);
 }
 
 fn draw_lazygit(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
@@ -265,40 +269,13 @@ fn draw_lazygit(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     f.render_widget(block, area);
 
     if let Some(lg) = app.lazygit.as_ref() {
-        let pseudo = PseudoTerminal::new(lg.screen());
+        let pseudo =
+            PseudoTerminal::new(lg.screen()).style(Style::default().bg(p.panel_bg).fg(p.fg));
         f.render_widget(pseudo, inner);
-        fill_default_bg(f, inner, p.panel_bg);
     } else {
         let hint = Paragraph::new("lazygit not running")
             .style(Style::default().fg(p.muted).bg(p.panel_bg));
         f.render_widget(hint, inner);
-    }
-}
-
-/// Fill any cells in `area` whose background is `Color::Reset` with `bg`.
-///
-/// `tui-term`'s `PseudoTerminal` always `Clear`s its area first and then
-/// writes vt100 cells via `set_bg(...)` — empty vt100 cells map to
-/// `Color::Reset`, which on a transparent terminal lets the host wallpaper
-/// bleed through. This patch reasserts the theme's `panel_bg` over those
-/// otherwise-default cells while leaving any explicitly-coloured cell
-/// (claude's status line, syntax highlighting, etc.) untouched. No-ops
-/// for the `system` theme where `panel_bg == Color::Reset` by design.
-fn fill_default_bg(f: &mut Frame<'_>, area: Rect, bg: Color) {
-    if bg == Color::Reset {
-        return;
-    }
-    let buf = f.buffer_mut();
-    let x_end = area.x.saturating_add(area.width);
-    let y_end = area.y.saturating_add(area.height);
-    for y in area.y..y_end {
-        for x in area.x..x_end {
-            if let Some(cell) = buf.cell_mut((x, y))
-                && cell.bg == Color::Reset
-            {
-                cell.set_bg(bg);
-            }
-        }
     }
 }
 
@@ -425,8 +402,16 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
             p,
         ),
         body("  1 / 2 / 3 / 4    jump to panel (lazydocker-style)", p),
-        body("  Tab / ]          next panel", p),
+        body(
+            "  Tab / ]          next panel (when not typing into a pane)",
+            p,
+        ),
         body("  Shift-Tab / [    previous panel", p),
+        body(
+            "  Ctrl-] / F6      next panel — works *even with a pane focused*",
+            p,
+        ),
+        body("  Ctrl-[ / F5      previous panel (same)", p),
         body("  j / k / ↑ / ↓    move selection in tree", p),
         body("  h / l            collapse / expand workdir group", p),
         body("  Enter            select session (start streaming)", p),
@@ -768,13 +753,12 @@ fn push_form_field_with_hint(
     let label_color = if focused { p.accent } else { p.muted };
     let mut label_spans = vec![Span::styled(
         format!("  {label}"),
-        Style::default().fg(label_color).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(label_color)
+            .add_modifier(Modifier::BOLD),
     )];
     if let Some(h) = hint {
-        label_spans.push(Span::styled(
-            format!("  {h}"),
-            Style::default().fg(p.muted),
-        ));
+        label_spans.push(Span::styled(format!("  {h}"), Style::default().fg(p.muted)));
     }
     lines.push(Line::from(label_spans));
     let value_line = if value.is_empty() && !focused {
@@ -826,7 +810,10 @@ fn draw_dir_picker_overlay(f: &mut Frame<'_>, area: Rect, picker: &DirPickerStat
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled("  current  ", Style::default().fg(p.muted)),
-        Span::styled(picker.path.clone(), Style::default().fg(p.fg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            picker.path.clone(),
+            Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
+        ),
     ]));
     if picker.parent.is_some() {
         lines.push(Line::from(Span::styled(
