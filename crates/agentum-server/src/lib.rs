@@ -50,10 +50,23 @@ pub struct AppState {
     pub version: &'static str,
     pub bootstrap_pin: Arc<bootstrap::BootstrapPin>,
     pub auth_limiter: Arc<ratelimit::RateLimiter>,
+    /// SHA-256 fingerprint of the active TLS cert, formatted `AB:CD:…`.
+    /// Empty when running with `--no-tls`. The dashboard wizard needs
+    /// this anonymously (before login) so the user can verify it matches
+    /// what `agentum serve` printed on the host TTY.
+    pub cert_fingerprint: Arc<String>,
 }
 
 impl AppState {
     pub fn new(store: Store, bus: broadcast::Sender<Event>) -> Self {
+        Self::with_fingerprint(store, bus, String::new())
+    }
+
+    pub fn with_fingerprint(
+        store: Store,
+        bus: broadcast::Sender<Event>,
+        cert_fingerprint: String,
+    ) -> Self {
         Self {
             store: Arc::new(store),
             bus,
@@ -64,6 +77,7 @@ impl AppState {
                 AUTH_RATE_LIMIT_ATTEMPTS,
                 AUTH_RATE_LIMIT_WINDOW,
             )),
+            cert_fingerprint: Arc::new(cert_fingerprint),
         }
     }
 }
@@ -78,6 +92,7 @@ pub struct ServeOptions {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::health::router())
+        .merge(routes::cert::router())
         .merge(routes::doctor::router())
         .merge(routes::auth::router())
         .merge(routes::sessions::router())
@@ -108,8 +123,20 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
     // ring is the smaller of the two.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
+    // Load cert artifacts up-front so the fingerprint can flow into
+    // AppState (needed by `/api/cert/fingerprint` for the wizard).
+    let tls_artifacts = if opts.tls {
+        Some(tls::ensure_artifacts()?)
+    } else {
+        None
+    };
+    let cert_fingerprint = tls_artifacts
+        .as_ref()
+        .and_then(|a| tls::cert_fingerprint(&a.cert_pem).ok())
+        .unwrap_or_default();
+
     let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
-    let state = AppState::new(store, bus.clone());
+    let state = AppState::with_fingerprint(store, bus.clone(), cert_fingerprint);
 
     // First-run gate: arm the bootstrap PIN if zero users exist. The PIN is
     // printed to TTY (stderr in normal `tracing` output) so an attacker on
@@ -145,18 +172,16 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
     let watchdog = agentum_watchdog::Watchdog::new(bus, state.store.clone());
     tokio::spawn(watchdog.run());
 
-    let app = router(state);
+    let app = router(state.clone());
 
-    if opts.tls {
-        let artifacts = tls::ensure_artifacts()?;
+    if let Some(artifacts) = tls_artifacts {
         // Print SHA-256 fingerprint so the operator can verify out-of-band
         // when a second device first trusts the cert.
-        match tls::cert_fingerprint(&artifacts.cert_pem) {
-            Ok(fp) => tracing::info!(
+        if !state.cert_fingerprint.is_empty() {
+            tracing::info!(
                 "TLS cert fingerprint (verify on second device): SHA-256 {}",
-                fp
-            ),
-            Err(e) => tracing::warn!(error = %e, "could not compute cert fingerprint"),
+                state.cert_fingerprint
+            );
         }
         let tls_config =
             RustlsConfig::from_pem_file(&artifacts.cert_path, &artifacts.key_path).await?;

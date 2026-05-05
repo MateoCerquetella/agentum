@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod board;
+pub mod cert;
 pub mod channels;
 pub mod doctor;
 pub mod events;

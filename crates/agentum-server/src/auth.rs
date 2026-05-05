@@ -74,7 +74,12 @@ fn verify_password_sync(plain: &str, stored_hash: &str) -> bool {
 fn is_public(path: &str) -> bool {
     matches!(
         path,
-        "/api/health" | "/api/cert" | "/api/auth/status" | "/api/auth/login" | "/api/auth/register"
+        "/api/health"
+            | "/api/cert"
+            | "/api/cert/fingerprint"
+            | "/api/auth/status"
+            | "/api/auth/login"
+            | "/api/auth/register"
     )
 }
 

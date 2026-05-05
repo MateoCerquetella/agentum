@@ -1,43 +1,27 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { authState, refreshAuth, login, register } from '$stores/auth';
+  import { authState, refreshAuth, login } from '$stores/auth';
+  import OnboardingWizard from './OnboardingWizard.svelte';
 
   interface Props { children: import('svelte').Snippet }
   let { children }: Props = $props();
 
   let username = $state('');
   let password = $state('');
-  let confirm = $state('');
   let submitting = $state(false);
   let error = $state<string | null>(null);
 
-  // The first-time `needs-setup` state always shows the register form.
-  // Subsequent visits land on login; users with admin access to the host
-  // can add additional accounts via `agentum auth add <name>` from the CLI.
-  let mode = $derived<'login' | 'register'>(
-    $authState === 'needs-setup' ? 'register' : 'login'
-  );
-
   onMount(refreshAuth);
 
-  async function submit(e: Event) {
+  async function submitLogin(e: Event) {
     e.preventDefault();
     if (!username.trim() || !password) return;
-    if (mode === 'register' && password !== confirm) {
-      error = 'passwords do not match';
-      return;
-    }
     submitting = true;
     error = null;
     try {
-      if (mode === 'register') {
-        await register(username.trim(), password);
-      } else {
-        await login(username.trim(), password);
-      }
+      await login(username.trim(), password);
       username = '';
       password = '';
-      confirm = '';
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -57,18 +41,13 @@
       <a href="/" class="back-link mono">← back to landing page</a>
     </div>
   </div>
-{:else if $authState === 'needs-setup' || $authState === 'needs-login'}
+{:else if $authState === 'needs-setup'}
+  <OnboardingWizard />
+{:else if $authState === 'needs-login'}
   <div class="full-screen">
-    <form class="card" onsubmit={submit}>
-      <h2>{mode === 'register' ? 'create your account' : 'log in to agentum'}</h2>
-      {#if mode === 'register'}
-        <p class="muted">
-          No users exist yet — this first registration becomes the admin
-          account. After this, the dashboard requires login.
-        </p>
-      {:else}
-        <p class="muted">Sign in with your agentum username and password.</p>
-      {/if}
+    <form class="card" onsubmit={submitLogin}>
+      <h2>log in to agentum</h2>
+      <p class="muted">Sign in with your agentum username and password.</p>
 
       <label>
         <span>Username</span>
@@ -89,38 +68,21 @@
         <input
           type="password"
           bind:value={password}
-          placeholder={mode === 'register' ? 'min 8 characters' : ''}
-          autocomplete={mode === 'register' ? 'new-password' : 'current-password'}
+          autocomplete="current-password"
           required
-          minlength={mode === 'register' ? 8 : undefined}
         />
       </label>
-
-      {#if mode === 'register'}
-        <label>
-          <span>Confirm password</span>
-          <input
-            type="password"
-            bind:value={confirm}
-            autocomplete="new-password"
-            required
-            minlength={8}
-          />
-        </label>
-      {/if}
 
       {#if error}<p class="err-msg">{error}</p>{/if}
 
       <button type="submit" class="primary" disabled={!username.trim() || !password || submitting}>
-        {submitting ? (mode === 'register' ? 'creating…' : 'signing in…') : (mode === 'register' ? 'Create account' : 'Sign in')}
+        {submitting ? 'signing in…' : 'Sign in'}
       </button>
 
-      {#if mode === 'login'}
-        <p class="hint muted">
-          Forgot password? Reset all auth on the host with
-          <code>agentum auth reset</code>.
-        </p>
-      {/if}
+      <p class="hint muted">
+        Forgot password? Reset all auth on the host with
+        <code>agentum auth reset</code>.
+      </p>
     </form>
   </div>
 {:else}

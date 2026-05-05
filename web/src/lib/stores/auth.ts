@@ -53,8 +53,12 @@ export async function login(username: string, password: string) {
   authState.set('ok');
 }
 
-export async function register(username: string, password: string) {
-  const r = await api.register(username, password);
+export async function register(
+  username: string,
+  password: string,
+  pin?: string
+) {
+  const r = await api.register(username, password, pin);
   setToken(r.token);
   currentUser.set(r.username);
   authState.set('ok');
