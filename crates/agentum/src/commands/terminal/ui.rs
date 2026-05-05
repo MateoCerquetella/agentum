@@ -290,6 +290,7 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         .selected_session()
         .map(|s| collapse_home(&s.workdir))
         .unwrap_or_else(|| "—".to_string());
+
     let tool_label = app
         .selected_session()
         .map(|s| match s.model.as_deref() {
@@ -332,12 +333,26 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         Span::styled(" g lazygit ", Style::default().fg(p.muted).bg(p.chrome_bg))
     };
 
+    // Bottom-left notification: show the most recent notification.
+    let notif = if let Some(n) = app.notifications.last() {
+        Span::styled(
+            format!(" ● {n} "),
+            Style::default()
+                .fg(p.accent_alt)
+                .bg(p.chrome_bg)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled("", Style::default().fg(p.muted).bg(p.chrome_bg))
+    };
+
     let extra = match &app.status_msg {
         Some(m) => format!(" · {m} "),
         None => String::new(),
     };
 
     let bar = Line::from(vec![
+        notif,
         Span::styled(
             format!(" {workdir} "),
             Style::default().fg(p.fg).bg(p.chrome_bg),
@@ -373,11 +388,15 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         Line::from(""),
         head("  Universal (work even inside the terminal pane)", p),
         body("  Ctrl-P / Ctrl-K   command palette", p),
-        body("  Ctrl-]            next panel", p),
-        body("  Ctrl-[            previous panel", p),
+        body("  Ctrl-] / F5       next panel", p),
+        body("  Ctrl-[ / F6       previous panel", p),
         body("  Ctrl-1 … Ctrl-9   jump to Nth project group in the tree", p),
         body("  Ctrl-Q            quit", p),
         body("  Ctrl-C            interrupt focused pane (else quit)", p),
+        body("  Shift-K           kill selected session", p),
+        body("  Shift-D           delete selected session", p),
+        body("  Shift-U           start (up) selected session", p),
+        body("  Shift-S           stop selected session", p),
         Line::from(""),
         head("  Tree", p),
         body("  1 / 2 / 3         focus tree / terminal / lazygit", p),
@@ -390,6 +409,7 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
             p,
         ),
         body("  r                 refresh sessions", p),
+        body("  t                 spawn plain bash terminal", p),
         Line::from(""),
         head("  Terminal", p),
         body(

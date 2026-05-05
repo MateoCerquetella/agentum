@@ -73,6 +73,7 @@ pub enum ActionKind {
     ToggleLazygit,
     LazygitCheats,
     Refresh,
+    SpawnTerminal,
     FocusTree,
     FocusTerm,
     FocusLazygit,
@@ -110,6 +111,12 @@ impl Catalog {
             hint: "r".into(),
             group: "general",
             kind: ActionKind::Refresh,
+        });
+        a.push(Action {
+            label: "Spawn plain terminal (bash)".into(),
+            hint: "t".into(),
+            group: "general",
+            kind: ActionKind::SpawnTerminal,
         });
 
         // Focus shortcuts.

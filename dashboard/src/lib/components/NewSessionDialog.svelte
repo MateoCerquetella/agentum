@@ -16,7 +16,7 @@
   let submitting = $state(false);
   let error = $state<string | null>(null);
 
-  const tools = ['claude', 'codex', 'opencode', 'aider'];
+  const tools = ['claude', 'codex', 'opencode', 'aider', 'bash'];
   const yoloTools = new Set(['claude', 'codex', 'opencode']);
 
   function reset() {

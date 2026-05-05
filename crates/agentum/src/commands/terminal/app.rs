@@ -65,7 +65,7 @@ pub enum Overlay {
 
 /// Suggested tool names. Mirrors the web's datalist on the New Session
 /// dialog. Pressing Tab on the `Tool` field cycles through these.
-pub const TOOL_SUGGESTIONS: &[&str] = &["claude", "codex", "opencode", "aider"];
+pub const TOOL_SUGGESTIONS: &[&str] = &["claude", "codex", "opencode", "aider", "bash"];
 
 /// Inline new-session form. Mirrors the web `NewSessionDialog` field-for-
 /// field: name, tool (with cycle-suggestions), model, workdir (with a
@@ -303,6 +303,9 @@ pub struct App {
     /// no session is selected; recreated each time the stream is reopened.
     pub term_in: Option<mpsc::UnboundedSender<Vec<u8>>>,
     pub theme: &'static Theme,
+    /// Recent notifications displayed in bottom-left. Pushed on session
+    /// events; capped at 3 entries. Each auto-clears after 8s.
+    pub notifications: Vec<String>,
 }
 
 impl App {
@@ -324,6 +327,7 @@ impl App {
             lazygit: None,
             term_in: None,
             theme: theme::load(),
+            notifications: Vec::new(),
         }
     }
 
@@ -647,7 +651,7 @@ async fn handle_crossterm(
     stream_handle: &mut Option<JoinHandle<()>>,
 ) {
     match ev {
-        CtEvent::Key(key) if key.kind == KeyEventKind::Press => {
+        CtEvent::Key(key) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
             handle_key(app, key, client, term_tx, lg_tx, stream_handle).await;
         }
         CtEvent::Resize(_, _) => {}
@@ -710,7 +714,16 @@ async fn handle_key(
         return;
     }
 
-    // Ctrl-1..Ctrl-9: jump cursor to the Nth project group, expand it,
+    // F5 / F6 — reliable global panel switchers. Use these instead of
+    // Ctrl-] / Ctrl-[ when your terminal eats those key combos.
+    if key.code == KeyCode::F(5) {
+        app.focus = next_focus(app.focus, app.lazygit_open());
+        return;
+    }
+    if key.code == KeyCode::F(6) {
+        app.focus = prev_focus(app.focus, app.lazygit_open());
+        return;
+    }
     // and focus the tree. Doesn't auto-select a session — user navigates
     // with arrows + Enter. Works even with a pane focused.
     if ctrl
@@ -754,6 +767,60 @@ async fn handle_key(
             }
             return;
         }
+    }
+
+    // Global session lifecycle — works from ANY pane (Shift+letter bypasses
+    // key_to_bytes forwarding since shift-only keys return None).
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT)
+        && !key.modifiers.contains(KeyModifiers::CONTROL)
+        && !key.modifiers.contains(KeyModifiers::ALT);
+    if shift {
+        match key.code {
+            KeyCode::Char('K') => {
+                if let Some(s) = app.selected_session() {
+                    app.overlay = Overlay::Confirm(PendingAction::Kill {
+                        id: s.id,
+                        name: s.name.clone(),
+                    });
+                }
+                return;
+            }
+            KeyCode::Char('D') => {
+                if let Some(s) = app.selected_session() {
+                    app.overlay = Overlay::Confirm(PendingAction::Delete {
+                        id: s.id,
+                        name: s.name.clone(),
+                        running: matches!(s.status, Status::Running),
+                    });
+                }
+                return;
+            }
+            KeyCode::Char('U') => {
+                if let Some(s) = app.selected_session() {
+                    app.overlay = Overlay::Confirm(PendingAction::Start {
+                        id: s.id,
+                        name: s.name.clone(),
+                    });
+                }
+                return;
+            }
+            KeyCode::Char('S') => {
+                if let Some(s) = app.selected_session() {
+                    app.overlay = Overlay::Confirm(PendingAction::Stop {
+                        id: s.id,
+                        name: s.name.clone(),
+                    });
+                }
+                return;
+            }
+            _ => {}
+        }
+    }
+
+    // 't' — spawn a plain terminal (bash shell). Works from tree focus.
+    if !shift && key.code == KeyCode::Char('t') && app.focus == Focus::Tree {
+        spawn_plain_terminal(app, client, term_tx, stream_handle).await;
+        return;
     }
 
     // While the lazygit pane is focused, forward raw bytes to its PTY.
@@ -1210,6 +1277,9 @@ async fn run_palette_action(
                 app.status_msg = Some("refreshed".into());
             }
         }
+        ActionKind::SpawnTerminal => {
+            spawn_plain_terminal(app, client, term_tx, stream_handle).await;
+        }
         ActionKind::FocusTree => app.focus = Focus::Tree,
         ActionKind::FocusTerm => app.focus = Focus::Term,
         ActionKind::FocusLazygit => {
@@ -1325,6 +1395,12 @@ async fn toggle_lazygit(app: &mut App, lg_tx: &mpsc::UnboundedSender<PtyMsg>) {
 fn key_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    // Shift-only keys are reserved for TUI lifecycle commands (Shift-K
+    // kills, Shift-D deletes, etc.). Don't forward them to the pane.
+    if shift && !ctrl && !alt {
+        return None;
+    }
     let mut out = Vec::new();
     match key.code {
         KeyCode::Char(c) => {
@@ -1452,19 +1528,87 @@ async fn handle_event_msg(app: &mut App, msg: EventMsg, client: &Client) {
 }
 
 async fn apply_event(app: &mut App, ev: Event, client: &Client) {
+    let name = ev.session_name.unwrap_or_else(|| "?".into());
     match ev.kind.as_str() {
         "session.crashed" | "watchdog.crashed" => {
             app.error_count += 1;
+            push_notification(app, format!("crashed: {name}"));
             if let Ok(fresh) = client.list_sessions().await {
                 app.refresh_sessions(fresh);
             }
         }
-        "session.started" | "session.stopped" | "session.created" | "session.deleted" => {
+        "session.started" => {
+            push_notification(app, format!("started: {name}"));
+            if let Ok(fresh) = client.list_sessions().await {
+                app.refresh_sessions(fresh);
+            }
+        }
+        "session.stopped" => {
+            push_notification(app, format!("stopped: {name}"));
+            if let Ok(fresh) = client.list_sessions().await {
+                app.refresh_sessions(fresh);
+            }
+        }
+        "session.created" | "session.deleted" => {
             if let Ok(fresh) = client.list_sessions().await {
                 app.refresh_sessions(fresh);
             }
         }
         _ => {}
+    }
+}
+
+/// Push a notification onto the bottom-left display. Caps at 3 entries.
+/// Each notification appears for ~8 seconds, using a simple counter
+/// (decremented each frame by the UI). The notification text is shown in the
+/// status line on the far left, giving instant feedback for session lifecycle
+/// events (crashes, stops, starts, etc.).
+fn push_notification(app: &mut App, text: String) {
+    app.notifications.push(text);
+    if app.notifications.len() > 3 {
+        app.notifications.remove(0);
+    }
+    app.status_msg = Some(app.notifications.last().cloned().unwrap_or_default());
+}
+
+/// Spawn a plain bash terminal as a session. Uses the passthrough adapter
+/// so the server picks up `bash` from PATH. Stored as a regular session so
+/// it appears in the tree and can be killed/deleted like any other agent.
+async fn spawn_plain_terminal(
+    app: &mut App,
+    client: &Client,
+    term_tx: &mpsc::UnboundedSender<TerminalMsg>,
+    stream_handle: &mut Option<JoinHandle<()>>,
+) {
+    let name = format!("shell-{}", Uuid::new_v4().to_string().split('-').next().unwrap_or("0"));
+    let workdir = app
+        .selected_session()
+        .map(|s| s.workdir.clone())
+        .or_else(|| std::env::var("HOME").ok())
+        .unwrap_or_else(|| ".".into());
+    match client
+        .create_session(&name, &workdir, "bash", None, vec![])
+        .await
+    {
+        Ok(created) => {
+            let id = created.id;
+            if let Err(e) = client.start_session(id).await {
+                app.status_msg = Some(format!("shell start failed: {e}"));
+                app.error_count += 1;
+            } else {
+                push_notification(app, format!("shell: {name}"));
+            }
+            if let Ok(fresh) = client.list_sessions().await {
+                app.refresh_sessions(fresh);
+                app.tree.select_session(id);
+                update_selection(app, client, term_tx, stream_handle);
+                app.focus = Focus::Term;
+            }
+        }
+        Err(e) => {
+            app.status_msg = Some(format!("shell create failed: {e}"));
+            app.error_count += 1;
+        }
     }
 }
 

@@ -4,6 +4,33 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] — 2026-05-05
+
+TUI interactivity overhaul. Panels now properly accept continuous input,
+global shortcuts work from any focused pane, and notifications surface
+session lifecycle events instantly.
+
+### Fixed
+- **Key repeat forwarding.** Holding a key is no longer a single press —
+  `KeyEventKind::Repeat` events are now forwarded to the pane, fixing the
+  "missing keystrokes" glitch that made typing feel laggy.
+- **Global shortcuts in panes.** Shift-K, Shift-D, Shift-U, Shift-S now
+  trigger kill/delete/start/stop even when the terminal or lazygit pane
+  is focused. Shift-only keys bypass `key_to_bytes()` so they never get
+  eaten by the running process.
+- **Reliable panel cycling.** F5 (next panel) and F6 (previous panel)
+  work as universal panel switchers for terminals that swallow Ctrl-]
+  and Ctrl-[.
+
+### Added
+- **Plain terminal spawn.** Press `t` in the tree or use the palette to
+  spawn a `bash` shell as a regular session. The dashboard now includes
+  `bash` in the New Session tool suggestions.
+- **Event notifications.** Session start, stop, and crash events now show
+  a highlighted notification on the bottom-left status bar.
+- **Spawn terminal palette action.** "Spawn plain terminal (bash)" in the
+  command palette.
+
 ## [0.6.2] — 2026-05-05
 
 YOLO mode and dashboard polish.
