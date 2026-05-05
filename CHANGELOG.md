@@ -4,6 +4,25 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.8] — 2026-05-05
+
+### Added
+- **Restored the SvelteKit web dashboard at `dashboard/`.** The
+  in-browser dashboard (sidebar, session cards, draggable terminal
+  pane, command palette, theme switcher) is back — moved from `web/`
+  to a new `dashboard/` folder so the marketing landing at
+  `web/index.html` stays untouched. The agentum-server re-embeds
+  `dashboard/build/` via `rust-embed` and serves it at `/`. Build with
+  `pnpm --dir dashboard install && pnpm --dir dashboard build` then
+  rebuild the server.
+
+### Changed
+- CSP loosened back to allow inline scripts/styles for the SvelteKit
+  bootstrap. The `default-src 'none'` posture introduced in v0.5.7
+  was correct for a JSON-only API but broke the embedded SPA.
+- CI / release workflows build the dashboard bundle before compiling
+  the server. Cache key is `dashboard/pnpm-lock.yaml`.
+
 ## [0.5.7] — 2026-05-05
 
 ### Added

@@ -1,8 +1,9 @@
 //! Response middleware that stamps the standard browser security headers.
 //!
 //! - `Content-Security-Policy`: same-origin everything, no framing. The
-//!   server is JSON-only — the dashboard frontend is hosted separately
-//!   (Netlify) and talks to this API cross-origin.
+//!   embedded SvelteKit SPA needs `'unsafe-inline'` for its bootstrap
+//!   script (per-build random `__sveltekit_<id>` suffix can't be
+//!   externalised) and for component-level inline styles.
 //! - `X-Frame-Options: DENY`: belt-and-braces with the CSP `frame-ancestors`.
 //! - `X-Content-Type-Options: nosniff`: prevents MIME-sniffing tricks.
 //! - `Referrer-Policy: no-referrer`: don't leak URLs (which contain
@@ -21,15 +22,25 @@ use axum::http::{HeaderName, HeaderValue, header};
 use axum::middleware::Next;
 use axum::response::Response;
 
-// CSP for a JSON API. `default-src 'self'` is mostly defence-in-depth
-// since responses don't render HTML; the inline-script/style allowances
-// kept from the old embedded-SPA era are dropped. If you ever serve
-// HTML directly from this server again, revisit this.
+// SvelteKit injects an inline bootstrap script in index.html that calls
+// `import("/_app/immutable/...")` to start the SPA. That script can't be
+// extracted to an external file (it carries a per-build random suffix on
+// `__sveltekit_<id>` and must run inline). We therefore allow
+// `'unsafe-inline'` for script-src; everything else still requires
+// same-origin. Same posture for style-src — Svelte components emit inline
+// `style` attributes for transitions/dynamic props.
 const CSP: &str = concat!(
-    "default-src 'none'; ",
+    "default-src 'self'; ",
+    "script-src 'self' 'unsafe-inline'; ",
+    "style-src 'self' 'unsafe-inline'; ",
+    "img-src 'self' data: blob:; ",
+    "font-src 'self' data:; ",
+    "connect-src 'self' ws: wss:; ",
+    "worker-src 'self' blob:; ",
+    "manifest-src 'self'; ",
     "frame-ancestors 'none'; ",
-    "base-uri 'none'; ",
-    "form-action 'none'",
+    "base-uri 'self'; ",
+    "form-action 'self'",
 );
 
 pub async fn security_headers(req: Request<Body>, next: Next) -> Response {

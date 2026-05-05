@@ -1,0 +1,46 @@
+/*
+ * System theme: follows prefers-color-scheme. Implemented by re-asserting
+ * the appropriate theme block under data-theme="system". Vars stay in lockstep
+ * with terminal-dark.css and paperlight.css.
+ */
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] {
+    --bg:          #0a0a0c;
+    --surface:     #111114;
+    --surface-2:   #1a1a1f;
+    --border:      #2a2a30;
+    --text:        #e8e8ec;
+    --text-2:      #a0a0b8;
+    --muted:       #707088;
+    --accent:      #ff8a4c;
+    --success:     #4ade80;
+    --warn:        #fbbf24;
+    --danger:      #f87171;
+    --font-sans:   "DM Sans", system-ui, -apple-system, sans-serif;
+    --font-mono:   "JetBrains Mono", "SF Mono", Consolas, monospace;
+    --font-display: var(--font-mono);
+    --radius:      10px;
+    --shadow:      0 1px 0 0 rgba(255,255,255,0.04) inset;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    --bg:          #faf6ee;
+    --surface:     #fdfaf3;
+    --surface-2:   #f1ebdc;
+    --border:      #d9cdb1;
+    --text:        #1a1411;
+    --text-2:      #4a3f33;
+    --muted:       #7a6c58;
+    --accent:      #c2410c;
+    --success:     #166534;
+    --warn:        #a16207;
+    --danger:      #b91c1c;
+    --font-sans:   "Spectral", Georgia, serif;
+    --font-mono:   "JetBrains Mono", "SF Mono", monospace;
+    --font-display: "Spectral", Georgia, serif;
+    --radius:      6px;
+    --shadow:      0 1px 0 rgba(0,0,0,0.04);
+  }
+}

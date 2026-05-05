@@ -1,0 +1,22 @@
+/*
+ * Theme variable contract. Every theme file must set these.
+ * Component CSS only reads from these custom properties — never literal colors.
+ */
+:root {
+  --bg:          #0a0a0c;
+  --surface:     #111114;
+  --surface-2:   #1a1a1f;
+  --border:      #2a2a30;
+  --text:        #e8e8ec;
+  --text-2:      #a0a0b8;
+  --muted:       #707088;
+  --accent:      #ff8a4c;
+  --success:     #4ade80;
+  --warn:        #fbbf24;
+  --danger:      #f87171;
+  --font-sans:   "DM Sans", system-ui, -apple-system, sans-serif;
+  --font-mono:   "JetBrains Mono", "SF Mono", Consolas, monospace;
+  --font-display: var(--font-mono);
+  --radius:      10px;
+  --shadow:      0 1px 0 0 rgba(255,255,255,0.04) inset;
+}
