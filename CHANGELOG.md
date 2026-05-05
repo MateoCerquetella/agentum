@@ -4,6 +4,13 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] — 2026-05-05
+
+### Fixed
+- `x86_64-apple-darwin` release job was stuck queueing on `macos-13` runners
+  (which GitHub is deprecating and queues heavily). Moved to `macos-14`
+  (Apple Silicon) and cross-compile to Intel.
+
 ## [0.2.1] — 2026-05-05
 
 ### Fixed
