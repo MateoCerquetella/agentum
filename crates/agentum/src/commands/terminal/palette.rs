@@ -3,25 +3,20 @@
 //! Opened with Ctrl-P or Ctrl-K. Prefix routing matches Fresh:
 //!
 //!   (no prefix)  fuzzy across everything (default)
-//!   `>`          commands only (focus, theme, lazygit, refresh, quit)
+//!   `>`          commands only (focus, lazygit, refresh, quit)
 //!   `#`          sessions only — like Fresh's buffer switcher
-//!   `@`          themes only
 //!
 //! Type to filter, ↑/↓ to move, Enter to run. Catalogue is rebuilt every
-//! frame so dynamic entries (sessions, themes) stay current. Filtering
-//! is a cheap case-insensitive subsequence match so "thmid" matches
-//! "Theme: midnight".
+//! frame so dynamic entries (sessions) stay current. Filtering is a
+//! cheap case-insensitive subsequence match.
 
 use uuid::Uuid;
-
-use super::theme;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     All,
     Commands,
     Sessions,
-    Themes,
 }
 
 impl Mode {
@@ -32,7 +27,6 @@ impl Mode {
         match raw.chars().next() {
             Some('>') => (Self::Commands, raw[1..].trim_start()),
             Some('#') => (Self::Sessions, raw[1..].trim_start()),
-            Some('@') => (Self::Themes, raw[1..].trim_start()),
             _ => (Self::All, raw),
         }
     }
@@ -42,16 +36,14 @@ impl Mode {
             Self::All => "all",
             Self::Commands => "commands",
             Self::Sessions => "sessions",
-            Self::Themes => "themes",
         }
     }
 
     pub fn keep(self, group: &str) -> bool {
         match self {
             Self::All => true,
-            Self::Commands => matches!(group, "general" | "focus" | "extensions" | "appearance"),
+            Self::Commands => matches!(group, "general" | "focus" | "extensions"),
             Self::Sessions => group == "sessions",
-            Self::Themes => group == "appearance",
         }
     }
 }
@@ -77,8 +69,6 @@ pub enum ActionKind {
     FocusTerm,
     FocusInput,
     FocusLazygit,
-    SetTheme(&'static str),
-    CycleTheme,
     SelectSession(Uuid),
 }
 
@@ -157,22 +147,6 @@ impl Catalog {
             hint: "G".into(),
             group: "extensions",
             kind: ActionKind::LazygitCheats,
-        });
-
-        // Themes.
-        for t in theme::all() {
-            a.push(Action {
-                label: format!("Theme: {}", t.name),
-                hint: "".into(),
-                group: "appearance",
-                kind: ActionKind::SetTheme(t.name),
-            });
-        }
-        a.push(Action {
-            label: "Theme: cycle".into(),
-            hint: "T".into(),
-            group: "appearance",
-            kind: ActionKind::CycleTheme,
         });
 
         // Sessions.

@@ -4,6 +4,39 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.6] — 2026-05-05
+
+### Fixed
+- **Cannot use the inner terminal — silent keystroke drops.** When the
+  Term pane was focused but the WS terminal stream wasn't connected
+  (`term_in == None`), every keypress was swallowed without feedback.
+  The pane felt frozen and there was no way to escape because Ctrl-C
+  was also being "forwarded" into the void. The dispatcher now surfaces
+  a status-bar error in both failure modes (no stream / stream closed)
+  and tells the user how to release focus or quit.
+- **Ctrl-Q is a universal hard-quit.** Runs before any pane forwarding
+  so the user always has an escape hatch — even when the WS is dead and
+  Ctrl-C would otherwise disappear into the SIGINT pipe.
+
+### Changed
+- **Removed the top title bar.** The bar duplicated the workdir, theme
+  chip, and `Ctrl-P palette` hint already present in the bottom status
+  bar. Layout is now a single horizontal split (tree + body) plus the
+  status line — matches the agentmux reference and frees a row for the
+  panes.
+- **Single canonical theme (`sanity`).** The multi-theme registry
+  (`system` / `midnight` / `dusk` / `slate` / `paper` / `mono`) has
+  been retired in favour of one disciplined dark palette. See
+  `docs/DESIGN-SYSTEM.md`. `~/.local/share/agentum/theme` and
+  `$AGENTUM_THEME` are still read for back-compat but their value is
+  ignored. The `T` key and `@theme` palette filter are gone.
+- **Pane title hints advertise `Ctrl-Q`.** Both the Term and Lazygit
+  pane titles now show `Ctrl-G release · Ctrl-Q quit` when focused.
+
+### Removed
+- The SvelteKit `web/` SPA. Replaced with a single static landing page
+  at `web/index.html`. The TUI is now the supported front-end.
+
 ## [0.5.4] — 2026-05-05
 
 ### Added

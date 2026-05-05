@@ -18,7 +18,6 @@ const TREE_WIDTH: u16 = 32;
 
 #[derive(Clone, Copy)]
 pub struct Areas {
-    pub title: Rect,
     pub tree: Rect,
     pub terminal: Rect,
     pub lazygit: Option<Rect>,
@@ -29,17 +28,13 @@ pub struct Areas {
 pub fn compute_layout(area: Rect, lazygit_open: bool) -> Areas {
     let v = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(3),
-            Constraint::Length(1),
-        ])
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
         .split(area);
 
     let body = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(TREE_WIDTH), Constraint::Min(20)])
-        .split(v[1]);
+        .split(v[0]);
 
     let right = Layout::default()
         .direction(Direction::Vertical)
@@ -65,12 +60,11 @@ pub fn compute_layout(area: Rect, lazygit_open: bool) -> Areas {
     };
 
     Areas {
-        title: v[0],
         tree: body[0],
         terminal: terminal_rect,
         lazygit: lazygit_rect,
         input: right[1],
-        status: v[2],
+        status: v[1],
     }
 }
 
@@ -83,7 +77,6 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
     let body = Block::default().style(Style::default().bg(p.body_bg).fg(p.fg));
     f.render_widget(body, f.area());
 
-    draw_title(f, areas.title, app, p);
     draw_tree(f, areas.tree, app, p);
     draw_terminal(f, areas.terminal, app, p);
     if let Some(lg_area) = areas.lazygit {
@@ -118,37 +111,6 @@ fn panel_block<'a>(title: &'a str, focused: bool, p: &Palette) -> Block<'a> {
         .borders(Borders::ALL)
         .border_style(border_style(focused, p))
         .style(Style::default().bg(p.panel_bg).fg(p.fg))
-}
-
-fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
-    let title = match app.selected_session() {
-        Some(s) => format!(" agentum · {} · {} ", s.name, s.workdir),
-        None => " agentum · no session selected ".to_string(),
-    };
-    let theme_chip = format!(" {} ", app.theme.name);
-    let line = Line::from(vec![
-        Span::styled(
-            title,
-            Style::default()
-                .fg(p.fg_strong)
-                .bg(p.body_bg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  ", Style::default().bg(p.body_bg)),
-        Span::styled(
-            theme_chip,
-            Style::default()
-                .fg(p.chip_fg)
-                .bg(p.chip_bg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "  Ctrl-P palette",
-            Style::default().fg(p.muted).bg(p.body_bg),
-        ),
-    ]);
-    let para = Paragraph::new(line).style(Style::default().bg(p.body_bg));
-    f.render_widget(para, area);
 }
 
 fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
@@ -231,7 +193,7 @@ fn render_tree_row(
 fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Term;
     let title = if focused {
-        " 2 terminal · typing → pane · Ctrl-G to release "
+        " 2 terminal · typing → pane · Ctrl-G release · Ctrl-Q quit "
     } else {
         " 2 terminal · Tab/2 to focus "
     };
@@ -256,7 +218,7 @@ fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
 fn draw_lazygit(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Lazygit;
     let title = if focused {
-        " 4 lazygit · Ctrl-G to release · G for cheat sheet "
+        " 4 lazygit · Ctrl-G release · Ctrl-Q quit · G cheat sheet "
     } else {
         " 4 lazygit · Tab/4 to focus · g to close "
     };
@@ -400,10 +362,6 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         ),
         err_text,
         lg_chip,
-        Span::styled(
-            format!(" {} ", app.theme.name),
-            Style::default().fg(p.chip_fg).bg(p.chip_bg),
-        ),
         Span::styled(extra, Style::default().fg(p.muted).bg(p.chrome_bg)),
         Span::styled(
             " Ctrl-P palette ",
@@ -442,6 +400,7 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         ),
         body("  Ctrl-C           interrupt focused pane (else quit)", p),
         body("  Ctrl-G           release focused pane → tree", p),
+        body("  Ctrl-Q           hard quit (works from any pane)", p),
         Line::from(""),
         head("  Sessions", p),
         body(
@@ -456,10 +415,9 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         ),
         body("  D                delete the selected session", p),
         Line::from(""),
-        head("  Extensions & appearance", p),
+        head("  Extensions", p),
         body("  g                toggle lazygit side pane", p),
         body("  G                lazygit cheat sheet", p),
-        body("  T                cycle theme", p),
         Line::from(""),
         body("  ?                toggle this help", p),
         body("  q                quit", p),
@@ -648,8 +606,6 @@ fn draw_palette_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         Span::styled(" commands", Style::default().fg(p.muted)),
         Span::styled("  #", Style::default().fg(p.accent)),
         Span::styled(" sessions", Style::default().fg(p.muted)),
-        Span::styled("  @", Style::default().fg(p.accent)),
-        Span::styled(" themes", Style::default().fg(p.muted)),
         Span::styled("    ↑↓ ", Style::default().fg(p.subtle)),
         Span::styled("move", Style::default().fg(p.muted)),
         Span::styled("  ⏎ ", Style::default().fg(p.subtle)),

@@ -23,7 +23,7 @@ use super::extensions::{self, LAZYGIT};
 use super::palette::{ActionKind, Catalog};
 use super::pty::{LocalPty, PtyMsg};
 use super::term::TerminalPane;
-use super::theme::{self, Theme};
+use super::theme::Theme;
 use super::ui;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
@@ -326,20 +326,8 @@ impl App {
             palette: PaletteState::new(),
             lazygit: None,
             term_in: None,
-            theme: theme::load(),
+            theme: super::theme::load(),
         }
-    }
-
-    pub fn set_theme(&mut self, name: &str) {
-        self.theme = Theme::by_name(name);
-        theme::save(self.theme.name);
-        self.status_msg = Some(format!("theme: {}", self.theme.name));
-    }
-
-    pub fn cycle_theme(&mut self) {
-        self.theme = Theme::next(self.theme.name);
-        theme::save(self.theme.name);
-        self.status_msg = Some(format!("theme: {}", self.theme.name));
     }
 
     pub fn selected_session(&self) -> Option<&Session> {
@@ -660,6 +648,14 @@ async fn handle_key(
         return;
     }
 
+    // Ctrl-Q is a universal hard-quit. It is never forwarded to a pane so the
+    // user always has an escape hatch — even if the WS terminal stream is
+    // dead (in which case Ctrl-C would silently disappear into nothing).
+    if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        app.should_quit = true;
+        return;
+    }
+
     // Ctrl-C only quits when no pane is focused. Inside a pane it's a real
     // SIGINT to whatever's running (claude code, shells, etc.) — otherwise
     // you could never interrupt a long-running task without killing the TUI.
@@ -752,14 +748,27 @@ async fn handle_key(
     }
 
     // While the remote terminal pane is focused, forward raw bytes over the
-    // WS so they hit the running process (claude code, shell, etc.).
+    // WS so they hit the running process (claude code, shell, etc.). When the
+    // stream isn't connected, surface that loudly — silently swallowing keys
+    // is what makes the pane feel "frozen" to the user.
     if app.focus == Focus::Term {
-        if let Some(tx) = app.term_in.as_ref()
-            && let Some(bytes) = key_to_bytes(&key)
-            && tx.send(bytes).is_err()
-        {
-            app.status_msg = Some("terminal stream closed".into());
-            app.error_count += 1;
+        let Some(bytes) = key_to_bytes(&key) else {
+            return;
+        };
+        match app.term_in.as_ref() {
+            Some(tx) => {
+                if tx.send(bytes).is_err() {
+                    app.status_msg =
+                        Some("terminal stream closed — Ctrl-G to release, Ctrl-Q to quit".into());
+                    app.error_count += 1;
+                }
+            }
+            None => {
+                app.status_msg = Some(
+                    "no terminal stream (select a running session) — Ctrl-G release, Ctrl-Q quit"
+                        .into(),
+                );
+            }
         }
         return;
     }
@@ -796,7 +805,6 @@ async fn handle_key(
         KeyCode::Char('?') => app.overlay = Overlay::Help,
         KeyCode::Char('g') => toggle_lazygit(app, lg_tx).await,
         KeyCode::Char('G') => app.overlay = Overlay::LazygitCheats,
-        KeyCode::Char('T') => app.cycle_theme(),
         // lazydocker parity: 1..=4 jump straight to a panel.
         KeyCode::Char('1') => app.focus = Focus::Tree,
         KeyCode::Char('2') => app.focus = Focus::Term,
@@ -1208,8 +1216,6 @@ async fn run_palette_action(
                 app.focus = Focus::Lazygit;
             }
         }
-        ActionKind::SetTheme(name) => app.set_theme(name),
-        ActionKind::CycleTheme => app.cycle_theme(),
         ActionKind::SelectSession(id) => {
             // Move tree cursor + reopen the stream for this id.
             app.tree.select_session(id);

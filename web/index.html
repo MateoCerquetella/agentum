@@ -1,0 +1,1565 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Agentum — A control plane for AI coding agents</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg:        #0b0b0b;
+    --bg-2:      #000000;
+    --surface:   #212121;
+    --surface-2: #353535;
+    --border:    #212121;
+    --border-2:  #353535;
+    --fg:        #ffffff;
+    --fg-2:      #b9b9b9;
+    --fg-3:      #797979;
+    --cta:       #f36458;
+    --link:      #0052ef;
+    --green:     color(display-p3 0.270588 1 0);
+    --green-fb:  #19d600;
+    --light:     #ededed;
+    --display:   "Space Grotesk", waldenburgNormal, ui-sans-serif, system-ui, sans-serif;
+    --mono:      "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  html { background: var(--bg); }
+  body {
+    font-family: var(--display);
+    background: var(--bg);
+    color: var(--fg);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: "calt" 0;
+    line-height: 1.5;
+    overflow-x: hidden;
+  }
+
+  ::selection { background: var(--link); color: #fff; }
+
+  a { color: inherit; text-decoration: none; transition: color 120ms ease; }
+  a:hover { color: var(--link); }
+  button { font: inherit; cursor: pointer; border: 0; background: none; color: inherit; }
+
+  /* ---------- typography ---------- */
+  .display {
+    font-family: var(--display);
+    font-size: clamp(48px, 8.6vw, 124px);
+    line-height: 0.98;
+    letter-spacing: -0.04em;
+    font-weight: 500;
+    margin: 0;
+  }
+  .h1 {
+    font-size: clamp(38px, 5vw, 72px);
+    line-height: 1.04;
+    letter-spacing: -0.04em;
+    font-weight: 500;
+    margin: 0;
+  }
+  .h2 {
+    font-size: clamp(30px, 3.4vw, 48px);
+    line-height: 1.06;
+    letter-spacing: -0.035em;
+    font-weight: 500;
+    margin: 0;
+  }
+  .h3 {
+    font-size: clamp(20px, 1.6vw, 24px);
+    line-height: 1.24;
+    letter-spacing: -0.01em;
+    font-weight: 500;
+    margin: 0;
+  }
+  .lede {
+    font-size: clamp(17px, 1.4vw, 20px);
+    line-height: 1.5;
+    letter-spacing: -0.005em;
+    color: var(--fg-2);
+    max-width: 60ch;
+    margin: 0;
+  }
+  .body { font-size: 16px; line-height: 1.5; color: var(--fg-2); margin: 0; }
+  .small { font-size: 13px; line-height: 1.45; color: var(--fg-2); margin: 0; }
+  .mono {
+    font-family: var(--mono);
+    font-feature-settings: "ss07";
+  }
+  .micro {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: var(--fg-3);
+  }
+
+  /* ---------- layout ---------- */
+  .wrap {
+    width: 100%;
+    max-width: 1440px;
+    margin: 0 auto;
+    padding: 0 32px;
+  }
+  @media (max-width: 720px) { .wrap { padding: 0 20px; } }
+
+  section { position: relative; }
+
+  /* ---------- buttons ---------- */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 40px;
+    padding: 0 18px;
+    border-radius: 99999px;
+    font-size: 15px;
+    line-height: 1;
+    font-weight: 500;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+    white-space: nowrap;
+  }
+  .btn-cta { background: var(--cta); color: #fff; }
+  .btn-cta:hover { background: var(--link); color: #fff; }
+  .btn-dark { background: #000; color: var(--fg-2); border: 1px solid var(--border-2); }
+  .btn-dark:hover { background: var(--link); color: #fff; border-color: var(--link); }
+  .btn-light { background: #fff; color: #0b0b0b; border: 1px solid #fff; }
+  .btn-light:hover { background: var(--link); border-color: var(--link); color: #fff; }
+  .btn-ghost { background: transparent; color: var(--fg-2); padding: 0 14px; height: 36px; font-size: 14px; }
+  .btn-ghost:hover { color: var(--link); }
+  .btn .arr {
+    display: inline-block;
+    transform: translateY(-1px);
+    transition: transform 160ms ease;
+  }
+  .btn:hover .arr { transform: translate(2px, -1px); }
+
+  /* ---------- nav ---------- */
+  nav.top {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(11,11,11,0.78);
+    backdrop-filter: saturate(180%) blur(18px);
+    -webkit-backdrop-filter: saturate(180%) blur(18px);
+    border-bottom: 1px solid var(--border);
+  }
+  nav.top .row {
+    display: flex; align-items: center; justify-content: space-between;
+    height: 60px;
+  }
+  nav.top .left { display: flex; align-items: center; gap: 36px; }
+  .brand {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-weight: 500; letter-spacing: -0.02em; font-size: 17px;
+  }
+  .brand .mark {
+    width: 22px; height: 22px; position: relative;
+    display: inline-grid; place-items: center;
+  }
+  .brand .mark svg { display: block; }
+  nav.top ul { list-style: none; display: flex; gap: 24px; padding: 0; margin: 0; }
+  nav.top ul a { color: var(--fg-2); font-size: 15px; }
+  nav.top .right { display: flex; align-items: center; gap: 8px; }
+  @media (max-width: 900px) {
+    nav.top ul { display: none; }
+    .brand-text-long { display: none; }
+  }
+
+  /* ---------- hero ---------- */
+  .hero {
+    padding: clamp(72px, 11vw, 140px) 0 clamp(40px, 6vw, 64px);
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    /* faint scanline texture */
+    content: "";
+    position: absolute; inset: 0;
+    background-image:
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.012) 0 1px, transparent 1px 4px);
+    pointer-events: none;
+    mask-image: radial-gradient(ellipse 90% 70% at 50% 35%, #000 30%, transparent 80%);
+  }
+  .hero .grid-bg {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(to right, rgba(255,255,255,0.035) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255,255,255,0.035) 1px, transparent 1px);
+    background-size: 80px 80px;
+    mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 30%, transparent 75%);
+    pointer-events: none;
+  }
+  .hero .inner { position: relative; z-index: 2; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 6px 12px 6px 8px;
+    border: 1px solid var(--border-2);
+    background: var(--surface);
+    border-radius: 99999px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--fg-2);
+    letter-spacing: 0.01em;
+  }
+  .eyebrow .dot {
+    width: 8px; height: 8px; border-radius: 99999px; background: var(--green-fb);
+    background: var(--green);
+    box-shadow: 0 0 0 4px rgba(25,214,0,0.12);
+  }
+  .eyebrow .tag-pill {
+    background: #000; border: 1px solid var(--border-2);
+    padding: 2px 8px; border-radius: 99999px;
+    font-size: 11px; color: var(--fg-3);
+  }
+  .hero h1 { margin-top: 28px; max-width: 16ch; }
+  .hero h1 .accent { color: var(--fg-3); }
+  .hero .lede { margin-top: 28px; max-width: 56ch; }
+  .hero .ctas {
+    display: flex; flex-wrap: wrap; gap: 12px; margin-top: 36px;
+    align-items: center;
+  }
+  .hero .install {
+    margin-top: 28px;
+    display: inline-flex; align-items: center; gap: 0;
+    background: #000;
+    border: 1px solid var(--border-2);
+    border-radius: 8px;
+    padding: 0;
+    overflow: hidden;
+    max-width: 100%;
+  }
+  .hero .install .lbl {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--fg-3);
+    letter-spacing: 0.04em;
+    padding: 0 12px;
+    border-right: 1px solid var(--border-2);
+    height: 40px; display: inline-flex; align-items: center;
+    background: var(--surface);
+  }
+  .hero .install code {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--fg);
+    padding: 0 14px;
+    height: 40px; display: inline-flex; align-items: center;
+    overflow-x: auto;
+    white-space: nowrap;
+    flex: 1;
+  }
+  .hero .install code .prompt { color: var(--fg-3); margin-right: 8px; }
+  .hero .install button.copy {
+    height: 40px; padding: 0 14px;
+    border-left: 1px solid var(--border-2);
+    color: var(--fg-2);
+    font-family: var(--mono); font-size: 12px; text-transform: uppercase;
+    letter-spacing: 0.04em;
+    transition: color 120ms ease, background 120ms ease;
+  }
+  .hero .install button.copy:hover { background: var(--link); color: #fff; }
+
+  .hero-meta {
+    margin-top: 56px;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 24px;
+    border-top: 1px solid var(--border);
+    padding-top: 32px;
+  }
+  .hero-meta .item .k { font-family: var(--mono); font-size: 11px; text-transform: uppercase; color: var(--fg-3); letter-spacing: 0.04em; }
+  .hero-meta .item .v { margin-top: 8px; font-size: 18px; letter-spacing: -0.01em; color: var(--fg); }
+  .hero-meta .item .v .accent { color: var(--green-fb); color: var(--green); }
+  @media (max-width: 720px) {
+    .hero-meta { grid-template-columns: 1fr 1fr; }
+  }
+
+  /* ---------- product window ---------- */
+  .stage {
+    padding: 12px 0 clamp(40px, 6vw, 80px);
+    position: relative;
+    z-index: 2;
+  }
+  .window {
+    border: 1px solid var(--border-2);
+    border-radius: 12px;
+    background: var(--bg);
+    overflow: hidden;
+    position: relative;
+  }
+  .window .chrome {
+    height: 38px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 14px;
+    background: linear-gradient(180deg, #141414, #0e0e0e);
+  }
+  .window .chrome .dots { display: flex; gap: 6px; }
+  .window .chrome .dots span {
+    width: 11px; height: 11px; border-radius: 99999px;
+    background: var(--surface-2);
+  }
+  .window .chrome .dots span:nth-child(1) { background: #f36458; }
+  .window .chrome .dots span:nth-child(2) { background: #5d5d5d; }
+  .window .chrome .dots span:nth-child(3) { background: #2f2f2f; }
+  .window .chrome .url {
+    flex: 1;
+    text-align: center;
+    font-family: var(--mono); font-size: 12px; color: var(--fg-3);
+    display: inline-flex; align-items: center; gap: 8px; justify-content: center;
+  }
+  .window .chrome .url .lock { color: var(--green-fb); color: var(--green); }
+  .window .chrome .right { display: flex; gap: 10px; align-items: center; color: var(--fg-3); font-size: 11px; font-family: var(--mono); }
+
+  .app {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    min-height: 580px;
+  }
+  @media (max-width: 920px) {
+    .app { grid-template-columns: 1fr; }
+    .app .sidebar { display: none; }
+  }
+  .app .sidebar {
+    border-right: 1px solid var(--border);
+    background: #0e0e0e;
+    padding: 18px 12px;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .sb-section .lbl {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--fg-3);
+    padding: 0 10px 8px;
+  }
+  .sb-section .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 10px;
+    border-radius: 5px;
+    color: var(--fg-2); font-size: 14px;
+    cursor: default;
+  }
+  .sb-section .nav-item .ico { width: 14px; height: 14px; color: var(--fg-3); }
+  .sb-section .nav-item:hover { background: #161616; color: var(--fg); }
+  .sb-section .nav-item.active { background: var(--surface); color: var(--fg); }
+  .sb-section .nav-item.active .ico { color: var(--fg); }
+  .sb-section .nav-item .count {
+    margin-left: auto;
+    font-family: var(--mono); font-size: 11px;
+    color: var(--fg-3);
+    background: #000; border: 1px solid var(--border-2);
+    border-radius: 99999px; padding: 1px 7px;
+  }
+  .sb-section .nav-item.active .count { color: var(--fg); border-color: var(--surface-2); }
+  .sb-status {
+    margin-top: auto;
+    border-top: 1px solid var(--border);
+    padding: 12px 10px 4px;
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 11px; color: var(--fg-3);
+  }
+  .sb-status .dot { width: 7px; height: 7px; border-radius: 99999px; background: var(--green); box-shadow: 0 0 0 3px rgba(25,214,0,0.15); }
+
+  .pane {
+    display: flex; flex-direction: column;
+    min-width: 0;
+  }
+  .pane .toolbar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    background: #0d0d0d;
+  }
+  .pane .toolbar .crumbs {
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 12px; color: var(--fg-2);
+    flex: 1; min-width: 0;
+  }
+  .pane .toolbar .crumbs .sep { color: var(--fg-3); }
+  .pane .toolbar .crumbs .leaf { color: var(--fg); }
+  .pane .toolbar .pills { display: flex; gap: 6px; }
+  .pane .toolbar .pill {
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 4px 9px; border-radius: 99999px;
+    background: var(--surface); color: var(--fg-2);
+    border: 1px solid var(--border-2);
+  }
+  .pane .toolbar .pill.live { color: var(--green-fb); color: var(--green); border-color: rgba(25,214,0,0.35); }
+  .pane .toolbar .pill.live::before {
+    content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 99999px;
+    background: var(--green); margin-right: 6px; transform: translateY(-1px);
+    animation: pulse 1.6s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  .term {
+    background: #050505;
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.6;
+    padding: 18px 20px 60px;
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+  }
+  .term .ln { white-space: pre; min-height: 1.6em; }
+  .term .ln .c-fg3 { color: var(--fg-3); }
+  .term .ln .c-fg2 { color: var(--fg-2); }
+  .term .ln .c-cta { color: var(--cta); }
+  .term .ln .c-link { color: var(--link); }
+  .term .ln .c-green { color: var(--green-fb); color: var(--green); }
+  .term .ln .c-mag { color: color(display-p3 0.96 0 1); color: #f000ff; }
+  .term .ln .c-amber { color: #ffb454; }
+  .term .ln .c-white { color: #fff; }
+  .term .ln .c-blu { color: #55beff; }
+
+  .term .input {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    border-top: 1px solid var(--border);
+    background: #000;
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 20px;
+    height: 40px;
+  }
+  .term .input .prompt { color: var(--cta); }
+  .term .input .ph { color: var(--fg-3); }
+  .term .input .caret {
+    width: 8px; height: 16px; background: var(--fg);
+    display: inline-block; transform: translateY(2px);
+    animation: caret 1s steps(1,end) infinite;
+    margin-left: 2px;
+  }
+  @keyframes caret { 50% { opacity: 0; } }
+
+  /* ---------- generic section header ---------- */
+  .sec-head { display: grid; gap: 18px; max-width: 920px; }
+  .sec-head .kicker {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--fg-3);
+  }
+  .sec-head .kicker .num {
+    border: 1px solid var(--border-2);
+    background: var(--surface);
+    color: var(--fg);
+    padding: 2px 8px; border-radius: 4px;
+  }
+
+  .section-pad { padding: clamp(72px, 11vw, 140px) 0; border-top: 1px solid var(--border); }
+
+  /* ---------- features grid ---------- */
+  .features {
+    margin-top: clamp(48px, 6vw, 80px);
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 16px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: 12px;
+    padding: 28px 28px 0;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-height: 360px;
+    transition: border-color 160ms ease, transform 200ms ease;
+  }
+  .card:hover { border-color: #4a4a4a; }
+  .card .tag {
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--fg-3);
+  }
+  .card h3 { margin-top: 16px; font-size: 24px; letter-spacing: -0.018em; line-height: 1.2; font-weight: 500; }
+  .card p { margin-top: 12px; color: var(--fg-2); font-size: 15px; line-height: 1.5; max-width: 38ch; }
+  .card .visual { margin-top: 28px; flex: 1; min-height: 160px; position: relative; }
+
+  /* feature spans */
+  .f-sessions { grid-column: span 7; }
+  .f-board { grid-column: span 5; }
+  .f-watchdog { grid-column: span 4; }
+  .f-channels { grid-column: span 4; }
+  .f-themes { grid-column: span 4; }
+  @media (max-width: 1100px) {
+    .f-sessions { grid-column: span 12; }
+    .f-board { grid-column: span 12; }
+    .f-watchdog { grid-column: span 6; }
+    .f-channels { grid-column: span 6; }
+    .f-themes { grid-column: span 12; }
+  }
+  @media (max-width: 720px) {
+    .features > * { grid-column: span 12 !important; }
+  }
+
+  /* ---- sessions visual ---- */
+  .sess-visual { margin: 16px -28px 0; padding: 0 28px 24px; }
+  .sess-row {
+    display: grid; grid-template-columns: 16px 1fr auto auto;
+    align-items: center; gap: 12px;
+    padding: 10px 0;
+    border-top: 1px solid var(--border);
+    font-family: var(--mono); font-size: 12px;
+  }
+  .sess-row:first-child { border-top: 0; }
+  .sess-row .stat {
+    width: 8px; height: 8px; border-radius: 99999px;
+    background: var(--green); box-shadow: 0 0 0 3px rgba(25,214,0,0.12);
+  }
+  .sess-row.idle .stat { background: var(--fg-3); box-shadow: none; }
+  .sess-row.compact .stat { background: var(--cta); box-shadow: 0 0 0 3px rgba(243,100,88,0.18); }
+  .sess-row .name { color: var(--fg); }
+  .sess-row .tool { color: var(--fg-3); }
+  .sess-row .meta { color: var(--fg-2); font-size: 11px; }
+  .sess-row .pill-mini {
+    font-size: 10px; padding: 2px 7px; border-radius: 99999px;
+    background: #000; color: var(--fg-2); border: 1px solid var(--border-2);
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .sess-row .pill-mini.live { color: var(--green); border-color: rgba(25,214,0,0.35); }
+  .sess-row .pill-mini.compact { color: var(--cta); border-color: rgba(243,100,88,0.35); }
+
+  /* ---- board visual ---- */
+  .card-board { position: relative; overflow: hidden; }
+  .card-board::before {
+    content: "";
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(to right, rgba(255,255,255,0.025) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size: 22px 22px;
+    background-position: -1px -1px;
+    mask-image: radial-gradient(ellipse 80% 70% at 50% 60%, #000 30%, transparent 78%);
+    -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 60%, #000 30%, transparent 78%);
+    pointer-events: none;
+    z-index: 0;
+  }
+  .card-board > * { position: relative; z-index: 1; }
+  .board {
+    margin: 16px -28px 0; padding: 0 28px 24px;
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+  }
+  .board .col { display: flex; flex-direction: column; gap: 8px; }
+  .board .col-h {
+    font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--fg-3);
+    padding: 0 0 6px;
+  }
+  .board .item {
+    background: #0b0b0b;
+    border: 1px solid var(--border-2);
+    border-radius: 6px;
+    padding: 10px;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  .board .item .k {
+    font-family: var(--mono); font-size: 10px;
+    color: var(--fg-3); letter-spacing: 0.02em;
+  }
+  .board .item .t { color: var(--fg); margin-top: 4px; font-size: 12.5px; }
+  .board .item .a { margin-top: 8px; display: flex; align-items: center; gap: 6px; color: var(--fg-3); font-family: var(--mono); font-size: 10px; text-transform: uppercase; }
+  .board .item .a::before { content: ""; width: 6px; height: 6px; border-radius: 99999px; background: var(--fg-3); }
+  .board .item.claude .a::before { background: var(--green); }
+  .board .item.codex .a::before { background: #55beff; }
+  .board .item.gemini .a::before { background: var(--cta); }
+  .board .item.dragging {
+    border-color: var(--link); box-shadow: 0 0 0 1px var(--link);
+    transform: rotate(-1deg);
+  }
+
+  /* ---- watchdog visual ---- */
+  .wd-feed { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .wd-row {
+    display: grid; grid-template-columns: 64px 1fr;
+    gap: 12px; align-items: start;
+    padding: 8px 0;
+    border-top: 1px solid var(--border);
+    font-family: var(--mono); font-size: 11.5px;
+  }
+  .wd-row:first-child { border-top: 0; padding-top: 0; }
+  .wd-row .ts { color: var(--fg-3); }
+  .wd-row .ev .et {
+    text-transform: uppercase; letter-spacing: 0.04em;
+    font-size: 10px; padding: 1px 6px; border-radius: 99999px;
+    background: #000; border: 1px solid var(--border-2);
+    color: var(--fg-2);
+  }
+  .wd-row.compact .ev .et { color: var(--cta); border-color: rgba(243,100,88,0.35); }
+  .wd-row.crash .ev .et { color: #ff5555; border-color: rgba(221,0,0,0.45); }
+  .wd-row.ok .ev .et { color: var(--green); border-color: rgba(25,214,0,0.35); }
+  .wd-row .ev .msg { color: var(--fg); font-size: 12px; margin-top: 4px; line-height: 1.45; }
+
+  /* ---- channels visual ---- */
+  .chat { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+  .msg {
+    border: 1px solid var(--border-2);
+    background: #0b0b0b;
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 12.5px;
+  }
+  .msg .who {
+    font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--fg-3); margin-bottom: 6px;
+    display: flex; gap: 8px; align-items: center;
+  }
+  .msg .who .dot { width: 6px; height: 6px; border-radius: 99999px; background: var(--green); }
+  .msg .who .dot.b { background: #55beff; }
+  .msg p { color: var(--fg); margin: 0; line-height: 1.5; }
+  .msg code {
+    font-family: var(--mono); background: #000; padding: 1px 5px;
+    border-radius: 3px; border: 1px solid var(--border-2); color: var(--fg-2);
+    font-size: 11.5px;
+  }
+
+  /* ---- surfaces visual ---- */
+  .surfaces { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .surfaces li { display: grid; grid-template-columns: 32px 1fr; gap: 12px; align-items: center; padding: 10px; border: 1px solid var(--border-2); background: #0b0b0b; border-radius: 8px; }
+  .surfaces .sf-ico { width: 32px; height: 32px; border-radius: 6px; background: #000; border: 1px solid var(--border-2); display: inline-grid; place-items: center; color: var(--fg-2); }
+  .surfaces .sf-ico svg { width: 16px; height: 16px; }
+  .surfaces .sf-h { color: var(--fg); font-size: 13px; letter-spacing: -0.01em; }
+  .surfaces .sf-d { font-family: var(--mono); font-size: 10.5px; color: var(--fg-3); text-transform: uppercase; letter-spacing: 0.03em; margin-top: 3px; }
+  .surfaces .sf-d .mono { font-size: 10.5px; color: var(--fg-2); text-transform: none; letter-spacing: 0; }
+
+  /* ---- (legacy theme swatches) ---- */
+  .swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 16px; }
+  .swatch {
+    aspect-ratio: 4/5;
+    border-radius: 8px;
+    border: 1px solid var(--border-2);
+    overflow: hidden;
+    position: relative;
+    display: flex; flex-direction: column;
+    cursor: default;
+  }
+  .swatch .top { flex: 1; }
+  .swatch .lbl {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 6px 8px;
+    border-top: 1px solid var(--border-2);
+    background: rgba(0,0,0,0.4);
+  }
+  .sw-midnight .top { background: linear-gradient(140deg,#0b1530,#1a2858 60%,#314a99); }
+  .sw-midnight .lbl { color: #b9c8ff; }
+  .sw-dusk .top { background: linear-gradient(140deg,#1a1612,#2b231b 60%,#5e3a25); }
+  .sw-dusk .lbl { color: #f3c994; }
+  .sw-slate .top { background: linear-gradient(140deg,#0d1418,#152024 60%,#1d2d33); position: relative; }
+  .sw-slate .top::after { content: ""; position: absolute; right: -10%; top: 30%; width: 80%; height: 80%; background: radial-gradient(circle, rgba(85,190,255,0.45), transparent 60%); }
+  .sw-slate .lbl { color: #55beff; }
+  .sw-paper .top { background: linear-gradient(140deg,#f3efe7,#e0d8c8); }
+  .sw-paper .lbl { color: #2d2a23; background: rgba(255,255,255,0.6); border-color: #c9bfaa; }
+  .sw-mono .top { background: linear-gradient(140deg,#000,#1a1a1a 60%,#fff 200%); }
+  .sw-mono .lbl { color: #fff; }
+
+  /* ---------- workflow / cli section ---------- */
+  .cli-grid {
+    margin-top: clamp(48px, 6vw, 80px);
+    display: grid; grid-template-columns: 1fr 1.1fr;
+    gap: 32px;
+    align-items: start;
+  }
+  @media (max-width: 1000px) { .cli-grid { grid-template-columns: 1fr; } }
+  .cli-list { display: flex; flex-direction: column; gap: 4px; }
+  .cli-item {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px 20px;
+    background: #0d0d0d;
+    transition: border-color 160ms ease, background 160ms ease;
+    cursor: pointer;
+  }
+  .cli-item:hover { border-color: var(--border-2); }
+  .cli-item.active { border-color: var(--surface-2); background: var(--surface); }
+  .cli-item .step {
+    display: flex; align-items: center; gap: 12px;
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--fg-3);
+  }
+  .cli-item.active .step { color: var(--fg-2); }
+  .cli-item .step .num {
+    width: 22px; height: 22px; border-radius: 99999px;
+    border: 1px solid var(--border-2);
+    display: inline-grid; place-items: center;
+    background: #000;
+    color: var(--fg-3);
+    font-size: 11px;
+  }
+  .cli-item.active .step .num { background: var(--cta); border-color: var(--cta); color: #fff; }
+  .cli-item h4 { margin: 14px 0 0; font-size: 22px; letter-spacing: -0.014em; line-height: 1.18; font-weight: 500; }
+  .cli-item p { margin: 8px 0 0; color: var(--fg-2); font-size: 14.5px; max-width: 48ch; line-height: 1.5; }
+
+  .codeblock {
+    background: #050505;
+    border: 1px solid var(--border-2);
+    border-radius: 12px;
+    overflow: hidden;
+    position: sticky; top: 84px;
+  }
+  .codeblock .top {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: #0e0e0e;
+    font-family: var(--mono); font-size: 11px; color: var(--fg-3);
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .codeblock .top .actions { display: flex; gap: 8px; }
+  .codeblock pre {
+    margin: 0; padding: 22px;
+    font-family: var(--mono); font-size: 13.5px; line-height: 1.7;
+    overflow-x: auto;
+    color: var(--fg);
+  }
+  .codeblock pre .cm { color: var(--fg-3); }
+  .codeblock pre .pr { color: var(--cta); }
+  .codeblock pre .kw { color: var(--fg); }
+  .codeblock pre .ar { color: var(--fg-2); }
+  .codeblock pre .st { color: #afe3ff; }
+  .codeblock pre .ok { color: var(--green); }
+  .codeblock pre .url { color: #55beff; text-decoration: underline; text-decoration-color: rgba(85,190,255,0.4); }
+
+  /* ---------- exec adapters ---------- */
+  .adapters {
+    margin-top: clamp(48px, 6vw, 80px);
+    display: grid; grid-template-columns: repeat(5, 1fr);
+    gap: 16px;
+  }
+  @media (max-width: 1100px) { .adapters { grid-template-columns: repeat(2, 1fr); } }
+  .adapter {
+    border: 1px solid var(--border-2);
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 22px;
+    display: flex; flex-direction: column; gap: 10px;
+    min-height: 168px;
+    transition: border-color 160ms ease;
+  }
+  .adapter:hover { border-color: #4a4a4a; }
+  .adapter .ico {
+    width: 36px; height: 36px;
+    background: #000; border: 1px solid var(--border-2);
+    border-radius: 8px;
+    display: inline-grid; place-items: center;
+    color: var(--fg);
+  }
+  .adapter .ico svg { width: 22px; height: 22px; display: block; }
+  .adapter .nm { font-size: 17px; letter-spacing: -0.01em; color: var(--fg); margin-top: auto; }
+  .adapter .sub { font-family: var(--mono); font-size: 11px; color: var(--fg-3); text-transform: uppercase; letter-spacing: 0.04em; }
+
+  /* ---------- comparison ---------- */
+  .compare {
+    margin-top: clamp(48px, 6vw, 80px);
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 900px) { .compare { grid-template-columns: 1fr; } }
+  .col-comp {
+    border: 1px solid var(--border-2);
+    border-radius: 12px;
+    padding: 28px 28px 32px;
+  }
+  .col-comp.them {
+    background: transparent;
+  }
+  .col-comp.us {
+    background: var(--surface);
+    border-color: var(--surface-2);
+  }
+  .col-comp .tt {
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--fg-3);
+  }
+  .col-comp.us .tt { color: var(--cta); }
+  .col-comp h3 { margin: 8px 0 18px; font-size: 26px; letter-spacing: -0.02em; font-weight: 500; line-height: 1.18; }
+  .col-comp ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+  .col-comp li {
+    display: grid; grid-template-columns: 18px 1fr;
+    gap: 12px; align-items: start;
+    color: var(--fg-2); font-size: 15px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .col-comp li:last-child { border-bottom: 0; padding-bottom: 0; }
+  .col-comp .ic {
+    width: 18px; height: 18px;
+    border-radius: 99999px;
+    display: inline-grid; place-items: center;
+    font-family: var(--mono); font-size: 11px;
+  }
+  .col-comp.them .ic { background: transparent; border: 1px solid var(--border-2); color: var(--fg-3); }
+  .col-comp.us .ic { background: var(--cta); color: #fff; }
+
+  /* ---------- install / pricing ---------- */
+  .install-grid {
+    margin-top: clamp(48px, 6vw, 80px);
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 900px) { .install-grid { grid-template-columns: 1fr; } }
+  .install-card {
+    border: 1px solid var(--border-2);
+    border-radius: 12px;
+    background: var(--surface);
+    padding: 32px 32px 36px;
+    display: flex; flex-direction: column;
+  }
+  .install-card.feat {
+    background: #0b0b0b;
+    border: 1px solid #4a4a4a;
+    box-shadow: 0 0 0 1px var(--cta) inset;
+  }
+  .install-card .price-tag {
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--fg-3);
+  }
+  .install-card.feat .price-tag { color: var(--cta); }
+  .install-card h3 { margin: 8px 0 0; font-size: 28px; font-weight: 500; letter-spacing: -0.02em; }
+  .install-card .price { margin-top: 16px; font-size: 56px; letter-spacing: -0.04em; line-height: 1; font-weight: 500; }
+  .install-card .price .unit { font-size: 16px; color: var(--fg-3); margin-left: 4px; letter-spacing: -0.01em; }
+  .install-card .desc { color: var(--fg-2); margin: 12px 0 24px; font-size: 15px; line-height: 1.5; max-width: 36ch; }
+  .install-card ul { list-style: none; margin: 0 0 28px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .install-card li {
+    display: grid; grid-template-columns: 18px 1fr;
+    gap: 10px; align-items: start;
+    color: var(--fg-2); font-size: 14.5px;
+  }
+  .install-card .check {
+    width: 18px; height: 18px;
+    color: var(--cta);
+  }
+  .install-card .btn { align-self: flex-start; margin-top: auto; }
+
+  /* ---------- final cta ---------- */
+  .final {
+    text-align: center;
+    padding: clamp(96px, 14vw, 180px) 0;
+    border-top: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+  .final::before {
+    content: "";
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(to right, rgba(255,255,255,0.04) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255,255,255,0.04) 1px, transparent 1px);
+    background-size: 60px 60px;
+    mask-image: radial-gradient(ellipse 60% 80% at 50% 50%, #000 30%, transparent 80%);
+  }
+  .final .inner { position: relative; }
+  .final h2 { max-width: 18ch; margin: 0 auto; }
+  .final .lede { margin: 24px auto 0; }
+  .final .ctas { margin-top: 36px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+  /* ---------- footer ---------- */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 56px 0 32px;
+    color: var(--fg-2);
+  }
+  footer .grid {
+    display: grid; grid-template-columns: 2fr repeat(4, 1fr);
+    gap: 32px;
+  }
+  @media (max-width: 900px) {
+    footer .grid { grid-template-columns: 1fr 1fr; }
+  }
+  footer .col h4 {
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--fg);
+    margin: 0 0 14px;
+    font-weight: 500;
+  }
+  footer .col ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  footer .col a { color: var(--fg-2); font-size: 14px; }
+  footer .brand-blurb { color: var(--fg-3); font-size: 13.5px; margin-top: 14px; max-width: 38ch; line-height: 1.5; }
+
+  footer .legal {
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    display: flex; justify-content: space-between; gap: 16px;
+    font-family: var(--mono); font-size: 11px; color: var(--fg-3);
+    text-transform: uppercase; letter-spacing: 0.04em;
+    flex-wrap: wrap;
+  }
+
+  /* small utility */
+  .row-flex { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .gap-32 { display: grid; gap: 32px; }
+  .copy-flash { color: var(--green) !important; }
+</style>
+</head>
+<body>
+
+<!-- ============ NAV ============ -->
+<nav class="top">
+  <div class="wrap">
+    <div class="row">
+      <div class="left">
+        <a href="#" class="brand" aria-label="Agentum">
+          <span class="mark" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+              <rect x="1" y="1" width="20" height="20" rx="5" stroke="white" stroke-width="1.4"/>
+              <path d="M6.2 14.6L10.6 5.5L15 14.6" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M7.7 11.6H13.5" stroke="#f36458" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <span>agentum</span>
+        </a>
+        <ul>
+          <li><a href="#features">Product</a></li>
+          <li><a href="#workflow">CLI</a></li>
+          <li><a href="#executors">Executors</a></li>
+          <li><a href="#install">Install</a></li>
+          <li><a href="#docs">Docs</a></li>
+        </ul>
+      </div>
+      <div class="right">
+        <a class="btn btn-ghost" href="https://github.com/MateoCerquetella/agentum" target="_blank" rel="noreferrer">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 .2A8 8 0 0 0 .2 8a8 8 0 0 0 5.5 7.6c.4.1.5-.2.5-.4v-1.5c-2.2.5-2.7-.9-2.7-.9-.4-.9-.9-1.2-.9-1.2-.7-.5.1-.5.1-.5.8.1 1.2.8 1.2.8.7 1.3 2 .9 2.4.7.1-.5.3-.9.5-1.1-1.8-.2-3.6-.9-3.6-3.9 0-.9.3-1.6.8-2.1-.1-.2-.4-1 .1-2.1 0 0 .7-.2 2.2.8a7.7 7.7 0 0 1 4 0c1.5-1 2.2-.8 2.2-.8.4 1.1.2 1.9.1 2.1.5.5.8 1.2.8 2.1 0 3-1.8 3.7-3.6 3.9.3.3.6.7.6 1.5v2.2c0 .2.1.5.5.4A8 8 0 0 0 15.8 8 8 8 0 0 0 8 .2z"/></svg>
+          GitHub
+          <span class="mono" id="gh-stars" style="color: var(--fg-3); font-size: 11px;">★ —</span>
+        </a>
+        <a class="btn btn-cta" href="#install">
+          Install <span class="arr">→</span>
+        </a>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<!-- ============ HERO ============ -->
+<section class="hero">
+  <div class="grid-bg" aria-hidden="true"></div>
+  <div class="wrap inner">
+    <h1 class="display">
+      A control plane<br/>
+      for the agents<br/>
+      <span class="accent">running your code.</span>
+    </h1>
+
+    <p class="lede">
+      One dashboard to spawn, watch, and message between parallel
+      AI coding agents — Claude&nbsp;Code, Codex, Gemini, Hermes, or any CLI —
+      running in tmux on your own machine. Single Rust binary. Browseable from your phone.
+    </p>
+
+    <div class="ctas">
+      <a class="btn btn-cta" href="#install">Get started <span class="arr">→</span></a>
+      <a class="btn btn-dark" href="#workflow">See it run</a>
+    </div>
+
+    <div class="install" role="group" aria-label="Install command">
+      <span class="lbl">Install</span>
+      <code id="install-cmd"><span class="prompt">$</span>curl -fsSL agentum.dev/install.sh | sh</code>
+      <button class="copy" id="copy-btn" aria-label="Copy install command">Copy</button>
+    </div>
+
+    <div class="hero-meta">
+      <div class="item">
+        <div class="k">Binary size</div>
+        <div class="v">≈ 14 MB</div>
+      </div>
+      <div class="item">
+        <div class="k">Cold start</div>
+        <div class="v">&lt; 80 ms</div>
+      </div>
+      <div class="item">
+        <div class="k">Backend</div>
+        <div class="v">Rust · axum · tokio</div>
+      </div>
+      <div class="item">
+        <div class="k">License</div>
+        <div class="v"><span class="accent">MIT</span> · self-hosted</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ PRODUCT WINDOW ============ -->
+<section class="stage">
+  <div class="wrap">
+    <div class="window" aria-label="Agentum dashboard preview">
+      <div class="chrome">
+        <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="url"><span class="lock">●</span> https://127.0.0.1:8822 — agentum dashboard</div>
+        <div class="right"><span>⌘K</span> palette</div>
+      </div>
+      <div class="app">
+        <aside class="sidebar">
+          <div class="sb-section">
+            <div class="lbl">Workspace</div>
+            <div class="nav-item">
+              <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M2 6h12"/></svg>
+              Sessions <span class="count">7</span>
+            </div>
+            <div class="nav-item active">
+              <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="3.5" height="12" rx="0.6"/><rect x="6.5" y="2" width="3" height="8" rx="0.6"/><rect x="10.5" y="2" width="3.5" height="6" rx="0.6"/></svg>
+              Board <span class="count">14</span>
+            </div>
+            <div class="nav-item">
+              <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3h10v10H3z"/><path d="M5.5 6h5M5.5 8.5h3"/></svg>
+              Notes <span class="count">9</span>
+            </div>
+            <div class="nav-item">
+              <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 4h10v6H7l-3 2.5V10H3z"/></svg>
+              Channels <span class="count">3</span>
+            </div>
+            <div class="nav-item">
+              <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3" width="11" height="9" rx="1"/><path d="M5 6h2M5 8h6M5 10h4"/></svg>
+              Terminals
+            </div>
+          </div>
+          <div class="sb-section">
+            <div class="lbl">Active sessions</div>
+            <div class="nav-item active">
+              <svg class="ico" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3.2" fill="#19d600"/></svg>
+              agentum <span class="count mono">opus</span>
+            </div>
+            <div class="nav-item">
+              <svg class="ico" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3.2" fill="#19d600"/></svg>
+              barik-enhanced <span class="count mono">opus</span>
+            </div>
+            <div class="nav-item">
+              <svg class="ico" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3.2" fill="#f36458"/></svg>
+              ricebarmac <span class="count mono">opus</span>
+            </div>
+            <div class="nav-item">
+              <svg class="ico" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3.2" fill="#19d600"/></svg>
+              bunman <span class="count mono">opus</span>
+            </div>
+            <div class="nav-item">
+              <svg class="ico" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3.2" fill="#797979"/></svg>
+              homelab-dietpi <span class="count mono">idle</span>
+            </div>
+          </div>
+          <div class="sb-status">
+            <span class="dot" aria-hidden="true"></span>
+            tmux · 7 panes · ws live
+          </div>
+        </aside>
+
+        <div class="pane">
+          <div class="toolbar">
+            <div class="crumbs">
+              <span>~/Developer/agentum</span>
+              <span class="sep">/</span>
+              <span>main</span>
+              <span class="sep">/</span>
+              <span class="leaf">claude-code · opus</span>
+            </div>
+            <div class="pills">
+              <span class="pill">model · opus-4.1</span>
+              <span class="pill">tmux · pane 0</span>
+              <span class="pill live">live</span>
+            </div>
+          </div>
+
+          <div class="term" id="term">
+            <div class="ln"><span class="c-amber">✻ Welcome to Claude Code</span> <span class="c-fg3">v2.0.14 · cwd: ~/Developer/agentum</span></div>
+            <div class="ln">&nbsp;</div>
+            <div class="ln"><span class="c-fg3">&gt;</span> <span class="c-fg2">refactor the auth middleware to expire tokens after 30 days,</span></div>
+            <div class="ln"><span class="c-fg3"> </span> <span class="c-fg2">add a migration, and write a clippy-clean test for it.</span></div>
+            <div class="ln">&nbsp;</div>
+            <div class="ln"><span class="c-amber">●</span> <span class="c-white">I'll refactor the auth middleware. Let me start by reading the current implementation.</span></div>
+            <div class="ln">&nbsp;</div>
+            <div class="ln"><span class="c-amber">●</span> <span class="c-fg2">Read</span>(<span class="c-blu">crates/agentum-server/src/auth.rs</span>)</div>
+            <div class="ln"><span class="c-fg3">  ⎿  Read 412 lines</span></div>
+            <div class="ln"><span class="c-amber">●</span> <span class="c-fg2">Glob</span>(<span class="c-blu">crates/agentum-store/migrations/*.sql</span>)</div>
+            <div class="ln"><span class="c-fg3">  ⎿  Found 6 files</span></div>
+            <div class="ln">&nbsp;</div>
+            <div class="ln"><span class="c-amber">●</span> <span class="c-fg2">Edit</span>(<span class="c-blu">crates/agentum-server/src/auth.rs</span>)</div>
+            <div class="ln"><span class="c-fg3">  ⎿  </span><span class="c-cta">- pub fn verify(token: &amp;str) -&gt; Result&lt;UserId&gt; {</span></div>
+            <div class="ln"><span class="c-fg3">     </span><span class="c-green">+ pub fn verify(token: &amp;str, now: DateTime&lt;Utc&gt;) -&gt; Result&lt;UserId&gt; {</span></div>
+            <div class="ln"><span class="c-fg3">     </span><span class="c-green">+     if session.expires_at &lt; now { return Err(Expired); }</span></div>
+            <div class="ln"><span class="c-amber">●</span> <span class="c-fg2">Write</span>(<span class="c-blu">migrations/0006_auth_session_expiry.sql</span>)</div>
+            <div class="ln"><span class="c-fg3">  ⎿  Wrote 18 lines</span></div>
+            <div class="ln"><span class="c-amber">●</span> <span class="c-fg2">Bash</span>(<span class="c-mag">cargo clippy --all-targets -- -D warnings</span>)</div>
+            <div class="ln"><span class="c-fg3">  ⎿  Finished `dev` profile in 2.41s · </span><span class="c-green">0 warnings</span></div>
+            <div class="ln"><span class="c-amber">●</span> <span class="c-fg2">Bash</span>(<span class="c-mag">cargo test --all</span>)</div>
+            <div class="ln"><span class="c-fg3">  ⎿  test auth::expired_token_rejected ... </span><span class="c-green">ok</span></div>
+            <div class="ln"><span class="c-fg3">     test auth::valid_token_accepted  ... </span><span class="c-green">ok</span></div>
+            <div class="ln">&nbsp;</div>
+            <div class="ln"><span class="c-amber">⚡ agentum watchdog</span> <span class="c-fg2">· ctx 47% → </span><span class="c-cta">/compact</span><span class="c-fg2"> @ 14:22:01 · restored 84%</span></div>
+            <div class="ln">&nbsp;</div>
+            <div class="ln"><span class="c-amber">●</span> Done — 3 files changed, 1 migration added, 14 tests pass.</div>
+            <div class="ln"><span class="c-fg3">  Shall I push to </span><span class="c-blu">feat/session-expiry</span><span class="c-fg3">?</span></div>
+            <div class="input">
+              <span class="prompt mono">›</span>
+              <span class="ph mono">type a message, or press <span style="color:var(--fg-2)">⌘K</span> to open the palette</span>
+              <span class="caret"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FEATURES ============ -->
+<section id="features" class="section-pad">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker"><span class="num">01</span><span>Capabilities</span></div>
+      <h2 class="h1">Built for people<br/>who run agents in parallel.</h2>
+      <p class="lede">Every agent gets its own tmux pane, its own log, and its own watchdog.
+        You get one dashboard, one keyboard, and one source of truth.</p>
+    </div>
+
+    <div class="features">
+      <!-- Sessions -->
+      <article class="card f-sessions">
+        <div class="tag">01 — Sessions</div>
+        <h3 class="h3">Spawn agents in tmux. Stream them anywhere.</h3>
+        <p>Each session is a tmux pane managed by Rust + tokio. Bidirectional WebSocket
+          stream means xterm.js in the browser and ratatui in the TUI both round-trip
+          keystrokes — Ctrl-C, arrow keys, paste — into the running pty.</p>
+        <div class="visual sess-visual">
+          <div class="sess-row"><span class="stat"></span><span class="name">agentum — expire auth tokens after 30d</span><span class="tool">opus</span><span class="pill-mini live">streaming</span></div>
+          <div class="sess-row"><span class="stat"></span><span class="name">barik-enhanced — pomodoro menubar widget</span><span class="tool">opus</span><span class="pill-mini live">streaming</span></div>
+          <div class="sess-row compact"><span class="stat"></span><span class="name">ricebarmac — SwiftUI theme hot reload</span><span class="tool">opus</span><span class="pill-mini compact">/compact</span></div>
+          <div class="sess-row idle"><span class="stat"></span><span class="name">homelab-dietpi — docker-compose audit</span><span class="tool">opus</span><span class="pill-mini">idle 14m</span></div>
+          <div class="sess-row"><span class="stat"></span><span class="name">bunman — systemd unit-file generator</span><span class="tool">opus</span><span class="pill-mini live">streaming</span></div>
+        </div>
+      </article>
+
+      <!-- Board -->
+      <article class="card f-board card-board">
+        <div class="tag">02 — Board</div>
+        <h3 class="h3">A kanban that agents can claim atomically.</h3>
+        <p>Drag-drop columns, optimistic local moves, <code class="mono" style="font-size:12px;color:var(--fg-2);background:#000;padding:1px 6px;border-radius:3px;border:1px solid var(--border-2)">409</code> on contention. Two agents can never claim the same card.</p>
+        <div class="visual board">
+          <div class="col">
+            <div class="col-h">Backlog · 4</div>
+            <div class="item"><div class="k">AG-128</div><div class="t">Wire fingerprint pin to remote terminal</div><div class="a">unclaimed</div></div>
+            <div class="item"><div class="k">AG-130</div><div class="t">Notarize macOS DMG via release.yml</div><div class="a">unclaimed</div></div>
+          </div>
+          <div class="col">
+            <div class="col-h">In progress · 3</div>
+            <div class="item claude"><div class="k">AG-122</div><div class="t">Token expiry + migration 0006</div><div class="a">opus · agentum</div></div>
+            <div class="item codex"><div class="k">AG-126</div><div class="t">Pomodoro widget for menubar</div><div class="a">opus · barik-enhanced</div></div>
+            <div class="item gemini dragging"><div class="k">AG-129</div><div class="t">SwiftUI theme hot reload</div><div class="a">opus · ricebarmac</div></div>
+          </div>
+          <div class="col">
+            <div class="col-h">Done · 12</div>
+            <div class="item"><div class="k">AG-119</div><div class="t">Bidirectional WS stream</div><div class="a">opus · agentum</div></div>
+            <div class="item"><div class="k">AG-121</div><div class="t">TOFU cert pin for VPS hosts</div><div class="a">opus · agentum</div></div>
+          </div>
+        </div>
+      </article>
+
+      <!-- Watchdog -->
+      <article class="card f-watchdog">
+        <div class="tag">03 — Watchdog</div>
+        <h3 class="h3">Auto-compacts on context low. Catches crashes loudly.</h3>
+        <p>A per-session reconciler ticks every 5 seconds. <code class="mono" style="font-size:11.5px;color:var(--fg-2);background:#000;padding:1px 6px;border-radius:3px;border:1px solid var(--border-2)">Context low &lt; 50%</code> → <code class="mono" style="font-size:11.5px;color:var(--cta);background:#000;padding:1px 6px;border-radius:3px;border:1px solid var(--border-2)">/compact</code>.</p>
+        <div class="visual">
+          <div class="wd-feed">
+            <div class="wd-row compact"><span class="ts">14:22:01</span><div class="ev"><span class="et">/compact</span><div class="msg">alpha · context low (47%) → issued</div></div></div>
+            <div class="wd-row ok"><span class="ts">14:22:14</span><div class="ev"><span class="et">restored</span><div class="msg">alpha · pane resumed at 84% utilization</div></div></div>
+            <div class="wd-row crash"><span class="ts">14:18:44</span><div class="ev"><span class="et">crashed</span><div class="msg">migrate · sigterm signature → tmux session killed</div></div></div>
+            <div class="wd-row ok"><span class="ts">14:11:09</span><div class="ev"><span class="et">tick</span><div class="msg">all 7 panes healthy · 0 errors</div></div></div>
+          </div>
+        </div>
+      </article>
+
+      <!-- Channels -->
+      <article class="card f-channels">
+        <div class="tag">04 — Channels</div>
+        <h3 class="h3">1:1 message pipes between sessions.</h3>
+        <p>One agent finishes a migration, posts the resulting schema diff into a
+          channel. Another agent — already running tests — reads it live over the
+          shared event bus and adapts.</p>
+        <div class="visual">
+          <div class="chat">
+            <div class="msg">
+              <div class="who"><span class="dot"></span> alpha → auth-fix · 14:21:48</div>
+              <p>migration <code>0006_auth_session_expiry.sql</code> applied. tests pass. unblocking your token-rotation branch.</p>
+            </div>
+            <div class="msg">
+              <div class="who"><span class="dot b"></span> auth-fix → alpha · 14:22:03</div>
+              <p>got it — re-running <code>cargo test --features tls</code> against the new schema.</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- Surfaces / 05 -->
+      <article class="card f-themes card-surfaces">
+        <div class="tag">05 — Surfaces</div>
+        <h3 class="h3">One backend. Five places to drive it.</h3>
+        <p>The same SQLite-backed event bus powers every surface. Your tmux panes don't care which window you're in.</p>
+        <div class="visual">
+          <ul class="surfaces">
+            <li>
+              <span class="sf-ico" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m7 10 3 2-3 2M13 14h4"/></svg>
+              </span>
+              <div class="sf-body">
+                <div class="sf-h">ratatui TUI</div>
+                <div class="sf-d"><span class="mono">agentum tui</span> · zero-network, runs over SSH</div>
+              </div>
+            </li>
+            <li>
+              <span class="sf-ico" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="1.5"/><path d="M9 20h6M12 17v3"/></svg>
+              </span>
+              <div class="sf-body">
+                <div class="sf-h">Svelte SPA</div>
+                <div class="sf-d">desktop dashboard · hot xterm.js panes</div>
+              </div>
+            </li>
+            <li>
+              <span class="sf-ico" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 18h2"/></svg>
+              </span>
+              <div class="sf-body">
+                <div class="sf-h">iOS / Android PWA</div>
+                <div class="sf-d">trust-on-first-use cert pin · home-screen install</div>
+              </div>
+            </li>
+            <li>
+              <span class="sf-ico" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14M5 12h14M5 18h14"/><circle cx="8" cy="6" r="1.6" fill="currentColor"/><circle cx="15" cy="12" r="1.6" fill="currentColor"/><circle cx="10" cy="18" r="1.6" fill="currentColor"/></svg>
+              </span>
+              <div class="sf-body">
+                <div class="sf-h">REST + WebSocket API</div>
+                <div class="sf-d">9 endpoints · bearer token · docs at <span class="mono">/api/openapi.json</span></div>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============ WORKFLOW / CLI ============ -->
+<section id="workflow" class="section-pad">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker"><span class="num">02</span><span>From shell to dashboard</span></div>
+      <h2 class="h1">Three commands<br/>and you're running.</h2>
+      <p class="lede">Every step is a single <span class="mono" style="color:var(--fg)">cargo install</span>-friendly binary. No daemon to chase, no compose file, no Docker.</p>
+    </div>
+
+    <div class="cli-grid">
+      <div class="cli-list" id="cli-list">
+        <div class="cli-item active" data-step="0">
+          <div class="step"><span class="num">01</span> Install</div>
+          <h4>One binary. Cargo or curl.</h4>
+          <p>Pre-built tarballs for darwin-arm64, darwin-x86_64, linux-x86_64, and linux-aarch64 — verified against <code class="mono" style="font-size:12.5px;color:var(--fg-2);background:#000;padding:1px 6px;border-radius:3px;border:1px solid var(--border-2)">SHA256SUMS</code>.</p>
+        </div>
+        <div class="cli-item" data-step="1">
+          <div class="step"><span class="num">02</span> Spawn</div>
+          <h4>Spin up an agent in any directory.</h4>
+          <p><code class="mono" style="font-size:12.5px;color:var(--fg-2);background:#000;padding:1px 6px;border-radius:3px;border:1px solid var(--border-2)">agentum new</code> creates a tmux pane, attaches the right adapter (claude / codex / gemini / hermes / passthrough), and starts the watchdog.</p>
+        </div>
+        <div class="cli-item" data-step="2">
+          <div class="step"><span class="num">03</span> Serve</div>
+          <h4>Open the dashboard from a phone.</h4>
+          <p>HTTPS on <span class="mono">:8822</span> with a self-signed cert; trust-on-first-use over plain HTTP <span class="mono">:8823</span> so your phone can pin it once.</p>
+        </div>
+      </div>
+
+      <div class="codeblock">
+        <div class="top">
+          <span>~/Developer · zsh</span>
+          <div class="actions"><span>copy</span><span>·</span><span>tmux pane 0</span></div>
+        </div>
+<pre><span class="cm"># 1 — install (Cargo)</span>
+<span class="pr">$</span> <span class="kw">cargo install</span> <span class="ar">--git https://github.com/mateocerquetella/agentum agentum</span>
+<span class="cm">    Compiling agentum v0.5.1 (✓ 7 crates)
+    Installed binary: ~/.cargo/bin/agentum</span>
+
+<span class="cm"># 2 — spawn an agent</span>
+<span class="pr">$</span> <span class="kw">agentum new</span> alpha <span class="ar">--tool</span> <span class="st">claude</span> <span class="ar">--dir</span> <span class="st">~/Developer/my-project</span> <span class="ar">--up</span>
+<span class="cm">  ✓ tmux session created       (alpha)
+  ✓ adapter attached           (claude · sonnet)
+  ✓ watchdog reconciler armed  (5s tick)
+  ✓ pane streaming             (ws://127.0.0.1:8822/api/sessions/alpha/stream)</span>
+
+<span class="cm"># 3 — open the dashboard</span>
+<span class="pr">$</span> <span class="kw">agentum serve</span>
+<span class="cm">  → HTTPS</span>     <span class="url">https://127.0.0.1:8822</span>
+<span class="cm">  → cert TOFU</span>  <span class="url">http://127.0.0.1:8823/api/cert</span>
+<span class="cm">  → fingerprint</span> <span class="ok">SHA256:1a:f6:9c:42:3e:8b:55:71:…:c3</span>
+<span class="cm">  → bearer</span>     <span class="ok">stored at $XDG_DATA_HOME/agentum/auth_token</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ EXECUTORS ============ -->
+<section id="executors" class="section-pad">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker"><span class="num">03</span><span>Executors</span></div>
+      <h2 class="h1">First-class for the four<br/>that matter. Passthrough for the rest.</h2>
+      <p class="lede">Each adapter declares its own compact-trigger and crash signatures so the
+        watchdog speaks the right dialect. Anything else on <span class="mono" style="color:var(--fg)">$PATH</span> works as a passthrough.</p>
+    </div>
+
+    <div class="adapters">
+      <div class="adapter">
+        <div class="ico" style="color:#d97757">
+          <!-- Anthropic / Claude asterisk -->
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 2.2 13.35 9.6 20.4 7.05l-5.4 5.7 5.4 4.4-7.05-2.55L12 21.8l-1.35-7.2-7.05 2.55 5.4-4.4-5.4-5.7 7.05 2.55Z"/>
+          </svg>
+        </div>
+        <div class="sub">Claude Code</div>
+        <div class="nm">claude</div>
+      </div>
+      <div class="adapter">
+        <div class="ico" style="color:#fff">
+          <!-- OpenAI knot -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9.6 4.2a4 4 0 0 1 4.8 0l3.4 2a4 4 0 0 1 2 3.45v4a4 4 0 0 1-2 3.45l-3.4 2a4 4 0 0 1-4.8 0l-3.4-2a4 4 0 0 1-2-3.45v-4a4 4 0 0 1 2-3.45Z"/>
+            <path d="M12 8v4l3.4 2M12 12 8.6 14"/>
+          </svg>
+        </div>
+        <div class="sub">OpenAI Codex CLI</div>
+        <div class="nm">codex</div>
+      </div>
+      <div class="adapter">
+        <div class="ico">
+          <!-- Gemini four-point star with gradient -->
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <defs>
+              <linearGradient id="gem" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#4796e3"/>
+                <stop offset="0.5" stop-color="#9168c0"/>
+                <stop offset="1" stop-color="#e34a8c"/>
+              </linearGradient>
+            </defs>
+            <path fill="url(#gem)" d="M12 2c0 4.5 5.5 10 10 10-4.5 0-10 5.5-10 10 0-4.5-5.5-10-10-10 4.5 0 10-5.5 10-10Z"/>
+          </svg>
+        </div>
+        <div class="sub">Google Gemini CLI</div>
+        <div class="nm">gemini</div>
+      </div>
+      <div class="adapter">
+        <div class="ico" style="color:#19d600">
+          <!-- Hermes / local: terminal chevron -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="5" width="18" height="14" rx="2"/>
+            <path d="m7 10 3 2-3 2M13 14h4"/>
+          </svg>
+        </div>
+        <div class="sub">Hermes (local)</div>
+        <div class="nm">hermes</div>
+      </div>
+      <div class="adapter">
+        <div class="ico" style="color:var(--fg-2)">
+          <!-- passthrough: arrow through bracket -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M7 5 4 8l3 3M17 13l3 3-3 3"/>
+            <path d="M4 8h6M14 16h6" stroke-dasharray="2 2"/>
+            <path d="M9 12h6"/>
+          </svg>
+        </div>
+        <div class="sub">Anything on PATH</div>
+        <div class="nm">passthrough</div>
+      </div>
+    </div>
+
+    <!-- Comparison -->
+    <div class="compare">
+      <div class="col-comp them">
+        <div class="tt">most agent UIs</div>
+        <h3>Cloud-hosted, opinionated, one-tool-only.</h3>
+        <ul>
+          <li><span class="ic">×</span> Locked to a single vendor's model and CLI</li>
+          <li><span class="ic">×</span> Your code goes through their proxy, your context lives in their database</li>
+          <li><span class="ic">×</span> No tmux underneath — you can't drop into the raw pane when it gets weird</li>
+          <li><span class="ic">×</span> Watchdog and channels are someone else's product roadmap</li>
+        </ul>
+      </div>
+      <div class="col-comp us">
+        <div class="tt">agentum</div>
+        <h3>Self-hosted, agent-agnostic, runs on your machine.</h3>
+        <ul>
+          <li><span class="ic">✓</span> Claude, Codex, Gemini, Hermes, or any binary on PATH</li>
+          <li><span class="ic">✓</span> Code never leaves your laptop. SQLite at <span class="mono" style="color:var(--fg)">$XDG_DATA_HOME</span></li>
+          <li><span class="ic">✓</span> tmux <em>is</em> the runtime. <span class="mono" style="color:var(--fg)">agentum open alpha</span> drops you into the pane</li>
+          <li><span class="ic">✓</span> Watchdog rules + atomic-claim board in v0.1.0 — not a roadmap promise</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INSTALL / PRICING ============ -->
+<section id="install" class="section-pad">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker"><span class="num">04</span><span>Install</span></div>
+      <h2 class="h1">Free, MIT, single binary.<br/>Or sponsor for priority builds.</h2>
+      <p class="lede">Agentum is and always will be self-hosted and source-available. Sponsor tiers
+        exist to fund the macOS notarization, signed Linux packages, and a hosted demo cert.</p>
+    </div>
+
+    <div class="install-grid">
+      <div class="install-card">
+        <div class="price-tag">Open Source</div>
+        <h3>Self-hosted</h3>
+        <div class="price">$0<span class="unit">/forever</span></div>
+        <p class="desc">Everything in the binary. No telemetry, no auth-back-to-mothership, no feature gates.</p>
+        <ul>
+          <li><span class="check">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg>
+          </span> All four executor adapters + passthrough</li>
+          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> Sessions, Board, Notes, Channels, Watchdog</li>
+          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> Five themes + system theme follow</li>
+          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> ratatui TUI + Svelte SPA + iOS/Android PWA</li>
+          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> SQLite (WAL) at <span class="mono" style="color:var(--fg-2)">$XDG_DATA_HOME</span></li>
+        </ul>
+        <a class="btn btn-light" href="https://github.com/MateoCerquetella/agentum" target="_blank" rel="noreferrer">Install with cargo <span class="arr">→</span></a>
+      </div>
+      <div class="install-card feat">
+        <div class="price-tag">Sponsor</div>
+        <h3>Backer</h3>
+        <div class="price">$9<span class="unit">/month</span></div>
+        <p class="desc">Underwrite the parts the project can't ship for free: notarized macOS DMG, signed packages, hosted demo.</p>
+        <ul>
+          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> Notarized macOS DMG (no Gatekeeper warning)</li>
+          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> Signed deb / rpm / Homebrew-Cask</li>
+          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> Priority issue triage & feature votes</li>
+          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> Sponsor channel in the Discord</li>
+          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> Your name in <span class="mono" style="color:var(--fg-2)">CREDITS.md</span></li>
+        </ul>
+        <a class="btn btn-cta" href="#">Sponsor on GitHub <span class="arr">→</span></a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FINAL CTA ============ -->
+<section class="final">
+  <div class="grid-bg" aria-hidden="true"></div>
+  <div class="wrap inner">
+    <h2 class="display" style="font-size: clamp(40px,7vw,96px);">Ship from a single<br/>tmux server.</h2>
+    <p class="lede" style="text-align:center;">One binary. Five agents. Zero clouds.</p>
+    <div class="ctas">
+      <a class="btn btn-cta" href="#install">Install agentum <span class="arr">→</span></a>
+      <a class="btn btn-dark" href="https://github.com/MateoCerquetella/agentum" target="_blank" rel="noreferrer">Read the source</a>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FOOTER ============ -->
+<footer id="docs">
+  <div class="wrap">
+    <div class="grid">
+      <div class="col">
+        <a href="#" class="brand">
+          <span class="mark" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+              <rect x="1" y="1" width="20" height="20" rx="5" stroke="white" stroke-width="1.4"/>
+              <path d="M6.2 14.6L10.6 5.5L15 14.6" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M7.7 11.6H13.5" stroke="#f36458" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <span>agentum</span>
+        </a>
+        <p class="brand-blurb">A self-hosted control plane for AI coding agents. Rust + Svelte, single binary, themeable.</p>
+      </div>
+      <div class="col">
+        <h4>Product</h4>
+        <ul>
+          <li><a href="#features">Sessions</a></li>
+          <li><a href="#features">Board</a></li>
+          <li><a href="#features">Watchdog</a></li>
+          <li><a href="#features">Channels</a></li>
+          <li><a href="#features">Themes</a></li>
+        </ul>
+      </div>
+      <div class="col">
+        <h4>Docs</h4>
+        <ul>
+          <li><a href="#">Architecture</a></li>
+          <li><a href="#">Data model</a></li>
+          <li><a href="#">HTTP API</a></li>
+          <li><a href="#">CLI reference</a></li>
+          <li><a href="#">Remote access</a></li>
+        </ul>
+      </div>
+      <div class="col">
+        <h4>Project</h4>
+        <ul>
+          <li><a href="https://github.com/MateoCerquetella/agentum" target="_blank" rel="noreferrer">GitHub</a></li>
+          <li><a href="#">Changelog</a></li>
+          <li><a href="#">Releases</a></li>
+          <li><a href="#">Roadmap</a></li>
+          <li><a href="#">Discord</a></li>
+        </ul>
+      </div>
+      <div class="col">
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="#">License (MIT)</a></li>
+          <li><a href="#">Security</a></li>
+          <li><a href="#">Privacy</a></li>
+          <li><a href="#">Credits</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <span>© 2026 agentum · MIT</span>
+      <span>v0.5.1 · built with rustc 1.95 · ⚡ tmux-native</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Copy install command
+  (function () {
+    var btn = document.getElementById('copy-btn');
+    var code = document.getElementById('install-cmd');
+    if (!btn || !code) return;
+    btn.addEventListener('click', function () {
+      var text = code.textContent.replace(/^\$\s*/, '').trim();
+      try {
+        navigator.clipboard.writeText(text);
+      } catch (e) {}
+      var prev = btn.textContent;
+      btn.textContent = 'Copied';
+      btn.classList.add('copy-flash');
+      setTimeout(function () {
+        btn.textContent = prev;
+        btn.classList.remove('copy-flash');
+      }, 1400);
+    });
+  })();
+
+  // CLI step highlight (interactive)
+  (function () {
+    var items = document.querySelectorAll('#cli-list .cli-item');
+    if (!items.length) return;
+    items.forEach(function (el) {
+      el.addEventListener('mouseenter', function () {
+        items.forEach(function (i) { i.classList.remove('active'); });
+        el.classList.add('active');
+      });
+    });
+  })();
+</script>
+
+</body>
+</html>
