@@ -776,10 +776,24 @@ async fn handle_key(
     if app.focus == Focus::Input {
         match key.code {
             KeyCode::Esc => app.focus = Focus::Tree,
+            // Tab / Shift-Tab cycle focus instead of being trapped in the
+            // input field — matches the behaviour every other pane has and
+            // mirrors the global `]` / `[` cycling.
+            KeyCode::Tab | KeyCode::Char(']') => {
+                app.focus = next_focus(app.focus, app.lazygit_open());
+            }
+            KeyCode::BackTab | KeyCode::Char('[') => {
+                app.focus = prev_focus(app.focus, app.lazygit_open());
+            }
             KeyCode::Backspace => {
                 app.input.pop();
             }
-            KeyCode::Char(c) => app.input.push(c),
+            // Plain character — but not Ctrl-modified ones. Ctrl-A/Ctrl-W
+            // etc. were being inserted as bare letters (the `Char(c)` arm
+            // ignored modifiers), which made meta-commands unusable.
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.input.push(c);
+            }
             KeyCode::Enter => {
                 if let Some(id) = app.selected {
                     let text = app.input.clone();
