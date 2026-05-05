@@ -1,5 +1,5 @@
 /**
- * Per-browser actor identity used for board claims (PRD §7).
+ * Per-browser actor identity used for board claims.
  *
  * Generated lazily on first access, persisted in localStorage. Two
  * different browsers (or two tabs after clearing storage) get different

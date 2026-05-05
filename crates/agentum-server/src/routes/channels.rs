@@ -1,5 +1,5 @@
 //! `/api/channels` — list/create/delete + per-channel message append + listing
-//! (PRD §7).
+//!.
 //!
 //! Live delivery rides on the existing `/api/events` broadcast bus: a POST
 //! to `/api/channels/{id}/messages` emits a `message.posted` event with

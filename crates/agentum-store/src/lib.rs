@@ -306,7 +306,7 @@ impl Store {
 
     /// Atomic CAS claim: succeeds only if `claimed_by` is currently NULL.
     /// Returns the updated row on success, `None` on conflict (caller maps
-    /// to 409). PRD §7.
+    /// to 409).
     pub async fn claim_board_item(
         &self,
         id: i64,

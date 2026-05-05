@@ -138,7 +138,7 @@ pub enum Cmd {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
 
-        /// Plain-HTTP cert-server port (PRD §3) — serves the self-signed PEM
+        /// Plain-HTTP cert-server port — serves the self-signed PEM
         /// for trust-on-first-use from a phone.
         #[arg(long, default_value_t = 8823)]
         cert_port: u16,

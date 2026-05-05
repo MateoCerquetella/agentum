@@ -1,4 +1,4 @@
-//! Tool-adapter abstraction (PRD §3 + §12 Phase 2b).
+//! Tool-adapter abstraction.
 //!
 //! Every supported AI CLI (Claude, Codex, Gemini, Hermes, …) implements
 //! [`ToolAdapter`]. The rest of agentum talks to the trait — never to a

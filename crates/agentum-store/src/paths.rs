@@ -1,4 +1,4 @@
-//! XDG-compliant filesystem paths for agentum, per PRD §3.
+//! XDG-compliant filesystem paths for agentum.
 //!
 //! Linux:    config=$XDG_CONFIG_HOME/agentum, data=$XDG_DATA_HOME/agentum,
 //!           cache=$XDG_CACHE_HOME/agentum, state=$XDG_STATE_HOME/agentum

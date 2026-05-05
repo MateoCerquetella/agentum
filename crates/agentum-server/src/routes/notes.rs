@@ -1,4 +1,4 @@
-//! `/api/notes` — REST CRUD per PRD §7.
+//! `/api/notes` — REST CRUD.
 
 use agentum_core::{NewNote, Note, NotePatch};
 use axum::Json;

@@ -6,11 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.0] — 2026-05-04
 
-The first release. Implements every phase of [PRD.md](PRD.md) v2.
+The first release. Implements every phase of the original PRD v2.
 
 ### Sessions
 - `agentum new / up / down / kill / rm / ls / ps / open / tail / send / keys`
-  CLI surface (PRD §9).
+  CLI surface.
 - tmux adapter: `has_session`, `new_session`, `kill_session`, `capture_pane`,
   `send_keys`, `pipe_pane`, `pane_pid`, `graceful_stop` (SIGTERM → SIGKILL
   after 5 s → `kill-session`).
@@ -27,7 +27,7 @@ The first release. Implements every phase of [PRD.md](PRD.md) v2.
   watchdog speaks the right dialect.
 
 ### Watchdog
-- Per-session reconciler ticks every 5 s. Applies the rules from PRD §10:
+- Per-session reconciler ticks every 5 s. Applies the watchdog rules:
   `Context low.*<\s*50%` → `/compact` (5 min cooldown), crash signatures →
   `Crashed` + `session.crashed{reason:pane_exited|signature}` event.
 - Events broadcast on a `tokio::sync::broadcast` bus and persisted to the
@@ -48,10 +48,10 @@ The first release. Implements every phase of [PRD.md](PRD.md) v2.
 
 ### Frontend (Phases 3, 4, 9)
 - SvelteKit 2 + Svelte 5 SPA, embedded into the Rust binary via `rust-embed`.
-- **Terminal Dark** + **Paperlight** + **System** themes (PRD §8 palettes
+- **Terminal Dark** + **Paperlight** + **System** themes (palettes
   verbatim). Persisted in localStorage.
 - `⌘K` / `Ctrl+K` command palette over pages, sessions, board items, notes,
-  and the built-in commands from PRD §8. `?` opens a keyboard-shortcut sheet.
+  and the built-in commands. `?` opens a keyboard-shortcut sheet.
 - Service worker pre-caches the immutable bundle; SPA shell falls back from
   the cache when offline.
 

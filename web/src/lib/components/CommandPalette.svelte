@@ -24,7 +24,7 @@
   function rebuild() {
     const out: Entry[] = [];
 
-    // Built-in commands (PRD §8)
+    // Built-in commands
     out.push({ id: 'cmd:theme:terminal-dark', title: 'Switch theme: terminal-dark', badge: 'cmd', action: () => applyTheme('terminal-dark') });
     out.push({ id: 'cmd:theme:paperlight',     title: 'Switch theme: paperlight',     badge: 'cmd', action: () => applyTheme('paperlight') });
     out.push({ id: 'cmd:theme:system',          title: 'Switch theme: system',          badge: 'cmd', action: () => applyTheme('system') });

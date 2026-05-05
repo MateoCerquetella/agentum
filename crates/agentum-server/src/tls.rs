@@ -1,4 +1,4 @@
-//! Self-signed TLS for `agentum serve` (PRD §11, phase 5).
+//! Self-signed TLS for `agentum serve`.
 //!
 //! On first boot we generate a long-lived self-signed cert covering
 //! `localhost` + common LAN IPs and write it to
