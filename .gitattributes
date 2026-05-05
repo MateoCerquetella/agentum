@@ -1,0 +1,3 @@
+web/build/** linguist-generated
+web/.svelte-kit/** linguist-generated
+*.lock linguist-generated

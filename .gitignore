@@ -23,8 +23,3 @@ web/dist
 .env
 .env.local
 *.log
-
-# Reference clone is read-only inheritance; commit it so agents can browse it,
-# but exclude its build artifacts.
-reference/**/node_modules
-reference/**/.git
