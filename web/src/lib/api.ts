@@ -45,7 +45,6 @@ export interface DoctorReport {
 export interface AuthStatus {
   needs_setup: boolean;
   register_open: boolean;
-  pin_required: boolean;
 }
 
 export interface CertFingerprint {
@@ -229,10 +228,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ username, password })
     }),
-  register: (username: string, password: string, pin?: string) =>
+  register: (username: string, password: string) =>
     request<AuthResp>('/api/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ username, password, pin: pin ?? null })
+      body: JSON.stringify({ username, password })
     }),
   certFingerprint: () => request<CertFingerprint>('/api/cert/fingerprint'),
   logout: () => request<void>('/api/auth/logout', { method: 'POST' }),

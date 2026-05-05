@@ -1,14 +1,10 @@
 <script lang="ts">
   /**
    * First-run onboarding wizard. Runs when `/api/auth/status` reports
-   * `needs_setup: true` and replaces the bare register form that used
-   * to live in TokenGate. Four steps:
+   * `needs_setup: true`. Four steps:
    *
    *   1. Welcome — what is agentum, set expectations.
-   *   2. Create admin — username + password + bootstrap PIN.
-   *      The PIN is printed on the host's terminal by `agentum serve`
-   *      and gates anonymous registration so a LAN attacker can't grab
-   *      the admin slot first.
+   *   2. Create admin — username + password.
    *   3. Verify cert — show the SHA-256 fingerprint, ask the user to
    *      confirm it matches what the host printed. Skipped on --no-tls.
    *   4. Share access — display the dashboard URL + fingerprint with
@@ -28,7 +24,6 @@
   let username = $state('');
   let password = $state('');
   let confirm = $state('');
-  let pin = $state('');
   let submitting = $state(false);
   let error = $state<string | null>(null);
   let tlsActive = $state<boolean | null>(null);
@@ -64,13 +59,9 @@
       error = 'passwords do not match';
       return;
     }
-    if (!pin.trim()) {
-      error = 'bootstrap PIN required (look for it on the host terminal)';
-      return;
-    }
     submitting = true;
     try {
-      await register(username.trim(), password, pin.trim());
+      await register(username.trim(), password);
       // Successful register sets authState to 'ok' as a side effect, but
       // we hold the user inside the wizard so they see the verify + share
       // steps. The TokenGate wrapper still considers them logged in.
@@ -125,10 +116,9 @@
     {:else if step === 'register'}
       <form onsubmit={submitRegister}>
         <p class="muted">
-          The first registration becomes the admin account. The bootstrap
-          PIN below was printed on the host's terminal when you ran
-          <code>agentum serve</code> — it stops anyone else on your
-          network from claiming the admin slot first.
+          The first registration becomes the admin account. After this,
+          additional users are added from the host with
+          <code>agentum auth add &lt;username&gt;</code>.
         </p>
 
         <label>
@@ -168,25 +158,6 @@
           />
         </label>
 
-        <label>
-          <span>Bootstrap PIN</span>
-          <input
-            type="text"
-            bind:value={pin}
-            placeholder="8 digits from the host terminal"
-            inputmode="numeric"
-            autocomplete="off"
-            spellcheck="false"
-            required
-            pattern="\d{8}"
-          />
-          <small class="hint">
-            On the machine running <code>agentum serve</code>, look for a
-            line like <code>bootstrap PIN: 12345678</code>. Restart
-            <code>agentum serve</code> to get a fresh one.
-          </small>
-        </label>
-
         {#if error}<p class="err-msg">{error}</p>{/if}
 
         <div class="actions">
@@ -194,7 +165,7 @@
           <button
             class="primary"
             type="submit"
-            disabled={!username.trim() || !password || !pin.trim() || submitting}
+            disabled={!username.trim() || !password || submitting}
           >
             {submitting ? 'creating…' : 'create account →'}
           </button>

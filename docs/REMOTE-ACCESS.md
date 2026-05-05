@@ -62,24 +62,24 @@ and configure the VPN client.
 
 ## First-time setup, step by step
 
-1. **On the host**, run `agentum serve`. Two important lines appear in
+1. **On the host**, run `agentum serve`. One important line appears in
    the terminal:
 
    ```
-   bootstrap PIN: 12345678
    TLS cert fingerprint (verify on second device): SHA-256 AB:CD:…
    ```
 
-   Keep that terminal open — you'll need both values in the next steps.
+   Keep that terminal open — you'll need this value in step 3.
 
 2. **From any browser on the network** (your laptop, your phone), open
    `https://<host-ip>:8822`. The browser warns about a self-signed cert
    — accept it.
 
 3. The dashboard's onboarding wizard kicks in. It walks you through:
-   - **Create admin** — username, password, plus the bootstrap PIN
-     from step 1. The PIN closes the LAN race window where someone
-     else on the network could grab the admin slot first.
+   - **Create admin** — username + password. The first registration
+     becomes the admin account; subsequent anonymous registers are
+     refused, and additional users are added from the host with
+     `agentum auth add <username>`.
    - **Verify cert** — the wizard shows the SHA-256 fingerprint the
      server is presenting. Confirm it matches the `SHA-256 AB:CD:…`
      line in the host terminal. If they differ, **someone is
@@ -148,8 +148,6 @@ cert. The recent hardening lands relevant defenses:
 
 - Online password guessing: per-IP rate limit of 8 login attempts per
   5 minutes, then 429.
-- First-user race: bootstrap PIN required on the very first
-  registration, single-use, lives only in process memory.
 - Cert MITM: SHA-256 fingerprint printed on every `agentum serve` boot
   so it can be verified out-of-band.
 - Token theft via logs: `?token=…` is redacted from access logs.

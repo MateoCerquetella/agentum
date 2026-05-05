@@ -1,12 +1,11 @@
 //! Auth endpoints: register / login / logout / me / status.
 //!
-//! `register` is gated by:
-//!   - "no users exist" — only the very first registration is anonymous, and
-//!   - a single-use bootstrap PIN held in process memory and printed to the
-//!     host TTY on serve start (defeats the LAN race for the admin slot).
+//! `register` is anonymous while no users exist (first-run bootstrap). Once
+//! at least one user exists, the route is closed permanently for that boot
+//! — additional accounts are added via `agentum auth add` on the host.
 //!
 //! `register` and `login` share a per-IP rate limiter to slow down online
-//! password / PIN guessing.
+//! password guessing.
 
 use std::net::SocketAddr;
 
@@ -14,7 +13,7 @@ use agentum_core::validate_username;
 use axum::Json;
 use axum::Router;
 use axum::extract::{ConnectInfo, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::StatusCode;
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 
@@ -36,39 +35,22 @@ pub fn router() -> Router<AppState> {
 struct StatusResp {
     /// True when zero users exist — UI shows registration form.
     needs_setup: bool,
-    /// True when register can be hit anonymously AND a bootstrap PIN is
-    /// armed. The dashboard uses this to decide whether to ask the user
-    /// to paste the PIN.
+    /// True when register can be hit anonymously. Equal to `needs_setup`
+    /// in current shape; kept as a separate field for forward compat.
     register_open: bool,
-    /// True when the host has armed a one-time PIN that must accompany
-    /// the register call. Always equal to `register_open`, exposed
-    /// separately so the UI can show different copy.
-    pin_required: bool,
 }
 
 async fn status(State(state): State<AppState>) -> Result<Json<StatusResp>, ApiError> {
     let n = state.store.count_users().await?;
     let needs_setup = n == 0;
-    let armed = state.bootstrap_pin.is_armed();
     Ok(Json(StatusResp {
         needs_setup,
-        register_open: needs_setup && armed,
-        pin_required: needs_setup && armed,
+        register_open: needs_setup,
     }))
 }
 
 #[derive(Deserialize)]
-struct RegisterCredentials {
-    username: String,
-    password: String,
-    /// Required when zero users exist. Echoes the PIN the operator saw on
-    /// the host TTY at `agentum serve` start.
-    #[serde(default)]
-    pin: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct LoginCredentials {
+struct Credentials {
     username: String,
     password: String,
 }
@@ -80,7 +62,6 @@ struct AuthResp {
 }
 
 const MIN_PASSWORD_LEN: usize = 8;
-const PIN_HEADER: &str = "x-bootstrap-pin";
 
 fn validate_password(p: &str) -> Result<(), ApiError> {
     if p.len() < MIN_PASSWORD_LEN {
@@ -104,8 +85,7 @@ fn check_rate_limit(state: &AppState, peer: SocketAddr) -> Result<(), ApiError> 
 async fn register(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    Json(body): Json<RegisterCredentials>,
+    Json(body): Json<Credentials>,
 ) -> Result<(StatusCode, Json<AuthResp>), ApiError> {
     check_rate_limit(&state, peer)?;
 
@@ -120,33 +100,6 @@ async fn register(
         ));
     }
 
-    if !state.bootstrap_pin.is_armed() {
-        // Belt-and-braces: count_users == 0 should imply armed, but if a
-        // race deletes everything, refuse rather than open up registration.
-        return Err(ApiError::Forbidden(
-            "bootstrap PIN not armed; restart `agentum serve` to generate a fresh one".into(),
-        ));
-    }
-
-    let supplied_pin = body
-        .pin
-        .clone()
-        .or_else(|| {
-            headers
-                .get(PIN_HEADER)
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.trim().to_string())
-        })
-        .ok_or_else(|| {
-            ApiError::Unauthorized(
-                "bootstrap PIN required (X-Bootstrap-PIN header or `pin` field)".into(),
-            )
-        })?;
-
-    if !state.bootstrap_pin.verify(&supplied_pin) {
-        return Err(ApiError::Unauthorized("invalid bootstrap PIN".into()));
-    }
-
     let username = body.username.trim().to_lowercase();
     validate_username(&username)
         .map_err(|e| ApiError::BadRequest(format!("invalid username: {e}")))?;
@@ -156,10 +109,6 @@ async fn register(
         .await
         .map_err(|e| ApiError::Internal(format!("hash failed: {e}")))?;
     let user = state.store.create_user(&username, &hash).await?;
-
-    // Successful first-user registration consumes the PIN. From here, only
-    // the CLI can add more users.
-    state.bootstrap_pin.clear();
 
     let token = new_token();
     state
@@ -179,7 +128,7 @@ async fn register(
 async fn login(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    Json(body): Json<LoginCredentials>,
+    Json(body): Json<Credentials>,
 ) -> Result<Json<AuthResp>, ApiError> {
     check_rate_limit(&state, peer)?;
 
