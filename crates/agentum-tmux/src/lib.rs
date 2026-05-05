@@ -122,7 +122,11 @@ pub async fn pipe_pane(target: &str, out_path: &Path) -> Result<()> {
     let cmd_str = format!("cat >> {quoted_path}");
 
     let mut c = Command::new("tmux");
-    c.arg("pipe-pane").arg("-o").arg("-t").arg(target).arg(cmd_str);
+    c.arg("pipe-pane")
+        .arg("-o")
+        .arg("-t")
+        .arg(target)
+        .arg(cmd_str);
     run_checked(&mut c).await
 }
 
@@ -220,14 +224,9 @@ mod tests {
         let _ = kill_session(target).await;
 
         let workdir = std::env::temp_dir();
-        new_session(
-            target,
-            &workdir,
-            &["sleep".into(), "3600".into()],
-            &[],
-        )
-        .await
-        .unwrap();
+        new_session(target, &workdir, &["sleep".into(), "3600".into()], &[])
+            .await
+            .unwrap();
 
         assert!(has_session(target).await.unwrap());
         let pid = pane_pid(target).await.unwrap();

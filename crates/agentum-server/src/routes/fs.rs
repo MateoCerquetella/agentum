@@ -83,7 +83,10 @@ async fn list_dir(Query(q): Query<ListQuery>) -> Result<Json<ListResp>, ApiError
         };
         let is_dir = if ft.is_symlink() {
             // Follow the symlink for the dir check, but skip dangling ones.
-            fs::metadata(ent.path()).await.map(|m| m.is_dir()).unwrap_or(false)
+            fs::metadata(ent.path())
+                .await
+                .map(|m| m.is_dir())
+                .unwrap_or(false)
         } else {
             ft.is_dir()
         };
@@ -123,7 +126,11 @@ fn resolve(raw: &str) -> Result<PathBuf, ApiError> {
         home.join(rest)
     } else {
         let p = Path::new(trimmed);
-        if p.is_absolute() { p.to_path_buf() } else { home.join(p) }
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            home.join(p)
+        }
     };
 
     // Don't canonicalize — the path may not exist yet (autocomplete is OK

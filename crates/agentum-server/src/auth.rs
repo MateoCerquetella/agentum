@@ -57,11 +57,7 @@ pub fn verify_password(plain: &str, stored_hash: &str) -> bool {
 fn is_public(path: &str) -> bool {
     matches!(
         path,
-        "/api/health"
-            | "/api/cert"
-            | "/api/auth/status"
-            | "/api/auth/login"
-            | "/api/auth/register"
+        "/api/health" | "/api/cert" | "/api/auth/status" | "/api/auth/login" | "/api/auth/register"
     )
 }
 
@@ -153,7 +149,10 @@ pub async fn require_token(
 fn unauthorized(msg: &'static str) -> Response {
     (
         StatusCode::UNAUTHORIZED,
-        [(axum::http::header::WWW_AUTHENTICATE, "Bearer realm=\"agentum\"")],
+        [(
+            axum::http::header::WWW_AUTHENTICATE,
+            "Bearer realm=\"agentum\"",
+        )],
         msg,
     )
         .into_response()
@@ -167,7 +166,10 @@ mod tests {
     fn token_format() {
         let t = new_token();
         assert_eq!(t.len(), 43);
-        assert!(t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+        assert!(
+            t.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        );
     }
 
     #[test]

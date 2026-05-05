@@ -21,7 +21,9 @@ fn push_user_flags(argv: &mut Vec<String>, session: &Session) {
 pub struct ClaudeAdapter;
 
 impl ToolAdapter for ClaudeAdapter {
-    fn name(&self) -> &'static str { "claude" }
+    fn name(&self) -> &'static str {
+        "claude"
+    }
 
     fn launch(&self, session: &Session) -> LaunchCommand {
         let mut argv = vec!["claude".to_string()];
@@ -35,10 +37,7 @@ impl ToolAdapter for ClaudeAdapter {
     }
 
     fn crash_signatures(&self) -> &'static [&'static str] {
-        &[
-            "redacted_thinking",
-            "panic: cannot continue",
-        ]
+        &["redacted_thinking", "panic: cannot continue"]
     }
 }
 
@@ -47,7 +46,9 @@ impl ToolAdapter for ClaudeAdapter {
 pub struct CodexAdapter;
 
 impl ToolAdapter for CodexAdapter {
-    fn name(&self) -> &'static str { "codex" }
+    fn name(&self) -> &'static str {
+        "codex"
+    }
 
     fn launch(&self, session: &Session) -> LaunchCommand {
         let mut argv = vec!["codex".to_string()];
@@ -67,7 +68,9 @@ impl ToolAdapter for CodexAdapter {
 pub struct GeminiAdapter;
 
 impl ToolAdapter for GeminiAdapter {
-    fn name(&self) -> &'static str { "gemini" }
+    fn name(&self) -> &'static str {
+        "gemini"
+    }
 
     fn launch(&self, session: &Session) -> LaunchCommand {
         let mut argv = vec!["gemini".to_string()];
@@ -82,7 +85,9 @@ impl ToolAdapter for GeminiAdapter {
 pub struct HermesAdapter;
 
 impl ToolAdapter for HermesAdapter {
-    fn name(&self) -> &'static str { "hermes" }
+    fn name(&self) -> &'static str {
+        "hermes"
+    }
 
     fn launch(&self, session: &Session) -> LaunchCommand {
         // bash-bridge convention: `hermes run --workdir <dir> [--model <m>] [user flags]`
@@ -106,11 +111,15 @@ pub struct PassthroughAdapter {
 }
 
 impl PassthroughAdapter {
-    pub fn new(tool: String) -> Self { Self { tool } }
+    pub fn new(tool: String) -> Self {
+        Self { tool }
+    }
 }
 
 impl ToolAdapter for PassthroughAdapter {
-    fn name(&self) -> &'static str { "passthrough" }
+    fn name(&self) -> &'static str {
+        "passthrough"
+    }
 
     fn launch(&self, session: &Session) -> LaunchCommand {
         let mut argv = vec![self.tool.clone()];
@@ -124,7 +133,7 @@ impl ToolAdapter for PassthroughAdapter {
 mod tests {
     use super::*;
     use crate::adapter_for;
-    use agentum_core::{Status, Session};
+    use agentum_core::{Session, Status};
     use time::OffsetDateTime;
     use uuid::Uuid;
 
@@ -147,11 +156,19 @@ mod tests {
 
     #[test]
     fn claude_argv() {
-        let s = fixture("claude", Some("opus-4-7"), &["--dangerously-skip-permissions"]);
+        let s = fixture(
+            "claude",
+            Some("opus-4-7"),
+            &["--dangerously-skip-permissions"],
+        );
         let cmd = ClaudeAdapter.launch(&s);
         assert_eq!(
             cmd.argv,
-            vec!["claude", "--model=opus-4-7", "--dangerously-skip-permissions"]
+            vec![
+                "claude",
+                "--model=opus-4-7",
+                "--dangerously-skip-permissions"
+            ]
         );
         assert_eq!(ClaudeAdapter.compact_trigger(), Some("/compact"));
     }
@@ -162,7 +179,13 @@ mod tests {
         let cmd = HermesAdapter.launch(&s);
         assert_eq!(
             cmd.argv,
-            vec!["hermes", "run", "--workdir", "/tmp/work", "--model=hermes-3"]
+            vec![
+                "hermes",
+                "run",
+                "--workdir",
+                "/tmp/work",
+                "--model=hermes-3"
+            ]
         );
     }
 

@@ -60,7 +60,9 @@ fn generate() -> Result<(String, String), TlsError> {
         .push(DnType::CommonName, "agentum self-signed");
 
     // Some browsers want SANs explicit
-    params.subject_alt_names.push(SanType::DnsName("localhost".try_into()?));
+    params
+        .subject_alt_names
+        .push(SanType::DnsName("localhost".try_into()?));
 
     let key = KeyPair::generate()?;
     let cert = params.self_signed(&key)?;

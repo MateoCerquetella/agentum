@@ -71,8 +71,7 @@ impl Watchdog {
 
     async fn reconcile(&self) -> Result<(), WatchdogError> {
         let running = self.store.list_sessions(Some(Status::Running)).await?;
-        let running_ids: std::collections::HashSet<Uuid> =
-            running.iter().map(|s| s.id).collect();
+        let running_ids: std::collections::HashSet<Uuid> = running.iter().map(|s| s.id).collect();
 
         let mut tasks = self.tasks.write().await;
 
