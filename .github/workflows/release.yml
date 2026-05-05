@@ -30,7 +30,9 @@ jobs:
             cross: true
             archive: tar.gz
           - target: x86_64-apple-darwin
-            runner: macos-13
+            # macos-14 is Apple Silicon; we cross-compile to x86_64 here.
+            # macos-13 (Intel) runners are being deprecated and queue heavily.
+            runner: macos-14
             cross: false
             archive: tar.gz
           - target: aarch64-apple-darwin
