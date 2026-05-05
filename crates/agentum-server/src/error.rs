@@ -16,6 +16,8 @@ pub enum ApiError {
     Unauthorized(String),
     #[error("forbidden: {0}")]
     Forbidden(String),
+    #[error("too many requests: {0}")]
+    TooManyRequests(String),
     #[error("internal: {0}")]
     Internal(String),
 }
@@ -28,6 +30,7 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
             ApiError::Unauthorized(m) => (StatusCode::UNAUTHORIZED, m.clone()),
             ApiError::Forbidden(m) => (StatusCode::FORBIDDEN, m.clone()),
+            ApiError::TooManyRequests(m) => (StatusCode::TOO_MANY_REQUESTS, m.clone()),
             ApiError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m.clone()),
         };
         (status, Json(json!({ "error": msg }))).into_response()
