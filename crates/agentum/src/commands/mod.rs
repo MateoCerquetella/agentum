@@ -2,6 +2,7 @@ pub mod auth;
 pub mod config;
 pub mod doctor;
 pub mod down;
+pub mod hosts;
 pub mod keys;
 pub mod kill;
 pub mod ls;
