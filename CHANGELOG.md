@@ -4,6 +4,34 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] — 2026-05-05
+
+TUI new-session form reaches feature parity with the web `NewSessionDialog`.
+v0.5.1 shipped a 4-field form (name / workdir / tool / model); the web
+dialog has six controls + a directory browser. Now the TUI matches.
+
+### Added
+- **Tool field cycles through suggestions** with Tab. Mirrors the web's
+  `<datalist>` of `claude / codex / opencode / aider`. Wraps after the
+  last entry; Shift-Tab still walks back through fields normally.
+- **Extra args field** parses `key=value` pairs the same way the web
+  does: whitespace-separated tokens, `key=true` becomes `--key`, anything
+  else becomes `--key=value`. Stripped of leading `--` if you typed it.
+- **"Start immediately" toggle** — checkbox-equivalent (`[x]` / `[ ]`).
+  Default on, unchecked = create-only (idle).
+- **Directory picker sub-overlay**, opened by pressing Enter while on
+  the Workdir field. Reads from `/api/fs/list`, shows up to 14 dirs at
+  a time, navigates with arrows + Enter, Backspace to go up, `a` to
+  accept the currently-listed directory as the workdir, Esc to cancel
+  back to the form.
+
+### Internal
+- `Overlay::NewSession(NewSessionForm)` boxed (`Box<NewSessionForm>`) to
+  silence `clippy::large_enum_variant` — the form grew past 264 bytes
+  with the picker state added.
+- New `parse_args_field` helper (in `terminal::app`), unit-testable in
+  isolation if a regression appears.
+
 ## [0.5.2] — 2026-05-05
 
 ### Added

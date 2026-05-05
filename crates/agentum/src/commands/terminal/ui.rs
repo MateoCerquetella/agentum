@@ -8,8 +8,8 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use tui_term::widget::PseudoTerminal;
 
 use super::app::{
-    App, ConnState, Focus, NewSessionField, NewSessionForm, Overlay, PendingAction, Row,
-    palette_catalog, status_dot,
+    App, ConnState, DirPickerState, Focus, NewSessionField, NewSessionForm, Overlay,
+    PendingAction, Row, palette_catalog, status_dot,
 };
 use super::extensions::{self, Extension, LAZYGIT};
 use super::theme::Palette;
@@ -633,41 +633,68 @@ fn draw_palette_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
 }
 
 fn draw_new_session_overlay(f: &mut Frame<'_>, area: Rect, form: &NewSessionForm, p: &Palette) {
+    // If the directory picker is up, it owns the overlay box.
+    if let Some(picker) = &form.picker {
+        draw_dir_picker_overlay(f, area, picker, p);
+        return;
+    }
+
     let mut lines: Vec<Line<'_>> = Vec::new();
-    lines.push(head("new session", p));
+    lines.push(head("New session", p));
     lines.push(Line::from(""));
+
     push_form_field(
         &mut lines,
-        "name",
+        "Name",
         &form.name,
         form.field == NewSessionField::Name,
-        "alpha, my-feature, …",
+        "alpha",
         p,
     );
-    push_form_field(
+    push_form_field_with_hint(
         &mut lines,
-        "workdir",
-        &form.workdir,
-        form.field == NewSessionField::Workdir,
-        "absolute path",
-        p,
-    );
-    push_form_field(
-        &mut lines,
-        "tool",
+        "Tool",
         &form.tool,
         form.field == NewSessionField::Tool,
-        "claude · codex · gemini · hermes · any cli on PATH",
+        "claude",
+        Some("Tab cycles claude → codex → opencode → aider"),
         p,
     );
-    push_form_field(
+    push_form_field_with_hint(
         &mut lines,
-        "model",
+        "Model",
         &form.model,
         form.field == NewSessionField::Model,
-        "optional",
+        "e.g. claude-opus-4-7",
+        Some("(optional)"),
         p,
     );
+    push_form_field_with_hint(
+        &mut lines,
+        "Working directory",
+        &form.workdir,
+        form.field == NewSessionField::Workdir,
+        "~/projects/foo",
+        Some("Enter opens the folder picker"),
+        p,
+    );
+    push_form_field_with_hint(
+        &mut lines,
+        "Extra args",
+        &form.args,
+        form.field == NewSessionField::Args,
+        "key=value pairs, space-separated",
+        Some("e.g. resume=true model=sonnet"),
+        p,
+    );
+    push_toggle_field(
+        &mut lines,
+        "Start immediately (--up)",
+        form.up_after,
+        form.field == NewSessionField::UpAfter,
+        p,
+    );
+
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled("  Tab/↓", Style::default().fg(p.accent)),
@@ -686,7 +713,7 @@ fn draw_new_session_overlay(f: &mut Frame<'_>, area: Rect, form: &NewSessionForm
             Style::default().fg(p.error),
         )));
     }
-    overlay_box(f, area, " new session ", lines, 64, p);
+    overlay_box(f, area, " New session ", lines, 70, p);
 }
 
 fn push_form_field(
@@ -697,13 +724,30 @@ fn push_form_field(
     placeholder: &str,
     p: &Palette,
 ) {
+    push_form_field_with_hint(lines, label, value, focused, placeholder, None, p);
+}
+
+fn push_form_field_with_hint(
+    lines: &mut Vec<Line<'static>>,
+    label: &str,
+    value: &str,
+    focused: bool,
+    placeholder: &str,
+    hint: Option<&str>,
+    p: &Palette,
+) {
     let label_color = if focused { p.accent } else { p.muted };
-    lines.push(Line::from(Span::styled(
+    let mut label_spans = vec![Span::styled(
         format!("  {label}"),
-        Style::default()
-            .fg(label_color)
-            .add_modifier(Modifier::BOLD),
-    )));
+        Style::default().fg(label_color).add_modifier(Modifier::BOLD),
+    )];
+    if let Some(h) = hint {
+        label_spans.push(Span::styled(
+            format!("  {h}"),
+            Style::default().fg(p.muted),
+        ));
+    }
+    lines.push(Line::from(label_spans));
     let value_line = if value.is_empty() && !focused {
         Line::from(Span::styled(
             format!("    {placeholder}"),
@@ -720,6 +764,100 @@ fn push_form_field(
         Line::from(spans)
     };
     lines.push(value_line);
+}
+
+fn push_toggle_field(
+    lines: &mut Vec<Line<'static>>,
+    label: &str,
+    on: bool,
+    focused: bool,
+    p: &Palette,
+) {
+    let label_color = if focused { p.accent } else { p.muted };
+    let mark: &'static str = if on { "[x]" } else { "[ ]" };
+    let mark_color = if on { p.success } else { p.muted };
+    let mut spans = vec![
+        Span::raw("  "),
+        Span::styled(mark, Style::default().fg(mark_color)),
+        Span::raw(" "),
+        Span::styled(label.to_string(), Style::default().fg(label_color)),
+    ];
+    if focused {
+        spans.push(Span::styled(
+            "  · space/Enter to toggle".to_string(),
+            Style::default().fg(p.muted),
+        ));
+    }
+    lines.push(Line::from(spans));
+}
+
+fn draw_dir_picker_overlay(f: &mut Frame<'_>, area: Rect, picker: &DirPickerState, p: &Palette) {
+    let mut lines: Vec<Line<'_>> = Vec::new();
+    lines.push(head("Pick a working directory", p));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  current  ", Style::default().fg(p.muted)),
+        Span::styled(picker.path.clone(), Style::default().fg(p.fg).add_modifier(Modifier::BOLD)),
+    ]));
+    if picker.parent.is_some() {
+        lines.push(Line::from(Span::styled(
+            "  ←/Backspace  go up",
+            Style::default().fg(p.muted),
+        )));
+    }
+    lines.push(Line::from(""));
+
+    if let Some(err) = &picker.error {
+        lines.push(Line::from(Span::styled(
+            format!("  ! {err}"),
+            Style::default().fg(p.error),
+        )));
+        lines.push(Line::from(""));
+    }
+
+    if picker.entries.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (no subdirectories)",
+            Style::default().fg(p.muted),
+        )));
+    } else {
+        // Show up to 14 entries with the cursor as a > marker.
+        let max = picker.entries.len().min(14);
+        for (i, entry) in picker.entries.iter().take(max).enumerate() {
+            let is_cursor = i == picker.cursor;
+            let prefix = if is_cursor { "  > " } else { "    " };
+            let style = if is_cursor {
+                Style::default().fg(p.cursor_fg).bg(p.cursor_bg)
+            } else {
+                Style::default().fg(p.fg)
+            };
+            lines.push(Line::from(Span::styled(
+                format!("{prefix}{}/", entry.name),
+                style,
+            )));
+        }
+        if picker.entries.len() > max {
+            lines.push(Line::from(Span::styled(
+                format!("  … {} more", picker.entries.len() - max),
+                Style::default().fg(p.muted),
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  ↑/↓", Style::default().fg(p.accent)),
+        Span::styled(" move   ", Style::default().fg(p.muted)),
+        Span::styled("→/Enter", Style::default().fg(p.accent)),
+        Span::styled(" descend   ", Style::default().fg(p.muted)),
+        Span::styled("←", Style::default().fg(p.accent)),
+        Span::styled(" up   ", Style::default().fg(p.muted)),
+        Span::styled("a", Style::default().fg(p.accent)),
+        Span::styled(" use this dir   ", Style::default().fg(p.muted)),
+        Span::styled("Esc", Style::default().fg(p.accent)),
+        Span::styled(" back", Style::default().fg(p.muted)),
+    ]));
+    overlay_box(f, area, " Folder picker ", lines, 70, p);
 }
 
 fn draw_confirm_overlay(f: &mut Frame<'_>, area: Rect, action: &PendingAction, p: &Palette) {

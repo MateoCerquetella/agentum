@@ -59,21 +59,52 @@ pub enum Overlay {
     LazygitInstall,
     Palette,
     /// New-session form (n key on the tree).
-    NewSession(NewSessionForm),
+    NewSession(Box<NewSessionForm>),
     /// Generic confirmation prompt for destructive session actions.
     Confirm(PendingAction),
 }
 
-/// Inline new-session form. Fields owned so the user can type into them.
+/// Suggested tool names. Mirrors the web's datalist on the New Session
+/// dialog. Pressing Tab on the `Tool` field cycles through these.
+pub const TOOL_SUGGESTIONS: &[&str] = &["claude", "codex", "opencode", "aider"];
+
+/// Inline new-session form. Mirrors the web `NewSessionDialog` field-for-
+/// field: name, tool (with cycle-suggestions), model, workdir (with a
+/// directory-picker sub-overlay), extra args, and an "up after create"
+/// toggle.
 #[derive(Clone, PartialEq, Eq)]
 pub struct NewSessionForm {
     pub field: NewSessionField,
     pub name: String,
-    pub workdir: String,
     pub tool: String,
     pub model: String,
+    pub workdir: String,
+    pub args: String,
+    pub up_after: bool,
     pub error: Option<String>,
     pub submitting: bool,
+    /// When `Some`, the directory-picker overlay is up. Field state persists
+    /// inside the form so closing the picker restores the rest of the form.
+    pub picker: Option<DirPickerState>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct DirPickerState {
+    /// Path the picker is currently listing.
+    pub path: String,
+    /// Parent of `path` (None at filesystem root).
+    pub parent: Option<String>,
+    /// Subdirectories of `path`. Loaded from `/api/fs/list`.
+    pub entries: Vec<DirEntryView>,
+    pub cursor: usize,
+    pub error: Option<String>,
+    pub loading: bool,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct DirEntryView {
+    pub name: String,
+    pub path: String,
 }
 
 impl NewSessionForm {
@@ -81,39 +112,61 @@ impl NewSessionForm {
         Self {
             field: NewSessionField::Name,
             name: String::new(),
-            workdir: default_workdir,
             tool: "claude".into(),
             model: String::new(),
+            workdir: default_workdir,
+            args: String::new(),
+            up_after: true,
             error: None,
             submitting: false,
+            picker: None,
         }
     }
 
     pub fn next_field(&mut self) {
         self.field = match self.field {
-            NewSessionField::Name => NewSessionField::Workdir,
-            NewSessionField::Workdir => NewSessionField::Tool,
+            NewSessionField::Name => NewSessionField::Tool,
             NewSessionField::Tool => NewSessionField::Model,
-            NewSessionField::Model => NewSessionField::Name,
+            NewSessionField::Model => NewSessionField::Workdir,
+            NewSessionField::Workdir => NewSessionField::Args,
+            NewSessionField::Args => NewSessionField::UpAfter,
+            NewSessionField::UpAfter => NewSessionField::Name,
         };
     }
 
     pub fn prev_field(&mut self) {
         self.field = match self.field {
-            NewSessionField::Name => NewSessionField::Model,
-            NewSessionField::Workdir => NewSessionField::Name,
-            NewSessionField::Tool => NewSessionField::Workdir,
+            NewSessionField::Name => NewSessionField::UpAfter,
+            NewSessionField::Tool => NewSessionField::Name,
             NewSessionField::Model => NewSessionField::Tool,
+            NewSessionField::Workdir => NewSessionField::Model,
+            NewSessionField::Args => NewSessionField::Workdir,
+            NewSessionField::UpAfter => NewSessionField::Args,
         };
     }
 
-    pub fn field_value_mut(&mut self) -> &mut String {
+    pub fn field_value_mut(&mut self) -> Option<&mut String> {
         match self.field {
-            NewSessionField::Name => &mut self.name,
-            NewSessionField::Workdir => &mut self.workdir,
-            NewSessionField::Tool => &mut self.tool,
-            NewSessionField::Model => &mut self.model,
+            NewSessionField::Name => Some(&mut self.name),
+            NewSessionField::Tool => Some(&mut self.tool),
+            NewSessionField::Model => Some(&mut self.model),
+            NewSessionField::Workdir => Some(&mut self.workdir),
+            NewSessionField::Args => Some(&mut self.args),
+            NewSessionField::UpAfter => None, // toggle, not text
         }
+    }
+
+    /// Cycle the tool field through `TOOL_SUGGESTIONS`. Triggered by
+    /// pressing Tab when the Tool field has focus and isn't already on
+    /// the last suggestion. Wraps to `claude` after the last entry.
+    pub fn cycle_tool(&mut self) {
+        let current = self.tool.trim();
+        let idx = TOOL_SUGGESTIONS.iter().position(|t| *t == current);
+        let next = match idx {
+            Some(i) => TOOL_SUGGESTIONS[(i + 1) % TOOL_SUGGESTIONS.len()],
+            None => TOOL_SUGGESTIONS[0],
+        };
+        self.tool = next.to_string();
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -130,12 +183,39 @@ impl NewSessionForm {
     }
 }
 
+/// Parse the `Extra args` text field the same way the web's
+/// `NewSessionDialog` does:
+///
+/// - whitespace-separated tokens
+/// - each token must contain `=`; tokens without one are dropped
+/// - leading `--` on the key is stripped (idempotent)
+/// - `key=true` becomes the boolean flag `--key`
+/// - everything else becomes `--key=value`
+///
+/// Returns the list the server expects in `NewSession.flags`.
+pub fn parse_args_field(input: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for tok in input.split_whitespace() {
+        let Some(eq) = tok.find('=') else { continue };
+        let key = tok[..eq].trim_start_matches("--");
+        let val = &tok[eq + 1..];
+        if val == "true" {
+            out.push(format!("--{key}"));
+        } else {
+            out.push(format!("--{key}={val}"));
+        }
+    }
+    out
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NewSessionField {
     Name,
-    Workdir,
     Tool,
     Model,
+    Workdir,
+    Args,
+    UpAfter,
 }
 
 /// A destructive session action waiting on user confirmation. Carries the
@@ -740,7 +820,7 @@ async fn handle_key(
                 .map(|s| s.workdir.clone())
                 .or_else(|| std::env::var("HOME").ok())
                 .unwrap_or_default();
-            app.overlay = Overlay::NewSession(NewSessionForm::new(workdir));
+            app.overlay = Overlay::NewSession(Box::new(NewSessionForm::new(workdir)));
         }
         KeyCode::Char('u') => {
             if let Some(s) = app.selected_session() {
@@ -797,20 +877,67 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
         return;
     }
 
+    // Picker overlay: input goes there as long as it's open.
+    if form.picker.is_some() {
+        handle_dir_picker_key(&mut form, key, client).await;
+        app.overlay = Overlay::NewSession(form);
+        return;
+    }
+
     match key.code {
         KeyCode::Esc => {
             // Drop overlay, dropping the form.
             return;
         }
-        KeyCode::Tab | KeyCode::Down => form.next_field(),
-        KeyCode::BackTab | KeyCode::Up => form.prev_field(),
+
+        // Tab/Shift-Tab moves between fields, EXCEPT on the Tool field
+        // where Tab cycles through suggestions (matches web's datalist).
+        KeyCode::Tab => {
+            if matches!(form.field, NewSessionField::Tool) {
+                form.cycle_tool();
+            } else {
+                form.next_field();
+            }
+        }
+        KeyCode::BackTab => form.prev_field(),
+        // Down/Up always navigate fields.
+        KeyCode::Down => form.next_field(),
+        KeyCode::Up => form.prev_field(),
+
+        // Toggle field: space flips up_after; on text fields it just types
+        // a literal space.
+        KeyCode::Char(' ') if matches!(form.field, NewSessionField::UpAfter) => {
+            form.up_after = !form.up_after;
+        }
+
+        // Enter while on the workdir field opens the dir picker
+        // (mirrors clicking the picker's chevron in the web UI).
+        // Enter on the up_after toggle flips it. Enter elsewhere submits.
+        KeyCode::Enter if matches!(form.field, NewSessionField::Workdir) => {
+            let seed = if form.workdir.trim().is_empty() {
+                None
+            } else {
+                Some(form.workdir.trim().to_string())
+            };
+            let picker = open_dir_picker(seed.as_deref(), client).await;
+            form.picker = Some(picker);
+        }
+        KeyCode::Enter if matches!(form.field, NewSessionField::UpAfter) => {
+            form.up_after = !form.up_after;
+        }
+
         KeyCode::Backspace => {
-            form.field_value_mut().pop();
+            if let Some(v) = form.field_value_mut() {
+                v.pop();
+            }
         }
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            form.field_value_mut().push(c);
+            if let Some(v) = form.field_value_mut() {
+                v.push(c);
+            }
         }
         KeyCode::Enter => {
+            // Submit.
             if let Err(msg) = form.validate() {
                 form.error = Some(msg.into());
                 app.overlay = Overlay::NewSession(form);
@@ -821,23 +948,30 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
             } else {
                 Some(form.model.trim().to_string())
             };
+            let flags = parse_args_field(&form.args);
             match client
                 .create_session(
                     form.name.trim(),
                     form.workdir.trim(),
                     form.tool.trim(),
                     model.as_deref(),
+                    flags,
                 )
                 .await
             {
                 Ok(created) => {
                     let id = created.id;
                     let name = created.name.clone();
-                    if let Err(e) = client.start_session(id).await {
-                        app.status_msg = Some(format!("created `{name}` but start failed: {e}"));
-                        app.error_count += 1;
+                    if form.up_after {
+                        if let Err(e) = client.start_session(id).await {
+                            app.status_msg =
+                                Some(format!("created `{name}` but start failed: {e}"));
+                            app.error_count += 1;
+                        } else {
+                            app.status_msg = Some(format!("created + started `{name}`"));
+                        }
                     } else {
-                        app.status_msg = Some(format!("created + started `{name}`"));
+                        app.status_msg = Some(format!("created `{name}` (idle)"));
                     }
                     if let Ok(fresh) = client.list_sessions().await {
                         app.refresh_sessions(fresh);
@@ -856,6 +990,80 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
         _ => {}
     }
     app.overlay = Overlay::NewSession(form);
+}
+
+/// Fetch the listing for `seed` (or `$HOME` if seed is empty/None).
+/// Falls back to an empty listing on transport errors so the picker
+/// still opens with a visible error message.
+async fn open_dir_picker(seed: Option<&str>, client: &Client) -> DirPickerState {
+    let path = seed.map(|s| s.to_string());
+    match client.list_dir(path.as_deref()).await {
+        Ok(listing) => DirPickerState {
+            path: listing.path,
+            parent: listing.parent,
+            entries: listing
+                .dirs
+                .into_iter()
+                .map(|d| DirEntryView {
+                    name: d.name,
+                    path: d.path,
+                })
+                .collect(),
+            cursor: 0,
+            error: None,
+            loading: false,
+        },
+        Err(e) => DirPickerState {
+            path: seed.unwrap_or("~").to_string(),
+            parent: None,
+            entries: Vec::new(),
+            cursor: 0,
+            error: Some(e.to_string()),
+            loading: false,
+        },
+    }
+}
+
+async fn handle_dir_picker_key(form: &mut NewSessionForm, key: KeyEvent, client: &Client) {
+    let Some(picker) = form.picker.as_mut() else {
+        return;
+    };
+
+    match key.code {
+        KeyCode::Esc => {
+            form.picker = None;
+        }
+        KeyCode::Up => {
+            picker.cursor = picker.cursor.saturating_sub(1);
+        }
+        KeyCode::Down => {
+            if picker.cursor + 1 < picker.entries.len() {
+                picker.cursor += 1;
+            }
+        }
+        // Right / Enter: descend into the highlighted entry.
+        KeyCode::Right | KeyCode::Enter => {
+            let Some(entry) = picker.entries.get(picker.cursor).cloned() else {
+                return;
+            };
+            let next = open_dir_picker(Some(&entry.path), client).await;
+            form.picker = Some(next);
+        }
+        // Left / Backspace: pop up one level.
+        KeyCode::Left | KeyCode::Backspace => {
+            if let Some(parent) = picker.parent.clone() {
+                let next = open_dir_picker(Some(&parent), client).await;
+                form.picker = Some(next);
+            }
+        }
+        // 'a' (accept): commit the *current directory* (the path being
+        // listed) as the workdir, and close the picker.
+        KeyCode::Char('a') | KeyCode::Char('s') => {
+            form.workdir = picker.path.clone();
+            form.picker = None;
+        }
+        _ => {}
+    }
 }
 
 async fn handle_confirm_key(app: &mut App, key: KeyEvent, client: &Client) {

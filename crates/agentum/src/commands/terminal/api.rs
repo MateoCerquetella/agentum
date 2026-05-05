@@ -18,7 +18,7 @@ use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Client as HttpClient;
 use rustls::ClientConfig;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::{Connector, connect_async_tls_with_config, tungstenite::Message as WsMsg};
@@ -26,6 +26,21 @@ use url::Url;
 use uuid::Uuid;
 
 use super::trust;
+
+/// Mirrors the server's `/api/fs/list` response. Used by the TUI's
+/// directory picker overlay.
+#[derive(Debug, Deserialize, Clone)]
+pub struct DirListing {
+    pub path: String,
+    pub parent: Option<String>,
+    pub dirs: Vec<DirEntry>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct DirEntry {
+    pub name: String,
+    pub path: String,
+}
 
 /// Optional pinned fingerprint, plus an "insecure" escape hatch. The
 /// escape hatch is *only* exposed via an explicit CLI flag and only
@@ -204,6 +219,28 @@ impl Client {
         Ok(resp.json::<Vec<Session>>().await?)
     }
 
+    /// `GET /api/fs/list` — enumerate directories under `path` (or `$HOME`
+    /// if `path` is `None`). Mirrors the web `DirPicker`'s feed for the
+    /// TUI's workdir picker overlay.
+    pub async fn list_dir(&self, path: Option<&str>) -> Result<DirListing> {
+        let mut url = self.base.join("/api/fs/list")?;
+        if let Some(p) = path {
+            url.query_pairs_mut().append_pair("path", p);
+        }
+        let resp = self
+            .http
+            .get(url)
+            .bearer_auth(&self.token)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("{status} — {body}");
+        }
+        Ok(resp.json::<DirListing>().await?)
+    }
+
     /// `POST /api/sessions` — create a new session row. The server records
     /// it as `Idle`; call `start_session` to actually spawn the tmux process.
     pub async fn create_session(
@@ -212,6 +249,7 @@ impl Client {
         workdir: &str,
         tool: &str,
         model: Option<&str>,
+        flags: Vec<String>,
     ) -> Result<Session> {
         #[derive(Serialize)]
         struct Body<'a> {
@@ -233,7 +271,7 @@ impl Client {
                 workdir,
                 tool,
                 model,
-                flags: Vec::new(),
+                flags,
             })
             .send()
             .await?;
