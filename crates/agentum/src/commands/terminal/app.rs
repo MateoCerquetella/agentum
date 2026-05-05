@@ -33,7 +33,6 @@ const TICK_INTERVAL: Duration = Duration::from_millis(100);
 pub enum Focus {
     Tree,
     Term,
-    Input,
     Lazygit,
 }
 
@@ -291,7 +290,6 @@ pub struct App {
     pub tree: Tree,
     pub selected: Option<Uuid>,
     pub term: TerminalPane,
-    pub input: String,
     pub focus: Focus,
     pub error_count: u32,
     pub conn: ConnState,
@@ -316,7 +314,6 @@ impl App {
             tree,
             selected,
             term: TerminalPane::new(),
-            input: String::new(),
             focus: Focus::Tree,
             error_count: 0,
             conn: ConnState::Connecting,
@@ -514,6 +511,22 @@ impl Tree {
             }
         }
     }
+
+    /// Move the cursor to the Nth project group (1-based) and expand it.
+    /// Returns true if the group exists.
+    pub fn focus_group(&mut self, n: usize) -> bool {
+        if n == 0 || n > self.groups.len() {
+            return false;
+        }
+        let gi = n - 1;
+        if let Some(g) = self.groups.get_mut(gi) {
+            g.expanded = true;
+        }
+        if let Some(idx) = self.row_index_of(Row::Group(gi)) {
+            self.cursor = idx;
+        }
+        true
+    }
 }
 
 fn first_visible_session(tree: &Tree, sessions: &[Session]) -> Option<Uuid> {
@@ -682,41 +695,38 @@ async fn handle_key(
     }
 
     // Global panel switch — works *even with a pane focused* so you can
-    // escape Term/Lazygit without first releasing focus. Ctrl-] / Ctrl-[
-    // are the modifier-protected versions; F6 / F5 are alternates that
-    // mirror lazydocker's "next/previous panel" bindings. Plain `[` / `]`
-    // remain available in non-pane focus (handled lower down) so they
-    // don't get swallowed when typing into claude code.
+    // escape Term/Lazygit without first releasing focus.
+    //   Ctrl-]  → next panel
+    //   Ctrl-[  → previous panel
+    // Plain `[` / `]` remain available in non-pane focus (handled lower
+    // down) so they don't get swallowed when typing into claude code.
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let cycle_next =
-        (ctrl && matches!(key.code, KeyCode::Char(']'))) || matches!(key.code, KeyCode::F(6));
-    let cycle_prev =
-        (ctrl && matches!(key.code, KeyCode::Char('['))) || matches!(key.code, KeyCode::F(5));
-    if cycle_next {
+    if ctrl && matches!(key.code, KeyCode::Char(']')) {
         app.focus = next_focus(app.focus, app.lazygit_open());
         return;
     }
-    if cycle_prev {
+    if ctrl && matches!(key.code, KeyCode::Char('[')) {
         app.focus = prev_focus(app.focus, app.lazygit_open());
         return;
     }
 
-    // Ctrl-G: universal "release pane focus → tree" hotkey for both the
-    // remote terminal pane and the local lazygit pane.
-    if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        match app.focus {
-            Focus::Lazygit => {
-                app.focus = Focus::Tree;
-                app.status_msg = Some("released lazygit focus (Ctrl-G)".into());
-                return;
-            }
-            Focus::Term => {
-                app.focus = Focus::Tree;
-                app.status_msg = Some("released terminal focus (Ctrl-G)".into());
-                return;
-            }
-            _ => return,
+    // Ctrl-1..Ctrl-9: jump cursor to the Nth project group, expand it,
+    // and focus the tree. Doesn't auto-select a session — user navigates
+    // with arrows + Enter. Works even with a pane focused.
+    if ctrl
+        && let KeyCode::Char(c) = key.code
+        && let Some(n) = c.to_digit(10)
+        && (1..=9).contains(&n)
+    {
+        let n = n as usize;
+        if app.tree.focus_group(n) {
+            app.focus = Focus::Tree;
+            let label = &app.tree.groups[n - 1].workdir;
+            app.status_msg = Some(format!("project {n}: {label}"));
+        } else {
+            app.status_msg = Some(format!("no project {n}"));
         }
+        return;
     }
 
     // Stateful overlays (own input fully).
@@ -785,52 +795,23 @@ async fn handle_key(
         return;
     }
 
-    if app.focus == Focus::Input {
-        match key.code {
-            KeyCode::Esc => app.focus = Focus::Tree,
-            KeyCode::Backspace => {
-                app.input.pop();
-            }
-            KeyCode::Char(c) => app.input.push(c),
-            KeyCode::Enter => {
-                if let Some(id) = app.selected {
-                    let text = app.input.clone();
-                    app.input.clear();
-                    match client.send_text(id, &text, true).await {
-                        Ok(()) => app.status_msg = Some("sent".into()),
-                        Err(e) => {
-                            app.status_msg = Some(format!("send failed: {e}"));
-                            app.error_count += 1;
-                        }
-                    }
-                } else {
-                    app.status_msg = Some("no session selected".into());
-                }
-            }
-            _ => {}
-        }
-        return;
-    }
-
     match key.code {
         KeyCode::Char('q') => app.should_quit = true,
         KeyCode::Char('?') => app.overlay = Overlay::Help,
         KeyCode::Char('g') => toggle_lazygit(app, lg_tx).await,
         KeyCode::Char('G') => app.overlay = Overlay::LazygitCheats,
         KeyCode::Char('T') => app.cycle_theme(),
-        // lazydocker parity: 1..=4 jump straight to a panel.
+        // 1/2/3 jump straight to a panel (Tree/Term/Lazygit).
         KeyCode::Char('1') => app.focus = Focus::Tree,
         KeyCode::Char('2') => app.focus = Focus::Term,
-        KeyCode::Char('3') => app.focus = Focus::Input,
-        KeyCode::Char('4') if app.lazygit_open() => app.focus = Focus::Lazygit,
-        // [ / ] cycle focus, like lazydocker's prev/next tab.
+        KeyCode::Char('3') if app.lazygit_open() => app.focus = Focus::Lazygit,
+        // [ / ] / Tab cycle focus.
         KeyCode::Char(']') | KeyCode::Tab => {
             app.focus = next_focus(app.focus, app.lazygit_open());
         }
         KeyCode::Char('[') | KeyCode::BackTab => {
             app.focus = prev_focus(app.focus, app.lazygit_open());
         }
-        KeyCode::Char('i') => app.focus = Focus::Input,
         KeyCode::Char('r') => {
             if let Ok(fresh) = client.list_sessions().await {
                 app.refresh_sessions(fresh);
@@ -848,7 +829,15 @@ async fn handle_key(
         KeyCode::Char('h') | KeyCode::Left => app.tree.collapse(),
         KeyCode::Char('l') | KeyCode::Right => app.tree.expand(),
         KeyCode::Enter => {
+            // If the cursor is on a session leaf, select it AND jump focus
+            // into the terminal so the user can start typing immediately.
+            // On a group row, expand/collapse (current behavior preserved
+            // by update_selection which is a no-op on group rows).
+            let on_leaf = matches!(app.tree.current_row(), Some(Row::Leaf { .. }));
             update_selection(app, client, term_tx, stream_handle);
+            if on_leaf && app.selected.is_some() {
+                app.focus = Focus::Term;
+            }
         }
 
         // Session lifecycle ------------------------------------------------
@@ -1223,7 +1212,6 @@ async fn run_palette_action(
         }
         ActionKind::FocusTree => app.focus = Focus::Tree,
         ActionKind::FocusTerm => app.focus = Focus::Term,
-        ActionKind::FocusInput => app.focus = Focus::Input,
         ActionKind::FocusLazygit => {
             if app.lazygit_open() {
                 app.focus = Focus::Lazygit;
@@ -1244,14 +1232,12 @@ fn next_focus(current: Focus, lazygit_open: bool) -> Focus {
         match current {
             Focus::Tree => Focus::Term,
             Focus::Term => Focus::Lazygit,
-            Focus::Lazygit => Focus::Input,
-            Focus::Input => Focus::Tree,
+            Focus::Lazygit => Focus::Tree,
         }
     } else {
         match current {
             Focus::Tree => Focus::Term,
-            Focus::Term => Focus::Input,
-            Focus::Input => Focus::Tree,
+            Focus::Term => Focus::Tree,
             Focus::Lazygit => Focus::Tree,
         }
     }
@@ -1260,15 +1246,13 @@ fn next_focus(current: Focus, lazygit_open: bool) -> Focus {
 fn prev_focus(current: Focus, lazygit_open: bool) -> Focus {
     if lazygit_open {
         match current {
-            Focus::Tree => Focus::Input,
-            Focus::Input => Focus::Lazygit,
+            Focus::Tree => Focus::Lazygit,
             Focus::Lazygit => Focus::Term,
             Focus::Term => Focus::Tree,
         }
     } else {
         match current {
-            Focus::Tree => Focus::Input,
-            Focus::Input => Focus::Term,
+            Focus::Tree => Focus::Term,
             Focus::Term => Focus::Tree,
             Focus::Lazygit => Focus::Tree,
         }
@@ -1295,9 +1279,23 @@ async fn toggle_lazygit(app: &mut App, lg_tx: &mpsc::UnboundedSender<PtyMsg>) {
         return;
     }
 
-    let cwd: PathBuf = match app.selected_session() {
-        Some(s) => PathBuf::from(&s.workdir),
-        None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    // Try the session's workdir first; if it doesn't exist locally (typical
+    // when connected to a remote `agentum serve`), fall back to the user's
+    // current dir and surface the substitution clearly. Without this fallback
+    // lazygit silently fails with `chdir: no such file or directory` and the
+    // pane just reports "lazygit exited" milliseconds after spawn.
+    let local_cwd =
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let (cwd, fell_back) = match app.selected_session() {
+        Some(s) => {
+            let p = PathBuf::from(&s.workdir);
+            if p.is_dir() {
+                (p, false)
+            } else {
+                (local_cwd.clone(), true)
+            }
+        }
+        None => (local_cwd.clone(), false),
     };
     let args = extensions::resolve_args(&LAZYGIT, &cwd);
 
@@ -1306,7 +1304,14 @@ async fn toggle_lazygit(app: &mut App, lg_tx: &mpsc::UnboundedSender<PtyMsg>) {
         Ok(pty) => {
             app.lazygit = Some(pty);
             app.focus = Focus::Lazygit;
-            app.status_msg = Some(format!("lazygit @ {}", cwd.display()));
+            app.status_msg = Some(if fell_back {
+                format!(
+                    "lazygit: session workdir not local — opened in {}",
+                    cwd.display()
+                )
+            } else {
+                format!("lazygit @ {}", cwd.display())
+            });
         }
         Err(e) => {
             app.status_msg = Some(format!("lazygit spawn failed: {e}"));

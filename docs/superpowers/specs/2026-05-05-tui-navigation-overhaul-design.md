@@ -72,9 +72,14 @@ In `toggle_lazygit`:
 (`Ctrl-]`/`Ctrl-[`) become primary; `Ctrl-G` and the function keys are gone.
 
 `Ctrl-1`..`Ctrl-9` semantics: numbers index the tree's project (workdir) groups
-in display order. Pressing `Ctrl-2` expands the second project group and selects
-its first session, focusing the tree. If fewer than N groups exist, the keypress
-is a no-op with a status message.
+in display order. Pressing `Ctrl-2` focuses the tree, moves the cursor to the
+second project group's row, and expands the group. **It does NOT auto-select a
+session** — the user navigates with arrows and presses `Enter` to pick one.
+If fewer than N groups exist, the keypress is a no-op with a status message.
+
+**`Enter` on a session leaf**: in addition to its current behavior (select +
+start streaming), focus moves to the terminal pane. Pressing `Enter` on a group
+row toggles expansion (current behavior, unchanged).
 
 ### 4. UI deduplication
 

@@ -75,7 +75,6 @@ pub enum ActionKind {
     Refresh,
     FocusTree,
     FocusTerm,
-    FocusInput,
     FocusLazygit,
     SetTheme(&'static str),
     CycleTheme,
@@ -126,16 +125,10 @@ impl Catalog {
             group: "focus",
             kind: ActionKind::FocusTerm,
         });
-        a.push(Action {
-            label: "Focus: Input".into(),
-            hint: "3".into(),
-            group: "focus",
-            kind: ActionKind::FocusInput,
-        });
         if lazygit_open {
             a.push(Action {
                 label: "Focus: Lazygit".into(),
-                hint: "4".into(),
+                hint: "3".into(),
                 group: "focus",
                 kind: ActionKind::FocusLazygit,
             });

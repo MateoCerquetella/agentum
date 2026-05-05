@@ -22,7 +22,6 @@ pub struct Areas {
     pub tree: Rect,
     pub terminal: Rect,
     pub lazygit: Option<Rect>,
-    pub input: Rect,
     pub status: Rect,
 }
 
@@ -41,27 +40,25 @@ pub fn compute_layout(area: Rect, lazygit_open: bool) -> Areas {
         .constraints([Constraint::Length(TREE_WIDTH), Constraint::Min(20)])
         .split(v[1]);
 
-    let right = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(3)])
-        .split(body[1]);
+    // Right column is now 100% terminal/lazygit — no bottom input bar.
+    let right_full = body[1];
 
     let (terminal_rect, lazygit_rect) = if lazygit_open {
-        if right[0].width >= 100 {
+        if right_full.width >= 100 {
             let cols = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-                .split(right[0]);
+                .split(right_full);
             (cols[0], Some(cols[1]))
         } else {
             let rows = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-                .split(right[0]);
+                .split(right_full);
             (rows[0], Some(rows[1]))
         }
     } else {
-        (right[0], None)
+        (right_full, None)
     };
 
     Areas {
@@ -69,7 +66,6 @@ pub fn compute_layout(area: Rect, lazygit_open: bool) -> Areas {
         tree: body[0],
         terminal: terminal_rect,
         lazygit: lazygit_rect,
-        input: right[1],
         status: v[2],
     }
 }
@@ -89,7 +85,6 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
     if let Some(lg_area) = areas.lazygit {
         draw_lazygit(f, lg_area, app, p);
     }
-    draw_input(f, areas.input, app, p);
     draw_status(f, areas.status, app, p);
 
     match &app.overlay {
@@ -121,32 +116,20 @@ fn panel_block<'a>(title: &'a str, focused: bool, p: &Palette) -> Block<'a> {
 }
 
 fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
+    // Top bar is intentionally minimal: app name + active session.
+    // Theme chip + ops info live in the status bar so we don't render the
+    // same data twice (workdir, theme, "Ctrl-P palette" used to repeat).
     let title = match app.selected_session() {
-        Some(s) => format!(" agentum · {} · {} ", s.name, s.workdir),
+        Some(s) => format!(" agentum · {} ", s.name),
         None => " agentum · no session selected ".to_string(),
     };
-    let theme_chip = format!(" {} ", app.theme.name);
-    let line = Line::from(vec![
-        Span::styled(
-            title,
-            Style::default()
-                .fg(p.fg_strong)
-                .bg(p.body_bg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  ", Style::default().bg(p.body_bg)),
-        Span::styled(
-            theme_chip,
-            Style::default()
-                .fg(p.chip_fg)
-                .bg(p.chip_bg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "  Ctrl-P palette",
-            Style::default().fg(p.muted).bg(p.body_bg),
-        ),
-    ]);
+    let line = Line::from(vec![Span::styled(
+        title,
+        Style::default()
+            .fg(p.fg_strong)
+            .bg(p.body_bg)
+            .add_modifier(Modifier::BOLD),
+    )]);
     let para = Paragraph::new(line).style(Style::default().bg(p.body_bg));
     f.render_widget(para, area);
 }
@@ -231,9 +214,9 @@ fn render_tree_row(
 fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Term;
     let title = if focused {
-        " 2 terminal · typing → pane · Ctrl-G to release "
+        " 2 terminal · Ctrl-] next panel · type freely "
     } else {
-        " 2 terminal · Tab/2 to focus "
+        " 2 terminal · 2 / Ctrl-] focus "
     };
     let block = panel_block(title, focused, p);
 
@@ -256,9 +239,9 @@ fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
 fn draw_lazygit(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Lazygit;
     let title = if focused {
-        " 4 lazygit · Ctrl-G to release · G for cheat sheet "
+        " 3 lazygit · Ctrl-] next panel · G cheats "
     } else {
-        " 4 lazygit · Tab/4 to focus · g to close "
+        " 3 lazygit · 3 / Ctrl-] focus · g close "
     };
     let block = panel_block(title, focused, p);
     let inner = block.inner(area);
@@ -299,37 +282,6 @@ fn fill_default_bg(f: &mut Frame<'_>, area: Rect, bg: Color) {
                 cell.set_bg(bg);
             }
         }
-    }
-}
-
-fn draw_input(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
-    let focused = app.focus == Focus::Input;
-    let placeholder = if app.input.is_empty() && !focused {
-        "Press i (or 3) to type a message or @path/to/file"
-    } else {
-        ""
-    };
-    let prompt = if focused { "› " } else { "  " };
-    let line = if app.input.is_empty() && !focused {
-        Line::from(vec![
-            Span::styled(prompt, Style::default().fg(p.muted)),
-            Span::styled(placeholder, Style::default().fg(p.muted)),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled(prompt, Style::default().fg(p.accent)),
-            Span::styled(app.input.clone(), Style::default().fg(p.fg_strong)),
-        ])
-    };
-    let block =
-        panel_block(" 3 input ", focused, p).style(Style::default().bg(p.surface_bg).fg(p.fg));
-    let para = Paragraph::new(line).block(block);
-    f.render_widget(para, area);
-
-    if focused {
-        let x = area.x + 1 + 2 + app.input.chars().count() as u16;
-        let y = area.y + 1;
-        f.set_cursor_position((x, y));
     }
 }
 
@@ -419,50 +371,52 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
     let mut lines = vec![
         head("agentum terminal — keys", p),
         Line::from(""),
-        head("  Navigation", p),
-        body(
-            "  Ctrl-P / Ctrl-K  command palette (search & run anything)",
-            p,
-        ),
-        body("  1 / 2 / 3 / 4    jump to panel (lazydocker-style)", p),
-        body("  Tab / ]          next panel", p),
-        body("  Shift-Tab / [    previous panel", p),
-        body("  j / k / ↑ / ↓    move selection in tree", p),
-        body("  h / l            collapse / expand workdir group", p),
-        body("  Enter            select session (start streaming)", p),
-        body("  r                refresh sessions", p),
+        head("  Universal (work even inside the terminal pane)", p),
+        body("  Ctrl-P / Ctrl-K   command palette", p),
+        body("  Ctrl-]            next panel", p),
+        body("  Ctrl-[            previous panel", p),
+        body("  Ctrl-1 … Ctrl-9   jump to Nth project group in the tree", p),
+        body("  Ctrl-Q            quit", p),
+        body("  Ctrl-C            interrupt focused pane (else quit)", p),
         Line::from(""),
-        head("  Terminal & input", p),
-        body("  i / 3            focus input bar", p),
-        body("  Enter (input)    send + append Enter to the pane", p),
-        body("  Esc              leave input", p),
+        head("  Tree", p),
+        body("  1 / 2 / 3         focus tree / terminal / lazygit", p),
+        body("  Tab / ]           next panel", p),
+        body("  Shift-Tab / [     previous panel", p),
+        body("  j / k / ↑ / ↓     move selection", p),
+        body("  h / l / ← / →     collapse / expand group", p),
         body(
-            "  2                focus terminal — typing forwards to pane",
+            "  Enter             select session and focus the terminal",
             p,
         ),
-        body("  Ctrl-C           interrupt focused pane (else quit)", p),
-        body("  Ctrl-G           release focused pane → tree", p),
+        body("  r                 refresh sessions", p),
+        Line::from(""),
+        head("  Terminal", p),
+        body(
+            "  All other keys forward to the running process (claude code, shell, …)",
+            p,
+        ),
         Line::from(""),
         head("  Sessions", p),
         body(
-            "  n                new session (form: name / workdir / tool / model)",
+            "  n                 new session (name / workdir / tool / model)",
             p,
         ),
-        body("  u                start (up) the selected session", p),
-        body("  s                stop the selected session (graceful)", p),
+        body("  u                 start (up) the selected session", p),
+        body("  s                 stop the selected session (graceful)", p),
         body(
-            "  K                kill the selected session (immediate)",
+            "  K                 kill the selected session (immediate)",
             p,
         ),
-        body("  D                delete the selected session", p),
+        body("  D                 delete the selected session", p),
         Line::from(""),
         head("  Extensions & appearance", p),
-        body("  g                toggle lazygit side pane", p),
-        body("  G                lazygit cheat sheet", p),
-        body("  T                cycle theme", p),
+        body("  g                 toggle lazygit side pane", p),
+        body("  G                 lazygit cheat sheet", p),
+        body("  T                 cycle theme", p),
         Line::from(""),
-        body("  ?                toggle this help", p),
-        body("  q                quit", p),
+        body("  ?                 toggle this help", p),
+        body("  q                 quit (when tree is focused)", p),
     ];
     if lazygit_open {
         lines.push(Line::from(""));
@@ -471,7 +425,7 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
             Style::default().fg(p.muted),
         )));
     }
-    overlay_box(f, area, " help ", lines, 64, p);
+    overlay_box(f, area, " help ", lines, 70, p);
 }
 
 fn draw_cheatsheet_overlay(f: &mut Frame<'_>, area: Rect, ext: &Extension, p: &Palette) {

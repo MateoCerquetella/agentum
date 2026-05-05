@@ -324,23 +324,6 @@ impl Client {
         Ok(())
     }
 
-    pub async fn send_text(&self, id: Uuid, text: &str, append_enter: bool) -> Result<()> {
-        #[derive(Serialize)]
-        struct Body<'a> {
-            text: &'a str,
-            append_enter: bool,
-        }
-        let url = self.base.join(&format!("/api/sessions/{id}/send"))?;
-        self.http
-            .post(url)
-            .bearer_auth(&self.token)
-            .json(&Body { text, append_enter })
-            .send()
-            .await?
-            .error_for_status()?;
-        Ok(())
-    }
-
     /// Open a bidirectional terminal stream.
     ///
     /// Server → client: tmux pane bytes arrive on `tx` as `TerminalMsg`s.
