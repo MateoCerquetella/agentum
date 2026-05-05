@@ -8,6 +8,7 @@
 mod api;
 mod app;
 mod extensions;
+mod palette;
 mod pty;
 mod term;
 mod theme;

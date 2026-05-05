@@ -4,6 +4,44 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-05-05
+
+The IDE-feel release. Real backgrounds, a VSCode-style command palette
+in the TUI, and a registry of named themes you can switch from anywhere.
+
+### Added
+- **Command palette in the TUI.** `Ctrl-P` (or `Ctrl-K`) from anywhere —
+  including with a pane focused — opens a fuzzy picker over every action
+  in the dashboard: focus jumps, refresh, lazygit toggle, theme picks,
+  and every active session. Type to subsequence-filter, ↑/↓ to move,
+  Enter to run, Esc to close. The action list rebuilds each frame so
+  dynamic entries (sessions, themes) are always live.
+- **Five named themes**, each with real layered backgrounds (body, panel,
+  surface, chrome) instead of border-color swaps:
+  - `midnight` — Tokyo-Night-inspired deep blue, soft fg, blue/violet
+    accents (default)
+  - `dusk` — One-Dark-style warm charcoal
+  - `slate` — cool charcoal with neon cyan + magenta accents
+  - `paper` — warm-paper light scheme
+  - `mono` — high-contrast black/white
+- The "system" theme name is preserved as a sentinel that resolves to
+  `midnight` on dark hosts and `paper` on light ones (sniffed via
+  `COLORFGBG`).
+
+### Changed
+- **TUI palette overhaul.** `Palette` now carries `body_bg`, `panel_bg`,
+  `surface_bg`, `chrome_bg`, `fg_strong`, `accent_alt`, `subtle`, and
+  `cursor_fg` — and every panel block paints a real background so the
+  TUI looks like an IDE, not a borders-on-default shell.
+- The status bar gets fully chip-styled (workdir / tool / connection /
+  errors / lazygit / theme / Ctrl-P hint / help). Title bar shows the
+  active theme as a pill.
+
+### Fixed
+- Pre-existing clippy warning in `agentum_server::routes::fs::resolve`
+  (`if_same_then_else`) — collapsed the `is_empty()` and `== "~"` arms
+  so CI's `-D warnings` clippy step actually passes.
+
 ## [0.3.1] — 2026-05-05
 
 ### Fixed

@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use super::api::{Client, EventMsg, TerminalMsg};
 use super::extensions::{self, LAZYGIT};
+use super::palette::{ActionKind, Catalog};
 use super::pty::{LocalPty, PtyMsg};
 use super::term::TerminalPane;
 use super::theme::{self, Theme};
@@ -51,6 +52,24 @@ pub enum Overlay {
     Help,
     LazygitCheats,
     LazygitInstall,
+    Palette,
+}
+
+/// Command-palette state. Driven by Ctrl-P / Ctrl-K. The action list is
+/// generated on demand from `palette::all_actions(&app)` so it can include
+/// dynamic entries like the active session list and theme registry.
+pub struct PaletteState {
+    pub query: String,
+    pub cursor: usize,
+}
+
+impl PaletteState {
+    pub fn new() -> Self {
+        Self {
+            query: String::new(),
+            cursor: 0,
+        }
+    }
 }
 
 pub struct App {
@@ -65,12 +84,13 @@ pub struct App {
     pub status_msg: Option<String>,
     pub should_quit: bool,
     pub overlay: Overlay,
+    pub palette: PaletteState,
     /// `Some` while a lazygit child is alive in the side pane.
     pub lazygit: Option<LocalPty>,
     /// Outbound key channel for the active terminal stream. `None` while
     /// no session is selected; recreated each time the stream is reopened.
     pub term_in: Option<mpsc::UnboundedSender<Vec<u8>>>,
-    pub theme: Theme,
+    pub theme: &'static Theme,
 }
 
 impl App {
@@ -89,17 +109,23 @@ impl App {
             status_msg: None,
             should_quit: false,
             overlay: Overlay::None,
+            palette: PaletteState::new(),
             lazygit: None,
             term_in: None,
-            theme: Theme::new(theme::load()),
+            theme: theme::load(),
         }
     }
 
+    pub fn set_theme(&mut self, name: &str) {
+        self.theme = Theme::by_name(name);
+        theme::save(self.theme.name);
+        self.status_msg = Some(format!("theme: {}", self.theme.name));
+    }
+
     pub fn cycle_theme(&mut self) {
-        let next = self.theme.mode.cycle();
-        self.theme = Theme::new(next);
-        theme::save(next);
-        self.status_msg = Some(format!("theme: {}", self.theme.mode.label()));
+        self.theme = Theme::next(self.theme.name);
+        theme::save(self.theme.name);
+        self.status_msg = Some(format!("theme: {}", self.theme.name));
     }
 
     pub fn selected_session(&self) -> Option<&Session> {
@@ -410,6 +436,16 @@ async fn handle_key(
     lg_tx: &mpsc::UnboundedSender<PtyMsg>,
     stream_handle: &mut Option<JoinHandle<()>>,
 ) {
+    // Ctrl-P / Ctrl-K opens the command palette from anywhere. Highest
+    // priority so it works even with a pane focused.
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('p') | KeyCode::Char('k'))
+    {
+        app.overlay = Overlay::Palette;
+        app.palette = PaletteState::new();
+        return;
+    }
+
     // Ctrl-C only quits when no pane is focused. Inside a pane it's a real
     // SIGINT to whatever's running (claude code, shells, etc.) — otherwise
     // you could never interrupt a long-running task without killing the TUI.
@@ -441,7 +477,14 @@ async fn handle_key(
         }
     }
 
-    // Overlays consume input first.
+    // Command-palette overlay: full input capture (typing edits the query,
+    // Up/Down moves the cursor, Enter runs the action).
+    if app.overlay == Overlay::Palette {
+        handle_palette_key(app, key, client, term_tx, lg_tx, stream_handle).await;
+        return;
+    }
+
+    // Other overlays consume input first.
     if app.overlay != Overlay::None {
         if matches!(
             key.code,
@@ -544,6 +587,89 @@ async fn handle_key(
             update_selection(app, client, term_tx, stream_handle);
         }
         _ => {}
+    }
+}
+
+/// Build the live action catalog from current app state.
+pub fn palette_catalog(app: &App) -> Catalog {
+    let sessions: Vec<(Uuid, String, String)> = app
+        .sessions
+        .iter()
+        .map(|s| (s.id, s.name.clone(), s.workdir.clone()))
+        .collect();
+    Catalog::build(app.lazygit_open(), &sessions)
+}
+
+async fn handle_palette_key(
+    app: &mut App,
+    key: KeyEvent,
+    client: &Client,
+    term_tx: &mpsc::UnboundedSender<TerminalMsg>,
+    lg_tx: &mpsc::UnboundedSender<PtyMsg>,
+    stream_handle: &mut Option<JoinHandle<()>>,
+) {
+    match key.code {
+        KeyCode::Esc => app.overlay = Overlay::None,
+        KeyCode::Up => app.palette.cursor = app.palette.cursor.saturating_sub(1),
+        KeyCode::Down => app.palette.cursor = app.palette.cursor.saturating_add(1),
+        KeyCode::Backspace => {
+            app.palette.query.pop();
+            app.palette.cursor = 0;
+        }
+        KeyCode::Char(c) => {
+            // Ctrl-modified chars besides p/k were handled upstream.
+            if !key.modifiers.contains(KeyModifiers::CONTROL) {
+                app.palette.query.push(c);
+                app.palette.cursor = 0;
+            }
+        }
+        KeyCode::Enter => {
+            let cat = palette_catalog(app);
+            let filtered = cat.filtered(&app.palette.query);
+            let chosen = filtered.get(app.palette.cursor).cloned().cloned();
+            app.overlay = Overlay::None;
+            if let Some(action) = chosen {
+                run_palette_action(app, action.kind, client, term_tx, lg_tx, stream_handle).await;
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn run_palette_action(
+    app: &mut App,
+    kind: ActionKind,
+    client: &Client,
+    term_tx: &mpsc::UnboundedSender<TerminalMsg>,
+    lg_tx: &mpsc::UnboundedSender<PtyMsg>,
+    stream_handle: &mut Option<JoinHandle<()>>,
+) {
+    match kind {
+        ActionKind::Quit => app.should_quit = true,
+        ActionKind::ToggleHelp => app.overlay = Overlay::Help,
+        ActionKind::ToggleLazygit => toggle_lazygit(app, lg_tx).await,
+        ActionKind::LazygitCheats => app.overlay = Overlay::LazygitCheats,
+        ActionKind::Refresh => {
+            if let Ok(fresh) = client.list_sessions().await {
+                app.refresh_sessions(fresh);
+                app.status_msg = Some("refreshed".into());
+            }
+        }
+        ActionKind::FocusTree => app.focus = Focus::Tree,
+        ActionKind::FocusTerm => app.focus = Focus::Term,
+        ActionKind::FocusInput => app.focus = Focus::Input,
+        ActionKind::FocusLazygit => {
+            if app.lazygit_open() {
+                app.focus = Focus::Lazygit;
+            }
+        }
+        ActionKind::SetTheme(name) => app.set_theme(name),
+        ActionKind::CycleTheme => app.cycle_theme(),
+        ActionKind::SelectSession(id) => {
+            // Move tree cursor + reopen the stream for this id.
+            app.tree.select_session(id);
+            update_selection(app, client, term_tx, stream_handle);
+        }
     }
 }
 

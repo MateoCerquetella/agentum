@@ -7,14 +7,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use tui_term::widget::PseudoTerminal;
 
-use super::app::{App, ConnState, Focus, Overlay, Row, status_dot};
+use super::app::{App, ConnState, Focus, Overlay, Row, palette_catalog, status_dot};
 use super::extensions::{self, Extension, LAZYGIT};
 use super::theme::Palette;
 
 const TREE_WIDTH: u16 = 32;
 
-/// Computed pane rectangles. Mirrored by `app::run_loop` so the vt100
-/// parsers can be sized to match.
 #[derive(Clone, Copy)]
 pub struct Areas {
     pub title: Rect,
@@ -25,8 +23,6 @@ pub struct Areas {
     pub status: Rect,
 }
 
-/// Single source of truth for the layout. Called from both `run_loop`
-/// (to size PTY parsers) and `draw` (to render).
 pub fn compute_layout(area: Rect, lazygit_open: bool) -> Areas {
     let v = Layout::default()
         .direction(Direction::Vertical)
@@ -48,8 +44,6 @@ pub fn compute_layout(area: Rect, lazygit_open: bool) -> Areas {
         .split(body[1]);
 
     let (terminal_rect, lazygit_rect) = if lazygit_open {
-        // Pick orientation by available width: side-by-side when there's
-        // enough room, stacked otherwise.
         if right[0].width >= 100 {
             let cols = Layout::default()
                 .direction(Direction::Horizontal)
@@ -81,6 +75,11 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
     let areas = compute_layout(f.area(), app.lazygit_open());
     let p = &app.theme.palette;
 
+    // Paint the body background across the entire frame so the void around
+    // panels takes the theme colour, not the host terminal's default.
+    let body = Block::default().style(Style::default().bg(p.body_bg).fg(p.fg));
+    f.render_widget(body, f.area());
+
     draw_title(f, areas.title, app, p);
     draw_tree(f, areas.tree, app, p);
     draw_terminal(f, areas.terminal, app, p);
@@ -95,31 +94,67 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         Overlay::Help => draw_help_overlay(f, f.area(), app.lazygit_open(), p),
         Overlay::LazygitCheats => draw_cheatsheet_overlay(f, f.area(), &LAZYGIT, p),
         Overlay::LazygitInstall => draw_install_overlay(f, f.area(), &LAZYGIT, p),
+        Overlay::Palette => draw_palette_overlay(f, f.area(), app, p),
     }
+}
+
+fn panel_block<'a>(title: &'a str, focused: bool, p: &Palette) -> Block<'a> {
+    Block::default()
+        .title(Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(if focused { p.accent } else { p.fg })
+                .add_modifier(if focused {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        ))
+        .borders(Borders::ALL)
+        .border_style(border_style(focused, p))
+        .style(Style::default().bg(p.panel_bg).fg(p.fg))
 }
 
 fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let title = match app.selected_session() {
-        Some(s) => format!("agentum terminal · {} · {}", s.name, s.workdir),
-        None => "agentum terminal · no session selected".to_string(),
+        Some(s) => format!(" agentum · {} · {} ", s.name, s.workdir),
+        None => " agentum · no session selected ".to_string(),
     };
-    let para =
-        Paragraph::new(title).style(Style::default().fg(p.title_fg).add_modifier(Modifier::BOLD));
+    let theme_chip = format!(" {} ", app.theme.name);
+    let line = Line::from(vec![
+        Span::styled(
+            title,
+            Style::default()
+                .fg(p.fg_strong)
+                .bg(p.body_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  ", Style::default().bg(p.body_bg)),
+        Span::styled(
+            theme_chip,
+            Style::default()
+                .fg(p.chip_fg)
+                .bg(p.chip_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "  Ctrl-P palette",
+            Style::default().fg(p.muted).bg(p.body_bg),
+        ),
+    ]);
+    let para = Paragraph::new(line).style(Style::default().bg(p.body_bg));
     f.render_widget(para, area);
 }
 
 fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Tree;
-    let block = Block::default()
-        .title(" 1 sessions ")
-        .borders(Borders::ALL)
-        .border_style(border_style(focused, p));
+    let block = panel_block(" 1 sessions ", focused, p);
 
     let mut items: Vec<ListItem> = Vec::new();
     let cursor = app.tree.cursor;
     for (i, row) in app.tree.rows().iter().enumerate() {
         let is_cursor = i == cursor;
-        items.push(render_tree_row(app, *row, is_cursor, p));
+        items.push(render_tree_row(app, *row, is_cursor, focused, p));
     }
 
     if items.is_empty() {
@@ -133,11 +168,19 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     f.render_widget(list, area);
 }
 
-fn render_tree_row(app: &App, row: Row, is_cursor: bool, p: &Palette) -> ListItem<'static> {
-    let cursor_bg = if is_cursor {
-        Style::default().bg(p.cursor_bg)
-    } else {
+fn render_tree_row(
+    app: &App,
+    row: Row,
+    is_cursor: bool,
+    panel_focused: bool,
+    p: &Palette,
+) -> ListItem<'static> {
+    let row_style = if is_cursor {
         Style::default()
+            .bg(p.cursor_bg)
+            .fg(if panel_focused { p.cursor_fg } else { p.fg })
+    } else {
+        Style::default().bg(p.panel_bg).fg(p.fg)
     };
     match row {
         Row::Group(gi) => {
@@ -145,13 +188,10 @@ fn render_tree_row(app: &App, row: Row, is_cursor: bool, p: &Palette) -> ListIte
             let arrow = if g.expanded { "▾" } else { "▸" };
             let label = collapse_home(&g.workdir);
             ListItem::new(Line::from(vec![
-                Span::raw(format!("{arrow} ")),
-                Span::styled(
-                    label,
-                    Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
-                ),
+                Span::raw(format!(" {arrow} ")),
+                Span::styled(label, Style::default().add_modifier(Modifier::BOLD)),
             ]))
-            .style(cursor_bg)
+            .style(row_style)
         }
         Row::Leaf { group, leaf } => {
             let id = app.tree.groups[group].sessions[leaf];
@@ -168,20 +208,17 @@ fn render_tree_row(app: &App, row: Row, is_cursor: bool, p: &Palette) -> ListIte
                 None => ("?".into(), "?", p.error, "".into()),
             };
             let mut spans = vec![
-                Span::raw("   "),
-                Span::styled(
-                    format!("{:<14}", truncate(&name, 14)),
-                    Style::default().fg(p.fg),
-                ),
+                Span::raw("    "),
+                Span::raw(format!("{:<14}", truncate(&name, 14))),
                 Span::raw(" "),
                 Span::styled(dot, Style::default().fg(dot_color)),
                 Span::raw(" "),
                 Span::styled(tool_label, Style::default().fg(p.muted)),
             ];
             if is_cursor {
-                spans[1].style = spans[1].style.add_modifier(Modifier::BOLD);
+                spans[1].style = Style::default().add_modifier(Modifier::BOLD);
             }
-            ListItem::new(Line::from(spans)).style(cursor_bg)
+            ListItem::new(Line::from(spans)).style(row_style)
         }
     }
 }
@@ -193,17 +230,14 @@ fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     } else {
         " 2 terminal · Tab/2 to focus "
     };
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(border_style(focused, p));
+    let block = panel_block(title, focused, p);
 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     if app.selected.is_none() {
         let hint = Paragraph::new("Select a session on the left and press Enter.")
-            .style(Style::default().fg(p.muted))
+            .style(Style::default().fg(p.muted).bg(p.panel_bg))
             .wrap(Wrap { trim: true });
         f.render_widget(hint, inner);
         return;
@@ -220,10 +254,7 @@ fn draw_lazygit(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     } else {
         " 4 lazygit · Tab/4 to focus · g to close "
     };
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(border_style(focused, p));
+    let block = panel_block(title, focused, p);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -231,7 +262,8 @@ fn draw_lazygit(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         let pseudo = PseudoTerminal::new(lg.screen());
         f.render_widget(pseudo, inner);
     } else {
-        let hint = Paragraph::new("lazygit not running").style(Style::default().fg(p.muted));
+        let hint = Paragraph::new("lazygit not running")
+            .style(Style::default().fg(p.muted).bg(p.panel_bg));
         f.render_widget(hint, inner);
     }
 }
@@ -243,27 +275,24 @@ fn draw_input(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     } else {
         ""
     };
-    let prompt = if focused { "> " } else { "  " };
+    let prompt = if focused { "› " } else { "  " };
     let line = if app.input.is_empty() && !focused {
         Line::from(vec![
-            Span::raw(prompt),
+            Span::styled(prompt, Style::default().fg(p.muted)),
             Span::styled(placeholder, Style::default().fg(p.muted)),
         ])
     } else {
         Line::from(vec![
-            Span::raw(prompt),
-            Span::styled(app.input.clone(), Style::default().fg(p.fg)),
+            Span::styled(prompt, Style::default().fg(p.accent)),
+            Span::styled(app.input.clone(), Style::default().fg(p.fg_strong)),
         ])
     };
-    let block = Block::default()
-        .title(" 3 input ")
-        .borders(Borders::ALL)
-        .border_style(border_style(focused, p));
+    let block =
+        panel_block(" 3 input ", focused, p).style(Style::default().bg(p.surface_bg).fg(p.fg));
     let para = Paragraph::new(line).block(block);
     f.render_widget(para, area);
 
     if focused {
-        // Cursor inside the bordered area, after the prompt.
         let x = area.x + 1 + 2 + app.input.chars().count() as u16;
         let y = area.y + 1;
         f.set_cursor_position((x, y));
@@ -290,15 +319,18 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     };
 
     let err_text = if app.error_count == 0 {
-        Span::styled("0 errors", Style::default().fg(p.muted))
+        Span::styled(" 0 errors ", Style::default().fg(p.muted).bg(p.chrome_bg))
     } else {
         Span::styled(
             format!(
-                "{} error{}",
+                " {} error{} ",
                 app.error_count,
                 if app.error_count == 1 { "" } else { "s" }
             ),
-            Style::default().fg(p.error),
+            Style::default()
+                .fg(p.error)
+                .bg(p.chrome_bg)
+                .add_modifier(Modifier::BOLD),
         )
     };
 
@@ -306,85 +338,84 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         Span::styled(
             " lazygit ",
             Style::default()
-                .bg(p.chip_active_bg)
-                .fg(p.chip_active_fg)
+                .bg(p.chip_bg)
+                .fg(p.chip_fg)
                 .add_modifier(Modifier::BOLD),
         )
     } else {
-        Span::styled("g lazygit", Style::default().fg(p.muted))
+        Span::styled(" g lazygit ", Style::default().fg(p.muted).bg(p.chrome_bg))
     };
 
-    let theme_chip = Span::styled(
-        format!(" T {} ", app.theme.mode.label()),
-        Style::default().fg(p.muted),
-    );
-
     let extra = match &app.status_msg {
-        Some(m) => format!(" · {m}"),
+        Some(m) => format!(" · {m} "),
         None => String::new(),
     };
 
     let bar = Line::from(vec![
-        Span::raw(" "),
-        Span::styled(workdir, Style::default().fg(p.status_bar_fg)),
-        Span::raw("  "),
-        Span::styled(tool_label, Style::default().fg(p.muted)),
-        Span::raw("    "),
-        Span::styled(conn_label, Style::default().fg(conn_color)),
-        Span::raw("   "),
+        Span::styled(
+            format!(" {workdir} "),
+            Style::default().fg(p.fg).bg(p.chrome_bg),
+        ),
+        Span::styled(
+            format!("{tool_label} "),
+            Style::default().fg(p.muted).bg(p.chrome_bg),
+        ),
+        Span::styled(
+            format!(" {conn_label} "),
+            Style::default().fg(conn_color).bg(p.chrome_bg),
+        ),
         err_text,
-        Span::raw("   "),
         lg_chip,
-        Span::raw("  "),
-        theme_chip,
-        Span::styled(extra, Style::default().fg(p.muted)),
-        Span::raw("   "),
-        Span::styled("? help", Style::default().fg(p.muted)),
+        Span::styled(
+            format!(" {} ", app.theme.name),
+            Style::default().fg(p.chip_fg).bg(p.chip_bg),
+        ),
+        Span::styled(extra, Style::default().fg(p.muted).bg(p.chrome_bg)),
+        Span::styled(
+            " Ctrl-P palette ",
+            Style::default().fg(p.accent).bg(p.chrome_bg),
+        ),
+        Span::styled(" ? help ", Style::default().fg(p.muted).bg(p.chrome_bg)),
     ]);
-    let para = Paragraph::new(bar).style(Style::default().bg(p.status_bar_bg).fg(p.status_bar_fg));
+    let para = Paragraph::new(bar).style(Style::default().bg(p.chrome_bg).fg(p.fg));
     f.render_widget(para, area);
 }
 
 fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Palette) {
     let mut lines = vec![
-        Line::from(Span::styled(
-            "agentum terminal — keys",
-            Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
-        )),
+        head("agentum terminal — keys", p),
         Line::from(""),
-        Line::from(Span::styled(
-            "  Navigation",
-            Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  1 / 2 / 3 / 4   jump straight to panel (lazydocker-style)"),
-        Line::from("  Tab / ]         next panel"),
-        Line::from("  Shift-Tab / [   previous panel"),
-        Line::from("  j / k / ↑ / ↓   move selection in tree"),
-        Line::from("  h / l           collapse / expand workdir group"),
-        Line::from("  Enter           select session (start streaming)"),
-        Line::from("  r               refresh sessions"),
+        head("  Navigation", p),
+        body(
+            "  Ctrl-P / Ctrl-K  command palette (search & run anything)",
+            p,
+        ),
+        body("  1 / 2 / 3 / 4    jump to panel (lazydocker-style)", p),
+        body("  Tab / ]          next panel", p),
+        body("  Shift-Tab / [    previous panel", p),
+        body("  j / k / ↑ / ↓    move selection in tree", p),
+        body("  h / l            collapse / expand workdir group", p),
+        body("  Enter            select session (start streaming)", p),
+        body("  r                refresh sessions", p),
         Line::from(""),
-        Line::from(Span::styled(
-            "  Terminal & input",
-            Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  i / 3           focus the input bar"),
-        Line::from("  Enter (input)   send + append Enter to the pane"),
-        Line::from("  Esc             leave input"),
-        Line::from("  2               focus terminal — typing forwards to claude code"),
-        Line::from("  Ctrl-C          interrupt focused pane (else quit)"),
-        Line::from("  Ctrl-G          release focused pane → tree"),
+        head("  Terminal & input", p),
+        body("  i / 3            focus input bar", p),
+        body("  Enter (input)    send + append Enter to the pane", p),
+        body("  Esc              leave input", p),
+        body(
+            "  2                focus terminal — typing forwards to pane",
+            p,
+        ),
+        body("  Ctrl-C           interrupt focused pane (else quit)", p),
+        body("  Ctrl-G           release focused pane → tree", p),
         Line::from(""),
-        Line::from(Span::styled(
-            "  Extensions & appearance",
-            Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  g               toggle lazygit side pane"),
-        Line::from("  G               lazygit cheat sheet"),
-        Line::from("  T               cycle theme (dark / light / system)"),
+        head("  Extensions & appearance", p),
+        body("  g                toggle lazygit side pane", p),
+        body("  G                lazygit cheat sheet", p),
+        body("  T                cycle theme", p),
         Line::from(""),
-        Line::from("  ?               toggle this help"),
-        Line::from("  q               quit"),
+        body("  ?                toggle this help", p),
+        body("  q                quit", p),
     ];
     if lazygit_open {
         lines.push(Line::from(""));
@@ -398,17 +429,11 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
 
 fn draw_cheatsheet_overlay(f: &mut Frame<'_>, area: Rect, ext: &Extension, p: &Palette) {
     let mut lines = vec![
-        Line::from(Span::styled(
-            format!("{} — cheat sheet", ext.display_name),
-            Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
-        )),
+        head(&format!("{} — cheat sheet", ext.display_name), p),
         Line::from(""),
     ];
     for (label, keys) in ext.cheatsheet {
-        lines.push(Line::from(Span::styled(
-            format!("  {:<22} {}", label, keys),
-            Style::default().fg(p.fg),
-        )));
+        lines.push(body(&format!("  {label:<22} {keys}"), p));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
@@ -416,10 +441,7 @@ fn draw_cheatsheet_overlay(f: &mut Frame<'_>, area: Rect, ext: &Extension, p: &P
         Style::default().fg(p.muted),
     )));
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  Esc / Enter to dismiss",
-        Style::default().fg(p.muted),
-    )));
+    lines.push(body("  Esc / Enter to dismiss", p));
     overlay_box(f, area, &format!(" {} ", ext.display_name), lines, 64, p);
 }
 
@@ -432,14 +454,11 @@ fn draw_install_overlay(f: &mut Frame<'_>, area: Rect, ext: &Extension, p: &Pale
         Line::from(""),
         Line::from(Span::styled(ext.blurb, Style::default().fg(p.fg))),
         Line::from(""),
-        Line::from(Span::styled(
-            "Install with one of:",
-            Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
-        )),
+        head("Install with one of:", p),
     ];
     for (name, cmd) in extensions::install_hints(ext) {
         lines.push(Line::from(vec![
-            Span::styled(format!("  {:<22} ", name), Style::default().fg(p.accent)),
+            Span::styled(format!("  {name:<22} "), Style::default().fg(p.accent)),
             Span::styled(cmd, Style::default().fg(p.fg)),
         ]));
     }
@@ -449,10 +468,7 @@ fn draw_install_overlay(f: &mut Frame<'_>, area: Rect, ext: &Extension, p: &Pale
         Style::default().fg(p.muted),
     )));
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  Esc / Enter to dismiss",
-        Style::default().fg(p.muted),
-    )));
+    lines.push(body("  Esc / Enter to dismiss", p));
     overlay_box(
         f,
         area,
@@ -461,6 +477,108 @@ fn draw_install_overlay(f: &mut Frame<'_>, area: Rect, ext: &Extension, p: &Pale
         72,
         p,
     );
+}
+
+fn draw_palette_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
+    let cat = palette_catalog(app);
+    let filtered = cat.filtered(&app.palette.query);
+    let max = filtered.len().saturating_sub(1);
+    let cursor = app.palette.cursor.min(max);
+
+    let w = 80.min(area.width.saturating_sub(4));
+    let h = 22.min(area.height.saturating_sub(4));
+    let x = area.x + area.width.saturating_sub(w) / 2;
+    let y = area.y + area.height.saturating_sub(h) / 2;
+    let r = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+
+    let block = Block::default()
+        .title(Span::styled(
+            " command palette ",
+            Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(p.focus_border))
+        .style(Style::default().bg(p.surface_bg).fg(p.fg));
+    f.render_widget(Clear, r);
+    f.render_widget(block.clone(), r);
+
+    let inner = block.inner(r);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(1)])
+        .split(inner);
+
+    // Query line.
+    let query_line = Line::from(vec![
+        Span::styled(" › ", Style::default().fg(p.accent)),
+        Span::styled(
+            app.palette.query.clone(),
+            Style::default()
+                .fg(p.fg_strong)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" █", Style::default().fg(p.accent)),
+    ]);
+    let query = Paragraph::new(query_line).style(Style::default().bg(p.surface_bg));
+    f.render_widget(query, rows[0]);
+
+    // Action list.
+    let visible = (rows[1].height as usize).max(1);
+    let start = cursor.saturating_sub(visible.saturating_sub(1));
+    let items: Vec<ListItem> = filtered
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible)
+        .map(|(i, a)| {
+            let is_cursor = i == cursor;
+            let row_style = if is_cursor {
+                Style::default()
+                    .bg(p.cursor_bg)
+                    .fg(p.cursor_fg)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().bg(p.surface_bg).fg(p.fg)
+            };
+            let pointer = if is_cursor { "›" } else { "│" };
+            let pointer_style = if is_cursor {
+                Style::default().fg(p.accent)
+            } else {
+                Style::default().fg(p.subtle)
+            };
+            let group = format!(" {:<10}", a.group);
+            let label = format!(" {} ", a.label);
+            let hint = if a.hint.is_empty() {
+                String::new()
+            } else {
+                format!("  {}", a.hint)
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{pointer} "), pointer_style),
+                Span::styled(group, Style::default().fg(p.muted)),
+                Span::raw(label),
+                Span::styled(hint, Style::default().fg(p.muted)),
+            ]))
+            .style(row_style)
+        })
+        .collect();
+
+    if items.is_empty() {
+        let empty = Paragraph::new(Line::from(Span::styled(
+            "  no matches — Esc to close",
+            Style::default().fg(p.muted),
+        )))
+        .style(Style::default().bg(p.surface_bg));
+        f.render_widget(empty, rows[1]);
+    } else {
+        let list = List::new(items).style(Style::default().bg(p.surface_bg));
+        f.render_widget(list, rows[1]);
+    }
 }
 
 fn overlay_box(
@@ -483,19 +601,38 @@ fn overlay_box(
         height: h,
     };
     let block = Block::default()
-        .title(title.to_string())
+        .title(Span::styled(
+            title.to_string(),
+            Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+        ))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(p.accent));
-    let para = Paragraph::new(lines).block(block);
+        .border_style(Style::default().fg(p.focus_border))
+        .style(Style::default().bg(p.surface_bg).fg(p.fg));
+    let para = Paragraph::new(lines)
+        .block(block)
+        .style(Style::default().bg(p.surface_bg).fg(p.fg));
     f.render_widget(Clear, r);
     f.render_widget(para, r);
 }
 
+fn head(text: &str, p: &Palette) -> Line<'static> {
+    Line::from(Span::styled(
+        text.to_string(),
+        Style::default()
+            .fg(p.accent_alt)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn body(text: &str, p: &Palette) -> Line<'static> {
+    Line::from(Span::styled(text.to_string(), Style::default().fg(p.fg)))
+}
+
 fn border_style(focused: bool, p: &Palette) -> Style {
     if focused {
-        Style::default().fg(p.focus_border)
+        Style::default().fg(p.focus_border).bg(p.panel_bg)
     } else {
-        Style::default().fg(p.idle_border)
+        Style::default().fg(p.idle_border).bg(p.panel_bg)
     }
 }
 

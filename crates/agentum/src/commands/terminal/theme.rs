@@ -1,170 +1,281 @@
-//! Color palette + persistence for the terminal dashboard.
+//! Themes — name-keyed palette registry with real backgrounds.
 //!
-//! Three modes — `dark`, `light`, and `system` — picked at startup from
-//! `~/.local/share/agentum/theme` (or `$AGENTUM_THEME`) and cycled at runtime
-//! with `T`. `system` is best-effort: we sniff `COLORFGBG` (set by VTE / iTerm
-//! when the user has a light scheme) and fall back to dark.
+//! Five built-ins: `midnight` (Tokyo Night-ish, default), `dusk` (One Dark
+//! warm charcoal), `slate` (cool charcoal with neon cyan accents), `paper`
+//! (Solarized-light-ish), `mono` (high-contrast B/W). Persisted in
+//! `~/.local/share/agentum/theme`, overridable via `$AGENTUM_THEME`. `T`
+//! cycles forward; the command palette (Ctrl-P / Ctrl-K) lets you pick by
+//! name. Everything ui.rs draws goes through `Palette` — there are no
+//! hardcoded `Color::*` in draw code.
 
 use std::path::PathBuf;
 
 use ratatui::style::Color;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ThemeMode {
-    Dark,
-    Light,
-    System,
+/// Concrete palette consumed by `ui.rs`. Every visible color goes through
+/// here, including the panel backgrounds — so themes actually look like
+/// themes, not just border-color swaps.
+#[derive(Clone, Copy)]
+pub struct Palette {
+    // Layered backgrounds. `body_bg` paints the void around panels;
+    // `panel_bg` is the inside of each pane block; `surface_bg` is for
+    // raised UI like the input bar and cursor row; `chrome_bg` is the
+    // status bar.
+    pub body_bg: Color,
+    pub panel_bg: Color,
+    pub surface_bg: Color,
+    pub chrome_bg: Color,
+
+    pub fg: Color,
+    pub fg_strong: Color,
+    pub muted: Color,
+    pub subtle: Color,
+
+    pub accent: Color,
+    pub accent_alt: Color,
+    pub idle_border: Color,
+    pub focus_border: Color,
+
+    pub cursor_bg: Color,
+    pub cursor_fg: Color,
+
+    pub success: Color,
+    pub warning: Color,
+    pub error: Color,
+
+    pub chip_bg: Color,
+    pub chip_fg: Color,
 }
 
-impl ThemeMode {
-    pub fn label(self) -> &'static str {
-        match self {
-            ThemeMode::Dark => "dark",
-            ThemeMode::Light => "light",
-            ThemeMode::System => "system",
-        }
+pub struct Theme {
+    pub name: &'static str,
+    pub palette: Palette,
+}
+
+impl Theme {
+    /// Resolve a name to a built-in theme. Falls back to `midnight` for
+    /// unknown names (including the special "system" sentinel — that's
+    /// turned into a concrete name before getting here).
+    pub fn by_name(name: &str) -> &'static Theme {
+        BUILTINS
+            .iter()
+            .find(|t| t.name.eq_ignore_ascii_case(name))
+            .unwrap_or(&BUILTINS[0])
     }
 
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "dark" => Some(Self::Dark),
-            "light" => Some(Self::Light),
-            "system" | "auto" => Some(Self::System),
-            _ => None,
-        }
-    }
-
-    pub fn cycle(self) -> Self {
-        match self {
-            ThemeMode::Dark => ThemeMode::Light,
-            ThemeMode::Light => ThemeMode::System,
-            ThemeMode::System => ThemeMode::Dark,
-        }
-    }
-
-    /// Resolve `System` to a concrete palette. Best-effort — on terminals
-    /// that don't advertise their scheme we default to dark.
-    fn resolved(self) -> ThemeMode {
-        match self {
-            ThemeMode::System => detect_system(),
-            other => other,
-        }
+    /// Cycle to the next theme in the registry.
+    pub fn next(current: &str) -> &'static Theme {
+        let idx = BUILTINS
+            .iter()
+            .position(|t| t.name.eq_ignore_ascii_case(current))
+            .unwrap_or(0);
+        &BUILTINS[(idx + 1) % BUILTINS.len()]
     }
 }
 
-fn detect_system() -> ThemeMode {
-    // COLORFGBG="<fg>;<bg>" — bg ≥ 8 is conventionally a light background.
+pub fn all() -> &'static [Theme] {
+    BUILTINS
+}
+
+// ---------- built-in palettes ----------
+//
+// Order matters: the first entry is the default and the cycle starts here.
+
+const BUILTINS: &[Theme] = &[
+    Theme {
+        name: "midnight",
+        palette: Palette {
+            body_bg: Color::Rgb(13, 17, 28),
+            panel_bg: Color::Rgb(17, 22, 35),
+            surface_bg: Color::Rgb(24, 30, 47),
+            chrome_bg: Color::Rgb(11, 14, 23),
+
+            fg: Color::Rgb(196, 203, 224),
+            fg_strong: Color::Rgb(232, 236, 248),
+            muted: Color::Rgb(115, 124, 153),
+            subtle: Color::Rgb(72, 82, 110),
+
+            accent: Color::Rgb(122, 162, 247),
+            accent_alt: Color::Rgb(187, 154, 247),
+            idle_border: Color::Rgb(40, 50, 75),
+            focus_border: Color::Rgb(122, 162, 247),
+
+            cursor_bg: Color::Rgb(40, 56, 95),
+            cursor_fg: Color::Rgb(232, 236, 248),
+
+            success: Color::Rgb(158, 206, 106),
+            warning: Color::Rgb(224, 175, 104),
+            error: Color::Rgb(247, 118, 142),
+
+            chip_bg: Color::Rgb(45, 38, 70),
+            chip_fg: Color::Rgb(206, 188, 247),
+        },
+    },
+    Theme {
+        name: "dusk",
+        palette: Palette {
+            body_bg: Color::Rgb(30, 32, 38),
+            panel_bg: Color::Rgb(40, 44, 52),
+            surface_bg: Color::Rgb(50, 55, 64),
+            chrome_bg: Color::Rgb(24, 26, 31),
+
+            fg: Color::Rgb(190, 195, 207),
+            fg_strong: Color::Rgb(230, 233, 240),
+            muted: Color::Rgb(125, 134, 152),
+            subtle: Color::Rgb(78, 84, 96),
+
+            accent: Color::Rgb(97, 175, 239),
+            accent_alt: Color::Rgb(198, 120, 221),
+            idle_border: Color::Rgb(60, 66, 78),
+            focus_border: Color::Rgb(97, 175, 239),
+
+            cursor_bg: Color::Rgb(56, 70, 92),
+            cursor_fg: Color::Rgb(230, 233, 240),
+
+            success: Color::Rgb(152, 195, 121),
+            warning: Color::Rgb(229, 192, 123),
+            error: Color::Rgb(224, 108, 117),
+
+            chip_bg: Color::Rgb(70, 50, 92),
+            chip_fg: Color::Rgb(214, 178, 239),
+        },
+    },
+    Theme {
+        name: "slate",
+        palette: Palette {
+            body_bg: Color::Rgb(8, 10, 14),
+            panel_bg: Color::Rgb(14, 17, 22),
+            surface_bg: Color::Rgb(22, 27, 35),
+            chrome_bg: Color::Rgb(5, 7, 10),
+
+            fg: Color::Rgb(200, 210, 220),
+            fg_strong: Color::Rgb(240, 246, 252),
+            muted: Color::Rgb(110, 120, 132),
+            subtle: Color::Rgb(60, 70, 82),
+
+            accent: Color::Rgb(100, 224, 224),
+            accent_alt: Color::Rgb(255, 121, 198),
+            idle_border: Color::Rgb(35, 42, 52),
+            focus_border: Color::Rgb(100, 224, 224),
+
+            cursor_bg: Color::Rgb(20, 70, 80),
+            cursor_fg: Color::Rgb(240, 246, 252),
+
+            success: Color::Rgb(80, 250, 123),
+            warning: Color::Rgb(241, 250, 140),
+            error: Color::Rgb(255, 85, 85),
+
+            chip_bg: Color::Rgb(40, 24, 56),
+            chip_fg: Color::Rgb(255, 184, 218),
+        },
+    },
+    Theme {
+        name: "paper",
+        palette: Palette {
+            body_bg: Color::Rgb(248, 246, 240),
+            panel_bg: Color::Rgb(253, 252, 247),
+            surface_bg: Color::Rgb(244, 240, 230),
+            chrome_bg: Color::Rgb(232, 228, 218),
+
+            fg: Color::Rgb(40, 42, 46),
+            fg_strong: Color::Rgb(15, 17, 20),
+            muted: Color::Rgb(120, 120, 116),
+            subtle: Color::Rgb(180, 178, 170),
+
+            accent: Color::Rgb(0, 95, 175),
+            accent_alt: Color::Rgb(160, 70, 130),
+            idle_border: Color::Rgb(200, 195, 180),
+            focus_border: Color::Rgb(0, 95, 175),
+
+            cursor_bg: Color::Rgb(225, 232, 244),
+            cursor_fg: Color::Rgb(15, 17, 20),
+
+            success: Color::Rgb(0, 120, 50),
+            warning: Color::Rgb(180, 110, 0),
+            error: Color::Rgb(190, 30, 30),
+
+            chip_bg: Color::Rgb(228, 218, 240),
+            chip_fg: Color::Rgb(80, 40, 130),
+        },
+    },
+    Theme {
+        name: "mono",
+        palette: Palette {
+            body_bg: Color::Rgb(0, 0, 0),
+            panel_bg: Color::Rgb(8, 8, 8),
+            surface_bg: Color::Rgb(20, 20, 20),
+            chrome_bg: Color::Rgb(0, 0, 0),
+
+            fg: Color::Rgb(220, 220, 220),
+            fg_strong: Color::Rgb(255, 255, 255),
+            muted: Color::Rgb(140, 140, 140),
+            subtle: Color::Rgb(80, 80, 80),
+
+            accent: Color::Rgb(255, 255, 255),
+            accent_alt: Color::Rgb(200, 200, 200),
+            idle_border: Color::Rgb(60, 60, 60),
+            focus_border: Color::Rgb(255, 255, 255),
+
+            cursor_bg: Color::Rgb(50, 50, 50),
+            cursor_fg: Color::Rgb(255, 255, 255),
+
+            success: Color::Rgb(220, 220, 220),
+            warning: Color::Rgb(220, 220, 220),
+            error: Color::Rgb(255, 255, 255),
+
+            chip_bg: Color::Rgb(40, 40, 40),
+            chip_fg: Color::Rgb(255, 255, 255),
+        },
+    },
+];
+
+// ---------- system detection + persistence ----------
+
+const SYSTEM_SENTINEL: &str = "system";
+
+/// Resolve a stored name to a concrete theme. `system` sniffs `COLORFGBG`
+/// and falls back to `midnight` for dark hosts, `paper` for light.
+fn resolve(name: &str) -> &'static Theme {
+    if name.eq_ignore_ascii_case(SYSTEM_SENTINEL) {
+        return Theme::by_name(if detect_light() { "paper" } else { "midnight" });
+    }
+    Theme::by_name(name)
+}
+
+fn detect_light() -> bool {
     if let Ok(s) = std::env::var("COLORFGBG")
         && let Some(bg) = s.split(';').nth(1)
         && let Ok(n) = bg.trim().parse::<u32>()
         && (7..=15).contains(&n)
     {
-        return ThemeMode::Light;
+        return true;
     }
-    ThemeMode::Dark
+    false
 }
-
-/// Concrete palette consumed by `ui.rs`. All colors flow through this struct
-/// — no hardcoded `Color::*` should remain in draw functions.
-#[derive(Clone, Copy)]
-pub struct Palette {
-    pub fg: Color,
-    pub muted: Color,
-    pub accent: Color,
-    pub idle_border: Color,
-    pub focus_border: Color,
-    pub cursor_bg: Color,
-    pub status_bar_bg: Color,
-    pub status_bar_fg: Color,
-    pub title_fg: Color,
-    pub success: Color,
-    pub warning: Color,
-    pub error: Color,
-    pub chip_active_bg: Color,
-    pub chip_active_fg: Color,
-}
-
-pub struct Theme {
-    pub mode: ThemeMode,
-    pub palette: Palette,
-}
-
-impl Theme {
-    pub fn new(mode: ThemeMode) -> Self {
-        let palette = match mode.resolved() {
-            ThemeMode::Light => light(),
-            _ => dark(),
-        };
-        Self { mode, palette }
-    }
-}
-
-fn dark() -> Palette {
-    Palette {
-        fg: Color::White,
-        muted: Color::DarkGray,
-        accent: Color::Cyan,
-        idle_border: Color::DarkGray,
-        focus_border: Color::Cyan,
-        cursor_bg: Color::Rgb(40, 60, 70),
-        status_bar_bg: Color::Rgb(20, 25, 35),
-        status_bar_fg: Color::Gray,
-        title_fg: Color::White,
-        success: Color::Green,
-        warning: Color::Yellow,
-        error: Color::Red,
-        chip_active_bg: Color::Rgb(60, 30, 70),
-        chip_active_fg: Color::White,
-    }
-}
-
-fn light() -> Palette {
-    Palette {
-        fg: Color::Rgb(20, 22, 28),
-        muted: Color::Rgb(120, 124, 132),
-        accent: Color::Rgb(0, 95, 175),
-        idle_border: Color::Rgb(180, 184, 192),
-        focus_border: Color::Rgb(0, 95, 175),
-        cursor_bg: Color::Rgb(220, 230, 245),
-        status_bar_bg: Color::Rgb(232, 234, 240),
-        status_bar_fg: Color::Rgb(40, 45, 55),
-        title_fg: Color::Rgb(20, 22, 28),
-        success: Color::Rgb(0, 120, 50),
-        warning: Color::Rgb(180, 110, 0),
-        error: Color::Rgb(190, 30, 30),
-        chip_active_bg: Color::Rgb(220, 210, 235),
-        chip_active_fg: Color::Rgb(60, 30, 110),
-    }
-}
-
-// ---------- persistence ----------
 
 fn theme_file() -> Option<PathBuf> {
     let dir = agentum_store::paths::data_dir().ok()?;
     Some(dir.join("theme"))
 }
 
-pub fn load() -> ThemeMode {
-    if let Ok(s) = std::env::var("AGENTUM_THEME")
-        && let Some(m) = ThemeMode::parse(&s)
-    {
-        return m;
+pub fn load() -> &'static Theme {
+    if let Ok(s) = std::env::var("AGENTUM_THEME") {
+        return resolve(s.trim());
     }
     if let Some(path) = theme_file()
         && let Ok(raw) = std::fs::read_to_string(&path)
-        && let Some(m) = ThemeMode::parse(&raw)
     {
-        return m;
+        return resolve(raw.trim());
     }
-    ThemeMode::System
+    Theme::by_name("midnight")
 }
 
-pub fn save(mode: ThemeMode) {
+pub fn save(name: &str) {
     let Some(path) = theme_file() else {
         return;
     };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(&path, format!("{}\n", mode.label()));
+    let _ = std::fs::write(&path, format!("{name}\n"));
 }
