@@ -22,7 +22,6 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 
 pub mod auth;
-mod embed;
 mod error;
 mod headers;
 mod logging;
@@ -102,11 +101,11 @@ pub fn router(state: AppState) -> Router {
             state.clone(),
             auth::require_token,
         ))
-        .fallback(embed::static_handler)
         .with_state(state)
-        // Security response headers wrap everything, including the embedded
-        // SPA. CSP is set conservatively: same-origin only, no inline JS, no
-        // framing. The dashboard is small enough to live within those rules.
+        // Security response headers wrap everything. CSP is conservative:
+        // same-origin only, no inline JS, no framing. The frontend lives
+        // separately (Netlify) and talks to this server purely over the
+        // JSON API.
         .layer(axum_mw::from_fn(headers::security_headers))
         .layer(logging::redacting_trace_layer())
 }

@@ -26,19 +26,6 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
-
-      - name: Build web bundle (needed for rust-embed)
-        run: pnpm --dir web install --frozen-lockfile && pnpm --dir web build
-
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
@@ -47,21 +34,3 @@ jobs:
 
       - name: cargo test
         run: cargo test --all
-
-  web:
-    name: web (svelte-check)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
-      - run: pnpm --dir web install --frozen-lockfile
-      - run: pnpm --dir web check
-      - run: pnpm --dir web build
