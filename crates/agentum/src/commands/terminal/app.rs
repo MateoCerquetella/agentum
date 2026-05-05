@@ -718,7 +718,7 @@ async fn handle_key(
             return;
         }
         Overlay::NewSession(_) => {
-            handle_new_session_key(app, key, client).await;
+            handle_new_session_key(app, key, client, term_tx, stream_handle).await;
             return;
         }
         Overlay::Confirm(_) => {
@@ -888,7 +888,13 @@ async fn handle_key(
     }
 }
 
-async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
+async fn handle_new_session_key(
+    app: &mut App,
+    key: KeyEvent,
+    client: &Client,
+    term_tx: &mpsc::UnboundedSender<TerminalMsg>,
+    stream_handle: &mut Option<JoinHandle<()>>,
+) {
     let Overlay::NewSession(mut form) = std::mem::replace(&mut app.overlay, Overlay::None) else {
         return;
     };
@@ -996,7 +1002,7 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
                     if let Ok(fresh) = client.list_sessions().await {
                         app.refresh_sessions(fresh);
                         app.tree.select_session(id);
-                        app.selected = Some(id);
+                        update_selection(app, client, term_tx, stream_handle);
                     }
                     return;
                 }
