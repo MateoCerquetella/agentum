@@ -26,6 +26,19 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: dashboard/pnpm-lock.yaml
+
+      - name: Build dashboard bundle (needed for rust-embed)
+        run: pnpm --dir dashboard install --frozen-lockfile && pnpm --dir dashboard build
+
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
