@@ -368,10 +368,8 @@ async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
                 None => break, // tail task ended (file error / eof on dead pane)
             },
             msg = socket.recv() => match msg {
-                Some(Ok(Message::Binary(b))) => {
-                    if !b.is_empty() {
-                        let _ = agentum_tmux::send_bytes(&target, &b).await;
-                    }
+                Some(Ok(Message::Binary(b))) if !b.is_empty() => {
+                    let _ = agentum_tmux::send_bytes(&target, &b).await;
                 }
                 Some(Ok(Message::Text(t))) => {
                     // Text frames are also accepted and forwarded as raw UTF-8.

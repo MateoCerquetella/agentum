@@ -99,7 +99,7 @@ async fn list_dir(Query(q): Query<ListQuery>) -> Result<Json<ListResp>, ApiError
         });
     }
 
-    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dirs.sort_by_key(|d| d.name.to_lowercase());
 
     let parent = resolved.parent().map(|p| p.to_string_lossy().to_string());
     Ok(Json(ListResp {
