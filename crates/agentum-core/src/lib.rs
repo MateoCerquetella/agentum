@@ -185,6 +185,76 @@ impl Event {
         self.payload = payload;
         self
     }
+
+    /// Project a server `Event` into the dashboard's compact wire shape.
+    /// Returns `None` for events the watchdog feed shouldn't display.
+    pub fn to_watchdog(&self) -> Option<WatchdogEvent> {
+        let kind = if let Some(rest) = self.kind.strip_prefix("watchdog.") {
+            match rest {
+                "compact" => WatchdogKind::Compact,
+                "crash"   => WatchdogKind::Crash,
+                "warn"    => WatchdogKind::Warn,
+                _         => WatchdogKind::Ok,
+            }
+        } else if self.kind == "session.crashed" {
+            WatchdogKind::Crash
+        } else if self.kind.starts_with("session.") {
+            WatchdogKind::Ok
+        } else {
+            return None;
+        };
+        // Prefer payload.label/msg when the watchdog publisher provides
+        // them; otherwise synthesize from the dotted kind.
+        let label = self
+            .payload
+            .get("label")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                self.kind.rsplit('.').next().unwrap_or("event").to_string()
+            });
+        let msg = self
+            .payload
+            .get("msg")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                match (&self.session_name, &self.session_id) {
+                    (Some(n), _) => format!("{n} · {}", self.kind),
+                    (None, Some(id)) => format!("{id} · {}", self.kind),
+                    _ => self.kind.clone(),
+                }
+            });
+        Some(WatchdogEvent {
+            ts: self.ts,
+            kind,
+            label,
+            msg,
+            ses: self.session_name.clone(),
+        })
+    }
+}
+
+/// Watchdog-feed event shape consumed by the dashboard. Compact subset
+/// of the server `Event`. Mirrors the TS `WatchdogEvent`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchdogEvent {
+    #[serde(with = "time::serde::rfc3339")]
+    pub ts: OffsetDateTime,
+    pub kind: WatchdogKind,
+    pub label: String,
+    pub msg: String,
+    /// Originating session name (nullable for fleet-level events).
+    pub ses: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WatchdogKind {
+    Ok,
+    Warn,
+    Compact,
+    Crash,
 }
 
 // ---------- board items (Phase 7) ----------
