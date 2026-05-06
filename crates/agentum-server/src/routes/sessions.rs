@@ -300,10 +300,23 @@ async fn send(
 
 // ---------- WS /stream ----------
 
+#[derive(Deserialize, Default)]
+struct StreamQuery {
+    /// `?resume=true` tells the WS handler the client has cached vt100
+    /// parser state for this session and just wants the missed log
+    /// delta — not a fresh `capture-pane` snapshot. Travels in the URL
+    /// because old daemons silently drop unknown query params; if it
+    /// were a wire frame they'd forward it to `tmux send-keys` as a
+    /// keystroke (the v0.6.20 regression).
+    #[serde(default)]
+    resume: bool,
+}
+
 async fn stream(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(q): Query<StreamQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let id = parse_uuid(&id)?;
     let session = state
@@ -313,7 +326,8 @@ async fn stream(
         .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
     let target = tmux_target(&session);
     let positions = state.stream_positions.clone();
-    Ok(ws.on_upgrade(move |socket| stream_session(socket, id, target, positions)))
+    let resume = q.resume;
+    Ok(ws.on_upgrade(move |socket| stream_session(socket, id, target, positions, resume)))
 }
 
 const BACKFILL_BYTES: u64 = 4096;
@@ -350,6 +364,7 @@ async fn stream_session(
     id: Uuid,
     target: String,
     positions: Arc<std::sync::Mutex<std::collections::HashMap<Uuid, u64>>>,
+    resume_requested: bool,
 ) {
     let log_path = match paths::pane_log(&id.to_string()) {
         Ok(p) => p,
@@ -400,7 +415,6 @@ async fn stream_session(
     // existing capture-at-current-size path.
     let mut early_input: Vec<Bytes> = Vec::new();
     let mut got_resize = false;
-    let mut resume_requested = false;
     let resize_deadline = tokio::time::Instant::now() + INITIAL_RESIZE_WAIT;
     loop {
         let remaining = resize_deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -413,13 +427,6 @@ async fn stream_session(
                     let _ = agentum_tmux::resize_window(&target, cols, rows).await;
                     got_resize = true;
                     break;
-                }
-                if parse_resume(&t) {
-                    // Client has cached parser state for this session and
-                    // wants the log delta, not a fresh snapshot. Keep
-                    // looping in case a resize follows immediately.
-                    resume_requested = true;
-                    continue;
                 }
                 // Non-resize text frame — preserve the legacy "treat as raw
                 // input" behaviour by buffering for replay after the snapshot.
@@ -683,21 +690,6 @@ async fn stream_session(
 
 fn parse_uuid(s: &str) -> Result<Uuid, ApiError> {
     Uuid::parse_str(s).map_err(|e| ApiError::BadRequest(e.to_string()))
-}
-
-/// Recognise `{"resume":true}` text frames. The TUI client sends this
-/// after a session-switch when it has cached vt100 parser state for the
-/// session and just needs the missed log delta — not a fresh
-/// `capture-pane` snapshot that would clobber the preserved state.
-fn parse_resume(t: &str) -> bool {
-    let trimmed = t.trim();
-    if !trimmed.starts_with('{') || !trimmed.contains("resume") {
-        return false;
-    }
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-        return false;
-    };
-    matches!(v.get("resume"), Some(serde_json::Value::Bool(true)))
 }
 
 /// Recognise `{"resize":{"cols":N,"rows":N}}` text frames. Returns the
