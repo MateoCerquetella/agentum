@@ -410,7 +410,21 @@ async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
                     }
                 }
                 Some(Ok(Message::Text(t))) => {
-                    if let Err(e) = agentum_tmux::send_bytes(&target, t.as_bytes()).await
+                    // Text frames double as a side-channel for control
+                    // messages — currently only `{"resize":{"cols":N,"rows":N}}`.
+                    // Anything that isn't a recognised JSON envelope is
+                    // forwarded as raw input bytes (preserves the old
+                    // behaviour for clients that send keystrokes as text).
+                    if let Some((cols, rows)) = parse_resize(&t) {
+                        if let Err(e) = agentum_tmux::resize_window(&target, cols, rows).await
+                            && socket
+                                .send(Message::Text(format!("[resize dropped: {e}]").into()))
+                                .await
+                                .is_err()
+                        {
+                            break;
+                        }
+                    } else if let Err(e) = agentum_tmux::send_bytes(&target, t.as_bytes()).await
                         && socket
                             .send(Message::Text(format!("[input dropped: {e}]").into()))
                             .await
@@ -429,4 +443,39 @@ async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
 
 fn parse_uuid(s: &str) -> Result<Uuid, ApiError> {
     Uuid::parse_str(s).map_err(|e| ApiError::BadRequest(e.to_string()))
+}
+
+/// Recognise `{"resize":{"cols":N,"rows":N}}` text frames. Returns the
+/// `(cols, rows)` pair on a hit; `None` for any other shape (the caller
+/// then treats the frame as raw input bytes for backward compatibility).
+fn parse_resize(t: &str) -> Option<(u16, u16)> {
+    let trimmed = t.trim();
+    if !trimmed.starts_with('{') || !trimmed.contains("resize") {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    let resize = v.get("resize")?;
+    let cols = resize.get("cols")?.as_u64()?;
+    let rows = resize.get("rows")?.as_u64()?;
+    Some((cols.min(u16::MAX as u64) as u16, rows.min(u16::MAX as u64) as u16))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_resize;
+
+    #[test]
+    fn parse_resize_recognises_envelope() {
+        assert_eq!(
+            parse_resize(r#"{"resize":{"cols":120,"rows":40}}"#),
+            Some((120, 40))
+        );
+    }
+
+    #[test]
+    fn parse_resize_ignores_other_text() {
+        assert_eq!(parse_resize("hello"), None);
+        assert_eq!(parse_resize(r#"{"send":"x"}"#), None);
+        assert_eq!(parse_resize(""), None);
+    }
 }

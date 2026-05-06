@@ -128,6 +128,41 @@ pub async fn send_bytes(target: &str, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Resize the tmux window (and therefore its single pane) so the running
+/// process redraws into `cols × rows`. Required when no client is attached
+/// — without an attached client tmux clamps the size to the default 80×24,
+/// which is why embedded TUIs render at the wrong width and overflow when
+/// the agentum TUI / web dashboard pane is bigger than that.
+///
+/// Tmux ≥ 3.0 honours `resize-window` for unattached sessions when the
+/// `window-size` option is `manual`. We force that mode on the first call
+/// (idempotent) so the resize sticks.
+pub async fn resize_window(target: &str, cols: u16, rows: u16) -> Result<()> {
+    let cols = cols.max(20);
+    let rows = rows.max(5);
+
+    // window-size manual: tmux stops auto-fitting to attached clients and
+    // honours our explicit size. -q suppresses "no current session" noise.
+    let _ = Command::new("tmux")
+        .args(["set-option", "-q", "-t"])
+        .arg(target)
+        .args(["window-size", "manual"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
+
+    let mut c = Command::new("tmux");
+    c.arg("resize-window")
+        .arg("-t")
+        .arg(target)
+        .arg("-x")
+        .arg(cols.to_string())
+        .arg("-y")
+        .arg(rows.to_string());
+    run_checked(&mut c).await
+}
+
 /// Pipe the pane's output to `out_path` (append). Uses `-o`: noop if a pipe
 /// is already active for this pane.
 ///
