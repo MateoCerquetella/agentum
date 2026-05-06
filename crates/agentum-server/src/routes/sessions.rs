@@ -324,11 +324,24 @@ const READ_CHUNK: usize = 8192;
 /// clients (or a stalled connection) don't block the connect indefinitely.
 const INITIAL_RESIZE_WAIT: Duration = Duration::from_millis(250);
 
-/// After resizing tmux to match the client's viewport, give the embedded
-/// process a moment to react to SIGWINCH and emit a fresh frame before we
-/// `capture-pane -e`. Without this we'd capture pre-resize content and end
-/// up back in the same misalignment race the resize was meant to fix.
-const POST_RESIZE_SETTLE: Duration = Duration::from_millis(80);
+/// Hard cap on how long we wait for the embedded process's post-SIGWINCH
+/// repaint burst to settle before snapshotting. Reached by genuinely
+/// active streams (claude code mid-response) — at that point the
+/// snapshot inevitably reflects mid-stream content, and the live tail
+/// will continue painting fresh bytes after.
+const POST_RESIZE_SETTLE_MAX: Duration = Duration::from_millis(400);
+
+/// Polling cadence for the post-resize quiet check. Two consecutive
+/// no-growth intervals (≈80 ms total) classifies the embedded TUI as
+/// "done repainting".
+const SETTLE_POLL_INTERVAL: Duration = Duration::from_millis(40);
+
+/// If we resized but see no log activity at all within this window, the
+/// embedded process probably isn't going to react (size already matched,
+/// or it's blocked on something). Bail rather than burning the full
+/// max-budget on a no-op wait. Long enough that a slow ratatui app has
+/// time to start emitting bytes.
+const POST_RESIZE_NO_ACTIVITY_BAIL: Duration = Duration::from_millis(180);
 
 async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
     let log_path = match paths::pane_log(&id.to_string()) {
@@ -406,12 +419,56 @@ async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
         }
     }
     if got_resize {
-        // Give tmux + the embedded TUI a beat to redraw at the new size
-        // before we snapshot. tmux propagates SIGWINCH to the embedded
-        // process; ratatui-based agents (claude, codex, opencode) then
-        // emit a fresh frame on their next render tick. 80 ms is enough
-        // headroom in practice without being a perceptible connect lag.
-        sleep(POST_RESIZE_SETTLE).await;
+        // Wait for the embedded process's post-SIGWINCH repaint burst to
+        // settle before snapshotting. Fixed sleeps don't work: idle panes
+        // are quiet immediately, but a ratatui-based agent (claude code,
+        // codex, opencode) reacting to a real size change can take well
+        // over 100 ms to start emitting its full repaint, then several
+        // dozen ms more to finish it. Capturing during that window
+        // returned a half-painted frame — tool indicator drawn but
+        // input box / footer missing, or status-line characters
+        // overpainting scrollback content because cursor moves still
+        // referenced the old grid.
+        //
+        // The pane log file (pipe-pane sink) gives us a cheap activity
+        // probe: bytes the embedded process emits are appended in real
+        // time, so file-size growth is direct evidence of repaint
+        // activity. Wait for activity to start, then for it to quiet.
+        // Fall back to a "no activity" bail-out if the resize was a
+        // no-op (size already matched), so connect doesn't pay the full
+        // budget for a settle that will never come.
+        let mut last_size = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+        let mut activity_seen = false;
+        let mut quiet_streak: u32 = 0;
+        let start = tokio::time::Instant::now();
+        let max_deadline = start + POST_RESIZE_SETTLE_MAX;
+        loop {
+            sleep(SETTLE_POLL_INTERVAL).await;
+            let now_size = file.metadata().await.map(|m| m.len()).unwrap_or(last_size);
+            if now_size != last_size {
+                activity_seen = true;
+                quiet_streak = 0;
+                last_size = now_size;
+            } else {
+                quiet_streak = quiet_streak.saturating_add(1);
+            }
+            let now = tokio::time::Instant::now();
+            // Activity → quiet: repaint burst is over, capture is safe.
+            if activity_seen && quiet_streak >= 2 {
+                break;
+            }
+            // No activity within the bail window: probably a no-op resize
+            // (size already matched, no SIGWINCH propagated). Don't burn
+            // the full max budget waiting for a wake-up that won't come.
+            if !activity_seen && now >= start + POST_RESIZE_NO_ACTIVITY_BAIL {
+                break;
+            }
+            // Hard cap so an actively-streaming agent can't hold connect
+            // open indefinitely.
+            if now >= max_deadline {
+                break;
+            }
+        }
     }
 
     // Replay the current pane state so the user lands on a complete frame,

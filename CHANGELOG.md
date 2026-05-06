@@ -4,6 +4,32 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.17] — 2026-05-06
+
+### Fixed
+- **Session-switch corruption (third pass — proper fix).** The v0.6.15
+  commit advertised a "poll log activity for post-resize settle" change
+  but only landed the unrelated transcript-watcher hunk; the actual
+  settle logic was lost in the diff. So the daemon was still doing the
+  v0.6.14 fixed 80 ms post-SIGWINCH sleep, capturing during the
+  embedded TUI's repaint burst, and shipping half-frames — characters
+  from claude's 80×24-positioned status line still landing inside
+  scrollback content (`s2ill ts` etc).
+
+  This release lands the actual settle loop AND fixes a logic bug in
+  the v0.6.15 design: the original would exit after two quiet polls
+  even when no activity had ever been observed, so we'd return BEFORE
+  the embedded process had even started reacting to SIGWINCH. The new
+  logic requires activity to have been seen before treating quiet as
+  "settled". When no activity occurs within 180 ms of the resize, we
+  bail (resize was probably a no-op — size already matched). Hard
+  cap: 400 ms.
+
+  Connect-time latency:
+  - no-op resize / size unchanged: ≈180 ms
+  - SIGWINCH-triggered repaint: scales with actual repaint duration
+  - active stream: 400 ms cap
+
 ## [0.6.15] — 2026-05-06
 
 ### Fixed
