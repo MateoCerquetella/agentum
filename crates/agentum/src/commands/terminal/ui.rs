@@ -1,7 +1,7 @@
 //! Pure draw functions for the terminal dashboard. No mutation, no IO.
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
@@ -609,18 +609,19 @@ fn fill_default_bg(f: &mut Frame<'_>, area: Rect, bg: Color) {
 }
 
 fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
-    // Each chip is opt-in/out via `app.prefs`. Build the list as we go
-    // so disabled chips collapse cleanly without leaving stray padding.
-    // Order is fixed (so the user sees a predictable layout) but each
-    // entry can be toggled via the palette's `Settings:` group.
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(12);
+    // Each chip is opt-in/out via `app.prefs`. Build two lists — the
+    // workdir/tool context chips anchor left, everything else (status
+    // signals, throughput, hints) is right-aligned so the noisy chips
+    // sit far from the eye when scanning the workdir.
+    let mut left: Vec<Span<'static>> = Vec::with_capacity(4);
+    let mut right: Vec<Span<'static>> = Vec::with_capacity(12);
 
     if app.prefs.get(StatusChip::Workdir) {
         let workdir = app
             .selected_session()
             .map(|s| collapse_home(&s.workdir))
             .unwrap_or_else(|| "—".to_string());
-        spans.push(Span::styled(
+        left.push(Span::styled(
             format!(" {workdir} "),
             Style::default().fg(p.fg).bg(p.chrome_bg),
         ));
@@ -634,7 +635,7 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
                 None => s.tool.clone(),
             })
             .unwrap_or_else(|| "—".to_string());
-        spans.push(Span::styled(
+        left.push(Span::styled(
             format!("{tool_label} "),
             Style::default().fg(p.muted).bg(p.chrome_bg),
         ));
@@ -646,7 +647,7 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
             ConnState::Connecting => ("◌ connecting", p.warning),
             ConnState::Disconnected => ("✗ disconnected", p.error),
         };
-        spans.push(Span::styled(
+        right.push(Span::styled(
             format!(" {conn_label} "),
             Style::default().fg(conn_color).bg(p.chrome_bg),
         ));
@@ -659,7 +660,7 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         // chip exists and learn it's there to flip off.
         let down = fmt_rate(app.io.rate_in());
         let up = fmt_rate(app.io.rate_out());
-        spans.push(Span::styled(
+        right.push(Span::styled(
             format!(" ↓{down} ↑{up} "),
             Style::default().fg(p.accent_alt).bg(p.chrome_bg),
         ));
@@ -670,7 +671,7 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         // about absolute volume (e.g. metered networks).
         let din = fmt_bytes(app.io.total_in());
         let dout = fmt_bytes(app.io.total_out());
-        spans.push(Span::styled(
+        right.push(Span::styled(
             format!(" Σ↓{din} ↑{dout} "),
             Style::default().fg(p.muted).bg(p.chrome_bg),
         ));
@@ -688,11 +689,11 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         } else {
             Span::styled(" g lazygit ", Style::default().fg(p.muted).bg(p.chrome_bg))
         };
-        spans.push(lg_chip);
+        right.push(lg_chip);
     }
 
     if app.prefs.get(StatusChip::Theme) {
-        spans.push(Span::styled(
+        right.push(Span::styled(
             format!(" {} ", app.theme.name),
             Style::default().fg(p.chip_fg).bg(p.chip_bg),
         ));
@@ -706,27 +707,36 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         None => String::new(),
     };
     if !extra.is_empty() {
-        spans.push(Span::styled(
+        right.push(Span::styled(
             extra,
             Style::default().fg(p.muted).bg(p.chrome_bg),
         ));
     }
 
     if app.prefs.get(StatusChip::PaletteHint) {
-        spans.push(Span::styled(
+        right.push(Span::styled(
             " Ctrl-P palette ",
             Style::default().fg(p.accent).bg(p.chrome_bg),
         ));
     }
     if app.prefs.get(StatusChip::HelpHint) {
-        spans.push(Span::styled(
+        right.push(Span::styled(
             " ? help ",
             Style::default().fg(p.muted).bg(p.chrome_bg),
         ));
     }
 
-    let para = Paragraph::new(Line::from(spans)).style(Style::default().bg(p.chrome_bg).fg(p.fg));
-    f.render_widget(para, area);
+    // Left paragraph paints the whole bar's chrome_bg; the right
+    // paragraph then overdraws its slot. Cells the right doesn't touch
+    // keep the chrome_bg fill, so the gap between left and right
+    // matches the bar instead of bleeding through to the host bg.
+    let bg = Style::default().bg(p.chrome_bg).fg(p.fg);
+    let left_p = Paragraph::new(Line::from(left))
+        .style(bg)
+        .alignment(Alignment::Left);
+    let right_p = Paragraph::new(Line::from(right)).alignment(Alignment::Right);
+    f.render_widget(left_p, area);
+    f.render_widget(right_p, area);
 }
 
 /// Bottom-left toast stack. Renders as an overlay (not a layout slot)
