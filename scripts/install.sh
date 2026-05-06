@@ -23,10 +23,13 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 PLATFORM=""; VERSION=""; INSTALL_MODE="${INSTALL_MODE:-}"; INTERACTIVE=false; HAS_TTY=false
 
 # ── Colors (agentum: dark bg + gold/amber accents) ────────────
+# Use actual ESC char so `printf '%s'` substitutes a real escape sequence.
+# (POSIX sh has no $'\033'; %s does not interpret backslash escapes.)
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-    C_R='\033[0m';    C_B='\033[1m';     C_D='\033[2m'
-    C_Y='\033[1;33m'; C_BL='\033[1;34m'; C_G='\033[1;32m'
-    C_RED='\033[1;31m'; C_C='\033[1;36m'; C_A='\033[38;5;214m'
+    ESC=$(printf '\033')
+    C_R="${ESC}[0m";    C_B="${ESC}[1m";     C_D="${ESC}[2m"
+    C_Y="${ESC}[1;33m"; C_BL="${ESC}[1;34m"; C_G="${ESC}[1;32m"
+    C_RED="${ESC}[1;31m"; C_C="${ESC}[1;36m"; C_A="${ESC}[38;5;214m"
 else
     C_R=''; C_B=''; C_D=''; C_Y=''; C_BL=''; C_G=''; C_RED=''; C_C=''; C_A=''
 fi
@@ -125,6 +128,22 @@ detect_version() {
         VERSION="$(wget -qO- "$GH_API" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"//;s/".*//')"
     else e "curl or wget is required"; fi
     [ -n "$VERSION" ] || e "could not determine latest version"
+}
+
+# ── Existing-install detection (turns the script into an updater) ──
+# Sets EXISTING_BIN / EXISTING_VERSION when an `agentum` is already on
+# disk — preferring INSTALL_DIR, falling back to whatever's on PATH.
+detect_existing() {
+    EXISTING_BIN=""; EXISTING_VERSION=""
+    if [ -x "$INSTALL_DIR/agentum" ]; then
+        EXISTING_BIN="$INSTALL_DIR/agentum"
+    elif command -v agentum >/dev/null 2>&1; then
+        EXISTING_BIN="$(command -v agentum)"
+    fi
+    [ -n "$EXISTING_BIN" ] || return 0
+    # `agentum --version` prints e.g. "agentum 0.6.5"
+    EXISTING_VERSION="$("$EXISTING_BIN" --version 2>/dev/null | awk '{print $2}')"
+    EXISTING_VERSION="${EXISTING_VERSION:-unknown}"
 }
 
 # ── Spinner ────────────────────────────────────────────────────
@@ -278,6 +297,19 @@ i "platform" "${C_D}${PLATFORM}${C_R}"
 detect_version
 i "version"  "${C_D}${VERSION}${C_R}"
 i "install"  "${C_D}${INSTALL_DIR}${C_R}"
+
+detect_existing
+if [ -n "$EXISTING_BIN" ]; then
+    target="${VERSION#v}"
+    have="${EXISTING_VERSION#v}"
+    if [ "$have" = "$target" ] && [ -z "${AGENTUM_FORCE_UPDATE:-}" ]; then
+        o "already up to date" "${C_D}v${have} at ${EXISTING_BIN}${C_R}"
+        h "Re-install anyway: AGENTUM_FORCE_UPDATE=1 curl … | sh"
+        printf '\n'
+        exit 0
+    fi
+    i "updating" "${C_D}v${have} → v${target}${C_R}"
+fi
 
 select_mode
 
