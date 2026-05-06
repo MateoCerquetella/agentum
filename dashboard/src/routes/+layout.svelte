@@ -11,6 +11,7 @@
   import { newSessionOpen, closeNewSession } from '$stores/newSession';
   import { authState } from '$stores/auth';
   import { connect as connectEvents, disconnect as disconnectEvents } from '$stores/events';
+  import { startEventBridge, stopEventBridge } from '$stores/event-bridge';
   import {
     palette, togglePalette, closePalette,
     shortcuts, openShortcuts, closeShortcuts
@@ -62,8 +63,13 @@
   onMount(() => {
     window.addEventListener('keydown', onKey);
     const unsub = authState.subscribe((s) => {
-      if (s === 'ok') connectEvents();
-      else disconnectEvents();
+      if (s === 'ok') {
+        connectEvents();
+        startEventBridge();
+      } else {
+        stopEventBridge();
+        disconnectEvents();
+      }
     });
     return () => {
       window.removeEventListener('keydown', onKey);
@@ -71,7 +77,7 @@
     };
   });
 
-  onDestroy(() => disconnectEvents());
+  onDestroy(() => { stopEventBridge(); disconnectEvents(); });
 </script>
 
 <TokenGate>
