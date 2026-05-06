@@ -37,7 +37,7 @@ async fn get_agent_tasks(
     // server doesn't waste a watcher on agents the TUI never opens.
     state
         .transcripts
-        .ensure_started(id, PathBuf::from(&session.workdir));
+        .ensure_started(id, PathBuf::from(&session.workdir), &session.tool);
 
     let snap = state.transcripts.snapshot(id).unwrap_or_default();
     Ok(Json(snap))

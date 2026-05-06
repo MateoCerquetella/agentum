@@ -54,7 +54,7 @@ async fn list(
     for s in &rows {
         state
             .transcripts
-            .ensure_started(s.id, PathBuf::from(&s.workdir));
+            .ensure_started(s.id, PathBuf::from(&s.workdir), &s.tool);
     }
     Ok(Json(rows))
 }

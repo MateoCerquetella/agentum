@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 /// Status of a single TodoWrite entry. Mirrors Claude's vocabulary so
 /// the parser is a pass-through (no string juggling at render time).
@@ -146,28 +147,19 @@ pub fn project_dir_for(workdir: &Path) -> Option<PathBuf> {
     Some(home.join(".claude").join("projects").join(s))
 }
 
-/// Pick the most recently modified `*.jsonl` in `dir`. Returns `None`
-/// if the directory doesn't exist or is empty.
+/// Deterministic transcript path for a session. Claude Code names
+/// transcript files `<session-id>.jsonl`, and agentum launches every
+/// claude with `--session-id <agentum-session-uuid>` (see
+/// `ClaudeAdapter::launch`), so the agentum session id *is* the file
+/// stem. Returns `None` if `$HOME` is unavailable or `workdir` is not
+/// absolute.
 ///
-/// This is a heuristic — Claude Code names files by session UUID, and
-/// the TUI doesn't (yet) know which UUID corresponds to which agentum
-/// session. mtime is the right tiebreaker for "the agent currently
-/// running in this workdir".
-pub fn latest_transcript(dir: &Path) -> Option<PathBuf> {
-    let entries = std::fs::read_dir(dir).ok()?;
-    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
-    for e in entries.flatten() {
-        let path = e.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
-            continue;
-        }
-        let Ok(meta) = e.metadata() else { continue };
-        let Ok(mt) = meta.modified() else { continue };
-        if best.as_ref().is_none_or(|(b, _)| mt > *b) {
-            best = Some((mt, path));
-        }
-    }
-    best.map(|(_, p)| p)
+/// This replaced an earlier mtime heuristic that picked the
+/// most-recently-modified `*.jsonl` in the project dir. With multiple
+/// agents in a single workdir that scheme cross-pollinated todos —
+/// whichever agent typed last won.
+pub fn transcript_path_for(workdir: &Path, session_id: Uuid) -> Option<PathBuf> {
+    Some(project_dir_for(workdir)?.join(format!("{session_id}.jsonl")))
 }
 
 // ---------- parser ----------
@@ -506,6 +498,33 @@ mod tests {
             dir,
             PathBuf::from("/tmp/h/.claude/projects/-home-me-proj-x")
         );
+        unsafe {
+            match saved {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
+
+    #[test]
+    fn transcript_path_pins_to_session_id() {
+        // Two sessions in the same workdir resolve to two different
+        // files — that's the whole point of switching from mtime
+        // heuristic to deterministic id-pinning.
+        let saved = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", "/tmp/h");
+        }
+        let id_a = Uuid::parse_str("00000000-0000-0000-0000-00000000000a").unwrap();
+        let id_b = Uuid::parse_str("00000000-0000-0000-0000-00000000000b").unwrap();
+        let workdir = Path::new("/home/me/proj");
+        let pa = transcript_path_for(workdir, id_a).unwrap();
+        let pb = transcript_path_for(workdir, id_b).unwrap();
+        assert_eq!(
+            pa,
+            PathBuf::from("/tmp/h/.claude/projects/-home-me-proj/00000000-0000-0000-0000-00000000000a.jsonl")
+        );
+        assert_ne!(pa, pb);
         unsafe {
             match saved {
                 Some(v) => std::env::set_var("HOME", v),

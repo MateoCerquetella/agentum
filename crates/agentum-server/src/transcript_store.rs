@@ -1,20 +1,28 @@
 //! In-memory store for per-session agent task state, populated by
 //! tailing each session's Claude Code JSONL transcript.
 //!
-//! Lifecycle: `TranscriptStore::start_for_session` is called every time
-//! a session is mentioned in a TUI request (`get_one`, `start`, …). It's
+//! Lifecycle: `TranscriptStore::ensure_started` is called every time a
+//! session is mentioned in a TUI request (`get_one`, `start`, …). It's
 //! idempotent — calling it twice for the same session id is cheap and
 //! leaves a single watcher running. The watcher itself uses `notify` to
-//! get coarse "directory changed" events; on each event we re-pick the
-//! latest `*.jsonl` for the workdir, read what's been appended since
-//! our last read, parse it, update the cached state, and broadcast an
+//! get coarse "directory changed" events; on each event we re-read the
+//! deterministic per-session transcript path
+//! (`<project_dir>/<agentum-session-id>.jsonl`), parse the newly
+//! appended slice, update the cached state, and broadcast an
 //! `agent_tasks.updated` event.
 //!
-//! Why not async per-file watchers? Claude can rotate transcripts (it
-//! creates a fresh file per session), so we'd have to re-resolve which
-//! file is "current" anyway. Watching the project directory once and
-//! polling `latest_transcript` on every event sidesteps the file-rotation
-//! race and keeps the design boring.
+//! Why per-session pinning? Claude Code names transcripts
+//! `<session-uuid>.jsonl`, and `ClaudeAdapter::launch` passes
+//! `--session-id <agentum-session-uuid>` so the agentum id *is* the
+//! file stem. Earlier this code picked the most-recently-mtimed
+//! `*.jsonl` in the project dir, which cross-pollinated todos when
+//! multiple agents shared a workdir.
+//!
+//! Non-Claude tools (codex, gemini, opencode, …) write transcripts in
+//! tool-specific shapes and locations and aren't supported here yet —
+//! `ensure_started` short-circuits for them so we don't materialize an
+//! empty `~/.claude/projects/<enc-cwd>/` for sessions that never run
+//! claude.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -34,12 +42,16 @@ use uuid::Uuid;
 struct Slot {
     workdir: PathBuf,
     state: AgentTaskState,
-    /// Path of the JSONL file we're currently following — `None` until
-    /// the agent's first turn lands one in the project dir.
-    current_path: Option<PathBuf>,
-    /// Bytes already consumed from `current_path`. Lets each event apply
-    /// only the newly appended slice instead of re-parsing the whole
-    /// transcript.
+    /// Deterministic path of this session's JSONL transcript
+    /// (`<project_dir>/<agentum-session-id>.jsonl`). The file may not
+    /// exist yet at slot creation — claude only materializes it on the
+    /// first turn — but the path itself is fixed for the slot's
+    /// lifetime, so we never have to re-resolve "which file is current"
+    /// and never wipe state on a perceived rotation.
+    transcript_path: PathBuf,
+    /// Bytes already consumed from `transcript_path`. Lets each event
+    /// apply only the newly appended slice instead of re-parsing the
+    /// whole transcript.
     cursor: u64,
     /// Pending `Task` tool dispatches awaiting their `tool_result`.
     /// Keyed by tool_use id.
@@ -73,10 +85,24 @@ impl TranscriptStore {
             .map(|s| s.state.clone())
     }
 
-    /// Begin watching this session's transcript directory if we aren't
+    /// Begin watching this session's transcript file if we aren't
     /// already. Idempotent. Performs an initial parse so callers see
     /// data without having to wait for the next FS event.
-    pub fn ensure_started(&self, id: Uuid, workdir: PathBuf) {
+    ///
+    /// `tool` is the session's tool name. Only `claude` has a
+    /// supported transcript shape today; other tools short-circuit so
+    /// we don't materialize an empty `~/.claude/projects/...` for
+    /// codex/gemini/opencode sessions and don't pretend the panel has
+    /// data for them.
+    pub fn ensure_started(&self, id: Uuid, workdir: PathBuf, tool: &str) {
+        if tool != "claude" {
+            // Codex writes `~/.codex/sessions/YYYY/MM/DD/rollout-…-<uuid>.jsonl`
+            // and opencode is SQLite-backed; both also lack a launch-
+            // time session-id flag, so the agentum→tool id mapping
+            // story is open. Until those parsers exist, no-op.
+            return;
+        }
+
         {
             let guard = match self.inner.lock() {
                 Ok(g) => g,
@@ -91,6 +117,9 @@ impl TranscriptStore {
             tracing::debug!(?workdir, "transcript: no $HOME or relative workdir; skipping watcher");
             return;
         };
+        let Some(transcript_path) = transcript::transcript_path_for(&workdir, id) else {
+            return;
+        };
 
         // Make the directory if it doesn't exist yet — Claude Code creates
         // it on first turn. notify barfs on missing paths otherwise.
@@ -102,6 +131,9 @@ impl TranscriptStore {
         }
 
         // Channel: notify watcher → tokio task that mutates the store.
+        // We watch the project directory (not the file directly)
+        // because claude creates the JSONL on its first turn — the file
+        // doesn't exist yet at watcher-setup time.
         let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
         let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
             Ok(w) => w,
@@ -117,10 +149,12 @@ impl TranscriptStore {
 
         // Populate immediately from whatever's already on disk so the
         // first GET returns data even if no FS events have fired yet.
-        let initial_path = transcript::latest_transcript(&project_dir);
-        let (state, cursor, pending) = match initial_path.as_deref() {
-            Some(path) => parse_full(path),
-            None => (AgentTaskState::default(), 0, HashMap::new()),
+        // First run usually has nothing — claude hasn't started writing
+        // yet — and that's fine.
+        let (state, cursor, pending) = if transcript_path.exists() {
+            parse_full(&transcript_path)
+        } else {
+            (AgentTaskState::default(), 0, HashMap::new())
         };
 
         if let Ok(mut guard) = self.inner.lock() {
@@ -129,7 +163,7 @@ impl TranscriptStore {
                 Slot {
                     workdir,
                     state,
-                    current_path: initial_path,
+                    transcript_path,
                     cursor,
                     pending_tasks: pending,
                     _watcher: watcher,
@@ -138,15 +172,18 @@ impl TranscriptStore {
         }
 
         // Spawn the consumer that drains the notify channel forever.
+        // Note: we don't filter on event paths here — any change in the
+        // project dir triggers a refresh, and refresh() reads only our
+        // pinned file. notify's path payload isn't reliable across
+        // platforms so the cheap re-stat is safer than path matching.
         let store = self.clone();
-        let project_dir_for_task = project_dir.clone();
         tokio::task::spawn_blocking(move || {
             for evt in rx {
                 let Ok(evt) = evt else { continue };
                 if !is_relevant(&evt.kind) {
                     continue;
                 }
-                store.refresh(id, &project_dir_for_task);
+                store.refresh(id);
             }
         });
 
@@ -160,9 +197,10 @@ impl TranscriptStore {
         );
     }
 
-    /// Re-resolve the latest transcript and apply any newly-appended
-    /// bytes. Holds the store lock only long enough to mutate the slot.
-    fn refresh(&self, id: Uuid, project_dir: &std::path::Path) {
+    /// Apply any newly-appended bytes from this session's pinned
+    /// transcript file. Holds the store lock only long enough to mutate
+    /// the slot.
+    fn refresh(&self, id: Uuid) {
         let emit;
 
         {
@@ -174,22 +212,12 @@ impl TranscriptStore {
                 return;
             };
 
-            let latest = transcript::latest_transcript(project_dir);
-            // File rotated (or first event after watcher start picks up
-            // a new file). Reset cursor + replay the whole thing.
-            if latest != slot.current_path {
-                slot.current_path = latest.clone();
-                slot.cursor = 0;
-                slot.state = AgentTaskState::default();
-                slot.pending_tasks.clear();
-            }
-
-            let Some(path) = slot.current_path.clone() else {
-                return;
-            };
+            let path = slot.transcript_path.clone();
 
             // Read only the newly appended slice. If the file shrank
-            // (someone truncated it), restart from offset 0.
+            // (someone truncated it), restart from offset 0. The file
+            // may also not exist yet — claude creates it on the first
+            // turn — so a missing file just means "nothing to do."
             let metadata = match std::fs::metadata(&path) {
                 Ok(m) => m,
                 Err(_) => return,
