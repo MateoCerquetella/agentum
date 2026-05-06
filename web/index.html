@@ -271,11 +271,8 @@
     color: transparent;
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .rotator > .rotator-word { animation-duration: 0s; transition: none; }
-    .rotator > .rotator-word:nth-child(1) { opacity: 1; transform: none; }
-    .rotator > .rotator-word:not(:nth-child(1)) { opacity: 0; }
-  }
+  /* note: rotator intentionally ignores prefers-reduced-motion — */
+  /* it's the hero's main signal of which agents we support.       */
   .hero .lede { margin-top: 28px; max-width: 56ch; }
   .hero .ctas {
     display: flex; flex-wrap: wrap; gap: 12px; margin-top: 36px;
