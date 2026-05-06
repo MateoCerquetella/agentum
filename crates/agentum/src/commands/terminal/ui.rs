@@ -14,8 +14,6 @@ use super::app::{
 use super::extensions::{self, Extension, LAZYGIT};
 use super::theme::Palette;
 
-const TREE_WIDTH: u16 = 32;
-
 #[derive(Clone, Copy)]
 pub struct Areas {
     pub title: Rect,
@@ -25,7 +23,12 @@ pub struct Areas {
     pub status: Rect,
 }
 
-pub fn compute_layout(area: Rect, lazygit_open: bool, fullscreen: bool) -> Areas {
+pub fn compute_layout(
+    area: Rect,
+    lazygit_open: bool,
+    fullscreen: bool,
+    tree_width: u16,
+) -> Areas {
     // Fullscreen: drop the title row, tree column, and status row so the
     // active panes consume every available cell. The empty Rects keep the
     // draw_* helpers no-op (they short-circuit on `area.width == 0`).
@@ -55,9 +58,13 @@ pub fn compute_layout(area: Rect, lazygit_open: bool, fullscreen: bool) -> Areas
         ])
         .split(area);
 
+    // Clamp tree width so the terminal pane always has at least 20 cols
+    // even on narrow terminals where the user widened the sidebar.
+    let max_tree = v[1].width.saturating_sub(20);
+    let tw = tree_width.min(max_tree).max(0);
     let body = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(TREE_WIDTH), Constraint::Min(20)])
+        .constraints([Constraint::Length(tw), Constraint::Min(20)])
         .split(v[1]);
 
     // Right column is now 100% terminal/lazygit — no bottom input bar.
@@ -92,7 +99,7 @@ fn split_main(area: Rect, lazygit_open: bool) -> (Rect, Option<Rect>) {
 }
 
 pub fn draw(f: &mut Frame<'_>, app: &App) {
-    let areas = compute_layout(f.area(), app.lazygit_open(), app.fullscreen);
+    let areas = compute_layout(f.area(), app.lazygit_open(), app.fullscreen, app.tree_width);
     let p = &app.theme.palette;
 
     // Paint the body background across the entire frame so the void around
@@ -201,7 +208,9 @@ fn render_tree_row(
         Row::Group(gi) => {
             let g = &app.tree.groups[gi];
             let arrow = if g.expanded { "▾" } else { "▸" };
-            let label = collapse_home(&g.workdir);
+            // Show the project name (basename) rather than the full path —
+            // the full workdir is still visible in the title bar / status.
+            let label = super::app::group_label(&g.workdir);
             ListItem::new(Line::from(vec![
                 Span::raw(format!(" {arrow} ")),
                 Span::styled(label, Style::default().add_modifier(Modifier::BOLD)),
@@ -463,6 +472,7 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
             p,
         ),
         body("  Esc               exit fullscreen", p),
+        body("  + / -             widen / narrow sidebar tree", p),
         Line::from(""),
         body("  ?                 toggle this help", p),
         body("  q                 quit (when tree is focused)", p),

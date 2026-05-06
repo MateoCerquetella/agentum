@@ -313,6 +313,10 @@ pub struct App {
     pub selected: Option<Uuid>,
     pub term: TerminalPane,
     pub focus: Focus,
+    /// Width of the sidebar tree pane in columns. User-resizable with
+    /// `+` / `-`, clamped 16..=80. The terminal pane keeps a 20-column
+    /// floor at draw time.
+    pub tree_width: u16,
     /// When `true` the title bar, tree sidebar, and status bar are hidden
     /// so the active pane (term + optional lazygit) fills the viewport.
     /// Toggled with Shift-F. Esc exits.
@@ -347,6 +351,7 @@ impl App {
             selected,
             term: TerminalPane::new(),
             focus: Focus::Tree,
+            tree_width: 32,
             fullscreen: false,
             error_count: 0,
             conn: ConnState::Connecting,
@@ -425,11 +430,57 @@ pub enum Row {
     Leaf { group: usize, leaf: usize },
 }
 
+/// Strip a single trailing `/` (but keep the root `/`) so `/foo` and
+/// `/foo/` collapse to one tree group instead of two.
+pub fn normalize_workdir(p: &str) -> String {
+    if p.len() > 1 && p.ends_with('/') {
+        p.trim_end_matches('/').to_string()
+    } else {
+        p.to_string()
+    }
+}
+
+/// Friendly label for a tree group: the basename of the workdir, with
+/// `~` for the home dir. Falls back to the (collapsed) path if there's
+/// no basename — only happens for filesystem-root groups.
+pub fn group_label(workdir: &str) -> String {
+    let collapsed = collapse_home_str(workdir);
+    if collapsed == "~" || collapsed == "/" {
+        return collapsed;
+    }
+    let basename = std::path::Path::new(workdir)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    if basename.is_empty() {
+        collapsed
+    } else {
+        basename.to_string()
+    }
+}
+
+fn collapse_home_str(p: &str) -> String {
+    if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok())
+        && !home.is_empty()
+    {
+        if p == home {
+            return "~".to_string();
+        }
+        if let Some(rest) = p.strip_prefix(&format!("{home}/")) {
+            return format!("~/{rest}");
+        }
+    }
+    p.to_string()
+}
+
 impl Tree {
     pub fn build(sessions: &[Session], prev_expanded: &HashMap<String, bool>) -> Self {
+        // Normalize workdirs before grouping so `/x/proj` and `/x/proj/`
+        // don't show up as two separate groups in the sidebar.
         let mut by_workdir: HashMap<String, Vec<&Session>> = HashMap::new();
         for s in sessions {
-            by_workdir.entry(s.workdir.clone()).or_default().push(s);
+            let key = normalize_workdir(&s.workdir);
+            by_workdir.entry(key).or_default().push(s);
         }
         let mut keys: Vec<String> = by_workdir.keys().cloned().collect();
         keys.sort();
@@ -611,6 +662,7 @@ pub async fn run_loop(
             ratatui::layout::Rect::new(0, 0, size.width, size.height),
             app.lazygit_open(),
             app.fullscreen,
+            app.tree_width,
         );
         let (term_rows, term_cols) = inner_size(areas.terminal);
         app.term.resize(term_rows, term_cols);
@@ -972,6 +1024,17 @@ async fn handle_key(
         KeyCode::Esc if app.fullscreen => {
             app.fullscreen = false;
             app.status_msg = Some("fullscreen off".into());
+        }
+        // Resize the sidebar tree. 4-col steps, clamped 16..=80; the
+        // terminal pane keeps its 20-col floor at draw time. Works
+        // regardless of focus so it's reachable from any panel.
+        KeyCode::Char('+') | KeyCode::Char('=') => {
+            app.tree_width = app.tree_width.saturating_add(4).min(80);
+            app.status_msg = Some(format!("tree width: {}", app.tree_width));
+        }
+        KeyCode::Char('-') | KeyCode::Char('_') => {
+            app.tree_width = app.tree_width.saturating_sub(4).max(16);
+            app.status_msg = Some(format!("tree width: {}", app.tree_width));
         }
         // 1/2/3 jump straight to a panel (Tree/Term/Lazygit).
         KeyCode::Char('1') => app.focus = Focus::Tree,

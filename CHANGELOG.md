@@ -4,6 +4,26 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.8] — 2026-05-05
+
+TUI sidebar polish.
+
+### Fixed
+- **Duplicate project groups.** Sessions whose `workdir` differed only
+  by a trailing `/` (`/x/proj` vs `/x/proj/`) showed up as two separate
+  groups in the sidebar tree. Workdirs are now normalized before
+  grouping.
+
+### Changed
+- **Sidebar shows project name, not full path.** Groups display the
+  basename of the workdir (e.g. `agentum` instead of
+  `/home/malloc/Developer/projects/agentum`). The full path is still
+  visible in the title bar / status when the project is selected.
+- **Sidebar is resizable.** `+` / `-` widen / narrow the tree pane
+  in 4-column steps (clamped to 16 ≤ width ≤ 80, and the terminal
+  pane keeps a 20-column floor on narrow terminals). Listed in the
+  help overlay.
+
 ## [0.6.7] — 2026-05-05
 
 Fixes the embedded-pane rendering corruption (overlapping characters,
