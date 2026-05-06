@@ -8,6 +8,12 @@
 
 export type Status = 'idle' | 'running' | 'stopped' | 'crashed';
 
+/**
+ * Lifecycle dot rendered by the design. `compact` is server-pushed when
+ * the watchdog issues /compact; `crash` mirrors `Status.crashed`.
+ */
+export type SessionState = 'live' | 'idle' | 'compact' | 'crash';
+
 export interface Session {
   id: string;
   name: string;
@@ -20,6 +26,21 @@ export interface Session {
   created_at: string;
   updated_at: string;
   last_activity_at: string | null;
+  /* --- Optional fields backfilled by the redesign backend. ----------
+     Until the Rust side populates them they're undefined; consumers
+     fall back to N/A or 100 (full ctx). */
+  /** Tokens consumed by this session. */
+  tokens?: number | null;
+  /** Spend in USD for this session. */
+  cost?: number | null;
+  /** 0–100, % of context window remaining. */
+  ctx?: number | null;
+  /** Tail of stdout — the FleetRow's "last activity" cell. */
+  last_log?: string | null;
+  /** Uptime in seconds, computed by the server. */
+  uptime_seconds?: number | null;
+  /** Lifecycle state with /compact awareness; `status` is still authoritative. */
+  state?: SessionState;
 }
 
 export interface NewSession {
@@ -150,6 +171,11 @@ export interface SendInput {
   append_enter?: boolean;
 }
 
+/** Ticket type tag the kanban dot color picks up. */
+export type TicketLbl = 'bug' | 'feat' | 'chore' | 'spike';
+/** Tool tag mapped to the ticket's tool dot. */
+export type Tool = 'claude' | 'codex' | 'gemini' | 'hermes' | string;
+
 export interface BoardItem {
   id: number;
   key: string;
@@ -159,18 +185,44 @@ export interface BoardItem {
   claimed_by: string | null;
   created_at: string;
   updated_at: string;
+  /* Optional design fields; backend lands them in the redesign branch. */
+  lbl?: TicketLbl | null;
+  tool?: Tool | null;
 }
 
 export interface NewBoardItem {
   title: string;
   body?: string | null;
   status?: string | null;
+  lbl?: TicketLbl | null;
+  tool?: Tool | null;
 }
 
 export interface BoardPatch {
   title?: string;
   body?: string | null;
   status?: string;
+  lbl?: TicketLbl | null;
+  tool?: Tool | null;
+}
+
+/* ------------------------------------------------------------------- */
+/* Watchdog feed — surfaced in the V1 hero, V1b session rail, and V2
+   right rail. Server pushes events over SSE; REST GET is the cold-start
+   fetch. */
+
+export type WatchdogKind = 'ok' | 'warn' | 'compact' | 'crash';
+
+export interface WatchdogEvent {
+  /** ISO 8601 timestamp; UI renders HH:MM:SS in the local zone. */
+  ts: string;
+  kind: WatchdogKind;
+  /** Short uppercase tag — the pill label. */
+  label: string;
+  /** Human-readable detail. */
+  msg: string;
+  /** Originating session id (nullable for fleet-level events). */
+  ses: string | null;
 }
 
 export interface GroupedBoard {
@@ -302,6 +354,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ claimed_by })
     }),
+
+  // ---------- watchdog ----------
+
+  /**
+   * Cold-start fetch for the watchdog feed. Live updates land via the
+   * SSE stream once the server endpoint exists; this is the fallback
+   * when SSE is disconnected or the page first loads.
+   */
+  listWatchdog: (limit?: number) => {
+    const q = typeof limit === 'number' ? `?limit=${limit}` : '';
+    return request<WatchdogEvent[]>(`/api/watchdog${q}`).catch(
+      // Backend lands the endpoint in a follow-up commit; until then
+      // return an empty feed instead of erroring.
+      () => [] as WatchdogEvent[]
+    );
+  },
 
   // ---------- notes ----------
 
