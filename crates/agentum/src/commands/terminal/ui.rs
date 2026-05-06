@@ -9,6 +9,8 @@ use tui_term::widget::PseudoTerminal;
 
 use std::time::SystemTime;
 
+use agentum_core::transcript::{AgentTaskState, TaskStatus, TodoStatus};
+
 use super::app::{
     App, ConnState, DirPickerState, ErrorEntry, Focus, NewSessionField, NewSessionForm, NotifKind,
     Notification, Overlay, PendingAction, Row, palette_catalog, status_dot,
@@ -27,8 +29,22 @@ pub struct Areas {
     /// left half and this is the right.
     pub terminal_right: Option<Rect>,
     pub lazygit: Option<Rect>,
+    /// Per-agent plan / todos / background-tasks panel pinned to the
+    /// right edge. `Some` when the terminal is wide enough and the
+    /// user hasn't toggled it off (Ctrl-T). Drawn for the currently
+    /// selected agent only.
+    pub agent_tasks: Option<Rect>,
     pub status: Rect,
 }
+
+/// Minimum total terminal width before the right panel is allowed.
+/// Below this we hide it entirely so the terminal pane keeps enough
+/// horizontal space to render embedded TUIs comfortably. 110 cols is
+/// roughly "wide enough that the user opted into a wide terminal."
+const RIGHT_PANEL_MIN_TOTAL_WIDTH: u16 = 110;
+/// Width of the right panel when shown. 34 fits a Plan/Todos/Tasks
+/// stack with truncation but doesn't overwhelm narrow setups.
+const RIGHT_PANEL_WIDTH: u16 = 34;
 
 pub fn compute_layout(
     area: Rect,
@@ -37,7 +53,16 @@ pub fn compute_layout(
     tree_width: u16,
     sidebar_hidden: bool,
     split_open: bool,
+    right_panel_visible: bool,
 ) -> Areas {
+    // Right panel is suppressed in fullscreen, when lazygit is open
+    // (already a 4th pane), and on terminals too narrow to host it
+    // without crushing the terminal area.
+    let show_right = right_panel_visible
+        && !fullscreen
+        && !lazygit_open
+        && area.width >= RIGHT_PANEL_MIN_TOTAL_WIDTH;
+
     // Fullscreen: drop the title row, tree column, and status row so the
     // active panes consume every available cell. The empty Rects keep the
     // draw_* helpers no-op (they short-circuit on `area.width == 0`).
@@ -56,6 +81,7 @@ pub fn compute_layout(
             terminal: term_left,
             terminal_right: term_right,
             lazygit: lazygit_rect,
+            agent_tasks: None,
             status: empty,
         };
     }
@@ -79,14 +105,27 @@ pub fn compute_layout(
         let max_tree = v[1].width.saturating_sub(20);
         tree_width.min(max_tree).max(0)
     };
+    // Reserve the right column when shown. Falls back to 0 if doing so
+    // would push the terminal pane below its 20-col floor.
+    let rw = if show_right
+        && v[1].width.saturating_sub(tw).saturating_sub(RIGHT_PANEL_WIDTH) >= 20
+    {
+        RIGHT_PANEL_WIDTH
+    } else {
+        0
+    };
     let body = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(tw), Constraint::Min(20)])
+        .constraints([
+            Constraint::Length(tw),
+            Constraint::Min(20),
+            Constraint::Length(rw),
+        ])
         .split(v[1]);
 
-    // Right column is now 100% terminal/lazygit — no bottom input bar.
     let (terminal_rect, lazygit_rect) = split_main(body[1], lazygit_open);
     let (term_left, term_right) = split_terminal(terminal_rect, split_open);
+    let agent_tasks_rect = if rw > 0 { Some(body[2]) } else { None };
 
     Areas {
         title: v[0],
@@ -94,6 +133,7 @@ pub fn compute_layout(
         terminal: term_left,
         terminal_right: term_right,
         lazygit: lazygit_rect,
+        agent_tasks: agent_tasks_rect,
         status: v[2],
     }
 }
@@ -149,6 +189,7 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         app.tree_width,
         app.sidebar_hidden,
         app.split_open(),
+        app.right_panel_visible,
     );
     let p = &app.theme.palette;
 
@@ -169,6 +210,9 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
     }
     if let Some(lg_area) = areas.lazygit {
         draw_lazygit(f, lg_area, app, p);
+    }
+    if let Some(rp_area) = areas.agent_tasks {
+        draw_agent_tasks_panel(f, rp_area, app, p);
     }
     if areas.status.height > 0 {
         draw_status(f, areas.status, app, p);
@@ -217,7 +261,7 @@ fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     // left, an error chip on the right when the log isn't empty. The
     // chip used to live in the bottom status bar; pulling it up here
     // keeps the bottom row reserved for non-error feedback while still
-    // surfacing "something failed — press e" in the user's eye-line.
+    // surfacing "something failed — press !" in the user's eye-line.
     let title = match app.selected_session() {
         Some(s) => format!(" agentum · {} ", s.name),
         None => " agentum · no session selected ".to_string(),
@@ -241,7 +285,7 @@ fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     }
 
     let chip_text = format!(
-        " ⚠ {} error{} · press e ",
+        " ⚠ {} error{} · press ! ",
         app.error_count,
         if app.error_count == 1 { "" } else { "s" }
     );
@@ -285,9 +329,9 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let count = app.sessions.len();
     let noun = if count == 1 { "session" } else { "sessions" };
     let title = if app.filter_input_active {
-        format!(" {count} {noun} · /{filter}_ ")
+        format!(" {count} {noun} · ⌕{filter}_ ")
     } else if !filter.is_empty() {
-        format!(" {count} {noun} · /{filter} ")
+        format!(" {count} {noun} · ⌕{filter} ")
     } else {
         format!(" {count} {noun} ")
     };
@@ -302,7 +346,7 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
 
     if items.is_empty() {
         let hint = if !filter.is_empty() {
-            format!("  (no matches for /{filter})")
+            format!("  (no matches for ⌕{filter})")
         } else {
             "  (no sessions — `agentum new …`)".to_string()
         };
@@ -667,6 +711,7 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         body("  Ctrl-G            toggle lazygit side pane", p),
         body("  Ctrl-Tab          flip back to last session", p),
         body("  Ctrl-B            toggle the sidebar tree", p),
+        body("  Ctrl-T            toggle the agent plan/todo/task panel", p),
         body("  Ctrl-K Z          toggle fullscreen (zen)", p),
         body("  Ctrl-\\            split the focused terminal pane", p),
         body("  Ctrl-W            close the split", p),
@@ -682,7 +727,7 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         body("  1 / 2 / 3         focus tree / terminal / lazygit", p),
         body("  Tab / ]           next panel", p),
         body("  Shift-Tab / [     previous panel", p),
-        body("  /                 filter sessions by name (Esc clears)", p),
+        body("  Ctrl-F            filter sessions by name (Esc clears)", p),
         body("  j / k / ↑ / ↓     move selection", p),
         body("  h / l / ← / →     collapse / expand group", p),
         body(
@@ -691,7 +736,7 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         ),
         body("  r                 refresh sessions", p),
         body("  t                 spawn plain bash terminal", p),
-        body("  e                 view recent error log", p),
+        body("  !                 view recent error log", p),
         Line::from(""),
         head("  Terminal", p),
         body(
@@ -1387,4 +1432,237 @@ fn truncate(s: &str, max: usize) -> String {
         out.push('…');
         out
     }
+}
+
+// ---------- agent-tasks right panel ----------
+
+/// Right-edge panel showing the selected agent's plan, todos, and
+/// background tasks. Layout idea adapted from MIT-licensed
+/// `Hmbown/DeepSeek-TUI` sidebar pattern: a vertical stack of three
+/// auto-collapsing sub-panels — empty ones get zero rows so the rest
+/// expand to fill. Status is rendered with `[x] / [~] / [ ]` prefix
+/// badges so it reads cleanly even on terminals with limited colour.
+fn draw_agent_tasks_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
+    let title = match app.selected_session() {
+        Some(s) => format!(" agent · {} ", s.name),
+        None => " agent ".to_string(),
+    };
+    let outer = Block::default()
+        .title(Span::styled(
+            title,
+            Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(p.idle_border).bg(p.panel_bg))
+        .style(Style::default().bg(p.panel_bg).fg(p.fg));
+    let inner = outer.inner(area);
+    f.render_widget(outer, area);
+
+    // No selection? Show an instructional hint and bail.
+    let Some(session) = app.selected_session() else {
+        let hint = Paragraph::new(
+            "Select a session on the left to see its plan, todos, and background tasks.",
+        )
+        .style(Style::default().fg(p.muted).bg(p.panel_bg))
+        .wrap(Wrap { trim: true });
+        f.render_widget(hint, inner);
+        return;
+    };
+
+    let state = app.agent_tasks.get(&session.id);
+    let plan_lines = build_plan_lines(state, inner.width as usize, p);
+    let todos_lines = build_todos_lines(state, inner.width as usize, p);
+    let tasks_lines = build_tasks_lines(state, inner.width as usize, p);
+
+    let plan_h = section_height(&plan_lines);
+    let todos_h = section_height(&todos_lines);
+    let tasks_h = section_height(&tasks_lines);
+
+    // If everything is empty, show one consolidated empty-state hint
+    // instead of three back-to-back blanks.
+    if plan_h == 0 && todos_h == 0 && tasks_h == 0 {
+        let hint = Paragraph::new(
+            "Waiting for the agent's first plan / todo / task call…\n\
+             (Ctrl-T toggles this panel)",
+        )
+        .style(Style::default().fg(p.muted).bg(p.panel_bg))
+        .wrap(Wrap { trim: true });
+        f.render_widget(hint, inner);
+        return;
+    }
+
+    // Allocate vertical space so empty sections take 0 rows; non-empty
+    // sections share the remainder. Use Min for non-empty so the last
+    // one absorbs leftover rows.
+    let constraints: Vec<Constraint> = [plan_h, todos_h, tasks_h]
+        .into_iter()
+        .map(|h| if h == 0 { Constraint::Length(0) } else { Constraint::Min(h) })
+        .collect();
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(inner);
+
+    if plan_h > 0 {
+        render_section(f, rows[0], "Plan", plan_lines, p);
+    }
+    if todos_h > 0 {
+        render_section(f, rows[1], "Todos", todos_lines, p);
+    }
+    if tasks_h > 0 {
+        render_section(f, rows[2], "Tasks", tasks_lines, p);
+    }
+}
+
+/// Required height for a sub-section — content rows plus the 2-row
+/// border. Returns 0 when there's no content, which lets the layout
+/// allocator collapse the slot.
+fn section_height(lines: &[Line<'static>]) -> u16 {
+    if lines.is_empty() {
+        0
+    } else {
+        (lines.len() as u16).saturating_add(2)
+    }
+}
+
+fn render_section(
+    f: &mut Frame<'_>,
+    area: Rect,
+    title: &str,
+    lines: Vec<Line<'static>>,
+    p: &Palette,
+) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let block = Block::default()
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::default().fg(p.fg_strong).add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(p.idle_border).bg(p.panel_bg))
+        .style(Style::default().bg(p.panel_bg).fg(p.fg));
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+fn build_plan_lines(
+    state: Option<&AgentTaskState>,
+    width: usize,
+    p: &Palette,
+) -> Vec<Line<'static>> {
+    let Some(plan) = state.and_then(|s| s.plan.as_deref()) else {
+        return Vec::new();
+    };
+    let inner = width.saturating_sub(2).max(8);
+    plan.lines()
+        .take(20)
+        .map(|raw| {
+            Line::from(Span::styled(
+                truncate(raw, inner),
+                Style::default().fg(p.fg),
+            ))
+        })
+        .collect()
+}
+
+fn build_todos_lines(
+    state: Option<&AgentTaskState>,
+    width: usize,
+    p: &Palette,
+) -> Vec<Line<'static>> {
+    let Some(state) = state else {
+        return Vec::new();
+    };
+    if state.todos.is_empty() {
+        return Vec::new();
+    }
+    let inner = width.saturating_sub(2).max(8);
+    let mut out: Vec<Line<'static>> = Vec::new();
+
+    let total = state.todos.len();
+    let done = state
+        .todos
+        .iter()
+        .filter(|t| matches!(t.status, TodoStatus::Completed))
+        .count();
+    out.push(Line::from(Span::styled(
+        format!("  {done}/{total} done"),
+        Style::default().fg(p.muted),
+    )));
+
+    for t in state.todos.iter().take(20) {
+        let (badge, color) = match t.status {
+            TodoStatus::Completed => ("[x]", p.success),
+            TodoStatus::InProgress => ("[~]", p.warning),
+            TodoStatus::Pending => ("[ ]", p.muted),
+        };
+        let label = match t.status {
+            TodoStatus::InProgress => t.active_form.clone().unwrap_or_else(|| t.content.clone()),
+            _ => t.content.clone(),
+        };
+        let text = format!("{badge} {label}");
+        out.push(Line::from(Span::styled(
+            truncate(&text, inner),
+            Style::default().fg(color),
+        )));
+    }
+    if state.todos.len() > 20 {
+        out.push(Line::from(Span::styled(
+            format!("  +{} more", state.todos.len() - 20),
+            Style::default().fg(p.muted),
+        )));
+    }
+    out
+}
+
+fn build_tasks_lines(
+    state: Option<&AgentTaskState>,
+    width: usize,
+    p: &Palette,
+) -> Vec<Line<'static>> {
+    let Some(state) = state else {
+        return Vec::new();
+    };
+    if state.tasks.is_empty() {
+        return Vec::new();
+    }
+    let inner = width.saturating_sub(2).max(8);
+    let mut out: Vec<Line<'static>> = Vec::new();
+    // Newest tasks tend to be most interesting — show the tail.
+    let take = 10usize;
+    let skip = state.tasks.len().saturating_sub(take);
+    for t in state.tasks.iter().skip(skip) {
+        let (badge, color) = match t.status {
+            TaskStatus::Running => ("●", p.warning),
+            TaskStatus::Completed => ("✓", p.success),
+            TaskStatus::Failed => ("✗", p.error),
+        };
+        let dur = match t.duration_ms {
+            Some(ms) if ms >= 1000 => format!(" ({:.1}s)", ms as f64 / 1000.0),
+            Some(ms) => format!(" ({ms}ms)"),
+            None => String::new(),
+        };
+        let agent = t
+            .subagent_type
+            .as_deref()
+            .map(|s| format!(" [{s}]"))
+            .unwrap_or_default();
+        let text = format!("{badge} {}{agent}{dur}", t.description);
+        out.push(Line::from(Span::styled(
+            truncate(&text, inner),
+            Style::default().fg(color),
+        )));
+    }
+    if state.tasks.len() > take {
+        out.insert(
+            0,
+            Line::from(Span::styled(
+                format!("  +{} earlier", state.tasks.len() - take),
+                Style::default().fg(p.muted),
+            )),
+        );
+    }
+    out
 }

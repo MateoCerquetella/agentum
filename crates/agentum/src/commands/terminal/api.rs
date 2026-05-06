@@ -12,7 +12,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use agentum_core::{Event, Session};
+use agentum_core::{Event, Session, transcript::AgentTaskState};
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -237,6 +237,22 @@ impl Client {
             .await?
             .error_for_status()?;
         Ok(resp.json::<Vec<Session>>().await?)
+    }
+
+    /// `GET /api/sessions/{id}/agent-tasks` — current plan / todos /
+    /// background tasks for one agent. Backed by the daemon's
+    /// transcript-tail watcher, so the data refreshes within a beat of
+    /// every TodoWrite / ExitPlanMode / Task tool call the agent makes.
+    pub async fn agent_tasks(&self, id: Uuid) -> Result<AgentTaskState> {
+        let url = self.base.join(&format!("/api/sessions/{id}/agent-tasks"))?;
+        let resp = self
+            .http
+            .get(url)
+            .bearer_auth(&self.token)
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(resp.json::<AgentTaskState>().await?)
     }
 
     /// `GET /api/fs/list` — enumerate directories under `path` (or `$HOME`

@@ -5,7 +5,7 @@ use std::io::Stdout;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use agentum_core::{Event, Session, Status};
+use agentum_core::{Event, Session, Status, transcript::AgentTaskState};
 use anyhow::Result;
 use crossterm::event::{
     Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
@@ -112,7 +112,7 @@ pub enum Overlay {
     LazygitCheats,
     LazygitInstall,
     Palette,
-    /// Scrollable view of the recent error log. Opened with `e` from
+    /// Scrollable view of the recent error log. Opened with `!` from
     /// tree focus or via the command palette. Replaces the status-bar
     /// counter that previously was the only place the user could tell
     /// errors had happened.
@@ -493,6 +493,15 @@ pub struct App {
     /// `--no-sound` / `AGENTUM_TUI_NO_SOUND` at startup; no runtime
     /// toggle (no key binding requested).
     pub sound_muted: bool,
+    /// Per-session cache of plan / todos / background tasks parsed
+    /// out of each agent's Claude Code transcript. Keys are session
+    /// ids. Populated from `GET /api/sessions/{id}/agent-tasks` and
+    /// refreshed when an `agent_tasks.updated` event lands on the bus.
+    pub agent_tasks: HashMap<Uuid, AgentTaskState>,
+    /// Show the right-side plan/todo/task panel. Toggled with `Ctrl-T`.
+    /// Default on so users see the feature without having to discover
+    /// the binding.
+    pub right_panel_visible: bool,
 }
 
 impl App {
@@ -535,6 +544,8 @@ impl App {
             notifications: Vec::new(),
             next_notif_id: 1,
             sound_muted: false,
+            agent_tasks: HashMap::new(),
+            right_panel_visible: true,
         }
     }
 
@@ -966,11 +977,21 @@ pub async fn run_loop(
         app.term_in = Some(key_tx);
         app.term_size = (0, 0); // force first resize once we know the pane size
         app.stream_handle_left = Some(h);
+        // Prime the agent-tasks panel for the initial selection so the
+        // user sees data on the first frame, not after the first
+        // transcript update lands.
+        refresh_agent_tasks(&mut app, &client, id).await;
     }
 
     let mut crossterm_events = EventStream::new();
     let mut tick = interval(TICK_INTERVAL);
     let mut last_refresh = Instant::now();
+    // Track the previously-rendered selection so we can fire an
+    // agent-tasks fetch the moment it changes (j/k/Enter/Ctrl-Tab/etc.)
+    // without retrofitting every navigation handler. The 100 ms tick
+    // means worst-case latency from keypress → panel update is one
+    // frame, which is below human perception for "instant."
+    let mut last_selected: Option<Uuid> = app.selected;
 
     loop {
         // Resize each PTY parser to the actual pane area before drawing.
@@ -982,6 +1003,7 @@ pub async fn run_loop(
             app.tree_width,
             app.sidebar_hidden,
             app.split_open(),
+            app.right_panel_visible,
         );
         // Cache for the next mouse event — handlers need to know which
         // pane the cursor is over, which only the layout knows.
@@ -1077,10 +1099,29 @@ pub async fn run_loop(
                 // bottom-left stack drains without us having to schedule
                 // a per-toast sleep future.
                 app.tick_expire();
+                // Selection changed since the last tick? Fire an
+                // immediate agent-tasks fetch so the right panel
+                // tracks tree navigation without the user having to
+                // wait for the 5-second refresh window.
+                if app.selected != last_selected {
+                    last_selected = app.selected;
+                    if let Some(id) = app.selected {
+                        refresh_agent_tasks(&mut app, &client, id).await;
+                    }
+                }
                 if last_refresh.elapsed() >= REFRESH_INTERVAL {
                     last_refresh = Instant::now();
                     if let Ok(fresh) = client.list_sessions().await {
                         app.refresh_sessions(fresh);
+                    }
+                    // Slow-path safety net for the agent-tasks panel:
+                    // events do the heavy lifting, but this catch-up
+                    // makes the panel converge even if a bus.lagged
+                    // dropped the relevant `agent_tasks.updated`.
+                    if app.right_panel_visible
+                        && let Some(id) = app.selected
+                    {
+                        refresh_agent_tasks(&mut app, &client, id).await;
                     }
                 }
             }
@@ -1351,6 +1392,30 @@ async fn handle_key(
         return;
     }
 
+    // Ctrl-T — toggle the right-side agent-tasks panel (plan / todos /
+    // background tasks). Mirror of Ctrl-B for the opposite edge. Hidden
+    // automatically on terminals narrower than ~110 cols regardless of
+    // this flag — see `ui::compute_layout`.
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('t'))
+    {
+        app.right_panel_visible = !app.right_panel_visible;
+        app.status_msg = Some(if app.right_panel_visible {
+            "agent panel on".into()
+        } else {
+            "agent panel off".into()
+        });
+        // Kick a fetch for the current selection so the panel populates
+        // immediately on first toggle, even if the events stream hasn't
+        // pushed an `agent_tasks.updated` for this session yet.
+        if app.right_panel_visible
+            && let Some(id) = app.selected
+        {
+            refresh_agent_tasks(app, client, id).await;
+        }
+        return;
+    }
+
     // Ctrl-Tab — flip back to the previously selected session. Mirrors
     // VS Code's "go to last edited file" / iTerm2's "last tab". A
     // no-op when there's no prior session (first run, or the last
@@ -1603,7 +1668,10 @@ async fn handle_key(
     }
 
     // 't' — spawn a plain terminal (bash shell). Works from tree focus.
-    if !shift && key.code == KeyCode::Char('t') && app.focus == Focus::Tree {
+    // Modifier-free only: Ctrl-T was previously firing this too, which
+    // surprised users who expected Ctrl-T to passthrough (or do nothing)
+    // and instead got a "shell-xxxx" notification on every chord press.
+    if key.modifiers.is_empty() && key.code == KeyCode::Char('t') && app.focus == Focus::Tree {
         spawn_plain_terminal(app, client).await;
         return;
     }
@@ -1697,10 +1765,13 @@ async fn handle_key(
     match key.code {
         KeyCode::Char('q') => app.should_quit = true,
         KeyCode::Char('?') => app.overlay = Overlay::Help,
-        KeyCode::Char('e') => {
+        KeyCode::Char('!') => {
             // Open the error log overlay. Always available (even when
             // empty) so the user can confirm "no errors yet" with the
             // same gesture they'd use to investigate a bumped counter.
+            // `!` mnemonic for alerts; `e` was a poor pick because it
+            // collided with Ctrl-E muscle memory and got typed into
+            // session-name fields by mistake.
             app.errors_scroll = 0;
             app.overlay = Overlay::Errors;
         }
@@ -1733,13 +1804,14 @@ async fn handle_key(
             app.tree.set_filter("");
             app.status_msg = Some("filter cleared".into());
         }
-        // `/` starts filter-input mode. Any prior filter is cleared so
-        // each `/` press is a fresh search — matches vim, fzf, and every
-        // other "press / to filter" UI.
-        KeyCode::Char('/') => {
+        // Ctrl-F starts filter-input mode. Any prior filter is cleared so
+        // each press is a fresh search — mirrors VS Code / browser Find.
+        // Plain `/` was previously the trigger but was eating arrow keys
+        // when accidentally pressed during navigation.
+        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.tree.set_filter("");
             app.filter_input_active = true;
-            app.status_msg = Some("/ (Esc to cancel · Enter to keep)".into());
+            app.status_msg = Some("⌃F search (Esc cancel · Enter keep · ↑↓ move)".into());
         }
         // Resize the sidebar tree. 4-col steps, clamped 16..=80; the
         // terminal pane keeps its 20-col floor at draw time. Works
@@ -1976,7 +2048,7 @@ async fn handle_new_session_key(
                             push_notification(
                                 app,
                                 msg,
-                                Some("see error log (e) for details".to_string()),
+                                Some("see error log (!) for details".to_string()),
                                 NotifKind::Warn,
                                 NOTIF_TTL_WARN_MS,
                             );
@@ -2182,7 +2254,7 @@ fn handle_errors_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc
         | KeyCode::Char('q')
-        | KeyCode::Char('e')
+        | KeyCode::Char('!')
         | KeyCode::Enter => {
             app.overlay = Overlay::None;
         }
@@ -2562,15 +2634,26 @@ fn handle_filter_input_key(
             app.status_msg = Some(if filter.is_empty() {
                 "filter cleared".into()
             } else {
-                format!("filter: /{filter}")
+                format!("filter: ⌕{filter}")
             });
         }
         KeyCode::Backspace => {
             if filter.pop().is_some() {
                 app.tree.set_filter(&filter);
-                app.status_msg = Some(format!("/ {filter}"));
+                app.status_msg = Some(format!("⌕ {filter}"));
                 changed = true;
             }
+        }
+        // Arrow keys move the tree cursor while the search box is open —
+        // matches VS Code / browser Find UX so the user can navigate
+        // matches without having to commit + re-trigger search.
+        KeyCode::Up => {
+            app.tree.move_cursor(-1);
+            changed = true;
+        }
+        KeyCode::Down => {
+            app.tree.move_cursor(1);
+            changed = true;
         }
         KeyCode::Char(c)
             if !key.modifiers.contains(KeyModifiers::CONTROL)
@@ -2578,7 +2661,7 @@ fn handle_filter_input_key(
         {
             filter.push(c);
             app.tree.set_filter(&filter);
-            app.status_msg = Some(format!("/ {filter}"));
+            app.status_msg = Some(format!("⌕ {filter}"));
             changed = true;
         }
         _ => {}
@@ -2750,6 +2833,23 @@ async fn handle_event_msg(app: &mut App, msg: EventMsg, client: &Client) {
     }
 }
 
+/// Fetch the latest plan/todos/tasks snapshot for `id` and stash it on
+/// `app.agent_tasks`. Silently swallows transport errors (the panel
+/// just keeps showing the previous snapshot — better than blowing up
+/// for a feature that's purely informational).
+async fn refresh_agent_tasks(app: &mut App, client: &Client, id: Uuid) {
+    match client.agent_tasks(id).await {
+        Ok(state) => {
+            app.agent_tasks.insert(id, state);
+        }
+        Err(e) => {
+            // Don't toast — too noisy on every reconnect. Tracing is
+            // enough; the panel will populate on the next event.
+            tracing::debug!(session = %id, error = %e, "agent_tasks fetch failed");
+        }
+    }
+}
+
 async fn apply_event(app: &mut App, ev: Event, client: &Client) {
     let name = ev.session_name.unwrap_or_else(|| "?".into());
     match ev.kind.as_str() {
@@ -2806,6 +2906,24 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
         "session.created" | "session.deleted" => {
             if let Ok(fresh) = client.list_sessions().await {
                 app.refresh_sessions(fresh);
+            }
+        }
+        "agent_tasks.updated" => {
+            // Server tail-watcher saw new bytes in this session's
+            // transcript. Refresh only if it's for a session we've
+            // actually got cached (or the currently selected one) —
+            // avoids a fetch storm when many agents are typing at once.
+            let target = ev
+                .payload
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .or(ev.session_id);
+            let Some(id) = target else { return };
+            let interesting =
+                Some(id) == app.selected || app.agent_tasks.contains_key(&id);
+            if interesting {
+                refresh_agent_tasks(app, client, id).await;
             }
         }
         _ => {}
