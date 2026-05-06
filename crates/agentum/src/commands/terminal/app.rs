@@ -396,14 +396,6 @@ pub struct App {
     /// the agent's UI happens to look mostly empty after task
     /// completion (snapshot-of-now overwriting the preserved state).
     pub parser_cache: std::collections::HashMap<Uuid, TerminalPane>,
-    /// Whether the connected daemon advertises the `resume` capability
-    /// (added in v0.6.19). When `false`, we MUST NOT emit
-    /// `{"resume":true}` text frames on the WS — older daemons would
-    /// forward them as raw input keystrokes via `tmux send-keys` and
-    /// type `{"resume":true}` straight into the agent's prompt, which
-    /// is exactly the regression a user reported. Probed once at
-    /// startup from `/api/health.capabilities`.
-    pub resume_supported: bool,
     pub focus: Focus,
     /// Width of the sidebar tree pane in columns. User-resizable with
     /// `+` / `-`, clamped 16..=80. The terminal pane keeps a 20-column
@@ -541,7 +533,6 @@ impl App {
             prev_selected: None,
             term: TerminalPane::new(),
             parser_cache: std::collections::HashMap::new(),
-            resume_supported: false,
             focus: Focus::Tree,
             tree_width: 32,
             fullscreen: false,
@@ -980,14 +971,6 @@ pub async fn run_loop(
 ) -> Result<()> {
     let mut app = App::new(sessions);
     app.sound_muted = sound_muted;
-    // Feature-detect the daemon's capabilities once at startup so the
-    // WS hot path never sends control frames an old daemon would
-    // forward to the agent's stdin as raw keystrokes (the v0.6.9
-    // gotcha that used to type `{"resize":...}` into the prompt).
-    // `resume` is the new one in v0.6.19; old daemons (< v0.6.19)
-    // don't list it, so we silently downgrade to the snapshot path.
-    let caps = client.capabilities().await.unwrap_or_default();
-    app.resume_supported = caps.iter().any(|c| c == "resume");
 
     let (term_tx, mut term_rx) = mpsc::unbounded_channel::<TerminalMsg>();
     let (term_tx_right, mut term_rx_right) = mpsc::unbounded_channel::<TerminalMsg>();
@@ -1011,7 +994,8 @@ pub async fn run_loop(
     // threading an extra `&mut Option<JoinHandle>` everywhere.
     if let Some(id) = app.selected {
         let (key_tx, key_rx) = mpsc::unbounded_channel::<TermOut>();
-        let h = client.open_terminal_stream(id, term_tx.clone(), key_rx);
+        // Initial connect on startup: no cached parser yet, no resume.
+        let h = client.open_terminal_stream(id, term_tx.clone(), key_rx, false);
         app.term_in = Some(key_tx);
         app.term_size = (0, 0); // force first resize once we know the pane size
         app.stream_handle_left = Some(h);
@@ -2882,23 +2866,15 @@ fn update_selection(app: &mut App, client: &Client, side: Side) {
             return;
         };
         let (key_tx, key_rx) = mpsc::unbounded_channel::<TermOut>();
-        // If we just restored a cached parser, queue the resume signal
-        // BEFORE the stream's writer task picks it up. The daemon's
-        // initial-resize wait loop will read this and skip the
-        // `capture-pane` snapshot in favour of replaying just the log
-        // delta — keeping the parser's preserved chat history intact.
-        //
-        // Gated on the daemon advertising the `resume` capability. Old
-        // daemons forward unknown text frames to `tmux send-keys`, so
-        // emitting `{"resume":true}` against one types those literal
-        // characters into the agent's prompt. Silently downgrading
-        // (no resume frame, no cache benefit, but no corruption either)
-        // is the only safe option — same pattern as the `resize`
-        // capability gate dashboards added in v0.6.9.
-        if side == Side::Left && restored_from_cache && app.resume_supported {
-            let _ = key_tx.send(TermOut::Resume);
-        }
-        let handle = client.open_terminal_stream(id, term_tx, key_rx);
+        // Resume signal travels in the WS URL query, not as a wire
+        // frame. Old daemons strip unknown query params silently and
+        // proceed with the existing snapshot path — no risk of the
+        // signal being typed into the agent's prompt by a daemon
+        // that doesn't recognise it (the v0.6.20 regression fixed
+        // this by gating on capabilities; v0.6.21 makes the signal
+        // structurally impossible to misinterpret).
+        let want_resume = side == Side::Left && restored_from_cache;
+        let handle = client.open_terminal_stream(id, term_tx, key_rx, want_resume);
         match side {
             Side::Left => {
                 app.stream_handle_left = Some(handle);
@@ -3126,6 +3102,25 @@ fn push_notification(
     }
 }
 
+/// Pick the next free `shell-N` name by scanning existing session names.
+/// Replaces the old random `shell-{uuid8}` scheme — users complained the
+/// random suffix was both ugly and hard to refer back to ("which shell
+/// was that?"). Sequential names are stable and collision-free since the
+/// server enforces unique names anyway.
+fn next_shell_name(sessions: &[Session]) -> String {
+    let mut max_n = 0u32;
+    for s in sessions {
+        if let Some(rest) = s.name.strip_prefix("shell-") {
+            if let Ok(n) = rest.parse::<u32>() {
+                if n > max_n {
+                    max_n = n;
+                }
+            }
+        }
+    }
+    format!("shell-{}", max_n + 1)
+}
+
 /// Spawn a plain interactive shell as a session. Uses the `terminal`
 /// adapter so the server picks the user's `$SHELL` (fish / zsh / bash)
 /// rather than hard-coding bash — matching what the user gets when they
@@ -3136,7 +3131,7 @@ async fn spawn_plain_terminal(
     app: &mut App,
     client: &Client,
 ) {
-    let name = format!("shell-{}", Uuid::new_v4().to_string().split('-').next().unwrap_or("0"));
+    let name = next_shell_name(&app.sessions);
     let workdir = app
         .selected_session()
         .map(|s| s.workdir.clone())

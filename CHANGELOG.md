@@ -4,6 +4,37 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.21] — 2026-05-06
+
+### Changed
+- **Resume signal moved from wire frame to URL query.** v0.6.19/0.6.20
+  put `{"resume":true}` on the WS as a JSON text frame and tried to
+  protect old daemons via capability gating. Both layers can fail
+  (probe timeouts, edge cases in capability advertisement, partial
+  upgrades) and the failure mode types literal characters into the
+  agent's prompt — a footgun bad enough that no amount of gating
+  makes it acceptable.
+
+  v0.6.21 puts the resume signal in the WS upgrade URL as a query
+  string: `/api/sessions/{id}/stream?resume=true`. axum's `Query`
+  extractor in old daemons silently drops unknown fields; the upgrade
+  proceeds as before, the resume bit is just ignored, and there is
+  no possible path for the signal to be forwarded to the agent's
+  stdin. New daemons read the param and use the saved-position log
+  delta path.
+
+  Removed: `TermOut::Resume` enum variant, the `parse_resume` server
+  helper, the `resume_supported` capability gate field, and the
+  `client.capabilities()` startup probe (kept the method on `Client`
+  itself for future use). The `"resume"` advertisement in
+  `/api/health.capabilities` is left in for any external clients
+  that may probe it.
+
+  This is a wire-format simplification, not a behaviour change for
+  matched-version client/daemon pairs — the in-memory log-position
+  state and per-session parser cache from v0.6.19 still drive the
+  fix.
+
 ## [0.6.20] — 2026-05-06
 
 ### Fixed

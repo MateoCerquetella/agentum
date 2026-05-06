@@ -379,12 +379,24 @@ impl Client {
         id: Uuid,
         tx: mpsc::UnboundedSender<TerminalMsg>,
         mut key_rx: mpsc::UnboundedReceiver<TermOut>,
+        resume: bool,
     ) -> JoinHandle<()> {
         let base = self.base.clone();
         let token = self.token.clone();
         let trust = self.trust.clone();
         tokio::spawn(async move {
-            let url = ws_url(&base, &format!("/api/sessions/{id}/stream"), &token);
+            // Resume signal travels in the URL query, not as a wire frame:
+            // axum strips unknown query params silently, so old daemons
+            // (no resume support) do the right thing — they upgrade the
+            // WS and proceed with the existing snapshot path. A wire
+            // frame would risk being typed into the agent's prompt by
+            // any old daemon that doesn't recognise it.
+            let path = if resume {
+                format!("/api/sessions/{id}/stream?resume=true")
+            } else {
+                format!("/api/sessions/{id}/stream")
+            };
+            let url = ws_url(&base, &path, &token);
             let connector = ws_connector(&url, &trust);
             let result = connect_async_tls_with_config(url.as_str(), None, false, connector).await;
             let stream = match result {
@@ -407,7 +419,6 @@ impl Client {
                         TermOut::Resize { cols, rows } => WsMsg::Text(
                             format!("{{\"resize\":{{\"cols\":{cols},\"rows\":{rows}}}}}").into(),
                         ),
-                        TermOut::Resume => WsMsg::Text("{\"resume\":true}".into()),
                     };
                     if sink.send(msg).await.is_err() {
                         break;
@@ -509,12 +520,6 @@ pub enum TerminalMsg {
 pub enum TermOut {
     Bytes(Vec<u8>),
     Resize { cols: u16, rows: u16 },
-    /// Tell the daemon "I have cached parser state for this session,
-    /// send me the log delta instead of a fresh `capture-pane` snapshot".
-    /// Sent once per stream-open by the client when reconnecting to a
-    /// session whose parser is in `parser_cache` — preserves visible
-    /// chat history across session switches.
-    Resume,
 }
 
 #[derive(Debug)]
