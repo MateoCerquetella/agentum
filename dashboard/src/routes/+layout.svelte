@@ -12,6 +12,8 @@
   import { authState } from '$stores/auth';
   import { connect as connectEvents, disconnect as disconnectEvents } from '$stores/events';
   import { startEventBridge, stopEventBridge } from '$stores/event-bridge';
+  import { tweaks, applyTweaks } from '$stores/tweaks';
+  import { get as getStore } from 'svelte/store';
   import {
     palette, togglePalette, closePalette,
     shortcuts, openShortcuts, closeShortcuts
@@ -61,6 +63,8 @@
   }
 
   onMount(() => {
+    // Push the persisted accent + density onto :root before first paint.
+    applyTweaks(getStore(tweaks));
     window.addEventListener('keydown', onKey);
     const unsub = authState.subscribe((s) => {
       if (s === 'ok') {
