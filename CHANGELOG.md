@@ -6,9 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-VS Code-style keybindings + split panes for the TUI.
+## [0.6.10] — 2026-05-06
+
+VS Code-style keybindings + split panes for the TUI, plus `--yolo` on
+the CLI, a `terminal` tool, and a fix for the hard-coded session
+count in the tree title.
 
 ### Added
+- **`agentum new --yolo`.** Appends `--dangerously-skip-permissions`
+  for `claude`, `codex`, `opencode` (no-op for tools that don't
+  recognize it). Brings the CLI in line with the TUI / dashboard
+  YOLO toggles.
+- **`tool=terminal`.** New executor adapter that launches `$SHELL`
+  (falls back to `bash`). Listed in CLI tool help, TUI Tab cycle,
+  and the dashboard's New Session datalist so picking "terminal"
+  works the same way from every entry point.
+- **Alacritty-style pad scroll.** Mouse-wheel / trackpad events now
+  scroll the agentum pane under the cursor, not the inner program.
+  Crossterm's mouse capture is enabled at startup, scroll events bump
+  a per-`TerminalPane` offset on top of vt100's 4096-line history,
+  and any keystroke forwarded into the pane snaps the view back to
+  live (matching Alacritty / kitty). A `↑ scroll N` badge in the
+  pane title makes the state obvious. `Shift-PgUp` / `Shift-PgDn`
+  do the same one page at a time without a pointer. Side-effect:
+  native click-drag selection on the host terminal now needs `Shift`
+  to bypass app-mode capture (the standard convention).
 - **`Ctrl-E` toggles tree ↔ terminal.** Previous behavior only
   released focus to the tree. Now the second press flips back to the
   terminal pane (restoring the correct split side via
@@ -49,6 +71,11 @@ VS Code-style keybindings + split panes for the TUI.
   can land.
 
 ### Fixed
+- **Tree title shows the real session count.** `draw_tree` was
+  hard-coded to `" 1 sessions "` in every state. Now uses
+  `app.sessions.len()` with proper singular/plural — projects with
+  multiple groups no longer report `1 sessions` while listing
+  several.
 - **Enter on the YOLO checkbox in the new-session dialog now submits.**
   It used to toggle YOLO instead, so you could never spawn from that
   field without first reaching for Tab. Use `Space` to flip YOLO.

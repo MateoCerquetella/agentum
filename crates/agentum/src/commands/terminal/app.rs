@@ -421,6 +421,11 @@ pub struct App {
     /// while the right pane is focused would silently drive the left
     /// pane and feel haunted.
     pub last_term_side: Side,
+    /// Most recent computed layout — stashed by `run_loop` after each
+    /// `ui::compute_layout` call. Mouse events arrive with absolute
+    /// (col, row) coords; routing them to "the pane under the cursor"
+    /// needs the Rects we just drew with. None until the first frame.
+    pub last_areas: Option<ui::Areas>,
     pub theme: &'static Theme,
     /// Recent notifications displayed in bottom-left. Pushed on session
     /// events; capped at 3 entries. Each auto-clears after 8s.
@@ -460,6 +465,7 @@ impl App {
             term_tx_right: None,
             split_right: None,
             last_term_side: Side::Left,
+            last_areas: None,
             theme: theme::load(),
             notifications: Vec::new(),
         }
@@ -867,6 +873,9 @@ pub async fn run_loop(
             app.sidebar_hidden,
             app.split_open(),
         );
+        // Cache for the next mouse event — handlers need to know which
+        // pane the cursor is over, which only the layout knows.
+        app.last_areas = Some(areas);
         let (term_rows, term_cols) = inner_size(areas.terminal);
         app.term.resize(term_rows, term_cols);
         // Tell the daemon (and through it tmux) about the new pane size so
@@ -982,8 +991,74 @@ async fn handle_crossterm(
         CtEvent::Key(key) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
             handle_key(app, key, client, lg_tx).await;
         }
+        CtEvent::Mouse(me) => handle_mouse(app, me),
         CtEvent::Resize(_, _) => {}
         _ => {}
+    }
+}
+
+/// Drive the terminal pane's scrollback in response to mouse events.
+/// Alacritty-style: scroll-wheel events stay inside agentum (we don't
+/// forward mouse events to the inner pane). The pane under the cursor
+/// owns the scroll. Click / drag / release events are intentionally
+/// ignored — text selection on the host terminal still works via
+/// Shift-click on every modern emulator.
+fn handle_mouse(app: &mut App, ev: crossterm::event::MouseEvent) {
+    use crossterm::event::MouseEventKind;
+    let lines = match ev.kind {
+        MouseEventKind::ScrollUp => Some(true),
+        MouseEventKind::ScrollDown => Some(false),
+        _ => None,
+    };
+    let Some(scroll_up) = lines else {
+        return;
+    };
+    let Some(areas) = app.last_areas else {
+        return; // first frame hasn't drawn yet
+    };
+    let col = ev.column;
+    let row = ev.row;
+    let in_rect = |r: ratatui::layout::Rect| {
+        r.width > 0
+            && r.height > 0
+            && col >= r.x
+            && col < r.x + r.width
+            && row >= r.y
+            && row < r.y + r.height
+    };
+    // Pick the slot whose rect the pointer is over. Right pane wins
+    // when split is open and the cursor is in its half.
+    let target = if let Some(right_rect) = areas.terminal_right
+        && in_rect(right_rect)
+    {
+        Some(Side::Right)
+    } else if in_rect(areas.terminal) {
+        Some(Side::Left)
+    } else {
+        None
+    };
+    let Some(side) = target else {
+        return;
+    };
+    // Apply the scroll to the matched slot's parser.
+    let n = super::term::WHEEL_LINES_PER_TICK;
+    match side {
+        Side::Left => {
+            if scroll_up {
+                app.term.scroll_up(n);
+            } else {
+                app.term.scroll_down(n);
+            }
+        }
+        Side::Right => {
+            if let Some(slot) = app.split_right.as_mut() {
+                if scroll_up {
+                    slot.term.scroll_up(n);
+                } else {
+                    slot.term.scroll_down(n);
+                }
+            }
+        }
     }
 }
 
@@ -1378,9 +1453,43 @@ async fn handle_key(
     // both failure modes loudly — silent swallowing was the original "frozen
     // pane" symptom.
     if matches!(app.focus, Focus::Term | Focus::TermRight) {
+        // Shift-PgUp / Shift-PgDn drive scrollback on the focused pane
+        // instead of being forwarded to claude. Single-keystroke fallback
+        // for users without a scroll wheel; mirrors the convention used by
+        // gnome-terminal, konsole, and the GNU screen "copy" mode.
+        let shift_only = key.modifiers.contains(KeyModifiers::SHIFT)
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT);
+        if shift_only && matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
+            let lines = (app.term_size.1 as usize).saturating_sub(1).max(1);
+            let target_pane: &mut TerminalPane = match app.focus {
+                Focus::TermRight => match app.split_right.as_mut() {
+                    Some(slot) => &mut slot.term,
+                    None => &mut app.term,
+                },
+                _ => &mut app.term,
+            };
+            if matches!(key.code, KeyCode::PageUp) {
+                target_pane.scroll_up(lines);
+            } else {
+                target_pane.scroll_down(lines);
+            }
+            return;
+        }
         let Some(bytes) = key_to_bytes(&key) else {
             return;
         };
+        // Any forwarded keystroke means the user is back to interacting
+        // live — snap scrollback to the bottom on whichever pane they're
+        // typing into. Matches Alacritty / kitty behaviour.
+        match app.focus {
+            Focus::TermRight => {
+                if let Some(slot) = app.split_right.as_mut() {
+                    slot.term.scroll_to_bottom();
+                }
+            }
+            _ => app.term.scroll_to_bottom(),
+        }
         // Pick the input channel for whichever pane is focused — split
         // pane (Right) routes to its own slot, the legacy single pane
         // (Left) keeps using the flat `term_in`.

@@ -225,12 +225,14 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     // narrowing the list. While filter-input mode is active we append a
     // trailing `_` to hint at the live cursor.
     let filter = app.tree.filter_str();
+    let count = app.sessions.len();
+    let noun = if count == 1 { "session" } else { "sessions" };
     let title = if app.filter_input_active {
-        format!(" 1 sessions · /{filter}_ ")
+        format!(" {count} {noun} · /{filter}_ ")
     } else if !filter.is_empty() {
-        format!(" 1 sessions · /{filter} ")
+        format!(" {count} {noun} · /{filter} ")
     } else {
-        " 1 sessions ".to_string()
+        format!(" {count} {noun} ")
     };
     let block = panel_block(&title, focused, p);
 
@@ -318,13 +320,21 @@ fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Term;
     // When a split is open, brand the left pane explicitly so the user
     // knows which side keystrokes go to.
-    let title = match (focused, app.split_open()) {
+    let base = match (focused, app.split_open()) {
         (true, true) => " 2 left · Ctrl-E ↔ tree · type freely ",
         (false, true) => " 2 left · 2 / Ctrl-E focus ",
         (true, false) => " 2 terminal · Ctrl-E ↔ tree · type freely ",
         (false, false) => " 2 terminal · 2 / Ctrl-E focus ",
     };
-    let block = panel_block(title, focused, p);
+    // Append a scrollback badge whenever the user has wheeled / Shift-PgUp
+    // away from live output, so it's visually obvious why fresh bytes
+    // aren't appearing. Any keystroke into the pane snaps back.
+    let title = if app.term.is_scrolled_back() {
+        format!("{} ↑ scroll {} ", base.trim_end(), app.term.scrollback_offset())
+    } else {
+        base.to_string()
+    };
+    let block = panel_block(&title, focused, p);
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -344,18 +354,23 @@ fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
 
 fn draw_terminal_right(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::TermRight;
-    let title = if focused {
+    let base = if focused {
         " right · Ctrl-E ↔ tree · Ctrl-W close · type freely "
     } else {
         " right · Ctrl-Shift-] focus · Ctrl-W close "
     };
-    let block = panel_block(title, focused, p);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
     let Some(slot) = app.split_right.as_ref() else {
         return; // shouldn't happen — only drawn while split is open
     };
+    let title = if slot.term.is_scrolled_back() {
+        format!("{} ↑ scroll {} ", base.trim_end(), slot.term.scrollback_offset())
+    } else {
+        base.to_string()
+    };
+    let block = panel_block(&title, focused, p);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
     if slot.selected.is_none() {
         let hint = Paragraph::new("Pick a session for this pane (focus, then Ctrl-P).")
             .style(Style::default().fg(p.muted).bg(p.panel_bg))
@@ -527,6 +542,8 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         body("  Ctrl-K Z          toggle fullscreen (zen)", p),
         body("  Ctrl-\\            split the focused terminal pane", p),
         body("  Ctrl-W            close the split", p),
+        body("  Mouse wheel       scroll the pane under the cursor", p),
+        body("  Shift-PgUp/PgDn   scroll the focused pane (no mouse needed)", p),
         body("  Ctrl-Shift-] / F5  next panel", p),
         body("  Ctrl-Shift-[ / F6  previous panel", p),
         body("  Ctrl-1 … Ctrl-9   jump to Nth project group in the tree", p),
