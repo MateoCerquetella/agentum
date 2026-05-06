@@ -4,6 +4,47 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.25] — 2026-05-06
+
+### Fixed
+- **Reconnect / session-switch failed with `ws connect: HTTP error:
+  200 OK`.** v0.6.21..=v0.6.24 built the resume-aware terminal-stream
+  URL with the resume bit baked into the path string:
+
+  ```rust
+  let path = format!("/api/sessions/{id}/stream?resume=true");
+  let url = ws_url(&base, &path, &token);
+  ```
+
+  Inside `ws_url`, `url::Url::set_path(...)` treats its argument as a
+  path component and percent-encodes the `?` to `%3F`. The wire URL
+  became `wss://host/api/sessions/{id}/stream%3Fresume=true?token=...`,
+  which the daemon decoded to a literal path of
+  `/api/sessions/{id}/stream?resume=true` — no match for the
+  registered `/api/sessions/{id}/stream` route. The request fell
+  through to the SPA fallback (`embed::static_handler`), which returns
+  200 OK with index.html. tungstenite reported `HTTP error: 200 OK`
+  and emitted `terminal stream closed` to the user.
+
+  Only first connects (resume=false) worked — the broken path was
+  reachable only via session switches and reconnects, which is why
+  the bug looked like "I can't reconnect to my agents".
+
+  `ws_url` now takes a separate `extra_query: &[(&str, &str)]` slice;
+  callers pass `("resume", "true")` as a real query pair. Added
+  regression tests asserting (a) `?resume=true` ends up in the query,
+  not the path, and (b) the serialized URL contains no `%3F`. A
+  `debug_assert!` in `ws_url` panics if a future caller smuggles a
+  `?` into `path` again.
+
+- **Errors overlay spammed with duplicate "terminal stream closed"
+  lines.** Each keystroke into a dead WS channel hit `push_error`
+  (app.rs:1808), so a typing burst against a disconnected agent
+  produced 25+ identical entries. `push_error` now suppresses an
+  exact-duplicate message pushed within 2 s of the previous one.
+  Distinct messages and the same message after a quiet window still
+  go through; this collapses bursts without losing live recurrences.
+
 ## [0.6.24] — 2026-05-06
 
 ### Fixed

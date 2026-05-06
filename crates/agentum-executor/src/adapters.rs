@@ -32,6 +32,15 @@ impl ToolAdapter for ClaudeAdapter {
     fn launch(&self, session: &Session) -> LaunchCommand {
         let mut argv = vec!["claude".to_string()];
         push_model(&mut argv, session);
+        // Pin Claude's session UUID to the agentum session UUID so its
+        // transcript lands at `~/.claude/projects/<enc-cwd>/<id>.jsonl`
+        // — the agent-tasks watcher reads that exact path. Without
+        // this, two agents in the same workdir share one project dir
+        // and the watcher (which used to pick the most-recently-mtimed
+        // .jsonl) cross-pollinated todos. See
+        // crates/agentum-server/src/transcript_store.rs.
+        argv.push("--session-id".to_string());
+        argv.push(session.id.to_string());
         push_user_flags(&mut argv, session, self.yolo_flag());
         LaunchCommand::argv_only(argv)
     }
@@ -229,12 +238,32 @@ mod tests {
         assert_eq!(
             cmd.argv,
             vec![
-                "claude",
-                "--model=opus-4-7",
-                "--dangerously-skip-permissions"
+                "claude".to_string(),
+                "--model=opus-4-7".to_string(),
+                "--session-id".to_string(),
+                s.id.to_string(),
+                "--dangerously-skip-permissions".to_string(),
             ]
         );
         assert_eq!(ClaudeAdapter.compact_trigger(), Some("/compact"));
+    }
+
+    #[test]
+    fn claude_session_id_is_agentum_uuid() {
+        // Two distinct agentum sessions in the same workdir must launch
+        // claude with distinct --session-id values so their transcripts
+        // land in different files. Regression for the cross-talk bug
+        // where the agent-tasks panel showed another agent's todos.
+        let a = fixture("claude", None, &[]);
+        let b = fixture("claude", None, &[]);
+        assert_ne!(a.id, b.id);
+        let argv_a = ClaudeAdapter.launch(&a).argv;
+        let argv_b = ClaudeAdapter.launch(&b).argv;
+        let pos_a = argv_a.iter().position(|s| s == "--session-id").unwrap();
+        let pos_b = argv_b.iter().position(|s| s == "--session-id").unwrap();
+        assert_eq!(argv_a[pos_a + 1], a.id.to_string());
+        assert_eq!(argv_b[pos_b + 1], b.id.to_string());
+        assert_ne!(argv_a[pos_a + 1], argv_b[pos_b + 1]);
     }
 
     #[test]

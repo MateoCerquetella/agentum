@@ -391,12 +391,24 @@ impl Client {
             // WS and proceed with the existing snapshot path. A wire
             // frame would risk being typed into the agent's prompt by
             // any old daemon that doesn't recognise it.
-            let path = if resume {
-                format!("/api/sessions/{id}/stream?resume=true")
-            } else {
-                format!("/api/sessions/{id}/stream")
-            };
-            let url = ws_url(&base, &path, &token);
+            //
+            // CRITICAL: the resume bit must be appended as a structured
+            // query pair, NOT baked into `path`. v0.6.21..=v0.6.24 had
+            // `format!("/api/sessions/{id}/stream?resume=true")` and
+            // handed it to `ws_url`, whose `url.set_path(...)` percent-
+            // encodes the `?` (it treats the whole string as a path
+            // component). The daemon then saw a literal path of
+            // `/api/sessions/{id}/stream?resume=true` (after URL
+            // decoding), which doesn't match the registered
+            // `/api/sessions/{id}/stream` route and falls through to
+            // the SPA fallback (`embed::static_handler`) — 200 OK with
+            // index.html. tungstenite reports `HTTP error: 200 OK` and
+            // the user sees "stream closed" + cannot reconnect on
+            // session-switch. Only first-connects (resume=false)
+            // worked, which is why the bug only bit reconnects.
+            let path = format!("/api/sessions/{id}/stream");
+            let extra: &[(&str, &str)] = if resume { &[("resume", "true")] } else { &[] };
+            let url = ws_url(&base, &path, &token, extra);
             let connector = ws_connector(&url, &trust);
             let result = connect_async_tls_with_config(url.as_str(), None, false, connector).await;
             let stream = match result {
@@ -457,7 +469,7 @@ impl Client {
         let token = self.token.clone();
         let trust = self.trust.clone();
         tokio::spawn(async move {
-            let url = ws_url(&base, "/api/events", &token);
+            let url = ws_url(&base, "/api/events", &token, &[]);
             let connector = ws_connector(&url, &trust);
             let result = connect_async_tls_with_config(url.as_str(), None, false, connector).await;
             let mut stream = match result {
@@ -546,7 +558,17 @@ pub async fn probe_health(base: &Url, trust: &TlsTrust, timeout: Duration) -> Re
     }
 }
 
-fn ws_url(base: &Url, path: &str, token: &str) -> Url {
+/// Build a `wss://` (or `ws://`) URL for a daemon WebSocket endpoint.
+///
+/// `path` MUST be a path-only string (no `?`). Embedding a query in
+/// `path` will percent-encode the `?` and produce a broken URL — see
+/// the call-site comment in `open_terminal_stream` for the v0.6.25
+/// regression details. Pass extra query parameters via `extra_query`.
+fn ws_url(base: &Url, path: &str, token: &str, extra_query: &[(&str, &str)]) -> Url {
+    debug_assert!(
+        !path.contains('?'),
+        "ws_url: `path` must not contain a query string; use `extra_query` instead (got {path:?})"
+    );
     let mut url = base.clone();
     let target = if base.scheme() == "https" {
         "wss"
@@ -555,7 +577,14 @@ fn ws_url(base: &Url, path: &str, token: &str) -> Url {
     };
     url.set_scheme(target).expect("valid ws scheme");
     url.set_path(path);
-    url.query_pairs_mut().clear().append_pair("token", token);
+    {
+        let mut q = url.query_pairs_mut();
+        q.clear();
+        q.append_pair("token", token);
+        for (k, v) in extra_query {
+            q.append_pair(k, v);
+        }
+    }
     url
 }
 
@@ -564,4 +593,64 @@ fn ws_connector(url: &Url, trust: &TlsTrust) -> Option<Connector> {
         return None;
     }
     trust.rustls_config().map(Connector::Rustls)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ws_url;
+    use url::Url;
+
+    fn base(scheme: &str) -> Url {
+        Url::parse(&format!("{scheme}://127.0.0.1:8822/")).unwrap()
+    }
+
+    #[test]
+    fn ws_url_promotes_https_to_wss_and_appends_token() {
+        let u = ws_url(&base("https"), "/api/events", "tok", &[]);
+        assert_eq!(u.scheme(), "wss");
+        assert_eq!(u.path(), "/api/events");
+        assert_eq!(u.query(), Some("token=tok"));
+    }
+
+    #[test]
+    fn ws_url_promotes_http_to_ws() {
+        let u = ws_url(&base("http"), "/api/events", "tok", &[]);
+        assert_eq!(u.scheme(), "ws");
+    }
+
+    #[test]
+    fn ws_url_appends_extra_query_pairs_after_token() {
+        // Regression for v0.6.21..=v0.6.24: caller embedded
+        // `?resume=true` in `path`, set_path percent-encoded the `?`,
+        // and the daemon couldn't route the request → 200 OK from
+        // SPA fallback, "ws connect: HTTP error: 200 OK" client-side.
+        // Resume must be a real query pair, not part of the path.
+        let u = ws_url(
+            &base("https"),
+            "/api/sessions/abc/stream",
+            "tok",
+            &[("resume", "true")],
+        );
+        assert_eq!(u.path(), "/api/sessions/abc/stream");
+        assert_eq!(u.query(), Some("token=tok&resume=true"));
+        // Critical: serialized form has no `%3F` in the path.
+        assert!(
+            !u.as_str().contains("%3F"),
+            "URL must not contain a percent-encoded `?`: {u}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "must not contain a query string")]
+    fn ws_url_rejects_query_in_path_under_debug() {
+        // The debug_assert! catches the v0.6.21..=v0.6.24 mistake at
+        // call time in dev builds. Release builds skip this and rely
+        // on the regression tests above for protection.
+        let _ = ws_url(
+            &base("https"),
+            "/api/sessions/abc/stream?resume=true",
+            "tok",
+            &[],
+        );
+    }
 }

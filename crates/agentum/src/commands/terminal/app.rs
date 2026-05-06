@@ -668,14 +668,30 @@ impl App {
     /// from tree focus, or via the palette) to read what failed.
     pub fn push_error(&mut self, text: impl Into<String>) {
         const MAX_ERROR_LOG: usize = 200;
+        // Suppress an identical error message that was just pushed —
+        // typing into a dead WS channel hits `push_error` once per
+        // keystroke (api.rs:1808) and used to spam the overlay with
+        // 25+ identical "terminal stream closed — Ctrl-E tree" lines
+        // until the user reconnected. Distinct messages, or the same
+        // message after a quiet window, still pass through. 2 s is a
+        // sweet spot: short enough that a real recurrence within a
+        // session feels live, long enough to collapse a typing burst.
+        const DEDUP_WINDOW: Duration = Duration::from_secs(2);
         let text = text.into();
         if text.is_empty() {
             return;
         }
-        self.errors.push(ErrorEntry {
-            at: SystemTime::now(),
-            text,
-        });
+        let now = SystemTime::now();
+        if let Some(last) = self.errors.last()
+            && last.text == text
+            && now
+                .duration_since(last.at)
+                .map(|d| d < DEDUP_WINDOW)
+                .unwrap_or(false)
+        {
+            return;
+        }
+        self.errors.push(ErrorEntry { at: now, text });
         let n = self.errors.len();
         if n > MAX_ERROR_LOG {
             self.errors.drain(0..n - MAX_ERROR_LOG);
