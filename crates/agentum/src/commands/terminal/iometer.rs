@@ -146,11 +146,13 @@ impl Default for IoMeter {
 }
 
 /// Compact human-readable rate. 0 reads as `—` so an idle pane doesn't
-/// scream `0 B/s` at the user. Three significant figures so the chip
-/// width stays stable across orders of magnitude.
+/// scream `0 B/s` at the user. Three significant figures + a left-pad
+/// to a constant 7-char width so the chip and its neighbors don't
+/// jitter as values flip between `—`, `10 B/s`, and `1.0 K/s`.
 pub fn fmt_rate(bps: f64) -> String {
+    const WIDTH: usize = 7;
     if bps < 1.0 {
-        return "—".into();
+        return format!("{:<WIDTH$}", "—");
     }
     let (val, unit) = if bps < 1024.0 {
         (bps, "B/s")
@@ -161,11 +163,12 @@ pub fn fmt_rate(bps: f64) -> String {
     } else {
         (bps / (1024.0 * 1024.0 * 1024.0), "G/s")
     };
-    if val < 10.0 {
+    let raw = if val < 10.0 {
         format!("{val:.1} {unit}")
     } else {
         format!("{val:.0} {unit}")
-    }
+    };
+    format!("{raw:<WIDTH$}")
 }
 
 /// Compact human-readable byte total (no `/s`). Used for the lifetime
@@ -227,11 +230,25 @@ mod tests {
 
     #[test]
     fn fmt_rate_scales() {
-        assert_eq!(fmt_rate(0.0), "—");
-        assert_eq!(fmt_rate(0.4), "—");
-        assert!(fmt_rate(50.0).ends_with("B/s"));
-        assert!(fmt_rate(2_048.0).ends_with("K/s"));
-        assert!(fmt_rate(5_000_000.0).ends_with("M/s"));
+        assert_eq!(fmt_rate(0.0).trim(), "—");
+        assert_eq!(fmt_rate(0.4).trim(), "—");
+        assert!(fmt_rate(50.0).contains("B/s"));
+        assert!(fmt_rate(2_048.0).contains("K/s"));
+        assert!(fmt_rate(5_000_000.0).contains("M/s"));
+    }
+
+    #[test]
+    fn fmt_rate_is_constant_width() {
+        // Chip layout depends on this — the whole point of padding.
+        let widths = [
+            fmt_rate(0.0).chars().count(),
+            fmt_rate(50.0).chars().count(),
+            fmt_rate(999.0).chars().count(),
+            fmt_rate(2_048.0).chars().count(),
+            fmt_rate(15_728_640.0).chars().count(),
+            fmt_rate(2_147_483_648.0).chars().count(),
+        ];
+        assert!(widths.iter().all(|&w| w == 7), "got widths: {widths:?}");
     }
 
     #[test]
