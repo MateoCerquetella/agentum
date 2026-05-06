@@ -4,6 +4,28 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.28] — 2026-05-06
+
+### Added
+- **Muted `◌` sidebar dot for sleeping (idle) agents.** v0.6.27
+  added the yellow `▲` for sessions awaiting a prompt, but a
+  finished agent sitting at the prompt still rendered as a green
+  `●` — visually identical to one that's actively working. The
+  sidebar now distinguishes three states explicitly: green `●` for
+  working, yellow `▲` for awaiting input, and a dim `◌` for idle.
+  Crashed `✗` still wins. Single-cell glyph throughout so the row
+  width stays stable — a 2-cell sleep emoji would have shifted the
+  tool/model label by a column.
+
+### Changed
+- **`agent.input_resolved` now carries a `state` payload** of
+  either `"working"` or `"idle"`, so a single event tells the TUI
+  whether to flip the dot to green or to muted `◌` without waiting
+  for a follow-up `agent.finished`. Older clients that ignored the
+  payload still get the awaiting-input clear behaviour they
+  already had — payload absence is treated as "leave the idle bit
+  alone and let the next finished/working event settle it".
+
 ## [0.6.27] — 2026-05-06
 
 ### Added

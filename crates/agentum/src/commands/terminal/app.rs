@@ -542,6 +542,14 @@ pub struct App {
     /// the persisted `Status` — so users can see at-a-glance which
     /// agent needs attention without opening the pane.
     pub awaiting_input: HashSet<Uuid>,
+    /// Sessions whose agent has finished its turn and is sitting at
+    /// the prompt (ActivityState::Idle on the watchdog side). Driven
+    /// by `agent.finished` and the `state: idle` payload variant of
+    /// `agent.input_resolved`. The sidebar dot renders a dim `◌` for
+    /// any id in this set so a "sleeping" agent is visually distinct
+    /// from one that's actively working — without needing a wider
+    /// 2-cell emoji that would shift the rest of the row.
+    pub idle: HashSet<Uuid>,
 }
 
 impl App {
@@ -591,6 +599,7 @@ impl App {
             io: IoMeter::new(),
             prefs: prefs::load(),
             awaiting_input: HashSet::new(),
+            idle: HashSet::new(),
         }
     }
 
@@ -3078,6 +3087,7 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
             );
             if let Some(id) = ev.session_id {
                 app.awaiting_input.remove(&id);
+                app.idle.remove(&id);
             }
             if let Ok(fresh) = client.list_sessions().await {
                 app.refresh_sessions(fresh);
@@ -3101,6 +3111,7 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
             );
             if let Some(id) = ev.session_id {
                 app.awaiting_input.remove(&id);
+                app.idle.remove(&id);
             }
             if let Ok(fresh) = client.list_sessions().await {
                 app.refresh_sessions(fresh);
@@ -3129,11 +3140,15 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                     NOTIF_TTL_INFO_MS,
                 );
             }
-            // Working→Idle implies the agent is no longer waiting on the
-            // user. Defensive cleanup in case `agent.input_resolved` was
-            // missed (event-bus lag, watchdog restart).
+            // Working→Idle: the agent is now sleeping at the prompt.
+            // Mirror the watchdog's ActivityState::Idle so the sidebar
+            // dot shows a muted `◌` instead of a misleading green `●`.
+            // Defensive cleanup of awaiting_input in case
+            // `agent.input_resolved` was missed (event-bus lag,
+            // watchdog restart).
             if let Some(id) = ev.session_id {
                 app.awaiting_input.remove(&id);
+                app.idle.insert(id);
             }
         }
         "agent.awaiting_input" => {
@@ -3149,14 +3164,36 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
             );
             if let Some(id) = ev.session_id {
                 app.awaiting_input.insert(id);
+                // An awaiting agent isn't sleeping — drop any stale idle
+                // bit so the dot doesn't briefly flicker through `◌`
+                // before it lands on `▲`.
+                app.idle.remove(&id);
             }
         }
         "agent.input_resolved" => {
             // User answered the prompt (or it was dismissed). Clear the
             // yellow attention dot — no toast: the action that resolved
-            // the prompt is what the user just did.
+            // the prompt is what the user just did. Payload tells us
+            // whether the agent is now working again or back at the
+            // prompt, so we can flip the dot directly to green or `◌`
+            // without waiting for a follow-up `agent.finished`.
             if let Some(id) = ev.session_id {
                 app.awaiting_input.remove(&id);
+                let resolved = ev.payload.get("state").and_then(|v| v.as_str());
+                match resolved {
+                    Some("idle") => {
+                        app.idle.insert(id);
+                    }
+                    Some("working") => {
+                        app.idle.remove(&id);
+                    }
+                    // Older watchdogs (pre-v0.6.28) emit this event with
+                    // no payload. Without the resolved-state hint we
+                    // can't tell working from idle, so we just clear
+                    // awaiting and let the next finished/working event
+                    // settle the idle bit.
+                    _ => {}
+                }
             }
         }
         "session.created" => {
@@ -3167,6 +3204,7 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
         "session.deleted" => {
             if let Some(id) = ev.session_id {
                 app.awaiting_input.remove(&id);
+                app.idle.remove(&id);
             }
             if let Ok(fresh) = client.list_sessions().await {
                 app.refresh_sessions(fresh);

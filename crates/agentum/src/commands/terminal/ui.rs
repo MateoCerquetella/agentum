@@ -457,14 +457,20 @@ fn render_tree_row(
             let session = app.sessions.iter().find(|s| s.id == id);
             let (name, dot, dot_color, tool_label) = match session {
                 Some(s) => {
-                    // Crashed always wins — a dead pane should never look
-                    // like it's just waiting. Otherwise a pending prompt
-                    // overrides the running/idle dot so users can spot
-                    // "this one needs me" without scanning the toast stack.
+                    // Priority: Crashed > Awaiting > Idle > underlying
+                    // status. A dead pane should never look like it's
+                    // just waiting; a pending prompt overrides the
+                    // green/idle dot so attention is unmissable; a
+                    // sleeping agent reads as muted `◌` instead of
+                    // green `●` so "working" and "idle at prompt" are
+                    // visually distinct without a 2-cell emoji that
+                    // would shift later spans.
                     let (dot, color) = if s.status == agentum_core::Status::Crashed {
                         status_dot(s.status)
                     } else if app.awaiting_input.contains(&s.id) {
                         ("▲", p.warning)
+                    } else if app.idle.contains(&s.id) {
+                        ("◌", p.muted)
                     } else {
                         status_dot(s.status)
                     };
