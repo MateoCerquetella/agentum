@@ -2,11 +2,23 @@
 //! JSONL session transcripts (`~/.claude/projects/<encoded-cwd>/<sid>.jsonl`).
 //!
 //! Claude Code writes one JSON object per line. The objects we care about
-//! carry `tool_use` blocks for `TodoWrite`, `ExitPlanMode`, and `Task` —
-//! everything else is ignored. Latest TodoWrite wins (Claude rewrites the
-//! whole list each call); ExitPlanMode payloads accumulate as the
-//! "current plan"; `Task` tool_use ↔ `tool_result` pairs become a small
-//! background-task list with status + duration.
+//! carry `tool_use` blocks for the task-tracking tool family
+//! (`TaskCreate`, `TaskUpdate`), `ExitPlanMode`, and the subagent-dispatch
+//! tool (`Agent`, formerly `Task`). Everything else is ignored.
+//!
+//! - `TaskCreate` adds a row with status `pending`; the matching
+//!   `tool_result` carries the assigned numeric id (`"Task #N created
+//!   successfully: <subject>"`), which we parse to bind subsequent
+//!   `TaskUpdate` calls.
+//! - `TaskUpdate` patches a row's status / fields by `taskId`; status
+//!   `deleted` removes the row.
+//! - `ExitPlanMode` payloads land as the current plan body.
+//! - `Agent` (legacy: `Task`) tool_use ↔ tool_result pairs become a
+//!   small background-task list with status + duration.
+//!
+//! For backward compatibility we also still recognize the legacy
+//! `TodoWrite` tool (older transcripts written by previous Claude Code
+//! versions): the latest call wins and replaces the todo list outright.
 //!
 //! Kept dep-light (serde + std only) so this can run inside the server
 //! and be exercised by unit tests without spinning up tokio or sqlx.
@@ -43,6 +55,21 @@ pub struct TodoItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_form: Option<String>,
     pub status: TodoStatus,
+    /// Free-text description supplied to `TaskCreate` (`input.description`).
+    /// Empty for legacy `TodoWrite`-sourced rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Numeric id assigned by Claude Code's task runtime, parsed out of
+    /// the `TaskCreate` tool_result text (`"Task #N created successfully: …"`).
+    /// `None` while the create call has no result yet, and always `None`
+    /// for legacy `TodoWrite`-sourced rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    /// `tool_use_id` of the originating `TaskCreate` call. Used to bind
+    /// the numeric `task_id` once the matching tool_result lands. Skipped
+    /// from the wire format — it's an internal join key only.
+    #[serde(default, skip_serializing, skip_deserializing)]
+    pub create_tool_id: Option<String>,
 }
 
 /// Status of a background `Task` tool dispatch. `Running` until the
@@ -194,6 +221,113 @@ fn apply_tool_use(
     let input = block.get("input");
 
     match name {
+        // Current Claude Code task tool family. `TaskCreate` adds a row
+        // with status `pending`; the assigned numeric id arrives later
+        // in the matching tool_result and is wired up there.
+        "TaskCreate" => {
+            let Some(tool_use_id) = block
+                .get("id")
+                .and_then(|i| i.as_str())
+                .map(str::to_string)
+            else {
+                return;
+            };
+            // Skip duplicates from a transcript replay.
+            if state
+                .todos
+                .iter()
+                .any(|t| t.create_tool_id.as_deref() == Some(tool_use_id.as_str()))
+            {
+                return;
+            }
+            let subject = input
+                .and_then(|i| i.get("subject"))
+                .and_then(|s| s.as_str())
+                .unwrap_or("(task)")
+                .to_string();
+            let active_form = input
+                .and_then(|i| i.get("activeForm"))
+                .and_then(|a| a.as_str())
+                .map(str::to_string);
+            let description = input
+                .and_then(|i| i.get("description"))
+                .and_then(|d| d.as_str())
+                .map(str::to_string);
+            state.todos.push(TodoItem {
+                content: subject,
+                active_form,
+                status: TodoStatus::Pending,
+                description,
+                task_id: None,
+                create_tool_id: Some(tool_use_id),
+            });
+        }
+        // `TaskUpdate` patches an existing row by numeric `taskId`. We
+        // accept either a string ("1") or a JSON number (1) since the
+        // input shape isn't strictly enforced upstream. `status:"deleted"`
+        // removes the row.
+        "TaskUpdate" => {
+            let task_id = input.and_then(|i| i.get("taskId")).and_then(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .or_else(|| v.as_i64().map(|n| n.to_string()))
+                    .or_else(|| v.as_u64().map(|n| n.to_string()))
+            });
+            let Some(task_id) = task_id else {
+                return;
+            };
+
+            let status_str = input
+                .and_then(|i| i.get("status"))
+                .and_then(|s| s.as_str())
+                .map(str::to_string);
+
+            // Deletion: drop the row entirely.
+            if status_str.as_deref() == Some("deleted") {
+                state.todos.retain(|t| t.task_id.as_deref() != Some(task_id.as_str()));
+                return;
+            }
+
+            let new_subject = input
+                .and_then(|i| i.get("subject"))
+                .and_then(|s| s.as_str())
+                .map(str::to_string);
+            let new_active_form = input
+                .and_then(|i| i.get("activeForm"))
+                .and_then(|a| a.as_str())
+                .map(str::to_string);
+            let new_description = input
+                .and_then(|i| i.get("description"))
+                .and_then(|d| d.as_str())
+                .map(str::to_string);
+
+            let Some(target) = state
+                .todos
+                .iter_mut()
+                .find(|t| t.task_id.as_deref() == Some(task_id.as_str()))
+            else {
+                return;
+            };
+
+            if let Some(s) = status_str {
+                target.status = match s.as_str() {
+                    "in_progress" => TodoStatus::InProgress,
+                    "completed" => TodoStatus::Completed,
+                    _ => TodoStatus::Pending,
+                };
+            }
+            if let Some(s) = new_subject {
+                target.content = s;
+            }
+            if new_active_form.is_some() {
+                target.active_form = new_active_form;
+            }
+            if new_description.is_some() {
+                target.description = new_description;
+            }
+        }
+        // Legacy: pre-task-family Claude Code rewrote the whole todo list
+        // on every call. Kept so old transcripts still render.
         "TodoWrite" => {
             let Some(todos) = input
                 .and_then(|i| i.get("todos"))
@@ -219,6 +353,9 @@ fn apply_tool_use(
                         content,
                         active_form,
                         status,
+                        description: None,
+                        task_id: None,
+                        create_tool_id: None,
                     })
                 })
                 .collect();
@@ -230,7 +367,9 @@ fn apply_tool_use(
                 state.plan = Some(plan.to_string());
             }
         }
-        "Task" => {
+        // Subagent dispatch. `Agent` is the current name; `Task` is kept
+        // for backward compatibility with older transcripts.
+        "Agent" | "Task" => {
             let id = match block.get("id").and_then(|i| i.as_str()) {
                 Some(s) => s.to_string(),
                 None => return,
@@ -275,6 +414,31 @@ fn apply_tool_result(
     else {
         return;
     };
+
+    // First: is this the result of a TaskCreate? The result content is a
+    // short string like `"Task #3 created successfully: <subject>"` —
+    // parse out N and bind it to the matching todo row so future
+    // TaskUpdate(taskId="3") calls land. Tolerate missing/non-string
+    // content (errors render as objects); just skip binding then.
+    if let Some(todo) = state
+        .todos
+        .iter_mut()
+        .find(|t| t.create_tool_id.as_deref() == Some(id.as_str()))
+    {
+        let result_text = block.get("content").and_then(|c| c.as_str());
+        if let Some(text) = result_text
+            && let Some(n) = parse_task_create_id(text)
+        {
+            todo.task_id = Some(n);
+        }
+        // Whether or not we parsed an id, the create has been observed —
+        // clear the join key so a later replayed line doesn't re-bind it.
+        todo.create_tool_id = None;
+        return;
+    }
+
+    // Otherwise: maybe it's a subagent dispatch (Agent / legacy Task)
+    // result. Close the matching record.
     let is_error = block
         .get("is_error")
         .and_then(|b| b.as_bool())
@@ -294,6 +458,20 @@ fn apply_tool_result(
             rec.duration_ms = Some(dur);
         }
     }
+}
+
+/// Pull `N` out of `"Task #N created successfully: …"`. Returns `None`
+/// if the prefix doesn't match — keeps us robust to future wording
+/// changes (the row stays unbound and just won't get future updates).
+fn parse_task_create_id(text: &str) -> Option<String> {
+    let rest = text.strip_prefix("Task #")?;
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    if end == 0 {
+        return None;
+    }
+    Some(rest[..end].to_string())
 }
 
 /// Replay an entire transcript file from scratch. Convenience wrapper
@@ -375,6 +553,107 @@ mod tests {
         apply_line(&mut state, &mut pending, result);
         assert!(matches!(state.tasks[0].status, TaskStatus::Completed));
         assert_eq!(state.tasks[0].duration_ms, Some(5_000));
+    }
+
+    #[test]
+    fn agent_dispatch_pairs_with_result() {
+        // Same lifecycle as legacy Task, but under the current `Agent`
+        // tool name — this is what live transcripts actually emit.
+        let mut state = AgentTaskState::default();
+        let mut pending = HashMap::new();
+        let dispatch = r#"{"type":"assistant","timestamp":"2025-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"agent-1","name":"Agent","input":{"description":"map repo","subagent_type":"Explore"}}]}}"#;
+        apply_line(&mut state, &mut pending, dispatch);
+        assert_eq!(state.tasks.len(), 1);
+        assert_eq!(state.tasks[0].description, "map repo");
+        assert!(matches!(state.tasks[0].status, TaskStatus::Running));
+
+        let result = r#"{"type":"user","timestamp":"2025-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"agent-1","is_error":false,"content":"done"}]}}"#;
+        apply_line(&mut state, &mut pending, result);
+        assert!(matches!(state.tasks[0].status, TaskStatus::Completed));
+        assert_eq!(state.tasks[0].duration_ms, Some(2_000));
+    }
+
+    #[test]
+    fn task_create_then_update_lifecycle() {
+        // Reproduce a real transcript shape: TaskCreate → tool_result
+        // ("Task #1 created successfully: …") → TaskUpdate(in_progress)
+        // → TaskUpdate(completed). Verifies the task-family parser end
+        // to end since the legacy TodoWrite path never sees this anymore.
+        let mut state = AgentTaskState::default();
+        let mut pending = HashMap::new();
+
+        let create = r#"{"type":"assistant","timestamp":"2025-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"toolu_create_1","name":"TaskCreate","input":{"subject":"Build it","description":"Build the thing","activeForm":"Building it"}}]}}"#;
+        apply_line(&mut state, &mut pending, create);
+        assert_eq!(state.todos.len(), 1);
+        assert_eq!(state.todos[0].content, "Build it");
+        assert_eq!(state.todos[0].active_form.as_deref(), Some("Building it"));
+        assert!(matches!(state.todos[0].status, TodoStatus::Pending));
+        assert_eq!(state.todos[0].task_id, None);
+
+        let create_result = r#"{"type":"user","timestamp":"2025-01-01T00:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_create_1","content":"Task #1 created successfully: Build it"}]}}"#;
+        apply_line(&mut state, &mut pending, create_result);
+        assert_eq!(state.todos[0].task_id.as_deref(), Some("1"));
+
+        let update_in_progress = r#"{"type":"assistant","timestamp":"2025-01-01T00:00:02Z","message":{"content":[{"type":"tool_use","id":"toolu_upd_1","name":"TaskUpdate","input":{"taskId":"1","status":"in_progress"}}]}}"#;
+        apply_line(&mut state, &mut pending, update_in_progress);
+        assert!(matches!(state.todos[0].status, TodoStatus::InProgress));
+
+        let update_completed = r#"{"type":"assistant","timestamp":"2025-01-01T00:00:03Z","message":{"content":[{"type":"tool_use","id":"toolu_upd_2","name":"TaskUpdate","input":{"taskId":"1","status":"completed"}}]}}"#;
+        apply_line(&mut state, &mut pending, update_completed);
+        assert!(matches!(state.todos[0].status, TodoStatus::Completed));
+    }
+
+    #[test]
+    fn task_update_deleted_drops_row() {
+        let mut state = AgentTaskState::default();
+        let mut pending = HashMap::new();
+        let create = r#"{"type":"assistant","timestamp":"2025-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"c1","name":"TaskCreate","input":{"subject":"Tmp"}}]}}"#;
+        let result = r#"{"type":"user","timestamp":"2025-01-01T00:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"c1","content":"Task #7 created successfully: Tmp"}]}}"#;
+        apply_line(&mut state, &mut pending, create);
+        apply_line(&mut state, &mut pending, result);
+        assert_eq!(state.todos.len(), 1);
+
+        let del = r#"{"type":"assistant","timestamp":"2025-01-01T00:00:02Z","message":{"content":[{"type":"tool_use","id":"u1","name":"TaskUpdate","input":{"taskId":"7","status":"deleted"}}]}}"#;
+        apply_line(&mut state, &mut pending, del);
+        assert!(state.todos.is_empty());
+    }
+
+    #[test]
+    fn task_update_accepts_numeric_id() {
+        // Some callers pass `taskId` as a JSON number rather than a
+        // string. Both should work.
+        let mut state = AgentTaskState::default();
+        let mut pending = HashMap::new();
+        apply_line(
+            &mut state,
+            &mut pending,
+            r#"{"type":"assistant","timestamp":"2025-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"c1","name":"TaskCreate","input":{"subject":"X"}}]}}"#,
+        );
+        apply_line(
+            &mut state,
+            &mut pending,
+            r#"{"type":"user","timestamp":"2025-01-01T00:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"c1","content":"Task #4 created successfully: X"}]}}"#,
+        );
+        apply_line(
+            &mut state,
+            &mut pending,
+            r#"{"type":"assistant","timestamp":"2025-01-01T00:00:02Z","message":{"content":[{"type":"tool_use","id":"u1","name":"TaskUpdate","input":{"taskId":4,"status":"in_progress"}}]}}"#,
+        );
+        assert!(matches!(state.todos[0].status, TodoStatus::InProgress));
+    }
+
+    #[test]
+    fn parse_task_create_id_handles_known_shapes() {
+        assert_eq!(
+            parse_task_create_id("Task #1 created successfully: foo"),
+            Some("1".to_string())
+        );
+        assert_eq!(
+            parse_task_create_id("Task #42 created successfully: bar"),
+            Some("42".to_string())
+        );
+        assert_eq!(parse_task_create_id("nope"), None);
+        assert_eq!(parse_task_create_id("Task #"), None);
     }
 
     #[test]

@@ -39,6 +39,27 @@ impl ToolAdapter for ClaudeAdapter {
     fn crash_signatures(&self) -> &'static [&'static str] {
         &["redacted_thinking", "panic: cannot continue"]
     }
+
+    // Claude Code's spinner footer always carries "esc to interrupt"
+    // while a turn is active and disappears the moment the model returns
+    // control. Cheap, stable Working→Idle signal — no transcript parsing
+    // required.
+    fn busy_signature(&self) -> Option<&'static str> {
+        Some("esc to interrupt")
+    }
+
+    // Permission prompts are rendered as a numbered options box. The
+    // wording varies slightly across versions but every variant we've
+    // seen carries one of these substrings on screen at the same time
+    // as the input field is suppressed.
+    fn awaiting_input_signatures(&self) -> &'static [&'static str] {
+        &[
+            "Do you want to proceed?",
+            "Do you want to make this edit",
+            "Do you want to create",
+            "❯ 1. Yes",
+        ]
+    }
 }
 
 // ---------- codex ----------

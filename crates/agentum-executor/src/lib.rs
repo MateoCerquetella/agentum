@@ -52,6 +52,23 @@ pub trait ToolAdapter: Send + Sync {
     fn crash_signatures(&self) -> &'static [&'static str] {
         &[]
     }
+
+    /// Substring that means "this agent is currently working on a turn"
+    /// (i.e. the spinner / 'esc to interrupt' line is on screen). When
+    /// the watchdog observes a Working→!Working transition it emits
+    /// `agent.finished`. Tools that don't have a stable busy marker
+    /// return `None` and opt out of finished-notifications.
+    fn busy_signature(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Substrings that, when present in the visible pane, mean the agent
+    /// is blocked waiting for the user to approve an action (a permission
+    /// prompt, a plan-mode confirmation, etc.). Watchdog emits
+    /// `agent.awaiting_input` on the !Awaiting→Awaiting transition.
+    fn awaiting_input_signatures(&self) -> &'static [&'static str] {
+        &[]
+    }
 }
 
 /// Pick the right adapter for a tool name. Always returns something — unknown
