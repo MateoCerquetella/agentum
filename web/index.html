@@ -221,52 +221,58 @@
   .hero h1 { margin-top: 28px; max-width: 16ch; }
   .hero h1 .accent { color: var(--fg-3); }
 
-  /* ---------- tagline rotator (slot-machine roll) ---------- */
-  /* position:relative + absolute words, with a hidden sizer that  */
-  /* reserves width = widest phrase. Keeps layout stable at any    */
-  /* viewport / font-size (clamp 48px → 124px), unlike inline-grid */
-  /* which collapsed on desktop in some browsers.                  */
+  /* ---------- brand rotator (slot-machine roll) ---------- */
   .rotator {
-    display: inline-block;
-    position: relative;
+    display: inline-grid;
     vertical-align: baseline;
     overflow: hidden;
-    line-height: inherit;
     padding: 0.05em 0.05em 0.18em;
     margin: -0.05em -0.05em -0.18em;
-    color: var(--fg-3);
-  }
-  .rotator > .rotator-sizer {
-    display: inline-block;
-    visibility: hidden;
-    white-space: nowrap;
-    pointer-events: none;
+    isolation: isolate;
   }
   .rotator > .rotator-word {
-    position: absolute;
-    top: 0.05em;
-    left: 0.05em;
+    grid-area: 1 / 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.22em;
     white-space: nowrap;
     opacity: 0;
     transform: translateY(110%);
-    animation: rotator-roll 12s cubic-bezier(0.85, 0, 0.15, 1) infinite;
+    animation: rotator-roll 10s cubic-bezier(0.85, 0, 0.15, 1) infinite;
     will-change: transform, opacity;
   }
-  .rotator > .rotator-word:nth-child(2) { animation-delay: 0s; }
-  .rotator > .rotator-word:nth-child(3) { animation-delay: 3s; }
-  .rotator > .rotator-word:nth-child(4) { animation-delay: 6s; }
-  .rotator > .rotator-word:nth-child(5) { animation-delay: 9s; }
+  .rotator > .rotator-word:nth-child(1) { animation-delay: 0s; }
+  .rotator > .rotator-word:nth-child(2) { animation-delay: 2.5s; }
+  .rotator > .rotator-word:nth-child(3) { animation-delay: 5s; }
+  .rotator > .rotator-word:nth-child(4) { animation-delay: 7.5s; }
 
   @keyframes rotator-roll {
     0%   { opacity: 0; transform: translateY(110%); }
-    5%   { opacity: 1; transform: translateY(0); }
-    23%  { opacity: 1; transform: translateY(0); }
-    28%  { opacity: 0; transform: translateY(-110%); }
+    6%   { opacity: 1; transform: translateY(0); }
+    25%  { opacity: 1; transform: translateY(0); }
+    31%  { opacity: 0; transform: translateY(-110%); }
     100% { opacity: 0; transform: translateY(-110%); }
   }
 
+  .rotator .brand-mark {
+    width: 0.78em;
+    height: 0.78em;
+    flex-shrink: 0;
+    display: block;
+  }
+
+  .brand-claude   { color: #cc785c; }
+  .brand-codex    { color: #ededed; }
+  .brand-opencode { color: #ededed; }
+  .brand-gemini   .brand-name {
+    background: linear-gradient(90deg, #4285f4 0%, #9b72cb 50%, #d96570 100%);
+    -webkit-background-clip: text;
+            background-clip: text;
+    color: transparent;
+  }
+
   /* note: rotator intentionally ignores prefers-reduced-motion — */
-  /* it's the hero's main signal of the product's value prop.      */
+  /* it's the hero's main signal of which agents we support.       */
   .hero .lede { margin-top: 28px; max-width: 56ch; }
   .hero .ctas {
     display: flex; flex-wrap: wrap; gap: 12px; margin-top: 36px;
@@ -1041,14 +1047,50 @@
   <div class="wrap inner">
     <h1 class="display">
       A control plane<br/>
-      for your AI agents,<br/>
-      <span class="rotator" role="text" aria-label="running your code on every device, from anywhere, even with the lid closed.">
-        <span class="rotator-sizer" aria-hidden="true">even with the lid closed.</span>
-        <span class="rotator-word" aria-hidden="true">running your code.</span>
-        <span class="rotator-word" aria-hidden="true">on every device.</span>
-        <span class="rotator-word" aria-hidden="true">even with the lid closed.</span>
-        <span class="rotator-word" aria-hidden="true">from your phone.</span>
-      </span>
+      for
+      <span class="rotator" role="text" aria-label="Claude, Codex, opencode, and Gemini">
+        <span class="rotator-word brand-claude" aria-hidden="true">
+          <svg class="brand-mark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <defs>
+              <path id="claude-spoke" d="M11.4 2 L12.6 2 L12.2 11.6 L11.8 11.6 Z"/>
+            </defs>
+            <use href="#claude-spoke"/>
+            <use href="#claude-spoke" transform="rotate(45 12 12)"/>
+            <use href="#claude-spoke" transform="rotate(90 12 12)"/>
+            <use href="#claude-spoke" transform="rotate(135 12 12)"/>
+            <use href="#claude-spoke" transform="rotate(180 12 12)"/>
+            <use href="#claude-spoke" transform="rotate(225 12 12)"/>
+            <use href="#claude-spoke" transform="rotate(270 12 12)"/>
+            <use href="#claude-spoke" transform="rotate(315 12 12)"/>
+          </svg><span class="brand-name">Claude</span>
+        </span>
+        <span class="rotator-word brand-codex" aria-hidden="true">
+          <svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+            <ellipse cx="12" cy="12" rx="9" ry="3"/>
+            <ellipse cx="12" cy="12" rx="9" ry="3" transform="rotate(60 12 12)"/>
+            <ellipse cx="12" cy="12" rx="9" ry="3" transform="rotate(120 12 12)"/>
+          </svg><span class="brand-name">Codex</span>
+        </span>
+        <span class="rotator-word brand-opencode" aria-hidden="true">
+          <svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M5 7 L11 12 L5 17"/>
+            <path d="M13 17 H19"/>
+          </svg><span class="brand-name">opencode</span>
+        </span>
+        <span class="rotator-word brand-gemini" aria-hidden="true">
+          <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+            <defs>
+              <linearGradient id="gem-grad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#4285f4"/>
+                <stop offset="50%" stop-color="#9b72cb"/>
+                <stop offset="100%" stop-color="#d96570"/>
+              </linearGradient>
+            </defs>
+            <path d="M12 1.5 C12 7, 17 11, 22.5 12 C17 13, 12 17, 12 22.5 C12 17, 7 13, 1.5 12 C7 11, 12 7, 12 1.5 Z" fill="url(#gem-grad)"/>
+          </svg><span class="brand-name">Gemini</span>
+        </span>
+      </span><br/>
+      <span class="accent">running your code.</span>
     </h1>
 
     <p class="lede">
