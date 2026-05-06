@@ -95,6 +95,26 @@ pub async fn capture_pane(target: &str, lines: usize) -> Result<String> {
     Ok(String::from_utf8(out.stdout)?)
 }
 
+/// Capture the current visible pane state with ANSI escapes (`-e`) so a
+/// faithful redraw can be replayed into a vt100 parser. Lines are joined
+/// into LF-terminated rows with `\r\n` so the bytes are valid for a raw
+/// terminal stream — `capture-pane -p` prints `\n` between rows but xterm
+/// expects `\r\n` to return to column 0.
+pub async fn capture_pane_ansi(target: &str) -> Result<Vec<u8>> {
+    let out = Command::new("tmux")
+        .args(["capture-pane", "-p", "-e", "-t"])
+        .arg(target)
+        .output()
+        .await?;
+    check(&out)?;
+    let mut buf = Vec::with_capacity(out.stdout.len() + 64);
+    for line in out.stdout.split(|b| *b == b'\n') {
+        buf.extend_from_slice(line);
+        buf.extend_from_slice(b"\r\n");
+    }
+    Ok(buf)
+}
+
 /// Send raw key spec (e.g. "C-c", "Enter") or text to a pane.
 /// `append_enter` adds a trailing Enter, useful for chat-style input bars.
 pub async fn send_keys(target: &str, keys: &str, append_enter: bool) -> Result<()> {

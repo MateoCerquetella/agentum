@@ -57,6 +57,19 @@ impl TerminalPane {
         self.parser.screen()
     }
 
+    /// True when the inner program has asked the terminal to deliver
+    /// mouse events (DECSET 1000 / 1002 / 1003). When this is on, scroll
+    /// wheel clicks should be forwarded to the program as escape
+    /// sequences — claude code, vim, htop, k9s all want it. When it's
+    /// off (or the inner program is on the main screen with shell-style
+    /// output), local scrollback wins instead.
+    pub fn wants_mouse_events(&self) -> bool {
+        !matches!(
+            self.parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::None
+        )
+    }
+
     pub fn reset(&mut self) {
         self.parser = Parser::new(self.rows, self.cols, SCROLLBACK);
         self.scrollback_offset = 0;

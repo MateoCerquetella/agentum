@@ -293,7 +293,7 @@ impl PendingAction {
                 format!("stop session `{name}`? (graceful, SIGTERM then kill after 5s)")
             }
             PendingAction::Kill { name, .. } => {
-                format!("kill session `{name}` immediately? (no graceful stop)")
+                format!("kill `{name}`? Stops the process and removes the session.")
             }
             PendingAction::Delete { name, running, .. } => {
                 if *running {
@@ -997,22 +997,22 @@ async fn handle_crossterm(
     }
 }
 
-/// Drive the terminal pane's scrollback in response to mouse events.
-/// Alacritty-style: scroll-wheel events stay inside agentum (we don't
-/// forward mouse events to the inner pane). The pane under the cursor
-/// owns the scroll. Click / drag / release events are intentionally
-/// ignored — text selection on the host terminal still works via
-/// Shift-click on every modern emulator.
+/// Route mouse events. Two-layer dispatch:
+///
+/// 1. If the inner program (claude code, vim, k9s, htop, …) has turned
+///    on mouse tracking, encode the event as an SGR escape sequence and
+///    forward it to the pane. Alt-screen TUIs all want this — the
+///    program owns scroll/click semantics, same as Alacritty / kitty /
+///    iTerm. Crucially, this is what unblocks scrollback inside claude
+///    code: vt100's local scrollback is empty in alt-screen mode, so
+///    the only way `Shift-PgUp`-style scrolling works is to let claude
+///    handle it natively.
+/// 2. Otherwise, scroll-wheel ticks drive agentum's own per-pane
+///    scrollback for shell-style output. Click / drag / move events are
+///    dropped (host terminal's Shift-click still works for native
+///    selection).
 fn handle_mouse(app: &mut App, ev: crossterm::event::MouseEvent) {
     use crossterm::event::MouseEventKind;
-    let lines = match ev.kind {
-        MouseEventKind::ScrollUp => Some(true),
-        MouseEventKind::ScrollDown => Some(false),
-        _ => None,
-    };
-    let Some(scroll_up) = lines else {
-        return;
-    };
     let Some(areas) = app.last_areas else {
         return; // first frame hasn't drawn yet
     };
@@ -1026,21 +1026,52 @@ fn handle_mouse(app: &mut App, ev: crossterm::event::MouseEvent) {
             && row >= r.y
             && row < r.y + r.height
     };
-    // Pick the slot whose rect the pointer is over. Right pane wins
-    // when split is open and the cursor is in its half.
-    let target = if let Some(right_rect) = areas.terminal_right
+    let (side, rect) = if let Some(right_rect) = areas.terminal_right
         && in_rect(right_rect)
     {
-        Some(Side::Right)
+        (Side::Right, right_rect)
     } else if in_rect(areas.terminal) {
-        Some(Side::Left)
+        (Side::Left, areas.terminal)
     } else {
-        None
-    };
-    let Some(side) = target else {
         return;
     };
-    // Apply the scroll to the matched slot's parser.
+
+    // Does the inner pane want the mouse? Inspect the slot's vt100
+    // mouse-protocol mode. When it's on, encode + forward; otherwise
+    // we own the event.
+    let wants_mouse = match side {
+        Side::Left => app.term.wants_mouse_events(),
+        Side::Right => app
+            .split_right
+            .as_ref()
+            .is_some_and(|s| s.term.wants_mouse_events()),
+    };
+
+    if wants_mouse {
+        // Translate absolute terminal coords into 1-based pane-local
+        // coords. The panel border is 1 cell, so the inner content
+        // starts at `(rect.x + 1, rect.y + 1)`. Subtract that, then add
+        // 1 because xterm coords are 1-based.
+        let inner_col = col.saturating_sub(rect.x.saturating_add(1)).saturating_add(1);
+        let inner_row = row.saturating_sub(rect.y.saturating_add(1)).saturating_add(1);
+        if let Some(seq) = encode_mouse_sgr(ev.kind, ev.modifiers, inner_col, inner_row) {
+            let tx = match side {
+                Side::Left => app.term_in.as_ref(),
+                Side::Right => app.split_right.as_ref().and_then(|s| s.term_in.as_ref()),
+            };
+            if let Some(tx) = tx {
+                let _ = tx.send(TermOut::Bytes(seq.into_bytes()));
+            }
+        }
+        return;
+    }
+
+    // Local scrollback path — only ever ScrollUp / ScrollDown.
+    let scroll_up = match ev.kind {
+        MouseEventKind::ScrollUp => true,
+        MouseEventKind::ScrollDown => false,
+        _ => return,
+    };
     let n = super::term::WHEEL_LINES_PER_TICK;
     match side {
         Side::Left => {
@@ -1059,6 +1090,57 @@ fn handle_mouse(app: &mut App, ev: crossterm::event::MouseEvent) {
                 }
             }
         }
+    }
+}
+
+/// Encode a crossterm mouse event as an xterm SGR sequence (DECSET 1006
+/// / `\x1b[<…M|m`). xterm SGR is what every modern alt-screen TUI
+/// requests, so always emitting it is the safe default.
+///
+/// - Press codes: 0 = left, 1 = middle, 2 = right
+/// - Drag adds +32; the button code is preserved
+/// - Scroll wheel: 64 = up, 65 = down (66/67 = horizontal)
+/// - Modifier bits: shift +4, alt +8, ctrl +16
+/// - Trailing `M` for press / motion / scroll, `m` for release
+fn encode_mouse_sgr(
+    kind: crossterm::event::MouseEventKind,
+    mods: crossterm::event::KeyModifiers,
+    col: u16,
+    row: u16,
+) -> Option<String> {
+    use crossterm::event::{KeyModifiers, MouseEventKind};
+    let (mut btn, action): (u32, char) = match kind {
+        MouseEventKind::Down(b) => (button_code(b), 'M'),
+        MouseEventKind::Up(b) => (button_code(b), 'm'),
+        MouseEventKind::Drag(b) => (button_code(b) + 32, 'M'),
+        MouseEventKind::ScrollUp => (64, 'M'),
+        MouseEventKind::ScrollDown => (65, 'M'),
+        MouseEventKind::ScrollLeft => (66, 'M'),
+        MouseEventKind::ScrollRight => (67, 'M'),
+        // Bare-move events (no button) are AnyMotion-mode-only. We
+        // don't inspect the requested mode here, so drop them — most
+        // apps don't ask for this and the event flood would saturate
+        // the stream on trackpad pointer movement anyway.
+        MouseEventKind::Moved => return None,
+    };
+    if mods.contains(KeyModifiers::SHIFT) {
+        btn += 4;
+    }
+    if mods.contains(KeyModifiers::ALT) {
+        btn += 8;
+    }
+    if mods.contains(KeyModifiers::CONTROL) {
+        btn += 16;
+    }
+    Some(format!("\x1b[<{btn};{col};{row}{action}"))
+}
+
+fn button_code(b: crossterm::event::MouseButton) -> u32 {
+    use crossterm::event::MouseButton;
+    match b {
+        MouseButton::Left => 0,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
     }
 }
 
@@ -1197,39 +1279,12 @@ async fn handle_key(
         }
     }
 
-    // Global panel switch — works *even with a pane focused* so you can
-    // escape Term/Lazygit without first releasing focus. The binding
-    // mirrors Slack/iTerm2/browser tab cycling (Cmd-Shift-]/[ on macOS,
-    // which translates to Ctrl-Shift-]/[ in a TUI since Cmd never reaches
-    // the app).
-    //   Ctrl-Shift-]  → next panel
-    //   Ctrl-Shift-[  → previous panel
-    // Plain `[` / `]` remain available in non-pane focus (handled lower
-    // down) so they don't get swallowed when typing into claude code.
-    //
-    // Why Ctrl-Shift and not plain Ctrl: Ctrl-[ in plain ASCII *is* the
-    // ESC byte — terminals can't distinguish the two without the Kitty
-    // Keyboard Protocol (which we push in mod.rs::run when supported).
-    // Ctrl-Shift-[ doesn't have that ambiguity, so it works on more
-    // emulators and survives accidentally running through nested screen
-    // sessions.
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let ctrl_shift = ctrl && key.modifiers.contains(KeyModifiers::SHIFT);
-    // Match both `]` and `}` because some emulators report Shift-] as the
-    // shifted glyph, others as `]` with the Shift modifier set. The Kitty
-    // protocol normalises this, but we accept both for portability.
-    if ctrl_shift && matches!(key.code, KeyCode::Char(']') | KeyCode::Char('}')) {
-        app.set_focus(next_focus(app.focus, app.lazygit_open(), app.split_open()));
-        return;
-    }
-    if ctrl_shift && matches!(key.code, KeyCode::Char('[') | KeyCode::Char('{')) {
-        app.set_focus(prev_focus(app.focus, app.lazygit_open(), app.split_open()));
-        return;
-    }
 
-    // F5 / F6 — reliable global panel switchers. Use these instead of
-    // Ctrl-Shift-] / Ctrl-Shift-[ when your terminal doesn't speak the
-    // Kitty Keyboard Protocol (e.g. plain xterm, cmd.exe).
+    // F5 / F6 — global panel switchers, work even with a pane focused.
+    // The Ctrl-Shift-] / Ctrl-Shift-[ pair was removed (it conflicted
+    // with bracket typing on emulators that report shifted brackets as
+    // unshifted glyphs); F5/F6 stays as the universal cycle.
     if key.code == KeyCode::F(5) {
         app.set_focus(next_focus(app.focus, app.lazygit_open(), app.split_open()));
         return;
@@ -1921,13 +1976,21 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
     let result = match &action {
         PendingAction::Start { id, .. } => client.start_session(*id).await,
         PendingAction::Stop { id, .. } => client.stop_session(*id).await,
-        PendingAction::Kill { id, .. } => client.kill_session(*id).await,
+        // "Kill" in the TUI means kill-and-remove: drop the tmux session
+        // AND the store record so the entry disappears from the tree.
+        // The split-brain behaviour where Kill stopped the process but
+        // left a corpse in the sidebar was confusing — users expect
+        // "kill terminal" to behave the same way every other multiplexer
+        // does (close + remove). The legacy stop-only verb is still
+        // reachable as `s`/Stop for the rare "I want to restart this
+        // exact session later" case.
+        PendingAction::Kill { id, .. } => client.delete_session(*id, true).await,
         PendingAction::Delete { id, running, .. } => client.delete_session(*id, *running).await,
     };
     let label = match &action {
         PendingAction::Start { name, .. } => format!("started `{name}`"),
         PendingAction::Stop { name, .. } => format!("stopped `{name}`"),
-        PendingAction::Kill { name, .. } => format!("killed `{name}`"),
+        PendingAction::Kill { name, .. } => format!("killed & removed `{name}`"),
         PendingAction::Delete { name, .. } => format!("deleted `{name}`"),
     };
     match result {
@@ -1949,7 +2012,7 @@ pub fn palette_catalog(app: &App) -> Catalog {
         .iter()
         .map(|s| (s.id, s.name.clone(), s.workdir.clone()))
         .collect();
-    Catalog::build(app.lazygit_open(), &sessions)
+    Catalog::build(app.lazygit_open(), &sessions, app.selected)
 }
 
 async fn handle_palette_key(
@@ -2226,8 +2289,21 @@ fn key_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
         KeyCode::Enter => out.push(b'\r'),
         KeyCode::Tab => out.push(b'\t'),
         KeyCode::BackTab => out.extend(b"\x1b[Z"),
+        // Ctrl/Alt + Backspace → backward-kill-word. `\x1b\x7f` is the
+        // readline default binding for backward-kill-word and is what
+        // bash/zsh/fish/Claude Code's input layer all recognise out of
+        // the box. Without this branch the modifier was being dropped
+        // and the keystroke degraded to a plain single-char delete.
+        KeyCode::Backspace if alt || ctrl => out.extend(b"\x1b\x7f"),
         KeyCode::Backspace => out.push(0x7f),
         KeyCode::Esc => out.push(0x1b),
+        // Ctrl/Alt + arrows → word-wise motion via Meta-b / Meta-f. These
+        // are the readline default bindings so they work in shells and
+        // in Claude Code without any rc-file tweaks. Vim sees them as
+        // `Esc b` / `Esc f` which is also word-back/word-forward in
+        // normal mode, so embedded vim still does the right thing.
+        KeyCode::Left if alt || ctrl => out.extend(b"\x1bb"),
+        KeyCode::Right if alt || ctrl => out.extend(b"\x1bf"),
         KeyCode::Up => out.extend(b"\x1b[A"),
         KeyCode::Down => out.extend(b"\x1b[B"),
         KeyCode::Right => out.extend(b"\x1b[C"),
@@ -2236,6 +2312,8 @@ fn key_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
         KeyCode::End => out.extend(b"\x1b[F"),
         KeyCode::PageUp => out.extend(b"\x1b[5~"),
         KeyCode::PageDown => out.extend(b"\x1b[6~"),
+        // Ctrl/Alt + Delete → forward-kill-word (`\x1bd`, readline Meta-d).
+        KeyCode::Delete if alt || ctrl => out.extend(b"\x1bd"),
         KeyCode::Delete => out.extend(b"\x1b[3~"),
         KeyCode::Insert => out.extend(b"\x1b[2~"),
         KeyCode::F(n) => match n {
@@ -2510,9 +2588,12 @@ fn push_notification(app: &mut App, text: String) {
     app.status_msg = Some(app.notifications.last().cloned().unwrap_or_default());
 }
 
-/// Spawn a plain bash terminal as a session. Uses the passthrough adapter
-/// so the server picks up `bash` from PATH. Stored as a regular session so
-/// it appears in the tree and can be killed/deleted like any other agent.
+/// Spawn a plain interactive shell as a session. Uses the `terminal`
+/// adapter so the server picks the user's `$SHELL` (fish / zsh / bash)
+/// rather than hard-coding bash — matching what the user gets when they
+/// open a new tab in their host terminal. Stored as a regular session
+/// so it appears in the tree and can be killed/deleted like any other
+/// agent.
 async fn spawn_plain_terminal(
     app: &mut App,
     client: &Client,
@@ -2524,7 +2605,7 @@ async fn spawn_plain_terminal(
         .or_else(|| std::env::var("HOME").ok())
         .unwrap_or_else(|| ".".into());
     match client
-        .create_session(&name, &workdir, "bash", None, vec![])
+        .create_session(&name, &workdir, "terminal", None, vec![])
         .await
     {
         Ok(created) => {

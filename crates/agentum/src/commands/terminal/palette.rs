@@ -96,11 +96,37 @@ pub struct Catalog {
 
 impl Catalog {
     /// Build the live action list. Pure — call from a draw or key handler.
+    /// `selected` is the currently-highlighted session (if any). When
+    /// present, its kill/delete entries are pinned to the very top so
+    /// the most likely action ("get rid of *this* terminal") is one
+    /// keystroke away with no typing.
     pub fn build(
         lazygit_open: bool,
         sessions: &[(Uuid, String, String)], // (id, name, workdir)
+        selected: Option<Uuid>,
     ) -> Self {
         let mut a = Vec::with_capacity(32);
+
+        // Lead with the destructive action for the active session — this
+        // is what users hit Ctrl-P looking for ("close this thing").
+        // Resolve the name from `sessions` so a stale `selected` (id no
+        // longer in the list) silently drops without crashing.
+        if let Some(id) = selected
+            && let Some((_, name, _)) = sessions.iter().find(|(sid, _, _)| *sid == id)
+        {
+            a.push(Action {
+                label: format!("Kill this terminal: {name}"),
+                hint: "Shift-K".into(),
+                group: "sessions",
+                kind: ActionKind::KillSession(id),
+            });
+            a.push(Action {
+                label: format!("Delete this terminal: {name}"),
+                hint: "x · Shift-D".into(),
+                group: "sessions",
+                kind: ActionKind::DeleteSession(id),
+            });
+        }
 
         a.push(Action {
             label: "Quit agentum".into(),
@@ -121,7 +147,7 @@ impl Catalog {
             kind: ActionKind::Refresh,
         });
         a.push(Action {
-            label: "Spawn plain terminal (bash)".into(),
+            label: "Spawn terminal ($SHELL)".into(),
             hint: "t".into(),
             group: "general",
             kind: ActionKind::SpawnTerminal,
@@ -190,6 +216,11 @@ impl Catalog {
         // surfaces all of them; in default mode the explicit
         // "Kill: …" / "Delete: …" labels keep them distinguishable
         // from "Session: …" via subsequence match.
+        //
+        // The currently-selected session's kill/delete entries are
+        // already pinned at the top (above), so we skip emitting them
+        // again here — keeps the catalogue tidy and stops the active
+        // session's kill from showing up twice.
         for (id, name, workdir) in sessions {
             a.push(Action {
                 label: format!("Session: {name}"),
@@ -197,6 +228,9 @@ impl Catalog {
                 group: "sessions",
                 kind: ActionKind::SelectSession(*id),
             });
+            if Some(*id) == selected {
+                continue;
+            }
             a.push(Action {
                 label: format!("Kill session: {name}"),
                 hint: "Shift-K".into(),

@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.11] — 2026-05-06
+
+Stream snapshot on session switch.
+
+### Fixed
+- **Switching sessions no longer lands you on a fragmented half-frame.**
+  The WS terminal stream used to backfill only the last 4 KB of the
+  pane log on connect. For embedded TUIs that paint via cursor-position
+  escapes (claude code, codex, opencode, k9s, …) 4 KB rarely contains a
+  self-consistent screen — the parser ended up mid-redraw, so after
+  flipping from `agentum-1` to `agentum-4` you'd see a stray "Musing…"
+  line and a floating cursor, with the rest of the pane blank.
+- **Fix:** the server now calls `tmux capture-pane -e` on stream open,
+  prefixes a `\x1b[2J\x1b[H` (clear + cursor home) and replays the
+  current visible frame *before* tailing the log. The vt100 parser on
+  the client lands on a clean snapshot every time. The old 4 KB tail
+  remains as a fallback for sessions that haven't been wired through
+  tmux yet (early start-up window).
+
 ## [0.6.10] — 2026-05-06
 
 VS Code-style keybindings + split panes for the TUI, plus `--yolo` on
@@ -21,13 +40,16 @@ count in the tree title.
   (falls back to `bash`). Listed in CLI tool help, TUI Tab cycle,
   and the dashboard's New Session datalist so picking "terminal"
   works the same way from every entry point.
-- **Alacritty-style pad scroll.** Mouse-wheel / trackpad events now
-  scroll the agentum pane under the cursor, not the inner program.
-  Crossterm's mouse capture is enabled at startup, scroll events bump
-  a per-`TerminalPane` offset on top of vt100's 4096-line history,
-  and any keystroke forwarded into the pane snaps the view back to
-  live (matching Alacritty / kitty). A `↑ scroll N` badge in the
-  pane title makes the state obvious. `Shift-PgUp` / `Shift-PgDn`
+- **Alacritty-style pad scroll.** Mouse capture is enabled at startup
+  and the wheel / trackpad routes by what the inner program asked for:
+  when an alt-screen TUI (claude code, vim, htop, k9s, …) has turned
+  on xterm mouse tracking, scroll / click / drag events are forwarded
+  to it as SGR escape sequences (DECSET 1006) — so claude code's own
+  scrollback works. Otherwise, scroll-wheel ticks drive agentum's
+  per-`TerminalPane` offset on top of vt100's 4096-line history, and
+  any forwarded keystroke snaps the view back to live (matching
+  Alacritty / kitty). A `↑ scroll N` badge in the pane title makes
+  the local-scrollback state obvious. `Shift-PgUp` / `Shift-PgDn`
   do the same one page at a time without a pointer. Side-effect:
   native click-drag selection on the host terminal now needs `Shift`
   to bypass app-mode capture (the standard convention).

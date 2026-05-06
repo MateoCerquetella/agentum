@@ -306,6 +306,13 @@ impl Client {
         self.post_session_action(id, "stop").await
     }
 
+    /// Kept as a thin wrapper around `/api/sessions/{id}/kill`. The TUI's
+    /// "Kill" verb now routes through `delete_session(id, force=true)`
+    /// (which kills *and* removes the record so the entry disappears
+    /// from the tree). The bare-kill endpoint is still useful for any
+    /// future caller that wants to stop the process while keeping the
+    /// session listed for restart — leave it on the client surface.
+    #[allow(dead_code)]
     pub async fn kill_session(&self, id: Uuid) -> Result<()> {
         self.post_session_action(id, "kill").await
     }
