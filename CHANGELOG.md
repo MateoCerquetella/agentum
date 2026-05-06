@@ -4,6 +4,35 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.24] — 2026-05-06
+
+### Fixed
+- **YOLO mode crashed non-Claude agents.** Both clients (TUI + dashboard)
+  pushed Claude's spelling — `--dangerously-skip-permissions` — into
+  every session's flags list when YOLO was on, and each executor
+  adapter forwarded `session.flags` verbatim. Codex sessions died
+  immediately at launch with `error: unexpected argument
+  '--dangerously-skip-permissions' found / tip: a similar argument
+  exists: '--dangerously-bypass-approvals-and-sandbox'`. `opencode`
+  had the same shape (listed in `YOLO_TOOLS` but no known flag).
+
+  YOLO is now translated at adapter launch, not the wire: clients
+  still push the canonical marker (`--dangerously-skip-permissions`)
+  for back-compat, and `ToolAdapter::yolo_flag()` declares each
+  binary's actual spelling. The translation is per-tool:
+
+  - claude → `--dangerously-skip-permissions` (identity)
+  - codex → `--dangerously-bypass-approvals-and-sandbox`
+  - gemini → `--yolo`
+  - tools without a known flag → marker is dropped (silent no-op
+    rather than a launch crash)
+
+  `opencode` is removed from `YOLO_TOOLS` in both clients until its
+  flag is verified — clicking YOLO with opencode selected just hides
+  the toggle now, instead of crashing the session on launch.
+
+  Regression tests cover all three transformations + the drop path.
+
 ## [0.6.23] — 2026-05-06
 
 ### Fixed

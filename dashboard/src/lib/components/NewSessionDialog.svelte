@@ -17,7 +17,16 @@
   let error = $state<string | null>(null);
 
   const tools = ['claude', 'codex', 'opencode', 'aider', 'terminal', 'bash'];
-  const yoloTools = new Set(['claude', 'codex', 'opencode']);
+  // Must match `YOLO_TOOLS` in `crates/agentum/src/commands/terminal/app.rs`
+  // and the set of executor adapters whose `yolo_flag()` returns Some.
+  // The on-the-wire flag is always `--dangerously-skip-permissions`
+  // (the marker); the server's adapter translates to the per-tool
+  // spelling at launch (claude: identity, codex:
+  // `--dangerously-bypass-approvals-and-sandbox`, gemini: `--yolo`).
+  // `opencode` was here in <=0.6.23 under the wrong assumption that it
+  // accepts Claude's flag verbatim — it doesn't, and codex sessions
+  // crashed on launch with "unexpected argument" until v0.6.24.
+  const yoloTools = new Set(['claude', 'codex', 'gemini']);
 
   function reset() {
     name = '';

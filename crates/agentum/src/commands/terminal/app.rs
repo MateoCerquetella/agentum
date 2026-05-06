@@ -138,12 +138,22 @@ pub struct ErrorEntry {
 /// dialog. Pressing Tab on the `Tool` field cycles through these.
 pub const TOOL_SUGGESTIONS: &[&str] = &["claude", "codex", "opencode", "aider", "bash"];
 
-/// Tools that accept `--dangerously-skip-permissions`. Mirrors the
+/// Tools that support YOLO / skip-permissions mode. Must mirror the
 /// `yoloTools` set in `dashboard/src/lib/components/NewSessionDialog.svelte`
-/// so the TUI and web treat the same set of agents as YOLO-capable.
-pub const YOLO_TOOLS: &[&str] = &["claude", "codex", "opencode"];
+/// AND the set of adapters whose `yolo_flag()` returns `Some(_)` in
+/// `crates/agentum-executor/src/adapters.rs`. `opencode` was previously
+/// listed here under the (wrong) assumption that it accepts Claude's
+/// flag — that footgun was the v0.6.24 fix; only add tools back once
+/// their adapter declares the correct per-tool flag.
+pub const YOLO_TOOLS: &[&str] = &["claude", "codex", "gemini"];
 
-/// Flag appended when YOLO mode is on and the tool is in `YOLO_TOOLS`.
+/// Wire-format YOLO marker. Both surfaces push this exact string into
+/// `Session::flags` when the YOLO toggle is on, regardless of tool.
+/// The executor adapter translates it to the tool-specific flag at
+/// launch time (`agentum-executor::translate_yolo_marker`); never push
+/// a different spelling here or you'll defeat the translation layer
+/// and reintroduce the v0.6.23 codex crash (`unexpected argument
+/// '--dangerously-skip-permissions'`).
 pub const YOLO_FLAG: &str = "--dangerously-skip-permissions";
 
 /// Inline new-session form. Mirrors the web `NewSessionDialog` field-for-

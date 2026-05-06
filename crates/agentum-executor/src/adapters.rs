@@ -2,7 +2,7 @@
 
 use agentum_core::Session;
 
-use crate::{LaunchCommand, ToolAdapter};
+use crate::{LaunchCommand, ToolAdapter, translate_yolo_marker};
 
 /// Append `--model=<v>` to argv if the session has a model set.
 fn push_model(argv: &mut Vec<String>, session: &Session) {
@@ -11,9 +11,13 @@ fn push_model(argv: &mut Vec<String>, session: &Session) {
     }
 }
 
-/// Append all user-provided flags verbatim.
-fn push_user_flags(argv: &mut Vec<String>, session: &Session) {
-    argv.extend(session.flags.iter().cloned());
+/// Append all user-provided flags, translating the YOLO marker into the
+/// adapter's own per-tool YOLO flag (or dropping it for tools without
+/// one). Adapters call this instead of pushing `session.flags` raw so
+/// that a single Claude-flavoured marker on the wire becomes the
+/// correct flag for whichever binary the adapter actually launches.
+fn push_user_flags(argv: &mut Vec<String>, session: &Session, yolo_flag: Option<&str>) {
+    argv.extend(translate_yolo_marker(&session.flags, yolo_flag));
 }
 
 // ---------- claude ----------
@@ -28,7 +32,7 @@ impl ToolAdapter for ClaudeAdapter {
     fn launch(&self, session: &Session) -> LaunchCommand {
         let mut argv = vec!["claude".to_string()];
         push_model(&mut argv, session);
-        push_user_flags(&mut argv, session);
+        push_user_flags(&mut argv, session, self.yolo_flag());
         LaunchCommand::argv_only(argv)
     }
 
@@ -38,6 +42,13 @@ impl ToolAdapter for ClaudeAdapter {
 
     fn crash_signatures(&self) -> &'static [&'static str] {
         &["redacted_thinking", "panic: cannot continue"]
+    }
+
+    // Claude Code's native spelling — the YOLO_MARKER constant matches
+    // this exactly, so translation here is the identity. Kept explicit
+    // so a future Claude rename only has to update this single spot.
+    fn yolo_flag(&self) -> Option<&'static str> {
+        Some("--dangerously-skip-permissions")
     }
 
     // Claude Code's spinner footer always carries "esc to interrupt"
@@ -74,13 +85,20 @@ impl ToolAdapter for CodexAdapter {
     fn launch(&self, session: &Session) -> LaunchCommand {
         let mut argv = vec!["codex".to_string()];
         push_model(&mut argv, session);
-        push_user_flags(&mut argv, session);
+        push_user_flags(&mut argv, session, self.yolo_flag());
         LaunchCommand::argv_only(argv)
     }
 
     // Codex CLI uses `/compact` too as of late 2025.
     fn compact_trigger(&self) -> Option<&'static str> {
         Some("/compact")
+    }
+
+    // Codex's no-confirmations switch. Codex itself emits this exact
+    // string as the "did you mean?" tip when handed Claude's flag, so
+    // it's the documented spelling — not a guess.
+    fn yolo_flag(&self) -> Option<&'static str> {
+        Some("--dangerously-bypass-approvals-and-sandbox")
     }
 }
 
@@ -96,8 +114,13 @@ impl ToolAdapter for GeminiAdapter {
     fn launch(&self, session: &Session) -> LaunchCommand {
         let mut argv = vec!["gemini".to_string()];
         push_model(&mut argv, session);
-        push_user_flags(&mut argv, session);
+        push_user_flags(&mut argv, session, self.yolo_flag());
         LaunchCommand::argv_only(argv)
+    }
+
+    // Gemini CLI accepts `--yolo` for non-interactive permission skipping.
+    fn yolo_flag(&self) -> Option<&'static str> {
+        Some("--yolo")
     }
 }
 
@@ -118,7 +141,7 @@ impl ToolAdapter for HermesAdapter {
         if let Some(m) = &session.model {
             argv.push(format!("--model={m}"));
         }
-        push_user_flags(&mut argv, session);
+        push_user_flags(&mut argv, session, self.yolo_flag());
         LaunchCommand::argv_only(argv)
     }
 }
@@ -138,7 +161,7 @@ impl ToolAdapter for TerminalAdapter {
     fn launch(&self, session: &Session) -> LaunchCommand {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "bash".into());
         let mut argv = vec![shell];
-        push_user_flags(&mut argv, session);
+        push_user_flags(&mut argv, session, self.yolo_flag());
         LaunchCommand::argv_only(argv)
     }
 }
@@ -165,7 +188,7 @@ impl ToolAdapter for PassthroughAdapter {
     fn launch(&self, session: &Session) -> LaunchCommand {
         let mut argv = vec![self.tool.clone()];
         push_model(&mut argv, session);
-        push_user_flags(&mut argv, session);
+        push_user_flags(&mut argv, session, self.yolo_flag());
         LaunchCommand::argv_only(argv)
     }
 }
@@ -235,6 +258,48 @@ mod tests {
         let s = fixture("weird", None, &["--foo", "--bar=baz"]);
         let cmd = adapter_for(&s.tool).launch(&s);
         assert_eq!(cmd.argv, vec!["weird", "--foo", "--bar=baz"]);
+    }
+
+    #[test]
+    fn codex_translates_yolo_marker_to_its_own_flag() {
+        // Both clients ship `--dangerously-skip-permissions` (Claude's
+        // spelling) on the wire when YOLO is on. CodexAdapter must
+        // translate it — feeding Claude's flag verbatim to codex
+        // produces `error: unexpected argument '--dangerously-skip-
+        // permissions' found / tip: a similar argument exists:
+        // '--dangerously-bypass-approvals-and-sandbox'`. Regression
+        // test for v0.6.24.
+        let s = fixture("codex", None, &["--dangerously-skip-permissions"]);
+        let cmd = CodexAdapter.launch(&s);
+        assert_eq!(
+            cmd.argv,
+            vec!["codex", "--dangerously-bypass-approvals-and-sandbox"]
+        );
+    }
+
+    #[test]
+    fn gemini_translates_yolo_marker_to_yolo() {
+        let s = fixture("gemini", None, &["--dangerously-skip-permissions"]);
+        let cmd = GeminiAdapter.launch(&s);
+        assert_eq!(cmd.argv, vec!["gemini", "--yolo"]);
+    }
+
+    #[test]
+    fn hermes_drops_yolo_marker_when_unsupported() {
+        // HermesAdapter has no yolo_flag; translation drops the marker
+        // rather than passing Claude's flag to a binary that doesn't
+        // know it. The user effectively gets non-YOLO; preferable to a
+        // crash on launch.
+        let s = fixture("hermes", None, &["--dangerously-skip-permissions"]);
+        let cmd = HermesAdapter.launch(&s);
+        assert_eq!(cmd.argv, vec!["hermes", "run", "--workdir", "/tmp/work"]);
+    }
+
+    #[test]
+    fn non_yolo_flags_pass_through_unchanged() {
+        let s = fixture("codex", None, &["--foo", "--bar=baz"]);
+        let cmd = CodexAdapter.launch(&s);
+        assert_eq!(cmd.argv, vec!["codex", "--foo", "--bar=baz"]);
     }
 
     #[test]

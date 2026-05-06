@@ -55,9 +55,11 @@ pub enum Cmd {
         #[arg(long)]
         up: bool,
 
-        /// Append `--dangerously-skip-permissions` for permission-skipping
-        /// agents (claude, codex, opencode). Ignored for tools that don't
-        /// support it.
+        /// Skip permission prompts for the underlying agent. The flag's
+        /// spelling differs per tool (claude: --dangerously-skip-permissions,
+        /// codex: --dangerously-bypass-approvals-and-sandbox, gemini:
+        /// --yolo) — the executor adapter picks the right one. Silently
+        /// ignored for tools without a known YOLO flag.
         #[arg(long)]
         yolo: bool,
     },

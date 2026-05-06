@@ -1273,10 +1273,14 @@ fn draw_new_session_overlay(f: &mut Frame<'_>, area: Rect, form: &NewSessionForm
     );
     let yolo_supported = form.yolo_active() || form.yolo;
     let yolo_label = if !yolo_supported && form.yolo {
-        // User toggled it on but the current tool doesn't accept the flag.
-        "YOLO mode (--dangerously-skip-permissions, ignored for this tool)"
+        // User toggled it on but the current tool doesn't have a known
+        // YOLO flag — adapter will drop the marker at launch.
+        "YOLO mode (skip permission prompts — ignored for this tool)"
     } else {
-        "YOLO mode (--dangerously-skip-permissions)"
+        // Generic — actual flag is tool-specific (claude:
+        // --dangerously-skip-permissions, codex:
+        // --dangerously-bypass-approvals-and-sandbox, gemini: --yolo).
+        "YOLO mode (skip permission prompts)"
     };
     push_toggle_field(
         &mut lines,
