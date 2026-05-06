@@ -29,6 +29,9 @@ mod logging;
 pub mod ratelimit;
 mod routes;
 pub mod tls;
+mod transcript_store;
+
+pub use transcript_store::TranscriptStore;
 
 pub use error::ApiError;
 
@@ -53,6 +56,10 @@ pub struct AppState {
     /// this anonymously (before login) so the user can verify it matches
     /// what `agentum serve` printed on the host TTY.
     pub cert_fingerprint: Arc<String>,
+    /// Per-session in-memory cache of plan/todos/tasks, populated by
+    /// tailing each agent's Claude Code transcript. See
+    /// [`transcript_store`] for how it stays in sync.
+    pub transcripts: TranscriptStore,
 }
 
 impl AppState {
@@ -65,6 +72,7 @@ impl AppState {
         bus: broadcast::Sender<Event>,
         cert_fingerprint: String,
     ) -> Self {
+        let transcripts = TranscriptStore::new(bus.clone());
         Self {
             store: Arc::new(store),
             bus,
@@ -75,6 +83,7 @@ impl AppState {
                 AUTH_RATE_LIMIT_WINDOW,
             )),
             cert_fingerprint: Arc::new(cert_fingerprint),
+            transcripts,
         }
     }
 }
@@ -93,6 +102,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::doctor::router())
         .merge(routes::auth::router())
         .merge(routes::sessions::router())
+        .merge(routes::agent_tasks::router())
         .merge(routes::board::router())
         .merge(routes::notes::router())
         .merge(routes::channels::router())

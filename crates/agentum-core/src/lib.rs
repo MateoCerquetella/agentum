@@ -9,6 +9,8 @@ use std::str::FromStr;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+pub mod transcript;
+
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
     #[error("invalid session status: {0}")]
