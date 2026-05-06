@@ -99,11 +99,11 @@ select_mode() {
     printf '       Server · Dashboard · TLS · tmux — full web UI\n'
     printf '       %s›%s %sagentum serve%s on your LAN, dashboard from any device\n\n' "${C_D}" "${C_R}" "${C_C}" "${C_R}"
     printf '  %s⌨️   [2] %sTerminal CLI%s\n'         "${C_B}" "${C_BL}" "${C_R}"
-    printf '       CLI-only tmux session manager, no server/TLS\n'
-    printf '       %s›%s %sagentum new/up/down/ls/tail%s from your terminal\n\n' "${C_D}" "${C_R}" "${C_C}" "${C_R}"
+    printf '       Fullscreen TUI + CLI session manager, no server/TLS\n'
+    printf '       %s›%s %sagentum terminal%s for the TUI, %sagentum new/ls/tail%s for scripts\n\n' "${C_D}" "${C_R}" "${C_C}" "${C_R}" "${C_C}" "${C_R}"
     printf '  %s✨  [3] %sBoth%s %s(recommended)%s\n' "${C_B}" "${C_G}" "${C_R}" "${C_D}" "${C_R}"
-    printf '       Install once, get the dashboard %sand%s the CLI workflow.\n' "${C_C}" "${C_R}"
-    printf '       %s›%s same binary — %sagentum serve%s or %sagentum new%s whenever you like\n\n' "${C_D}" "${C_R}" "${C_C}" "${C_R}" "${C_C}" "${C_R}"
+    printf '       Install once, get the dashboard %sand%s the terminal workflow.\n' "${C_C}" "${C_R}"
+    printf '       %s›%s same binary — %sagentum serve%s or %sagentum terminal%s whenever you like\n\n' "${C_D}" "${C_R}" "${C_C}" "${C_R}" "${C_C}" "${C_R}"
     while true; do
         printf '  %sChoice [1-3] (3):%s ' "${C_D}" "${C_R}"
         choice=""; read_input choice; choice="${choice:-3}"
@@ -267,9 +267,9 @@ post_cli() {
     printf '\n'
     div " Get started "
     printf '\n'
-    h "1. Create an agent:  ${C_C}agentum new my-agent --tool claude --dir . --up${C_R}"
-    h "2. Watch it work:    ${C_C}agentum tail my-agent${C_R}   ${C_D}(or ${C_C}open${C_R}${C_D} to attach)${C_R}"
-    h "3. Manage sessions:  ${C_C}agentum ls${C_R} | ${C_C}ps${C_R} | ${C_C}send${C_R} | ${C_C}down${C_R}"
+    h "1. Open the terminal UI:  ${C_C}agentum terminal${C_R}   ${C_D}(fullscreen TUI)${C_R}"
+    h "2. Create an agent:       ${C_C}agentum new my-agent --tool claude --dir . --up${C_R}"
+    h "3. Watch / manage:        ${C_C}agentum tail my-agent${C_R} · ${C_C}ls${C_R} · ${C_C}ps${C_R} · ${C_C}open${C_R} · ${C_C}down${C_R}"
     printf '\n'
     h "Want a web dashboard later? Run ${C_C}agentum serve${C_R} anytime."
     printf '\n'
@@ -280,14 +280,14 @@ post_both() {
     div " Get started "
     printf '\n'
     h "${C_B}From the terminal${C_R}"
-    h "  1. Create an agent:  ${C_C}agentum new my-agent --tool claude --dir . --up${C_R}"
-    h "  2. Watch it work:    ${C_C}agentum tail my-agent${C_R}"
-    h "  3. Manage sessions:  ${C_C}agentum ls${C_R} | ${C_C}ps${C_R} | ${C_C}open${C_R} | ${C_C}send${C_R} | ${C_C}down${C_R}"
+    h "  1. Open the terminal UI:  ${C_C}agentum terminal${C_R}   ${C_D}(fullscreen TUI)${C_R}"
+    h "  2. Create an agent:       ${C_C}agentum new my-agent --tool claude --dir . --up${C_R}"
+    h "  3. Watch / manage:        ${C_C}agentum tail my-agent${C_R} · ${C_C}ls${C_R} · ${C_C}ps${C_R} · ${C_C}open${C_R} · ${C_C}down${C_R}"
     printf '\n'
     h "${C_B}From the dashboard${C_R}"
-    h "  4. Start the server: ${C_C}agentum serve${C_R}"
-    h "  5. Open in browser:  ${C_C}https://127.0.0.1:8822${C_R}  ${C_D}(self-signed TLS)${C_R}"
-    h "  6. Get your token:   ${C_C}agentum auth show${C_R}"
+    h "  4. Start the server:      ${C_C}agentum serve${C_R}"
+    h "  5. Open in browser:       ${C_C}https://127.0.0.1:8822${C_R}  ${C_D}(self-signed TLS)${C_R}"
+    h "  6. Get your token:        ${C_C}agentum auth show${C_R}"
     printf '\n'
     h "Health check: ${C_C}agentum doctor${C_R}"
     printf '\n'

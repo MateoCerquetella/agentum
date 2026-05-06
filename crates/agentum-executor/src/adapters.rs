@@ -102,6 +102,26 @@ impl ToolAdapter for HermesAdapter {
     }
 }
 
+// ---------- terminal ----------
+
+/// Plain interactive shell. Honors `$SHELL` (the user's login shell), falling
+/// back to `bash`. The session's user flags are appended verbatim and any
+/// configured `model` is ignored — shells don't take one.
+pub struct TerminalAdapter;
+
+impl ToolAdapter for TerminalAdapter {
+    fn name(&self) -> &'static str {
+        "terminal"
+    }
+
+    fn launch(&self, session: &Session) -> LaunchCommand {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "bash".into());
+        let mut argv = vec![shell];
+        push_user_flags(&mut argv, session);
+        LaunchCommand::argv_only(argv)
+    }
+}
+
 // ---------- passthrough ----------
 
 /// Catch-all adapter for any binary we don't have first-class knowledge of.

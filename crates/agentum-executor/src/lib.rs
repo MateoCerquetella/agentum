@@ -12,7 +12,9 @@ use agentum_core::Session;
 
 mod adapters;
 
-pub use adapters::{ClaudeAdapter, CodexAdapter, GeminiAdapter, HermesAdapter, PassthroughAdapter};
+pub use adapters::{
+    ClaudeAdapter, CodexAdapter, GeminiAdapter, HermesAdapter, PassthroughAdapter, TerminalAdapter,
+};
 
 /// What tmux actually launches: argv plus per-session environment overrides.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +62,7 @@ pub fn adapter_for(tool: &str) -> Box<dyn ToolAdapter> {
         "codex" => Box::new(CodexAdapter),
         "gemini" => Box::new(GeminiAdapter),
         "hermes" => Box::new(HermesAdapter),
+        "terminal" => Box::new(TerminalAdapter),
         other => Box::new(PassthroughAdapter::new(other.to_string())),
     }
 }
