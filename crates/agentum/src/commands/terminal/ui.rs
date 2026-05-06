@@ -616,11 +616,14 @@ fn fill_default_bg(f: &mut Frame<'_>, area: Rect, bg: Color) {
 
 fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     // Each chip is opt-in/out via `app.prefs`. Build two lists — the
-    // workdir/tool context chips anchor left, everything else (status
-    // signals, throughput, hints) is right-aligned so the noisy chips
-    // sit far from the eye when scanning the workdir.
-    let mut left: Vec<Span<'static>> = Vec::with_capacity(4);
-    let mut right: Vec<Span<'static>> = Vec::with_capacity(12);
+    // workdir/tool context chips anchor left along with the live
+    // connection + throughput indicators (so connection state sits next
+    // to the path it applies to, not on the opposite side of the bar).
+    // Everything else (totals, hints, transient status messages) is
+    // right-aligned so noisier chips sit far from the eye when scanning
+    // the workdir.
+    let mut left: Vec<Span<'static>> = Vec::with_capacity(6);
+    let mut right: Vec<Span<'static>> = Vec::with_capacity(10);
 
     if app.prefs.get(StatusChip::Workdir) {
         let workdir = app
@@ -653,7 +656,7 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
             ConnState::Connecting => ("◌ connecting", p.warning),
             ConnState::Disconnected => ("✗ disconnected", p.error),
         };
-        right.push(Span::styled(
+        left.push(Span::styled(
             format!(" {conn_label} "),
             Style::default().fg(conn_color).bg(p.chrome_bg),
         ));
@@ -666,7 +669,7 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         // chip exists and learn it's there to flip off.
         let down = fmt_rate(app.io.rate_in());
         let up = fmt_rate(app.io.rate_out());
-        right.push(Span::styled(
+        left.push(Span::styled(
             format!(" ↓{down} ↑{up} "),
             Style::default().fg(p.accent_alt).bg(p.chrome_bg),
         ));

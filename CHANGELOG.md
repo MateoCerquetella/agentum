@@ -4,6 +4,18 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.29] — 2026-05-06
+
+### Changed
+- **Status bar — `connected` and live network throughput chips
+  moved from the right-aligned cluster to the left, immediately
+  after the workdir + tool chips.** Connection state belongs next
+  to the path it applies to; pinning it to the left edge also
+  keeps it from shifting horizontally as the right cluster grows
+  and shrinks (lazygit toggle, transient status messages, theme
+  name length). Lifetime IO totals, lazygit/theme/palette/help
+  hints stay on the right.
+
 ## [0.6.28] — 2026-05-06
 
 ### Added
