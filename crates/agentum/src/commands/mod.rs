@@ -14,6 +14,7 @@ pub mod serve;
 pub mod tail;
 pub mod terminal;
 pub mod up;
+pub mod update;
 
 use agentum_store::Store;
 use anyhow::{Context, Result};

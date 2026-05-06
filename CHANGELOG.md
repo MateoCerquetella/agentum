@@ -4,6 +4,27 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.5] — 2026-05-05
+
+Installer fix + `agentum update`.
+
+### Fixed
+- **Installer rendered ANSI escapes literally.** `printf '%s' "$C_Y"` was
+  emitting the literal string `\033[1;33m` because `%s` doesn't interpret
+  backslash escapes (and POSIX `sh` lacks `$'\033'`). Color variables now
+  hold a real ESC byte produced via `ESC=$(printf '\033')`, so all
+  installer output renders correctly when piped through `sh`.
+
+### Added
+- **`agentum update`.** New subcommand re-runs the official installer
+  (`releases/latest/download/install.sh`) in-place. Optional
+  `--mode server|cli` to skip the prompt; `--force` to reinstall the
+  current version.
+- **Installer detects existing installs.** When `agentum` is already on
+  disk it prints `updating vX → vY` and, if you're already on the latest,
+  exits cleanly instead of re-downloading. Override with
+  `AGENTUM_FORCE_UPDATE=1`.
+
 ## [0.6.4] — 2026-05-06
 
 Interactive installer with mode selection.

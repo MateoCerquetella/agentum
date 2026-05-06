@@ -201,6 +201,25 @@ pub enum Cmd {
         #[command(subcommand)]
         action: HostsCmd,
     },
+
+    /// Update agentum to the latest release (re-runs install.sh).
+    ///
+    /// Downloads `releases/latest/download/install.sh` and pipes it to `sh`,
+    /// preserving your `INSTALL_DIR`. Pass `--mode server|cli` to skip the
+    /// interactive prompt; otherwise the installer behaves identically to a
+    /// fresh `curl … | sh` (interactive when on a TTY, defaults to `server`
+    /// when not).
+    Update {
+        /// Install mode for the installer (`server` = full Control Plane,
+        /// `cli` = lightweight CLI). Omit to let the installer prompt or
+        /// pick its default.
+        #[arg(long, value_parser = ["server", "cli"])]
+        mode: Option<String>,
+
+        /// Reinstall even when already on the latest version.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -298,6 +317,14 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             .await
         }
         Cmd::Hosts { action } => crate::commands::hosts::run(action).await,
+        Cmd::Update { mode, force } => {
+            let mode = match mode.as_deref() {
+                Some("server") => Some(crate::commands::update::Mode::Server),
+                Some("cli") => Some(crate::commands::update::Mode::Cli),
+                _ => None,
+            };
+            crate::commands::update::run(mode, force).await
+        }
     }
 }
 
