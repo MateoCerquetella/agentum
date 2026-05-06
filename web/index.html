@@ -221,10 +221,13 @@
   .hero h1 { margin-top: 28px; max-width: 16ch; }
   .hero h1 .accent { color: var(--fg-3); }
 
-  /* ---------- brand rotator ---------- */
+  /* ---------- brand rotator (slot-machine roll) ---------- */
   .rotator {
     display: inline-grid;
     vertical-align: baseline;
+    overflow: hidden;
+    padding: 0.05em 0.05em 0.18em;
+    margin: -0.05em -0.05em -0.18em;
     isolation: isolate;
   }
   .rotator > .rotator-word {
@@ -234,21 +237,21 @@
     gap: 0.22em;
     white-space: nowrap;
     opacity: 0;
-    transform: translateY(0.45em);
-    animation: rotator-cycle 12s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+    transform: translateY(110%);
+    animation: rotator-roll 10s cubic-bezier(0.85, 0, 0.15, 1) infinite;
     will-change: transform, opacity;
   }
   .rotator > .rotator-word:nth-child(1) { animation-delay: 0s; }
-  .rotator > .rotator-word:nth-child(2) { animation-delay: 3s; }
-  .rotator > .rotator-word:nth-child(3) { animation-delay: 6s; }
-  .rotator > .rotator-word:nth-child(4) { animation-delay: 9s; }
+  .rotator > .rotator-word:nth-child(2) { animation-delay: 2.5s; }
+  .rotator > .rotator-word:nth-child(3) { animation-delay: 5s; }
+  .rotator > .rotator-word:nth-child(4) { animation-delay: 7.5s; }
 
-  @keyframes rotator-cycle {
-    0%   { opacity: 0; transform: translateY(0.45em); }
-    5%   { opacity: 1; transform: translateY(0); }
+  @keyframes rotator-roll {
+    0%   { opacity: 0; transform: translateY(110%); }
+    6%   { opacity: 1; transform: translateY(0); }
     25%  { opacity: 1; transform: translateY(0); }
-    30%  { opacity: 0; transform: translateY(-0.45em); }
-    100% { opacity: 0; transform: translateY(-0.45em); }
+    31%  { opacity: 0; transform: translateY(-110%); }
+    100% { opacity: 0; transform: translateY(-110%); }
   }
 
   .rotator .brand-mark {
