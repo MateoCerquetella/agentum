@@ -15,19 +15,74 @@ front, one binary, `cargo install`.
 
 ## Quick start
 
+The installer is interactive — it asks whether you want the full **Control Plane**
+(server + dashboard + TLS) or just the lightweight **Terminal CLI** for managing
+tmux sessions.  Both install the same binary; the choice tailors the
+post-install guidance.
+
 ```sh
-# Install (binary)
+# Interactive install (recommended)
 curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh | sh
 
-# Install (from source)
+# Or download and run directly for the interactive prompts:
+#   curl -fsSLO https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh
+#   sh install.sh
+```
+
+When you run it, you'll see:
+
+```
+  █████╗  ██████╗ ███████╗███╗   ██╗████████╗██╗   ██╗███╗   ███╗
+ ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝██║   ██║████╗ ████║
+ ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   ██║   ██║██╔████╔██║
+ ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   ██║   ██║██║╚██╔╝██║
+ ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ╚██████╔╝██║ ╚═╝ ██║
+ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝ ╚═╝     ╚═╝
+               self-hosted AI agent control plane
+
+  ● platform x86_64-unknown-linux-gnu
+  ● version  v0.6.3
+  ● install  /home/you/.local/bin
+
+  Choose your install:
+
+  🖥️   [1] Control Plane
+       Server · Dashboard · TLS · tmux — full web UI
+       › agentum serve on your LAN, dashboard from any device
+
+  ⌨️   [2] Terminal CLI
+       CLI-only tmux session manager, no server/TLS
+       › agentum new/up/down/ls/tail from your terminal
+
+  Choice [1-2] (1):
+```
+
+**Non-interactive / CI usage:**
+
+```sh
+# Control Plane (server + dashboard)
+curl -fsSL https://.../install.sh | INSTALL_MODE=server sh
+
+# Terminal CLI only
+curl -fsSL https://.../install.sh | INSTALL_MODE=cli sh
+
+# Or with CLI flags (download first, then run directly):
+sh install.sh --mode server
+sh install.sh --mode cli --no-interactive
+
+# Install from source
 cargo install --git https://github.com/mateocerquetella/agentum agentum
+```
 
-# Spawn an agent in a project directory
-agentum new alpha --tool claude --dir ~/Developer/my-project --up
+After install, get started:
 
-# Open the dashboard (HTTPS, self-signed cert)
+```sh
+# Control Plane — start the server and open the dashboard
 agentum serve
 # → https://127.0.0.1:8822  (paste the bearer from `agentum auth show`)
+
+# Terminal CLI — spawn an agent session right away
+agentum new alpha --tool claude --dir ~/Developer/my-project --up
 ```
 
 ## What you get

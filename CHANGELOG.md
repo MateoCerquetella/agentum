@@ -4,6 +4,18 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] — 2026-05-06
+
+Interactive installer with mode selection.
+
+### Changed
+- **Installer overhaul.** `install.sh` now presents an interactive terminal
+  UI asking whether to install the full Control Plane (server + dashboard +
+  TLS) or just the lightweight Terminal CLI. Non-interactive/CI modes
+  supported via `INSTALL_MODE=server|cli` env var or `--mode` flag.
+- **README updated** with the new installer docs, mode comparison, and
+  both interactive and CI usage examples.
+
 ## [0.6.3] — 2026-05-05
 
 TUI interactivity overhaul. Panels now properly accept continuous input,
