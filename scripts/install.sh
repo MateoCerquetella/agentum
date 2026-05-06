@@ -102,8 +102,8 @@ select_mode() {
     printf '       CLI-only tmux session manager, no server/TLS\n'
     printf '       %s›%s %sagentum new/up/down/ls/tail%s from your terminal\n\n' "${C_D}" "${C_R}" "${C_C}" "${C_R}"
     printf '  %s✨  [3] %sBoth%s %s(recommended)%s\n' "${C_B}" "${C_G}" "${C_R}" "${C_D}" "${C_R}"
-    printf '       Install once, get the dashboard ${C_C}and${C_R} the CLI workflow.\n'
-    printf '       %s›%s same binary — `agentum serve` or `agentum new` whenever you like\n\n' "${C_D}" "${C_R}"
+    printf '       Install once, get the dashboard %sand%s the CLI workflow.\n' "${C_C}" "${C_R}"
+    printf '       %s›%s same binary — %sagentum serve%s or %sagentum new%s whenever you like\n\n' "${C_D}" "${C_R}" "${C_C}" "${C_R}" "${C_C}" "${C_R}"
     while true; do
         printf '  %sChoice [1-3] (3):%s ' "${C_D}" "${C_R}"
         choice=""; read_input choice; choice="${choice:-3}"
@@ -247,53 +247,49 @@ check_tmux() {
 
 AGENTUM_BIN() { echo "$INSTALL_DIR/agentum"; }
 
-# ── Post-install: Control Plane ────────────────────────────────
+# ── Post-install onboarding ────────────────────────────────────
+# Keep it short. One ordered list per mode. No auto-running doctor
+# or --help dumps — those are one keystroke away if the user wants them.
 post_server() {
     printf '\n'
-    div " Control Plane Setup "
+    div " Get started "
     printf '\n'
-    check_tmux
+    h "1. Start the server:    ${C_C}agentum serve${C_R}"
+    h "2. Open the dashboard:  ${C_C}https://127.0.0.1:8822${C_R}  ${C_D}(self-signed TLS)${C_R}"
+    h "3. Get your token:      ${C_C}agentum auth show${C_R}"
+    h "4. Create an agent:     ${C_C}agentum new alpha --tool claude --dir . --up${C_R}"
     printf '\n'
-    bin="$(AGENTUM_BIN)"
-    if [ -x "$bin" ]; then
-        s "Running" "${C_C}agentum doctor${C_R}"
-        "$bin" doctor 2>&1 || w "doctor reported issues — review output above"
-    else
-        h "Run ${C_C}agentum doctor${C_R} once the binary is on PATH"
-    fi
-    printf '\n'
-    div " Next Steps "
-    printf '\n'
-    h "1. Start server:  ${C_C}agentum serve${C_R}"
-    h "2. Dashboard:      ${C_C}https://127.0.0.1:8822${C_R}"
-    h "3. Auth token:     ${C_C}agentum auth show${C_R}"
-    h "4. First agent:    ${C_C}agentum new alpha --tool claude --dir ~/project --up${C_R}"
-    printf '\n'
-    h "TLS is self-signed — accept the browser warning."
-    h "For phone: visit ${C_C}http://127.0.0.1:8823/api/cert${C_R} to trust."
+    h "Health check: ${C_C}agentum doctor${C_R}    Phone trust: ${C_C}http://127.0.0.1:8823/api/cert${C_R}"
     printf '\n'
 }
 
-# ── Post-install: Terminal CLI ─────────────────────────────────
 post_cli() {
     printf '\n'
-    div " Terminal CLI "
+    div " Get started "
     printf '\n'
-    check_tmux
+    h "1. Create an agent:  ${C_C}agentum new my-agent --tool claude --dir . --up${C_R}"
+    h "2. Watch it work:    ${C_C}agentum tail my-agent${C_R}   ${C_D}(or ${C_C}open${C_R}${C_D} to attach)${C_R}"
+    h "3. Manage sessions:  ${C_C}agentum ls${C_R} | ${C_C}ps${C_R} | ${C_C}send${C_R} | ${C_C}down${C_R}"
     printf '\n'
-    bin="$(AGENTUM_BIN)"
-    if [ -x "$bin" ]; then
-        s "Quick help" "${C_C}agentum --help${C_R}"
-        "$bin" --help 2>&1 | head -20 || true
-    fi
+    h "Want a web dashboard later? Run ${C_C}agentum serve${C_R} anytime."
     printf '\n'
-    div " Get Started "
+}
+
+post_both() {
     printf '\n'
-    h "Create your first agent:"
-    h "  ${C_C}agentum new my-agent --tool claude --dir ~/project --up${C_R}"
+    div " Get started "
     printf '\n'
-    h "Common:  ${C_C}ls${C_R} | ${C_C}ps${C_R} | ${C_C}open <n>${C_R} | ${C_C}tail <n>${C_R} | ${C_C}send <n> <t>${C_R}"
-    h "Upgrade: ${C_C}agentum serve${C_R} to add the dashboard anytime"
+    h "${C_B}From the terminal${C_R}"
+    h "  1. Create an agent:  ${C_C}agentum new my-agent --tool claude --dir . --up${C_R}"
+    h "  2. Watch it work:    ${C_C}agentum tail my-agent${C_R}"
+    h "  3. Manage sessions:  ${C_C}agentum ls${C_R} | ${C_C}ps${C_R} | ${C_C}open${C_R} | ${C_C}send${C_R} | ${C_C}down${C_R}"
+    printf '\n'
+    h "${C_B}From the dashboard${C_R}"
+    h "  4. Start the server: ${C_C}agentum serve${C_R}"
+    h "  5. Open in browser:  ${C_C}https://127.0.0.1:8822${C_R}  ${C_D}(self-signed TLS)${C_R}"
+    h "  6. Get your token:   ${C_C}agentum auth show${C_R}"
+    printf '\n'
+    h "Health check: ${C_C}agentum doctor${C_R}"
     printf '\n'
 }
 
@@ -331,10 +327,13 @@ download
 install_binary
 check_path
 
+printf '\n'
+check_tmux
+
 case "$INSTALL_MODE" in
     server) post_server ;;
     cli)    post_cli ;;
-    both)   post_server; post_cli ;;
+    both)   post_both ;;
 esac
 
-printf '\n  %s%s✨  agentum is ready!%s\n\n' "${C_Y}" "${C_B}" "${C_R}"
+printf '  %s%s✨  agentum is ready!%s\n\n' "${C_Y}" "${C_B}" "${C_R}"
