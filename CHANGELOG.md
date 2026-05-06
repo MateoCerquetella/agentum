@@ -4,6 +4,41 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.13] — 2026-05-06
+
+Unified notifications across TUI and dashboard, with system sounds in
+the terminal.
+
+### Added
+- **Bottom-left toast stack in the TUI.** Session lifecycle events now
+  render as bordered, severity-coloured toasts (info/warn/error)
+  stacked above the status bar, instead of a single text chip jammed
+  inside it. Newest on top, FIFO-capped at 4, auto-expire by TTL
+  (info 6s, warn 4s, error 12s — matching the dashboard).
+  Implemented as an overlay so the layout never reflows when toasts
+  come and go.
+- **System sounds on TUI notifications.** Plays a per-severity sound
+  via the platform's native player — `paplay`/`pw-play` on Linux
+  (freedesktop `dialog-error.oga` / `dialog-warning.oga` /
+  `dialog-information.oga`), `afplay` on macOS (`Sosumi` / `Funk` /
+  `Glass`). Falls back to BEL (`\x07`) when no player is on PATH.
+  Fire-and-forget via `tokio::process::Command`; no new Cargo
+  dependencies. Mute with `--no-sound` or
+  `AGENTUM_TUI_NO_SOUND=1`.
+- **Dashboard `session.stopped` toast.** The web toast stack now
+  surfaces clean stops (4s info), matching the TUI for parity.
+
+### Changed
+- **`watchdog.compact` events now toast in the TUI.** Previously
+  silent; now mirrors the dashboard with a 6s info toast carrying
+  the auto-compact reason.
+- **`bus.lagged` surfaces as both a toast and an error-overlay
+  entry.** Used to live only in the errors overlay; now also a
+  warn toast so the user sees skipped events at the moment they
+  happen.
+- **`session.started` is silent in the TUI.** Matches the dashboard
+  — bus replays on reconnect would otherwise spam the stack.
+
 ## [0.6.12] — 2026-05-06
 
 Recent-errors overlay.

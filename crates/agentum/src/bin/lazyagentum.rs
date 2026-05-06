@@ -27,6 +27,11 @@ struct Args {
     /// Skip TLS cert verification entirely. Strongly discouraged.
     #[arg(long)]
     insecure: bool,
+
+    /// Mute system sounds for notifications. Also honoured via the
+    /// `AGENTUM_TUI_NO_SOUND` env var.
+    #[arg(long)]
+    no_sound: bool,
 }
 
 #[tokio::main]
@@ -37,6 +42,7 @@ async fn main() -> Result<()> {
         api: args.api,
         fingerprint: args.fingerprint,
         insecure: args.insecure,
+        no_sound: args.no_sound,
     })
     .await
 }

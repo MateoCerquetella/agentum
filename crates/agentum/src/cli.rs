@@ -202,6 +202,11 @@ pub enum Cmd {
         /// here only for local throwaway test setups.
         #[arg(long)]
         insecure: bool,
+
+        /// Mute system sounds for notifications. Also honoured via the
+        /// `AGENTUM_TUI_NO_SOUND` env var.
+        #[arg(long)]
+        no_sound: bool,
     },
 
     /// Manage the SSH-style known_hosts file used by `agentum terminal`.
@@ -317,11 +322,13 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             api,
             fingerprint,
             insecure,
+            no_sound,
         } => {
             crate::commands::terminal::run(crate::commands::terminal::Options {
                 api,
                 fingerprint,
                 insecure,
+                no_sound,
             })
             .await
         }
@@ -388,16 +395,19 @@ mod tests {
             "--fingerprint",
             "AB:CD",
             "--insecure",
+            "--no-sound",
         ]);
         match cli.command {
             Cmd::Terminal {
                 api,
                 fingerprint,
                 insecure,
+                no_sound,
             } => {
                 assert_eq!(api.as_deref(), Some("https://vps:8822"));
                 assert_eq!(fingerprint.as_deref(), Some("AB:CD"));
                 assert!(insecure);
+                assert!(no_sound);
             }
             _ => panic!("expected Terminal"),
         }

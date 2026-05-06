@@ -29,6 +29,39 @@ use super::ui;
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const TICK_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Maximum visible notification toasts in the bottom-left stack. Older
+/// entries are evicted FIFO when a new one arrives — same ceiling as
+/// the dashboard's `ToastStack`.
+pub const MAX_NOTIFS: usize = 4;
+/// TTLs in milliseconds, mirroring `dashboard/src/lib/stores/events.ts`.
+pub const NOTIF_TTL_INFO_MS: u64 = 6000;
+pub const NOTIF_TTL_WARN_MS: u64 = 4000;
+pub const NOTIF_TTL_ERROR_MS: u64 = 12000;
+
+/// Severity buckets for bottom-left toasts. Drives both the colour of
+/// the toast border and which system sound `sound::play` triggers.
+/// Mirrors `Toast['kind']` in the dashboard so the two surfaces stay in
+/// lockstep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotifKind {
+    Info,
+    Warn,
+    Error,
+}
+
+/// One entry in the bottom-left toast stack. Constructed by
+/// `apply_event` from incoming bus events. Expires automatically once
+/// `created_at.elapsed() >= ttl` — see `App::tick_expire`.
+#[derive(Clone, Debug)]
+pub struct Notification {
+    pub id: u64,
+    pub title: String,
+    pub body: Option<String>,
+    pub kind: NotifKind,
+    pub created_at: Instant,
+    pub ttl: Duration,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Tree,
@@ -449,9 +482,17 @@ pub struct App {
     /// needs the Rects we just drew with. None until the first frame.
     pub last_areas: Option<ui::Areas>,
     pub theme: &'static Theme,
-    /// Recent notifications displayed in bottom-left. Pushed on session
-    /// events; capped at 3 entries. Each auto-clears after 8s.
-    pub notifications: Vec<String>,
+    /// Bottom-left toast stack. Each `Notification` carries its own
+    /// severity, body, and TTL; expired entries are drained every tick
+    /// by `tick_expire`. Capped at `MAX_NOTIFS` (oldest evicted FIFO).
+    pub notifications: Vec<Notification>,
+    /// Monotonic id source so renderers can use `id` as a `keyed` hint
+    /// when toasts come and go between frames.
+    pub next_notif_id: u64,
+    /// When `true`, `push_notification` skips `sound::play`. Set from
+    /// `--no-sound` / `AGENTUM_TUI_NO_SOUND` at startup; no runtime
+    /// toggle (no key binding requested).
+    pub sound_muted: bool,
 }
 
 impl App {
@@ -492,7 +533,18 @@ impl App {
             last_areas: None,
             theme: theme::load(),
             notifications: Vec::new(),
+            next_notif_id: 1,
+            sound_muted: false,
         }
+    }
+
+    /// Drop notifications whose TTL has elapsed. Called on every run-loop
+    /// tick (~100 ms). O(`MAX_NOTIFS`) per frame — cheaper than threading
+    /// a per-toast `tokio::sleep` future into the select.
+    pub fn tick_expire(&mut self) {
+        let now = Instant::now();
+        self.notifications
+            .retain(|n| now.saturating_duration_since(n.created_at) < n.ttl);
     }
 
     pub fn set_theme(&mut self, name: &str) {
@@ -883,8 +935,10 @@ pub async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     client: Client,
     sessions: Vec<Session>,
+    sound_muted: bool,
 ) -> Result<()> {
     let mut app = App::new(sessions);
+    app.sound_muted = sound_muted;
 
     let (term_tx, mut term_rx) = mpsc::unbounded_channel::<TerminalMsg>();
     let (term_tx_right, mut term_rx_right) = mpsc::unbounded_channel::<TerminalMsg>();
@@ -1019,6 +1073,10 @@ pub async fn run_loop(
             }
 
             _ = tick.tick() => {
+                // Cheap O(MAX_NOTIFS) sweep — drops expired toasts so the
+                // bottom-left stack drains without us having to schedule
+                // a per-toast sleep future.
+                app.tick_expire();
                 if last_refresh.elapsed() >= REFRESH_INTERVAL {
                     last_refresh = Instant::now();
                     if let Ok(fresh) = client.list_sessions().await {
@@ -2636,7 +2694,17 @@ async fn handle_event_msg(app: &mut App, msg: EventMsg, client: &Client) {
         }
         EventMsg::Raw(kind) => {
             if kind == "bus.lagged" {
+                // Surface in both channels: errors overlay (audit trail)
+                // and a warn toast (immediate feedback). Mirrors the
+                // dashboard, which surfaces this as a toast too.
                 app.push_error("event bus lagged (some updates may be missing)");
+                push_notification(
+                    app,
+                    "event stream lagged".to_string(),
+                    Some("some updates may be missing".to_string()),
+                    NotifKind::Warn,
+                    NOTIF_TTL_WARN_MS,
+                );
             }
         }
         EventMsg::Event(ev) => apply_event(app, ev, client).await,
@@ -2647,23 +2715,54 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
     let name = ev.session_name.unwrap_or_else(|| "?".into());
     match ev.kind.as_str() {
         "session.crashed" | "watchdog.crashed" => {
+            // Log + toast both. The errors overlay is the audit trail;
+            // the toast is the in-the-moment alert.
+            let reason = ev
+                .payload
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .or_else(|| ev.payload.get("signature").and_then(|v| v.as_str()))
+                .map(|s| format!("reason: {s}"));
             app.push_error(format!("crashed: {name}"));
-            push_notification(app, format!("crashed: {name}"));
+            push_notification(
+                app,
+                format!("{name} crashed"),
+                reason,
+                NotifKind::Error,
+                NOTIF_TTL_ERROR_MS,
+            );
             if let Ok(fresh) = client.list_sessions().await {
                 app.refresh_sessions(fresh);
             }
         }
         "session.started" => {
-            push_notification(app, format!("started: {name}"));
+            // Silent — matches the dashboard, which suppresses started
+            // events because the initial bus replay would spam toasts on
+            // every reconnect.
             if let Ok(fresh) = client.list_sessions().await {
                 app.refresh_sessions(fresh);
             }
         }
         "session.stopped" => {
-            push_notification(app, format!("stopped: {name}"));
+            push_notification(
+                app,
+                format!("{name} stopped"),
+                None,
+                NotifKind::Info,
+                NOTIF_TTL_INFO_MS,
+            );
             if let Ok(fresh) = client.list_sessions().await {
                 app.refresh_sessions(fresh);
             }
+        }
+        "watchdog.compact" => {
+            push_notification(
+                app,
+                format!("auto-compacted {name}"),
+                Some("watchdog detected low context and sent /compact".to_string()),
+                NotifKind::Info,
+                NOTIF_TTL_INFO_MS,
+            );
         }
         "session.created" | "session.deleted" => {
             if let Ok(fresh) = client.list_sessions().await {
@@ -2674,17 +2773,34 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
     }
 }
 
-/// Push a notification onto the bottom-left display. Caps at 3 entries.
-/// Each notification appears for ~8 seconds, using a simple counter
-/// (decremented each frame by the UI). The notification text is shown in the
-/// status line on the far left, giving instant feedback for session lifecycle
-/// events (crashes, stops, starts, etc.).
-fn push_notification(app: &mut App, text: String) {
-    app.notifications.push(text);
-    if app.notifications.len() > 3 {
-        app.notifications.remove(0);
+/// Append a typed toast to the bottom-left notification stack and play
+/// the matching system sound (unless `app.sound_muted`). Evicts the
+/// oldest entry FIFO when the stack would exceed `MAX_NOTIFS`. Mirrors
+/// the dashboard's `pushToast` shape (id, kind, title, body, ttl_ms).
+fn push_notification(
+    app: &mut App,
+    title: String,
+    body: Option<String>,
+    kind: NotifKind,
+    ttl_ms: u64,
+) {
+    let id = app.next_notif_id;
+    app.next_notif_id = app.next_notif_id.saturating_add(1);
+    app.notifications.push(Notification {
+        id,
+        title,
+        body,
+        kind,
+        created_at: Instant::now(),
+        ttl: Duration::from_millis(ttl_ms),
+    });
+    if app.notifications.len() > MAX_NOTIFS {
+        let drop_n = app.notifications.len() - MAX_NOTIFS;
+        app.notifications.drain(0..drop_n);
     }
-    app.status_msg = Some(app.notifications.last().cloned().unwrap_or_default());
+    if !app.sound_muted {
+        super::sound::play(kind);
+    }
 }
 
 /// Spawn a plain interactive shell as a session. Uses the `terminal`
@@ -2712,7 +2828,13 @@ async fn spawn_plain_terminal(
             if let Err(e) = client.start_session(id).await {
                 app.push_error(format!("shell start failed: {e}"));
             } else {
-                push_notification(app, format!("shell: {name}"));
+                push_notification(
+                    app,
+                    format!("shell: {name}"),
+                    None,
+                    NotifKind::Info,
+                    NOTIF_TTL_INFO_MS,
+                );
             }
             if let Ok(fresh) = client.list_sessions().await {
                 app.refresh_sessions(fresh);

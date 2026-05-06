@@ -10,8 +10,8 @@ use tui_term::widget::PseudoTerminal;
 use std::time::SystemTime;
 
 use super::app::{
-    App, ConnState, DirPickerState, ErrorEntry, Focus, NewSessionField, NewSessionForm, Overlay,
-    PendingAction, Row, palette_catalog, status_dot,
+    App, ConnState, DirPickerState, ErrorEntry, Focus, NewSessionField, NewSessionForm, NotifKind,
+    Notification, Overlay, PendingAction, Row, palette_catalog, status_dot,
 };
 use super::extensions::{self, Extension, LAZYGIT};
 use super::theme::Palette;
@@ -172,6 +172,15 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
     }
     if areas.status.height > 0 {
         draw_status(f, areas.status, app, p);
+    }
+
+    // Bottom-left toast stack — overlays whatever was just drawn so it
+    // covers chrome / panes but is itself covered by modal overlays
+    // below. Skipped in fullscreen because there's no status bar to
+    // anchor above and a stack of bordered blocks over a fullscreen
+    // pane would obscure the pane content the user opted into.
+    if !app.fullscreen && !app.notifications.is_empty() {
+        draw_notifications(f, f.area(), app, p);
     }
 
     match &app.overlay {
@@ -515,18 +524,9 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         Span::styled(" g lazygit ", Style::default().fg(p.muted).bg(p.chrome_bg))
     };
 
-    // Bottom-left notification: show the most recent notification.
-    let notif = if let Some(n) = app.notifications.last() {
-        Span::styled(
-            format!(" ● {n} "),
-            Style::default()
-                .fg(p.accent_alt)
-                .bg(p.chrome_bg)
-                .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        Span::styled("", Style::default().fg(p.muted).bg(p.chrome_bg))
-    };
+    // Notifications now render as a bottom-left toast overlay (see
+    // `draw_notifications`), not inside the status bar — keeps lifecycle
+    // events from fighting workdir/tool chips for horizontal space.
 
     let extra = match &app.status_msg {
         Some(m) => format!(" · {m} "),
@@ -534,7 +534,6 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     };
 
     let bar = Line::from(vec![
-        notif,
         Span::styled(
             format!(" {workdir} "),
             Style::default().fg(p.fg).bg(p.chrome_bg),
@@ -561,6 +560,101 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     ]);
     let para = Paragraph::new(bar).style(Style::default().bg(p.chrome_bg).fg(p.fg));
     f.render_widget(para, area);
+}
+
+/// Bottom-left toast stack. Renders as an overlay (not a layout slot)
+/// so toasts coming and going never reflow `Areas` — the terminal pane
+/// stays glued to its size and we avoid the jitter that would come
+/// from constantly resizing the inner vt100 grid.
+///
+/// Layout: each toast is a bordered block with a severity-coloured
+/// border, anchored against the left edge with a 1-cell margin. They
+/// stack upward from just above the status bar (newest on top).
+fn draw_notifications(f: &mut Frame<'_>, screen: Rect, app: &App, p: &Palette) {
+    if screen.width < 6 || screen.height < 4 {
+        return;
+    }
+
+    // Status bar consumes the bottom row; the stack starts one row above.
+    let max_width = screen.width.saturating_sub(2).min(48);
+    let mut bottom = screen.bottom().saturating_sub(1);
+    // Render newest on top: walk from newest (last) downward in the
+    // stack so the most recent event sits highest in the column.
+    for n in app.notifications.iter().rev() {
+        let height = toast_height(n, max_width);
+        if height + 1 > bottom.saturating_sub(screen.y) {
+            // No more vertical room above the status bar — drop the rest.
+            break;
+        }
+        let y = bottom.saturating_sub(height);
+        let rect = Rect {
+            x: screen.x.saturating_add(1),
+            y,
+            width: max_width,
+            height,
+        };
+        f.render_widget(Clear, rect);
+        f.render_widget(toast_widget(n, p), rect);
+        bottom = y;
+    }
+}
+
+/// Compute how many rows a toast needs given its width budget. Always
+/// reserves 2 rows for the top + bottom border plus the title row, then
+/// adds wrap-budgeted body lines if `body` is set.
+fn toast_height(n: &Notification, width: u16) -> u16 {
+    // Inside the borders we have `width - 2` columns for text.
+    let inner = width.saturating_sub(2).max(1) as usize;
+    let title_rows = wrap_rows(&n.title, inner);
+    let body_rows = match &n.body {
+        Some(b) if !b.is_empty() => wrap_rows(b, inner),
+        _ => 0,
+    };
+    let content = (title_rows + body_rows).max(1) as u16;
+    // 2 border rows + content. Cap at 6 so a runaway body doesn't eat
+    // the whole screen.
+    (2 + content).min(6)
+}
+
+fn wrap_rows(s: &str, width: usize) -> usize {
+    if width == 0 || s.is_empty() {
+        return 1;
+    }
+    s.chars().count().div_ceil(width).max(1)
+}
+
+fn toast_widget<'a>(n: &'a Notification, p: &Palette) -> Paragraph<'a> {
+    let color = match n.kind {
+        NotifKind::Info => p.accent,
+        NotifKind::Warn => p.warning,
+        NotifKind::Error => p.error,
+    };
+    let icon = match n.kind {
+        NotifKind::Info => "●",
+        NotifKind::Warn => "▲",
+        NotifKind::Error => "✗",
+    };
+    let mut lines: Vec<Line> = Vec::with_capacity(2);
+    lines.push(Line::from(vec![
+        Span::styled(format!("{icon} "), Style::default().fg(color)),
+        Span::styled(
+            n.title.as_str(),
+            Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    if let Some(body) = n.body.as_deref()
+        && !body.is_empty()
+    {
+        lines.push(Line::from(Span::styled(
+            body,
+            Style::default().fg(p.muted),
+        )));
+    }
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(color))
+        .style(Style::default().bg(p.surface_bg));
+    Paragraph::new(lines).block(block).wrap(Wrap { trim: false })
 }
 
 fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Palette) {

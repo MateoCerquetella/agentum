@@ -17,6 +17,7 @@ mod app;
 mod extensions;
 mod palette;
 mod pty;
+mod sound;
 mod term;
 mod theme;
 pub mod trust;
@@ -54,6 +55,10 @@ pub struct Options {
     /// Skip cert verification entirely. Strongly discouraged; only here
     /// for local throwaway test setups. Print a big warning when set.
     pub insecure: bool,
+    /// Mute system sounds for notifications. Also honoured via the
+    /// `AGENTUM_TUI_NO_SOUND` env var so users can set it once in their
+    /// shell rc instead of remembering the flag.
+    pub no_sound: bool,
 }
 
 pub async fn run(opts: Options) -> Result<()> {
@@ -88,7 +93,8 @@ pub async fn run(opts: Options) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("init ratatui terminal")?;
 
-    app::run_loop(&mut terminal, client, sessions).await
+    let sound_muted = opts.no_sound || std::env::var_os("AGENTUM_TUI_NO_SOUND").is_some();
+    app::run_loop(&mut terminal, client, sessions, sound_muted).await
 }
 
 struct TerminalGuard;

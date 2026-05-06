@@ -113,6 +113,15 @@ function handle(ev: BusEvent) {
       // No toast — this can be noisy on first connection. Silent for now.
       break;
     }
+    case 'session.stopped': {
+      const name = ev.session_name ?? 'session';
+      pushToast({
+        kind: 'info',
+        title: `${name} stopped`,
+        ttl_ms: 4000
+      });
+      break;
+    }
     case 'bus.lagged': {
       const skipped = ev.payload?.skipped ?? '?';
       pushToast({
