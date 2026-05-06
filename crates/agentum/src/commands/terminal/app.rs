@@ -1970,13 +1970,37 @@ async fn handle_new_session_key(
                     let name = created.name.clone();
                     if form.up_after {
                         if let Err(e) = client.start_session(id).await {
-                            app.status_msg = Some(format!("created `{name}` (start failed)"));
+                            let msg = format!("created `{name}` (start failed)");
+                            app.status_msg = Some(msg.clone());
                             app.push_error(format!("start `{name}`: {e}"));
+                            push_notification(
+                                app,
+                                msg,
+                                Some("see error log (e) for details".to_string()),
+                                NotifKind::Warn,
+                                NOTIF_TTL_WARN_MS,
+                            );
                         } else {
-                            app.status_msg = Some(format!("created + started `{name}`"));
+                            let msg = format!("created + started `{name}`");
+                            app.status_msg = Some(msg.clone());
+                            push_notification(
+                                app,
+                                msg,
+                                None,
+                                NotifKind::Info,
+                                NOTIF_TTL_INFO_MS,
+                            );
                         }
                     } else {
-                        app.status_msg = Some(format!("created `{name}` (idle)"));
+                        let msg = format!("created `{name}` (idle)");
+                        app.status_msg = Some(msg.clone());
+                        push_notification(
+                            app,
+                            msg,
+                            None,
+                            NotifKind::Info,
+                            NOTIF_TTL_INFO_MS,
+                        );
                     }
                     if let Ok(fresh) = client.list_sessions().await {
                         app.refresh_sessions(fresh);
@@ -2115,7 +2139,22 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         PendingAction::Delete { name, .. } => format!("deleted `{name}`"),
     };
     match result {
-        Ok(()) => app.status_msg = Some(label),
+        Ok(()) => {
+            // Toast user-initiated lifecycle actions. The server's event
+            // bus only re-emits `session.crashed` / `watchdog.compact` /
+            // (silenced) `session.started`, so without this nudge a clean
+            // start/stop/kill/delete would silently update the tree with
+            // zero confirmation. Direct push lets the toast fire even
+            // when the events WS is offline.
+            app.status_msg = Some(label.clone());
+            push_notification(
+                app,
+                label,
+                None,
+                NotifKind::Info,
+                NOTIF_TTL_INFO_MS,
+            );
+        }
         Err(e) => {
             app.push_error(format!("{label}: {e}"));
         }

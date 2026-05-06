@@ -4,6 +4,34 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.14] — 2026-05-06
+
+### Fixed
+- **Embedded-TUI scrollback corruption on stream connect.** The WS handler
+  was capturing `tmux capture-pane -e` and shipping the snapshot to the
+  client *before* reading any input from the socket. Resize messages from
+  the client (`{"resize":{"cols":N,"rows":N}}`) only landed after the
+  snapshot was already in flight, so the snapshot — and the live bytes
+  that followed — were dimensioned for tmux's stale pane size (80×24 for
+  fresh detached sessions). The embedded TUI kept emitting cursor-position
+  escapes against the wrong size, the client's vt100 parser placed those
+  characters in the wrong cells, and status-line text like `esc to
+  interrupt` overpainted scrollback content — leaving permanent artefacts
+  like `okterrupt` in the parser's history. v0.6.7 added the resize
+  protocol but kept this race; v0.6.11's high-fidelity snapshot replay
+  made it dramatically more visible.
+
+  The handler now waits up to 250 ms for the client's first resize text
+  frame, applies it to tmux, settles for 80 ms so the embedded process
+  can react to SIGWINCH and emit a fresh frame, *then* captures and
+  ships the snapshot. Old clients that never send a resize fall through
+  to the previous capture-at-current-size path. Any non-resize input
+  that arrives during the wait window is buffered and forwarded to the
+  pane after the snapshot, so no keystrokes are silently dropped.
+
+  Single-file change in `crates/agentum-server/src/routes/sessions.rs`;
+  no protocol or client changes required.
+
 ## [0.6.13] — 2026-05-06
 
 Unified notifications across TUI and dashboard, with system sounds in
