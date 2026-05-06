@@ -309,6 +309,19 @@ async fn stream(
 const BACKFILL_BYTES: u64 = 4096;
 const READ_CHUNK: usize = 8192;
 
+/// How long the WS handler waits for the client's first `{"resize":...}` text
+/// frame before falling back to capturing at tmux's current pane size. Modern
+/// clients send this within milliseconds of `onopen` / first frame, so the
+/// wait virtually never reaches the timeout. The cap exists so legacy
+/// clients (or a stalled connection) don't block the connect indefinitely.
+const INITIAL_RESIZE_WAIT: Duration = Duration::from_millis(250);
+
+/// After resizing tmux to match the client's viewport, give the embedded
+/// process a moment to react to SIGWINCH and emit a fresh frame before we
+/// `capture-pane -e`. Without this we'd capture pre-resize content and end
+/// up back in the same misalignment race the resize was meant to fix.
+const POST_RESIZE_SETTLE: Duration = Duration::from_millis(80);
+
 async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
     let log_path = match paths::pane_log(&id.to_string()) {
         Ok(p) => p,
@@ -343,6 +356,55 @@ async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
             return;
         }
     };
+
+    // Resize tmux to match the client's viewport BEFORE we snapshot. Without
+    // this we capture-pane at tmux's stale pane size (80×24 default for fresh
+    // detached sessions, or whatever the previous client sat at), the embedded
+    // TUI keeps emitting cursor-position escapes against that size, and the
+    // client's vt100 parser — sized to the actual viewport — places the
+    // characters in the wrong cells. Symptom: status-line text like "esc to
+    // interrupt" overpaints scrollback content and you end up with artefacts
+    // like `okterrupt` permanently baked into the scrollback buffer.
+    //
+    // Modern clients (TUI ≥ 0.6.7, dashboard ≥ 0.6.7) push a `{"resize":...}`
+    // text frame within milliseconds of WS open, so this wait almost never
+    // reaches the timeout in practice. Old clients fall through to the
+    // existing capture-at-current-size path.
+    let mut early_input: Vec<Bytes> = Vec::new();
+    let mut got_resize = false;
+    let resize_deadline = tokio::time::Instant::now() + INITIAL_RESIZE_WAIT;
+    loop {
+        let remaining = resize_deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, socket.recv()).await {
+            Ok(Some(Ok(Message::Text(t)))) => {
+                if let Some((cols, rows)) = parse_resize(&t) {
+                    let _ = agentum_tmux::resize_window(&target, cols, rows).await;
+                    got_resize = true;
+                    break;
+                }
+                // Non-resize text frame — preserve the legacy "treat as raw
+                // input" behaviour by buffering for replay after the snapshot.
+                early_input.push(Bytes::copy_from_slice(t.as_bytes()));
+            }
+            Ok(Some(Ok(Message::Binary(b)))) if !b.is_empty() => {
+                early_input.push(b);
+            }
+            Ok(Some(Ok(_))) => {} // ping/pong/etc.
+            Ok(Some(Err(_))) | Ok(None) => return, // socket already gone
+            Err(_) => break, // timeout — fall through with no resize
+        }
+    }
+    if got_resize {
+        // Give tmux + the embedded TUI a beat to redraw at the new size
+        // before we snapshot. tmux propagates SIGWINCH to the embedded
+        // process; ratatui-based agents (claude, codex, opencode) then
+        // emit a fresh frame on their next render tick. 80 ms is enough
+        // headroom in practice without being a perceptible connect lag.
+        sleep(POST_RESIZE_SETTLE).await;
+    }
 
     // Replay the current pane state so the user lands on a complete frame,
     // not the tail of a partial redraw. Tail-only backfill bites embedded
@@ -400,6 +462,14 @@ async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
                 return;
             }
         }
+    }
+
+    // Replay any non-resize input that arrived during the resize-wait window.
+    // Rare in practice (a fast typer connecting and hammering keys before the
+    // first frame fires), but preserves the previous "every byte forwarded"
+    // contract so we never silently drop a keystroke at connect time.
+    for chunk in early_input {
+        let _ = agentum_tmux::send_bytes(&target, &chunk).await;
     }
 
     // Tail the pane log on a dedicated task and pipe chunks through an mpsc.
