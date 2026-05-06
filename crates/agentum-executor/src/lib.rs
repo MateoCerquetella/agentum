@@ -69,6 +69,48 @@ pub trait ToolAdapter: Send + Sync {
     fn awaiting_input_signatures(&self) -> &'static [&'static str] {
         &[]
     }
+
+    /// The tool-specific flag that enables "YOLO" / skip-permissions mode.
+    /// Returns `None` for tools that have no such flag (or where we
+    /// haven't verified the spelling).
+    ///
+    /// agentum's YOLO toggle is tool-agnostic at the UI layer — both the
+    /// TUI and dashboard send the canonical Claude marker
+    /// `--dangerously-skip-permissions` through the session's flags
+    /// list. Each adapter's `launch` translates that marker to its own
+    /// `yolo_flag` (Claude: identity; Codex: `--dangerously-bypass-
+    /// approvals-and-sandbox`; tools with `None`: marker is dropped).
+    /// This keeps a single source of truth for per-tool YOLO semantics.
+    fn yolo_flag(&self) -> Option<&'static str> {
+        None
+    }
+}
+
+/// The canonical "user wants YOLO" marker as it travels through
+/// `Session::flags`. Both the TUI and the dashboard push this exact
+/// string when the YOLO checkbox is on. Every adapter's `launch`
+/// translates it via [`translate_yolo_marker`] to the tool-specific
+/// flag (or drops it for tools without one).
+pub const YOLO_MARKER: &str = "--dangerously-skip-permissions";
+
+/// Walk `flags` and substitute any [`YOLO_MARKER`] for the adapter's
+/// own `yolo_flag()` value. Markers are dropped entirely when the
+/// adapter has no YOLO flag, so a YOLO toggle on a tool that doesn't
+/// support it is silently a no-op rather than passing Claude's flag
+/// to a binary that rejects it.
+///
+/// Order is preserved; non-marker flags pass through unchanged.
+pub fn translate_yolo_marker(flags: &[String], yolo_flag: Option<&str>) -> Vec<String> {
+    flags
+        .iter()
+        .filter_map(|f| {
+            if f == YOLO_MARKER {
+                yolo_flag.map(|s| s.to_string())
+            } else {
+                Some(f.clone())
+            }
+        })
+        .collect()
 }
 
 /// Pick the right adapter for a tool name. Always returns something — unknown
