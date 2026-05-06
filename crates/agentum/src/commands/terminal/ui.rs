@@ -7,8 +7,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use tui_term::widget::PseudoTerminal;
 
+use std::time::SystemTime;
+
 use super::app::{
-    App, ConnState, DirPickerState, Focus, NewSessionField, NewSessionForm, Overlay,
+    App, ConnState, DirPickerState, ErrorEntry, Focus, NewSessionField, NewSessionForm, Overlay,
     PendingAction, Row, palette_catalog, status_dot,
 };
 use super::extensions::{self, Extension, LAZYGIT};
@@ -178,6 +180,7 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         Overlay::LazygitCheats => draw_cheatsheet_overlay(f, f.area(), &LAZYGIT, p),
         Overlay::LazygitInstall => draw_install_overlay(f, f.area(), &LAZYGIT, p),
         Overlay::Palette => draw_palette_overlay(f, f.area(), app, p),
+        Overlay::Errors => draw_errors_overlay(f, f.area(), app, p),
         Overlay::NewSession(form) => draw_new_session_overlay(f, f.area(), form, p),
         Overlay::Confirm(action) => draw_confirm_overlay(f, f.area(), action, p),
     }
@@ -201,22 +204,67 @@ fn panel_block<'a>(title: &'a str, focused: bool, p: &Palette) -> Block<'a> {
 }
 
 fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
-    // Top bar is intentionally minimal: app name + active session.
-    // Theme chip + ops info live in the status bar so we don't render the
-    // same data twice (workdir, theme, "Ctrl-P palette" used to repeat).
+    // Top bar is intentionally minimal: app name + active session on the
+    // left, an error chip on the right when the log isn't empty. The
+    // chip used to live in the bottom status bar; pulling it up here
+    // keeps the bottom row reserved for non-error feedback while still
+    // surfacing "something failed — press e" in the user's eye-line.
     let title = match app.selected_session() {
         Some(s) => format!(" agentum · {} ", s.name),
         None => " agentum · no session selected ".to_string(),
     };
-    let line = Line::from(vec![Span::styled(
+    let title_span = Span::styled(
         title,
         Style::default()
             .fg(p.fg_strong)
             .bg(p.body_bg)
             .add_modifier(Modifier::BOLD),
-    )]);
-    let para = Paragraph::new(line).style(Style::default().bg(p.body_bg));
-    f.render_widget(para, area);
+    );
+
+    // Right-aligned error chip. Padded with a leading column of body bg
+    // so the chip doesn't smear into the (possibly truncated) title when
+    // the terminal is narrow.
+    if app.error_count == 0 {
+        let para = Paragraph::new(Line::from(vec![title_span]))
+            .style(Style::default().bg(p.body_bg));
+        f.render_widget(para, area);
+        return;
+    }
+
+    let chip_text = format!(
+        " ⚠ {} error{} · press e ",
+        app.error_count,
+        if app.error_count == 1 { "" } else { "s" }
+    );
+    let chip = Span::styled(
+        chip_text.clone(),
+        Style::default()
+            .fg(p.error)
+            .bg(p.chrome_bg)
+            .add_modifier(Modifier::BOLD),
+    );
+
+    let chip_w = chip_text.chars().count() as u16;
+    let total = area.width;
+    let title_w = total.saturating_sub(chip_w).saturating_sub(1);
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(title_w),
+            Constraint::Length(1),
+            Constraint::Length(chip_w),
+        ])
+        .split(area);
+
+    let title_para = Paragraph::new(Line::from(vec![title_span]))
+        .style(Style::default().bg(p.body_bg));
+    f.render_widget(title_para, cols[0]);
+    let gap = Paragraph::new("").style(Style::default().bg(p.body_bg));
+    f.render_widget(gap, cols[1]);
+    let chip_para = Paragraph::new(Line::from(vec![chip]))
+        .style(Style::default().bg(p.body_bg))
+        .alignment(ratatui::layout::Alignment::Right);
+    f.render_widget(chip_para, cols[2]);
 }
 
 fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
@@ -452,21 +500,8 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         ConnState::Disconnected => ("✗ disconnected", p.error),
     };
 
-    let err_text = if app.error_count == 0 {
-        Span::styled(" 0 errors ", Style::default().fg(p.muted).bg(p.chrome_bg))
-    } else {
-        Span::styled(
-            format!(
-                " {} error{} ",
-                app.error_count,
-                if app.error_count == 1 { "" } else { "s" }
-            ),
-            Style::default()
-                .fg(p.error)
-                .bg(p.chrome_bg)
-                .add_modifier(Modifier::BOLD),
-        )
-    };
+    // Error chip moved to the title bar so the bottom row stays
+    // reserved for non-error feedback (see `draw_title`).
 
     let lg_chip = if app.lazygit_open() {
         Span::styled(
@@ -512,7 +547,6 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
             format!(" {conn_label} "),
             Style::default().fg(conn_color).bg(p.chrome_bg),
         ),
-        err_text,
         lg_chip,
         Span::styled(
             format!(" {} ", app.theme.name),
@@ -563,6 +597,7 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         ),
         body("  r                 refresh sessions", p),
         body("  t                 spawn plain bash terminal", p),
+        body("  e                 view recent error log", p),
         Line::from(""),
         head("  Terminal", p),
         body(
@@ -792,6 +827,124 @@ fn draw_palette_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     ]);
     let hints_para = Paragraph::new(hints).style(Style::default().bg(p.chrome_bg));
     f.render_widget(hints_para, rows[2]);
+}
+
+fn draw_errors_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
+    let w = 100.min(area.width.saturating_sub(4));
+    let h = 28.min(area.height.saturating_sub(4));
+    let x = area.x + area.width.saturating_sub(w) / 2;
+    let y = area.y + area.height.saturating_sub(h) / 2;
+    let r = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+
+    let title = if app.errors.is_empty() {
+        " errors ".to_string()
+    } else {
+        format!(
+            " errors · showing {} of {} ",
+            app.errors.len(),
+            app.error_count
+        )
+    };
+    let block = Block::default()
+        .title(Span::styled(
+            title,
+            Style::default().fg(p.error).add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(p.focus_border))
+        .style(Style::default().bg(p.surface_bg).fg(p.fg));
+    f.render_widget(Clear, r);
+    f.render_widget(block.clone(), r);
+    let inner = block.inner(r);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+
+    if app.errors.is_empty() {
+        let line = Line::from(vec![Span::styled(
+            "  no errors recorded — agentum will list failures here as they happen",
+            Style::default().fg(p.muted),
+        )]);
+        let para = Paragraph::new(line).style(Style::default().bg(p.surface_bg));
+        f.render_widget(para, rows[0]);
+    } else {
+        // Newest-first list. `errors_scroll` is "entries from the top
+        // (newest) we've already scrolled past". Saturate against the
+        // list length so `End` (errors_scroll = usize::MAX) snaps to
+        // the oldest visible entry without crashing.
+        let visible = (rows[0].height as usize).max(1);
+        let n = app.errors.len();
+        let max_scroll = n.saturating_sub(1);
+        let scroll = app.errors_scroll.min(max_scroll);
+        let text_w = rows[0].width.saturating_sub(12) as usize; // leave room for stamp
+        let lines: Vec<Line> = app
+            .errors
+            .iter()
+            .rev()
+            .skip(scroll)
+            .take(visible)
+            .map(|e| format_error_line(e, text_w, p))
+            .collect();
+        let para = Paragraph::new(lines).style(Style::default().bg(p.surface_bg));
+        f.render_widget(para, rows[0]);
+    }
+
+    let hints = Line::from(vec![
+        Span::styled(" j/k ", Style::default().fg(p.subtle)),
+        Span::styled("scroll", Style::default().fg(p.muted)),
+        Span::styled("  PgUp/PgDn ", Style::default().fg(p.subtle)),
+        Span::styled("page", Style::default().fg(p.muted)),
+        Span::styled("  g/G ", Style::default().fg(p.subtle)),
+        Span::styled("top/bottom", Style::default().fg(p.muted)),
+        Span::styled("  c ", Style::default().fg(p.subtle)),
+        Span::styled("clear", Style::default().fg(p.muted)),
+        Span::styled("  Esc / e ", Style::default().fg(p.subtle)),
+        Span::styled("close", Style::default().fg(p.muted)),
+    ]);
+    let hints_para = Paragraph::new(hints).style(Style::default().bg(p.surface_bg));
+    f.render_widget(hints_para, rows[1]);
+}
+
+/// Render one error entry as a single line: `[ 12s ] message`.
+/// Long messages are truncated to the available width so wrapping
+/// doesn't desync the scroll offset (which counts entries, not lines).
+fn format_error_line<'a>(entry: &ErrorEntry, text_w: usize, p: &Palette) -> Line<'a> {
+    let stamp = format_short_age(entry.at);
+    let stamp_text = format!("  [{stamp:>4}] ");
+    let mut text = entry.text.replace('\n', " ");
+    if text_w > 1 && text.chars().count() > text_w {
+        text = text.chars().take(text_w.saturating_sub(1)).collect::<String>() + "…";
+    }
+    Line::from(vec![
+        Span::styled(stamp_text, Style::default().fg(p.muted)),
+        Span::styled(text, Style::default().fg(p.fg)),
+    ])
+}
+
+/// Compact "time since" label: `12s`, `3m`, `2h`, `4d`. Avoids needing
+/// the local-offset feature of the `time` crate (the workspace doesn't
+/// enable it) and stays readable on a chrome row.
+fn format_short_age(at: SystemTime) -> String {
+    let secs = SystemTime::now()
+        .duration_since(at)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86_400)
+    }
 }
 
 fn draw_new_session_overlay(f: &mut Frame<'_>, area: Rect, form: &NewSessionForm, p: &Palette) {

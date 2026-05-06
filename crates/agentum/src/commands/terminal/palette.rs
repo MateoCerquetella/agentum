@@ -70,6 +70,8 @@ pub struct Action {
 pub enum ActionKind {
     Quit,
     ToggleHelp,
+    /// Open the recent-error log overlay. Bound to `e` from tree focus.
+    ShowErrors,
     ToggleLazygit,
     LazygitCheats,
     Refresh,
@@ -139,6 +141,12 @@ impl Catalog {
             hint: "?".into(),
             group: "general",
             kind: ActionKind::ToggleHelp,
+        });
+        a.push(Action {
+            label: "Errors · view recent error log".into(),
+            hint: "e".into(),
+            group: "general",
+            kind: ActionKind::ShowErrors,
         });
         a.push(Action {
             label: "Refresh sessions".into(),

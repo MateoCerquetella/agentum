@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::io::Stdout;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use agentum_core::{Event, Session, Status};
 use anyhow::Result;
@@ -79,10 +79,24 @@ pub enum Overlay {
     LazygitCheats,
     LazygitInstall,
     Palette,
+    /// Scrollable view of the recent error log. Opened with `e` from
+    /// tree focus or via the command palette. Replaces the status-bar
+    /// counter that previously was the only place the user could tell
+    /// errors had happened.
+    Errors,
     /// New-session form (n key on the tree).
     NewSession(Box<NewSessionForm>),
     /// Generic confirmation prompt for destructive session actions.
     Confirm(PendingAction),
+}
+
+/// One observed error, surfaced to the user via the error overlay.
+/// `at` is captured at push time so the overlay can render a stable
+/// timestamp regardless of when the user opens it.
+#[derive(Clone, Debug)]
+pub struct ErrorEntry {
+    pub at: SystemTime,
+    pub text: String,
 }
 
 /// Suggested tool names. Mirrors the web's datalist on the New Session
@@ -365,6 +379,14 @@ pub struct App {
     /// Esc again from tree focus to clear it).
     pub filter_input_active: bool,
     pub error_count: u32,
+    /// Ring of recent error messages, capped at `MAX_ERROR_LOG`. Pushed
+    /// alongside every `error_count` bump so the user can open the
+    /// errors overlay (`e` from tree focus) and see what actually
+    /// failed instead of just a counter.
+    pub errors: Vec<ErrorEntry>,
+    /// Top-of-list offset for the errors overlay, in entries. Saturates
+    /// at the list length when the user presses `End`.
+    pub errors_scroll: usize,
     pub conn: ConnState,
     pub status_msg: Option<String>,
     pub should_quit: bool,
@@ -449,6 +471,8 @@ impl App {
             chord: None,
             filter_input_active: false,
             error_count: 0,
+            errors: Vec::new(),
+            errors_scroll: 0,
             conn: ConnState::Connecting,
             status_msg: None,
             should_quit: false,
@@ -534,6 +558,38 @@ impl App {
             Focus::TermRight => Side::Right,
             _ => self.last_term_side,
         }
+    }
+
+    /// Append an error message to the visible log and bump the counter.
+    /// Status bar deliberately is NOT touched here: the status row at the
+    /// bottom is reserved for non-error feedback ("filter cleared",
+    /// "refreshed", session-event notifications) so error chatter doesn't
+    /// drown those signals out — the user opens the errors overlay (`e`
+    /// from tree focus, or via the palette) to read what failed.
+    pub fn push_error(&mut self, text: impl Into<String>) {
+        const MAX_ERROR_LOG: usize = 200;
+        let text = text.into();
+        if text.is_empty() {
+            return;
+        }
+        self.errors.push(ErrorEntry {
+            at: SystemTime::now(),
+            text,
+        });
+        let n = self.errors.len();
+        if n > MAX_ERROR_LOG {
+            self.errors.drain(0..n - MAX_ERROR_LOG);
+        }
+        self.error_count = self.error_count.saturating_add(1);
+    }
+
+    /// Drop the visible log + counter. Wired to `c` inside the errors
+    /// overlay; useful after the user has read and acknowledged a batch
+    /// of failures.
+    pub fn clear_errors(&mut self) {
+        self.errors.clear();
+        self.error_count = 0;
+        self.errors_scroll = 0;
     }
 
     /// Move focus, keeping `last_term_side` in sync. Call this instead of
@@ -1420,6 +1476,10 @@ async fn handle_key(
             handle_confirm_key(app, key, client).await;
             return;
         }
+        Overlay::Errors => {
+            handle_errors_key(app, key);
+            return;
+        }
         Overlay::None => {}
         // Help / cheatsheet / install: any of these dismiss it.
         _ => {
@@ -1496,8 +1556,7 @@ async fn handle_key(
             && let Some(bytes) = key_to_bytes(&key)
         {
             if let Err(e) = lg.write(&bytes) {
-                app.status_msg = Some(format!("lazygit write: {e}"));
-                app.error_count += 1;
+                app.push_error(format!("lazygit write: {e}"));
             }
         }
         return;
@@ -1555,9 +1614,7 @@ async fn handle_key(
         match tx_opt {
             Some(tx) => {
                 if tx.send(TermOut::Bytes(bytes)).is_err() {
-                    app.status_msg =
-                        Some("terminal stream closed — Ctrl-E tree · Ctrl-Q quit".into());
-                    app.error_count += 1;
+                    app.push_error("terminal stream closed — Ctrl-E tree · Ctrl-Q quit");
                 }
             }
             None => {
@@ -1582,6 +1639,13 @@ async fn handle_key(
     match key.code {
         KeyCode::Char('q') => app.should_quit = true,
         KeyCode::Char('?') => app.overlay = Overlay::Help,
+        KeyCode::Char('e') => {
+            // Open the error log overlay. Always available (even when
+            // empty) so the user can confirm "no errors yet" with the
+            // same gesture they'd use to investigate a bumped counter.
+            app.errors_scroll = 0;
+            app.overlay = Overlay::Errors;
+        }
         KeyCode::Char('g') => toggle_lazygit(app, lg_tx).await,
         KeyCode::Char('G') => app.overlay = Overlay::LazygitCheats,
         KeyCode::Char('T') => app.cycle_theme(),
@@ -1848,9 +1912,8 @@ async fn handle_new_session_key(
                     let name = created.name.clone();
                     if form.up_after {
                         if let Err(e) = client.start_session(id).await {
-                            app.status_msg =
-                                Some(format!("created `{name}` but start failed: {e}"));
-                            app.error_count += 1;
+                            app.status_msg = Some(format!("created `{name}` (start failed)"));
+                            app.push_error(format!("start `{name}`: {e}"));
                         } else {
                             app.status_msg = Some(format!("created + started `{name}`"));
                         }
@@ -1996,8 +2059,7 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
     match result {
         Ok(()) => app.status_msg = Some(label),
         Err(e) => {
-            app.status_msg = Some(format!("{label}: {e}"));
-            app.error_count += 1;
+            app.push_error(format!("{label}: {e}"));
         }
     }
     if let Ok(fresh) = client.list_sessions().await {
@@ -2013,6 +2075,43 @@ pub fn palette_catalog(app: &App) -> Catalog {
         .map(|s| (s.id, s.name.clone(), s.workdir.clone()))
         .collect();
     Catalog::build(app.lazygit_open(), &sessions, app.selected)
+}
+
+/// Errors-overlay key handler. Treats the overlay as a vim-ish list:
+/// j/k or arrow keys scroll, PgUp/PgDn page, g/G snap to ends, c clears
+/// the log, and Esc/q/Enter/e dismiss. The cursor saturates at the list
+/// length on render so we don't have to clamp on every keystroke.
+fn handle_errors_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc
+        | KeyCode::Char('q')
+        | KeyCode::Char('e')
+        | KeyCode::Enter => {
+            app.overlay = Overlay::None;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.errors_scroll = app.errors_scroll.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.errors_scroll = app.errors_scroll.saturating_add(1);
+        }
+        KeyCode::PageUp => {
+            app.errors_scroll = app.errors_scroll.saturating_sub(10);
+        }
+        KeyCode::PageDown => {
+            app.errors_scroll = app.errors_scroll.saturating_add(10);
+        }
+        KeyCode::Home | KeyCode::Char('g') => {
+            app.errors_scroll = 0;
+        }
+        KeyCode::End | KeyCode::Char('G') => {
+            app.errors_scroll = usize::MAX;
+        }
+        KeyCode::Char('c') => {
+            app.clear_errors();
+        }
+        _ => {}
+    }
 }
 
 async fn handle_palette_key(
@@ -2057,6 +2156,10 @@ async fn run_palette_action(
     match kind {
         ActionKind::Quit => app.should_quit = true,
         ActionKind::ToggleHelp => app.overlay = Overlay::Help,
+        ActionKind::ShowErrors => {
+            app.errors_scroll = 0;
+            app.overlay = Overlay::Errors;
+        }
         ActionKind::ToggleLazygit => toggle_lazygit(app, lg_tx).await,
         ActionKind::LazygitCheats => app.overlay = Overlay::LazygitCheats,
         ActionKind::Refresh => {
@@ -2199,8 +2302,7 @@ async fn toggle_lazygit(app: &mut App, lg_tx: &mpsc::UnboundedSender<PtyMsg>) {
             });
         }
         Err(e) => {
-            app.status_msg = Some(format!("lazygit spawn failed: {e}"));
-            app.error_count += 1;
+            app.push_error(format!("lazygit spawn failed: {e}"));
         }
     }
 }
@@ -2251,8 +2353,7 @@ fn refresh_lazygit_for_selection(app: &mut App) {
             if app.focus == Focus::Lazygit {
                 app.focus = Focus::Tree;
             }
-            app.status_msg = Some(format!("lazygit respawn failed: {e}"));
-            app.error_count += 1;
+            app.push_error(format!("lazygit respawn failed: {e}"));
         }
     }
 }
@@ -2496,12 +2597,11 @@ fn handle_terminal_msg(app: &mut App, msg: TerminalMsg, side: Side) {
         TerminalMsg::Error(s) => {
             // Server-sent text frames are diagnostic — typically
             // `[input dropped: tmux exited with status 1 (stderr: …)]`
-            // when `tmux send-keys` rejects the target. Surface to the
-            // status bar so the actual pane (claude code, etc.) doesn't
-            // get garbled mid-render. Bump error_count so it's visible
-            // even when the user isn't reading the chrome line.
-            app.status_msg = Some(s.trim().to_string());
-            app.error_count += 1;
+            // when `tmux send-keys` rejects the target. Route into the
+            // error overlay rather than the status bar so the actual
+            // pane (claude code, etc.) doesn't get garbled mid-render
+            // and the message survives more than a single redraw.
+            app.push_error(s.trim().to_string());
         }
         TerminalMsg::Closed => {
             app.status_msg = Some(match side {
@@ -2532,12 +2632,11 @@ async fn handle_event_msg(app: &mut App, msg: EventMsg, client: &Client) {
         EventMsg::Closed => app.conn = ConnState::Disconnected,
         EventMsg::Error(s) => {
             app.conn = ConnState::Disconnected;
-            app.error_count += 1;
-            app.status_msg = Some(format!("events: {s}"));
+            app.push_error(format!("events: {s}"));
         }
         EventMsg::Raw(kind) => {
             if kind == "bus.lagged" {
-                app.error_count += 1;
+                app.push_error("event bus lagged (some updates may be missing)");
             }
         }
         EventMsg::Event(ev) => apply_event(app, ev, client).await,
@@ -2548,7 +2647,7 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
     let name = ev.session_name.unwrap_or_else(|| "?".into());
     match ev.kind.as_str() {
         "session.crashed" | "watchdog.crashed" => {
-            app.error_count += 1;
+            app.push_error(format!("crashed: {name}"));
             push_notification(app, format!("crashed: {name}"));
             if let Ok(fresh) = client.list_sessions().await {
                 app.refresh_sessions(fresh);
@@ -2611,8 +2710,7 @@ async fn spawn_plain_terminal(
         Ok(created) => {
             let id = created.id;
             if let Err(e) = client.start_session(id).await {
-                app.status_msg = Some(format!("shell start failed: {e}"));
-                app.error_count += 1;
+                app.push_error(format!("shell start failed: {e}"));
             } else {
                 push_notification(app, format!("shell: {name}"));
             }
@@ -2627,8 +2725,7 @@ async fn spawn_plain_terminal(
             }
         }
         Err(e) => {
-            app.status_msg = Some(format!("shell create failed: {e}"));
-            app.error_count += 1;
+            app.push_error(format!("shell create failed: {e}"));
         }
     }
 }
