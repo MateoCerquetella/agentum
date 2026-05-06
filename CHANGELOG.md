@@ -4,6 +4,55 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.23] — 2026-05-06
+
+### Fixed
+- **Dashboard terminal pane initial-snapshot corruption.** The dashboard
+  raced two async operations on connect: opening the WebSocket and
+  probing `/api/health` for the `resize` capability. The WS open
+  consistently won on localhost, so the first `sendResize()` in
+  `ws.onopen` early-returned with `resizeSupported = false`, the
+  server's 250 ms `INITIAL_RESIZE_WAIT` window expired with no resize
+  received, and the daemon `capture-pane`d tmux at its pre-sized
+  132×40 default. xterm rendered those bytes at the host element's
+  width — every line wrapped wrong, Claude's sticky footer
+  (`▶▶ bypass permissions…`) reflowed into the middle of the chat
+  scrollback, and leading characters got eaten at line edges
+  (`Searching` → `S  rching`). Probe is now serialized before the WS
+  open: one extra HTTP round-trip (single-digit ms on localhost) buys
+  a guaranteed correctly-sized resize as the first thing the WS sees.
+
+### Added
+- **Activity-state notifications: `agent.finished` and
+  `agent.awaiting_input`.** The watchdog classifies each session's
+  pane snapshot into Working / Idle / AwaitingInput from cheap
+  pane-substring signatures the executor adapter declares
+  (`busy_signature`, `awaiting_input_signatures`). Working → Idle
+  emits `agent.finished`; (Working|Idle) → AwaitingInput emits
+  `agent.awaiting_input`. Both surfaces (TUI + dashboard) toast on
+  these events; `agent.finished` is suppressed when the user is
+  already viewing the originating session, `agent.awaiting_input` is
+  unconditional because it's a "you have to do something" signal.
+  Permission-prompt detection beats busy detection — Claude keeps the
+  spinner up while a prompt is open. Adapters without declared
+  signatures stay in `Unknown` forever and never emit, so we never
+  fire spurious finished/awaiting toasts on tools we don't recognize.
+
+### Changed
+- **Transcript parser tracks Claude Code's new task-tool family.**
+  Recognises `TaskCreate` / `TaskUpdate` / `Agent` (formerly `Task`)
+  alongside the legacy `TodoWrite` so newer transcripts produce
+  populated agent-task panels. `TaskCreate` rows bind to the numeric
+  `task_id` parsed from the matching `tool_result`; `TaskUpdate`
+  patches by id; `status: deleted` removes the row. Legacy
+  `TodoWrite` transcripts continue to render via the latest-call-wins
+  path.
+
+## [0.6.22] — 2026-05-06
+
+### Added
+- **Lazygit pinned to a far-right column with resizable width.**
+
 ## [0.6.21] — 2026-05-06
 
 ### Changed

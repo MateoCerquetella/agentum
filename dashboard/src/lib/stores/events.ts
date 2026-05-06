@@ -132,7 +132,42 @@ function handle(ev: BusEvent) {
       });
       break;
     }
+    case 'agent.finished': {
+      // Watchdog saw the agent's busy spinner go away. Suppress the
+      // toast when the user is already on this session's detail page —
+      // they can see "finished" in the pane in front of them.
+      const name = ev.session_name ?? 'agent';
+      if (!isViewingSession(ev.session_id)) {
+        pushToast({
+          kind: 'info',
+          title: `${name} finished`,
+          ttl_ms: 6000
+        });
+      }
+      break;
+    }
+    case 'agent.awaiting_input': {
+      // Permission prompt is open. Always toast — this is a "you have to
+      // do something" event and the user might be on another tab.
+      const name = ev.session_name ?? 'agent';
+      pushToast({
+        kind: 'warn',
+        title: `${name} needs input`,
+        body: 'agent is waiting on a permission prompt',
+        ttl_ms: 8000
+      });
+      break;
+    }
   }
+}
+
+/** Best-effort "is the user looking at this session right now?" check.
+ *  Matches the route `/sessions/{id}` against the current pathname.
+ *  Used to suppress redundant `agent.finished` toasts. */
+function isViewingSession(id: string | null): boolean {
+  if (!id) return false;
+  if (typeof location === 'undefined') return false;
+  return location.pathname.startsWith(`/sessions/${id}`);
 }
 
 export function connect() {

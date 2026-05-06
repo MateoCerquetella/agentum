@@ -69,9 +69,22 @@
   }
 
   // One-click "spawn plain terminal" — mirrors the TUI's `t` shortcut.
-  // Generates a `shell-XXXX` name, asks the server for a default workdir
-  // (the user's home), creates a `bash` session, starts it, and navigates
-  // to the detail page so the user lands on the live pane.
+  // Picks the next free `shell-N` name (sequential, scanning current
+  // sessions), asks the server for a default workdir (the user's home),
+  // creates a `bash` session, starts it, and navigates to the detail
+  // page so the user lands on the live pane.
+  function nextShellName(): string {
+    let max = 0;
+    for (const s of $sessions.items) {
+      const m = /^shell-(\d+)$/.exec(s.name);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (Number.isFinite(n) && n > max) max = n;
+      }
+    }
+    return `shell-${max + 1}`;
+  }
+
   async function spawnShell() {
     if (spawningShell) return;
     spawningShell = true;
@@ -84,9 +97,8 @@
       } catch {
         // Fall through to "."; the backend will reject if it's invalid.
       }
-      const suffix = Math.random().toString(16).slice(2, 8);
       const created = await api.createSession({
-        name: `shell-${suffix}`,
+        name: nextShellName(),
         workdir,
         tool: 'bash',
         model: null,

@@ -114,6 +114,8 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
     let adapter = agentum_executor::adapter_for(&sess.tool);
     let compact_cmd = adapter.compact_trigger();
     let crash_sigs = adapter.crash_signatures();
+    let busy_sig = adapter.busy_signature();
+    let awaiting_sigs = adapter.awaiting_input_signatures();
 
     let context_low = match Regex::new(r"Context low.*<\s*50%") {
         Ok(r) => r,
@@ -131,6 +133,14 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
     .await;
 
     let mut last_compact: Option<Instant> = None;
+    // Per-session activity state, derived purely from pane substrings.
+    // We start in `Unknown` so the first observation never fires a
+    // notification — the user already knows the agent is wherever it
+    // is when they spawn agentum or the watchdog restarts. Transitions
+    // we care about:
+    //   Working → Idle             → emit `agent.finished`
+    //   (Working|Idle) → Awaiting  → emit `agent.awaiting_input`
+    let mut activity = ActivityState::Unknown;
     let mut tick = interval(TICK);
     // Drop the immediate first tick so we don't fire before the pane is alive.
     tick.tick().await;
@@ -199,6 +209,65 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
                 }
             }
         }
+
+        // Activity-state transitions → agent.finished / agent.awaiting_input.
+        // Only fires for adapters that declared a busy_signature or any
+        // awaiting_input_signatures — others stay in `Unknown` forever
+        // and never emit. We never emit on the Unknown→* edge so a
+        // user spawning agentum onto an already-finished session
+        // doesn't get a spurious "finished" toast.
+        let next = classify_activity(&pane, busy_sig, awaiting_sigs);
+        if next != activity {
+            match (activity, next) {
+                (ActivityState::Working, ActivityState::Idle) => {
+                    let ev = Event::new("agent.finished")
+                        .with_session(sess.id, &sess.name);
+                    let _ = emit(&bus, &store, ev).await;
+                }
+                (prev, ActivityState::AwaitingInput)
+                    if prev != ActivityState::AwaitingInput
+                        && prev != ActivityState::Unknown =>
+                {
+                    let ev = Event::new("agent.awaiting_input")
+                        .with_session(sess.id, &sess.name);
+                    let _ = emit(&bus, &store, ev).await;
+                }
+                _ => {}
+            }
+            activity = next;
+        }
+    }
+}
+
+/// Pane-derived activity state. `Unknown` is the seed value before any
+/// observation; transitions out of `Unknown` never emit so the watchdog
+/// stays quiet on startup / reconnect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ActivityState {
+    Unknown,
+    Working,
+    Idle,
+    AwaitingInput,
+}
+
+/// Classify a pane snapshot into an [`ActivityState`]. Permission-prompt
+/// signatures take precedence over the busy/idle distinction — Claude
+/// keeps "esc to interrupt" on screen while a permission box is open,
+/// and the user-facing important fact is "you need to answer this".
+fn classify_activity(
+    pane: &str,
+    busy_sig: Option<&str>,
+    awaiting_sigs: &[&str],
+) -> ActivityState {
+    if !awaiting_sigs.is_empty() && awaiting_sigs.iter().any(|s| pane.contains(s)) {
+        return ActivityState::AwaitingInput;
+    }
+    match busy_sig {
+        Some(s) if pane.contains(s) => ActivityState::Working,
+        Some(_) => ActivityState::Idle,
+        // Adapter opted out — keep Unknown so we never emit spurious
+        // finished/awaiting events for tools without stable markers.
+        None => ActivityState::Unknown,
     }
 }
 
@@ -233,5 +302,36 @@ mod tests {
     fn cooldown_window() {
         // 5 minute window
         assert_eq!(COMPACT_COOLDOWN, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn classify_activity_states() {
+        let busy = Some("esc to interrupt");
+        let awaiting = ["Do you want to proceed?", "❯ 1. Yes"];
+
+        assert_eq!(
+            classify_activity("...working hard (esc to interrupt)", busy, &awaiting),
+            ActivityState::Working,
+        );
+        assert_eq!(
+            classify_activity("> _\n", busy, &awaiting),
+            ActivityState::Idle,
+        );
+        // Permission prompt outranks busy spinner — Claude leaves the
+        // spinner up while the prompt is open.
+        assert_eq!(
+            classify_activity(
+                "... esc to interrupt ...\nDo you want to proceed?",
+                busy,
+                &awaiting
+            ),
+            ActivityState::AwaitingInput,
+        );
+        // Adapter without a busy_signature stays in Unknown — no
+        // spurious finished/awaiting toasts for tools we don't know.
+        assert_eq!(
+            classify_activity("anything goes here", None, &[]),
+            ActivityState::Unknown,
+        );
     }
 }

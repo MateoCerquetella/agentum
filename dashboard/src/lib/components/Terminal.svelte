@@ -61,7 +61,9 @@
     ws.send(JSON.stringify({ resize: { cols, rows } }));
   }
 
-  onMount(() => {
+  let destroyed = false;
+
+  onMount(async () => {
     term = new Terminal({
       fontFamily:
         'JetBrains Mono, "SF Mono", Menlo, Consolas, monospace',
@@ -104,19 +106,25 @@
     // tmux pane mirrors whatever xterm just laid itself out as.
     term.onResize(() => sendResize());
 
-    // Probe server capabilities before opening the WS so the first
-    // resize emit (in onopen below) only fires when the daemon actually
-    // understands it. Older daemons silently skipped — better than
-    // typing `{"resize":…}` into the agent's prompt.
-    api.health()
-      .then((h) => {
-        resizeSupported = Array.isArray(h.capabilities) && h.capabilities.includes('resize');
-        if (resizeSupported && ws?.readyState === WebSocket.OPEN) {
-          // WS may have opened first; backfill the size we suppressed.
-          sendResize();
-        }
-      })
-      .catch(() => { /* leave resizeSupported = false */ });
+    // Probe `resize` capability BEFORE opening the WS — not concurrently.
+    // The server arms a 250 ms `INITIAL_RESIZE_WAIT` window from WS open
+    // and `capture-pane`s tmux at whatever size it currently has if no
+    // resize lands in time. Tmux is pre-sized to 132×40 (v0.6.18). If
+    // the WS open beat the probe (the common case on localhost), the
+    // first `sendResize()` in `ws.onopen` early-returned with
+    // `resizeSupported = false`, the server timed out and snapped at
+    // 132×40, xterm rendered those bytes at the host's width, and every
+    // line wrapped wrong — Claude's sticky footer (`▶▶ bypass
+    // permissions…`) reflowed into the middle of chat output, leading
+    // characters got eaten at line edges. Serializing the probe here
+    // costs one HTTP round-trip (single-digit ms on localhost) and
+    // guarantees the very first thing the WS sees post-open is a
+    // correctly-sized resize frame.
+    try {
+      const h = await api.health();
+      resizeSupported = Array.isArray(h.capabilities) && h.capabilities.includes('resize');
+    } catch { /* leave resizeSupported = false */ }
+    if (destroyed) return;
 
     ws = new WebSocket(api.streamUrl(sessionId));
     ws.binaryType = 'arraybuffer';
@@ -149,6 +157,7 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
     resizeObserver?.disconnect();
     ws?.close();
     term?.dispose();
