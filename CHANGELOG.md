@@ -4,6 +4,31 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.15] — 2026-05-06
+
+### Fixed
+- **Half-painted pane on session switch.** v0.6.14 fixed the resize race
+  but kept a fixed 80 ms post-SIGWINCH sleep before snapshotting. That's
+  enough for an idle pane, but ratatui-based agents (claude code, codex,
+  opencode) reacting to a real size change can take well over 100 ms to
+  emit a full repaint. We were capturing mid-burst and shipping a frame
+  that contained only what the agent had drawn so far — typically just
+  a streaming indicator, with the input box and footer missing.
+  User-visible symptom: switching to a session landed on a near-empty
+  pane that never filled in.
+
+  Replaced the fixed sleep with a poll on the pane log file's size.
+  While the embedded process is emitting bytes, the pipe-pane log
+  grows; when two consecutive 40 ms intervals show no growth, the
+  repaint burst is considered settled and we capture. Capped at
+  280 ms total so an actively-streaming agent doesn't hold connect
+  open — at the cap we accept a mid-stream snapshot and let the
+  live tail paint over it.
+
+  Connect latency for an idle pane: ≈80 ms (two quiet polls).
+  For a post-SIGWINCH repaint: scales with the actual repaint
+  duration, capped at 280 ms.
+
 ## [0.6.14] — 2026-05-06
 
 ### Fixed

@@ -47,6 +47,14 @@ async fn list(
         None => None,
     };
     let rows = state.store.list_sessions(status).await?;
+    // Lazy-start a transcript watcher per known session so plan/todo
+    // updates stream live. `ensure_started` is idempotent — calling it
+    // for sessions that already have a watcher is cheap.
+    for s in &rows {
+        state
+            .transcripts
+            .ensure_started(s.id, PathBuf::from(&s.workdir));
+    }
     Ok(Json(rows))
 }
 
