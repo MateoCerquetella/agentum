@@ -6,6 +6,7 @@
 //!   `>`          commands only (focus, theme, lazygit, refresh, quit)
 //!   `#`          sessions only — like Fresh's buffer switcher
 //!   `@`          themes only
+//!   `~`          settings — status-bar chip toggles, view toggles
 //!
 //! Type to filter, ↑/↓ to move, Enter to run. Catalogue is rebuilt every
 //! frame so dynamic entries (sessions, themes) stay current. Filtering
@@ -14,6 +15,7 @@
 
 use uuid::Uuid;
 
+use super::prefs::StatusChip;
 use super::theme;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -22,6 +24,7 @@ pub enum Mode {
     Commands,
     Sessions,
     Themes,
+    Settings,
 }
 
 impl Mode {
@@ -33,6 +36,7 @@ impl Mode {
             Some('>') => (Self::Commands, raw[1..].trim_start()),
             Some('#') => (Self::Sessions, raw[1..].trim_start()),
             Some('@') => (Self::Themes, raw[1..].trim_start()),
+            Some('~') => (Self::Settings, raw[1..].trim_start()),
             _ => (Self::All, raw),
         }
     }
@@ -43,15 +47,20 @@ impl Mode {
             Self::Commands => "commands",
             Self::Sessions => "sessions",
             Self::Themes => "themes",
+            Self::Settings => "settings",
         }
     }
 
     pub fn keep(self, group: &str) -> bool {
         match self {
             Self::All => true,
-            Self::Commands => matches!(group, "general" | "focus" | "extensions" | "appearance"),
+            Self::Commands => matches!(
+                group,
+                "general" | "focus" | "extensions" | "appearance" | "view" | "settings"
+            ),
             Self::Sessions => group == "sessions",
             Self::Themes => group == "appearance",
+            Self::Settings => matches!(group, "settings" | "view"),
         }
     }
 }
@@ -90,10 +99,33 @@ pub enum ActionKind {
     /// Open the destructive-confirm overlay for `Delete` against this
     /// session. Same safety net as `KillSession`.
     DeleteSession(Uuid),
+    /// View toggles — same primitives the Ctrl-* shortcuts already
+    /// drive, surfaced through the palette so users can find them
+    /// without memorising chords.
+    ToggleSidebar,
+    ToggleRightPanel,
+    ToggleFullscreen,
+    ToggleSplit,
+    /// Toggle visibility of one status-bar chip. Persists to disk.
+    ToggleStatusChip(StatusChip),
+    /// Reset all status-bar prefs to their defaults.
+    ResetStatusBar,
 }
 
 pub struct Catalog {
     pub actions: Vec<Action>,
+}
+
+/// Snapshot of view + prefs state passed into `Catalog::build`. Lets
+/// the Settings-group actions render their current value ("[x]" /
+/// "[ ]") without the catalogue having to take a `&App` reference (the
+/// borrow checker hates that — `App` owns its own catalogue derivation).
+#[derive(Clone, Copy)]
+pub struct ViewState {
+    pub sidebar_hidden: bool,
+    pub right_panel_visible: bool,
+    pub fullscreen: bool,
+    pub split_open: bool,
 }
 
 impl Catalog {
@@ -106,6 +138,8 @@ impl Catalog {
         lazygit_open: bool,
         sessions: &[(Uuid, String, String)], // (id, name, workdir)
         selected: Option<Uuid>,
+        view: ViewState,
+        prefs: &super::prefs::Prefs,
     ) -> Self {
         let mut a = Vec::with_capacity(32);
 
@@ -199,6 +233,65 @@ impl Catalog {
             hint: "G".into(),
             group: "extensions",
             kind: ActionKind::LazygitCheats,
+        });
+
+        // View toggles. Each entry shows current state inline so the
+        // user can read off what's on without flipping it first.
+        let onoff = |b: bool| if b { "on" } else { "off" };
+        a.push(Action {
+            label: format!(
+                "View: sidebar [{}]",
+                onoff(!view.sidebar_hidden)
+            ),
+            hint: "Ctrl-B".into(),
+            group: "view",
+            kind: ActionKind::ToggleSidebar,
+        });
+        a.push(Action {
+            label: format!(
+                "View: agent panel [{}]",
+                onoff(view.right_panel_visible)
+            ),
+            hint: "Ctrl-T".into(),
+            group: "view",
+            kind: ActionKind::ToggleRightPanel,
+        });
+        a.push(Action {
+            label: format!("View: fullscreen [{}]", onoff(view.fullscreen)),
+            hint: "Shift-F · Ctrl-K Z".into(),
+            group: "view",
+            kind: ActionKind::ToggleFullscreen,
+        });
+        a.push(Action {
+            label: format!(
+                "View: split terminal [{}]",
+                onoff(view.split_open)
+            ),
+            hint: "Ctrl-\\".into(),
+            group: "view",
+            kind: ActionKind::ToggleSplit,
+        });
+
+        // Status-bar settings — one entry per chip. Renders the chip
+        // label and current value so the user can see what each
+        // does before flipping it.
+        for chip in StatusChip::ALL {
+            a.push(Action {
+                label: format!(
+                    "Status bar: {} [{}]",
+                    chip.label(),
+                    onoff(prefs.get(*chip))
+                ),
+                hint: "".into(),
+                group: "settings",
+                kind: ActionKind::ToggleStatusChip(*chip),
+            });
+        }
+        a.push(Action {
+            label: "Status bar: reset to defaults".into(),
+            hint: "".into(),
+            group: "settings",
+            kind: ActionKind::ResetStatusBar,
         });
 
         // Themes.

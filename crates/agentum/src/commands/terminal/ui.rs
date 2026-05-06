@@ -16,6 +16,8 @@ use super::app::{
     Notification, Overlay, PendingAction, Row, palette_catalog, status_dot,
 };
 use super::extensions::{self, Extension, LAZYGIT};
+use super::iometer::{fmt_bytes, fmt_rate};
+use super::prefs::StatusChip;
 use super::theme::Palette;
 
 #[derive(Clone, Copy)]
@@ -55,12 +57,12 @@ pub fn compute_layout(
     split_open: bool,
     right_panel_visible: bool,
 ) -> Areas {
-    // Right panel is suppressed in fullscreen, when lazygit is open
-    // (already a 4th pane), and on terminals too narrow to host it
-    // without crushing the terminal area.
+    // Right panel is suppressed in fullscreen and on terminals too
+    // narrow to host it without crushing the terminal area. It stays
+    // visible alongside lazygit so the agent's plan/todos/tasks remain
+    // in view while the user works in git.
     let show_right = right_panel_visible
         && !fullscreen
-        && !lazygit_open
         && area.width >= RIGHT_PANEL_MIN_TOTAL_WIDTH;
 
     // Fullscreen: drop the title row, tree column, and status row so the
@@ -534,75 +536,123 @@ fn fill_default_bg(f: &mut Frame<'_>, area: Rect, bg: Color) {
 }
 
 fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
-    let workdir = app
-        .selected_session()
-        .map(|s| collapse_home(&s.workdir))
-        .unwrap_or_else(|| "—".to_string());
+    // Each chip is opt-in/out via `app.prefs`. Build the list as we go
+    // so disabled chips collapse cleanly without leaving stray padding.
+    // Order is fixed (so the user sees a predictable layout) but each
+    // entry can be toggled via the palette's `Settings:` group.
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(12);
 
-    let tool_label = app
-        .selected_session()
-        .map(|s| match s.model.as_deref() {
-            Some(m) => format!("{} · {}", s.tool, m),
-            None => s.tool.clone(),
-        })
-        .unwrap_or_else(|| "—".to_string());
+    if app.prefs.get(StatusChip::Workdir) {
+        let workdir = app
+            .selected_session()
+            .map(|s| collapse_home(&s.workdir))
+            .unwrap_or_else(|| "—".to_string());
+        spans.push(Span::styled(
+            format!(" {workdir} "),
+            Style::default().fg(p.fg).bg(p.chrome_bg),
+        ));
+    }
 
-    let (conn_label, conn_color) = match app.conn {
-        ConnState::Connected => ("● connected", p.success),
-        ConnState::Connecting => ("◌ connecting", p.warning),
-        ConnState::Disconnected => ("✗ disconnected", p.error),
-    };
+    if app.prefs.get(StatusChip::Tool) {
+        let tool_label = app
+            .selected_session()
+            .map(|s| match s.model.as_deref() {
+                Some(m) => format!("{} · {}", s.tool, m),
+                None => s.tool.clone(),
+            })
+            .unwrap_or_else(|| "—".to_string());
+        spans.push(Span::styled(
+            format!("{tool_label} "),
+            Style::default().fg(p.muted).bg(p.chrome_bg),
+        ));
+    }
 
-    // Error chip moved to the title bar so the bottom row stays
-    // reserved for non-error feedback (see `draw_title`).
+    if app.prefs.get(StatusChip::Conn) {
+        let (conn_label, conn_color) = match app.conn {
+            ConnState::Connected => ("● connected", p.success),
+            ConnState::Connecting => ("◌ connecting", p.warning),
+            ConnState::Disconnected => ("✗ disconnected", p.error),
+        };
+        spans.push(Span::styled(
+            format!(" {conn_label} "),
+            Style::default().fg(conn_color).bg(p.chrome_bg),
+        ));
+    }
 
-    let lg_chip = if app.lazygit_open() {
-        Span::styled(
-            " lazygit ",
-            Style::default()
-                .bg(p.chip_bg)
-                .fg(p.chip_fg)
-                .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        Span::styled(" g lazygit ", Style::default().fg(p.muted).bg(p.chrome_bg))
-    };
+    if app.prefs.get(StatusChip::Io) {
+        // Live throughput chip — `↓ rate · ↑ rate`. Treated as one chip
+        // visually so it doesn't compete with workdir/tool for width.
+        // Renders even when both rates are zero so the user can see the
+        // chip exists and learn it's there to flip off.
+        let down = fmt_rate(app.io.rate_in());
+        let up = fmt_rate(app.io.rate_out());
+        spans.push(Span::styled(
+            format!(" ↓{down} ↑{up} "),
+            Style::default().fg(p.accent_alt).bg(p.chrome_bg),
+        ));
+    }
 
-    // Notifications now render as a bottom-left toast overlay (see
-    // `draw_notifications`), not inside the status bar — keeps lifecycle
-    // events from fighting workdir/tool chips for horizontal space.
+    if app.prefs.get(StatusChip::IoTotals) {
+        // Lifetime totals — quieter, opt-in chip for users who care
+        // about absolute volume (e.g. metered networks).
+        let din = fmt_bytes(app.io.total_in());
+        let dout = fmt_bytes(app.io.total_out());
+        spans.push(Span::styled(
+            format!(" Σ↓{din} ↑{dout} "),
+            Style::default().fg(p.muted).bg(p.chrome_bg),
+        ));
+    }
 
+    if app.prefs.get(StatusChip::Lazygit) {
+        let lg_chip = if app.lazygit_open() {
+            Span::styled(
+                " lazygit ",
+                Style::default()
+                    .bg(p.chip_bg)
+                    .fg(p.chip_fg)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::styled(" g lazygit ", Style::default().fg(p.muted).bg(p.chrome_bg))
+        };
+        spans.push(lg_chip);
+    }
+
+    if app.prefs.get(StatusChip::Theme) {
+        spans.push(Span::styled(
+            format!(" {} ", app.theme.name),
+            Style::default().fg(p.chip_fg).bg(p.chip_bg),
+        ));
+    }
+
+    // Status message is always shown — it's a transient feedback channel
+    // and hiding it would silently drop user-relevant signals (e.g.
+    // "sidebar hidden", "theme: midnight"). Empty when no message.
     let extra = match &app.status_msg {
         Some(m) => format!(" · {m} "),
         None => String::new(),
     };
-
-    let bar = Line::from(vec![
-        Span::styled(
-            format!(" {workdir} "),
-            Style::default().fg(p.fg).bg(p.chrome_bg),
-        ),
-        Span::styled(
-            format!("{tool_label} "),
+    if !extra.is_empty() {
+        spans.push(Span::styled(
+            extra,
             Style::default().fg(p.muted).bg(p.chrome_bg),
-        ),
-        Span::styled(
-            format!(" {conn_label} "),
-            Style::default().fg(conn_color).bg(p.chrome_bg),
-        ),
-        lg_chip,
-        Span::styled(
-            format!(" {} ", app.theme.name),
-            Style::default().fg(p.chip_fg).bg(p.chip_bg),
-        ),
-        Span::styled(extra, Style::default().fg(p.muted).bg(p.chrome_bg)),
-        Span::styled(
+        ));
+    }
+
+    if app.prefs.get(StatusChip::PaletteHint) {
+        spans.push(Span::styled(
             " Ctrl-P palette ",
             Style::default().fg(p.accent).bg(p.chrome_bg),
-        ),
-        Span::styled(" ? help ", Style::default().fg(p.muted).bg(p.chrome_bg)),
-    ]);
-    let para = Paragraph::new(bar).style(Style::default().bg(p.chrome_bg).fg(p.fg));
+        ));
+    }
+    if app.prefs.get(StatusChip::HelpHint) {
+        spans.push(Span::styled(
+            " ? help ",
+            Style::default().fg(p.muted).bg(p.chrome_bg),
+        ));
+    }
+
+    let para = Paragraph::new(Line::from(spans)).style(Style::default().bg(p.chrome_bg).fg(p.fg));
     f.render_widget(para, area);
 }
 
@@ -761,6 +811,11 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         body("  g                 toggle lazygit side pane", p),
         body("  G                 lazygit cheat sheet", p),
         body("  T                 cycle theme", p),
+        body(
+            "  Ctrl-P then ~     status bar settings (toggle each chip individually)",
+            p,
+        ),
+        body("  ↓ rate ↑ rate     live WS throughput · toggle via ~ I/O speeds", p),
         body(
             "  Shift-F           toggle fullscreen (hide tree + chrome)",
             p,
@@ -947,7 +1002,9 @@ fn draw_palette_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         f.render_widget(list, rows[1]);
     }
 
-    // Hints line — Fresh-style prefix legend.
+    // Hints line — Fresh-style prefix legend. `~` is the new
+    // settings prefix; truncated on narrow palettes by ratatui's
+    // line clip rather than by us pre-trimming.
     let hints = Line::from(vec![
         Span::styled(" › ", Style::default().fg(p.subtle)),
         Span::styled("type", Style::default().fg(p.muted)),
@@ -957,6 +1014,8 @@ fn draw_palette_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         Span::styled(" sessions", Style::default().fg(p.muted)),
         Span::styled("  @", Style::default().fg(p.accent)),
         Span::styled(" themes", Style::default().fg(p.muted)),
+        Span::styled("  ~", Style::default().fg(p.accent)),
+        Span::styled(" settings", Style::default().fg(p.muted)),
         Span::styled("    ↑↓ ", Style::default().fg(p.subtle)),
         Span::styled("move", Style::default().fg(p.muted)),
         Span::styled("  ⏎ ", Style::default().fg(p.subtle)),
@@ -1436,92 +1495,83 @@ fn truncate(s: &str, max: usize) -> String {
 
 // ---------- agent-tasks right panel ----------
 
-/// Right-edge panel showing the selected agent's plan, todos, and
-/// background tasks. Layout idea adapted from MIT-licensed
-/// `Hmbown/DeepSeek-TUI` sidebar pattern: a vertical stack of three
-/// auto-collapsing sub-panels — empty ones get zero rows so the rest
-/// expand to fill. Status is rendered with `[x] / [~] / [ ]` prefix
-/// badges so it reads cleanly even on terminals with limited colour.
+/// Right-edge column showing the selected agent's plan, todos, and
+/// background tasks as three independent boxes stacked vertically. Each
+/// box owns its own border and title so they read as distinct cards
+/// rather than sub-sections of a wrapper. Status is rendered with
+/// `[x] / [~] / [ ]` prefix badges so it reads cleanly even on
+/// terminals with limited colour.
 fn draw_agent_tasks_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
-    let title = match app.selected_session() {
-        Some(s) => format!(" agent · {} ", s.name),
-        None => " agent ".to_string(),
-    };
-    let outer = Block::default()
-        .title(Span::styled(
-            title,
-            Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
-        ))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(p.idle_border).bg(p.panel_bg))
-        .style(Style::default().bg(p.panel_bg).fg(p.fg));
-    let inner = outer.inner(area);
-    f.render_widget(outer, area);
-
-    // No selection? Show an instructional hint and bail.
-    let Some(session) = app.selected_session() else {
-        let hint = Paragraph::new(
-            "Select a session on the left to see its plan, todos, and background tasks.",
-        )
-        .style(Style::default().fg(p.muted).bg(p.panel_bg))
-        .wrap(Wrap { trim: true });
-        f.render_widget(hint, inner);
-        return;
-    };
-
-    let state = app.agent_tasks.get(&session.id);
-    let plan_lines = build_plan_lines(state, inner.width as usize, p);
-    let todos_lines = build_todos_lines(state, inner.width as usize, p);
-    let tasks_lines = build_tasks_lines(state, inner.width as usize, p);
-
-    let plan_h = section_height(&plan_lines);
-    let todos_h = section_height(&todos_lines);
-    let tasks_h = section_height(&tasks_lines);
-
-    // If everything is empty, show one consolidated empty-state hint
-    // instead of three back-to-back blanks.
-    if plan_h == 0 && todos_h == 0 && tasks_h == 0 {
-        let hint = Paragraph::new(
-            "Waiting for the agent's first plan / todo / task call…\n\
-             (Ctrl-T toggles this panel)",
-        )
-        .style(Style::default().fg(p.muted).bg(p.panel_bg))
-        .wrap(Wrap { trim: true });
-        f.render_widget(hint, inner);
+    if area.width == 0 || area.height == 0 {
         return;
     }
 
-    // Allocate vertical space so empty sections take 0 rows; non-empty
-    // sections share the remainder. Use Min for non-empty so the last
-    // one absorbs leftover rows.
-    let constraints: Vec<Constraint> = [plan_h, todos_h, tasks_h]
-        .into_iter()
-        .map(|h| if h == 0 { Constraint::Length(0) } else { Constraint::Min(h) })
-        .collect();
+    // Three equal-height boxes. Saturating-divide so we still produce
+    // sensible heights on very short windows; remainder rows fall to
+    // the last box.
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(inner);
+        .constraints([
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+        ])
+        .split(area);
 
-    if plan_h > 0 {
-        render_section(f, rows[0], "Plan", plan_lines, p);
-    }
-    if todos_h > 0 {
-        render_section(f, rows[1], "Todos", todos_lines, p);
-    }
-    if tasks_h > 0 {
-        render_section(f, rows[2], "Tasks", tasks_lines, p);
-    }
+    let session = app.selected_session();
+    let plan_title = match session {
+        Some(s) => format!(" Plan · {} ", s.name),
+        None => " Plan ".to_string(),
+    };
+
+    // Build content per box; when there's no session yet, every box
+    // shows a short empty-state hint so the column reads as 3 boxes
+    // even on first launch.
+    let (plan_lines, todos_lines, tasks_lines) = match session {
+        Some(session) => {
+            let state = app.agent_tasks.get(&session.id);
+            let inner_width = rows[0].width.saturating_sub(2) as usize;
+            let plan = build_plan_lines(state, inner_width, p);
+            let todos = build_todos_lines(state, inner_width, p);
+            let tasks = build_tasks_lines(state, inner_width, p);
+            (
+                or_empty_hint(plan, "Waiting for /plan…", p),
+                or_empty_hint(todos, "No todos yet.", p),
+                or_empty_hint(tasks, "No background tasks.", p),
+            )
+        }
+        None => {
+            let hint = |s: &str| {
+                vec![Line::from(Span::styled(
+                    s.to_string(),
+                    Style::default().fg(p.muted),
+                ))]
+            };
+            (
+                hint("Select a session to see its plan."),
+                hint("Select a session to see its todos."),
+                hint("Select a session to see its tasks."),
+            )
+        }
+    };
+
+    render_section(f, rows[0], &plan_title, plan_lines, p);
+    render_section(f, rows[1], " Todos ", todos_lines, p);
+    render_section(f, rows[2], " Tasks ", tasks_lines, p);
 }
 
-/// Required height for a sub-section — content rows plus the 2-row
-/// border. Returns 0 when there's no content, which lets the layout
-/// allocator collapse the slot.
-fn section_height(lines: &[Line<'static>]) -> u16 {
+fn or_empty_hint(
+    lines: Vec<Line<'static>>,
+    hint: &str,
+    p: &Palette,
+) -> Vec<Line<'static>> {
     if lines.is_empty() {
-        0
+        vec![Line::from(Span::styled(
+            hint.to_string(),
+            Style::default().fg(p.muted),
+        ))]
     } else {
-        (lines.len() as u16).saturating_add(2)
+        lines
     }
 }
 
@@ -1537,13 +1587,13 @@ fn render_section(
     }
     let block = Block::default()
         .title(Span::styled(
-            format!(" {title} "),
+            title.to_string(),
             Style::default().fg(p.fg_strong).add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(p.idle_border).bg(p.panel_bg))
         .style(Style::default().bg(p.panel_bg).fg(p.fg));
-    let para = Paragraph::new(lines).block(block);
+    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }
 

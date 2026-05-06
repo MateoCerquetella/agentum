@@ -4,6 +4,50 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.19] — 2026-05-06
+
+### Fixed
+- **Session-switch wipes visible chat history.** The actual root cause
+  of the recurring "switch away → switch back → content gone" reports.
+  When the user switched away and back, the TUI client called
+  `term.reset()` (destroying its vt100 parser), opened a fresh WS, and
+  the daemon shipped a `tmux capture-pane` snapshot reflecting whatever
+  the agent's UI looked like *right now*. After a task completes,
+  claude code's UI is mostly empty (just task header + input box) — so
+  the snapshot replay overwrote all the visible chat history with that
+  near-empty state. No amount of resize/settle/snapshot-timing tuning
+  could fix this because the *snapshot itself* was the wrong artefact
+  to send.
+
+  Two-piece fix:
+
+  - **Client (`agentum/src/commands/terminal/app.rs`)**: keep a
+    `parser_cache: HashMap<Uuid, TerminalPane>` on `App`. On switch,
+    stash the current parser keyed by the old session id and restore
+    one for the new selection (or install a fresh one if there's no
+    cache hit). Replaces the previous `term.reset()` on switch.
+
+  - **Server (`agentum-server/src/routes/sessions.rs`)**: track
+    per-session log-file positions in a `Mutex<HashMap<Uuid, u64>>` on
+    `AppState`. The WS handler now recognises a `{"resume":true}` text
+    frame in its initial wait window — when present, it replays the
+    log delta from the saved position instead of capturing a fresh
+    snapshot. The TUI client emits this frame whenever it restored a
+    parser from cache.
+
+  Net effect: switching away and back no longer touches visible chat
+  history. The bytes the agent emitted while the user was on the other
+  session are replayed into the preserved parser, bringing it from the
+  pre-switch state to the live tail without any
+  `\x1b[2J\x1b[H`-clobber.
+
+  Wire format addition: `{"resume":true}` text frames on the
+  `/api/sessions/{id}/stream` WebSocket. Old daemons ignore unrecognised
+  text frames (they're already treated as raw input by the legacy path,
+  which is harmless for `{"resume":true}` since it's not a meaningful
+  keystroke). Old clients never emit it, so they fall through to the
+  existing snapshot path.
+
 ## [0.6.18] — 2026-05-06
 
 ### Fixed

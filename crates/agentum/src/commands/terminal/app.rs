@@ -20,7 +20,9 @@ use uuid::Uuid;
 
 use super::api::{Client, EventMsg, TermOut, TerminalMsg};
 use super::extensions::{self, LAZYGIT};
-use super::palette::{ActionKind, Catalog};
+use super::iometer::IoMeter;
+use super::palette::{ActionKind, Catalog, ViewState};
+use super::prefs::{self, Prefs};
 use super::pty::{LocalPty, PtyMsg};
 use super::term::TerminalPane;
 use super::theme::{self, Theme};
@@ -386,6 +388,14 @@ pub struct App {
     /// switched at least once.
     pub prev_selected: Option<Uuid>,
     pub term: TerminalPane,
+    /// Parser state stashed when the user switches away from a session.
+    /// On switch-back we restore the parser instead of opening a fresh
+    /// one, and tell the daemon `{"resume":true}` so it sends the missed
+    /// log delta instead of a full pane snapshot. This is what stops a
+    /// session-switch round-trip from wiping visible chat history when
+    /// the agent's UI happens to look mostly empty after task
+    /// completion (snapshot-of-now overwriting the preserved state).
+    pub parser_cache: std::collections::HashMap<Uuid, TerminalPane>,
     pub focus: Focus,
     /// Width of the sidebar tree pane in columns. User-resizable with
     /// `+` / `-`, clamped 16..=80. The terminal pane keeps a 20-column
@@ -502,6 +512,14 @@ pub struct App {
     /// Default on so users see the feature without having to discover
     /// the binding.
     pub right_panel_visible: bool,
+    /// Sliding-window byte counter for the active WS terminal stream.
+    /// Drives the I/O speed chip on the status bar. Reset on session
+    /// switch so totals reflect the current stream, not an accumulation
+    /// across every session the user clicked through this run.
+    pub io: IoMeter,
+    /// Persistent UI preferences — what to show on the status bar.
+    /// Loaded at startup, persisted to disk on every change.
+    pub prefs: Prefs,
 }
 
 impl App {
@@ -514,6 +532,7 @@ impl App {
             selected,
             prev_selected: None,
             term: TerminalPane::new(),
+            parser_cache: std::collections::HashMap::new(),
             focus: Focus::Tree,
             tree_width: 32,
             fullscreen: false,
@@ -546,6 +565,8 @@ impl App {
             sound_muted: false,
             agent_tasks: HashMap::new(),
             right_panel_visible: true,
+            io: IoMeter::new(),
+            prefs: prefs::load(),
         }
     }
 
@@ -1215,7 +1236,9 @@ fn handle_mouse(app: &mut App, ev: crossterm::event::MouseEvent) {
                 Side::Right => app.split_right.as_ref().and_then(|s| s.term_in.as_ref()),
             };
             if let Some(tx) = tx {
-                let _ = tx.send(TermOut::Bytes(seq.into_bytes()));
+                let bytes = seq.into_bytes();
+                app.io.record_out(bytes.len());
+                let _ = tx.send(TermOut::Bytes(bytes));
             }
         }
         return;
@@ -1737,11 +1760,14 @@ async fn handle_key(
             Focus::TermRight => app.split_right.as_ref().and_then(|s| s.term_in.as_ref()),
             _ => app.term_in.as_ref(),
         };
-        match tx_opt {
-            Some(tx) => {
-                if tx.send(TermOut::Bytes(bytes)).is_err() {
-                    app.push_error("terminal stream closed — Ctrl-E tree · Ctrl-Q quit");
-                }
+        let nbytes = bytes.len();
+        let send_result = tx_opt.map(|tx| tx.send(TermOut::Bytes(bytes)));
+        match send_result {
+            Some(Ok(())) => {
+                app.io.record_out(nbytes);
+            }
+            Some(Err(_)) => {
+                app.push_error("terminal stream closed — Ctrl-E tree · Ctrl-Q quit");
             }
             None => {
                 app.status_msg = Some(
@@ -2243,7 +2269,13 @@ pub fn palette_catalog(app: &App) -> Catalog {
         .iter()
         .map(|s| (s.id, s.name.clone(), s.workdir.clone()))
         .collect();
-    Catalog::build(app.lazygit_open(), &sessions, app.selected)
+    let view = ViewState {
+        sidebar_hidden: app.sidebar_hidden,
+        right_panel_visible: app.right_panel_visible,
+        fullscreen: app.fullscreen,
+        split_open: app.split_open(),
+    };
+    Catalog::build(app.lazygit_open(), &sessions, app.selected, view, &app.prefs)
 }
 
 /// Errors-overlay key handler. Treats the overlay as a vim-ish list:
@@ -2373,6 +2405,80 @@ async fn run_palette_action(
                     running: matches!(s.status, Status::Running),
                 });
             }
+        }
+        ActionKind::ToggleSidebar => {
+            app.sidebar_hidden = !app.sidebar_hidden;
+            if app.sidebar_hidden && app.focus == Focus::Tree {
+                app.set_focus(Focus::Term);
+            }
+            app.status_msg = Some(if app.sidebar_hidden {
+                "sidebar hidden".into()
+            } else {
+                "sidebar visible".into()
+            });
+        }
+        ActionKind::ToggleRightPanel => {
+            app.right_panel_visible = !app.right_panel_visible;
+            app.status_msg = Some(if app.right_panel_visible {
+                "agent panel on".into()
+            } else {
+                "agent panel off".into()
+            });
+            // Match the Ctrl-T keybinding: kick a fetch when turning
+            // the panel on so it populates immediately.
+            if app.right_panel_visible
+                && let Some(id) = app.selected
+            {
+                refresh_agent_tasks(app, client, id).await;
+            }
+        }
+        ActionKind::ToggleFullscreen => {
+            app.fullscreen = !app.fullscreen;
+            app.status_msg = Some(if app.fullscreen {
+                "fullscreen on (Esc to exit)".into()
+            } else {
+                "fullscreen off".into()
+            });
+        }
+        ActionKind::ToggleSplit => {
+            if app.split_open() {
+                if let Some(handle) = app.stream_handle_right.take() {
+                    handle.abort();
+                }
+                app.split_right = None;
+                if app.focus == Focus::TermRight {
+                    app.set_focus(Focus::Term);
+                }
+                app.last_term_side = Side::Left;
+                app.status_msg = Some("split closed".into());
+            } else if app.lazygit_open() {
+                app.status_msg = Some("close lazygit before splitting".into());
+            } else {
+                app.split_right = Some(TermSlot {
+                    selected: None,
+                    term: TerminalPane::new(),
+                    term_in: None,
+                    term_size: (0, 0),
+                });
+                app.set_focus(Focus::TermRight);
+                app.last_term_side = Side::Right;
+                update_selection(app, client, Side::Right);
+                app.status_msg = Some("split open (Ctrl-W to close)".into());
+            }
+        }
+        ActionKind::ToggleStatusChip(chip) => {
+            let now_on = app.prefs.toggle(chip);
+            prefs::save(&app.prefs);
+            app.status_msg = Some(format!(
+                "status: {} {}",
+                chip.label(),
+                if now_on { "on" } else { "off" }
+            ));
+        }
+        ActionKind::ResetStatusBar => {
+            app.prefs = Prefs::default();
+            prefs::save(&app.prefs);
+            app.status_msg = Some("status bar reset to defaults".into());
         }
     }
 }
@@ -2706,12 +2812,27 @@ fn update_selection(app: &mut App, client: &Client, side: Side) {
     if side == Side::Left && let Some(prev) = app.selected {
         app.prev_selected = Some(prev);
     }
-    // Reset parser + selection + input channel for the chosen side.
+    // Stash the current parser keyed by its session id, then either
+    // restore a cached parser for the new selection (preserves chat
+    // history across switches — see `parser_cache`) or install a fresh
+    // one. The right slot doesn't get parser caching yet — it's an
+    // opt-in side-by-side view and tracking two independent caches
+    // doubles the state for marginal benefit.
+    let mut restored_from_cache = false;
     match side {
         Side::Left => {
             app.term_in = None;
+            if let Some(prev_id) = app.selected.take() {
+                let stale = std::mem::replace(&mut app.term, TerminalPane::new());
+                app.parser_cache.insert(prev_id, stale);
+            }
+            if let Some(new_id) = new_id
+                && let Some(cached) = app.parser_cache.remove(&new_id)
+            {
+                app.term = cached;
+                restored_from_cache = true;
+            }
             app.selected = new_id;
-            app.term.reset();
             app.term_size = (0, 0);
         }
         Side::Right => {
@@ -2723,6 +2844,11 @@ fn update_selection(app: &mut App, client: &Client, side: Side) {
             }
         }
     }
+    // Reset the I/O meter so the chip reflects throughput on the new
+    // stream rather than carrying credit from the prior session. The
+    // meter is shared across both panes (one pipe to the daemon), so a
+    // selection change on either side is the right reset trigger.
+    app.io.reset();
     // Open the new stream and stash the handle on App. Pick the right
     // outbound bytes channel for the side so the streams are isolated:
     // bytes from the right session feed the right slot's parser, never
@@ -2739,6 +2865,14 @@ fn update_selection(app: &mut App, client: &Client, side: Side) {
             return;
         };
         let (key_tx, key_rx) = mpsc::unbounded_channel::<TermOut>();
+        // If we just restored a cached parser, queue the resume signal
+        // BEFORE the stream's writer task picks it up. The daemon's
+        // initial-resize wait loop will read this and skip the
+        // `capture-pane` snapshot in favour of replaying just the log
+        // delta — keeping the parser's preserved chat history intact.
+        if side == Side::Left && restored_from_cache {
+            let _ = key_tx.send(TermOut::Resume);
+        }
         let handle = client.open_terminal_stream(id, term_tx, key_rx);
         match side {
             Side::Left => {
@@ -2766,14 +2900,21 @@ fn update_selection(app: &mut App, client: &Client, side: Side) {
 
 fn handle_terminal_msg(app: &mut App, msg: TerminalMsg, side: Side) {
     match msg {
-        TerminalMsg::Bytes(b) => match side {
-            Side::Left => app.term.feed(&b),
-            Side::Right => {
-                if let Some(slot) = app.split_right.as_mut() {
-                    slot.term.feed(&b);
+        TerminalMsg::Bytes(b) => {
+            // Meter every inbound frame regardless of which side it
+            // landed on — the WS pipe is a single tunnel from the
+            // user's perspective even when split panes mux two
+            // session streams over it.
+            app.io.record_in(b.len());
+            match side {
+                Side::Left => app.term.feed(&b),
+                Side::Right => {
+                    if let Some(slot) = app.split_right.as_mut() {
+                        slot.term.feed(&b);
+                    }
                 }
             }
-        },
+        }
         TerminalMsg::Error(s) => {
             // Server-sent text frames are diagnostic — typically
             // `[input dropped: tmux exited with status 1 (stderr: …)]`

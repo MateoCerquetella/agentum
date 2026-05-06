@@ -15,7 +15,9 @@
 mod api;
 mod app;
 mod extensions;
+mod iometer;
 mod palette;
+mod prefs;
 mod pty;
 mod sound;
 mod term;

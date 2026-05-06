@@ -21,6 +21,7 @@ GH_API="https://api.github.com/repos/${REPO}/releases/latest"
 GH_DL="https://github.com/${REPO}/releases/download"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 PLATFORM=""; VERSION=""; INSTALL_MODE="${INSTALL_MODE:-}"; INTERACTIVE=false; HAS_TTY=false
+IS_UPDATE=false
 
 # ── Colors (agentum: dark bg + gold/amber accents) ────────────
 # Use actual ESC char so `printf '%s'` substitutes a real escape sequence.
@@ -313,15 +314,23 @@ if [ -n "$EXISTING_BIN" ]; then
         exit 0
     fi
     i "updating" "${C_D}v${have} → v${target}${C_R}"
+    IS_UPDATE=true
+    # Updates re-use the existing install — skip the mode prompt unless the
+    # user explicitly asked for a different mode. Same binary either way.
+    [ -z "$INSTALL_MODE" ] && INSTALL_MODE="both"
 fi
 
 select_mode
 
-case "$INSTALL_MODE" in
-    server) s "Installing" "${C_Y}Control Plane${C_R} — server + dashboard + TLS + tmux" ;;
-    cli)    s "Installing" "${C_BL}Terminal CLI${C_R} — lightweight tmux session manager" ;;
-    both)   s "Installing" "${C_G}Both${C_R} — Control Plane + Terminal CLI (same binary)" ;;
-esac
+if [ "$IS_UPDATE" = true ]; then
+    s "Updating" "${C_D}v${EXISTING_VERSION#v} → ${VERSION}${C_R}"
+else
+    case "$INSTALL_MODE" in
+        server) s "Installing" "${C_Y}Control Plane${C_R} — server + dashboard + TLS + tmux" ;;
+        cli)    s "Installing" "${C_BL}Terminal CLI${C_R} — lightweight tmux session manager" ;;
+        both)   s "Installing" "${C_G}Both${C_R} — Control Plane + Terminal CLI (same binary)" ;;
+    esac
+fi
 
 download
 install_binary
@@ -330,10 +339,13 @@ check_path
 printf '\n'
 check_tmux
 
-case "$INSTALL_MODE" in
-    server) post_server ;;
-    cli)    post_cli ;;
-    both)   post_both ;;
-esac
-
-printf '  %s%s✨  agentum is ready!%s\n\n' "${C_Y}" "${C_B}" "${C_R}"
+if [ "$IS_UPDATE" = true ]; then
+    printf '\n  %s%s✨  Updated to %s%s\n\n' "${C_Y}" "${C_B}" "${VERSION}" "${C_R}"
+else
+    case "$INSTALL_MODE" in
+        server) post_server ;;
+        cli)    post_cli ;;
+        both)   post_both ;;
+    esac
+    printf '  %s%s✨  agentum is ready!%s\n\n' "${C_Y}" "${C_B}" "${C_R}"
+fi

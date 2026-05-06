@@ -407,6 +407,7 @@ impl Client {
                         TermOut::Resize { cols, rows } => WsMsg::Text(
                             format!("{{\"resize\":{{\"cols\":{cols},\"rows\":{rows}}}}}").into(),
                         ),
+                        TermOut::Resume => WsMsg::Text("{\"resume\":true}".into()),
                     };
                     if sink.send(msg).await.is_err() {
                         break;
@@ -508,6 +509,12 @@ pub enum TerminalMsg {
 pub enum TermOut {
     Bytes(Vec<u8>),
     Resize { cols: u16, rows: u16 },
+    /// Tell the daemon "I have cached parser state for this session,
+    /// send me the log delta instead of a fresh `capture-pane` snapshot".
+    /// Sent once per stream-open by the client when reconnecting to a
+    /// session whose parser is in `parser_cache` — preserves visible
+    /// chat history across session switches.
+    Resume,
 }
 
 #[derive(Debug)]

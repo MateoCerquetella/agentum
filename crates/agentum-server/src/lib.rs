@@ -60,6 +60,14 @@ pub struct AppState {
     /// tailing each agent's Claude Code transcript. See
     /// [`transcript_store`] for how it stays in sync.
     pub transcripts: TranscriptStore,
+    /// Per-session log file position last forwarded over a WS stream.
+    /// When a client reconnects with `{"resume":true}`, the WS handler
+    /// uses this to replay only the bytes the client missed during the
+    /// gap (typically a session-switch round trip), instead of sending
+    /// a full `capture-pane` snapshot that would clobber the client's
+    /// preserved parser state with whatever the agent's UI happens to
+    /// look like *now*.
+    pub stream_positions: Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, u64>>>,
 }
 
 impl AppState {
@@ -84,6 +92,7 @@ impl AppState {
             )),
             cert_fingerprint: Arc::new(cert_fingerprint),
             transcripts,
+            stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 }
