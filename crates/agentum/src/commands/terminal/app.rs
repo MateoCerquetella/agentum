@@ -1,6 +1,6 @@
 //! TUI app state, key dispatch, and event loop.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Stdout;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
@@ -535,6 +535,13 @@ pub struct App {
     /// Persistent UI preferences — what to show on the status bar.
     /// Loaded at startup, persisted to disk on every change.
     pub prefs: Prefs,
+    /// Sessions currently waiting on a permission prompt or other
+    /// user-input gate. Driven by `agent.awaiting_input` /
+    /// `agent.input_resolved` events from the watchdog. The sidebar
+    /// dot renders yellow `▲` for any id in this set, regardless of
+    /// the persisted `Status` — so users can see at-a-glance which
+    /// agent needs attention without opening the pane.
+    pub awaiting_input: HashSet<Uuid>,
 }
 
 impl App {
@@ -583,6 +590,7 @@ impl App {
             lazygit_width: 60,
             io: IoMeter::new(),
             prefs: prefs::load(),
+            awaiting_input: HashSet::new(),
         }
     }
 
@@ -3068,6 +3076,9 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                 NotifKind::Error,
                 NOTIF_TTL_ERROR_MS,
             );
+            if let Some(id) = ev.session_id {
+                app.awaiting_input.remove(&id);
+            }
             if let Ok(fresh) = client.list_sessions().await {
                 app.refresh_sessions(fresh);
             }
@@ -3088,6 +3099,9 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                 NotifKind::Info,
                 NOTIF_TTL_INFO_MS,
             );
+            if let Some(id) = ev.session_id {
+                app.awaiting_input.remove(&id);
+            }
             if let Ok(fresh) = client.list_sessions().await {
                 app.refresh_sessions(fresh);
             }
@@ -3115,6 +3129,12 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                     NOTIF_TTL_INFO_MS,
                 );
             }
+            // Working→Idle implies the agent is no longer waiting on the
+            // user. Defensive cleanup in case `agent.input_resolved` was
+            // missed (event-bus lag, watchdog restart).
+            if let Some(id) = ev.session_id {
+                app.awaiting_input.remove(&id);
+            }
         }
         "agent.awaiting_input" => {
             // Awaiting input is a "you have to do something" event, so we
@@ -3127,8 +3147,27 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                 NotifKind::Warn,
                 NOTIF_TTL_WARN_MS,
             );
+            if let Some(id) = ev.session_id {
+                app.awaiting_input.insert(id);
+            }
         }
-        "session.created" | "session.deleted" => {
+        "agent.input_resolved" => {
+            // User answered the prompt (or it was dismissed). Clear the
+            // yellow attention dot — no toast: the action that resolved
+            // the prompt is what the user just did.
+            if let Some(id) = ev.session_id {
+                app.awaiting_input.remove(&id);
+            }
+        }
+        "session.created" => {
+            if let Ok(fresh) = client.list_sessions().await {
+                app.refresh_sessions(fresh);
+            }
+        }
+        "session.deleted" => {
+            if let Some(id) = ev.session_id {
+                app.awaiting_input.remove(&id);
+            }
             if let Ok(fresh) = client.list_sessions().await {
                 app.refresh_sessions(fresh);
             }

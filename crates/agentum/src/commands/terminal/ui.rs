@@ -457,7 +457,17 @@ fn render_tree_row(
             let session = app.sessions.iter().find(|s| s.id == id);
             let (name, dot, dot_color, tool_label) = match session {
                 Some(s) => {
-                    let (dot, color) = status_dot(s.status);
+                    // Crashed always wins — a dead pane should never look
+                    // like it's just waiting. Otherwise a pending prompt
+                    // overrides the running/idle dot so users can spot
+                    // "this one needs me" without scanning the toast stack.
+                    let (dot, color) = if s.status == agentum_core::Status::Crashed {
+                        status_dot(s.status)
+                    } else if app.awaiting_input.contains(&s.id) {
+                        ("▲", p.warning)
+                    } else {
+                        status_dot(s.status)
+                    };
                     let tool = match s.model.as_deref() {
                         Some(m) => format!("{}/{}", s.tool, m),
                         None => s.tool.clone(),
