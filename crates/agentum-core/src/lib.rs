@@ -74,6 +74,70 @@ pub struct Session {
     pub updated_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
     pub last_activity_at: Option<OffsetDateTime>,
+
+    /* ---------------------------------------------------------------
+     * Redesign fields (phase 8). All optional — populated by the
+     * watchdog crate as it observes the agent. The HTTP layer skips
+     * `None` values so the wire format stays compact.
+     * ------------------------------------------------------------- */
+    /// Cumulative tokens consumed by this session (input + output).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<i64>,
+    /// USD spend, summed from per-tool pricing.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "cost")]
+    pub cost_usd: Option<f64>,
+    /// 0–100, percentage of context window remaining.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ctx: Option<i32>,
+    /// Tail of stdout — used as the FleetRow "last activity" cell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_log: Option<String>,
+    /// Override for time-since-creation when the agent reports a more
+    /// accurate "since this pane started" figure. The web client
+    /// falls back to `(now - created_at)` when this is None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uptime_seconds: Option<i64>,
+    /// Watchdog-aware lifecycle state (`live`/`idle`/`compact`/`crash`).
+    /// Independent of `status` because /compact suspends a session
+    /// without stopping its tmux pane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<SessionState>,
+}
+
+/// Lifecycle state surfaced on the dashboard. Mirrors the TypeScript
+/// `SessionState` so a server-pushed value flows directly to the
+/// state-dot color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionState {
+    Live,
+    Idle,
+    Compact,
+    Crash,
+}
+
+impl SessionState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Idle => "idle",
+            Self::Compact => "compact",
+            Self::Crash => "crash",
+        }
+    }
+}
+
+impl std::str::FromStr for SessionState {
+    type Err = CoreError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "live" => Ok(Self::Live),
+            "idle" => Ok(Self::Idle),
+            "compact" => Ok(Self::Compact),
+            "crash" => Ok(Self::Crash),
+            other => Err(CoreError::InvalidStatus(other.to_string())),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

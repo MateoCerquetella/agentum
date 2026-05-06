@@ -130,6 +130,12 @@ impl Store {
             created_at: now,
             updated_at: now,
             last_activity_at: None,
+            tokens: None,
+            cost_usd: None,
+            ctx: None,
+            last_log: None,
+            uptime_seconds: None,
+            state: None,
         })
     }
 
@@ -888,6 +894,13 @@ struct SessionRow {
     created_at: String,
     updated_at: String,
     last_activity_at: Option<String>,
+    /* ---- redesign metrics columns (migration 0007) ---- */
+    tokens: Option<i64>,
+    cost_usd: Option<f64>,
+    ctx: Option<i64>,
+    last_log: Option<String>,
+    uptime_seconds: Option<i64>,
+    state: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -987,6 +1000,11 @@ impl TryFrom<BoardItemRow> for BoardItem {
 impl TryFrom<SessionRow> for Session {
     type Error = StoreError;
     fn try_from(r: SessionRow) -> Result<Self> {
+        let state = r
+            .state
+            .as_deref()
+            .map(agentum_core::SessionState::from_str)
+            .transpose()?;
         Ok(Session {
             id: Uuid::parse_str(&r.id)?,
             name: r.name,
@@ -1003,6 +1021,12 @@ impl TryFrom<SessionRow> for Session {
                 .as_deref()
                 .map(|s| OffsetDateTime::parse(s, &Rfc3339))
                 .transpose()?,
+            tokens: r.tokens,
+            cost_usd: r.cost_usd,
+            ctx: r.ctx.map(|c| c as i32),
+            last_log: r.last_log,
+            uptime_seconds: r.uptime_seconds,
+            state,
         })
     }
 }
