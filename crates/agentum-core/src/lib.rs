@@ -206,6 +206,16 @@ pub struct BoardItem {
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
+    /// Ticket type — colors the foot label pill.
+    /// One of: `bug` | `feat` | `chore` | `spike`. Free-form String so
+    /// users can introduce custom labels without a schema change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lbl: Option<String>,
+    /// Tool ecosystem — colors the foot dot.
+    /// `claude` | `codex` | `gemini` | `hermes` are the recognized values;
+    /// others fall back to neutral grey.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,6 +225,10 @@ pub struct NewBoardItem {
     pub body: Option<String>,
     #[serde(default)]
     pub status: Option<String>,
+    #[serde(default)]
+    pub lbl: Option<String>,
+    #[serde(default)]
+    pub tool: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -225,6 +239,10 @@ pub struct BoardPatch {
     pub body: Option<Option<String>>,
     #[serde(default)]
     pub status: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    pub lbl: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    pub tool: Option<Option<String>>,
 }
 
 /// Distinguishes "field omitted" from "field set to null" so a PATCH can
