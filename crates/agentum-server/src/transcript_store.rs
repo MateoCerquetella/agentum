@@ -117,8 +117,28 @@ impl TranscriptStore {
             tracing::debug!(?workdir, "transcript: no $HOME or relative workdir; skipping watcher");
             return;
         };
-        let Some(transcript_path) = transcript::transcript_path_for(&workdir, id) else {
+        let Some(pinned_path) = transcript::transcript_path_for(&workdir, id) else {
             return;
+        };
+        // Resolve the actual file to read.
+        //
+        // Post-v0.6.25 sessions: claude was launched with
+        // `--session-id <agentum-uuid>`, so `pinned_path` materializes
+        // on the first turn and is the only one we ever read. Pinning
+        // is what stops two agents in the same workdir from
+        // cross-pollinating todos.
+        //
+        // Pre-v0.6.25 sessions: claude wrote to its own random UUID,
+        // and `pinned_path` will never appear. Without a fallback the
+        // Plan / Todos / Tasks panels stay empty until the user kills
+        // the session and recreates it. We accept the cross-
+        // pollination risk for pre-pin sessions in exchange for a
+        // working panel — the alternative is a silent dead-end UI.
+        let transcript_path = if pinned_path.exists() {
+            pinned_path
+        } else {
+            transcript::latest_transcript_excluding(&project_dir, Some(&pinned_path))
+                .unwrap_or(pinned_path)
         };
 
         // Make the directory if it doesn't exist yet — Claude Code creates
