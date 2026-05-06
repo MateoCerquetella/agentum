@@ -4,7 +4,26 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.12] — 2026-05-06
+
+Recent-errors overlay.
+
+### Added
+- **`e` opens a recent-errors log.** The status bar's red error chip
+  has been a counter for ages — now it's also a doorway. Press `e`
+  from tree focus (or pick "Errors · view recent error log" from the
+  command palette) to see what actually went wrong, newest-first,
+  with a relative timestamp on each entry. `j/k` · `PgUp/PgDn` ·
+  `g/G` scroll, `c` clears, `Esc` / `e` dismisses.
+
+### Changed
+- **Failures route through `App::push_error` instead of
+  `status_msg`.** The status bar gets overwritten by the next hint,
+  which used to mean errors disappeared the moment something else
+  happened. Lazygit PTY write failures, terminal-stream closures,
+  session-start errors, and palette action failures now accumulate
+  in the overlay's ring buffer so a busy session's history is
+  reviewable.
 
 ## [0.6.11] — 2026-05-06
 
