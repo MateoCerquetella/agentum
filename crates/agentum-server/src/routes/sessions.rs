@@ -344,8 +344,45 @@ async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
         }
     };
 
-    // Backfill last 4KB so the user lands on recent context, not a blank pane.
-    if let Ok(end) = file.seek(std::io::SeekFrom::End(0)).await {
+    // Replay the current pane state so the user lands on a complete frame,
+    // not the tail of a partial redraw. Tail-only backfill bites embedded
+    // TUIs (claude, codex, …) that paint via cursor-position escapes —
+    // 4 KB rarely contains a self-consistent screen, leaving the parser
+    // mid-frame. `tmux capture-pane -e` prints the visible cells with
+    // ANSI styling, which feeds vt100 a clean snapshot. If capture fails
+    // (tmux missing or session torn down between checks), fall back to
+    // the old log-tail strategy.
+    let mut snapshot_sent = false;
+    if let Ok(snap) = agentum_tmux::capture_pane_ansi(&target).await
+        && !snap.is_empty()
+    {
+        // Reset the client parser before painting the snapshot so any
+        // stale cells from a previous session are discarded:
+        //   ESC [ 2 J  — erase entire screen
+        //   ESC [ H    — cursor home
+        let mut payload = Vec::with_capacity(snap.len() + 8);
+        payload.extend_from_slice(b"\x1b[2J\x1b[H");
+        payload.extend_from_slice(&snap);
+        if socket
+            .send(Message::Binary(Bytes::from(payload)))
+            .await
+            .is_err()
+        {
+            return;
+        }
+        snapshot_sent = true;
+        // Skip past the existing log so tailing only emits NEW bytes —
+        // otherwise the snapshot and the log replay would render the same
+        // content twice (cosmetic, but visible as flicker).
+        let _ = file.seek(std::io::SeekFrom::End(0)).await;
+    }
+
+    // Fallback: if capture-pane didn't yield anything (early in session
+    // life, before tmux has rendered, or for non-tmux sessions), keep the
+    // old 4 KB tail behaviour so users still see *something* on connect.
+    if !snapshot_sent
+        && let Ok(end) = file.seek(std::io::SeekFrom::End(0)).await
+    {
         let backfill = end.min(BACKFILL_BYTES);
         if backfill > 0
             && file
