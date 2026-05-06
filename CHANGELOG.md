@@ -4,6 +4,31 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.27] — 2026-05-06
+
+### Added
+- **Sidebar status dot now flips yellow when an agent is awaiting
+  user input.** The watchdog already detected permission prompts
+  (Claude's "Do you want to proceed?", etc.) and emitted a toast,
+  but the sidebar leaf kept its green Running dot — easy to miss
+  when you're tabbed away to lazygit or another pane. Sessions in
+  the awaiting set now render as a yellow `▲` regardless of their
+  persisted `Status`. Crashed still wins (red `✗`) so a dead pane
+  never looks like it's just waiting; everything else falls
+  through to the existing green/idle/stopped dots.
+
+### Changed
+- **Watchdog emits a new `agent.input_resolved` event** when a
+  pane leaves the `AwaitingInput` activity state (back to Working
+  or Idle). Existing transitions — `agent.finished` for
+  Working→Idle and `agent.awaiting_input` for any→AwaitingInput —
+  are unchanged. The new event lets clients clear "needs input"
+  badges as soon as the prompt is answered, without waiting for a
+  separate finished/working signal. Defensive cleanup is also
+  wired on `agent.finished`, `session.stopped`, `session.crashed`,
+  and `session.deleted` so the badge can never get stuck on a
+  stale id after an event-bus lag or watchdog restart.
+
 ## [0.6.26] — 2026-05-06
 
 ### Fixed
