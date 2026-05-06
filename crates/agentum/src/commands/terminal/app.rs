@@ -65,7 +65,8 @@ pub enum Overlay {
 
 /// Suggested tool names. Mirrors the web's datalist on the New Session
 /// dialog. Pressing Tab on the `Tool` field cycles through these.
-pub const TOOL_SUGGESTIONS: &[&str] = &["claude", "codex", "opencode", "aider", "bash"];
+pub const TOOL_SUGGESTIONS: &[&str] =
+    &["claude", "codex", "opencode", "aider", "terminal", "bash"];
 
 /// Tools that accept `--dangerously-skip-permissions`. Mirrors the
 /// `yoloTools` set in `dashboard/src/lib/components/NewSessionDialog.svelte`
@@ -311,6 +312,11 @@ pub struct App {
     pub sessions: Vec<Session>,
     pub tree: Tree,
     pub selected: Option<Uuid>,
+    /// The session that *was* selected before the current one. Powers
+    /// Ctrl-Tab "flip back to last session" — the most-used nav action
+    /// when alternating between two agents. None until the user has
+    /// switched at least once.
+    pub prev_selected: Option<Uuid>,
     pub term: TerminalPane,
     pub focus: Focus,
     /// Width of the sidebar tree pane in columns. User-resizable with
@@ -321,6 +327,16 @@ pub struct App {
     /// so the active pane (term + optional lazygit) fills the viewport.
     /// Toggled with Shift-F. Esc exits.
     pub fullscreen: bool,
+    /// When `true` the tree sidebar is hidden but the title and status
+    /// bars stay. Distinct from `fullscreen`: this is VS Code's `Ctrl-B`
+    /// "toggle primary side bar" — useful when you want screen real
+    /// estate for the term pane but still want the breadcrumb/status.
+    pub sidebar_hidden: bool,
+    /// Multi-key chord prefix awaiting a follow-up. `Some('K')` means we
+    /// just consumed Ctrl-K and the next keystroke decides the action
+    /// (VS Code parity: Ctrl-K Z = fullscreen, Ctrl-K B = sidebar, …).
+    /// Cleared automatically on the next key event regardless of match.
+    pub chord: Option<char>,
     pub error_count: u32,
     pub conn: ConnState,
     pub status_msg: Option<String>,
@@ -349,10 +365,13 @@ impl App {
             sessions,
             tree,
             selected,
+            prev_selected: None,
             term: TerminalPane::new(),
             focus: Focus::Tree,
             tree_width: 32,
             fullscreen: false,
+            sidebar_hidden: false,
+            chord: None,
             error_count: 0,
             conn: ConnState::Connecting,
             status_msg: None,
@@ -663,6 +682,7 @@ pub async fn run_loop(
             app.lazygit_open(),
             app.fullscreen,
             app.tree_width,
+            app.sidebar_hidden,
         );
         let (term_rows, term_cols) = inner_size(areas.terminal);
         app.term.resize(term_rows, term_cols);
@@ -767,16 +787,114 @@ async fn handle_key(
     lg_tx: &mpsc::UnboundedSender<PtyMsg>,
     stream_handle: &mut Option<JoinHandle<()>>,
 ) {
-    // Ctrl-P / Ctrl-K / Ctrl-Shift-P opens the command palette from
-    // anywhere. Highest priority so it works even with a pane focused.
+    // Chord follow-up — if the previous key set a chord prefix, this
+    // keystroke completes (or cancels) it. Done before the palette /
+    // quit / cycle handlers so chord branches like `Ctrl-K Z` aren't
+    // interpreted as the standalone meaning of `Z`.
+    if let Some(prefix) = app.chord.take() {
+        match prefix {
+            'K' => {
+                // VS Code parity: Ctrl-K Z (zen) toggles fullscreen,
+                // Ctrl-K B toggles the sidebar. Anything else cancels
+                // the chord silently.
+                let c = match key.code {
+                    KeyCode::Char(c) => Some(c.to_ascii_lowercase()),
+                    _ => None,
+                };
+                match c {
+                    Some('z') => {
+                        app.fullscreen = !app.fullscreen;
+                        if app.fullscreen && app.focus == Focus::Tree {
+                            app.focus = Focus::Term;
+                        }
+                        app.status_msg = Some(if app.fullscreen {
+                            "fullscreen on (Ctrl-K Z or Esc to exit)".into()
+                        } else {
+                            "fullscreen off".into()
+                        });
+                    }
+                    Some('b') => {
+                        app.sidebar_hidden = !app.sidebar_hidden;
+                        if app.sidebar_hidden && app.focus == Focus::Tree {
+                            app.focus = Focus::Term;
+                        }
+                        app.status_msg = Some(if app.sidebar_hidden {
+                            "sidebar hidden".into()
+                        } else {
+                            "sidebar visible".into()
+                        });
+                    }
+                    _ => {
+                        app.status_msg = Some("(chord cancelled)".into());
+                    }
+                }
+                return;
+            }
+            _ => {} // unknown prefix — fall through
+        }
+    }
+
+    // Ctrl-P / Ctrl-Shift-P opens the command palette from anywhere.
+    // Highest priority so it works even with a pane focused.
     // Ctrl-Shift-P is the canonical VS Code binding; Ctrl-P matches
-    // VS Code's Quick Open and the palette here serves both roles;
-    // Ctrl-K is kept for muscle memory from earlier versions.
+    // VS Code's Quick Open and the palette here serves both roles.
+    // (Ctrl-K is now a chord prefix — see below — and no longer aliases
+    // the palette.)
     if key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key.code, KeyCode::Char('p') | KeyCode::Char('k') | KeyCode::Char('P'))
+        && matches!(key.code, KeyCode::Char('p') | KeyCode::Char('P'))
     {
         app.overlay = Overlay::Palette;
         app.palette = PaletteState::new();
+        return;
+    }
+
+    // Ctrl-K — VS Code chord prefix. Standalone: nothing happens; the
+    // next keystroke is interpreted as a chord follow-up (handled at
+    // the top of this function on the next event). Cleared after the
+    // very next event regardless of match, so a stray prefix never
+    // sticks. Currently bound: K-Z fullscreen, K-B sidebar.
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('k'))
+    {
+        app.chord = Some('K');
+        app.status_msg = Some("Ctrl-K · waiting (Z fullscreen · B sidebar)".into());
+        return;
+    }
+
+    // Ctrl-B — VS Code "toggle primary side bar". Hides just the tree
+    // column; title and status bars stay so the user keeps the
+    // breadcrumb. Distinct from Shift-F / Ctrl-K Z fullscreen which
+    // strips everything.
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('b'))
+    {
+        app.sidebar_hidden = !app.sidebar_hidden;
+        if app.sidebar_hidden && app.focus == Focus::Tree {
+            app.focus = Focus::Term;
+        }
+        app.status_msg = Some(if app.sidebar_hidden {
+            "sidebar hidden (Ctrl-B to reopen)".into()
+        } else {
+            "sidebar visible".into()
+        });
+        return;
+    }
+
+    // Ctrl-Tab — flip back to the previously selected session. Mirrors
+    // VS Code's "go to last edited file" / iTerm2's "last tab". A
+    // no-op when there's no prior session (first run, or the last
+    // session was deleted).
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Tab | KeyCode::BackTab)
+    {
+        if let Some(prev) = app.prev_selected
+            && app.sessions.iter().any(|s| s.id == prev)
+        {
+            app.tree.select_session(prev);
+            update_selection(app, client, term_tx, stream_handle);
+        } else {
+            app.status_msg = Some("no previous session".into());
+        }
         return;
     }
 
@@ -1643,6 +1761,12 @@ fn update_selection(
     }
     if let Some(handle) = stream_handle.take() {
         handle.abort();
+    }
+    // Remember where we were before re-pointing — Ctrl-Tab reads this
+    // to flip back. Skip storing None so flip-back doesn't degrade after
+    // a session is deleted.
+    if let Some(prev) = app.selected {
+        app.prev_selected = Some(prev);
     }
     app.term_in = None;
     app.selected = new_id;

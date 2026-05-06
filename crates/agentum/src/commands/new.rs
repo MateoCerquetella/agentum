@@ -5,6 +5,7 @@ use agentum_core::NewSession;
 use anyhow::{Context, Result, bail};
 
 use crate::cli::arg_to_flag;
+use crate::commands::terminal::app::{YOLO_FLAG, YOLO_TOOLS};
 
 pub async fn run(
     name: String,
@@ -14,6 +15,7 @@ pub async fn run(
     model: Option<String>,
     args: Vec<String>,
     up: bool,
+    yolo: bool,
 ) -> Result<()> {
     let dir = resolve_workdir(dir, pick)?;
 
@@ -26,7 +28,13 @@ pub async fn run(
         .to_string_lossy()
         .into_owned();
 
-    let flags: Vec<String> = args.iter().map(|a| arg_to_flag(a)).collect();
+    let mut flags: Vec<String> = args.iter().map(|a| arg_to_flag(a)).collect();
+    if yolo
+        && YOLO_TOOLS.iter().any(|t| *t == tool.as_str())
+        && !flags.iter().any(|f| f == YOLO_FLAG)
+    {
+        flags.push(YOLO_FLAG.to_string());
+    }
 
     let (store, _) = super::open_store().await?;
     let session = store

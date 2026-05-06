@@ -11,12 +11,23 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/api/health", get(health))
 }
 
+/// Capability tags advertised in the health response so clients can
+/// feature-detect without parsing version strings. Whenever you add a
+/// new capability that depends on server-side behaviour (currently:
+/// PTY resize messages over the WS terminal stream), append a tag.
+const CAPABILITIES: &[&str] = &["resize"];
+
 #[derive(Serialize)]
 struct Health {
     status: &'static str,
     version: &'static str,
     uptime_seconds: u64,
     sessions_running: i64,
+    /// Optional features this daemon supports. Clients that send
+    /// `{"resize":…}` over the terminal WS check for `"resize"` here
+    /// before transmitting — older daemons forward unknown text frames
+    /// as keystrokes, so silently downgrading is the only safe option.
+    capabilities: &'static [&'static str],
 }
 
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
@@ -32,5 +43,6 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         version: state.version,
         uptime_seconds: uptime,
         sessions_running: running,
+        capabilities: CAPABILITIES,
     })
 }

@@ -13,7 +13,7 @@
 //! connect aborts with a loud "MITM?" error.
 
 mod api;
-mod app;
+pub mod app;
 mod extensions;
 mod palette;
 mod pty;

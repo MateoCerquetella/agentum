@@ -4,6 +4,30 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.9] — 2026-05-06
+
+Capability negotiation for the terminal stream.
+
+### Fixed
+- **Resize messages no longer corrupt input on stale daemons.** v0.6.7
+  added a `{"resize":…}` envelope on the WS terminal stream, but only
+  the running `agentum serve` process actually applies it. Anyone
+  whose daemon was still on ≤0.6.6 saw the new client write the JSON
+  envelope and the old server forward it to `tmux send-keys` — which
+  typed `{"resize":{"cols":N,"rows":N}}` straight into claude's
+  prompt.
+- The fix is server-side feature advertisement: `/api/health` now
+  returns `capabilities: ["resize"]`, and both clients (TUI +
+  dashboard) probe before sending. If `resize` is missing from the
+  list, the client silently downgrades — degraded layout (the old
+  empty-bottom problem) but no corrupted input. The TUI also
+  surfaces a status message asking the host to run `agentum update`.
+
+If you're hitting this: run `agentum update` on the host running
+`agentum serve` and **restart the daemon** so it picks up the new
+binary. `agentum update` only writes the file; the running process
+keeps the old code in memory.
+
 ## [0.6.8] — 2026-05-05
 
 TUI sidebar polish.

@@ -193,6 +193,26 @@ impl Client {
         }
     }
 
+    /// Probe the server's `/api/health` for advertised capabilities.
+    /// Daemons before v0.6.7 don't return a `capabilities` field — those
+    /// land here as an empty `Vec` and the caller treats every feature
+    /// as unsupported. Doing this once at startup keeps the WS hot path
+    /// free of per-frame version checks.
+    pub async fn capabilities(&self) -> Result<Vec<String>> {
+        #[derive(serde::Deserialize, Default)]
+        struct Health {
+            #[serde(default)]
+            capabilities: Vec<String>,
+        }
+        let url = self.base.join("/api/health")?;
+        let resp = self.http.get(url).send().await?;
+        if !resp.status().is_success() {
+            bail!("health returned {}", resp.status())
+        }
+        let h: Health = resp.json().await.unwrap_or_default();
+        Ok(h.capabilities)
+    }
+
     pub async fn me(&self) -> Result<String> {
         let url = self.base.join("/api/auth/me")?;
         let resp = self.http.get(url).bearer_auth(&self.token).send().await?;

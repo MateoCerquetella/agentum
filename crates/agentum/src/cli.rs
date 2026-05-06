@@ -26,7 +26,9 @@ pub enum Cmd {
         /// Session name (used in tmux target and URLs).
         name: String,
 
-        /// Tool binary to run inside the session (claude, codex, opencode, aider…). Required.
+        /// Tool binary to run inside the session (claude, codex, opencode, aider, terminal…). Required.
+        ///
+        /// Use `terminal` (or `bash`) for a plain interactive shell session.
         #[arg(long)]
         tool: String,
 
@@ -52,6 +54,12 @@ pub enum Cmd {
         /// Start the session immediately after creating it.
         #[arg(long)]
         up: bool,
+
+        /// Append `--dangerously-skip-permissions` for permission-skipping
+        /// agents (claude, codex, opencode). Ignored for tools that don't
+        /// support it.
+        #[arg(long)]
+        yolo: bool,
     },
 
     /// Start a session.
@@ -275,7 +283,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             model,
             arg,
             up,
-        } => crate::commands::new::run(name, tool, dir, pick, model, arg, up).await,
+            yolo,
+        } => crate::commands::new::run(name, tool, dir, pick, model, arg, up, yolo).await,
         Cmd::Up { name } => crate::commands::up::run(name).await,
         Cmd::Down { name } => crate::commands::down::run(name).await,
         Cmd::Kill { name } => crate::commands::kill::run(name).await,

@@ -78,6 +78,10 @@ export interface Health {
   version: string;
   uptime_seconds: number;
   sessions_running: number;
+  /// Optional in older daemons (pre-v0.6.7) — treat absence as "no
+  /// optional features supported" so we don't ship messages the server
+  /// will misinterpret as keystrokes (e.g. PTY resize).
+  capabilities?: string[];
 }
 
 const TOKEN_KEY = 'agentum_token';

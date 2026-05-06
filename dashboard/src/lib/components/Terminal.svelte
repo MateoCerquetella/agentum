@@ -42,8 +42,16 @@
   // Tell the daemon (and through it tmux) about the current pane size so
   // the embedded TUI redraws into the right viewport. Without this tmux
   // clamps to its 80×24 default and characters overlap.
+  //
+  // Daemons before v0.6.7 don't advertise the `resize` capability and
+  // forward unknown text frames to `tmux send-keys` — that's how a stale
+  // server ends up typing `{"resize":…}` straight into the agent's
+  // prompt. We probe `/api/health` once and silently downgrade if the
+  // capability isn't there.
   let lastSentSize = { cols: 0, rows: 0 };
+  let resizeSupported = false;
   function sendResize() {
+    if (!resizeSupported) return;
     if (!ws || ws.readyState !== WebSocket.OPEN || !term) return;
     const cols = term.cols;
     const rows = term.rows;
@@ -95,6 +103,20 @@
     // xterm's own resize event fires on fit() — pipe it through so the
     // tmux pane mirrors whatever xterm just laid itself out as.
     term.onResize(() => sendResize());
+
+    // Probe server capabilities before opening the WS so the first
+    // resize emit (in onopen below) only fires when the daemon actually
+    // understands it. Older daemons silently skipped — better than
+    // typing `{"resize":…}` into the agent's prompt.
+    api.health()
+      .then((h) => {
+        resizeSupported = Array.isArray(h.capabilities) && h.capabilities.includes('resize');
+        if (resizeSupported && ws?.readyState === WebSocket.OPEN) {
+          // WS may have opened first; backfill the size we suppressed.
+          sendResize();
+        }
+      })
+      .catch(() => { /* leave resizeSupported = false */ });
 
     ws = new WebSocket(api.streamUrl(sessionId));
     ws.binaryType = 'arraybuffer';

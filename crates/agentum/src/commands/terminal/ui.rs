@@ -28,6 +28,7 @@ pub fn compute_layout(
     lazygit_open: bool,
     fullscreen: bool,
     tree_width: u16,
+    sidebar_hidden: bool,
 ) -> Areas {
     // Fullscreen: drop the title row, tree column, and status row so the
     // active panes consume every available cell. The empty Rects keep the
@@ -60,8 +61,14 @@ pub fn compute_layout(
 
     // Clamp tree width so the terminal pane always has at least 20 cols
     // even on narrow terminals where the user widened the sidebar.
-    let max_tree = v[1].width.saturating_sub(20);
-    let tw = tree_width.min(max_tree).max(0);
+    // Sidebar-hidden (Ctrl-B / Ctrl-K B) collapses the tree column to 0
+    // while leaving title and status bars in place.
+    let tw = if sidebar_hidden {
+        0
+    } else {
+        let max_tree = v[1].width.saturating_sub(20);
+        tree_width.min(max_tree).max(0)
+    };
     let body = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(tw), Constraint::Min(20)])
@@ -99,7 +106,13 @@ fn split_main(area: Rect, lazygit_open: bool) -> (Rect, Option<Rect>) {
 }
 
 pub fn draw(f: &mut Frame<'_>, app: &App) {
-    let areas = compute_layout(f.area(), app.lazygit_open(), app.fullscreen, app.tree_width);
+    let areas = compute_layout(
+        f.area(),
+        app.lazygit_open(),
+        app.fullscreen,
+        app.tree_width,
+        app.sidebar_hidden,
+    );
     let p = &app.theme.palette;
 
     // Paint the body background across the entire frame so the void around
@@ -425,6 +438,9 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         head("  Universal (work even inside the terminal pane)", p),
         body("  Ctrl-P / Ctrl-Shift-P  command palette", p),
         body("  Ctrl-E            release pane focus → tree", p),
+        body("  Ctrl-Tab          flip back to last session", p),
+        body("  Ctrl-B            toggle the sidebar tree", p),
+        body("  Ctrl-K Z          toggle fullscreen (zen)", p),
         body("  Ctrl-Shift-] / F5  next panel", p),
         body("  Ctrl-Shift-[ / F6  previous panel", p),
         body("  Ctrl-1 … Ctrl-9   jump to Nth project group in the tree", p),
