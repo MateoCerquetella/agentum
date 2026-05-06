@@ -224,6 +224,12 @@ mod tests {
             created_at: now,
             updated_at: now,
             last_activity_at: None,
+            tokens: None,
+            cost_usd: None,
+            ctx: None,
+            last_log: None,
+            uptime_seconds: None,
+            state: None,
         }
     }
 
