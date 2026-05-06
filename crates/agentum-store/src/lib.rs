@@ -292,12 +292,14 @@ impl Store {
 
         let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
-            "INSERT INTO board_items (key, title, body, status, created_at, updated_at)
-             VALUES ('', ?, ?, ?, ?, ?)",
+            "INSERT INTO board_items (key, title, body, status, lbl, tool, created_at, updated_at)
+             VALUES ('', ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&new.title)
         .bind(&new.body)
         .bind(&status)
+        .bind(&new.lbl)
+        .bind(&new.tool)
         .bind(&now_s)
         .bind(&now_s)
         .execute(&mut *tx)
@@ -320,6 +322,8 @@ impl Store {
             claimed_by: None,
             created_at: now,
             updated_at: now,
+            lbl: new.lbl,
+            tool: new.tool,
         })
     }
 
@@ -343,11 +347,17 @@ impl Store {
         let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
         let body_set = patch.body.is_some();
         let body_value = patch.body.unwrap_or(None);
+        let lbl_set = patch.lbl.is_some();
+        let lbl_value = patch.lbl.unwrap_or(None);
+        let tool_set = patch.tool.is_some();
+        let tool_value = patch.tool.unwrap_or(None);
         let affected = sqlx::query(
             "UPDATE board_items SET
                 title  = COALESCE(?, title),
                 status = COALESCE(?, status),
                 body   = CASE WHEN ? = 1 THEN ? ELSE body END,
+                lbl    = CASE WHEN ? = 1 THEN ? ELSE lbl  END,
+                tool   = CASE WHEN ? = 1 THEN ? ELSE tool END,
                 updated_at = ?
              WHERE id = ?",
         )
@@ -355,6 +365,10 @@ impl Store {
         .bind(&patch.status)
         .bind(if body_set { 1i32 } else { 0i32 })
         .bind(&body_value)
+        .bind(if lbl_set  { 1i32 } else { 0i32 })
+        .bind(&lbl_value)
+        .bind(if tool_set { 1i32 } else { 0i32 })
+        .bind(&tool_value)
         .bind(&now_s)
         .bind(id)
         .execute(&self.pool)
@@ -979,6 +993,9 @@ struct BoardItemRow {
     claimed_by: Option<String>,
     created_at: String,
     updated_at: String,
+    /* ---- redesign discriminators (migration 0008) ---- */
+    lbl: Option<String>,
+    tool: Option<String>,
 }
 
 impl TryFrom<BoardItemRow> for BoardItem {
@@ -993,6 +1010,8 @@ impl TryFrom<BoardItemRow> for BoardItem {
             claimed_by: r.claimed_by,
             created_at: OffsetDateTime::parse(&r.created_at, &Rfc3339)?,
             updated_at: OffsetDateTime::parse(&r.updated_at, &Rfc3339)?,
+            lbl: r.lbl,
+            tool: r.tool,
         })
     }
 }
