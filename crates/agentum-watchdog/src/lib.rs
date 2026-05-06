@@ -235,13 +235,27 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
                 // Leaving AwaitingInput → user has answered (or the prompt
                 // was dismissed). Lets clients clear any "needs input" UI
                 // (yellow status dot, attention badges) without waiting for
-                // a separate finished/working event.
+                // a separate finished/working event. Payload carries the
+                // resolved state so a single event distinguishes "answered
+                // and back to working" from "prompt dismissed, now idle" —
+                // the TUI uses this to swap the dot between active green
+                // and muted "sleeping" without having to wait for a
+                // follow-up `agent.finished`.
                 (ActivityState::AwaitingInput, next_state)
                     if next_state != ActivityState::AwaitingInput
                         && next_state != ActivityState::Unknown =>
                 {
+                    let resolved = match next_state {
+                        ActivityState::Working => "working",
+                        ActivityState::Idle => "idle",
+                        // Unreachable per the guard above, but keeps the
+                        // match exhaustive without a panic if the variant
+                        // set ever grows.
+                        _ => "unknown",
+                    };
                     let ev = Event::new("agent.input_resolved")
-                        .with_session(sess.id, &sess.name);
+                        .with_session(sess.id, &sess.name)
+                        .with_payload(serde_json::json!({"state": resolved}));
                     let _ = emit(&bus, &store, ev).await;
                 }
                 _ => {}
