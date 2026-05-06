@@ -25,7 +25,27 @@ pub struct Areas {
     pub status: Rect,
 }
 
-pub fn compute_layout(area: Rect, lazygit_open: bool) -> Areas {
+pub fn compute_layout(area: Rect, lazygit_open: bool, fullscreen: bool) -> Areas {
+    // Fullscreen: drop the title row, tree column, and status row so the
+    // active panes consume every available cell. The empty Rects keep the
+    // draw_* helpers no-op (they short-circuit on `area.width == 0`).
+    if fullscreen {
+        let (terminal_rect, lazygit_rect) = split_main(area, lazygit_open);
+        let empty = Rect {
+            x: area.x,
+            y: area.y,
+            width: 0,
+            height: 0,
+        };
+        return Areas {
+            title: empty,
+            tree: empty,
+            terminal: terminal_rect,
+            lazygit: lazygit_rect,
+            status: empty,
+        };
+    }
+
     let v = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -41,25 +61,7 @@ pub fn compute_layout(area: Rect, lazygit_open: bool) -> Areas {
         .split(v[1]);
 
     // Right column is now 100% terminal/lazygit — no bottom input bar.
-    let right_full = body[1];
-
-    let (terminal_rect, lazygit_rect) = if lazygit_open {
-        if right_full.width >= 100 {
-            let cols = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-                .split(right_full);
-            (cols[0], Some(cols[1]))
-        } else {
-            let rows = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-                .split(right_full);
-            (rows[0], Some(rows[1]))
-        }
-    } else {
-        (right_full, None)
-    };
+    let (terminal_rect, lazygit_rect) = split_main(body[1], lazygit_open);
 
     Areas {
         title: v[0],
@@ -70,8 +72,27 @@ pub fn compute_layout(area: Rect, lazygit_open: bool) -> Areas {
     }
 }
 
+fn split_main(area: Rect, lazygit_open: bool) -> (Rect, Option<Rect>) {
+    if !lazygit_open {
+        return (area, None);
+    }
+    if area.width >= 100 {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(area);
+        (cols[0], Some(cols[1]))
+    } else {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(area);
+        (rows[0], Some(rows[1]))
+    }
+}
+
 pub fn draw(f: &mut Frame<'_>, app: &App) {
-    let areas = compute_layout(f.area(), app.lazygit_open());
+    let areas = compute_layout(f.area(), app.lazygit_open(), app.fullscreen);
     let p = &app.theme.palette;
 
     // Paint the body background across the entire frame so the void around
@@ -79,13 +100,19 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
     let body = Block::default().style(Style::default().bg(p.body_bg).fg(p.fg));
     f.render_widget(body, f.area());
 
-    draw_title(f, areas.title, app, p);
-    draw_tree(f, areas.tree, app, p);
+    if areas.title.height > 0 {
+        draw_title(f, areas.title, app, p);
+    }
+    if areas.tree.width > 0 {
+        draw_tree(f, areas.tree, app, p);
+    }
     draw_terminal(f, areas.terminal, app, p);
     if let Some(lg_area) = areas.lazygit {
         draw_lazygit(f, lg_area, app, p);
     }
-    draw_status(f, areas.status, app, p);
+    if areas.status.height > 0 {
+        draw_status(f, areas.status, app, p);
+    }
 
     match &app.overlay {
         Overlay::None => {}
@@ -434,6 +461,11 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         body("  g                 toggle lazygit side pane", p),
         body("  G                 lazygit cheat sheet", p),
         body("  T                 cycle theme", p),
+        body(
+            "  Shift-F           toggle fullscreen (hide tree + chrome)",
+            p,
+        ),
+        body("  Esc               exit fullscreen", p),
         Line::from(""),
         body("  ?                 toggle this help", p),
         body("  q                 quit (when tree is focused)", p),

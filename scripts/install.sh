@@ -83,11 +83,15 @@ banner() {
 }
 
 # ── Mode selection ─────────────────────────────────────────────
+# Both `server` and `cli` install the same binary — the only difference
+# is the post-install guidance shown afterwards. `both` shows both
+# guides so users who want to use the dashboard *and* the CLI quickly
+# get pointed at every entrypoint.
 select_mode() {
-    case "${INSTALL_MODE}" in server|cli) return ;; esac
+    case "${INSTALL_MODE}" in server|cli|both) return ;; esac
     if [ "$INTERACTIVE" != true ]; then
-        INSTALL_MODE="server"
-        i "mode" "defaulting to ${C_B}server${C_R} (use --mode cli for terminal-only)"
+        INSTALL_MODE="both"
+        i "mode" "defaulting to ${C_B}both${C_R} (use --mode server|cli to narrow)"
         return
     fi
     printf '\n  %sChoose your install:%s\n\n' "${C_Y}" "${C_R}"
@@ -97,14 +101,18 @@ select_mode() {
     printf '  %s⌨️   [2] %sTerminal CLI%s\n'         "${C_B}" "${C_BL}" "${C_R}"
     printf '       CLI-only tmux session manager, no server/TLS\n'
     printf '       %s›%s %sagentum new/up/down/ls/tail%s from your terminal\n\n' "${C_D}" "${C_R}" "${C_C}" "${C_R}"
+    printf '  %s✨  [3] %sBoth%s %s(recommended)%s\n' "${C_B}" "${C_G}" "${C_R}" "${C_D}" "${C_R}"
+    printf '       Install once, get the dashboard ${C_C}and${C_R} the CLI workflow.\n'
+    printf '       %s›%s same binary — `agentum serve` or `agentum new` whenever you like\n\n' "${C_D}" "${C_R}"
     while true; do
-        printf '  %sChoice [1-2] (1):%s ' "${C_D}" "${C_R}"
-        choice=""; read_input choice; choice="${choice:-1}"
+        printf '  %sChoice [1-3] (3):%s ' "${C_D}" "${C_R}"
+        choice=""; read_input choice; choice="${choice:-3}"
         case "$choice" in
             1|server|Server) INSTALL_MODE="server"; break ;;
             2|cli|CLI|client) INSTALL_MODE="cli"; break ;;
+            3|both|Both|all|All) INSTALL_MODE="both"; break ;;
             q|quit) printf '\n  %sCancelled.%s\n\n' "${C_D}" "${C_R}"; exit 0 ;;
-            *) printf '  %sEnter 1 or 2.%s\n' "${C_RED}" "${C_R}" ;;
+            *) printf '  %sEnter 1, 2 or 3.%s\n' "${C_RED}" "${C_R}" ;;
         esac
     done
     printf '\n'
@@ -316,6 +324,7 @@ select_mode
 case "$INSTALL_MODE" in
     server) s "Installing" "${C_Y}Control Plane${C_R} — server + dashboard + TLS + tmux" ;;
     cli)    s "Installing" "${C_BL}Terminal CLI${C_R} — lightweight tmux session manager" ;;
+    both)   s "Installing" "${C_G}Both${C_R} — Control Plane + Terminal CLI (same binary)" ;;
 esac
 
 download
@@ -325,6 +334,7 @@ check_path
 case "$INSTALL_MODE" in
     server) post_server ;;
     cli)    post_cli ;;
+    both)   post_server; post_cli ;;
 esac
 
 printf '\n  %s%s✨  agentum is ready!%s\n\n' "${C_Y}" "${C_B}" "${C_R}"

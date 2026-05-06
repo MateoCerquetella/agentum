@@ -4,6 +4,26 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.6] — 2026-05-05
+
+Multi-mode installer + TUI fullscreen toggle.
+
+### Added
+- **Installer "Both" mode.** Third option in the interactive prompt
+  (now the default) covers users who want the dashboard *and* the CLI
+  workflow. Same single binary; the installer just prints both
+  post-install guides. Available via `--mode both`,
+  `INSTALL_MODE=both`, or `agentum update --mode both`.
+- **Fullscreen toggle in `agentum terminal` / `lazyagentum`.**
+  Shift-F hides the title bar, sidebar tree, and status row so the
+  active session pane fills the viewport. Esc exits. Mirrors the web
+  dashboard's Shift+F shortcut.
+
+### Changed
+- **Non-interactive default is `both`.** Previously CI/no-TTY runs
+  silently picked `server`. They now install + show both guides,
+  matching the interactive default.
+
 ## [0.6.5] — 2026-05-05
 
 Installer fix + `agentum update`.

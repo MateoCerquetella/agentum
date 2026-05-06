@@ -211,9 +211,9 @@ pub enum Cmd {
     /// when not).
     Update {
         /// Install mode for the installer (`server` = full Control Plane,
-        /// `cli` = lightweight CLI). Omit to let the installer prompt or
-        /// pick its default.
-        #[arg(long, value_parser = ["server", "cli"])]
+        /// `cli` = lightweight CLI, `both` = show both post-install guides).
+        /// Omit to let the installer prompt or pick its default.
+        #[arg(long, value_parser = ["server", "cli", "both"])]
         mode: Option<String>,
 
         /// Reinstall even when already on the latest version.
@@ -321,6 +321,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             let mode = match mode.as_deref() {
                 Some("server") => Some(crate::commands::update::Mode::Server),
                 Some("cli") => Some(crate::commands::update::Mode::Cli),
+                Some("both") => Some(crate::commands::update::Mode::Both),
                 _ => None,
             };
             crate::commands::update::run(mode, force).await

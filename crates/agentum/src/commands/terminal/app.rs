@@ -291,6 +291,10 @@ pub struct App {
     pub selected: Option<Uuid>,
     pub term: TerminalPane,
     pub focus: Focus,
+    /// When `true` the title bar, tree sidebar, and status bar are hidden
+    /// so the active pane (term + optional lazygit) fills the viewport.
+    /// Toggled with Shift-F. Esc exits.
+    pub fullscreen: bool,
     pub error_count: u32,
     pub conn: ConnState,
     pub status_msg: Option<String>,
@@ -318,6 +322,7 @@ impl App {
             selected,
             term: TerminalPane::new(),
             focus: Focus::Tree,
+            fullscreen: false,
             error_count: 0,
             conn: ConnState::Connecting,
             status_msg: None,
@@ -578,6 +583,7 @@ pub async fn run_loop(
         let areas = ui::compute_layout(
             ratatui::layout::Rect::new(0, 0, size.width, size.height),
             app.lazygit_open(),
+            app.fullscreen,
         );
         let (term_rows, term_cols) = inner_size(areas.terminal);
         app.term.resize(term_rows, term_cols);
@@ -699,23 +705,38 @@ async fn handle_key(
     }
 
     // Global panel switch — works *even with a pane focused* so you can
-    // escape Term/Lazygit without first releasing focus.
-    //   Ctrl-]  → next panel
-    //   Ctrl-[  → previous panel
+    // escape Term/Lazygit without first releasing focus. The binding
+    // mirrors Slack/iTerm2/browser tab cycling (Cmd-Shift-]/[ on macOS,
+    // which translates to Ctrl-Shift-]/[ in a TUI since Cmd never reaches
+    // the app).
+    //   Ctrl-Shift-]  → next panel
+    //   Ctrl-Shift-[  → previous panel
     // Plain `[` / `]` remain available in non-pane focus (handled lower
     // down) so they don't get swallowed when typing into claude code.
+    //
+    // Why Ctrl-Shift and not plain Ctrl: Ctrl-[ in plain ASCII *is* the
+    // ESC byte — terminals can't distinguish the two without the Kitty
+    // Keyboard Protocol (which we push in mod.rs::run when supported).
+    // Ctrl-Shift-[ doesn't have that ambiguity, so it works on more
+    // emulators and survives accidentally running through nested screen
+    // sessions.
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    if ctrl && matches!(key.code, KeyCode::Char(']')) {
+    let ctrl_shift = ctrl && key.modifiers.contains(KeyModifiers::SHIFT);
+    // Match both `]` and `}` because some emulators report Shift-] as the
+    // shifted glyph, others as `]` with the Shift modifier set. The Kitty
+    // protocol normalises this, but we accept both for portability.
+    if ctrl_shift && matches!(key.code, KeyCode::Char(']') | KeyCode::Char('}')) {
         app.focus = next_focus(app.focus, app.lazygit_open());
         return;
     }
-    if ctrl && matches!(key.code, KeyCode::Char('[')) {
+    if ctrl_shift && matches!(key.code, KeyCode::Char('[') | KeyCode::Char('{')) {
         app.focus = prev_focus(app.focus, app.lazygit_open());
         return;
     }
 
     // F5 / F6 — reliable global panel switchers. Use these instead of
-    // Ctrl-] / Ctrl-[ when your terminal eats those key combos.
+    // Ctrl-Shift-] / Ctrl-Shift-[ when your terminal doesn't speak the
+    // Kitty Keyboard Protocol (e.g. plain xterm, cmd.exe).
     if key.code == KeyCode::F(5) {
         app.focus = next_focus(app.focus, app.lazygit_open());
         return;
@@ -769,12 +790,15 @@ async fn handle_key(
         }
     }
 
-    // Global session lifecycle — works from ANY pane (Shift+letter bypasses
-    // key_to_bytes forwarding since shift-only keys return None).
+    // Tree-focus session lifecycle — Shift+K/D/U/S act on the highlighted
+    // session. Gated to `Focus::Tree` so capital letters typed into
+    // claude code (e.g. "KILL THE SERVER" in a prompt) reach the pane
+    // instead of being swallowed by a confirmation overlay. From a pane,
+    // use the command palette (Ctrl-P) for the same actions.
     let shift = key.modifiers.contains(KeyModifiers::SHIFT)
         && !key.modifiers.contains(KeyModifiers::CONTROL)
         && !key.modifiers.contains(KeyModifiers::ALT);
-    if shift {
+    if shift && app.focus == Focus::Tree {
         match key.code {
             KeyCode::Char('K') => {
                 if let Some(s) = app.selected_session() {
@@ -868,6 +892,24 @@ async fn handle_key(
         KeyCode::Char('g') => toggle_lazygit(app, lg_tx).await,
         KeyCode::Char('G') => app.overlay = Overlay::LazygitCheats,
         KeyCode::Char('T') => app.cycle_theme(),
+        // Shift-F toggles fullscreen (hides title/tree/status). Esc exits
+        // when active. Mirrors the web dashboard's Shift+F shortcut so
+        // muscle memory carries across surfaces.
+        KeyCode::Char('F') => {
+            app.fullscreen = !app.fullscreen;
+            if app.fullscreen && app.focus == Focus::Tree {
+                app.focus = Focus::Term;
+            }
+            app.status_msg = Some(if app.fullscreen {
+                "fullscreen on (Shift-F or Esc to exit)".into()
+            } else {
+                "fullscreen off".into()
+            });
+        }
+        KeyCode::Esc if app.fullscreen => {
+            app.fullscreen = false;
+            app.status_msg = Some("fullscreen off".into());
+        }
         // 1/2/3 jump straight to a panel (Tree/Term/Lazygit).
         KeyCode::Char('1') => app.focus = Focus::Tree,
         KeyCode::Char('2') => app.focus = Focus::Term,
@@ -1392,15 +1434,16 @@ async fn toggle_lazygit(app: &mut App, lg_tx: &mpsc::UnboundedSender<PtyMsg>) {
 
 /// Translate a crossterm key event into bytes the lazygit PTY understands.
 /// Mirrors the subset agentmux/wezterm/etc. handle for embedded TUIs.
+///
+/// Note: shift-only keys are forwarded normally — the Kitty Keyboard
+/// Protocol reports capital letters as `Char('A')` *with* the SHIFT
+/// modifier set, where legacy mode reported them as `Char('A')` with no
+/// modifier. Either way the codepoint is already the shifted glyph, so
+/// we just extend the byte stream and let the receiving program (claude
+/// code, a shell, etc.) interpret it.
 fn key_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    // Shift-only keys are reserved for TUI lifecycle commands (Shift-K
-    // kills, Shift-D deletes, etc.). Don't forward them to the pane.
-    if shift && !ctrl && !alt {
-        return None;
-    }
     let mut out = Vec::new();
     match key.code {
         KeyCode::Char(c) => {

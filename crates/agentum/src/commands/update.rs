@@ -9,6 +9,7 @@ const INSTALL_URL: &str =
 pub enum Mode {
     Server,
     Cli,
+    Both,
 }
 
 impl Mode {
@@ -16,6 +17,7 @@ impl Mode {
         match self {
             Mode::Server => "server",
             Mode::Cli => "cli",
+            Mode::Both => "both",
         }
     }
 }
