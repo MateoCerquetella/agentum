@@ -4,6 +4,39 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.26] — 2026-05-06
+
+### Fixed
+- **Daemon restart caused "duplicate footer / duplicate content"
+  corruption.** The `stream_positions` map (per-session log offsets
+  for resume-aware reconnects) is in-memory only — `agentum serve`
+  restart wipes it. The reconnect path looked up the saved offset
+  with `unwrap_or(0)`, so after a restart any client that requested
+  `resume=true` got the **entire log** shipped as "delta" and
+  replayed on top of its still-cached parser state. Visible result:
+  Claude's sticky footer (`▶▶ bypass permissions…`) baked into the
+  middle of the scrollback, the response body duplicated below
+  itself, and the prompt input rendered twice. Fixed by treating "no
+  saved position" as "fall through to the fresh capture-pane
+  snapshot path" — client gets `\x1b[2J\x1b[H` + a clean snapshot,
+  parser resets cleanly to current truth.
+
+- **Plan / Todos / Tasks panels stayed empty for pre-v0.6.25
+  sessions.** v0.6.25 added `--session-id <agentum-uuid>` to the
+  Claude launch and switched the transcript watcher from an mtime
+  heuristic to the deterministic `<agentum-uuid>.jsonl` path. New
+  sessions get their pinned file on the first turn — but sessions
+  created **before** v0.6.25 have a claude that's writing to its own
+  random UUID, so the pinned file never materializes and the panel
+  watcher silently sits on a non-existent path. Re-introduced
+  `latest_transcript_excluding(dir, exclude)` as a fallback: when
+  the pinned path doesn't exist, the slot uses the most-recently-
+  modified `*.jsonl` in the project dir instead. Post-pin sessions
+  always hit the deterministic path first and never trip the
+  fallback, so cross-pollination only matters for legacy sessions
+  with multiple agents in one workdir — same trade-off the panel
+  had pre-v0.6.25, restored only for the migration window.
+
 ## [0.6.25] — 2026-05-06
 
 ### Fixed

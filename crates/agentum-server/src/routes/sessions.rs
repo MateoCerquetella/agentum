@@ -510,12 +510,19 @@ async fn stream_session(
     //    `capture-pane -e` the current visible grid and ship it after a
     //    `\x1b[2J\x1b[H` clear. Same as v0.6.11+ behaviour.
     let mut snapshot_sent = false;
-    if resume_requested {
-        let saved_pos = positions
-            .lock()
-            .ok()
-            .and_then(|map| map.get(&id).copied())
-            .unwrap_or(0);
+    // Resume only if we actually have a saved position for this session.
+    // Without this guard, `unwrap_or(0)` after a daemon restart wiped
+    // `stream_positions` (in-memory only) made the daemon ship the
+    // ENTIRE log as "delta" on top of the client's existing parser
+    // state — duplicate footer/content baked into scrollback every time
+    // the daemon was bounced. v0.6.26 falls through to the fresh
+    // snapshot path in that case: client gets `\x1b[2J\x1b[H` + a
+    // capture-pane render, parser cleanly resets to current truth.
+    let saved_pos_opt: Option<u64> = positions
+        .lock()
+        .ok()
+        .and_then(|map| map.get(&id).copied());
+    if let (true, Some(saved_pos)) = (resume_requested, saved_pos_opt) {
         if let Ok(end) = file.seek(std::io::SeekFrom::End(0)).await
             && end >= saved_pos
         {
@@ -540,7 +547,9 @@ async fn stream_session(
             let _ = file.seek(std::io::SeekFrom::End(0)).await;
             snapshot_sent = true;
         }
-    } else if let Ok(snap) = agentum_tmux::capture_pane_ansi(&target).await
+    }
+    if !snapshot_sent
+        && let Ok(snap) = agentum_tmux::capture_pane_ansi(&target).await
         && !snap.is_empty()
     {
         // Reset the client parser before painting the snapshot so any

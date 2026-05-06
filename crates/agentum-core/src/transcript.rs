@@ -162,6 +162,38 @@ pub fn transcript_path_for(workdir: &Path, session_id: Uuid) -> Option<PathBuf> 
     Some(project_dir_for(workdir)?.join(format!("{session_id}.jsonl")))
 }
 
+/// Pick the most recently modified `*.jsonl` in `dir`, ignoring
+/// `exclude`. Returns `None` if the directory doesn't exist, is
+/// empty, or contains only the excluded path.
+///
+/// Re-introduced in v0.6.26 as a *fallback* for pre-v0.6.25 sessions
+/// where claude was launched without `--session-id <agentum-uuid>`
+/// and so writes to its own random UUID — the deterministic
+/// [`transcript_path_for`] never materializes for those sessions, and
+/// without this fallback the Plan / Todos / Tasks panels stay empty
+/// forever. New sessions started post-v0.6.25 hit the deterministic
+/// path on their first turn and never need this; the cross-pollination
+/// risk only applies when multiple pre-pin agents share one workdir.
+pub fn latest_transcript_excluding(dir: &Path, exclude: Option<&Path>) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+            continue;
+        }
+        if exclude.is_some_and(|x| x == path) {
+            continue;
+        }
+        let Ok(meta) = e.metadata() else { continue };
+        let Ok(mt) = meta.modified() else { continue };
+        if best.as_ref().is_none_or(|(b, _)| mt > *b) {
+            best = Some((mt, path));
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
 // ---------- parser ----------
 
 /// Apply one JSONL line to `state`. Unknown / malformed lines are
