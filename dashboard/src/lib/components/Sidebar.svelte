@@ -1,204 +1,158 @@
 <script lang="ts">
   import { page } from '$app/state';
+  import { goto } from '$app/navigation';
   import { sessions } from '$stores/sessions';
-  import { get } from 'svelte/store';
-  import Icon from './Icon.svelte';
+  import { openPalette } from '$stores/palette';
+  import { openNewSession } from '$stores/newSession';
+  import type { Status } from '$lib/api';
 
-  interface NavItem {
-    href: string;
-    label: string;
-    icon: string;
-    soon?: boolean;
+  /**
+   * Map server-side Status onto the design's state vocabulary used for
+   * the dot color in the sessions list. `compact` is derived from the
+   * server when ctx data lands; until then `running` maps to `live`.
+   */
+  function stateClass(status: Status): string {
+    if (status === 'running') return 'live';
+    if (status === 'crashed') return 'crash';
+    return 'idle';
   }
 
-  const items: NavItem[] = [
-    { href: '/',          label: 'Agents',    icon: 'monitor' },
-    { href: '/terminals', label: 'Terminals', icon: 'terminal' },
-    { href: '/settings',  label: 'Settings',  icon: 'settings' }
-  ];
-
-  function isActive(href: string): boolean {
-    const p = page.url.pathname;
-    if (href === '/') return p === '/' || p.startsWith('/sessions');
-    return p === href || p.startsWith(href + '/');
-  }
-
-  let runningCount = $state(0);
-  $effect(() => {
-    const v = get(sessions);
-    runningCount = v.items.filter(s => s.status === 'running').length;
+  const activeSessionId = $derived.by(() => {
+    const m = page.url.pathname.match(/^\/sessions\/([^/]+)/);
+    return m ? m[1] : null;
   });
+
+  const activeView = $derived.by(() => {
+    const p = page.url.pathname;
+    if (p === '/') return 'overview';
+    if (p.startsWith('/board')) return 'board';
+    if (p.startsWith('/sessions')) return 'sessions';
+    if (p.startsWith('/terminals')) return 'terminals';
+    if (p.startsWith('/settings')) return 'settings';
+    return '';
+  });
+
+  const liveCount = $derived($sessions.items.filter(s => s.status === 'running').length);
 </script>
 
-<aside class="sidebar">
-  <a class="brand" href="/">
-    <span class="logo" aria-hidden="true">
-      <Icon name="cpu" size={20} />
-    </span>
-    <span class="wordmark">
-      <span class="status-dot" data-status={runningCount > 0 ? 'running' : 'idle'}></span>
-      <span class="name">agentum</span>
-    </span>
-  </a>
-
-  <div class="nav-group">
-    <span class="eyebrow nav-heading">Navigation</span>
-    <nav>
-      {#each items as item}
-        <a
-          class="nav-item"
-          class:active={isActive(item.href)}
-          class:soon={item.soon}
-          href={item.href}
-          aria-current={isActive(item.href) ? 'page' : undefined}
-        >
-          <span class="rail" aria-hidden="true"></span>
-          <Icon name={item.icon} size={15} />
-          <span class="label">{item.label}</span>
-          {#if item.soon}<span class="badge mono">soon</span>{/if}
-        </a>
-      {/each}
-    </nav>
+<aside class="sb">
+  <!-- Workspace switcher -->
+  <div class="ws-switcher">
+    <button type="button" class="ws-card" aria-label="Switch workspace">
+      <span class="glyph">A</span>
+      <span class="meta">
+        <span class="name">Agentum</span>
+        <span class="host">localhost · 8822</span>
+      </span>
+      <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" style="color: var(--fg-3); flex-shrink: 0;">
+        <path d="M5 6l3 3 3-3M5 10l3 3 3-3"/>
+      </svg>
+    </button>
+    <button type="button" class="ws-search" onclick={openPalette}>
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+        <circle cx="7" cy="7" r="4.5"/>
+        <path d="M10.5 10.5L13.5 13.5"/>
+      </svg>
+      <span class="lbl">Search</span>
+      <span class="kbd">⌘K</span>
+    </button>
   </div>
 
-  <footer>
-    <span class="eyebrow">Build</span>
-    <span class="ver mono">v{__APP_VERSION__}</span>
-  </footer>
+  <!-- Top-level nav -->
+  <div class="sect">
+    <a href="/" class="item" class:active={activeView === 'overview'}>
+      <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+        <rect x="2" y="2" width="5" height="5" rx="1"/>
+        <rect x="9" y="2" width="5" height="5" rx="1"/>
+        <rect x="2" y="9" width="5" height="5" rx="1"/>
+        <rect x="9" y="9" width="5" height="5" rx="1"/>
+      </svg>
+      <span class="nm">Overview</span>
+    </a>
+    <a href="/sessions" class="item" class:active={activeView === 'sessions'}>
+      <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+        <rect x="2" y="3" width="12" height="10" rx="1.5"/>
+        <path d="M2 6h12"/>
+      </svg>
+      <span class="nm">Sessions</span>
+      <span class="count">{$sessions.items.length}</span>
+    </a>
+    <a href="/board" class="item" class:active={activeView === 'board'}>
+      <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+        <rect x="2" y="2" width="3.5" height="12" rx="0.6"/>
+        <rect x="6.5" y="2" width="3" height="8" rx="0.6"/>
+        <rect x="10.5" y="2" width="3.5" height="6" rx="0.6"/>
+      </svg>
+      <span class="nm">Board</span>
+    </a>
+    <a href="/terminals" class="item" class:active={activeView === 'terminals'}>
+      <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+        <rect x="2" y="3" width="12" height="10" rx="1.5"/>
+        <path d="M5 7l2 1.5L5 10" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M9 10h2" stroke-linecap="round"/>
+      </svg>
+      <span class="nm">Terminals</span>
+    </a>
+    <a href="/settings" class="item" class:active={activeView === 'settings'}>
+      <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+        <circle cx="8" cy="8" r="2.2"/>
+        <path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8L3.4 3.4" stroke-linecap="round"/>
+      </svg>
+      <span class="nm">Settings</span>
+    </a>
+  </div>
+
+  <!-- Sessions list (live updating) -->
+  <div class="sect sessions-sect">
+    <div class="sect-lbl">
+      <span>Sessions · {liveCount} live</span>
+      <button type="button" class="add" onclick={openNewSession} title="Spawn session" aria-label="Spawn session">+</button>
+    </div>
+    <div class="sessions-scroll">
+      {#each $sessions.items as s (s.id)}
+        <a
+          href={`/sessions/${s.id}`}
+          class="item"
+          class:active={s.id === activeSessionId}
+        >
+          <span class={`stat ${stateClass(s.status)}`}></span>
+          <span class="nm">{s.name}</span>
+          <span class="count">{s.tool}</span>
+        </a>
+      {/each}
+      {#if $sessions.items.length === 0}
+        <div class="empty">No sessions yet.</div>
+      {/if}
+    </div>
+  </div>
+
+  <div class="footer">
+    <span class="dot"></span>
+    <span style="color: var(--fg-2);">tmux</span>
+    <span>· {liveCount} pane{liveCount === 1 ? '' : 's'}</span>
+    <span style="flex: 1;"></span>
+    <span style="color: var(--fg-2);">v{__APP_VERSION__}</span>
+  </div>
 </aside>
 
 <style>
-  .sidebar {
+  /* Most styles come from .sb in _design.css. Locals here cover only
+     overrides that depend on this component's structure. */
+  .sessions-sect {
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
-    width: 224px;
-    min-width: 224px;
-    border-right: 1px solid var(--border);
-    background: var(--surface);
-    height: 100vh;
-    position: sticky;
-    top: 0;
-    padding: 18px 14px;
-    gap: 28px;
   }
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 4px 6px 18px;
-    border-bottom: 1px solid var(--border-2);
-    color: var(--text);
-    text-decoration: none;
-    transition: opacity 120ms ease;
+  .sessions-scroll {
+    overflow-y: auto;
+    min-height: 0;
+    flex: 1;
   }
-  .brand:hover { opacity: 0.85; }
-  .logo {
-    color: var(--text);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    background: var(--bg);
-    border: 1px solid var(--border-2);
-    border-radius: var(--radius-sm);
-  }
-  .wordmark {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .name {
-    font-family: var(--font-display);
-    font-size: 15px;
-    font-weight: 600;
-    letter-spacing: -0.02em;
-    color: var(--text);
-  }
-
-  .nav-group { display: flex; flex-direction: column; gap: 10px; flex: 1; }
-  .nav-heading { padding: 0 8px; }
-
-  nav { display: flex; flex-direction: column; gap: 2px; }
-
-  .nav-item {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
-    border-radius: var(--radius-sm);
-    color: var(--text-2);
-    text-decoration: none;
-    font-size: 13.5px;
-    transition: background 120ms ease, color 120ms ease;
-  }
-  .rail {
-    position: absolute;
-    left: -14px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 2px;
-    height: 0;
-    background: var(--cta);
-    transition: height 160ms cubic-bezier(0.2, 0.7, 0.2, 1);
-  }
-  .nav-item:hover {
-    background: var(--bg);
-    color: var(--text);
-  }
-  .nav-item.active {
-    color: var(--text);
-    background: var(--bg);
-  }
-  .nav-item.active .rail { height: 18px; }
-  .nav-item.active :global(.icon) {
-    color: var(--cta);
-  }
-  .label { letter-spacing: -0.005em; }
-  .nav-item.soon { color: var(--muted); cursor: default; }
-  .nav-item.soon:hover { background: transparent; color: var(--muted); }
-
-  .badge {
-    margin-left: auto;
-    font-size: 9.5px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    padding: 2px 6px;
-    border-radius: 99999px;
-    background: var(--surface-2);
-    color: var(--muted);
-  }
-
-  footer {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 8px 0;
-    border-top: 1px solid var(--border-2);
-  }
-  .ver { font-size: 11px; color: var(--muted); }
-
-  @media (max-width: 720px) {
-    .sidebar {
-      width: 100%;
-      min-width: 0;
-      height: auto;
-      flex-direction: row;
-      position: static;
-      align-items: center;
-      gap: 10px;
-      padding: 8px 10px;
-      border-right: 0;
-      border-bottom: 1px solid var(--border);
-    }
-    .brand { padding: 0 8px 0 0; border-bottom: 0; border-right: 1px solid var(--border-2); }
-    .nav-group { flex-direction: row; gap: 0; }
-    .nav-heading { display: none; }
-    nav { flex-direction: row; overflow-x: auto; }
-    .rail { display: none; }
-    .nav-item { white-space: nowrap; padding: 6px 10px; font-size: 12.5px; }
-    .badge { display: none; }
-    footer { display: none; }
+  .empty {
+    padding: 6px 8px;
+    font-size: 12px;
+    color: var(--fg-3);
+    font-family: var(--mono);
   }
 </style>

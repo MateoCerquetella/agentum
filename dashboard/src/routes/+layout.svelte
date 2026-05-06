@@ -76,11 +76,13 @@
 
 <TokenGate>
   {#snippet children()}
-    <div class="shell" class:fullscreen={$fullscreen} class:wide={isWideRoute(page.url.pathname)}>
-      {#if !$fullscreen}<Sidebar />{/if}
-      <div class="main">
-        {#if !$fullscreen}<Topbar />{/if}
-        <main>{@render children()}</main>
+    <div class="db shell" class:fullscreen={$fullscreen} class:wide={isWideRoute(page.url.pathname)}>
+      {#if !$fullscreen}<Topbar />{/if}
+      <div class="row">
+        {#if !$fullscreen}<Sidebar />{/if}
+        <div class="main">
+          <main>{@render children()}</main>
+        </div>
       </div>
       {#if $fullscreen}
         <button
@@ -101,32 +103,37 @@
 </TokenGate>
 
 <style>
+  /* Design layout: TopBar full-width on top, then flex row of
+     [Sidebar | Main]. The .db utility class (from _design.css) handles
+     the canvas chrome; locals tune the inner row + main. */
   .shell {
-    display: flex;
+    height: 100vh;
+    height: 100dvh;
     min-height: 100vh;
+  }
+  .row {
+    flex: 1;
+    display: flex;
+    min-height: 0;
   }
   .main {
     flex: 1;
     display: flex;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
   }
   main {
     flex: 1;
-    padding: 1.5rem 1.75rem;
-    max-width: 1100px;
-    width: 100%;
-    margin: 0 auto;
     display: flex;
     flex-direction: column;
     min-height: 0;
+    overflow: hidden;
   }
 
-  /* Wide routes (canvas, etc.) get the full main column. */
-  .shell.wide main {
-    max-width: none;
-    padding: 1rem 1rem 0;
-  }
+  /* Wide routes (canvas, etc.) — same as default now; kept for API. */
+  .shell.wide main { padding: 0; }
+
   /* Fullscreen mode: zero chrome, page consumes the viewport. */
   .shell.fullscreen main {
     padding: 0;
@@ -152,7 +159,7 @@
   .exit-fs:hover { opacity: 1; color: var(--text); }
 
   @media (max-width: 720px) {
-    .shell { flex-direction: column; }
-    main { padding: 1rem; }
+    .row { flex-direction: column; }
+    .row :global(.sb) { width: 100%; height: auto; border-right: 0; border-bottom: 1px solid var(--border); }
   }
 </style>
