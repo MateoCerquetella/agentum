@@ -221,31 +221,51 @@
   .hero h1 { margin-top: 28px; max-width: 16ch; }
   .hero h1 .accent { color: var(--fg-3); }
 
-  /* ---------- word rotator ---------- */
+  /* ---------- brand rotator ---------- */
   .rotator {
     display: inline-grid;
     vertical-align: baseline;
-    color: var(--cta);
+    isolation: isolate;
   }
   .rotator > .rotator-word {
     grid-area: 1 / 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.22em;
+    white-space: nowrap;
     opacity: 0;
     transform: translateY(0.45em);
-    animation: rotator-cycle 12.5s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+    animation: rotator-cycle 12s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
     will-change: transform, opacity;
   }
   .rotator > .rotator-word:nth-child(1) { animation-delay: 0s; }
-  .rotator > .rotator-word:nth-child(2) { animation-delay: 2.5s; }
-  .rotator > .rotator-word:nth-child(3) { animation-delay: 5s; }
-  .rotator > .rotator-word:nth-child(4) { animation-delay: 7.5s; }
-  .rotator > .rotator-word:nth-child(5) { animation-delay: 10s; }
+  .rotator > .rotator-word:nth-child(2) { animation-delay: 3s; }
+  .rotator > .rotator-word:nth-child(3) { animation-delay: 6s; }
+  .rotator > .rotator-word:nth-child(4) { animation-delay: 9s; }
 
   @keyframes rotator-cycle {
     0%   { opacity: 0; transform: translateY(0.45em); }
-    4%   { opacity: 1; transform: translateY(0); }
-    20%  { opacity: 1; transform: translateY(0); }
-    24%  { opacity: 0; transform: translateY(-0.45em); }
+    5%   { opacity: 1; transform: translateY(0); }
+    25%  { opacity: 1; transform: translateY(0); }
+    30%  { opacity: 0; transform: translateY(-0.45em); }
     100% { opacity: 0; transform: translateY(-0.45em); }
+  }
+
+  .rotator .brand-mark {
+    width: 0.78em;
+    height: 0.78em;
+    flex-shrink: 0;
+    display: block;
+  }
+
+  .brand-claude   { color: #cc785c; }
+  .brand-codex    { color: #ededed; }
+  .brand-opencode { color: #ededed; }
+  .brand-gemini   .brand-name {
+    background: linear-gradient(90deg, #4285f4 0%, #9b72cb 50%, #d96570 100%);
+    -webkit-background-clip: text;
+            background-clip: text;
+    color: transparent;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -1027,17 +1047,50 @@
   <div class="wrap inner">
     <h1 class="display">
       A control plane<br/>
-      for the agents<br/>
-      <span class="accent">
-        <span class="rotator" role="text" aria-label="running your code">
-          <span class="rotator-word" aria-hidden="true">running</span>
-          <span class="rotator-word" aria-hidden="true">shipping</span>
-          <span class="rotator-word" aria-hidden="true">writing</span>
-          <span class="rotator-word" aria-hidden="true">debugging</span>
-          <span class="rotator-word" aria-hidden="true">reviewing</span>
+      for
+      <span class="rotator" role="text" aria-label="Claude, Codex, opencode, and Gemini">
+        <span class="rotator-word brand-claude" aria-hidden="true">
+          <svg class="brand-mark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <defs>
+              <path id="claude-spoke" d="M11.4 2 L12.6 2 L12.2 11.6 L11.8 11.6 Z"/>
+            </defs>
+            <use href="#claude-spoke"/>
+            <use href="#claude-spoke" transform="rotate(45 12 12)"/>
+            <use href="#claude-spoke" transform="rotate(90 12 12)"/>
+            <use href="#claude-spoke" transform="rotate(135 12 12)"/>
+            <use href="#claude-spoke" transform="rotate(180 12 12)"/>
+            <use href="#claude-spoke" transform="rotate(225 12 12)"/>
+            <use href="#claude-spoke" transform="rotate(270 12 12)"/>
+            <use href="#claude-spoke" transform="rotate(315 12 12)"/>
+          </svg><span class="brand-name">Claude</span>
         </span>
-        your code.
-      </span>
+        <span class="rotator-word brand-codex" aria-hidden="true">
+          <svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+            <ellipse cx="12" cy="12" rx="9" ry="3"/>
+            <ellipse cx="12" cy="12" rx="9" ry="3" transform="rotate(60 12 12)"/>
+            <ellipse cx="12" cy="12" rx="9" ry="3" transform="rotate(120 12 12)"/>
+          </svg><span class="brand-name">Codex</span>
+        </span>
+        <span class="rotator-word brand-opencode" aria-hidden="true">
+          <svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M5 7 L11 12 L5 17"/>
+            <path d="M13 17 H19"/>
+          </svg><span class="brand-name">opencode</span>
+        </span>
+        <span class="rotator-word brand-gemini" aria-hidden="true">
+          <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+            <defs>
+              <linearGradient id="gem-grad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#4285f4"/>
+                <stop offset="50%" stop-color="#9b72cb"/>
+                <stop offset="100%" stop-color="#d96570"/>
+              </linearGradient>
+            </defs>
+            <path d="M12 1.5 C12 7, 17 11, 22.5 12 C17 13, 12 17, 12 22.5 C12 17, 7 13, 1.5 12 C7 11, 12 7, 12 1.5 Z" fill="url(#gem-grad)"/>
+          </svg><span class="brand-name">Gemini</span>
+        </span>
+      </span><br/>
+      <span class="accent">running your code.</span>
     </h1>
 
     <p class="lede">
