@@ -4,6 +4,30 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.18] — 2026-05-06
+
+### Fixed
+- **Pre-size the tmux pane at session creation (132×40).** The resize
+  protocol does its job once a client connects, but until then a fresh
+  detached session lives at tmux's default 80×24 — and that's where
+  the embedded agent (claude code, codex, opencode) launches and
+  renders its first frames. Some ratatui apps don't reflow already-
+  rendered chat history when the viewport later widens, so users were
+  seeing text wrapped at ~70 cols stranded inside a much wider visible
+  pane (the screenshot a user reported with `Bash(cargo check ...)`
+  output narrow-wrapped while the pane had ~136 cols of empty space
+  to its right).
+
+  `agentum_tmux::new_session` now passes `-x 132 -y 40` to
+  `tmux new-session`, so the pane starts at a width any modern client
+  can comfortably display. When a client connects with a different
+  size, the existing resize-window flow kicks in as before; tmux
+  reflows lines on resize, so growing a pane just unwraps content
+  rather than truncating it.
+
+  Two constants exposed (`DEFAULT_PANE_COLS`, `DEFAULT_PANE_ROWS`)
+  for easy tuning without code-spelunking.
+
 ## [0.6.17] — 2026-05-06
 
 ### Fixed
