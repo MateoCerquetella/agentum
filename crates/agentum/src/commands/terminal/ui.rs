@@ -47,6 +47,13 @@ const RIGHT_PANEL_MIN_TOTAL_WIDTH: u16 = 110;
 /// Width of the right panel when shown. 34 fits a Plan/Todos/Tasks
 /// stack with truncation but doesn't overwhelm narrow setups.
 const RIGHT_PANEL_WIDTH: u16 = 34;
+/// Hard floor for the lazygit pane width when it gets a dedicated outer
+/// column. Anything narrower than this and lazygit's own panels start
+/// truncating headers, so we fall back to the in-pane split.
+pub const LAZYGIT_MIN_WIDTH: u16 = 40;
+/// Hard ceiling so the user can't accidentally crush the terminal pane
+/// below its 20-col floor by holding the grow key.
+pub const LAZYGIT_MAX_WIDTH: u16 = 160;
 
 pub fn compute_layout(
     area: Rect,
@@ -56,6 +63,7 @@ pub fn compute_layout(
     sidebar_hidden: bool,
     split_open: bool,
     right_panel_visible: bool,
+    lazygit_width: u16,
 ) -> Areas {
     // Right panel is suppressed in fullscreen and on terminals too
     // narrow to host it without crushing the terminal area. It stays
@@ -69,7 +77,8 @@ pub fn compute_layout(
     // active panes consume every available cell. The empty Rects keep the
     // draw_* helpers no-op (they short-circuit on `area.width == 0`).
     if fullscreen {
-        let (terminal_rect, lazygit_rect) = split_main(area, lazygit_open);
+        let (terminal_rect, lazygit_rect) =
+            split_main(area, lazygit_open, lazygit_width);
         let (term_left, term_right) = split_terminal(terminal_rect, split_open);
         let empty = Rect {
             x: area.x,
@@ -107,10 +116,48 @@ pub fn compute_layout(
         let max_tree = v[1].width.saturating_sub(20);
         tree_width.min(max_tree).max(0)
     };
+
+    // Lazygit gets its own outer column on the far right when it's open
+    // AND we have room to host a 20-col terminal next to it. On narrow
+    // viewports we fall back to the in-pane split (handled below by
+    // `split_main` receiving `lw == 0` and `lazygit_open == true`).
+    let lw_target = if lazygit_open {
+        lazygit_width.clamp(LAZYGIT_MIN_WIDTH, LAZYGIT_MAX_WIDTH)
+    } else {
+        0
+    };
+    // Try to fit tree + 20-col term + agent_tasks + lazygit. If lazygit
+    // can't fit at min width, leave it inline. If it fits but would
+    // squeeze agent_tasks, drop the agent panel first — keeping lazygit
+    // pinned right is the explicit user preference.
+    let lw = if lw_target == 0 {
+        0
+    } else if v[1]
+        .width
+        .saturating_sub(tw)
+        .saturating_sub(RIGHT_PANEL_WIDTH)
+        .saturating_sub(lw_target)
+        >= 20
+    {
+        lw_target
+    } else if v[1].width.saturating_sub(tw).saturating_sub(lw_target) >= 20 {
+        lw_target
+    } else {
+        // Not enough room for a dedicated column: signal the in-pane
+        // split fallback by leaving lw at zero.
+        0
+    };
+
     // Reserve the right column when shown. Falls back to 0 if doing so
-    // would push the terminal pane below its 20-col floor.
+    // would push the terminal pane below its 20-col floor — counting
+    // both the lazygit outer column and the right panel together.
     let rw = if show_right
-        && v[1].width.saturating_sub(tw).saturating_sub(RIGHT_PANEL_WIDTH) >= 20
+        && v[1]
+            .width
+            .saturating_sub(tw)
+            .saturating_sub(lw)
+            .saturating_sub(RIGHT_PANEL_WIDTH)
+            >= 20
     {
         RIGHT_PANEL_WIDTH
     } else {
@@ -122,10 +169,18 @@ pub fn compute_layout(
             Constraint::Length(tw),
             Constraint::Min(20),
             Constraint::Length(rw),
+            Constraint::Length(lw),
         ])
         .split(v[1]);
 
-    let (terminal_rect, lazygit_rect) = split_main(body[1], lazygit_open);
+    // When `lw > 0` the outer column owns the lazygit Rect; otherwise
+    // we let `split_main` carve it out of the terminal area (the legacy
+    // in-pane split for narrow viewports).
+    let (terminal_rect, lazygit_rect) = if lw > 0 {
+        (body[1], Some(body[3]))
+    } else {
+        split_main(body[1], lazygit_open, lazygit_width)
+    };
     let (term_left, term_right) = split_terminal(terminal_rect, split_open);
     let agent_tasks_rect = if rw > 0 { Some(body[2]) } else { None };
 
@@ -140,14 +195,21 @@ pub fn compute_layout(
     }
 }
 
-fn split_main(area: Rect, lazygit_open: bool) -> (Rect, Option<Rect>) {
+fn split_main(area: Rect, lazygit_open: bool, lazygit_width: u16) -> (Rect, Option<Rect>) {
     if !lazygit_open {
         return (area, None);
     }
     if area.width >= 100 {
+        // Honour the user's chosen width as a fixed split when there's
+        // room; clamp so the terminal half keeps at least 40 cols. This
+        // makes the resize key affect the inline split too, not just
+        // the dedicated outer column.
+        let lw = lazygit_width
+            .clamp(LAZYGIT_MIN_WIDTH, LAZYGIT_MAX_WIDTH)
+            .min(area.width.saturating_sub(40));
         let cols = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .constraints([Constraint::Min(40), Constraint::Length(lw)])
             .split(area);
         (cols[0], Some(cols[1]))
     } else {
@@ -192,6 +254,7 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         app.sidebar_hidden,
         app.split_open(),
         app.right_panel_visible,
+        app.lazygit_width,
     );
     let p = &app.theme.palette;
 
@@ -460,7 +523,7 @@ fn draw_terminal_right(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let base = if focused {
         " right · Ctrl-E ↔ tree · Ctrl-W close · type freely "
     } else {
-        " right · Ctrl-Shift-] focus · Ctrl-W close "
+        " right · Tab focus · Ctrl-W close "
     };
     let Some(slot) = app.split_right.as_ref() else {
         return; // shouldn't happen — only drawn while split is open
@@ -491,7 +554,7 @@ fn draw_lazygit(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let title = if focused {
         " 3 lazygit · Ctrl-E ↔ tree · Ctrl-G close "
     } else {
-        " 3 lazygit · 3 / Ctrl-Shift-] focus · Ctrl-G close "
+        " 3 lazygit · 3 / Tab focus · Ctrl-G close "
     };
     let block = panel_block(title, focused, p);
     let inner = block.inner(area);
@@ -763,20 +826,21 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         body("  Ctrl-B            toggle the sidebar tree", p),
         body("  Ctrl-T            toggle the agent plan/todo/task panel", p),
         body("  Ctrl-K Z          toggle fullscreen (zen)", p),
+        body("  Ctrl-K , / .      shrink / grow lazygit width", p),
         body("  Ctrl-\\            split the focused terminal pane", p),
         body("  Ctrl-W            close the split", p),
         body("  Mouse wheel       scroll the pane under the cursor", p),
         body("  Shift-PgUp/PgDn   scroll the focused pane (no mouse needed)", p),
-        body("  Ctrl-Shift-] / F5  next panel", p),
-        body("  Ctrl-Shift-[ / F6  previous panel", p),
+        body("  F5                next panel", p),
+        body("  F6                previous panel", p),
         body("  Ctrl-1 … Ctrl-9   jump to Nth project group in the tree", p),
         body("  Ctrl-Q            quit", p),
         body("  Ctrl-C            interrupt focused pane (else quit)", p),
         Line::from(""),
         head("  Tree", p),
         body("  1 / 2 / 3         focus tree / terminal / lazygit", p),
-        body("  Tab / ]           next panel", p),
-        body("  Shift-Tab / [     previous panel", p),
+        body("  Tab               next panel", p),
+        body("  Shift-Tab         previous panel", p),
         body("  Ctrl-F            filter sessions by name (Esc clears)", p),
         body("  j / k / ↑ / ↓     move selection", p),
         body("  h / l / ← / →     collapse / expand group", p),

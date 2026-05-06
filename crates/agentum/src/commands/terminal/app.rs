@@ -512,6 +512,11 @@ pub struct App {
     /// Default on so users see the feature without having to discover
     /// the binding.
     pub right_panel_visible: bool,
+    /// Width of the lazygit pane in columns. Drives both the dedicated
+    /// far-right outer column and the in-pane horizontal split fallback
+    /// so the resize keys behave the same in either layout. Clamped
+    /// `LAZYGIT_MIN_WIDTH..=LAZYGIT_MAX_WIDTH` at draw time.
+    pub lazygit_width: u16,
     /// Sliding-window byte counter for the active WS terminal stream.
     /// Drives the I/O speed chip on the status bar. Reset on session
     /// switch so totals reflect the current stream, not an accumulation
@@ -565,6 +570,7 @@ impl App {
             sound_muted: false,
             agent_tasks: HashMap::new(),
             right_panel_visible: true,
+            lazygit_width: 60,
             io: IoMeter::new(),
             prefs: prefs::load(),
         }
@@ -1026,6 +1032,7 @@ pub async fn run_loop(
             app.sidebar_hidden,
             app.split_open(),
             app.right_panel_visible,
+            app.lazygit_width,
         );
         // Cache for the next mouse event — handlers need to know which
         // pane the cursor is over, which only the layout knows.
@@ -1363,6 +1370,24 @@ async fn handle_key(
                     "sidebar visible".into()
                 });
             }
+            // Lazygit width resize. `,` / `<` shrink, `.` / `>` grow.
+            // Works from any focus (including the lazygit pane) because
+            // the chord prefix runs ahead of pane key forwarding. Step
+            // size is 4 cols — same cadence as the sidebar's `+`/`-`.
+            Some(',') | Some('<') => {
+                app.lazygit_width = app
+                    .lazygit_width
+                    .saturating_sub(4)
+                    .max(ui::LAZYGIT_MIN_WIDTH);
+                app.status_msg = Some(format!("lazygit width: {}", app.lazygit_width));
+            }
+            Some('.') | Some('>') => {
+                app.lazygit_width = app
+                    .lazygit_width
+                    .saturating_add(4)
+                    .min(ui::LAZYGIT_MAX_WIDTH);
+                app.status_msg = Some(format!("lazygit width: {}", app.lazygit_width));
+            }
             _ => {
                 app.status_msg = Some("(chord cancelled)".into());
             }
@@ -1393,7 +1418,9 @@ async fn handle_key(
         && matches!(key.code, KeyCode::Char('k'))
     {
         app.chord = Some('K');
-        app.status_msg = Some("Ctrl-K · waiting (Z fullscreen · B sidebar)".into());
+        app.status_msg = Some(
+            "Ctrl-K · waiting (Z fullscreen · B sidebar · , / . lazygit width)".into(),
+        );
         return;
     }
 
@@ -1540,10 +1567,10 @@ async fn handle_key(
     // Ctrl-\ — split the focused terminal pane horizontally. Mirrors
     // VS Code's "Split Editor". Cloning the current selection into the
     // right slot is the common use ("watch two agents in this repo
-    // run side-by-side"); the user can then focus the right pane (one
-    // Ctrl-Shift-]) and pick a different session via the palette or
-    // tree if they want. No-op while lazygit is open — those two
-    // features are mutually exclusive (4-column layouts get cramped).
+    // run side-by-side"); the user can then focus the right pane (Tab
+    // or F5) and pick a different session via the palette or tree if
+    // they want. No-op while lazygit is open — those two features are
+    // mutually exclusive (4-column layouts get cramped).
     if ctrl && matches!(key.code, KeyCode::Char('\\')) {
         if app.lazygit_open() {
             app.status_msg = Some("close lazygit (g) before splitting".into());
@@ -1855,11 +1882,14 @@ async fn handle_key(
         KeyCode::Char('1') => app.focus = Focus::Tree,
         KeyCode::Char('2') => app.focus = Focus::Term,
         KeyCode::Char('3') if app.lazygit_open() => app.focus = Focus::Lazygit,
-        // [ / ] / Tab cycle focus.
-        KeyCode::Char(']') | KeyCode::Tab => {
+        // Tab / Shift-Tab cycle focus. The plain `]` / `[` aliases were
+        // removed — they collided with bracket typing and the user
+        // didn't use them. F5 / F6 stays as the universal cycle for
+        // emulators that send ambiguous Tab codes.
+        KeyCode::Tab => {
             app.set_focus(next_focus(app.focus, app.lazygit_open(), app.split_open()));
         }
-        KeyCode::Char('[') | KeyCode::BackTab => {
+        KeyCode::BackTab => {
             app.set_focus(prev_focus(app.focus, app.lazygit_open(), app.split_open()));
         }
         KeyCode::Char('r') => {
@@ -3043,6 +3073,33 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                 Some("watchdog detected low context and sent /compact".to_string()),
                 NotifKind::Info,
                 NOTIF_TTL_INFO_MS,
+            );
+        }
+        "agent.finished" => {
+            // Suppress the toast when the user is already looking at this
+            // session — they don't need a notification for an event they
+            // can see live in the pane in front of them. The dashboard
+            // applies the same filter on its end.
+            if ev.session_id != app.selected {
+                push_notification(
+                    app,
+                    format!("{name} finished"),
+                    None,
+                    NotifKind::Info,
+                    NOTIF_TTL_INFO_MS,
+                );
+            }
+        }
+        "agent.awaiting_input" => {
+            // Awaiting input is a "you have to do something" event, so we
+            // toast even when the session is selected — the user might be
+            // tabbed away to lazygit / errors / palette and miss it.
+            push_notification(
+                app,
+                format!("{name} needs input"),
+                Some("agent is waiting on a permission prompt".to_string()),
+                NotifKind::Warn,
+                NOTIF_TTL_WARN_MS,
             );
         }
         "session.created" | "session.deleted" => {
