@@ -1,47 +1,80 @@
 /*
- * Single canonical theme — see docs/DESIGN-SYSTEM.md.
+ * Design tokens — verbatim from design_handoff_agentum_dashboard.
  * Component CSS reads only from these custom properties.
  *
- * Design tokens:
  *   #0b0b0b near-black canvas      #f36458 coral CTA
- *   #212121 elevated surface       #0052ef electric blue (interactive)
- *   #353535 medium dark            #19d600 neon green (success)
- *   #b9b9b9 silver body            #dd0000 error red
- *   #797979 metadata gray
- *   #ffffff white
+ *   #000000 inputs / terminal      #0052ef electric blue (link)
+ *   #212121 elevated surface       #19d600 neon green (live, success)
+ *   #353535 medium dark            #ffb454 amber (warn)
+ *   #b9b9b9 silver body            #f000ff magenta (rare highlight)
+ *   #797979 metadata gray          #55beff sky-blue (codex, info)
+ *   #ffffff white                  #ff5555 crash red
+ *
+ * Tweaks (accent / density) override --cta and --root-fs at runtime.
  */
 :root {
   /* Surfaces */
   --bg:          #0b0b0b;
+  --bg-2:        #000000;
   --surface:     #212121;
   --surface-2:   #353535;
   --border:      #212121;
   --border-2:    #353535;
 
-  /* Text ramp */
-  --text:        #ffffff;
-  --text-2:      #b9b9b9;
-  --muted:       #797979;
+  /* Foreground ramp (canonical names from the design) */
+  --fg:          #ffffff;
+  --fg-2:        #b9b9b9;
+  --fg-3:        #797979;
 
-  /* Interactive */
-  --accent:      #0052ef;   /* electric blue — universal hover/active signal */
-  --cta:         #f36458;   /* coral — primary CTAs */
+  /* Brand / interactive */
+  --cta:         #f36458;
+  --link:        #0052ef;
 
-  /* Semantic */
-  --success:     #19d600;
-  --warn:        #f36458;
-  --danger:      #dd0000;
+  /* Semantic palette */
+  --green:       #19d600;
+  --amber:       #ffb454;
+  --magenta:     #f000ff;
+  --blu:         #55beff;
+  --crash:       #ff5555;
 
-  /* Type */
-  --font-sans:    "Space Grotesk", waldenburgNormal, ui-sans-serif, system-ui, sans-serif;
-  --font-mono:    "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --font-display: var(--font-sans);
+  /* Tool dot colors (kanban / chat) */
+  --tool-claude: var(--green);
+  --tool-codex:  var(--blu);
+  --tool-gemini: var(--cta);
+  --tool-hermes: var(--amber);
 
-  /* Geometry — 3-6px small radii, jump straight to pill (99999px) */
+  /* Typography */
+  --display:     "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --mono:        "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Density (overridden by /settings tweak) */
+  --root-fs:     15px;
+
+  /* Geometry */
   --radius:      6px;
   --radius-sm:   3px;
+  --radius-md:   5px;
+  --radius-lg:   8px;
   --radius-pill: 99999px;
 
-  /* Depth — colorimetric, no offset shadows */
+  /* Motion */
+  --t-hover:     120ms ease;
+  --t-transform: 160ms ease;
+
+  /* ------------------------------------------------------------- */
+  /* Legacy aliases — existing components still reference these    */
+  /* names. Keep them mapped to the new tokens until rewrites land. */
+  --text:        var(--fg);
+  --text-2:      var(--fg-2);
+  --muted:       var(--fg-3);
+  --accent:      var(--link);
+  --success:     var(--green);
+  --warn:        var(--cta);
+  --danger:      var(--crash);
+  --font-sans:    var(--display);
+  --font-mono:    var(--mono);
+  --font-display: var(--display);
   --shadow:      0 0 0 1px var(--border-2);
 }
+
+html { font-size: var(--root-fs); }

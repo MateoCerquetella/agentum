@@ -1,4 +1,5 @@
 @import './lib/themes/_vars.css';
+@import './lib/themes/_design.css';
 
 *, *::before, *::after { box-sizing: border-box; }
 
