@@ -64,94 +64,80 @@
   });
 </script>
 
-<section class="head">
-  <div>
-    <h2>Terminals</h2>
-    <p class="muted">Drag headers to move, drag edges/corner to resize. Double-click a header to maximize.</p>
-  </div>
-  <div class="actions">
+<div class="page">
+  <div class="toolbar">
+    <span class="micro" style="color: var(--fg-2);">Terminals</span>
+    <span class="micro" style="margin-left: 4px;">· drag headers, resize edges, double-click to maximize</span>
+    <span class="spacer"></span>
     <label class="toggle">
       <input type="checkbox" bind:checked={showRunningOnly} />
       <span>running only</span>
     </label>
-    <button class="ghost" type="button" onclick={onResetLayout} title="Tile panels in a grid">
-      reset layout
+    <button type="button" class="tb-btn" onclick={onResetLayout} title="Tile panels in a grid">
+      Reset layout
     </button>
-    <button class="ghost" type="button" onclick={toggleFullscreen} title="Fullscreen (Shift+F)">
+    <button type="button" class="tb-btn" onclick={toggleFullscreen} title="Fullscreen (Shift+F)">
       {$fullscreen ? '⤢ exit fullscreen' : '⤢ fullscreen'}
     </button>
   </div>
-</section>
 
-{#if visible.length === 0}
-  <EmptyState
-    title={showRunningOnly ? 'No running sessions' : 'No sessions'}
-    body={showRunningOnly
-      ? 'Start a session, or untick "running only" to view stopped panes.'
-      : 'Create a session from the Agents page first.'}
-  />
-{:else}
-  <div
-    class="canvas"
-    class:fullscreen={$fullscreen}
-    style:--canvas-w="{canvasW}px"
-    style:--canvas-h="{canvasH}px"
-  >
-    {#each visible as session (session.id)}
-      {#if $layouts[session.id]}
-        <TerminalPanel
-          {session}
-          layout={$layouts[session.id]}
-          maximized={maximizedId === session.id}
-          {onMaximize}
-          {onOpen}
-        />
-      {/if}
-    {/each}
+  <div class="scroll">
+    {#if visible.length === 0}
+      <EmptyState
+        title={showRunningOnly ? 'No running sessions' : 'No sessions'}
+        body={showRunningOnly
+          ? 'Start a session, or untick "running only" to view stopped panes.'
+          : 'Create a session from the Agents page first.'}
+      />
+    {:else}
+      <div
+        class="canvas"
+        class:fullscreen={$fullscreen}
+        style:--canvas-w="{canvasW}px"
+        style:--canvas-h="{canvasH}px"
+      >
+        {#each visible as session (session.id)}
+          {#if $layouts[session.id]}
+            <TerminalPanel
+              {session}
+              layout={$layouts[session.id]}
+              maximized={maximizedId === session.id}
+              {onMaximize}
+              {onOpen}
+            />
+          {/if}
+        {/each}
+      </div>
+    {/if}
   </div>
-{/if}
+</div>
 
 <style>
-  .head {
+  .page {
+    flex: 1;
     display: flex;
-    justify-content: space-between;
-    align-items: flex-end;
-    margin-bottom: 0.9rem;
-    gap: 1rem;
-    flex-wrap: wrap;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--bg);
   }
-  h2 {
-    font-family: var(--font-display);
-    font-weight: 600;
-    margin: 0 0 0.25rem;
-    font-size: 1.4rem;
+  .scroll {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 14px;
   }
-  .muted { color: var(--muted); margin: 0; font-size: 0.85rem; }
-  .actions { display: flex; gap: 0.5rem; align-items: center; }
   .toggle {
     display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
-    font-family: var(--font-mono);
-    font-size: 0.78rem;
-    color: var(--text-2);
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--fg-2);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
     cursor: pointer;
   }
-  .toggle input { accent-color: var(--accent); }
-  .ghost {
-    background: var(--surface);
-    color: var(--text-2);
-    border: 1px solid var(--border);
-    padding: 0.4rem 0.75rem;
-    border-radius: 6px;
-    font-family: var(--font-mono);
-    font-size: 0.78rem;
-    cursor: pointer;
-  }
-  .ghost:hover {
-    color: var(--text);
-    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-  }
+  .toggle input { accent-color: var(--cta); }
 
   .canvas {
     position: relative;
