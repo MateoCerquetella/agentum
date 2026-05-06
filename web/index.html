@@ -555,6 +555,74 @@
 
   .section-pad { padding: clamp(72px, 11vw, 140px) 0; border-top: 1px solid var(--border); }
 
+  /* ---------- problem→solution narrative ---------- */
+  .narrative {
+    margin-top: clamp(40px, 5vw, 64px);
+    max-width: 72ch;
+    display: grid;
+    gap: 24px;
+  }
+  .narrative .step {
+    margin: 0;
+    padding: 14px 0 14px 22px;
+    border-left: 1px solid var(--border-2);
+    font-size: clamp(17px, 1.5vw, 21px);
+    line-height: 1.55;
+    color: var(--fg-2);
+  }
+  .narrative .step.problem { border-left-color: var(--cta); }
+  .narrative .step.solution {
+    border-left-color: var(--green);
+    color: var(--fg);
+    font-size: clamp(20px, 1.8vw, 26px);
+    letter-spacing: -0.01em;
+  }
+  .narrative .step .step-tag {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg-3);
+    margin-right: 12px;
+    padding: 2px 8px;
+    border: 1px solid var(--border-2);
+    border-radius: 99999px;
+    background: #000;
+    vertical-align: 0.18em;
+  }
+  .narrative .step.problem .step-tag {
+    color: var(--cta);
+    border-color: rgba(243, 100, 88, 0.4);
+  }
+  .narrative .step.solution .step-tag {
+    color: var(--green);
+    border-color: rgba(25, 214, 0, 0.4);
+  }
+  .narrative .benefits {
+    list-style: none;
+    padding: 0;
+    margin: 4px 0 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px 32px;
+  }
+  .narrative .benefits li {
+    font-size: 15.5px;
+    line-height: 1.5;
+    color: var(--fg-2);
+    padding-left: 18px;
+    border-left: 1px solid var(--border);
+  }
+  .narrative .benefits li strong {
+    color: var(--fg);
+    font-weight: 500;
+  }
+  .narrative .narrative-ctas { margin-top: 12px; }
+  @media (max-width: 720px) {
+    .narrative .benefits { grid-template-columns: 1fr; }
+  }
+
   /* ---------- features grid ---------- */
   .features {
     margin-top: clamp(48px, 6vw, 80px);
@@ -1020,10 +1088,8 @@
           <span>agentum</span>
         </a>
         <ul>
-          <li><a href="#features">Product</a></li>
+          <li><a href="#why">Why</a></li>
           <li><a href="#workflow">CLI</a></li>
-          <li><a href="#executors">Executors</a></li>
-          <li><a href="#install">Install</a></li>
           <li><a href="#docs">Docs</a></li>
         </ul>
       </div>
@@ -1033,7 +1099,7 @@
           GitHub
           <span class="mono" id="gh-stars" style="color: var(--fg-3); font-size: 11px;">★ —</span>
         </a>
-        <a class="btn btn-cta" href="#install">
+        <a class="btn btn-cta" href="https://github.com/MateoCerquetella/agentum" target="_blank" rel="noreferrer">
           Install <span class="arr">→</span>
         </a>
       </div>
@@ -1100,7 +1166,7 @@
     </p>
 
     <div class="ctas">
-      <a class="btn btn-cta" href="#install">Get started <span class="arr">→</span></a>
+      <a class="btn btn-cta" href="https://github.com/MateoCerquetella/agentum" target="_blank" rel="noreferrer">Get started <span class="arr">→</span></a>
       <a class="btn btn-dark" href="#workflow">See it run</a>
     </div>
 
@@ -1277,16 +1343,45 @@
 </section>
 
 <!-- ============ FEATURES ============ -->
-<section id="features" class="section-pad">
+<section id="why" class="section-pad">
   <div class="wrap">
     <div class="sec-head">
-      <div class="kicker"><span class="num">01</span><span>Capabilities</span></div>
+      <div class="kicker"><span class="num">01</span><span>Why agentum</span></div>
       <h2 class="h1">Built for people<br/>who run agents in parallel.</h2>
-      <p class="lede">Every agent gets its own tmux pane, its own log, and its own watchdog.
-        You get one dashboard, one keyboard, and one source of truth.</p>
     </div>
 
-    <div class="features">
+    <div class="narrative">
+      <p class="step problem">
+        <span class="step-tag">Problem</span>
+        You run 5–6 AI coding agents in parallel — Claude Code, Codex, Gemini, Hermes —
+        and the minute you leave your desk, you lose all visibility.
+      </p>
+
+      <p class="step middle">
+        So you move them to a VPS, wrap them in tmux, and now you're babysitting tmux
+        instead of code: switching panes, checking what crashed, manually compacting
+        context before it overflows. Five sessions in, it's a second job.
+      </p>
+
+      <p class="step solution">
+        <span class="step-tag">agentum</span>
+        A single Rust binary that turns tmux into a proper control plane.
+      </p>
+
+      <ul class="benefits">
+        <li><strong>Browser dashboard + terminal TUI.</strong> Every agent live, side-by-side. Drop into any pane in one click.</li>
+        <li><strong>Embedded lazygit panel.</strong> See git changes without leaving the session.</li>
+        <li><strong>Watchdog.</strong> Auto-detects crashes, auto-compacts context before it overflows.</li>
+        <li><strong>PWA on your phone.</strong> Close the lid of your Mac. Keep watching from anywhere.</li>
+      </ul>
+
+      <div class="ctas narrative-ctas">
+        <a class="btn btn-cta" href="https://github.com/MateoCerquetella/agentum" target="_blank" rel="noreferrer">Read the source <span class="arr">→</span></a>
+        <a class="btn btn-dark" href="#workflow">See how it runs</a>
+      </div>
+    </div>
+
+    <div class="features" hidden>
       <!-- Sessions -->
       <article class="card f-sessions">
         <div class="tag">01 — Sessions</div>
@@ -1470,164 +1565,6 @@
   </div>
 </section>
 
-<!-- ============ EXECUTORS ============ -->
-<section id="executors" class="section-pad">
-  <div class="wrap">
-    <div class="sec-head">
-      <div class="kicker"><span class="num">03</span><span>Executors</span></div>
-      <h2 class="h1">First-class for the four<br/>that matter. Passthrough for the rest.</h2>
-      <p class="lede">Each adapter declares its own compact-trigger and crash signatures so the
-        watchdog speaks the right dialect. Anything else on <span class="mono" style="color:var(--fg)">$PATH</span> works as a passthrough.</p>
-    </div>
-
-    <div class="adapters">
-      <div class="adapter">
-        <div class="ico" style="color:#d97757">
-          <!-- Anthropic / Claude asterisk -->
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M12 2.2 13.35 9.6 20.4 7.05l-5.4 5.7 5.4 4.4-7.05-2.55L12 21.8l-1.35-7.2-7.05 2.55 5.4-4.4-5.4-5.7 7.05 2.55Z"/>
-          </svg>
-        </div>
-        <div class="sub">Claude Code</div>
-        <div class="nm">claude</div>
-      </div>
-      <div class="adapter">
-        <div class="ico" style="color:#fff">
-          <!-- OpenAI knot -->
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M9.6 4.2a4 4 0 0 1 4.8 0l3.4 2a4 4 0 0 1 2 3.45v4a4 4 0 0 1-2 3.45l-3.4 2a4 4 0 0 1-4.8 0l-3.4-2a4 4 0 0 1-2-3.45v-4a4 4 0 0 1 2-3.45Z"/>
-            <path d="M12 8v4l3.4 2M12 12 8.6 14"/>
-          </svg>
-        </div>
-        <div class="sub">OpenAI Codex CLI</div>
-        <div class="nm">codex</div>
-      </div>
-      <div class="adapter">
-        <div class="ico">
-          <!-- Gemini four-point star with gradient -->
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <defs>
-              <linearGradient id="gem" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0" stop-color="#4796e3"/>
-                <stop offset="0.5" stop-color="#9168c0"/>
-                <stop offset="1" stop-color="#e34a8c"/>
-              </linearGradient>
-            </defs>
-            <path fill="url(#gem)" d="M12 2c0 4.5 5.5 10 10 10-4.5 0-10 5.5-10 10 0-4.5-5.5-10-10-10 4.5 0 10-5.5 10-10Z"/>
-          </svg>
-        </div>
-        <div class="sub">Google Gemini CLI</div>
-        <div class="nm">gemini</div>
-      </div>
-      <div class="adapter">
-        <div class="ico" style="color:#19d600">
-          <!-- Hermes / local: terminal chevron -->
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <rect x="3" y="5" width="18" height="14" rx="2"/>
-            <path d="m7 10 3 2-3 2M13 14h4"/>
-          </svg>
-        </div>
-        <div class="sub">Hermes (local)</div>
-        <div class="nm">hermes</div>
-      </div>
-      <div class="adapter">
-        <div class="ico" style="color:var(--fg-2)">
-          <!-- passthrough: arrow through bracket -->
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M7 5 4 8l3 3M17 13l3 3-3 3"/>
-            <path d="M4 8h6M14 16h6" stroke-dasharray="2 2"/>
-            <path d="M9 12h6"/>
-          </svg>
-        </div>
-        <div class="sub">Anything on PATH</div>
-        <div class="nm">passthrough</div>
-      </div>
-    </div>
-
-    <!-- Comparison -->
-    <div class="compare">
-      <div class="col-comp them">
-        <div class="tt">most agent UIs</div>
-        <h3>Cloud-hosted, opinionated, one-tool-only.</h3>
-        <ul>
-          <li><span class="ic">×</span> Locked to a single vendor's model and CLI</li>
-          <li><span class="ic">×</span> Your code goes through their proxy, your context lives in their database</li>
-          <li><span class="ic">×</span> No tmux underneath — you can't drop into the raw pane when it gets weird</li>
-          <li><span class="ic">×</span> Watchdog and channels are someone else's product roadmap</li>
-        </ul>
-      </div>
-      <div class="col-comp us">
-        <div class="tt">agentum</div>
-        <h3>Self-hosted, agent-agnostic, runs on your machine.</h3>
-        <ul>
-          <li><span class="ic">✓</span> Claude, Codex, Gemini, Hermes, or any binary on PATH</li>
-          <li><span class="ic">✓</span> Code never leaves your laptop. SQLite at <span class="mono" style="color:var(--fg)">$XDG_DATA_HOME</span></li>
-          <li><span class="ic">✓</span> tmux <em>is</em> the runtime. <span class="mono" style="color:var(--fg)">agentum open alpha</span> drops you into the pane</li>
-          <li><span class="ic">✓</span> Watchdog rules + atomic-claim board in v0.1.0 — not a roadmap promise</li>
-        </ul>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ============ INSTALL / PRICING ============ -->
-<section id="install" class="section-pad">
-  <div class="wrap">
-    <div class="sec-head">
-      <div class="kicker"><span class="num">04</span><span>Install</span></div>
-      <h2 class="h1">Free, MIT, single binary.<br/>Or sponsor for priority builds.</h2>
-      <p class="lede">Agentum is and always will be self-hosted and source-available. Sponsor tiers
-        exist to fund the macOS notarization, signed Linux packages, and a hosted demo cert.</p>
-    </div>
-
-    <div class="install-grid">
-      <div class="install-card">
-        <div class="price-tag">Open Source</div>
-        <h3>Self-hosted</h3>
-        <div class="price">$0<span class="unit">/forever</span></div>
-        <p class="desc">Everything in the binary. No telemetry, no auth-back-to-mothership, no feature gates.</p>
-        <ul>
-          <li><span class="check">
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg>
-          </span> All four executor adapters + passthrough</li>
-          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> Sessions, Board, Notes, Channels, Watchdog</li>
-          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> Five themes + system theme follow</li>
-          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> ratatui TUI + Svelte SPA + iOS/Android PWA</li>
-          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> SQLite (WAL) at <span class="mono" style="color:var(--fg-2)">$XDG_DATA_HOME</span></li>
-        </ul>
-        <a class="btn btn-light" href="https://github.com/MateoCerquetella/agentum" target="_blank" rel="noreferrer">Install with cargo <span class="arr">→</span></a>
-      </div>
-      <div class="install-card feat">
-        <div class="price-tag">Sponsor</div>
-        <h3>Backer</h3>
-        <div class="price">$9<span class="unit">/month</span></div>
-        <p class="desc">Underwrite the parts the project can't ship for free: notarized macOS DMG, signed packages, hosted demo.</p>
-        <ul>
-          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> Notarized macOS DMG (no Gatekeeper warning)</li>
-          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> Signed deb / rpm / Homebrew-Cask</li>
-          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> Priority issue triage & feature votes</li>
-          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> Sponsor channel in the Discord</li>
-          <li><span class="check"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3.5 9.5L7 13L14.5 5"/></svg></span> Your name in <span class="mono" style="color:var(--fg-2)">CREDITS.md</span></li>
-        </ul>
-        <a class="btn btn-cta" href="https://github.com/sponsors/MateoCerquetella" target="_blank" rel="noreferrer">Sponsor on GitHub <span class="arr">→</span></a>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ============ FINAL CTA ============ -->
-<section class="final">
-  <div class="grid-bg" aria-hidden="true"></div>
-  <div class="wrap inner">
-    <h2 class="display" style="font-size: clamp(40px,7vw,96px);">Ship from a single<br/>tmux server.</h2>
-    <p class="lede" style="text-align:center;">One binary. Five agents. Zero clouds.</p>
-    <div class="ctas">
-      <a class="btn btn-cta" href="#install">Install agentum <span class="arr">→</span></a>
-      <a class="btn btn-dark" href="https://github.com/MateoCerquetella/agentum" target="_blank" rel="noreferrer">Read the source</a>
-    </div>
-  </div>
-</section>
-
 <!-- ============ FOOTER ============ -->
 <footer id="docs">
   <div class="wrap">
@@ -1648,11 +1585,9 @@
       <div class="col">
         <h4>Product</h4>
         <ul>
-          <li><a href="#features">Sessions</a></li>
-          <li><a href="#features">Board</a></li>
-          <li><a href="#features">Watchdog</a></li>
-          <li><a href="#features">Channels</a></li>
-          <li><a href="#features">Themes</a></li>
+          <li><a href="#why">Why agentum</a></li>
+          <li><a href="#workflow">CLI</a></li>
+          <li><a href="https://github.com/MateoCerquetella/agentum" target="_blank" rel="noreferrer">GitHub</a></li>
         </ul>
       </div>
       <div class="col">
