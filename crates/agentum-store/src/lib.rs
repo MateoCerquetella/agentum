@@ -555,6 +555,22 @@ impl Store {
         rows.into_iter().map(Message::try_from).collect()
     }
 
+    /// Newest-first list of recent watchdog-eligible events. Filters
+    /// for kinds the dashboard's watchdog feed renders (`watchdog.*`
+    /// and `session.crashed` / `session.started` etc.). `limit` caps
+    /// the result; pass 50 for the default cold-start payload.
+    pub async fn list_watchdog_events(&self, limit: i64) -> Result<Vec<Event>> {
+        let rows: Vec<EventRow> = sqlx::query_as::<_, EventRow>(
+            "SELECT session_id, kind, payload, ts FROM events
+             WHERE kind LIKE 'watchdog.%' OR kind LIKE 'session.%'
+             ORDER BY ts DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(Event::try_from).collect()
+    }
+
     /// Persist an event row. Best-effort (failures should not break callers).
     pub async fn insert_event(&self, ev: &Event) -> Result<()> {
         let payload = serde_json::to_string(&ev.payload)?;
@@ -930,6 +946,34 @@ impl TryFrom<MessageRow> for Message {
             channel_id: r.channel_id,
             sender: r.sender,
             body: r.body,
+            ts: OffsetDateTime::parse(&r.ts, &Rfc3339)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct EventRow {
+    session_id: Option<String>,
+    kind: String,
+    payload: String,
+    ts: String,
+}
+
+impl TryFrom<EventRow> for Event {
+    type Error = StoreError;
+    fn try_from(r: EventRow) -> Result<Self> {
+        Ok(Event {
+            kind: r.kind,
+            session_id: r
+                .session_id
+                .as_deref()
+                .map(Uuid::parse_str)
+                .transpose()?,
+            // session_name is not persisted in the events table; the SSE
+            // path passes it through directly. Cold-start GETs leave it
+            // None and the watchdog projection falls back to session_id.
+            session_name: None,
+            payload: serde_json::from_str(&r.payload).unwrap_or(serde_json::Value::Null),
             ts: OffsetDateTime::parse(&r.ts, &Rfc3339)?,
         })
     }
