@@ -396,6 +396,14 @@ pub struct App {
     /// the agent's UI happens to look mostly empty after task
     /// completion (snapshot-of-now overwriting the preserved state).
     pub parser_cache: std::collections::HashMap<Uuid, TerminalPane>,
+    /// Whether the connected daemon advertises the `resume` capability
+    /// (added in v0.6.19). When `false`, we MUST NOT emit
+    /// `{"resume":true}` text frames on the WS — older daemons would
+    /// forward them as raw input keystrokes via `tmux send-keys` and
+    /// type `{"resume":true}` straight into the agent's prompt, which
+    /// is exactly the regression a user reported. Probed once at
+    /// startup from `/api/health.capabilities`.
+    pub resume_supported: bool,
     pub focus: Focus,
     /// Width of the sidebar tree pane in columns. User-resizable with
     /// `+` / `-`, clamped 16..=80. The terminal pane keeps a 20-column
@@ -533,6 +541,7 @@ impl App {
             prev_selected: None,
             term: TerminalPane::new(),
             parser_cache: std::collections::HashMap::new(),
+            resume_supported: false,
             focus: Focus::Tree,
             tree_width: 32,
             fullscreen: false,
@@ -971,6 +980,14 @@ pub async fn run_loop(
 ) -> Result<()> {
     let mut app = App::new(sessions);
     app.sound_muted = sound_muted;
+    // Feature-detect the daemon's capabilities once at startup so the
+    // WS hot path never sends control frames an old daemon would
+    // forward to the agent's stdin as raw keystrokes (the v0.6.9
+    // gotcha that used to type `{"resize":...}` into the prompt).
+    // `resume` is the new one in v0.6.19; old daemons (< v0.6.19)
+    // don't list it, so we silently downgrade to the snapshot path.
+    let caps = client.capabilities().await.unwrap_or_default();
+    app.resume_supported = caps.iter().any(|c| c == "resume");
 
     let (term_tx, mut term_rx) = mpsc::unbounded_channel::<TerminalMsg>();
     let (term_tx_right, mut term_rx_right) = mpsc::unbounded_channel::<TerminalMsg>();
@@ -2870,7 +2887,15 @@ fn update_selection(app: &mut App, client: &Client, side: Side) {
         // initial-resize wait loop will read this and skip the
         // `capture-pane` snapshot in favour of replaying just the log
         // delta — keeping the parser's preserved chat history intact.
-        if side == Side::Left && restored_from_cache {
+        //
+        // Gated on the daemon advertising the `resume` capability. Old
+        // daemons forward unknown text frames to `tmux send-keys`, so
+        // emitting `{"resume":true}` against one types those literal
+        // characters into the agent's prompt. Silently downgrading
+        // (no resume frame, no cache benefit, but no corruption either)
+        // is the only safe option — same pattern as the `resize`
+        // capability gate dashboards added in v0.6.9.
+        if side == Side::Left && restored_from_cache && app.resume_supported {
             let _ = key_tx.send(TermOut::Resume);
         }
         let handle = client.open_terminal_stream(id, term_tx, key_rx);

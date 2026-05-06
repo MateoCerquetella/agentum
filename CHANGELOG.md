@@ -4,6 +4,34 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.20] — 2026-05-06
+
+### Fixed
+- **`{"resume":true}` typed into the agent's prompt against an old
+  daemon.** v0.6.19 added the resume protocol but didn't gate the
+  client-side emission on capability negotiation. Result: anyone
+  running a v0.6.19 binary against a daemon < v0.6.19 (very common —
+  `agentum update` swaps the binary, but the running `agentum serve`
+  keeps old code in memory until killed) saw the new client send
+  `{"resume":true}` text frames on every session-switch with cached
+  state, and the old daemon's WS handler — which doesn't recognise
+  the envelope — forwarded those frames as raw input keystrokes via
+  `tmux send-keys`, typing the literal characters into the agent's
+  prompt.
+
+  Same gotcha v0.6.9 fixed for the `resize` envelope. Same fix:
+
+  - **Server (`routes/health.rs`)**: append `"resume"` to the
+    advertised capabilities list at `/api/health.capabilities`.
+  - **Client (`app.rs`)**: probe capabilities once at startup, store
+    `App.resume_supported`, gate the `TermOut::Resume` emit on the
+    flag being true. Old daemons silently downgrade to the snapshot
+    path (still gets the old behaviour, but no prompt corruption).
+
+  As before, the protective effect of this gate only kicks in once the
+  v0.6.20+ binary is the running daemon — `pkill -f "agentum serve"`
+  after `agentum update` is still required.
+
 ## [0.6.19] — 2026-05-06
 
 ### Fixed
