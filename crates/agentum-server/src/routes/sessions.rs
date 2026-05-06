@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use agentum_core::{NewSession, Session, Status};
@@ -311,7 +312,8 @@ async fn stream(
         .await?
         .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
     let target = tmux_target(&session);
-    Ok(ws.on_upgrade(move |socket| stream_session(socket, id, target)))
+    let positions = state.stream_positions.clone();
+    Ok(ws.on_upgrade(move |socket| stream_session(socket, id, target, positions)))
 }
 
 const BACKFILL_BYTES: u64 = 4096;
@@ -343,7 +345,12 @@ const SETTLE_POLL_INTERVAL: Duration = Duration::from_millis(40);
 /// time to start emitting bytes.
 const POST_RESIZE_NO_ACTIVITY_BAIL: Duration = Duration::from_millis(180);
 
-async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
+async fn stream_session(
+    mut socket: WebSocket,
+    id: Uuid,
+    target: String,
+    positions: Arc<std::sync::Mutex<std::collections::HashMap<Uuid, u64>>>,
+) {
     let log_path = match paths::pane_log(&id.to_string()) {
         Ok(p) => p,
         Err(e) => {
@@ -393,6 +400,7 @@ async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
     // existing capture-at-current-size path.
     let mut early_input: Vec<Bytes> = Vec::new();
     let mut got_resize = false;
+    let mut resume_requested = false;
     let resize_deadline = tokio::time::Instant::now() + INITIAL_RESIZE_WAIT;
     loop {
         let remaining = resize_deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -405,6 +413,13 @@ async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
                     let _ = agentum_tmux::resize_window(&target, cols, rows).await;
                     got_resize = true;
                     break;
+                }
+                if parse_resume(&t) {
+                    // Client has cached parser state for this session and
+                    // wants the log delta, not a fresh snapshot. Keep
+                    // looping in case a resize follows immediately.
+                    resume_requested = true;
+                    continue;
                 }
                 // Non-resize text frame — preserve the legacy "treat as raw
                 // input" behaviour by buffering for replay after the snapshot.
@@ -471,16 +486,54 @@ async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
         }
     }
 
-    // Replay the current pane state so the user lands on a complete frame,
-    // not the tail of a partial redraw. Tail-only backfill bites embedded
-    // TUIs (claude, codex, …) that paint via cursor-position escapes —
-    // 4 KB rarely contains a self-consistent screen, leaving the parser
-    // mid-frame. `tmux capture-pane -e` prints the visible cells with
-    // ANSI styling, which feeds vt100 a clean snapshot. If capture fails
-    // (tmux missing or session torn down between checks), fall back to
-    // the old log-tail strategy.
+    // Replay path. Two modes:
+    //
+    // 1. RESUME: client has cached parser state and just wants the bytes
+    //    it missed during the WS gap. Look up the saved log position and
+    //    forward `log[saved..end]` as binary. The client's parser was
+    //    not reset, so playing back those bytes brings it from the
+    //    pre-disconnect state to the live tail without clobbering
+    //    anything. Without this, switching agents and switching back
+    //    used to wipe all visible chat history because we'd send a
+    //    `capture-pane` snapshot reflecting whatever the embedded TUI's
+    //    UI looks like *now* — which after a task completes can be
+    //    almost empty.
+    //
+    // 2. FRESH SNAPSHOT (default): client has no cached state, so we
+    //    `capture-pane -e` the current visible grid and ship it after a
+    //    `\x1b[2J\x1b[H` clear. Same as v0.6.11+ behaviour.
     let mut snapshot_sent = false;
-    if let Ok(snap) = agentum_tmux::capture_pane_ansi(&target).await
+    if resume_requested {
+        let saved_pos = positions
+            .lock()
+            .ok()
+            .and_then(|map| map.get(&id).copied())
+            .unwrap_or(0);
+        if let Ok(end) = file.seek(std::io::SeekFrom::End(0)).await
+            && end >= saved_pos
+        {
+            let delta = end - saved_pos;
+            if delta > 0
+                && file
+                    .seek(std::io::SeekFrom::Start(saved_pos))
+                    .await
+                    .is_ok()
+            {
+                let mut buf = vec![0u8; delta as usize];
+                if file.read_exact(&mut buf).await.is_ok()
+                    && socket
+                        .send(Message::Binary(Bytes::from(buf)))
+                        .await
+                        .is_err()
+                {
+                    return;
+                }
+            }
+            // Position file at end so tail picks up only post-delta bytes.
+            let _ = file.seek(std::io::SeekFrom::End(0)).await;
+            snapshot_sent = true;
+        }
+    } else if let Ok(snap) = agentum_tmux::capture_pane_ansi(&target).await
         && !snap.is_empty()
     {
         // Reset the client parser before painting the snapshot so any
@@ -540,6 +593,11 @@ async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
     // Tail the pane log on a dedicated task and pipe chunks through an mpsc.
     // The main loop multiplexes `tail_rx` (output) and `socket.recv()` (input)
     // so a chatty pane never starves keystrokes — and vice versa.
+    //
+    // We also remember the log position the tail starts from so the outer
+    // loop can save where the client left off on disconnect — that's what
+    // makes `{"resume":true}` reconnects deliver only the missed delta.
+    let tail_start_pos = file.stream_position().await.unwrap_or(0);
     let (tail_tx, mut tail_rx) = tokio::sync::mpsc::channel::<Bytes>(64);
     let tail_handle = tokio::spawn(async move {
         let mut buf = vec![0u8; READ_CHUNK];
@@ -560,13 +618,16 @@ async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
         }
     });
 
+    let mut bytes_forwarded: u64 = 0;
     loop {
         tokio::select! {
             chunk = tail_rx.recv() => match chunk {
                 Some(bytes) => {
+                    let len = bytes.len() as u64;
                     if socket.send(Message::Binary(bytes)).await.is_err() {
                         break;
                     }
+                    bytes_forwarded += len;
                 }
                 None => break, // tail task ended (file error / eof on dead pane)
             },
@@ -611,10 +672,32 @@ async fn stream_session(mut socket: WebSocket, id: Uuid, target: String) {
         }
     }
     tail_handle.abort();
+    // Save the log position the next reconnect should resume from. We
+    // started tailing at `tail_start_pos` and the outer loop forwarded
+    // `bytes_forwarded` bytes to the client, so the file position to
+    // pick up from is the sum.
+    if let Ok(mut map) = positions.lock() {
+        map.insert(id, tail_start_pos.saturating_add(bytes_forwarded));
+    }
 }
 
 fn parse_uuid(s: &str) -> Result<Uuid, ApiError> {
     Uuid::parse_str(s).map_err(|e| ApiError::BadRequest(e.to_string()))
+}
+
+/// Recognise `{"resume":true}` text frames. The TUI client sends this
+/// after a session-switch when it has cached vt100 parser state for the
+/// session and just needs the missed log delta — not a fresh
+/// `capture-pane` snapshot that would clobber the preserved state.
+fn parse_resume(t: &str) -> bool {
+    let trimmed = t.trim();
+    if !trimmed.starts_with('{') || !trimmed.contains("resume") {
+        return false;
+    }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return false;
+    };
+    matches!(v.get("resume"), Some(serde_json::Value::Bool(true)))
 }
 
 /// Recognise `{"resize":{"cols":N,"rows":N}}` text frames. Returns the
