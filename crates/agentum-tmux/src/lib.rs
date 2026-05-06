@@ -49,6 +49,20 @@ pub async fn has_session(target: &str) -> Result<bool> {
 ///
 /// `env` entries are forwarded as `-e KEY=VAL` to tmux so the spawned shell
 /// inherits them. Workdir must exist on disk.
+/// Initial tmux pane size for newly-created sessions. Without explicit
+/// `-x/-y` flags, `tmux new-session -d` clamps to its default 80×24,
+/// which means embedded TUIs (claude code, codex, opencode) launch and
+/// render their first frame at 80 cols. When a wider client later
+/// connects we tell tmux to `resize-window` and the embedded process
+/// gets SIGWINCH — but ratatui-based agents don't always reflow stale
+/// chat history past their viewport, so the user sees text wrapped at
+/// 80 cols stranded inside a much wider visible pane. Pre-sizing to a
+/// roomy default (132×40 — fits a 13" laptop in landscape and is the
+/// classic VT220 wide mode) means the very first rendered frame uses a
+/// width any modern client can comfortably display.
+pub const DEFAULT_PANE_COLS: u16 = 132;
+pub const DEFAULT_PANE_ROWS: u16 = 40;
+
 pub async fn new_session(
     target: &str,
     workdir: &Path,
@@ -62,6 +76,10 @@ pub async fn new_session(
         .arg("-d")
         .arg("-s")
         .arg(target)
+        .arg("-x")
+        .arg(DEFAULT_PANE_COLS.to_string())
+        .arg("-y")
+        .arg(DEFAULT_PANE_ROWS.to_string())
         .arg("-c")
         .arg(workdir);
     for (k, v) in env {
