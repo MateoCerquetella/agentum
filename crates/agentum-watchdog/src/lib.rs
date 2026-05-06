@@ -210,11 +210,11 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
             }
         }
 
-        // Activity-state transitions → agent.finished / agent.awaiting_input.
-        // Only fires for adapters that declared a busy_signature or any
-        // awaiting_input_signatures — others stay in `Unknown` forever
-        // and never emit. We never emit on the Unknown→* edge so a
-        // user spawning agentum onto an already-finished session
+        // Activity-state transitions → agent.finished / agent.awaiting_input
+        // / agent.input_resolved. Only fires for adapters that declared a
+        // busy_signature or any awaiting_input_signatures — others stay in
+        // `Unknown` forever and never emit. We never emit on the Unknown→*
+        // edge so a user spawning agentum onto an already-finished session
         // doesn't get a spurious "finished" toast.
         let next = classify_activity(&pane, busy_sig, awaiting_sigs);
         if next != activity {
@@ -229,6 +229,18 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
                         && prev != ActivityState::Unknown =>
                 {
                     let ev = Event::new("agent.awaiting_input")
+                        .with_session(sess.id, &sess.name);
+                    let _ = emit(&bus, &store, ev).await;
+                }
+                // Leaving AwaitingInput → user has answered (or the prompt
+                // was dismissed). Lets clients clear any "needs input" UI
+                // (yellow status dot, attention badges) without waiting for
+                // a separate finished/working event.
+                (ActivityState::AwaitingInput, next_state)
+                    if next_state != ActivityState::AwaitingInput
+                        && next_state != ActivityState::Unknown =>
+                {
+                    let ev = Event::new("agent.input_resolved")
                         .with_session(sess.id, &sess.name);
                     let _ = emit(&bus, &store, ev).await;
                 }
