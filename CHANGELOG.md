@@ -4,6 +4,61 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+VS Code-style keybindings + split panes for the TUI.
+
+### Added
+- **`Ctrl-E` toggles tree ↔ terminal.** Previous behavior only
+  released focus to the tree. Now the second press flips back to the
+  terminal pane (restoring the correct split side via
+  `last_term_side`), so you can ping-pong without reaching for Tab
+  or 1/2. Going back to the tree auto-drops fullscreen and unhides
+  the sidebar so the tree you jumped to is actually visible.
+- **`Ctrl-G` global lazygit toggle.** Plain `g` only toggled the
+  pane when the tree was focused — inside the terminal it got
+  forwarded to claude code. `Ctrl-G` works from any focus so you
+  can pop lazygit mid-prompt without first releasing focus.
+- **Split terminals (`Ctrl-\\`).** Mirrors VS Code's "Split Editor".
+  Splits the focused terminal pane horizontally (or vertically on
+  narrow terminals — &lt;80 cols) and clones the current selection
+  into the new right slot. Each side has its own session, parser, and
+  WebSocket stream; bytes are routed independently so the panes don't
+  blur into each other. `Ctrl-Shift-]` / `Ctrl-Shift-[` cycle through
+  Tree → Term → TermRight → Lazygit. Mutually exclusive with the
+  lazygit pane (Ctrl-\\ refuses while lazygit is open and vice versa)
+  — a 4-column layout doesn't fit on anything narrower than ~160 cols.
+- **`Ctrl-W` close split.** Drops the right slot, snaps focus back to
+  the left pane.
+- **`Ctrl-Tab` flip to last session.** The most-used nav action when
+  alternating between two agents. No-op if there's no prior session.
+- **`Ctrl-B` toggle sidebar.** VS Code's "toggle primary side bar".
+  Hides just the tree column; title and status bars stay.
+- **`Ctrl-K` chord prefix** (VS Code parity). Currently bound:
+  `Ctrl-K Z` toggles fullscreen ("zen"), `Ctrl-K B` toggles the
+  sidebar. Stray prefixes auto-cancel on the next keystroke.
+- **`/` filter sessions in the tree.** Press `/` from tree focus to
+  start filtering; type to extend, Backspace to trim, Enter to
+  commit, Esc to clear. Project groups with no matching sessions
+  collapse out. The filter survives session-list refreshes. The
+  active filter shows in the tree title bar.
+
+### Changed
+- **`Ctrl-K` no longer aliases the command palette.** Use `Ctrl-P`
+  or `Ctrl-Shift-P`. The alias is freed so VS Code chord prefixes
+  can land.
+
+### Fixed
+- **Enter on the YOLO checkbox in the new-session dialog now submits.**
+  It used to toggle YOLO instead, so you could never spawn from that
+  field without first reaching for Tab. Use `Space` to flip YOLO.
+
+### Notes
+- Tree-driven j/k targets the side last typed into (`last_term_side`),
+  so when you release pane focus back to the tree (Ctrl-E) and start
+  navigating, you keep driving the right pane until you focus the
+  left explicitly.
+
 ## [0.6.9] — 2026-05-06
 
 Capability negotiation for the terminal stream.

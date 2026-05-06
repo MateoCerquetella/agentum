@@ -6,7 +6,7 @@
 //! neon cyan), `paper` (Solarized-light-ish), `mono` (high-contrast B/W).
 //! Persisted in `~/.local/share/agentum/theme`, overridable via
 //! `$AGENTUM_THEME`. `T` cycles forward; the command palette
-//! (Ctrl-P / Ctrl-K) lets you pick by name. Everything ui.rs draws goes
+//! (Ctrl-P / Ctrl-Shift-P) lets you pick by name. Everything ui.rs draws goes
 //! through `Palette` — there are no hardcoded `Color::*` in draw code.
 //!
 //! ## How `system` works

@@ -1,6 +1,6 @@
 //! Command palette — Fresh-IDE-style prefix-routed picker.
 //!
-//! Opened with Ctrl-P or Ctrl-K. Prefix routing matches Fresh:
+//! Opened with Ctrl-P or Ctrl-Shift-P. Prefix routing matches Fresh:
 //!
 //!   (no prefix)  fuzzy across everything (default)
 //!   `>`          commands only (focus, theme, lazygit, refresh, quit)
@@ -80,6 +80,14 @@ pub enum ActionKind {
     SetTheme(&'static str),
     CycleTheme,
     SelectSession(Uuid),
+    /// Open the destructive-confirm overlay for `Kill` against this
+    /// session. Routed through the same prompt as Shift-K from tree
+    /// focus so a misclick in the palette can't drop a process by
+    /// accident.
+    KillSession(Uuid),
+    /// Open the destructive-confirm overlay for `Delete` against this
+    /// session. Same safety net as `KillSession`.
+    DeleteSession(Uuid),
 }
 
 pub struct Catalog {
@@ -175,13 +183,31 @@ impl Catalog {
             kind: ActionKind::CycleTheme,
         });
 
-        // Sessions.
+        // Sessions. Each session contributes three entries (select /
+        // kill / delete) so destructive actions are discoverable from
+        // the palette without forcing the user to navigate the tree
+        // first. They share the `sessions` group so the `#` prefix
+        // surfaces all of them; in default mode the explicit
+        // "Kill: …" / "Delete: …" labels keep them distinguishable
+        // from "Session: …" via subsequence match.
         for (id, name, workdir) in sessions {
             a.push(Action {
                 label: format!("Session: {name}"),
                 hint: workdir.clone(),
                 group: "sessions",
                 kind: ActionKind::SelectSession(*id),
+            });
+            a.push(Action {
+                label: format!("Kill session: {name}"),
+                hint: "Shift-K".into(),
+                group: "sessions",
+                kind: ActionKind::KillSession(*id),
+            });
+            a.push(Action {
+                label: format!("Delete session: {name}"),
+                hint: "x · Shift-D".into(),
+                group: "sessions",
+                kind: ActionKind::DeleteSession(*id),
             });
         }
 

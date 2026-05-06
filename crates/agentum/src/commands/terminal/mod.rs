@@ -13,7 +13,7 @@
 //! connect aborts with a loud "MITM?" error.
 
 mod api;
-pub mod app;
+mod app;
 mod extensions;
 mod palette;
 mod pty;
@@ -22,10 +22,16 @@ mod theme;
 pub mod trust;
 mod ui;
 
+// Re-export YOLO constants so the standalone `agentum new` command can
+// stay aligned with the TUI's New Session form without making the entire
+// `app` module public.
+pub use app::{YOLO_FLAG, YOLO_TOOLS};
+
 use std::io;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -68,6 +74,15 @@ pub async fn run(opts: Options) -> Result<()> {
     enable_raw_mode().context("enable raw mode")?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen).context("enter alt screen")?;
+    // Mouse capture lets us see scroll-wheel events instead of the host
+    // terminal's fallback of translating them to arrow keys (which then
+    // get forwarded into claude code). Mirrors Alacritty / kitty / iTerm
+    // when the running app doesn't have its own mouse tracking on. We
+    // *don't* forward the events to the inner pane — they drive
+    // agentum's own scrollback. Side effect: native click-drag selection
+    // breaks; users hold Shift to bypass app-mode capture, which is the
+    // standard convention every modern terminal emulator honours.
+    execute!(stdout, EnableMouseCapture).context("enable mouse capture")?;
     let _restore = TerminalGuard;
 
     let backend = CrosstermBackend::new(stdout);
@@ -80,8 +95,12 @@ struct TerminalGuard;
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
+        // Reverse order of setup: disable mouse capture first (otherwise
+        // the host terminal stays in app-mode tracking after agentum
+        // exits and ordinary clicks emit garbage in the parent shell).
+        let _ = execute!(io::stdout(), DisableMouseCapture);
         let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        let _ = disable_raw_mode();
     }
 }
 

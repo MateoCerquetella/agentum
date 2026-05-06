@@ -18,7 +18,12 @@ use super::theme::Palette;
 pub struct Areas {
     pub title: Rect,
     pub tree: Rect,
+    /// Primary (left) terminal pane. Always present.
     pub terminal: Rect,
+    /// Right terminal pane in a horizontal split. `Some` when the user
+    /// has opened a split with Ctrl-\\. When set, `terminal` is the
+    /// left half and this is the right.
+    pub terminal_right: Option<Rect>,
     pub lazygit: Option<Rect>,
     pub status: Rect,
 }
@@ -29,12 +34,14 @@ pub fn compute_layout(
     fullscreen: bool,
     tree_width: u16,
     sidebar_hidden: bool,
+    split_open: bool,
 ) -> Areas {
     // Fullscreen: drop the title row, tree column, and status row so the
     // active panes consume every available cell. The empty Rects keep the
     // draw_* helpers no-op (they short-circuit on `area.width == 0`).
     if fullscreen {
         let (terminal_rect, lazygit_rect) = split_main(area, lazygit_open);
+        let (term_left, term_right) = split_terminal(terminal_rect, split_open);
         let empty = Rect {
             x: area.x,
             y: area.y,
@@ -44,7 +51,8 @@ pub fn compute_layout(
         return Areas {
             title: empty,
             tree: empty,
-            terminal: terminal_rect,
+            terminal: term_left,
+            terminal_right: term_right,
             lazygit: lazygit_rect,
             status: empty,
         };
@@ -76,11 +84,13 @@ pub fn compute_layout(
 
     // Right column is now 100% terminal/lazygit — no bottom input bar.
     let (terminal_rect, lazygit_rect) = split_main(body[1], lazygit_open);
+    let (term_left, term_right) = split_terminal(terminal_rect, split_open);
 
     Areas {
         title: v[0],
         tree: body[0],
-        terminal: terminal_rect,
+        terminal: term_left,
+        terminal_right: term_right,
         lazygit: lazygit_rect,
         status: v[2],
     }
@@ -105,6 +115,30 @@ fn split_main(area: Rect, lazygit_open: bool) -> (Rect, Option<Rect>) {
     }
 }
 
+/// Split the terminal area into a left/right pair when the user has
+/// opened a split (Ctrl-\\). Wide terminals split horizontally (50/50);
+/// narrow ones stack vertically so each pane keeps a usable width. We
+/// use 80 columns as the cutoff because below that horizontal halves
+/// pinch every embedded TUI under the 40-col floor most expect.
+fn split_terminal(area: Rect, split_open: bool) -> (Rect, Option<Rect>) {
+    if !split_open {
+        return (area, None);
+    }
+    if area.width >= 80 {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+        (cols[0], Some(cols[1]))
+    } else {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+        (rows[0], Some(rows[1]))
+    }
+}
+
 pub fn draw(f: &mut Frame<'_>, app: &App) {
     let areas = compute_layout(
         f.area(),
@@ -112,6 +146,7 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         app.fullscreen,
         app.tree_width,
         app.sidebar_hidden,
+        app.split_open(),
     );
     let p = &app.theme.palette;
 
@@ -127,6 +162,9 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         draw_tree(f, areas.tree, app, p);
     }
     draw_terminal(f, areas.terminal, app, p);
+    if let Some(right_area) = areas.terminal_right {
+        draw_terminal_right(f, right_area, app, p);
+    }
     if let Some(lg_area) = areas.lazygit {
         draw_lazygit(f, lg_area, app, p);
     }
@@ -183,7 +221,18 @@ fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
 
 fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Tree;
-    let block = panel_block(" 1 sessions ", focused, p);
+    // Title shows the active filter so the user always sees what's
+    // narrowing the list. While filter-input mode is active we append a
+    // trailing `_` to hint at the live cursor.
+    let filter = app.tree.filter_str();
+    let title = if app.filter_input_active {
+        format!(" 1 sessions · /{filter}_ ")
+    } else if !filter.is_empty() {
+        format!(" 1 sessions · /{filter} ")
+    } else {
+        " 1 sessions ".to_string()
+    };
+    let block = panel_block(&title, focused, p);
 
     let mut items: Vec<ListItem> = Vec::new();
     let cursor = app.tree.cursor;
@@ -193,8 +242,13 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     }
 
     if items.is_empty() {
+        let hint = if !filter.is_empty() {
+            format!("  (no matches for /{filter})")
+        } else {
+            "  (no sessions — `agentum new …`)".to_string()
+        };
         items.push(ListItem::new(Line::from(Span::styled(
-            "  (no sessions — `agentum new …`)",
+            hint,
             Style::default().fg(p.muted),
         ))));
     }
@@ -262,10 +316,13 @@ fn render_tree_row(
 
 fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Term;
-    let title = if focused {
-        " 2 terminal · Ctrl-E release · type freely "
-    } else {
-        " 2 terminal · 2 / Ctrl-Shift-] focus "
+    // When a split is open, brand the left pane explicitly so the user
+    // knows which side keystrokes go to.
+    let title = match (focused, app.split_open()) {
+        (true, true) => " 2 left · Ctrl-E ↔ tree · type freely ",
+        (false, true) => " 2 left · 2 / Ctrl-E focus ",
+        (true, false) => " 2 terminal · Ctrl-E ↔ tree · type freely ",
+        (false, false) => " 2 terminal · 2 / Ctrl-E focus ",
     };
     let block = panel_block(title, focused, p);
 
@@ -285,12 +342,38 @@ fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     fill_default_bg(f, inner, p.panel_bg);
 }
 
+fn draw_terminal_right(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
+    let focused = app.focus == Focus::TermRight;
+    let title = if focused {
+        " right · Ctrl-E ↔ tree · Ctrl-W close · type freely "
+    } else {
+        " right · Ctrl-Shift-] focus · Ctrl-W close "
+    };
+    let block = panel_block(title, focused, p);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let Some(slot) = app.split_right.as_ref() else {
+        return; // shouldn't happen — only drawn while split is open
+    };
+    if slot.selected.is_none() {
+        let hint = Paragraph::new("Pick a session for this pane (focus, then Ctrl-P).")
+            .style(Style::default().fg(p.muted).bg(p.panel_bg))
+            .wrap(Wrap { trim: true });
+        f.render_widget(hint, inner);
+        return;
+    }
+    let pseudo = PseudoTerminal::new(slot.term.screen());
+    f.render_widget(pseudo, inner);
+    fill_default_bg(f, inner, p.panel_bg);
+}
+
 fn draw_lazygit(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Lazygit;
     let title = if focused {
-        " 3 lazygit · Ctrl-E release · G cheats "
+        " 3 lazygit · Ctrl-E ↔ tree · Ctrl-G close "
     } else {
-        " 3 lazygit · 3 / Ctrl-Shift-] focus · g close "
+        " 3 lazygit · 3 / Ctrl-Shift-] focus · Ctrl-G close "
     };
     let block = panel_block(title, focused, p);
     let inner = block.inner(area);
@@ -437,10 +520,13 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         Line::from(""),
         head("  Universal (work even inside the terminal pane)", p),
         body("  Ctrl-P / Ctrl-Shift-P  command palette", p),
-        body("  Ctrl-E            release pane focus → tree", p),
+        body("  Ctrl-E            toggle focus: tree ↔ terminal", p),
+        body("  Ctrl-G            toggle lazygit side pane", p),
         body("  Ctrl-Tab          flip back to last session", p),
         body("  Ctrl-B            toggle the sidebar tree", p),
         body("  Ctrl-K Z          toggle fullscreen (zen)", p),
+        body("  Ctrl-\\            split the focused terminal pane", p),
+        body("  Ctrl-W            close the split", p),
         body("  Ctrl-Shift-] / F5  next panel", p),
         body("  Ctrl-Shift-[ / F6  previous panel", p),
         body("  Ctrl-1 … Ctrl-9   jump to Nth project group in the tree", p),
@@ -451,6 +537,7 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         body("  1 / 2 / 3         focus tree / terminal / lazygit", p),
         body("  Tab / ]           next panel", p),
         body("  Shift-Tab / [     previous panel", p),
+        body("  /                 filter sessions by name (Esc clears)", p),
         body("  j / k / ↑ / ↓     move selection", p),
         body("  h / l / ← / →     collapse / expand group", p),
         body(
@@ -477,7 +564,7 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
             "  K                 kill the selected session (immediate)",
             p,
         ),
-        body("  D                 delete the selected session", p),
+        body("  x · D             delete the selected session", p),
         Line::from(""),
         head("  Extensions & appearance", p),
         body("  g                 toggle lazygit side pane", p),

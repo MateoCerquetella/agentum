@@ -5,7 +5,7 @@ use agentum_core::NewSession;
 use anyhow::{Context, Result, bail};
 
 use crate::cli::arg_to_flag;
-use crate::commands::terminal::app::{YOLO_FLAG, YOLO_TOOLS};
+use crate::commands::terminal::{YOLO_FLAG, YOLO_TOOLS};
 
 pub async fn run(
     name: String,

@@ -32,8 +32,30 @@ const TICK_INTERVAL: Duration = Duration::from_millis(100);
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Tree,
+    /// Left / primary terminal pane.
     Term,
+    /// Right pane in a split. Only meaningful when `App::split_right`
+    /// is `Some`; closing the split reverts focus to `Term`.
+    TermRight,
     Lazygit,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+}
+
+/// Per-pane terminal state when split-screen is in play. The left slot
+/// keeps using `App`'s flat `term`/`selected`/`term_in`/`term_size` fields
+/// (so the legacy single-pane code stays unchanged); a right split lives
+/// here. Drop the slot to close the split — its `Drop` impl on
+/// `term_in` / the stream handle aborts the WS worker.
+pub struct TermSlot {
+    pub selected: Option<Uuid>,
+    pub term: TerminalPane,
+    pub term_in: Option<mpsc::UnboundedSender<TermOut>>,
+    pub term_size: (u16, u16),
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -65,8 +87,7 @@ pub enum Overlay {
 
 /// Suggested tool names. Mirrors the web's datalist on the New Session
 /// dialog. Pressing Tab on the `Tool` field cycles through these.
-pub const TOOL_SUGGESTIONS: &[&str] =
-    &["claude", "codex", "opencode", "aider", "terminal", "bash"];
+pub const TOOL_SUGGESTIONS: &[&str] = &["claude", "codex", "opencode", "aider", "bash"];
 
 /// Tools that accept `--dangerously-skip-permissions`. Mirrors the
 /// `yoloTools` set in `dashboard/src/lib/components/NewSessionDialog.svelte`
@@ -291,7 +312,7 @@ impl PendingAction {
     }
 }
 
-/// Command-palette state. Driven by Ctrl-P / Ctrl-K. The action list is
+/// Command-palette state. Driven by Ctrl-P / Ctrl-Shift-P. The action list is
 /// generated on demand from `palette::all_actions(&app)` so it can include
 /// dynamic entries like the active session list and theme registry.
 pub struct PaletteState {
@@ -337,6 +358,12 @@ pub struct App {
     /// (VS Code parity: Ctrl-K Z = fullscreen, Ctrl-K B = sidebar, …).
     /// Cleared automatically on the next key event regardless of match.
     pub chord: Option<char>,
+    /// True while the user is typing into the tree filter prompt
+    /// (entered with `/` from tree focus). While active, keystrokes
+    /// extend / trim the filter instead of navigating the tree. Esc
+    /// clears + exits, Enter commits + exits (filter persists; press
+    /// Esc again from tree focus to clear it).
+    pub filter_input_active: bool,
     pub error_count: u32,
     pub conn: ConnState,
     pub status_msg: Option<String>,
@@ -345,12 +372,55 @@ pub struct App {
     pub palette: PaletteState,
     /// `Some` while a lazygit child is alive in the side pane.
     pub lazygit: Option<LocalPty>,
+    /// The cwd we last spawned lazygit in. Compared against the freshly
+    /// selected session's workdir so tree navigation can respawn the
+    /// side pane when the user switches to a different project — the
+    /// pane was otherwise pinned to whatever directory it was first
+    /// opened in, which made the lazygit view drift out of sync with
+    /// the highlighted agent.
+    pub lazygit_cwd: Option<PathBuf>,
+    /// Cheap clone of the run-loop's lazygit-byte channel. Lives on
+    /// `App` so any handler that mutates the selection (filter input,
+    /// palette pick, tree j/k, post-create refresh) can respawn the
+    /// side pane via `refresh_lazygit_for_selection` without every
+    /// call site having to thread an extra `&Sender` parameter.
+    pub lg_tx: Option<mpsc::UnboundedSender<PtyMsg>>,
     /// Outbound key channel for the active terminal stream. `None` while
     /// no session is selected; recreated each time the stream is reopened.
     pub term_in: Option<mpsc::UnboundedSender<TermOut>>,
     /// Last `(cols, rows)` we told the server about. Tracked here so we
     /// only push a resize when the value actually changes.
     pub term_size: (u16, u16),
+    /// Owned stream-task handles. Stored on `App` instead of threaded
+    /// through every helper as `&mut Option<JoinHandle<()>>` — that
+    /// pattern has to expand to TWO handles for split panes (left +
+    /// right), and threading both through the call graph would touch
+    /// every async helper. Living here means helpers see them through
+    /// `&mut App` for free. Aborted (drop-on-demand) when reselecting.
+    pub stream_handle_left: Option<JoinHandle<()>>,
+    /// Right-pane stream task. `Some` only when the split is open and
+    /// the right slot has an active session.
+    pub stream_handle_right: Option<JoinHandle<()>>,
+    /// Cheap clones of the run-loop's two terminal-byte channels. Living
+    /// on `App` means `update_selection` can pick the correct sender by
+    /// `Side` without every async helper having to thread two `&Sender`
+    /// references. Set once in `run_loop` right after the channels are
+    /// created.
+    pub term_tx_left: Option<mpsc::UnboundedSender<TerminalMsg>>,
+    pub term_tx_right: Option<mpsc::UnboundedSender<TerminalMsg>>,
+    /// Right-side terminal slot — `Some` while a split is active. Holds
+    /// its own selection / parser / input channel / cached size; the
+    /// existing flat `term` / `selected` / `term_in` / `term_size`
+    /// fields keep referring to the LEFT slot so existing call sites
+    /// don't need to be rewritten.
+    pub split_right: Option<TermSlot>,
+    /// Which side tree-driven selection updates target. Updated on every
+    /// `Term` / `TermRight` focus event so when the user releases pane
+    /// focus back to the tree (Ctrl-E), j/k retargets the slot they
+    /// were just typing into. Without this, navigating from the tree
+    /// while the right pane is focused would silently drive the left
+    /// pane and feel haunted.
+    pub last_term_side: Side,
     pub theme: &'static Theme,
     /// Recent notifications displayed in bottom-left. Pushed on session
     /// events; capped at 3 entries. Each auto-clears after 8s.
@@ -372,6 +442,7 @@ impl App {
             fullscreen: false,
             sidebar_hidden: false,
             chord: None,
+            filter_input_active: false,
             error_count: 0,
             conn: ConnState::Connecting,
             status_msg: None,
@@ -379,8 +450,16 @@ impl App {
             overlay: Overlay::None,
             palette: PaletteState::new(),
             lazygit: None,
+            lazygit_cwd: None,
+            lg_tx: None,
             term_in: None,
             term_size: (0, 0),
+            stream_handle_left: None,
+            stream_handle_right: None,
+            term_tx_left: None,
+            term_tx_right: None,
+            split_right: None,
+            last_term_side: Side::Left,
             theme: theme::load(),
             notifications: Vec::new(),
         }
@@ -410,8 +489,14 @@ impl App {
             .iter()
             .map(|g| (g.workdir.clone(), g.expanded))
             .collect();
+        // Preserve the active filter across rebuilds — the user's typed
+        // search shouldn't vanish just because the session list changed.
+        let prev_filter = self.tree.filter_str().to_string();
         self.sessions = sessions;
         self.tree = Tree::build(&self.sessions, &prev_state);
+        if !prev_filter.is_empty() {
+            self.tree.set_filter(&prev_filter);
+        }
         if let Some(sel) = self.selected
             && !self.sessions.iter().any(|s| s.id == sel)
         {
@@ -428,6 +513,37 @@ impl App {
     pub fn lazygit_open(&self) -> bool {
         self.lazygit.is_some()
     }
+
+    /// True when the right-pane split is active.
+    pub fn split_open(&self) -> bool {
+        self.split_right.is_some()
+    }
+
+    /// Which terminal slot tree-driven selection changes should retarget.
+    /// `Term` / `TermRight` focus pin it explicitly; from `Tree` /
+    /// `Lazygit` we fall back to whichever side the user last typed into.
+    pub fn target_side(&self) -> Side {
+        match self.focus {
+            Focus::Term => Side::Left,
+            Focus::TermRight => Side::Right,
+            _ => self.last_term_side,
+        }
+    }
+
+    /// Move focus, keeping `last_term_side` in sync. Call this instead of
+    /// assigning `self.focus = …` directly so tree → term hand-off
+    /// remembers which side the user was on. Tree / Lazygit focus
+    /// changes are passthroughs — they don't touch `last_term_side`,
+    /// so the prior value (the side the user was last typing in) is
+    /// preserved across tree visits.
+    pub fn set_focus(&mut self, f: Focus) {
+        self.focus = f;
+        match f {
+            Focus::Term => self.last_term_side = Side::Left,
+            Focus::TermRight => self.last_term_side = Side::Right,
+            _ => {}
+        }
+    }
 }
 
 // ---------- Tree ----------
@@ -435,6 +551,18 @@ impl App {
 pub struct Tree {
     pub groups: Vec<Group>,
     pub cursor: usize, // index into the flattened visible row list
+    /// Active filter (lowercased). Empty string = no filter. Changes
+    /// what `rows()` emits, which automatically threads through every
+    /// cursor method (`move_cursor`, `clamp_cursor`, `current_row`,
+    /// `current_session`) since they all read `self.rows()`.
+    filter: String,
+    /// Lowercased session names, keyed by id. Refreshed each time
+    /// sessions change so `rows()` can apply the filter without
+    /// borrowing the global `&[Session]`. The cache is the price of
+    /// keeping `rows()` parameter-free; it stales between session
+    /// refreshes, so `App::refresh_sessions` must call
+    /// `Tree::refresh_names` whenever the session list changes.
+    name_index: HashMap<Uuid, String>,
 }
 
 pub struct Group {
@@ -515,15 +643,59 @@ impl Tree {
                 }
             })
             .collect();
-        Self { groups, cursor: 0 }
+        let name_index = sessions
+            .iter()
+            .map(|s| (s.id, s.name.to_ascii_lowercase()))
+            .collect();
+        Self {
+            groups,
+            cursor: 0,
+            filter: String::new(),
+            name_index,
+        }
+    }
+
+    /// Read the active filter (lowercased, exactly as set).
+    pub fn filter_str(&self) -> &str {
+        &self.filter
+    }
+
+    /// Replace the active filter and re-clamp the cursor onto a still-visible
+    /// row. Filter strings are stored lowercased so matching is case-insensitive.
+    pub fn set_filter(&mut self, needle: &str) {
+        self.filter = needle.trim().to_ascii_lowercase();
+        self.clamp_cursor();
     }
 
     pub fn rows(&self) -> Vec<Row> {
+        let needle = self.filter.as_str();
+        let filtering = !needle.is_empty();
         let mut rows = Vec::new();
         for (gi, g) in self.groups.iter().enumerate() {
+            // While filtering, only count leaves whose name contains the
+            // needle; while unfiltered, all leaves count.
+            let visible_leaves: Vec<usize> = if filtering {
+                (0..g.sessions.len())
+                    .filter(|li| {
+                        let id = g.sessions[*li];
+                        self.name_index
+                            .get(&id)
+                            .is_some_and(|n| n.contains(needle))
+                    })
+                    .collect()
+            } else {
+                (0..g.sessions.len()).collect()
+            };
+            // Drop empty groups while filtering; otherwise keep the
+            // group header so the user can expand/collapse it.
+            if filtering && visible_leaves.is_empty() {
+                continue;
+            }
             rows.push(Row::Group(gi));
-            if g.expanded {
-                for li in 0..g.sessions.len() {
+            // Filter mode forces every group expanded — flat search behaves
+            // like a single list. Unfiltered mode honours `g.expanded`.
+            if filtering || g.expanded {
+                for li in visible_leaves {
                     rows.push(Row::Leaf {
                         group: gi,
                         leaf: li,
@@ -653,22 +825,32 @@ pub async fn run_loop(
     let mut app = App::new(sessions);
 
     let (term_tx, mut term_rx) = mpsc::unbounded_channel::<TerminalMsg>();
+    let (term_tx_right, mut term_rx_right) = mpsc::unbounded_channel::<TerminalMsg>();
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<EventMsg>();
     let (lg_tx, mut lg_rx) = mpsc::unbounded_channel::<PtyMsg>();
+    // Stash cheap clones on `App` so `update_selection` can pick the
+    // correct sender by side without re-threading args. The lazygit
+    // sender lives here too so `refresh_lazygit_for_selection` can
+    // respawn the side pane on project switches without threading a
+    // `&Sender` through every handler.
+    app.term_tx_left = Some(term_tx.clone());
+    app.term_tx_right = Some(term_tx_right);
+    app.lg_tx = Some(lg_tx.clone());
 
     // Subscribe to the daemon's event bus.
     let _events_handle: JoinHandle<()> = client.open_event_stream(event_tx);
 
-    // Open the terminal stream for the initial selection.
-    let mut stream_handle: Option<JoinHandle<()>> = if let Some(id) = app.selected {
+    // Open the terminal stream for the initial selection. The handle
+    // lives on `App` (left/right slots) instead of the run-loop stack
+    // so helper functions can access it through `&mut App` without
+    // threading an extra `&mut Option<JoinHandle>` everywhere.
+    if let Some(id) = app.selected {
         let (key_tx, key_rx) = mpsc::unbounded_channel::<TermOut>();
         let h = client.open_terminal_stream(id, term_tx.clone(), key_rx);
         app.term_in = Some(key_tx);
         app.term_size = (0, 0); // force first resize once we know the pane size
-        Some(h)
-    } else {
-        None
-    };
+        app.stream_handle_left = Some(h);
+    }
 
     let mut crossterm_events = EventStream::new();
     let mut tick = interval(TICK_INTERVAL);
@@ -683,6 +865,7 @@ pub async fn run_loop(
             app.fullscreen,
             app.tree_width,
             app.sidebar_hidden,
+            app.split_open(),
         );
         let (term_rows, term_cols) = inner_size(areas.terminal);
         app.term.resize(term_rows, term_cols);
@@ -701,6 +884,28 @@ pub async fn run_loop(
                 app.term_size = (term_cols, term_rows);
             }
         }
+        // Mirror the resize plumbing for the right split when active —
+        // each side has its own parser, its own remembered size, and its
+        // own input channel.
+        if let Some(right_area) = areas.terminal_right
+            && let Some(slot) = app.split_right.as_mut()
+        {
+            let (r_rows, r_cols) = inner_size(right_area);
+            slot.term.resize(r_rows, r_cols);
+            if (r_cols, r_rows) != slot.term_size
+                && r_cols > 0
+                && r_rows > 0
+                && let Some(tx) = slot.term_in.as_ref()
+                && tx
+                    .send(TermOut::Resize {
+                        cols: r_cols,
+                        rows: r_rows,
+                    })
+                    .is_ok()
+            {
+                slot.term_size = (r_cols, r_rows);
+            }
+        }
         if let Some(lg) = app.lazygit.as_mut() {
             let (rows, cols) = inner_size(areas.lazygit.unwrap_or(areas.terminal));
             lg.resize(rows, cols);
@@ -716,6 +921,7 @@ pub async fn run_loop(
             && lg.finished()
         {
             app.lazygit = None;
+            app.lazygit_cwd = None;
             if app.focus == Focus::Lazygit {
                 app.focus = Focus::Tree;
             }
@@ -727,12 +933,16 @@ pub async fn run_loop(
 
             maybe_input = crossterm_events.next() => {
                 if let Some(Ok(ev)) = maybe_input {
-                    handle_crossterm(&mut app, ev, &client, &term_tx, &lg_tx, &mut stream_handle).await;
+                    handle_crossterm(&mut app, ev, &client, &lg_tx).await;
                 }
             }
 
             Some(msg) = term_rx.recv() => {
-                handle_terminal_msg(&mut app, msg);
+                handle_terminal_msg(&mut app, msg, Side::Left);
+            }
+
+            Some(msg) = term_rx_right.recv() => {
+                handle_terminal_msg(&mut app, msg, Side::Right);
             }
 
             Some(msg) = event_rx.recv() => {
@@ -766,13 +976,11 @@ async fn handle_crossterm(
     app: &mut App,
     ev: CtEvent,
     client: &Client,
-    term_tx: &mpsc::UnboundedSender<TerminalMsg>,
     lg_tx: &mpsc::UnboundedSender<PtyMsg>,
-    stream_handle: &mut Option<JoinHandle<()>>,
 ) {
     match ev {
         CtEvent::Key(key) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
-            handle_key(app, key, client, term_tx, lg_tx, stream_handle).await;
+            handle_key(app, key, client, lg_tx).await;
         }
         CtEvent::Resize(_, _) => {}
         _ => {}
@@ -783,55 +991,47 @@ async fn handle_key(
     app: &mut App,
     key: KeyEvent,
     client: &Client,
-    term_tx: &mpsc::UnboundedSender<TerminalMsg>,
     lg_tx: &mpsc::UnboundedSender<PtyMsg>,
-    stream_handle: &mut Option<JoinHandle<()>>,
 ) {
     // Chord follow-up — if the previous key set a chord prefix, this
     // keystroke completes (or cancels) it. Done before the palette /
     // quit / cycle handlers so chord branches like `Ctrl-K Z` aren't
     // interpreted as the standalone meaning of `Z`.
-    if let Some(prefix) = app.chord.take() {
-        match prefix {
-            'K' => {
-                // VS Code parity: Ctrl-K Z (zen) toggles fullscreen,
-                // Ctrl-K B toggles the sidebar. Anything else cancels
-                // the chord silently.
-                let c = match key.code {
-                    KeyCode::Char(c) => Some(c.to_ascii_lowercase()),
-                    _ => None,
-                };
-                match c {
-                    Some('z') => {
-                        app.fullscreen = !app.fullscreen;
-                        if app.fullscreen && app.focus == Focus::Tree {
-                            app.focus = Focus::Term;
-                        }
-                        app.status_msg = Some(if app.fullscreen {
-                            "fullscreen on (Ctrl-K Z or Esc to exit)".into()
-                        } else {
-                            "fullscreen off".into()
-                        });
-                    }
-                    Some('b') => {
-                        app.sidebar_hidden = !app.sidebar_hidden;
-                        if app.sidebar_hidden && app.focus == Focus::Tree {
-                            app.focus = Focus::Term;
-                        }
-                        app.status_msg = Some(if app.sidebar_hidden {
-                            "sidebar hidden".into()
-                        } else {
-                            "sidebar visible".into()
-                        });
-                    }
-                    _ => {
-                        app.status_msg = Some("(chord cancelled)".into());
-                    }
+    if let Some('K') = app.chord.take() {
+        // VS Code parity: Ctrl-K Z (zen) toggles fullscreen, Ctrl-K B
+        // toggles the sidebar. Anything else cancels the chord silently.
+        let c = match key.code {
+            KeyCode::Char(c) => Some(c.to_ascii_lowercase()),
+            _ => None,
+        };
+        match c {
+            Some('z') => {
+                app.fullscreen = !app.fullscreen;
+                if app.fullscreen && app.focus == Focus::Tree {
+                    app.set_focus(Focus::Term);
                 }
-                return;
+                app.status_msg = Some(if app.fullscreen {
+                    "fullscreen on (Ctrl-K Z or Esc to exit)".into()
+                } else {
+                    "fullscreen off".into()
+                });
             }
-            _ => {} // unknown prefix — fall through
+            Some('b') => {
+                app.sidebar_hidden = !app.sidebar_hidden;
+                if app.sidebar_hidden && app.focus == Focus::Tree {
+                    app.set_focus(Focus::Term);
+                }
+                app.status_msg = Some(if app.sidebar_hidden {
+                    "sidebar hidden".into()
+                } else {
+                    "sidebar visible".into()
+                });
+            }
+            _ => {
+                app.status_msg = Some("(chord cancelled)".into());
+            }
         }
+        return;
     }
 
     // Ctrl-P / Ctrl-Shift-P opens the command palette from anywhere.
@@ -870,7 +1070,7 @@ async fn handle_key(
     {
         app.sidebar_hidden = !app.sidebar_hidden;
         if app.sidebar_hidden && app.focus == Focus::Tree {
-            app.focus = Focus::Term;
+            app.set_focus(Focus::Term);
         }
         app.status_msg = Some(if app.sidebar_hidden {
             "sidebar hidden (Ctrl-B to reopen)".into()
@@ -891,7 +1091,10 @@ async fn handle_key(
             && app.sessions.iter().any(|s| s.id == prev)
         {
             app.tree.select_session(prev);
-            update_selection(app, client, term_tx, stream_handle);
+            {
+            let side = app.target_side();
+            update_selection(app, client, side);
+        }
         } else {
             app.status_msg = Some("no previous session".into());
         }
@@ -941,11 +1144,11 @@ async fn handle_key(
     // shifted glyph, others as `]` with the Shift modifier set. The Kitty
     // protocol normalises this, but we accept both for portability.
     if ctrl_shift && matches!(key.code, KeyCode::Char(']') | KeyCode::Char('}')) {
-        app.focus = next_focus(app.focus, app.lazygit_open());
+        app.set_focus(next_focus(app.focus, app.lazygit_open(), app.split_open()));
         return;
     }
     if ctrl_shift && matches!(key.code, KeyCode::Char('[') | KeyCode::Char('{')) {
-        app.focus = prev_focus(app.focus, app.lazygit_open());
+        app.set_focus(prev_focus(app.focus, app.lazygit_open(), app.split_open()));
         return;
     }
 
@@ -953,26 +1156,103 @@ async fn handle_key(
     // Ctrl-Shift-] / Ctrl-Shift-[ when your terminal doesn't speak the
     // Kitty Keyboard Protocol (e.g. plain xterm, cmd.exe).
     if key.code == KeyCode::F(5) {
-        app.focus = next_focus(app.focus, app.lazygit_open());
+        app.set_focus(next_focus(app.focus, app.lazygit_open(), app.split_open()));
         return;
     }
     if key.code == KeyCode::F(6) {
-        app.focus = prev_focus(app.focus, app.lazygit_open());
+        app.set_focus(prev_focus(app.focus, app.lazygit_open(), app.split_open()));
         return;
     }
 
-    // Ctrl-E — "release pane focus → tree". Mirrors VS Code's
-    // Ctrl-Shift-E (focus Explorer) but as a single chord so it doesn't
-    // collide with Ctrl-Shift-]/[ panel cycling. The escape hatch for
-    // when you're typing into claude code and want the session list
-    // back. Works from any focus, no Kitty-protocol dependency.
-    // Lowercase `e` is unbound so this is conflict-free.
+    // Ctrl-E — toggle focus between the session tree and the terminal.
+    // Mirrors VS Code's Ctrl-Shift-E (focus Explorer), but as a single
+    // chord that flips back to the pane on the second press so you can
+    // ping-pong without reaching for Tab or 1/2. Works from any focus
+    // and from any emulator (no Kitty-protocol dependency); lowercase
+    // `e` stays unbound so this is conflict-free.
     if ctrl && matches!(key.code, KeyCode::Char('e') | KeyCode::Char('E')) {
-        app.focus = Focus::Tree;
-        if app.fullscreen {
-            // Releasing focus while fullscreen would hide the tree we
-            // just jumped to. Drop fullscreen so the sidebar reappears.
-            app.fullscreen = false;
+        if app.focus == Focus::Tree {
+            // Tree → terminal. Restore whichever side the user was
+            // last typing in so split-pane workflows survive a round
+            // trip through the sidebar.
+            app.set_focus(if app.last_term_side == Side::Right && app.split_open() {
+                Focus::TermRight
+            } else {
+                Focus::Term
+            });
+        } else {
+            // Pane → tree. Reveal sidebar / drop fullscreen so the
+            // tree we just jumped to is actually visible.
+            app.set_focus(Focus::Tree);
+            if app.fullscreen {
+                app.fullscreen = false;
+            }
+            if app.sidebar_hidden {
+                app.sidebar_hidden = false;
+            }
+        }
+        return;
+    }
+
+    // Ctrl-G — toggle the lazygit side pane from any focus. Plain `g`
+    // also toggles it but only fires when the tree is focused (otherwise
+    // it gets forwarded as a literal keystroke to the running agent).
+    // Ctrl-G is the global escape hatch so you can pop lazygit while
+    // typing into claude code without first releasing focus.
+    if ctrl && matches!(key.code, KeyCode::Char('g') | KeyCode::Char('G')) {
+        toggle_lazygit(app, lg_tx).await;
+        return;
+    }
+
+    // Ctrl-\ — split the focused terminal pane horizontally. Mirrors
+    // VS Code's "Split Editor". Cloning the current selection into the
+    // right slot is the common use ("watch two agents in this repo
+    // run side-by-side"); the user can then focus the right pane (one
+    // Ctrl-Shift-]) and pick a different session via the palette or
+    // tree if they want. No-op while lazygit is open — those two
+    // features are mutually exclusive (4-column layouts get cramped).
+    if ctrl && matches!(key.code, KeyCode::Char('\\')) {
+        if app.lazygit_open() {
+            app.status_msg = Some("close lazygit (g) before splitting".into());
+        } else if app.split_open() {
+            app.status_msg = Some("already split — Ctrl-W to close".into());
+        } else {
+            // Clone the current selection into a fresh slot. The
+            // stream is opened by `update_selection` once we set the
+            // tree cursor onto the right's session.
+            app.split_right = Some(TermSlot {
+                selected: None,
+                term: TerminalPane::new(),
+                term_in: None,
+                term_size: (0, 0),
+            });
+            app.set_focus(Focus::TermRight);
+            app.last_term_side = Side::Right;
+            // Drive the right pane to the tree's current session.
+            update_selection(app, client, Side::Right);
+            app.status_msg = Some("split (Ctrl-W to close)".into());
+        }
+        return;
+    }
+
+    // Ctrl-W — close the current split. From the right pane: drops it.
+    // From the left/tree/lazygit while a split is open: also drops the
+    // right slot. No-op when there's nothing to close.
+    if ctrl && matches!(key.code, KeyCode::Char('w')) {
+        if app.split_open() {
+            // Abort the right-pane stream task and drop the slot.
+            if let Some(handle) = app.stream_handle_right.take() {
+                handle.abort();
+            }
+            app.split_right = None;
+            // Snap focus back to the left if we were on the right.
+            if app.focus == Focus::TermRight {
+                app.set_focus(Focus::Term);
+            }
+            app.last_term_side = Side::Left;
+            app.status_msg = Some("split closed".into());
+        } else {
+            app.status_msg = Some("no split to close".into());
         }
         return;
     }
@@ -999,11 +1279,11 @@ async fn handle_key(
     // Stateful overlays (own input fully).
     match &app.overlay {
         Overlay::Palette => {
-            handle_palette_key(app, key, client, term_tx, lg_tx, stream_handle).await;
+            handle_palette_key(app, key, client, lg_tx).await;
             return;
         }
         Overlay::NewSession(_) => {
-            handle_new_session_key(app, key, client, term_tx, stream_handle).await;
+            handle_new_session_key(app, key, client).await;
             return;
         }
         Overlay::Confirm(_) => {
@@ -1076,7 +1356,7 @@ async fn handle_key(
 
     // 't' — spawn a plain terminal (bash shell). Works from tree focus.
     if !shift && key.code == KeyCode::Char('t') && app.focus == Focus::Tree {
-        spawn_plain_terminal(app, client, term_tx, stream_handle).await;
+        spawn_plain_terminal(app, client).await;
         return;
     }
 
@@ -1097,25 +1377,41 @@ async fn handle_key(
     // WS so they hit the running process (claude code, shell, etc.). Surface
     // both failure modes loudly — silent swallowing was the original "frozen
     // pane" symptom.
-    if app.focus == Focus::Term {
+    if matches!(app.focus, Focus::Term | Focus::TermRight) {
         let Some(bytes) = key_to_bytes(&key) else {
             return;
         };
-        match app.term_in.as_ref() {
+        // Pick the input channel for whichever pane is focused — split
+        // pane (Right) routes to its own slot, the legacy single pane
+        // (Left) keeps using the flat `term_in`.
+        let tx_opt = match app.focus {
+            Focus::TermRight => app.split_right.as_ref().and_then(|s| s.term_in.as_ref()),
+            _ => app.term_in.as_ref(),
+        };
+        match tx_opt {
             Some(tx) => {
                 if tx.send(TermOut::Bytes(bytes)).is_err() {
                     app.status_msg =
-                        Some("terminal stream closed — Ctrl-E release · Ctrl-Q quit".into());
+                        Some("terminal stream closed — Ctrl-E tree · Ctrl-Q quit".into());
                     app.error_count += 1;
                 }
             }
             None => {
                 app.status_msg = Some(
-                    "no terminal stream (no session selected?) — Ctrl-E release · Ctrl-Q quit"
+                    "no terminal stream (no session selected?) — Ctrl-E tree · Ctrl-Q quit"
                         .into(),
                 );
             }
         }
+        return;
+    }
+
+    // Filter-input mode (entered with `/` from tree focus) absorbs every
+    // keystroke until committed (Enter) or cancelled (Esc). Lives above
+    // the tree-key match so chars like `/`, `n`, `q` extend the filter
+    // instead of triggering their tree shortcuts.
+    if app.filter_input_active {
+        handle_filter_input_key(app, &key, client);
         return;
     }
 
@@ -1131,7 +1427,7 @@ async fn handle_key(
         KeyCode::Char('F') => {
             app.fullscreen = !app.fullscreen;
             if app.fullscreen && app.focus == Focus::Tree {
-                app.focus = Focus::Term;
+                app.set_focus(Focus::Term);
             }
             app.status_msg = Some(if app.fullscreen {
                 "fullscreen on (Shift-F or Esc to exit)".into()
@@ -1142,6 +1438,22 @@ async fn handle_key(
         KeyCode::Esc if app.fullscreen => {
             app.fullscreen = false;
             app.status_msg = Some("fullscreen off".into());
+        }
+        // Esc clears an active tree filter when filter-input mode isn't
+        // running (that case is handled inside `handle_filter_input_key`).
+        // Lets the user blow away a stale filter without remembering the
+        // exact magic key they typed.
+        KeyCode::Esc if !app.tree.filter_str().is_empty() => {
+            app.tree.set_filter("");
+            app.status_msg = Some("filter cleared".into());
+        }
+        // `/` starts filter-input mode. Any prior filter is cleared so
+        // each `/` press is a fresh search — matches vim, fzf, and every
+        // other "press / to filter" UI.
+        KeyCode::Char('/') => {
+            app.tree.set_filter("");
+            app.filter_input_active = true;
+            app.status_msg = Some("/ (Esc to cancel · Enter to keep)".into());
         }
         // Resize the sidebar tree. 4-col steps, clamped 16..=80; the
         // terminal pane keeps its 20-col floor at draw time. Works
@@ -1160,10 +1472,10 @@ async fn handle_key(
         KeyCode::Char('3') if app.lazygit_open() => app.focus = Focus::Lazygit,
         // [ / ] / Tab cycle focus.
         KeyCode::Char(']') | KeyCode::Tab => {
-            app.focus = next_focus(app.focus, app.lazygit_open());
+            app.set_focus(next_focus(app.focus, app.lazygit_open(), app.split_open()));
         }
         KeyCode::Char('[') | KeyCode::BackTab => {
-            app.focus = prev_focus(app.focus, app.lazygit_open());
+            app.set_focus(prev_focus(app.focus, app.lazygit_open(), app.split_open()));
         }
         KeyCode::Char('r') => {
             if let Ok(fresh) = client.list_sessions().await {
@@ -1173,11 +1485,17 @@ async fn handle_key(
         }
         KeyCode::Char('j') | KeyCode::Down => {
             app.tree.move_cursor(1);
-            update_selection(app, client, term_tx, stream_handle);
+            {
+            let side = app.target_side();
+            update_selection(app, client, side);
+        }
         }
         KeyCode::Char('k') | KeyCode::Up => {
             app.tree.move_cursor(-1);
-            update_selection(app, client, term_tx, stream_handle);
+            {
+            let side = app.target_side();
+            update_selection(app, client, side);
+        }
         }
         KeyCode::Char('h') | KeyCode::Left => app.tree.collapse(),
         KeyCode::Char('l') | KeyCode::Right => app.tree.expand(),
@@ -1187,9 +1505,12 @@ async fn handle_key(
             // On a group row, expand/collapse (current behavior preserved
             // by update_selection which is a no-op on group rows).
             let on_leaf = matches!(app.tree.current_row(), Some(Row::Leaf { .. }));
-            update_selection(app, client, term_tx, stream_handle);
+            {
+            let side = app.target_side();
+            update_selection(app, client, side);
+        }
             if on_leaf && app.selected.is_some() {
-                app.focus = Focus::Term;
+                app.set_focus(Focus::Term);
             }
         }
 
@@ -1235,7 +1556,11 @@ async fn handle_key(
                 app.status_msg = Some("no session selected".into());
             }
         }
-        KeyCode::Char('D') => {
+        KeyCode::Char('D') | KeyCode::Char('x') => {
+            // `x` is the more discoverable delete shortcut — vim/fzf-style
+            // and unshifted so the user doesn't have to learn that capital
+            // letters mean lifecycle actions. Shift-D stays bound for
+            // muscle memory; both route to the same confirmation prompt.
             if let Some(s) = app.selected_session() {
                 app.overlay = Overlay::Confirm(PendingAction::Delete {
                     id: s.id,
@@ -1255,8 +1580,6 @@ async fn handle_new_session_key(
     app: &mut App,
     key: KeyEvent,
     client: &Client,
-    term_tx: &mpsc::UnboundedSender<TerminalMsg>,
-    stream_handle: &mut Option<JoinHandle<()>>,
 ) {
     let Overlay::NewSession(mut form) = std::mem::replace(&mut app.overlay, Overlay::None) else {
         return;
@@ -1304,7 +1627,9 @@ async fn handle_new_session_key(
 
         // Enter while on the workdir field opens the dir picker
         // (mirrors clicking the picker's chevron in the web UI).
-        // Enter on a toggle flips it. Enter elsewhere submits.
+        // Enter on up-after still flips it. Enter on YOLO submits —
+        // YOLO is the last field, so the natural next move is to spawn,
+        // not to keep toggling. Use Space if you need to flip YOLO.
         KeyCode::Enter if matches!(form.field, NewSessionField::Workdir) => {
             let seed = if form.workdir.trim().is_empty() {
                 None
@@ -1316,9 +1641,6 @@ async fn handle_new_session_key(
         }
         KeyCode::Enter if matches!(form.field, NewSessionField::UpAfter) => {
             form.up_after = !form.up_after;
-        }
-        KeyCode::Enter if matches!(form.field, NewSessionField::Yolo) => {
-            form.yolo = !form.yolo;
         }
 
         KeyCode::Backspace => {
@@ -1374,7 +1696,10 @@ async fn handle_new_session_key(
                     if let Ok(fresh) = client.list_sessions().await {
                         app.refresh_sessions(fresh);
                         app.tree.select_session(id);
-                        update_selection(app, client, term_tx, stream_handle);
+                        {
+            let side = app.target_side();
+            update_selection(app, client, side);
+        }
                     }
                     return;
                 }
@@ -1522,9 +1847,7 @@ async fn handle_palette_key(
     app: &mut App,
     key: KeyEvent,
     client: &Client,
-    term_tx: &mpsc::UnboundedSender<TerminalMsg>,
     lg_tx: &mpsc::UnboundedSender<PtyMsg>,
-    stream_handle: &mut Option<JoinHandle<()>>,
 ) {
     match key.code {
         KeyCode::Esc => app.overlay = Overlay::None,
@@ -1546,7 +1869,7 @@ async fn handle_palette_key(
             let chosen = filtered.get(app.palette.cursor).cloned().cloned();
             app.overlay = Overlay::None;
             if let Some(action) = chosen {
-                run_palette_action(app, action.kind, client, term_tx, lg_tx, stream_handle).await;
+                run_palette_action(app, action.kind, client, lg_tx).await;
             }
         }
         _ => {}
@@ -1557,9 +1880,7 @@ async fn run_palette_action(
     app: &mut App,
     kind: ActionKind,
     client: &Client,
-    term_tx: &mpsc::UnboundedSender<TerminalMsg>,
     lg_tx: &mpsc::UnboundedSender<PtyMsg>,
-    stream_handle: &mut Option<JoinHandle<()>>,
 ) {
     match kind {
         ActionKind::Quit => app.should_quit = true,
@@ -1573,7 +1894,7 @@ async fn run_palette_action(
             }
         }
         ActionKind::SpawnTerminal => {
-            spawn_plain_terminal(app, client, term_tx, stream_handle).await;
+            spawn_plain_terminal(app, client).await;
         }
         ActionKind::FocusTree => app.focus = Focus::Tree,
         ActionKind::FocusTerm => app.focus = Focus::Term,
@@ -1587,40 +1908,57 @@ async fn run_palette_action(
         ActionKind::SelectSession(id) => {
             // Move tree cursor + reopen the stream for this id.
             app.tree.select_session(id);
-            update_selection(app, client, term_tx, stream_handle);
+            {
+            let side = app.target_side();
+            update_selection(app, client, side);
+        }
+        }
+        ActionKind::KillSession(id) => {
+            if let Some(s) = app.sessions.iter().find(|s| s.id == id) {
+                app.overlay = Overlay::Confirm(PendingAction::Kill {
+                    id,
+                    name: s.name.clone(),
+                });
+            }
+        }
+        ActionKind::DeleteSession(id) => {
+            if let Some(s) = app.sessions.iter().find(|s| s.id == id) {
+                app.overlay = Overlay::Confirm(PendingAction::Delete {
+                    id,
+                    name: s.name.clone(),
+                    running: matches!(s.status, Status::Running),
+                });
+            }
         }
     }
 }
 
-fn next_focus(current: Focus, lazygit_open: bool) -> Focus {
-    if lazygit_open {
-        match current {
-            Focus::Tree => Focus::Term,
-            Focus::Term => Focus::Lazygit,
-            Focus::Lazygit => Focus::Tree,
-        }
-    } else {
-        match current {
-            Focus::Tree => Focus::Term,
-            Focus::Term => Focus::Tree,
-            Focus::Lazygit => Focus::Tree,
-        }
+/// Next-panel cycle. Inserts `TermRight` after `Term` when the split is
+/// open (so the natural cycle is Tree → Term → TermRight → [Lazygit] →
+/// Tree). When lazygit is open *and* split is open, both extras sit
+/// between Term and the wrap.
+fn next_focus(current: Focus, lazygit_open: bool, split_open: bool) -> Focus {
+    match (current, split_open, lazygit_open) {
+        (Focus::Tree, _, _) => Focus::Term,
+        (Focus::Term, true, _) => Focus::TermRight,
+        (Focus::Term, false, true) => Focus::Lazygit,
+        (Focus::Term, false, false) => Focus::Tree,
+        (Focus::TermRight, _, true) => Focus::Lazygit,
+        (Focus::TermRight, _, false) => Focus::Tree,
+        (Focus::Lazygit, _, _) => Focus::Tree,
     }
 }
 
-fn prev_focus(current: Focus, lazygit_open: bool) -> Focus {
-    if lazygit_open {
-        match current {
-            Focus::Tree => Focus::Lazygit,
-            Focus::Lazygit => Focus::Term,
-            Focus::Term => Focus::Tree,
-        }
-    } else {
-        match current {
-            Focus::Tree => Focus::Term,
-            Focus::Term => Focus::Tree,
-            Focus::Lazygit => Focus::Tree,
-        }
+/// Previous-panel cycle. Mirrors `next_focus` reversed.
+fn prev_focus(current: Focus, lazygit_open: bool, split_open: bool) -> Focus {
+    match (current, split_open, lazygit_open) {
+        (Focus::Tree, _, true) => Focus::Lazygit,
+        (Focus::Tree, true, false) => Focus::TermRight,
+        (Focus::Tree, false, false) => Focus::Term,
+        (Focus::Lazygit, true, _) => Focus::TermRight,
+        (Focus::Lazygit, false, _) => Focus::Term,
+        (Focus::TermRight, _, _) => Focus::Term,
+        (Focus::Term, _, _) => Focus::Tree,
     }
 }
 
@@ -1632,10 +1970,19 @@ fn prev_focus(current: Focus, lazygit_open: bool) -> Focus {
 async fn toggle_lazygit(app: &mut App, lg_tx: &mpsc::UnboundedSender<PtyMsg>) {
     if app.lazygit.is_some() {
         app.lazygit = None;
+        app.lazygit_cwd = None;
         if app.focus == Focus::Lazygit {
             app.focus = Focus::Tree;
         }
         app.status_msg = Some("closed lazygit".into());
+        return;
+    }
+    // Mutually exclusive with the terminal split — three columns of
+    // tree + left + right + lazygit gets unreadable on anything narrower
+    // than ~160 cols. Symmetrical with Ctrl-\\ refusing while lazygit is
+    // open.
+    if app.split_open() {
+        app.status_msg = Some("close the split (Ctrl-W) before opening lazygit".into());
         return;
     }
 
@@ -1668,6 +2015,7 @@ async fn toggle_lazygit(app: &mut App, lg_tx: &mpsc::UnboundedSender<PtyMsg>) {
     match LocalPty::spawn(LAZYGIT.binary, &args, &cwd, 24, 80, lg_tx.clone()) {
         Ok(pty) => {
             app.lazygit = Some(pty);
+            app.lazygit_cwd = Some(cwd.clone());
             app.focus = Focus::Lazygit;
             app.status_msg = Some(if fell_back {
                 format!(
@@ -1680,6 +2028,58 @@ async fn toggle_lazygit(app: &mut App, lg_tx: &mpsc::UnboundedSender<PtyMsg>) {
         }
         Err(e) => {
             app.status_msg = Some(format!("lazygit spawn failed: {e}"));
+            app.error_count += 1;
+        }
+    }
+}
+
+/// Respawn the lazygit side pane in the active session's workdir
+/// when the user switches to a different project. Without this, the
+/// pane stays pinned to whatever directory it was first opened in
+/// and silently drifts out of sync with the highlighted agent.
+///
+/// No-op when lazygit isn't open, when no session is selected, when
+/// the selection's workdir isn't a local directory (typical for
+/// remote daemons — keep the existing pane rather than collapsing it
+/// into the local cwd), or when the workdir is the same one we
+/// already spawned in (lateral switch between agents in the same
+/// repo, no need to thrash).
+fn refresh_lazygit_for_selection(app: &mut App) {
+    if app.lazygit.is_none() {
+        return;
+    }
+    let Some(lg_tx) = app.lg_tx.clone() else {
+        return;
+    };
+    let Some(sess) = app.selected_session() else {
+        return;
+    };
+    let new_cwd = PathBuf::from(&sess.workdir);
+    if !new_cwd.is_dir() {
+        return;
+    }
+    if app.lazygit_cwd.as_ref() == Some(&new_cwd) {
+        return;
+    }
+
+    // Drop the old child first so its `Drop` kills it before we open
+    // the new master. Holding two PTY pairs simultaneously isn't
+    // strictly wrong, but the doomed one keeps draining its read
+    // thread into a sink we're about to replace.
+    app.lazygit = None;
+    let args = extensions::resolve_args(&LAZYGIT, &new_cwd);
+    match LocalPty::spawn(LAZYGIT.binary, &args, &new_cwd, 24, 80, lg_tx) {
+        Ok(pty) => {
+            app.lazygit = Some(pty);
+            app.lazygit_cwd = Some(new_cwd.clone());
+            app.status_msg = Some(format!("lazygit @ {}", new_cwd.display()));
+        }
+        Err(e) => {
+            app.lazygit_cwd = None;
+            if app.focus == Focus::Lazygit {
+                app.focus = Focus::Tree;
+            }
+            app.status_msg = Some(format!("lazygit respawn failed: {e}"));
             app.error_count += 1;
         }
     }
@@ -1749,41 +2149,163 @@ fn key_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn update_selection(
+/// Drive the tree-filter prompt while `app.filter_input_active`. Chars /
+/// backspace mutate the live filter (each edit re-clamps the cursor to a
+/// still-visible row); Enter commits and exits input mode (the filter
+/// remains active so subsequent j/k navigate the filtered view); Esc
+/// clears the filter and exits input mode in one shot.
+///
+/// After every edit we run `update_selection` so the right-hand terminal
+/// pane keeps tracking the highlighted session — typing into the filter
+/// feels like a live drill-down, not a deferred commit.
+fn handle_filter_input_key(
     app: &mut App,
+    key: &KeyEvent,
     client: &Client,
-    term_tx: &mpsc::UnboundedSender<TerminalMsg>,
-    stream_handle: &mut Option<JoinHandle<()>>,
 ) {
-    let new_id = app.tree.current_session(&app.sessions);
-    if new_id == app.selected {
-        return;
+    let mut filter = app.tree.filter_str().to_string();
+    let mut changed = false;
+    match key.code {
+        KeyCode::Esc => {
+            app.tree.set_filter("");
+            app.filter_input_active = false;
+            app.status_msg = Some("filter cleared".into());
+            changed = true;
+        }
+        KeyCode::Enter => {
+            app.filter_input_active = false;
+            app.status_msg = Some(if filter.is_empty() {
+                "filter cleared".into()
+            } else {
+                format!("filter: /{filter}")
+            });
+        }
+        KeyCode::Backspace => {
+            if filter.pop().is_some() {
+                app.tree.set_filter(&filter);
+                app.status_msg = Some(format!("/ {filter}"));
+                changed = true;
+            }
+        }
+        KeyCode::Char(c)
+            if !key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            filter.push(c);
+            app.tree.set_filter(&filter);
+            app.status_msg = Some(format!("/ {filter}"));
+            changed = true;
+        }
+        _ => {}
     }
-    if let Some(handle) = stream_handle.take() {
-        handle.abort();
-    }
-    // Remember where we were before re-pointing — Ctrl-Tab reads this
-    // to flip back. Skip storing None so flip-back doesn't degrade after
-    // a session is deleted.
-    if let Some(prev) = app.selected {
-        app.prev_selected = Some(prev);
-    }
-    app.term_in = None;
-    app.selected = new_id;
-    app.term.reset();
-    if let Some(id) = new_id {
-        let (key_tx, key_rx) = mpsc::unbounded_channel::<TermOut>();
-        *stream_handle = Some(client.open_terminal_stream(id, term_tx.clone(), key_rx));
-        app.term_in = Some(key_tx);
-        // Force a resize push on the next tick — the new stream has no
-        // memory of the previous pane size.
-        app.term_size = (0, 0);
+    // Drill into the now-highlighted session so the right pane previews
+    // matches as the user types.
+    if changed {
+        {
+            let side = app.target_side();
+            update_selection(app, client, side);
+        }
     }
 }
 
-fn handle_terminal_msg(app: &mut App, msg: TerminalMsg) {
+/// Drive the focused (or specified) terminal slot to whatever the tree
+/// cursor is pointing at — abort the previous stream, reset the parser,
+/// open a new one. `side` decides which slot to retarget; the unselected
+/// slot is left alone. Stream handle and term-tx live on `App` now, so
+/// this needs no extra channel parameters.
+fn update_selection(app: &mut App, client: &Client, side: Side) {
+    let new_id = app.tree.current_session(&app.sessions);
+    let current = match side {
+        Side::Left => app.selected,
+        Side::Right => app.split_right.as_ref().and_then(|s| s.selected),
+    };
+    if new_id == current {
+        return;
+    }
+    // Abort the prior stream task (if any) for this side.
+    let handle_slot = match side {
+        Side::Left => &mut app.stream_handle_left,
+        Side::Right => &mut app.stream_handle_right,
+    };
+    if let Some(handle) = handle_slot.take() {
+        handle.abort();
+    }
+    // Remember where we were on the LEFT side before re-pointing it —
+    // Ctrl-Tab reads `prev_selected` to flip back. Right-side history
+    // isn't tracked yet (one per side would double the state for a
+    // marginal feature; revisit if Ctrl-Tab on the right side becomes
+    // a thing).
+    if side == Side::Left && let Some(prev) = app.selected {
+        app.prev_selected = Some(prev);
+    }
+    // Reset parser + selection + input channel for the chosen side.
+    match side {
+        Side::Left => {
+            app.term_in = None;
+            app.selected = new_id;
+            app.term.reset();
+            app.term_size = (0, 0);
+        }
+        Side::Right => {
+            if let Some(slot) = app.split_right.as_mut() {
+                slot.term_in = None;
+                slot.selected = new_id;
+                slot.term.reset();
+                slot.term_size = (0, 0);
+            }
+        }
+    }
+    // Open the new stream and stash the handle on App. Pick the right
+    // outbound bytes channel for the side so the streams are isolated:
+    // bytes from the right session feed the right slot's parser, never
+    // the left's.
+    if let Some(id) = new_id {
+        let term_tx = match side {
+            Side::Left => app.term_tx_left.clone(),
+            Side::Right => app.term_tx_right.clone(),
+        };
+        let Some(term_tx) = term_tx else {
+            // Channels weren't wired before run_loop set them — should
+            // not happen in practice, but bail safely.
+            app.status_msg = Some("internal: term channel not initialised".into());
+            return;
+        };
+        let (key_tx, key_rx) = mpsc::unbounded_channel::<TermOut>();
+        let handle = client.open_terminal_stream(id, term_tx, key_rx);
+        match side {
+            Side::Left => {
+                app.stream_handle_left = Some(handle);
+                app.term_in = Some(key_tx);
+            }
+            Side::Right => {
+                app.stream_handle_right = Some(handle);
+                if let Some(slot) = app.split_right.as_mut() {
+                    slot.term_in = Some(key_tx);
+                }
+            }
+        }
+    }
+    // Keep the lazygit side pane in lock-step with whichever side
+    // owns the "primary" selection. Right-side splits are deliberately
+    // skipped — they're an opt-in side-by-side view, and
+    // `lazygit_cwd` only tracks one repo. If a user wants lazygit on
+    // the right pane's workdir, focusing it as the left pane (close
+    // split with Ctrl-W) does the right thing.
+    if side == Side::Left {
+        refresh_lazygit_for_selection(app);
+    }
+}
+
+fn handle_terminal_msg(app: &mut App, msg: TerminalMsg, side: Side) {
     match msg {
-        TerminalMsg::Bytes(b) => app.term.feed(&b),
+        TerminalMsg::Bytes(b) => match side {
+            Side::Left => app.term.feed(&b),
+            Side::Right => {
+                if let Some(slot) = app.split_right.as_mut() {
+                    slot.term.feed(&b);
+                }
+            }
+        },
         TerminalMsg::Error(s) => {
             // Server-sent text frames are diagnostic — typically
             // `[input dropped: tmux exited with status 1 (stderr: …)]`
@@ -1795,7 +2317,10 @@ fn handle_terminal_msg(app: &mut App, msg: TerminalMsg) {
             app.error_count += 1;
         }
         TerminalMsg::Closed => {
-            app.status_msg = Some("terminal stream closed".into());
+            app.status_msg = Some(match side {
+                Side::Left => "terminal stream closed".into(),
+                Side::Right => "right-pane stream closed".into(),
+            });
         }
     }
 }
@@ -1882,8 +2407,6 @@ fn push_notification(app: &mut App, text: String) {
 async fn spawn_plain_terminal(
     app: &mut App,
     client: &Client,
-    term_tx: &mpsc::UnboundedSender<TerminalMsg>,
-    stream_handle: &mut Option<JoinHandle<()>>,
 ) {
     let name = format!("shell-{}", Uuid::new_v4().to_string().split('-').next().unwrap_or("0"));
     let workdir = app
@@ -1906,8 +2429,11 @@ async fn spawn_plain_terminal(
             if let Ok(fresh) = client.list_sessions().await {
                 app.refresh_sessions(fresh);
                 app.tree.select_session(id);
-                update_selection(app, client, term_tx, stream_handle);
-                app.focus = Focus::Term;
+                {
+            let side = app.target_side();
+            update_selection(app, client, side);
+        }
+                app.set_focus(Focus::Term);
             }
         }
         Err(e) => {
