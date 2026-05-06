@@ -18,7 +18,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{Instant, interval};
 use uuid::Uuid;
 
-use super::api::{Client, EventMsg, TerminalMsg};
+use super::api::{Client, EventMsg, TermOut, TerminalMsg};
 use super::extensions::{self, LAZYGIT};
 use super::palette::{ActionKind, Catalog};
 use super::pty::{LocalPty, PtyMsg};
@@ -67,10 +67,19 @@ pub enum Overlay {
 /// dialog. Pressing Tab on the `Tool` field cycles through these.
 pub const TOOL_SUGGESTIONS: &[&str] = &["claude", "codex", "opencode", "aider", "bash"];
 
+/// Tools that accept `--dangerously-skip-permissions`. Mirrors the
+/// `yoloTools` set in `dashboard/src/lib/components/NewSessionDialog.svelte`
+/// so the TUI and web treat the same set of agents as YOLO-capable.
+pub const YOLO_TOOLS: &[&str] = &["claude", "codex", "opencode"];
+
+/// Flag appended when YOLO mode is on and the tool is in `YOLO_TOOLS`.
+pub const YOLO_FLAG: &str = "--dangerously-skip-permissions";
+
 /// Inline new-session form. Mirrors the web `NewSessionDialog` field-for-
 /// field: name, tool (with cycle-suggestions), model, workdir (with a
-/// directory-picker sub-overlay), extra args, and an "up after create"
-/// toggle.
+/// directory-picker sub-overlay), extra args, an "up after create" toggle,
+/// and a YOLO toggle that appends `--dangerously-skip-permissions` for
+/// permission-skipping agents.
 #[derive(Clone, PartialEq, Eq)]
 pub struct NewSessionForm {
     pub field: NewSessionField,
@@ -80,6 +89,7 @@ pub struct NewSessionForm {
     pub workdir: String,
     pub args: String,
     pub up_after: bool,
+    pub yolo: bool,
     pub error: Option<String>,
     pub submitting: bool,
     /// When `Some`, the directory-picker overlay is up. Field state persists
@@ -116,6 +126,7 @@ impl NewSessionForm {
             workdir: default_workdir,
             args: String::new(),
             up_after: true,
+            yolo: false,
             error: None,
             submitting: false,
             picker: None,
@@ -129,18 +140,20 @@ impl NewSessionForm {
             NewSessionField::Model => NewSessionField::Workdir,
             NewSessionField::Workdir => NewSessionField::Args,
             NewSessionField::Args => NewSessionField::UpAfter,
-            NewSessionField::UpAfter => NewSessionField::Name,
+            NewSessionField::UpAfter => NewSessionField::Yolo,
+            NewSessionField::Yolo => NewSessionField::Name,
         };
     }
 
     pub fn prev_field(&mut self) {
         self.field = match self.field {
-            NewSessionField::Name => NewSessionField::UpAfter,
+            NewSessionField::Name => NewSessionField::Yolo,
             NewSessionField::Tool => NewSessionField::Name,
             NewSessionField::Model => NewSessionField::Tool,
             NewSessionField::Workdir => NewSessionField::Model,
             NewSessionField::Args => NewSessionField::Workdir,
             NewSessionField::UpAfter => NewSessionField::Args,
+            NewSessionField::Yolo => NewSessionField::UpAfter,
         };
     }
 
@@ -151,8 +164,16 @@ impl NewSessionForm {
             NewSessionField::Model => Some(&mut self.model),
             NewSessionField::Workdir => Some(&mut self.workdir),
             NewSessionField::Args => Some(&mut self.args),
-            NewSessionField::UpAfter => None, // toggle, not text
+            NewSessionField::UpAfter | NewSessionField::Yolo => None, // toggles, not text
         }
+    }
+
+    /// True when YOLO mode is enabled and the active tool actually supports
+    /// `--dangerously-skip-permissions`. Bash and aider (and friends) ignore
+    /// the toggle so the flag stays out of their argv.
+    pub fn yolo_active(&self) -> bool {
+        let tool = self.tool.trim();
+        self.yolo && YOLO_TOOLS.iter().any(|t| *t == tool)
     }
 
     /// Cycle the tool field through `TOOL_SUGGESTIONS`. Triggered by
@@ -215,6 +236,7 @@ pub enum NewSessionField {
     Workdir,
     Args,
     UpAfter,
+    Yolo,
 }
 
 /// A destructive session action waiting on user confirmation. Carries the
@@ -305,7 +327,10 @@ pub struct App {
     pub lazygit: Option<LocalPty>,
     /// Outbound key channel for the active terminal stream. `None` while
     /// no session is selected; recreated each time the stream is reopened.
-    pub term_in: Option<mpsc::UnboundedSender<Vec<u8>>>,
+    pub term_in: Option<mpsc::UnboundedSender<TermOut>>,
+    /// Last `(cols, rows)` we told the server about. Tracked here so we
+    /// only push a resize when the value actually changes.
+    pub term_size: (u16, u16),
     pub theme: &'static Theme,
     /// Recent notifications displayed in bottom-left. Pushed on session
     /// events; capped at 3 entries. Each auto-clears after 8s.
@@ -331,6 +356,7 @@ impl App {
             palette: PaletteState::new(),
             lazygit: None,
             term_in: None,
+            term_size: (0, 0),
             theme: theme::load(),
             notifications: Vec::new(),
         }
@@ -565,9 +591,10 @@ pub async fn run_loop(
 
     // Open the terminal stream for the initial selection.
     let mut stream_handle: Option<JoinHandle<()>> = if let Some(id) = app.selected {
-        let (key_tx, key_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (key_tx, key_rx) = mpsc::unbounded_channel::<TermOut>();
         let h = client.open_terminal_stream(id, term_tx.clone(), key_rx);
         app.term_in = Some(key_tx);
+        app.term_size = (0, 0); // force first resize once we know the pane size
         Some(h)
     } else {
         None
@@ -587,6 +614,21 @@ pub async fn run_loop(
         );
         let (term_rows, term_cols) = inner_size(areas.terminal);
         app.term.resize(term_rows, term_cols);
+        // Tell the daemon (and through it tmux) about the new pane size so
+        // the embedded TUI redraws into the right viewport. Without this
+        // tmux clamps to its 80×24 default and you get overlapping text.
+        if (term_cols, term_rows) != app.term_size && term_cols > 0 && term_rows > 0 {
+            if let Some(tx) = app.term_in.as_ref()
+                && tx
+                    .send(TermOut::Resize {
+                        cols: term_cols,
+                        rows: term_rows,
+                    })
+                    .is_ok()
+            {
+                app.term_size = (term_cols, term_rows);
+            }
+        }
         if let Some(lg) = app.lazygit.as_mut() {
             let (rows, cols) = inner_size(areas.lazygit.unwrap_or(areas.terminal));
             lg.resize(rows, cols);
@@ -673,10 +715,13 @@ async fn handle_key(
     lg_tx: &mpsc::UnboundedSender<PtyMsg>,
     stream_handle: &mut Option<JoinHandle<()>>,
 ) {
-    // Ctrl-P / Ctrl-K opens the command palette from anywhere. Highest
-    // priority so it works even with a pane focused.
+    // Ctrl-P / Ctrl-K / Ctrl-Shift-P opens the command palette from
+    // anywhere. Highest priority so it works even with a pane focused.
+    // Ctrl-Shift-P is the canonical VS Code binding; Ctrl-P matches
+    // VS Code's Quick Open and the palette here serves both roles;
+    // Ctrl-K is kept for muscle memory from earlier versions.
     if key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key.code, KeyCode::Char('p') | KeyCode::Char('k'))
+        && matches!(key.code, KeyCode::Char('p') | KeyCode::Char('k') | KeyCode::Char('P'))
     {
         app.overlay = Overlay::Palette;
         app.palette = PaletteState::new();
@@ -745,6 +790,24 @@ async fn handle_key(
         app.focus = prev_focus(app.focus, app.lazygit_open());
         return;
     }
+
+    // Ctrl-E — "release pane focus → tree". Mirrors VS Code's
+    // Ctrl-Shift-E (focus Explorer) but as a single chord so it doesn't
+    // collide with Ctrl-Shift-]/[ panel cycling. The escape hatch for
+    // when you're typing into claude code and want the session list
+    // back. Works from any focus, no Kitty-protocol dependency.
+    // Lowercase `e` is unbound so this is conflict-free.
+    if ctrl && matches!(key.code, KeyCode::Char('e') | KeyCode::Char('E')) {
+        app.focus = Focus::Tree;
+        if app.fullscreen {
+            // Releasing focus while fullscreen would hide the tree we
+            // just jumped to. Drop fullscreen so the sidebar reappears.
+            app.fullscreen = false;
+        }
+        return;
+    }
+
+    // Ctrl-1 … Ctrl-9 — jump straight to the Nth project group in the tree
     // and focus the tree. Doesn't auto-select a session — user navigates
     // with arrows + Enter. Works even with a pane focused.
     if ctrl
@@ -870,15 +933,15 @@ async fn handle_key(
         };
         match app.term_in.as_ref() {
             Some(tx) => {
-                if tx.send(bytes).is_err() {
+                if tx.send(TermOut::Bytes(bytes)).is_err() {
                     app.status_msg =
-                        Some("terminal stream closed — Ctrl-G release · Ctrl-Q quit".into());
+                        Some("terminal stream closed — Ctrl-E release · Ctrl-Q quit".into());
                     app.error_count += 1;
                 }
             }
             None => {
                 app.status_msg = Some(
-                    "no terminal stream (no session selected?) — Ctrl-G release · Ctrl-Q quit"
+                    "no terminal stream (no session selected?) — Ctrl-E release · Ctrl-Q quit"
                         .into(),
                 );
             }
@@ -1049,15 +1112,18 @@ async fn handle_new_session_key(
         KeyCode::Down => form.next_field(),
         KeyCode::Up => form.prev_field(),
 
-        // Toggle field: space flips up_after; on text fields it just types
-        // a literal space.
+        // Toggle field: space flips the focused checkbox; on text fields it
+        // just types a literal space.
         KeyCode::Char(' ') if matches!(form.field, NewSessionField::UpAfter) => {
             form.up_after = !form.up_after;
+        }
+        KeyCode::Char(' ') if matches!(form.field, NewSessionField::Yolo) => {
+            form.yolo = !form.yolo;
         }
 
         // Enter while on the workdir field opens the dir picker
         // (mirrors clicking the picker's chevron in the web UI).
-        // Enter on the up_after toggle flips it. Enter elsewhere submits.
+        // Enter on a toggle flips it. Enter elsewhere submits.
         KeyCode::Enter if matches!(form.field, NewSessionField::Workdir) => {
             let seed = if form.workdir.trim().is_empty() {
                 None
@@ -1069,6 +1135,9 @@ async fn handle_new_session_key(
         }
         KeyCode::Enter if matches!(form.field, NewSessionField::UpAfter) => {
             form.up_after = !form.up_after;
+        }
+        KeyCode::Enter if matches!(form.field, NewSessionField::Yolo) => {
+            form.yolo = !form.yolo;
         }
 
         KeyCode::Backspace => {
@@ -1093,7 +1162,10 @@ async fn handle_new_session_key(
             } else {
                 Some(form.model.trim().to_string())
             };
-            let flags = parse_args_field(&form.args);
+            let mut flags = parse_args_field(&form.args);
+            if form.yolo_active() && !flags.iter().any(|f| f == YOLO_FLAG) {
+                flags.push(YOLO_FLAG.to_string());
+            }
             match client
                 .create_session(
                     form.name.trim(),
@@ -1513,9 +1585,12 @@ fn update_selection(
     app.selected = new_id;
     app.term.reset();
     if let Some(id) = new_id {
-        let (key_tx, key_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (key_tx, key_rx) = mpsc::unbounded_channel::<TermOut>();
         *stream_handle = Some(client.open_terminal_stream(id, term_tx.clone(), key_rx));
         app.term_in = Some(key_tx);
+        // Force a resize push on the next tick — the new stream has no
+        // memory of the previous pane size.
+        app.term_size = (0, 0);
     }
 }
 

@@ -5,6 +5,7 @@
   import { openShortcuts } from '$stores/palette';
   import { sessions, loadSessions } from '$stores/sessions';
   import { openNewSession } from '$stores/newSession';
+  import { api } from '$lib/api';
 
   type Entry = {
     id: string;
@@ -25,6 +26,7 @@
     // Built-in commands
     out.push({ id: 'cmd:shortcuts',             title: 'Show keyboard shortcuts (?)',   badge: 'cmd', action: () => { closePalette(); openShortcuts(); } });
     out.push({ id: 'cmd:new-session',            title: 'New agent…',                    badge: 'cmd', subtitle: 'agentum new', action: () => { closePalette(); openNewSession(); } });
+    out.push({ id: 'cmd:spawn-shell',            title: 'Spawn plain shell (bash)',      badge: 'cmd', subtitle: 'TUI parity: t', action: () => { closePalette(); spawnShellFromPalette(); } });
     out.push({ id: 'cmd:settings',               title: 'Open settings',                 badge: 'cmd', action: () => goto('/settings') });
 
     // Pages
@@ -74,6 +76,33 @@
       if (i >= ql.length) return 10;
     }
     return 0;
+  }
+
+  // Mirrors the `t` shortcut in the TUI: create a `bash` session in the
+  // user's home, start it, and navigate to its detail page. Errors fall
+  // through to the console — the dashboard's main page has its own banner;
+  // here we keep the palette interaction silent on success.
+  async function spawnShellFromPalette() {
+    try {
+      let workdir = '.';
+      try {
+        const home = await api.listDir();
+        if (home?.path) workdir = home.path;
+      } catch { /* best-effort */ }
+      const suffix = Math.random().toString(16).slice(2, 8);
+      const created = await api.createSession({
+        name: `shell-${suffix}`,
+        workdir,
+        tool: 'bash',
+        model: null,
+        flags: []
+      });
+      try { await api.startSession(created.id); } catch { /* surfaced on detail page */ }
+      await loadSessions();
+      await goto(`/sessions/${created.id}`);
+    } catch (err) {
+      console.error('spawn-shell failed', err);
+    }
   }
 
   function refilter() {

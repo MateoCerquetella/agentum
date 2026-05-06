@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import { sessions, loadSessions } from '$stores/sessions';
   import { openNewSession } from '$stores/newSession';
   import SessionCard from '$components/SessionCard.svelte';
@@ -9,6 +10,8 @@
 
   let runningOnly = $state(false);
   let health = $state<Health | null>(null);
+  let spawningShell = $state(false);
+  let spawnError = $state<string | null>(null);
 
   function refresh() {
     loadSessions(runningOnly ? 'running' : undefined);
@@ -64,6 +67,46 @@
     if (s < 86400) return `${Math.floor(s / 3600)}h`;
     return `${Math.floor(s / 86400)}d`;
   }
+
+  // One-click "spawn plain terminal" — mirrors the TUI's `t` shortcut.
+  // Generates a `shell-XXXX` name, asks the server for a default workdir
+  // (the user's home), creates a `bash` session, starts it, and navigates
+  // to the detail page so the user lands on the live pane.
+  async function spawnShell() {
+    if (spawningShell) return;
+    spawningShell = true;
+    spawnError = null;
+    try {
+      let workdir = '.';
+      try {
+        const home = await api.listDir();
+        if (home?.path) workdir = home.path;
+      } catch {
+        // Fall through to "."; the backend will reject if it's invalid.
+      }
+      const suffix = Math.random().toString(16).slice(2, 8);
+      const created = await api.createSession({
+        name: `shell-${suffix}`,
+        workdir,
+        tool: 'bash',
+        model: null,
+        flags: []
+      });
+      try {
+        await api.startSession(created.id);
+      } catch (e) {
+        spawnError = e instanceof Error ? e.message : String(e);
+        await loadSessions();
+        return;
+      }
+      await loadSessions();
+      await goto(`/sessions/${created.id}`);
+    } catch (e) {
+      spawnError = e instanceof Error ? e.message : String(e);
+    } finally {
+      spawningShell = false;
+    }
+  }
 </script>
 
 <section class="head">
@@ -83,11 +126,28 @@
       <span class="status-dot" data-status={runningOnly ? 'running' : 'idle'} aria-hidden="true"></span>
       {runningOnly ? 'running only' : 'all sessions'}
     </button>
+    <button
+      type="button"
+      class="btn btn-shell"
+      onclick={spawnShell}
+      disabled={spawningShell}
+      title="Spawn a plain bash shell session (mirrors TUI `t`)"
+    >
+      <span class="shell-glyph" aria-hidden="true">›_</span>
+      {spawningShell ? 'spawning…' : 'Spawn shell'}
+    </button>
     <button class="btn btn-cta" onclick={openNewSession}>
       <span class="plus">+</span> New session
     </button>
   </div>
 </section>
+
+{#if spawnError}
+  <div class="banner mono" role="alert">
+    <span class="banner-tag">SHELL</span>
+    <span>Failed to spawn shell: <code>{spawnError}</code></span>
+  </div>
+{/if}
 
 {#if $sessions.items.length > 0}
   <div class="stats">
@@ -218,6 +278,35 @@
     display: inline-block;
     font-weight: 500;
     margin-right: 2px;
+  }
+
+  /* Plain-shell quick-spawn button — secondary CTA next to "+ New session". */
+  .btn-shell {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 36px;
+    padding: 0 14px;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border-2);
+    border-radius: 99999px;
+    font-family: var(--font-mono, inherit);
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  }
+  .btn-shell:hover:not(:disabled) {
+    color: var(--text);
+    border-color: var(--accent);
+  }
+  .btn-shell:disabled { opacity: 0.55; cursor: not-allowed; }
+  .shell-glyph {
+    font-family: var(--font-mono, monospace);
+    color: var(--accent);
+    font-weight: 600;
+    letter-spacing: -0.05em;
   }
 
   /* ---------- stat tiles ---------- */

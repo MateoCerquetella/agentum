@@ -241,9 +241,9 @@ fn render_tree_row(
 fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Term;
     let title = if focused {
-        " 2 terminal · Ctrl-] next panel · type freely "
+        " 2 terminal · Ctrl-E release · type freely "
     } else {
-        " 2 terminal · 2 / Ctrl-] focus "
+        " 2 terminal · 2 / Ctrl-Shift-] focus "
     };
     let block = panel_block(title, focused, p);
 
@@ -266,9 +266,9 @@ fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
 fn draw_lazygit(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Lazygit;
     let title = if focused {
-        " 3 lazygit · Ctrl-] next panel · G cheats "
+        " 3 lazygit · Ctrl-E release · G cheats "
     } else {
-        " 3 lazygit · 3 / Ctrl-] focus · g close "
+        " 3 lazygit · 3 / Ctrl-Shift-] focus · g close "
     };
     let block = panel_block(title, focused, p);
     let inner = block.inner(area);
@@ -414,16 +414,13 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         head("agentum terminal — keys", p),
         Line::from(""),
         head("  Universal (work even inside the terminal pane)", p),
-        body("  Ctrl-P / Ctrl-K   command palette", p),
-        body("  Ctrl-] / F5       next panel", p),
-        body("  Ctrl-[ / F6       previous panel", p),
+        body("  Ctrl-P / Ctrl-Shift-P  command palette", p),
+        body("  Ctrl-E            release pane focus → tree", p),
+        body("  Ctrl-Shift-] / F5  next panel", p),
+        body("  Ctrl-Shift-[ / F6  previous panel", p),
         body("  Ctrl-1 … Ctrl-9   jump to Nth project group in the tree", p),
         body("  Ctrl-Q            quit", p),
         body("  Ctrl-C            interrupt focused pane (else quit)", p),
-        body("  Shift-K           kill selected session", p),
-        body("  Shift-D           delete selected session", p),
-        body("  Shift-U           start (up) selected session", p),
-        body("  Shift-S           stop selected session", p),
         Line::from(""),
         head("  Tree", p),
         body("  1 / 2 / 3         focus tree / terminal / lazygit", p),
@@ -727,6 +724,20 @@ fn draw_new_session_overlay(f: &mut Frame<'_>, area: Rect, form: &NewSessionForm
         "Start immediately (--up)",
         form.up_after,
         form.field == NewSessionField::UpAfter,
+        p,
+    );
+    let yolo_supported = form.yolo_active() || form.yolo;
+    let yolo_label = if !yolo_supported && form.yolo {
+        // User toggled it on but the current tool doesn't accept the flag.
+        "YOLO mode (--dangerously-skip-permissions, ignored for this tool)"
+    } else {
+        "YOLO mode (--dangerously-skip-permissions)"
+    };
+    push_toggle_field(
+        &mut lines,
+        yolo_label,
+        form.yolo,
+        form.field == NewSessionField::Yolo,
         p,
     );
 

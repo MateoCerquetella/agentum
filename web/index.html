@@ -220,6 +220,39 @@
   }
   .hero h1 { margin-top: 28px; max-width: 16ch; }
   .hero h1 .accent { color: var(--fg-3); }
+
+  /* ---------- word rotator ---------- */
+  .rotator {
+    display: inline-grid;
+    vertical-align: baseline;
+    color: var(--cta);
+  }
+  .rotator > .rotator-word {
+    grid-area: 1 / 1;
+    opacity: 0;
+    transform: translateY(0.45em);
+    animation: rotator-cycle 12.5s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+    will-change: transform, opacity;
+  }
+  .rotator > .rotator-word:nth-child(1) { animation-delay: 0s; }
+  .rotator > .rotator-word:nth-child(2) { animation-delay: 2.5s; }
+  .rotator > .rotator-word:nth-child(3) { animation-delay: 5s; }
+  .rotator > .rotator-word:nth-child(4) { animation-delay: 7.5s; }
+  .rotator > .rotator-word:nth-child(5) { animation-delay: 10s; }
+
+  @keyframes rotator-cycle {
+    0%   { opacity: 0; transform: translateY(0.45em); }
+    4%   { opacity: 1; transform: translateY(0); }
+    20%  { opacity: 1; transform: translateY(0); }
+    24%  { opacity: 0; transform: translateY(-0.45em); }
+    100% { opacity: 0; transform: translateY(-0.45em); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .rotator > .rotator-word { animation-duration: 0s; transition: none; }
+    .rotator > .rotator-word:nth-child(1) { opacity: 1; transform: none; }
+    .rotator > .rotator-word:not(:nth-child(1)) { opacity: 0; }
+  }
   .hero .lede { margin-top: 28px; max-width: 56ch; }
   .hero .ctas {
     display: flex; flex-wrap: wrap; gap: 12px; margin-top: 36px;
@@ -995,7 +1028,16 @@
     <h1 class="display">
       A control plane<br/>
       for the agents<br/>
-      <span class="accent">running your code.</span>
+      <span class="accent">
+        <span class="rotator" role="text" aria-label="running your code">
+          <span class="rotator-word" aria-hidden="true">running</span>
+          <span class="rotator-word" aria-hidden="true">shipping</span>
+          <span class="rotator-word" aria-hidden="true">writing</span>
+          <span class="rotator-word" aria-hidden="true">debugging</span>
+          <span class="rotator-word" aria-hidden="true">reviewing</span>
+        </span>
+        your code.
+      </span>
     </h1>
 
     <p class="lede">

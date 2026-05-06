@@ -39,6 +39,20 @@
     ws.send(data);
   }
 
+  // Tell the daemon (and through it tmux) about the current pane size so
+  // the embedded TUI redraws into the right viewport. Without this tmux
+  // clamps to its 80×24 default and characters overlap.
+  let lastSentSize = { cols: 0, rows: 0 };
+  function sendResize() {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !term) return;
+    const cols = term.cols;
+    const rows = term.rows;
+    if (cols <= 0 || rows <= 0) return;
+    if (cols === lastSentSize.cols && rows === lastSentSize.rows) return;
+    lastSentSize = { cols, rows };
+    ws.send(JSON.stringify({ resize: { cols, rows } }));
+  }
+
   onMount(() => {
     term = new Terminal({
       fontFamily:
@@ -70,8 +84,17 @@
       });
     }
 
-    resizeObserver = new ResizeObserver(() => fit?.fit());
+    resizeObserver = new ResizeObserver(() => {
+      fit?.fit();
+      // fit triggers term.onResize, but emit explicitly too in case the
+      // observer fires before the WS is open (we'll de-dupe by size).
+      sendResize();
+    });
     resizeObserver.observe(host);
+
+    // xterm's own resize event fires on fit() — pipe it through so the
+    // tmux pane mirrors whatever xterm just laid itself out as.
+    term.onResize(() => sendResize());
 
     ws = new WebSocket(api.streamUrl(sessionId));
     ws.binaryType = 'arraybuffer';
@@ -79,6 +102,9 @@
     ws.onopen = () => {
       connected = true;
       connectionMsg = null;
+      // Reset cache so the first send always fires once we know the size.
+      lastSentSize = { cols: 0, rows: 0 };
+      sendResize();
     };
     ws.onmessage = (ev) => {
       if (typeof ev.data === 'string') {
@@ -113,7 +139,10 @@
   function blur() { focused = false; }
 
   // Public method exposed via export (consumers can call .resize() after layout).
-  export function refit() { fit?.fit(); }
+  export function refit() {
+    fit?.fit();
+    sendResize();
+  }
   export function paste(text: string) {
     if (!ws || readonly) return;
     sendBytes(encoder.encode(text));

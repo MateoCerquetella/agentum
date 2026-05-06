@@ -335,7 +335,7 @@ impl Client {
         &self,
         id: Uuid,
         tx: mpsc::UnboundedSender<TerminalMsg>,
-        mut key_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+        mut key_rx: mpsc::UnboundedReceiver<TermOut>,
     ) -> JoinHandle<()> {
         let base = self.base.clone();
         let token = self.token.clone();
@@ -354,11 +354,18 @@ impl Client {
             };
             let (mut sink, mut src) = stream.split();
 
-            // Pump outbound keystrokes onto the WS until the channel closes.
-            // Detached so a chatty pane never starves keystrokes.
+            // Pump outbound keystrokes / resize messages onto the WS until
+            // the channel closes. Detached so a chatty pane never starves
+            // keystrokes.
             let writer = tokio::spawn(async move {
-                while let Some(bytes) = key_rx.recv().await {
-                    if sink.send(WsMsg::Binary(bytes)).await.is_err() {
+                while let Some(out) = key_rx.recv().await {
+                    let msg = match out {
+                        TermOut::Bytes(b) => WsMsg::Binary(b.into()),
+                        TermOut::Resize { cols, rows } => WsMsg::Text(
+                            format!("{{\"resize\":{{\"cols\":{cols},\"rows\":{rows}}}}}").into(),
+                        ),
+                    };
+                    if sink.send(msg).await.is_err() {
                         break;
                     }
                 }
@@ -449,6 +456,15 @@ pub enum TerminalMsg {
     Bytes(Bytes),
     Error(String),
     Closed,
+}
+
+/// Outbound terminal stream messages: keystrokes (binary frames) and
+/// resize notifications (JSON text frames). Sent from the TUI to the
+/// daemon over the same WebSocket as input.
+#[derive(Debug, Clone)]
+pub enum TermOut {
+    Bytes(Vec<u8>),
+    Resize { cols: u16, rows: u16 },
 }
 
 #[derive(Debug)]

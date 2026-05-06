@@ -4,6 +4,29 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.7] — 2026-05-05
+
+Fixes the embedded-pane rendering corruption (overlapping characters,
+truncated lines) that anyone using `agentum terminal` or the dashboard
+session view would have hit.
+
+### Fixed
+- **PTY size mismatch.** The WebSocket terminal stream forwarded
+  keystrokes but never told tmux the client's pane size, so detached
+  sessions stayed clamped to the 80×24 default while the agentum TUI /
+  dashboard rendered them at the actual pane size. Result: claude code
+  and similar TUIs drew at the wrong width and characters overlapped.
+- **Resize protocol.** Text frames over the WS now carry
+  `{"resize":{"cols":N,"rows":N}}`. The daemon flips the tmux window
+  to manual sizing and calls `resize-window -x N -y N`. Any frame that
+  isn't this envelope still routes to `tmux send-keys -H` for input
+  compatibility.
+- **Both surfaces wired up.**
+  - TUI: tracks the last sent size and pushes a resize on every layout
+    change (including Shift-F fullscreen toggle).
+  - Dashboard: pushes on `WebSocket.onopen`, on every `ResizeObserver`
+    tick, on xterm's own `onResize`, and on `refit()`.
+
 ## [0.6.6] — 2026-05-05
 
 Multi-mode installer + TUI fullscreen toggle.
