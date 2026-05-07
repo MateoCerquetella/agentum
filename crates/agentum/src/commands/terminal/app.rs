@@ -105,6 +105,7 @@ pub enum ConnState {
     #[default]
     Connecting,
     Connected,
+    Reconnecting { attempt: u32, delay_ms: u64 },
     Disconnected,
 }
 
@@ -601,6 +602,8 @@ pub struct App {
     /// at the list length when the user presses `End`.
     pub errors_scroll: usize,
     pub conn: ConnState,
+    pub was_connected: bool,
+    pub tick_count: u64,
     pub status_msg: Option<String>,
     pub should_quit: bool,
     pub overlay: Overlay,
@@ -776,6 +779,8 @@ impl App {
             errors: Vec::new(),
             errors_scroll: 0,
             conn: ConnState::Connecting,
+            was_connected: false,
+            tick_count: 0,
             status_msg: None,
             should_quit: false,
             overlay: Overlay::None,
@@ -1393,6 +1398,7 @@ pub async fn run_loop(
             }
 
             _ = tick.tick() => {
+                app.tick_count = app.tick_count.wrapping_add(1);
                 // Cheap O(MAX_NOTIFS) sweep — drops expired toasts so the
                 // bottom-left stack drains without us having to schedule
                 // a per-toast sleep future.
@@ -1660,26 +1666,32 @@ fn extract_selection_text(app: &App, sel: TermSelection) -> String {
     out
 }
 
-/// Copy text to the host terminal's clipboard via OSC 52. Works over
-/// SSH (the local terminal interprets the escape, never sends our
-/// content over the wire as data) and across kitty / Alacritty /
-/// iTerm / wezterm / Ghostty / xterm without any new dependencies.
-/// Best-effort: failures are silent — if the host disallows OSC 52
-/// the user just won't see anything new in their clipboard, no toast
-/// to spam them with.
-fn write_osc52(text: &str) {
-    use std::io::Write;
-    let encoded = base64_encode(text.as_bytes());
-    // OSC 52 ; c ; <data> ST
-    let seq = format!("\x1b]52;c;{encoded}\x1b\\");
-    let mut out = std::io::stdout().lock();
-    let _ = out.write_all(seq.as_bytes());
-    let _ = out.flush();
-}
+/// Copy text to the host terminal's clipboard via OSC 52.
+///
+/// DISABLED in v0.6.33+ pending a proper deferred-emission rewrite.
+/// The previous implementation wrote the OSC 52 sequence directly to
+/// stdout from within the input handler, *mid-frame*, while ratatui
+/// owned the screen. Two compounding failure modes followed:
+///
+///   1. Inside tmux (TERM=tmux-256color or $TMUX set), OSC 52 must be
+///      wrapped in DCS passthrough (`\x1bPtmux;\x1b…\x1b\\`) or tmux
+///      will swallow / partially echo the sequence as literal text.
+///   2. Even on tmux-free terminals, the raw write bypasses ratatui's
+///      diff renderer — the next `terminal.draw()` call only patches
+///      cells ratatui *thinks* are dirty, so anything the OSC payload
+///      disturbed in the actual terminal stays disturbed.
+///
+/// Net effect: visible text corruption every time a selection drag
+/// ends in a pane. Until we plumb the OSC sequence through a
+/// between-frames flush queue, we just drop it on the floor — the
+/// in-buffer selection highlight still renders correctly, the user
+/// just doesn't get the host-clipboard copy.
+fn write_osc52(_text: &str) {}
 
 /// Tiny self-contained base64 encoder so OSC 52 doesn't drag in a
 /// crate dependency. Standard alphabet, `=` padding — exactly what
 /// every terminal's OSC 52 parser expects.
+#[allow(dead_code)] // re-enabled when write_osc52 comes back
 fn base64_encode(input: &[u8]) -> String {
     const TBL: &[u8; 64] =
         b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -2447,19 +2459,29 @@ async fn handle_key(
         }
         KeyCode::Char('h') | KeyCode::Left => app.tree.collapse(),
         KeyCode::Char('l') | KeyCode::Right => app.tree.expand(),
-        KeyCode::Enter => {
-            // If the cursor is on a session leaf, select it AND jump focus
+        KeyCode::Char(' ') => {
+            // Space: select the session under the cursor AND jump focus
             // into the terminal so the user can start typing immediately.
-            // On a group row, expand/collapse (current behavior preserved
-            // by update_selection which is a no-op on group rows).
+            // On a group row, this is a no-op (update_selection ignores
+            // group rows). Enter is reserved for an upcoming multi-select
+            // mode (see WIP note below).
             let on_leaf = matches!(app.tree.current_row(), Some(Row::Leaf { .. }));
             {
-            let side = app.target_side();
-            update_selection(app, client, side);
-        }
+                let side = app.target_side();
+                update_selection(app, client, side);
+            }
             if on_leaf && app.selected.is_some() {
                 app.set_focus(Focus::Term);
             }
+        }
+        KeyCode::Enter => {
+            // WIP: Enter will toggle multi-select on the cursor row so
+            // bulk actions (stop / archive / delete several sessions at
+            // once) can be issued from the tree. Tracked for follow-up;
+            // surface a status hint for now so the keystroke isn't a
+            // silent no-op while users adjust to Space-to-enter-terminal.
+            app.status_msg =
+                Some("multi-select coming soon — use Space to enter the terminal".into());
         }
 
         // Session lifecycle ------------------------------------------------
@@ -3818,10 +3840,6 @@ fn update_selection(app: &mut App, client: &Client, side: Side) {
 fn handle_terminal_msg(app: &mut App, msg: TerminalMsg, side: Side) {
     match msg {
         TerminalMsg::Bytes(b) => {
-            // Meter every inbound frame regardless of which side it
-            // landed on — the WS pipe is a single tunnel from the
-            // user's perspective even when split panes mux two
-            // session streams over it.
             app.io.record_in(b.len());
             match side {
                 Side::Left => app.term.feed(&b),
@@ -3832,13 +3850,8 @@ fn handle_terminal_msg(app: &mut App, msg: TerminalMsg, side: Side) {
                 }
             }
         }
+        TerminalMsg::Reconnecting { .. } => {}
         TerminalMsg::Error(s) => {
-            // Server-sent text frames are diagnostic — typically
-            // `[input dropped: tmux exited with status 1 (stderr: …)]`
-            // when `tmux send-keys` rejects the target. Route into the
-            // error overlay rather than the status bar so the actual
-            // pane (claude code, etc.) doesn't get garbled mid-render
-            // and the message survives more than a single redraw.
             app.push_error(s.trim().to_string());
         }
         TerminalMsg::Closed => {
@@ -3866,10 +3879,22 @@ fn handle_lazygit_msg(app: &mut App, msg: PtyMsg) {
 
 async fn handle_event_msg(app: &mut App, msg: EventMsg, client: &Client) {
     match msg {
-        EventMsg::Connected => app.conn = ConnState::Connected,
-        EventMsg::Closed => app.conn = ConnState::Disconnected,
+        EventMsg::Connected => {
+            app.conn = ConnState::Connected;
+            app.was_connected = true;
+        }
+        EventMsg::Reconnecting { attempt, delay_ms } => {
+            app.conn = ConnState::Reconnecting { attempt, delay_ms };
+        }
+        EventMsg::Closed => {
+            if app.was_connected {
+                app.conn = ConnState::Disconnected;
+            }
+        }
         EventMsg::Error(s) => {
-            app.conn = ConnState::Disconnected;
+            if app.was_connected {
+                app.conn = ConnState::Disconnected;
+            }
             app.push_error(format!("events: {s}"));
         }
         EventMsg::Raw(kind) => {

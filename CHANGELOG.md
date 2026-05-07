@@ -4,6 +4,40 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.33] — 2026-05-07
+
+### Added
+- **WebSocket auto-reconnect with exponential backoff.** Both the
+  events stream (`/api/events`) and the per-session terminal stream
+  now reconnect automatically when the connection drops, with
+  capped exponential backoff between attempts. New `Reconnecting`
+  variants on `ConnState`, `TerminalMsg`, `EventMsg` carry the
+  attempt count + delay so the status bar can show "reconnecting
+  (try N)" instead of a final-looking "disconnected". The
+  pre-first-connect `Closed` / `Error` no longer flashes
+  Disconnected — gated on `was_connected`.
+
+### Changed
+- **`Space` now selects + focuses the terminal in the tree
+  sidebar; `Enter` is reserved for an upcoming multi-select mode.**
+  Enter currently shows `multi-select coming soon — use Space to
+  enter the terminal` so the keystroke isn't a silent no-op while
+  users adjust. Space is what most file managers / browsers use
+  for "preview / open" — Enter freed up for bulk-action UX.
+
+### Fixed
+- **Mouse-select-to-copy disabled to stop visible text corruption
+  inside tmux.** The v0.6.31 OSC 52 implementation wrote the
+  escape sequence directly to stdout from the input handler,
+  *mid-frame*, while ratatui owned the screen. Inside tmux the
+  sequence wasn't wrapped in DCS passthrough so tmux echoed it as
+  literal text; outside tmux the raw write bypassed ratatui's
+  diff renderer so disturbed cells stayed disturbed across the
+  next draw. Disabled until the OSC 52 emit is reworked into a
+  proper deferred between-frames flush queue. The in-buffer
+  highlight still renders correctly during the drag — only the
+  host-clipboard write is dropped.
+
 ## [0.6.32] — 2026-05-07
 
 ### Fixed

@@ -494,51 +494,67 @@ impl Client {
         let token = self.token.clone();
         let trust = self.trust.clone();
         tokio::spawn(async move {
-            let url = ws_url(&base, "/api/events", &token, &[]);
-            let connector = ws_connector(&url, &trust);
-            let result = connect_async_tls_with_config(url.as_str(), None, false, connector).await;
-            let mut stream = match result {
-                Ok((s, _)) => {
-                    let _ = tx.send(EventMsg::Connected);
-                    s
-                }
-                Err(e) => {
-                    let _ = tx.send(EventMsg::Error(format!("ws connect: {e}")));
-                    let _ = tx.send(EventMsg::Closed);
+            let mut attempt: u32 = 0;
+            loop {
+                if tx.is_closed() {
                     return;
                 }
-            };
-            while let Some(msg) = stream.next().await {
-                match msg {
-                    Ok(WsMsg::Text(t)) => match serde_json::from_str::<Event>(&t) {
-                        Ok(ev) => {
-                            if tx.send(EventMsg::Event(ev)).is_err() {
-                                break;
-                            }
-                        }
-                        Err(_) => {
-                            // bus.lagged uses a slim shape (no `ts`); pass kind through.
-                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
-                                let kind = v
-                                    .get("kind")
-                                    .and_then(|k| k.as_str())
-                                    .unwrap_or("unknown")
-                                    .to_string();
-                                if tx.send(EventMsg::Raw(kind)).is_err() {
-                                    break;
+                let url = ws_url(&base, "/api/events", &token, &[]);
+                let connector = ws_connector(&url, &trust);
+                let result =
+                    connect_async_tls_with_config(url.as_str(), None, false, connector).await;
+                let mut stream = match result {
+                    Ok((s, _)) => {
+                        attempt = 0;
+                        let _ = tx.send(EventMsg::Connected);
+                        s
+                    }
+                    Err(_) => {
+                        attempt = attempt.saturating_add(1);
+                        let delay = backoff_delay(attempt);
+                        let _ = tx.send(EventMsg::Reconnecting {
+                            attempt,
+                            delay_ms: delay.as_millis() as u64,
+                        });
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                };
+                while let Some(msg) = stream.next().await {
+                    if tx.is_closed() {
+                        return;
+                    }
+                    match msg {
+                        Ok(WsMsg::Text(t)) => match serde_json::from_str::<Event>(&t) {
+                            Ok(ev) => {
+                                if tx.send(EventMsg::Event(ev)).is_err() {
+                                    return;
                                 }
                             }
-                        }
-                    },
-                    Ok(WsMsg::Close(_)) => break,
-                    Ok(_) => {}
-                    Err(e) => {
-                        let _ = tx.send(EventMsg::Error(format!("ws: {e}")));
+                            Err(_) => {
+                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
+                                    let kind = v
+                                        .get("kind")
+                                        .and_then(|k| k.as_str())
+                                        .unwrap_or("unknown")
+                                        .to_string();
+                                    if tx.send(EventMsg::Raw(kind)).is_err() {
+                                        return;
+                                    }
+                                }
+                            }
+                        },
+                        Ok(WsMsg::Close(_)) => break,
+                        Ok(_) => {}
+                    Err(err) => {
+                        let _ = tx.send(EventMsg::Error(format!("ws: {err}")));
                         break;
+                        }
                     }
                 }
+                let _ = tx.send(EventMsg::Closed);
+                attempt = attempt.saturating_add(1);
             }
-            let _ = tx.send(EventMsg::Closed);
         })
     }
 }
@@ -546,6 +562,7 @@ impl Client {
 #[derive(Debug)]
 pub enum TerminalMsg {
     Bytes(Bytes),
+    Reconnecting { attempt: u32, delay_ms: u64 },
     Error(String),
     Closed,
 }
@@ -562,6 +579,7 @@ pub enum TermOut {
 #[derive(Debug)]
 pub enum EventMsg {
     Connected,
+    Reconnecting { attempt: u32, delay_ms: u64 },
     Event(Event),
     Raw(String),
     Error(String),
@@ -618,6 +636,14 @@ fn ws_connector(url: &Url, trust: &TlsTrust) -> Option<Connector> {
         return None;
     }
     trust.rustls_config().map(Connector::Rustls)
+}
+
+fn backoff_delay(attempt: u32) -> Duration {
+    let base = Duration::from_secs(1);
+    let cap = Duration::from_secs(30);
+    let shift = attempt.saturating_sub(1).min(5);
+    let ms = base.as_millis() as u64 * (1u64 << shift);
+    Duration::from_millis(ms.min(cap.as_millis() as u64))
 }
 
 #[cfg(test)]

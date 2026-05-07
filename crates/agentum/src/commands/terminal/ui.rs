@@ -308,6 +308,11 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         draw_notifications(f, f.area(), app, p);
     }
 
+    let show_reconnect = app.was_connected && app.conn != ConnState::Connected;
+    if show_reconnect {
+        draw_reconnect_overlay(f, f.area(), app, p);
+    }
+
     match &app.overlay {
         Overlay::None => {}
         Overlay::Help => draw_help_overlay(f, f.area(), app.lazygit_open(), p),
@@ -546,7 +551,7 @@ fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     f.render_widget(block, area);
 
     if app.selected.is_none() {
-        let hint = Paragraph::new("Select a session on the left and press Enter.")
+        let hint = Paragraph::new("Select a session on the left and press Space.")
             .style(Style::default().fg(p.muted).bg(p.panel_bg))
             .wrap(Wrap { trim: true });
         f.render_widget(hint, inner);
@@ -731,6 +736,7 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         let (conn_label, conn_color) = match app.conn {
             ConnState::Connected => ("● connected", p.success),
             ConnState::Connecting => ("◌ connecting", p.warning),
+            ConnState::Reconnecting { .. } => ("⟳ reconnecting", p.warning),
             ConnState::Disconnected => ("✗ disconnected", p.error),
         };
         left.push(Span::styled(
@@ -949,9 +955,10 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         body("  j / k / ↑ / ↓     move selection", p),
         body("  h / l / ← / →     collapse / expand group", p),
         body(
-            "  Enter             select session and focus the terminal",
+            "  Space             select session and focus the terminal",
             p,
         ),
+        body("  Enter             multi-select (WIP — coming soon)", p),
         body("  r                 refresh sessions", p),
         body("  t                 spawn plain bash terminal", p),
         body("  !                 view recent error log", p),
@@ -1780,6 +1787,50 @@ fn overlay_box(
         .style(Style::default().bg(p.surface_bg).fg(p.fg));
     f.render_widget(Clear, r);
     f.render_widget(para, r);
+}
+
+fn draw_reconnect_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
+    let (title, body_line) = match app.conn {
+        ConnState::Reconnecting { attempt, delay_ms } => {
+            let secs = delay_ms as f64 / 1000.0;
+            (
+                " reconnecting ",
+                format!("  attempt {attempt} · retrying in {secs:.1}s  "),
+            )
+        }
+        ConnState::Disconnected => (
+            " disconnected ",
+            "  connection lost — reconnecting...  ".to_string(),
+        ),
+        _ => return,
+    };
+    let dots = match app.tick_count % 4 {
+        0 => "",
+        1 => ".",
+        2 => "..",
+        _ => "...",
+    };
+    let lines = vec![
+        Line::from(Span::styled(
+            format!("  reconnecting{dots}"),
+            Style::default()
+                .fg(p.accent)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  connection to the agentum daemon was lost",
+            Style::default().fg(p.fg),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(body_line, Style::default().fg(p.warning))),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Ctrl-Q to quit",
+            Style::default().fg(p.muted),
+        )),
+    ];
+    overlay_box(f, area, title, lines, 54, p);
 }
 
 fn head(text: &str, p: &Palette) -> Line<'static> {
