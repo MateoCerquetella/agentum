@@ -13,8 +13,8 @@ use agentum_core::transcript::{AgentTaskState, TaskStatus, TodoStatus};
 
 use super::app::{
     App, ConnState, DirPickerState, ErrorEntry, Focus, NewSessionField, NewSessionForm, NotifKind,
-    Notification, Overlay, PendingAction, Row, SettingsRow, SettingsState, palette_catalog,
-    status_dot,
+    Notification, Overlay, PendingAction, RenameState, Row, SettingsRow, SettingsState,
+    palette_catalog, status_dot,
 };
 use super::extensions::{self, Extension, LAZYGIT};
 use super::iometer::{fmt_bytes, fmt_rate};
@@ -318,6 +318,7 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         Overlay::NewSession(form) => draw_new_session_overlay(f, f.area(), form, p),
         Overlay::Confirm(action) => draw_confirm_overlay(f, f.area(), action, p),
         Overlay::Settings(state) => draw_settings_overlay(f, f.area(), state, &app.prefs, p),
+        Overlay::Rename(state) => draw_rename_overlay(f, f.area(), state, p),
     }
 }
 
@@ -883,6 +884,7 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         body("  Ctrl-W            close the split", p),
         body("  Ctrl-Shift-←/→    resize the split divider (when split is open)", p),
         body("  Ctrl-,            settings (notifications · layout · status bar)", p),
+        body("  Ctrl-R            rename the highlighted session (tree only)", p),
         body("  Mouse wheel       scroll the pane under the cursor", p),
         body("  Shift-PgUp/PgDn   scroll the focused pane (no mouse needed)", p),
         body("  F5                next panel", p),
@@ -1264,6 +1266,43 @@ fn draw_settings_overlay(
     )));
 
     overlay_box(f, area, " settings ", lines, (label_w as u16) + 8, p);
+}
+
+/// Inline rename prompt. Compact: just the buffer (with a fake cursor
+/// block) and an optional inline error. Modeled on the existing
+/// confirm overlay's footprint so it doesn't dominate the screen.
+fn draw_rename_overlay(f: &mut Frame<'_>, area: Rect, state: &RenameState, p: &Palette) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(head("Rename session", p));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("  current: {}", state.original),
+        Style::default().fg(p.muted),
+    )));
+    let buffer = if state.buffer.is_empty() {
+        "  ▎".to_string()
+    } else {
+        format!("  {}▎", state.buffer)
+    };
+    lines.push(Line::from(Span::styled(
+        buffer,
+        Style::default()
+            .fg(p.fg_strong)
+            .add_modifier(Modifier::BOLD),
+    )));
+    if let Some(err) = state.error.as_ref() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  ⚠ {err}"),
+            Style::default().fg(p.error),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Enter save · Esc cancel".to_string(),
+        Style::default().fg(p.muted),
+    )));
+    overlay_box(f, area, " rename ", lines, 60, p);
 }
 
 fn draw_errors_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {

@@ -131,6 +131,11 @@ pub enum Overlay {
     /// counter that previously was the only place the user could tell
     /// errors had happened.
     Errors,
+    /// Inline rename prompt for the highlighted session. Opened with
+    /// `Ctrl-R` from tree focus or via the palette. Enter submits via
+    /// PATCH; Esc cancels. Pre-filled with the current name so the user
+    /// can edit rather than retype from scratch.
+    Rename(RenameState),
     /// New-session form (n key on the tree).
     NewSession(Box<NewSessionForm>),
     /// Generic confirmation prompt for destructive session actions.
@@ -482,6 +487,30 @@ impl SettingsState {
     }
 }
 
+/// Buffer state for the inline rename prompt. Holds the session being
+/// renamed plus the editable buffer (pre-filled with the current name).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RenameState {
+    pub id: Uuid,
+    pub original: String,
+    pub buffer: String,
+    /// Optional inline error to render under the input — populated on a
+    /// failed PATCH (duplicate name, server validation rejected) so the
+    /// user sees what's wrong without losing their typed text.
+    pub error: Option<String>,
+}
+
+impl RenameState {
+    pub fn new(id: Uuid, current_name: &str) -> Self {
+        Self {
+            id,
+            original: current_name.to_string(),
+            buffer: current_name.to_string(),
+            error: None,
+        }
+    }
+}
+
 pub struct App {
     pub sessions: Vec<Session>,
     pub tree: Tree,
@@ -614,6 +643,31 @@ pub struct App {
     /// ids. Populated from `GET /api/sessions/{id}/agent-tasks` and
     /// refreshed when an `agent_tasks.updated` event lands on the bus.
     pub agent_tasks: HashMap<Uuid, AgentTaskState>,
+    /// Sender for spawn-detached agent-tasks fetches. Background tasks
+    /// post `(session_id, Some(state))` on success or
+    /// `(session_id, None)` on transport error; the run-loop drains
+    /// the receiver, clears the in-flight marker either way, and
+    /// writes into `agent_tasks` on success. Letting fetches run off
+    /// the keystroke path keeps j/k navigation snappy even when the
+    /// daemon is remote.
+    pub agent_tasks_tx: Option<mpsc::UnboundedSender<(Uuid, Option<AgentTaskState>)>>,
+    /// Session ids with an in-flight `spawn_agent_tasks_fetch`. Used
+    /// to coalesce duplicate fetches when navigation, events, and the
+    /// 5-second slow-path all want to refresh the same id within a
+    /// few hundred ms. Cleared by the `agent_tasks_rx` arm regardless
+    /// of success or failure.
+    pub agent_tasks_inflight: HashSet<Uuid>,
+    /// Cwd we want lazygit to be in next. Set on every navigation and
+    /// drained by `drive_pending_lazygit` from the tick loop. The
+    /// indirection lets us debounce PTY respawns so a held-j burst
+    /// across many repos triggers exactly one lazygit cold-boot at
+    /// the user's *settled* destination instead of one per session.
+    pub pending_lazygit_cwd: Option<PathBuf>,
+    /// Wall-clock time of the most recent navigation that wants
+    /// lazygit attention. Compared against `LAZYGIT_NAV_DEBOUNCE_MS`
+    /// in the tick loop so we only honour `pending_lazygit_cwd` once
+    /// the user has stopped moving.
+    pub last_nav_at: Option<Instant>,
     /// Show the right-side plan/todo/task panel. Toggled with `Ctrl-T`.
     /// Default on so users see the feature without having to discover
     /// the binding.
@@ -700,6 +754,10 @@ impl App {
             next_notif_id: 1,
             sound_muted_cli: false,
             agent_tasks: HashMap::new(),
+            agent_tasks_tx: None,
+            agent_tasks_inflight: HashSet::new(),
+            pending_lazygit_cwd: None,
+            last_nav_at: None,
             right_panel_visible: prefs.right_panel_visible,
             lazygit_width: prefs.lazygit_width,
             term_split_pct: prefs.term_split_pct,
@@ -1132,6 +1190,8 @@ pub async fn run_loop(
     let (term_tx_right, mut term_rx_right) = mpsc::unbounded_channel::<TerminalMsg>();
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<EventMsg>();
     let (lg_tx, mut lg_rx) = mpsc::unbounded_channel::<PtyMsg>();
+    let (agent_tasks_tx, mut agent_tasks_rx) =
+        mpsc::unbounded_channel::<(Uuid, Option<AgentTaskState>)>();
     // Stash cheap clones on `App` so `update_selection` can pick the
     // correct sender by side without re-threading args. The lazygit
     // sender lives here too so `refresh_lazygit_for_selection` can
@@ -1140,6 +1200,7 @@ pub async fn run_loop(
     app.term_tx_left = Some(term_tx.clone());
     app.term_tx_right = Some(term_tx_right);
     app.lg_tx = Some(lg_tx.clone());
+    app.agent_tasks_tx = Some(agent_tasks_tx);
 
     // Subscribe to the daemon's event bus.
     let _events_handle: JoinHandle<()> = client.open_event_stream(event_tx);
@@ -1155,21 +1216,21 @@ pub async fn run_loop(
         app.term_in = Some(key_tx);
         app.term_size = (0, 0); // force first resize once we know the pane size
         app.stream_handle_left = Some(h);
-        // Prime the agent-tasks panel for the initial selection so the
-        // user sees data on the first frame, not after the first
-        // transcript update lands.
-        refresh_agent_tasks(&mut app, &client, id).await;
+    }
+    // Pre-warm the agent-tasks cache for every known session in
+    // parallel — non-blocking, results stream back via
+    // `agent_tasks_rx`. After the first ~tens of ms, every navigation
+    // becomes a pure cache hit instead of waiting on a network round
+    // trip; events handle freshness from there. We fire for ALL ids
+    // (including the initial selection) so the prime path is uniform.
+    let prime_ids: Vec<Uuid> = app.sessions.iter().map(|s| s.id).collect();
+    for id in prime_ids {
+        spawn_agent_tasks_fetch(&mut app, &client, id);
     }
 
     let mut crossterm_events = EventStream::new();
     let mut tick = interval(TICK_INTERVAL);
     let mut last_refresh = Instant::now();
-    // Track the previously-rendered selection so we can fire an
-    // agent-tasks fetch the moment it changes (j/k/Enter/Ctrl-Tab/etc.)
-    // without retrofitting every navigation handler. The 100 ms tick
-    // means worst-case latency from keypress → panel update is one
-    // frame, which is below human perception for "instant."
-    let mut last_selected: Option<Uuid> = app.selected;
 
     loop {
         // Resize each PTY parser to the actual pane area before drawing.
@@ -1274,20 +1335,51 @@ pub async fn run_loop(
                 handle_lazygit_msg(&mut app, msg);
             }
 
+            Some((id, maybe_state)) = agent_tasks_rx.recv() => {
+                // Always drop the in-flight marker so the next
+                // navigation/event can re-fetch this id immediately.
+                // On transport error the message carries `None` and
+                // we deliberately leave the existing cached snapshot
+                // alone — better to keep showing the last good plan
+                // than to flash an empty panel.
+                app.agent_tasks_inflight.remove(&id);
+                if let Some(state) = maybe_state {
+                    app.agent_tasks.insert(id, state);
+                }
+            }
+
             _ = tick.tick() => {
                 // Cheap O(MAX_NOTIFS) sweep — drops expired toasts so the
                 // bottom-left stack drains without us having to schedule
                 // a per-toast sleep future.
                 app.tick_expire();
-                // Track the latest selection here purely so the
-                // 5-second slow path below has the correct id to fetch
-                // for. Nav-driven fetches happen inline inside
-                // `update_selection` — no double-fetch on keypress.
-                last_selected = app.selected;
+                // Lazygit follow-up for cross-repo navigation. We defer
+                // the PTY respawn out of `update_selection` itself so
+                // rapid j/k bursts can't thrash lazygit children: the
+                // pending cwd keeps getting overwritten and only the
+                // *settled* destination triggers a respawn here. The
+                // ~100 ms tick is well below the human "instant"
+                // threshold yet long enough that holding j through 50
+                // sessions only spawns lazygit once at the end.
+                drive_pending_lazygit(&mut app);
                 if last_refresh.elapsed() >= REFRESH_INTERVAL {
                     last_refresh = Instant::now();
                     if let Ok(fresh) = client.list_sessions().await {
                         app.refresh_sessions(fresh);
+                        // Pre-warm the cache for any newly-discovered
+                        // sessions so the first nav to them is also a
+                        // pure cache hit. Existing ids skip via the
+                        // in-flight dedup or because the channel hasn't
+                        // delivered a stale fetch result yet.
+                        let new_ids: Vec<Uuid> = app
+                            .sessions
+                            .iter()
+                            .filter(|s| !app.agent_tasks.contains_key(&s.id))
+                            .map(|s| s.id)
+                            .collect();
+                        for id in new_ids {
+                            spawn_agent_tasks_fetch(&mut app, &client, id);
+                        }
                     }
                     // Slow-path safety net for the agent-tasks panel:
                     // events do the heavy lifting, but this catch-up
@@ -1296,7 +1388,7 @@ pub async fn run_loop(
                     if app.right_panel_visible
                         && let Some(id) = app.selected
                     {
-                        refresh_agent_tasks(&mut app, &client, id).await;
+                        spawn_agent_tasks_fetch(&mut app, &client, id);
                     }
                 }
             }
@@ -1618,7 +1710,7 @@ async fn handle_key(
         if app.right_panel_visible
             && let Some(id) = app.selected
         {
-            refresh_agent_tasks(app, client, id).await;
+            spawn_agent_tasks_fetch(app, client, id);
         }
         return;
     }
@@ -1666,6 +1758,26 @@ async fn handle_key(
         return;
     }
 
+    // Ctrl-R opens the rename prompt for the highlighted session. Only
+    // active when the tree pane has focus — when a terminal is focused
+    // Ctrl-R is reverse-search inside the shell and we let it forward
+    // through. No-op when no session is highlighted (cursor on a group
+    // row, etc.).
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('r'))
+        && app.focus == Focus::Tree
+    {
+        if let Some(sess) = app.selected_session() {
+            let id = sess.id;
+            let name = sess.name.clone();
+            app.overlay = Overlay::Rename(RenameState::new(id, &name));
+            app.status_msg = Some("rename (Enter save · Esc cancel)".into());
+        } else {
+            app.status_msg = Some("no session selected to rename".into());
+        }
+        return;
+    }
+
     // Ctrl-Tab — flip back to the previously selected session. Mirrors
     // VS Code's "go to last edited file" / iTerm2's "last tab". A
     // no-op when there's no prior session (first run, or the last
@@ -1679,7 +1791,7 @@ async fn handle_key(
             app.tree.select_session(prev);
             {
             let side = app.target_side();
-            update_selection(app, client, side).await;
+            update_selection(app, client, side);
         }
         } else {
             app.status_msg = Some("no previous session".into());
@@ -1788,7 +1900,7 @@ async fn handle_key(
             app.set_focus(Focus::TermRight);
             app.last_term_side = Side::Right;
             // Drive the right pane to the tree's current session.
-            update_selection(app, client, Side::Right).await;
+            update_selection(app, client, Side::Right);
             app.status_msg = Some("split (Ctrl-W to close)".into());
         }
         return;
@@ -1855,6 +1967,10 @@ async fn handle_key(
         }
         Overlay::Settings(_) => {
             handle_settings_key(app, key);
+            return;
+        }
+        Overlay::Rename(_) => {
+            handle_rename_key(app, key, client).await;
             return;
         }
         Overlay::None => {}
@@ -2015,7 +2131,7 @@ async fn handle_key(
     // the tree-key match so chars like `/`, `n`, `q` extend the filter
     // instead of triggering their tree shortcuts.
     if app.filter_input_active {
-        handle_filter_input_key(app, &key, client).await;
+        handle_filter_input_key(app, &key, client);
         return;
     }
 
@@ -2109,14 +2225,14 @@ async fn handle_key(
             app.tree.move_cursor(1);
             {
             let side = app.target_side();
-            update_selection(app, client, side).await;
+            update_selection(app, client, side);
         }
         }
         KeyCode::Char('k') | KeyCode::Up => {
             app.tree.move_cursor(-1);
             {
             let side = app.target_side();
-            update_selection(app, client, side).await;
+            update_selection(app, client, side);
         }
         }
         KeyCode::Char('h') | KeyCode::Left => app.tree.collapse(),
@@ -2129,7 +2245,7 @@ async fn handle_key(
             let on_leaf = matches!(app.tree.current_row(), Some(Row::Leaf { .. }));
             {
             let side = app.target_side();
-            update_selection(app, client, side).await;
+            update_selection(app, client, side);
         }
             if on_leaf && app.selected.is_some() {
                 app.set_focus(Focus::Term);
@@ -2340,7 +2456,7 @@ async fn handle_new_session_key(
                         app.tree.select_session(id);
                         {
             let side = app.target_side();
-            update_selection(app, client, side).await;
+            update_selection(app, client, side);
         }
                     }
                     return;
@@ -2756,6 +2872,71 @@ fn settings_row_short_label(row: SettingsRow) -> &'static str {
     }
 }
 
+/// Drive the inline rename overlay. Plain typing edits the buffer;
+/// Backspace deletes the last character; Enter submits via PATCH; Esc
+/// cancels and closes. On success the local sessions list is refreshed
+/// so the new name shows immediately without waiting for the bus
+/// event. On failure the inline error is set and the overlay stays
+/// open with the typed buffer preserved.
+async fn handle_rename_key(app: &mut App, key: KeyEvent, client: &Client) {
+    let Overlay::Rename(state) = app.overlay.clone() else {
+        return;
+    };
+    let mut state = state;
+    match key.code {
+        KeyCode::Esc => {
+            app.overlay = Overlay::None;
+            app.status_msg = Some("rename cancelled".into());
+        }
+        KeyCode::Backspace => {
+            state.buffer.pop();
+            state.error = None;
+            app.overlay = Overlay::Rename(state);
+        }
+        KeyCode::Enter => {
+            let trimmed = state.buffer.trim();
+            if trimmed.is_empty() {
+                state.error = Some("name cannot be empty".into());
+                app.overlay = Overlay::Rename(state);
+                return;
+            }
+            if trimmed == state.original {
+                app.overlay = Overlay::None;
+                app.status_msg = Some("rename: no change".into());
+                return;
+            }
+            let id = state.id;
+            match client.rename_session(id, trimmed).await {
+                Ok(updated) => {
+                    app.overlay = Overlay::None;
+                    app.status_msg = Some(format!("renamed → {}", updated.name));
+                    if let Ok(fresh) = client.list_sessions().await {
+                        app.refresh_sessions(fresh);
+                        app.tree.select_session(id);
+                    }
+                }
+                Err(e) => {
+                    state.error = Some(format!("{e}"));
+                    app.overlay = Overlay::Rename(state);
+                }
+            }
+        }
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Cap at 64 chars to match the server validation so the
+            // user gets a hard stop rather than a "too long" error.
+            if state.buffer.chars().count() < 64 {
+                state.buffer.push(c);
+                state.error = None;
+            }
+            app.overlay = Overlay::Rename(state);
+        }
+        _ => {
+            // Unknown key — keep the overlay state and the buffer.
+            app.overlay = Overlay::Rename(state);
+        }
+    }
+}
+
 fn handle_errors_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc
@@ -2860,7 +3041,7 @@ async fn run_palette_action(
             app.tree.select_session(id);
             {
             let side = app.target_side();
-            update_selection(app, client, side).await;
+            update_selection(app, client, side);
         }
         }
         ActionKind::KillSession(id) => {
@@ -2907,7 +3088,7 @@ async fn run_palette_action(
             if app.right_panel_visible
                 && let Some(id) = app.selected
             {
-                refresh_agent_tasks(app, client, id).await;
+                spawn_agent_tasks_fetch(app, client, id);
             }
         }
         ActionKind::ToggleFullscreen => {
@@ -2940,7 +3121,7 @@ async fn run_palette_action(
                 });
                 app.set_focus(Focus::TermRight);
                 app.last_term_side = Side::Right;
-                update_selection(app, client, Side::Right).await;
+                update_selection(app, client, Side::Right);
                 app.status_msg = Some("split open (Ctrl-W to close)".into());
             }
         }
@@ -3231,7 +3412,7 @@ fn key_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
 /// After every edit we run `update_selection` so the right-hand terminal
 /// pane keeps tracking the highlighted session — typing into the filter
 /// feels like a live drill-down, not a deferred commit.
-async fn handle_filter_input_key(
+fn handle_filter_input_key(
     app: &mut App,
     key: &KeyEvent,
     client: &Client,
@@ -3287,7 +3468,7 @@ async fn handle_filter_input_key(
     if changed {
         {
             let side = app.target_side();
-            update_selection(app, client, side).await;
+            update_selection(app, client, side);
         }
     }
 }
@@ -3297,7 +3478,7 @@ async fn handle_filter_input_key(
 /// open a new one. `side` decides which slot to retarget; the unselected
 /// slot is left alone. Stream handle and term-tx live on `App` now, so
 /// this needs no extra channel parameters.
-async fn update_selection(app: &mut App, client: &Client, side: Side) {
+fn update_selection(app: &mut App, client: &Client, side: Side) {
     let new_id = app.tree.current_session(&app.sessions);
     let current = match side {
         Side::Left => app.selected,
@@ -3397,29 +3578,30 @@ async fn update_selection(app: &mut App, client: &Client, side: Side) {
             }
         }
     }
-    // Keep the lazygit side pane in lock-step with whichever side
-    // owns the "primary" selection. Right-side splits are deliberately
-    // skipped — they're an opt-in side-by-side view, and
-    // `lazygit_cwd` only tracks one repo. If a user wants lazygit on
-    // the right pane's workdir, focusing it as the left pane (close
-    // split with Ctrl-W) does the right thing.
-    //
-    // Fire the lazygit respawn FIRST (sync, but spawns a background
-    // PTY process) so its cold-boot overlaps with the agent-tasks
-    // network fetch that follows.
+    // Lazygit follow-up is debounced through the tick loop instead of
+    // running inline here. Stamping the desired cwd + the keypress
+    // moment on `App` lets `drive_pending_lazygit` decide later whether
+    // the user has settled on a destination — holding j across 50
+    // sessions in different repos used to cause 50 PTY respawns; now
+    // it causes one. Right-side splits are deliberately skipped: the
+    // pane tracks `app.selected` only.
     if side == Side::Left {
-        refresh_lazygit_for_selection(app);
+        request_lazygit_for_selection(app);
     }
     // Pull a fresh agent-tasks snapshot for the new selection on the
     // primary (left) side so the right-hand plan/todos panel updates
-    // in-step with navigation. Without this we'd wait up to one tick
-    // (~100 ms) for the run-loop's selection-change watchdog to fire
-    // — perceptible jank on j/k spam. Skipped for right-side splits
-    // because the panel tracks `app.selected` only.
+    // in-step with navigation. The fetch runs spawn-detached — the
+    // result lands on `agent_tasks_rx`, not on this stack — so the
+    // keystroke handler never blocks on a network round trip even
+    // when the daemon is remote. The cache hit path renders
+    // synchronously from `agent_tasks` (keyed by id) so the panel
+    // shows last-known state immediately and updates the moment the
+    // fresh snapshot arrives. Skipped for right-side splits because
+    // the panel tracks `app.selected` only.
     if side == Side::Left
         && let Some(id) = new_id
     {
-        refresh_agent_tasks(app, client, id).await;
+        spawn_agent_tasks_fetch(app, client, id);
     }
 }
 
@@ -3498,21 +3680,88 @@ async fn handle_event_msg(app: &mut App, msg: EventMsg, client: &Client) {
     }
 }
 
-/// Fetch the latest plan/todos/tasks snapshot for `id` and stash it on
-/// `app.agent_tasks`. Silently swallows transport errors (the panel
-/// just keeps showing the previous snapshot — better than blowing up
-/// for a feature that's purely informational).
-async fn refresh_agent_tasks(app: &mut App, client: &Client, id: Uuid) {
-    match client.agent_tasks(id).await {
-        Ok(state) => {
-            app.agent_tasks.insert(id, state);
-        }
-        Err(e) => {
-            // Don't toast — too noisy on every reconnect. Tracing is
-            // enough; the panel will populate on the next event.
-            tracing::debug!(session = %id, error = %e, "agent_tasks fetch failed");
-        }
+/// Fire a non-blocking agent-tasks fetch for `id`. The HTTP round trip
+/// runs on a detached tokio task; the result lands on
+/// `app.agent_tasks_tx` and is applied by the run-loop's
+/// `agent_tasks_rx` arm. Coalesces concurrent requests for the same
+/// id (via `agent_tasks_inflight`) so a navigation burst plus an
+/// `agent_tasks.updated` event can't fan out into duplicate fetches.
+/// On transport error we still post `None` so the in-flight marker
+/// gets cleared — the panel keeps showing the last good snapshot.
+/// No-op if the channel hasn't been wired yet (pre-`run_loop`
+/// contexts only).
+fn spawn_agent_tasks_fetch(app: &mut App, client: &Client, id: Uuid) {
+    let Some(tx) = app.agent_tasks_tx.clone() else {
+        return;
+    };
+    if !app.agent_tasks_inflight.insert(id) {
+        return; // already in-flight — coalesce
     }
+    let client = client.clone();
+    tokio::spawn(async move {
+        let payload = match client.agent_tasks(id).await {
+            Ok(state) => Some(state),
+            Err(e) => {
+                tracing::debug!(session = %id, error = %e, "agent_tasks fetch failed");
+                None
+            }
+        };
+        let _ = tx.send((id, payload));
+    });
+}
+
+/// Debounce window between the last navigation and the lazygit PTY
+/// respawn. 120 ms is below human "instant" perception for a settled
+/// destination yet long enough to coalesce a held-j burst (xterm
+/// typematic fires every ~30 ms).
+const LAZYGIT_NAV_DEBOUNCE: Duration = Duration::from_millis(120);
+
+/// Stamp the new selection's workdir as pending. The actual lazygit
+/// respawn happens later in `drive_pending_lazygit` once the user
+/// has stopped moving — see `LAZYGIT_NAV_DEBOUNCE`.
+fn request_lazygit_for_selection(app: &mut App) {
+    // No lazygit pane open → nothing to follow.
+    if app.lazygit.is_none() {
+        app.pending_lazygit_cwd = None;
+        return;
+    }
+    let Some(sess) = app.selected_session() else {
+        return;
+    };
+    app.pending_lazygit_cwd = Some(PathBuf::from(&sess.workdir));
+    app.last_nav_at = Some(Instant::now());
+}
+
+/// Tick-driven catch-up for the deferred lazygit respawn. Fires the
+/// PTY swap iff lazygit is open, the pending cwd differs from the
+/// live one, and the most recent nav has settled
+/// (>= `LAZYGIT_NAV_DEBOUNCE`). Otherwise leaves
+/// `pending_lazygit_cwd` in place for the next tick.
+fn drive_pending_lazygit(app: &mut App) {
+    if app.lazygit.is_none() {
+        // Pane was closed mid-debounce — drop the stale pending entry.
+        app.pending_lazygit_cwd = None;
+        app.last_nav_at = None;
+        return;
+    }
+    let Some(pending) = app.pending_lazygit_cwd.clone() else {
+        return;
+    };
+    if app.lazygit_cwd.as_ref() == Some(&pending) {
+        // Already there — nothing to do.
+        app.pending_lazygit_cwd = None;
+        app.last_nav_at = None;
+        return;
+    }
+    let settled = app
+        .last_nav_at
+        .is_some_and(|t| t.elapsed() >= LAZYGIT_NAV_DEBOUNCE);
+    if !settled {
+        return;
+    }
+    refresh_lazygit_for_selection(app);
+    app.pending_lazygit_cwd = None;
+    app.last_nav_at = None;
 }
 
 async fn apply_event(app: &mut App, ev: Event, client: &Client) {
@@ -3680,7 +3929,7 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
             let interesting =
                 Some(id) == app.selected || app.agent_tasks.contains_key(&id);
             if interesting {
-                refresh_agent_tasks(app, client, id).await;
+                spawn_agent_tasks_fetch(app, client, id);
             }
         }
         _ => {}
@@ -3783,7 +4032,7 @@ async fn spawn_plain_terminal(
                 app.tree.select_session(id);
                 {
             let side = app.target_side();
-            update_selection(app, client, side).await;
+            update_selection(app, client, side);
         }
                 app.set_focus(Focus::Term);
             }

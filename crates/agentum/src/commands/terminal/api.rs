@@ -314,6 +314,31 @@ impl Client {
         Ok(resp.json::<Session>().await?)
     }
 
+    /// `PATCH /api/sessions/{id}` with `{name: ...}`. Server validates
+    /// (trimmed, non-empty, ≤ 64 chars) and emits `session.renamed` on
+    /// the bus so other clients pick the new label up automatically.
+    /// Allowed even on a running session — pure metadata.
+    pub async fn rename_session(&self, id: Uuid, new_name: &str) -> Result<Session> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            name: &'a str,
+        }
+        let url = self.base.join(&format!("/api/sessions/{id}"))?;
+        let resp = self
+            .http
+            .patch(url)
+            .bearer_auth(&self.token)
+            .json(&Body { name: new_name })
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("{status} — {body}");
+        }
+        Ok(resp.json::<Session>().await?)
+    }
+
     pub async fn start_session(&self, id: Uuid) -> Result<()> {
         self.post_session_action(id, "start").await
     }
