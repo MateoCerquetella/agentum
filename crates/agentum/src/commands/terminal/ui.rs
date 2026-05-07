@@ -13,11 +13,12 @@ use agentum_core::transcript::{AgentTaskState, TaskStatus, TodoStatus};
 
 use super::app::{
     App, ConnState, DirPickerState, ErrorEntry, Focus, NewSessionField, NewSessionForm, NotifKind,
-    Notification, Overlay, PendingAction, Row, palette_catalog, status_dot,
+    Notification, Overlay, PendingAction, Row, SettingsRow, SettingsState, palette_catalog,
+    status_dot,
 };
 use super::extensions::{self, Extension, LAZYGIT};
 use super::iometer::{fmt_bytes, fmt_rate};
-use super::prefs::StatusChip;
+use super::prefs::{Prefs, SoundKind, StatusChip};
 use super::theme::Palette;
 
 #[derive(Clone, Copy)]
@@ -54,6 +55,12 @@ pub const LAZYGIT_MIN_WIDTH: u16 = 40;
 /// Hard ceiling so the user can't accidentally crush the terminal pane
 /// below its 20-col floor by holding the grow key.
 pub const LAZYGIT_MAX_WIDTH: u16 = 160;
+/// Clamp range for the term-split percentage. 25 / 75 keeps either half
+/// above ~30 cols on a 110-col viewport.
+pub const TERM_SPLIT_MIN_PCT: u16 = 25;
+pub const TERM_SPLIT_MAX_PCT: u16 = 75;
+/// Step size per `Ctrl-Shift-←/→` press.
+pub const TERM_SPLIT_STEP: u16 = 5;
 
 pub fn compute_layout(
     area: Rect,
@@ -64,6 +71,7 @@ pub fn compute_layout(
     split_open: bool,
     right_panel_visible: bool,
     lazygit_width: u16,
+    term_split_pct: u16,
 ) -> Areas {
     // Right panel is suppressed in fullscreen and on terminals too
     // narrow to host it without crushing the terminal area. It stays
@@ -79,7 +87,7 @@ pub fn compute_layout(
     if fullscreen {
         let (terminal_rect, lazygit_rect) =
             split_main(area, lazygit_open, lazygit_width);
-        let (term_left, term_right) = split_terminal(terminal_rect, split_open);
+        let (term_left, term_right) = split_terminal(terminal_rect, split_open, term_split_pct);
         let empty = Rect {
             x: area.x,
             y: area.y,
@@ -181,7 +189,7 @@ pub fn compute_layout(
     } else {
         split_main(body[1], lazygit_open, lazygit_width)
     };
-    let (term_left, term_right) = split_terminal(terminal_rect, split_open);
+    let (term_left, term_right) = split_terminal(terminal_rect, split_open, term_split_pct);
     let agent_tasks_rect = if rw > 0 { Some(body[2]) } else { None };
 
     Areas {
@@ -226,17 +234,24 @@ fn split_main(area: Rect, lazygit_open: bool, lazygit_width: u16) -> (Rect, Opti
 /// narrow ones stack vertically so each pane keeps a usable width. We
 /// use 80 columns as the cutoff because below that horizontal halves
 /// pinch every embedded TUI under the 40-col floor most expect.
-fn split_terminal(area: Rect, split_open: bool) -> (Rect, Option<Rect>) {
+fn split_terminal(
+    area: Rect,
+    split_open: bool,
+    term_split_pct: u16,
+) -> (Rect, Option<Rect>) {
     if !split_open {
         return (area, None);
     }
+    let pct = term_split_pct.clamp(TERM_SPLIT_MIN_PCT, TERM_SPLIT_MAX_PCT);
     if area.width >= 80 {
         let cols = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .constraints([Constraint::Percentage(pct), Constraint::Percentage(100 - pct)])
             .split(area);
         (cols[0], Some(cols[1]))
     } else {
+        // Narrow viewports stack vertically — keep 50/50 since up/down
+        // would collide with tree navigation if we wired a resize.
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -255,6 +270,7 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         app.split_open(),
         app.right_panel_visible,
         app.lazygit_width,
+        app.term_split_pct,
     );
     let p = &app.theme.palette;
 
@@ -301,6 +317,7 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         Overlay::Errors => draw_errors_overlay(f, f.area(), app, p),
         Overlay::NewSession(form) => draw_new_session_overlay(f, f.area(), form, p),
         Overlay::Confirm(action) => draw_confirm_overlay(f, f.area(), action, p),
+        Overlay::Settings(state) => draw_settings_overlay(f, f.area(), state, &app.prefs, p),
     }
 }
 
@@ -1124,6 +1141,127 @@ fn draw_palette_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     ]);
     let hints_para = Paragraph::new(hints).style(Style::default().bg(p.chrome_bg));
     f.render_widget(hints_para, rows[2]);
+}
+
+/// One-line label for a numeric ms value rendered in the overlay.
+fn fmt_ttl_ms(ms: u64) -> String {
+    if ms % 1000 == 0 {
+        format!("{}s", ms / 1000)
+    } else {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    }
+}
+
+fn settings_row_label(row: SettingsRow, prefs: &Prefs) -> (String, String) {
+    let onoff = |b: bool| if b { "on" } else { "off" };
+    match row {
+        SettingsRow::SoundMaster => (
+            "  Sound: master".into(),
+            onoff(prefs.sound_master).into(),
+        ),
+        SettingsRow::SoundInfo => ("  Sound: info".into(), onoff(prefs.sound_info).into()),
+        SettingsRow::SoundWarn => ("  Sound: warn".into(), onoff(prefs.sound_warn).into()),
+        SettingsRow::SoundError => ("  Sound: error".into(), onoff(prefs.sound_error).into()),
+        SettingsRow::TtlInfo => (
+            "  Notification TTL: info".into(),
+            fmt_ttl_ms(prefs.ttl_ms(SoundKind::Info)),
+        ),
+        SettingsRow::TtlWarn => (
+            "  Notification TTL: warn".into(),
+            fmt_ttl_ms(prefs.ttl_ms(SoundKind::Warn)),
+        ),
+        SettingsRow::TtlError => (
+            "  Notification TTL: error".into(),
+            fmt_ttl_ms(prefs.ttl_ms(SoundKind::Error)),
+        ),
+        SettingsRow::SidebarHidden => (
+            "  Sidebar (tree)".into(),
+            onoff(!prefs.sidebar_hidden).into(),
+        ),
+        SettingsRow::RightPanelVisible => (
+            "  Agent panel (right)".into(),
+            onoff(prefs.right_panel_visible).into(),
+        ),
+        SettingsRow::ChipWorkdir => ("  Chip: workdir".into(), onoff(prefs.show_workdir).into()),
+        SettingsRow::ChipTool => ("  Chip: tool".into(), onoff(prefs.show_tool).into()),
+        SettingsRow::ChipConn => ("  Chip: connection".into(), onoff(prefs.show_conn).into()),
+        SettingsRow::ChipLazygit => ("  Chip: lazygit".into(), onoff(prefs.show_lazygit).into()),
+        SettingsRow::ChipTheme => ("  Chip: theme".into(), onoff(prefs.show_theme).into()),
+        SettingsRow::ChipIo => ("  Chip: I/O speeds".into(), onoff(prefs.show_io).into()),
+        SettingsRow::ChipIoTotals => (
+            "  Chip: I/O totals".into(),
+            onoff(prefs.show_io_totals).into(),
+        ),
+        SettingsRow::ChipPaletteHint => (
+            "  Chip: palette hint".into(),
+            onoff(prefs.show_palette_hint).into(),
+        ),
+        SettingsRow::ChipHelpHint => (
+            "  Chip: help hint".into(),
+            onoff(prefs.show_help_hint).into(),
+        ),
+        SettingsRow::ResetAll => (
+            "  Reset everything to defaults".into(),
+            "press space".into(),
+        ),
+    }
+}
+
+fn draw_settings_overlay(
+    f: &mut Frame<'_>,
+    area: Rect,
+    state: &SettingsState,
+    prefs: &Prefs,
+    p: &Palette,
+) {
+    // Vertical list of label + value with section headers between
+    // groups. Highlighted row painted with `chip_bg` so it reads as
+    // "selected" without inventing a new palette tone.
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(head("Settings", p));
+    lines.push(Line::from(""));
+
+    let cursor = state.cursor.min(SettingsRow::ROWS.len() - 1);
+    let label_w = 64usize;
+    for (i, row) in SettingsRow::ROWS.iter().copied().enumerate() {
+        if let Some(header) = row.section_header() {
+            if i != 0 {
+                lines.push(Line::from(""));
+            }
+            lines.push(head(header, p));
+        }
+        let (label, value) = settings_row_label(row, prefs);
+        let pad = label_w
+            .saturating_sub(label.chars().count())
+            .saturating_sub(value.chars().count());
+        let pad = " ".repeat(pad.max(2));
+        let label_style = if i == cursor {
+            Style::default().fg(p.fg_strong).bg(p.chip_bg).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(p.fg)
+        };
+        let value_style = if i == cursor {
+            Style::default().fg(p.accent).bg(p.chip_bg).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(p.muted)
+        };
+        let arrow = if i == cursor { " ▸" } else { "  " };
+        let row_line = Line::from(vec![
+            Span::styled(arrow.to_string(), Style::default().fg(p.accent)),
+            Span::styled(label, label_style),
+            Span::styled(pad, label_style),
+            Span::styled(value, value_style),
+        ]);
+        lines.push(row_line);
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  ↑↓ move · ←→ adjust · space toggle · r reset row · Esc close".to_string(),
+        Style::default().fg(p.muted),
+    )));
+
+    overlay_box(f, area, " settings ", lines, (label_w as u16) + 8, p);
 }
 
 fn draw_errors_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {

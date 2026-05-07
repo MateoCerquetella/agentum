@@ -35,9 +35,16 @@ const TICK_INTERVAL: Duration = Duration::from_millis(100);
 /// entries are evicted FIFO when a new one arrives — same ceiling as
 /// the dashboard's `ToastStack`.
 pub const MAX_NOTIFS: usize = 4;
-/// TTLs in milliseconds, mirroring `dashboard/src/lib/stores/events.ts`.
+/// Default TTLs in milliseconds for the three severities, mirroring
+/// `dashboard/src/lib/stores/events.ts`. Runtime TTLs are read from
+/// `app.prefs.ttl_for(kind)` at every notification site so the user can
+/// tune them via the Settings overlay; these constants only define the
+/// ship-with values used by `Prefs::default()`.
+#[allow(dead_code)]
 pub const NOTIF_TTL_INFO_MS: u64 = 6000;
+#[allow(dead_code)]
 pub const NOTIF_TTL_WARN_MS: u64 = 4000;
+#[allow(dead_code)]
 pub const NOTIF_TTL_ERROR_MS: u64 = 12000;
 
 /// Severity buckets for bottom-left toasts. Drives both the colour of
@@ -114,6 +121,11 @@ pub enum Overlay {
     LazygitCheats,
     LazygitInstall,
     Palette,
+    /// Browsable settings UI. Opened with `Ctrl-,` or via the command
+    /// palette. Each row toggles a boolean, bumps a numeric, or fires a
+    /// reset; every mutation persists to `tui_prefs.toml` via
+    /// `prefs::save`.
+    Settings(SettingsState),
     /// Scrollable view of the recent error log. Opened with `!` from
     /// tree focus or via the command palette. Replaces the status-bar
     /// counter that previously was the only place the user could tell
@@ -388,6 +400,88 @@ impl PaletteState {
     }
 }
 
+/// One interactive row in the Settings overlay. Boolean rows respond to
+/// `space` / `enter`; numeric rows respond to `←` / `→`; the lone
+/// `ResetAll` row fires the prefs reset on `space` / `enter`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SettingsRow {
+    SoundMaster,
+    SoundInfo,
+    SoundWarn,
+    SoundError,
+    TtlInfo,
+    TtlWarn,
+    TtlError,
+    SidebarHidden,
+    RightPanelVisible,
+    ChipWorkdir,
+    ChipTool,
+    ChipConn,
+    ChipLazygit,
+    ChipTheme,
+    ChipIo,
+    ChipIoTotals,
+    ChipPaletteHint,
+    ChipHelpHint,
+    ResetAll,
+}
+
+impl SettingsRow {
+    pub const ROWS: &'static [Self] = &[
+        Self::SoundMaster,
+        Self::SoundInfo,
+        Self::SoundWarn,
+        Self::SoundError,
+        Self::TtlInfo,
+        Self::TtlWarn,
+        Self::TtlError,
+        Self::SidebarHidden,
+        Self::RightPanelVisible,
+        Self::ChipWorkdir,
+        Self::ChipTool,
+        Self::ChipConn,
+        Self::ChipLazygit,
+        Self::ChipTheme,
+        Self::ChipIo,
+        Self::ChipIoTotals,
+        Self::ChipPaletteHint,
+        Self::ChipHelpHint,
+        Self::ResetAll,
+    ];
+
+    /// Section header to render *above* this row, if any. Drives the
+    /// "Notifications / Layout / Status bar / Actions" grouping in the
+    /// overlay without needing a separate non-selectable row variant.
+    pub fn section_header(self) -> Option<&'static str> {
+        match self {
+            Self::SoundMaster => Some("Notifications"),
+            Self::SidebarHidden => Some("Layout"),
+            Self::ChipWorkdir => Some("Status bar"),
+            Self::ResetAll => Some("Actions"),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SettingsState {
+    pub cursor: usize,
+}
+
+impl SettingsState {
+    pub fn new() -> Self {
+        Self { cursor: 0 }
+    }
+    pub fn current(&self) -> SettingsRow {
+        SettingsRow::ROWS[self.cursor.min(SettingsRow::ROWS.len() - 1)]
+    }
+    pub fn move_by(&mut self, delta: isize) {
+        let len = SettingsRow::ROWS.len() as isize;
+        let next = (self.cursor as isize + delta).rem_euclid(len);
+        self.cursor = next as usize;
+    }
+}
+
 pub struct App {
     pub sessions: Vec<Session>,
     pub tree: Tree,
@@ -509,10 +603,12 @@ pub struct App {
     /// Monotonic id source so renderers can use `id` as a `keyed` hint
     /// when toasts come and go between frames.
     pub next_notif_id: u64,
-    /// When `true`, `push_notification` skips `sound::play`. Set from
-    /// `--no-sound` / `AGENTUM_TUI_NO_SOUND` at startup; no runtime
-    /// toggle (no key binding requested).
-    pub sound_muted: bool,
+    /// One-shot CLI override on top of `prefs.sound_master` /
+    /// `prefs.sound_<kind>`. Set from `--no-sound` /
+    /// `AGENTUM_TUI_NO_SOUND` at startup. When `true`, no notification
+    /// sound ever plays this run regardless of the persisted prefs;
+    /// when `false`, the prefs decide.
+    pub sound_muted_cli: bool,
     /// Per-session cache of plan / todos / background tasks parsed
     /// out of each agent's Claude Code transcript. Keys are session
     /// ids. Populated from `GET /api/sessions/{id}/agent-tasks` and
@@ -527,6 +623,11 @@ pub struct App {
     /// so the resize keys behave the same in either layout. Clamped
     /// `LAZYGIT_MIN_WIDTH..=LAZYGIT_MAX_WIDTH` at draw time.
     pub lazygit_width: u16,
+    /// Percentage of the terminal area allocated to the LEFT pane when a
+    /// split is open. Right pane gets the rest. Resized with
+    /// `Ctrl-Shift-Left` / `Ctrl-Shift-Right`, clamped 25..=75 so neither
+    /// side collapses. Ignored when no split is open.
+    pub term_split_pct: u16,
     /// Sliding-window byte counter for the active WS terminal stream.
     /// Drives the I/O speed chip on the status bar. Reset on session
     /// switch so totals reflect the current stream, not an accumulation
@@ -556,6 +657,11 @@ impl App {
     pub fn new(sessions: Vec<Session>) -> Self {
         let tree = Tree::build(&sessions, &HashMap::new());
         let selected = first_visible_session(&tree, &sessions);
+        // Load persisted prefs once and seed the runtime layout fields.
+        // Both `app.<field>` and `app.prefs.<field>` are kept in sync at
+        // every keybinding mutation so the on-disk file is the source of
+        // truth that survives a restart.
+        let prefs = prefs::load();
         Self {
             sessions,
             tree,
@@ -564,9 +670,9 @@ impl App {
             term: TerminalPane::new(),
             parser_cache: std::collections::HashMap::new(),
             focus: Focus::Tree,
-            tree_width: 32,
+            tree_width: prefs.tree_width,
             fullscreen: false,
-            sidebar_hidden: false,
+            sidebar_hidden: prefs.sidebar_hidden,
             chord: None,
             filter_input_active: false,
             error_count: 0,
@@ -592,12 +698,13 @@ impl App {
             theme: theme::load(),
             notifications: Vec::new(),
             next_notif_id: 1,
-            sound_muted: false,
+            sound_muted_cli: false,
             agent_tasks: HashMap::new(),
-            right_panel_visible: true,
-            lazygit_width: 60,
+            right_panel_visible: prefs.right_panel_visible,
+            lazygit_width: prefs.lazygit_width,
+            term_split_pct: prefs.term_split_pct,
             io: IoMeter::new(),
-            prefs: prefs::load(),
+            prefs,
             awaiting_input: HashSet::new(),
             idle: HashSet::new(),
         }
@@ -1019,7 +1126,7 @@ pub async fn run_loop(
     sound_muted: bool,
 ) -> Result<()> {
     let mut app = App::new(sessions);
-    app.sound_muted = sound_muted;
+    app.sound_muted_cli = sound_muted;
 
     let (term_tx, mut term_rx) = mpsc::unbounded_channel::<TerminalMsg>();
     let (term_tx_right, mut term_rx_right) = mpsc::unbounded_channel::<TerminalMsg>();
@@ -1076,6 +1183,7 @@ pub async fn run_loop(
             app.split_open(),
             app.right_panel_visible,
             app.lazygit_width,
+            app.term_split_pct,
         );
         // Cache for the next mouse event — handlers need to know which
         // pane the cursor is over, which only the layout knows.
@@ -1402,6 +1510,8 @@ async fn handle_key(
                 if app.sidebar_hidden && app.focus == Focus::Tree {
                     app.set_focus(Focus::Term);
                 }
+                app.prefs.sidebar_hidden = app.sidebar_hidden;
+                prefs::save(&app.prefs);
                 app.status_msg = Some(if app.sidebar_hidden {
                     "sidebar hidden".into()
                 } else {
@@ -1417,6 +1527,8 @@ async fn handle_key(
                     .lazygit_width
                     .saturating_sub(4)
                     .max(ui::LAZYGIT_MIN_WIDTH);
+                app.prefs.lazygit_width = app.lazygit_width;
+                prefs::save(&app.prefs);
                 app.status_msg = Some(format!("lazygit width: {}", app.lazygit_width));
             }
             Some('.') | Some('>') => {
@@ -1424,6 +1536,8 @@ async fn handle_key(
                     .lazygit_width
                     .saturating_add(4)
                     .min(ui::LAZYGIT_MAX_WIDTH);
+                app.prefs.lazygit_width = app.lazygit_width;
+                prefs::save(&app.prefs);
                 app.status_msg = Some(format!("lazygit width: {}", app.lazygit_width));
             }
             _ => {
@@ -1473,6 +1587,8 @@ async fn handle_key(
         if app.sidebar_hidden && app.focus == Focus::Tree {
             app.set_focus(Focus::Term);
         }
+        app.prefs.sidebar_hidden = app.sidebar_hidden;
+        prefs::save(&app.prefs);
         app.status_msg = Some(if app.sidebar_hidden {
             "sidebar hidden (Ctrl-B to reopen)".into()
         } else {
@@ -1489,6 +1605,8 @@ async fn handle_key(
         && matches!(key.code, KeyCode::Char('t'))
     {
         app.right_panel_visible = !app.right_panel_visible;
+        app.prefs.right_panel_visible = app.right_panel_visible;
+        prefs::save(&app.prefs);
         app.status_msg = Some(if app.right_panel_visible {
             "agent panel on".into()
         } else {
@@ -1502,6 +1620,49 @@ async fn handle_key(
         {
             refresh_agent_tasks(app, client, id).await;
         }
+        return;
+    }
+
+    // Ctrl-Shift-Left / Ctrl-Shift-Right resize the terminal split when
+    // one's open. Runs ahead of pane forwarding so it works while a
+    // terminal pane has focus (the pane otherwise eats arrow keys as
+    // cursor movement). No-op (with status hint) when no split is open.
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && key.modifiers.contains(KeyModifiers::SHIFT)
+        && matches!(key.code, KeyCode::Left | KeyCode::Right)
+    {
+        if !app.split_open() {
+            app.status_msg = Some("split closed (Ctrl-\\ to open)".into());
+            return;
+        }
+        let pct = app
+            .term_split_pct
+            .clamp(ui::TERM_SPLIT_MIN_PCT, ui::TERM_SPLIT_MAX_PCT);
+        let next = match key.code {
+            KeyCode::Left => pct.saturating_sub(ui::TERM_SPLIT_STEP),
+            KeyCode::Right => pct.saturating_add(ui::TERM_SPLIT_STEP),
+            _ => pct,
+        };
+        app.term_split_pct = next.clamp(ui::TERM_SPLIT_MIN_PCT, ui::TERM_SPLIT_MAX_PCT);
+        app.prefs.term_split_pct = app.term_split_pct;
+        prefs::save(&app.prefs);
+        app.status_msg = Some(format!(
+            "split: {}% / {}%",
+            app.term_split_pct,
+            100 - app.term_split_pct
+        ));
+        return;
+    }
+
+    // Ctrl-, opens the Settings overlay. Mirrors VS Code's "Preferences:
+    // Open Settings" binding. Runs ahead of pane forwarding so it works
+    // from any focus, including inside the terminal pane.
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char(','))
+    {
+        app.overlay = Overlay::Settings(SettingsState::new());
+        app.status_msg = Some(
+            "settings (Esc close · ↑↓ move · ←→ adjust · space toggle · r reset row)".into(),
+        );
         return;
     }
 
@@ -1690,6 +1851,10 @@ async fn handle_key(
         }
         Overlay::Errors => {
             handle_errors_key(app, key);
+            return;
+        }
+        Overlay::Settings(_) => {
+            handle_settings_key(app, key);
             return;
         }
         Overlay::None => {}
@@ -1910,10 +2075,14 @@ async fn handle_key(
         // regardless of focus so it's reachable from any panel.
         KeyCode::Char('+') | KeyCode::Char('=') => {
             app.tree_width = app.tree_width.saturating_add(4).min(80);
+            app.prefs.tree_width = app.tree_width;
+            prefs::save(&app.prefs);
             app.status_msg = Some(format!("tree width: {}", app.tree_width));
         }
         KeyCode::Char('-') | KeyCode::Char('_') => {
             app.tree_width = app.tree_width.saturating_sub(4).max(16);
+            app.prefs.tree_width = app.tree_width;
+            prefs::save(&app.prefs);
             app.status_msg = Some(format!("tree width: {}", app.tree_width));
         }
         // 1/2/3 jump straight to a panel (Tree/Term/Lazygit).
@@ -2145,7 +2314,6 @@ async fn handle_new_session_key(
                                 msg,
                                 Some("see error log (!) for details".to_string()),
                                 NotifKind::Warn,
-                                NOTIF_TTL_WARN_MS,
                             );
                         } else {
                             let msg = format!("created + started `{name}`");
@@ -2155,7 +2323,6 @@ async fn handle_new_session_key(
                                 msg,
                                 None,
                                 NotifKind::Info,
-                                NOTIF_TTL_INFO_MS,
                             );
                         }
                     } else {
@@ -2166,7 +2333,6 @@ async fn handle_new_session_key(
                             msg,
                             None,
                             NotifKind::Info,
-                            NOTIF_TTL_INFO_MS,
                         );
                     }
                     if let Ok(fresh) = client.list_sessions().await {
@@ -2319,7 +2485,6 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
                 label,
                 None,
                 NotifKind::Info,
-                NOTIF_TTL_INFO_MS,
             );
         }
         Err(e) => {
@@ -2351,6 +2516,246 @@ pub fn palette_catalog(app: &App) -> Catalog {
 /// j/k or arrow keys scroll, PgUp/PgDn page, g/G snap to ends, c clears
 /// the log, and Esc/q/Enter/e dismiss. The cursor saturates at the list
 /// length on render so we don't have to clamp on every keystroke.
+/// Drive the Settings overlay. Boolean rows respond to `space` /
+/// `enter`; numeric (TTL) rows respond to `←` / `→` (and also `space` /
+/// `enter` to bump up); the `ResetAll` row fires `prefs.reset()` on
+/// activation. `r` resets the focused row alone. Esc closes. Every
+/// mutation calls `prefs::save` so the next launch comes up the same
+/// way and mirrors the runtime fields onto `app.<field>` for hot-path
+/// draw code that doesn't go through prefs.
+fn handle_settings_key(app: &mut App, key: KeyEvent) {
+    let Overlay::Settings(state) = app.overlay.clone() else {
+        return;
+    };
+    let mut state = state;
+    let mut changed = false;
+    let row = state.current();
+    match key.code {
+        KeyCode::Esc => {
+            app.overlay = Overlay::None;
+            return;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            state.move_by(-1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            state.move_by(1);
+        }
+        KeyCode::Home => state.cursor = 0,
+        KeyCode::End => state.cursor = SettingsRow::ROWS.len() - 1,
+        KeyCode::Char('r') => {
+            // Reset focused row to its default by overwriting from
+            // `Prefs::default()`.
+            let d = prefs::Prefs::default();
+            apply_settings_row_from(&d, row, &mut app.prefs);
+            mirror_layout_from_prefs(app);
+            prefs::save(&app.prefs);
+            changed = true;
+            app.status_msg = Some(format!("reset row · {}", settings_row_short_label(row)));
+        }
+        KeyCode::Left | KeyCode::Char('h') => {
+            if let Some(kind) = ttl_row_kind(row) {
+                let new_ms = app
+                    .prefs
+                    .bump_ttl(kind, -(prefs::NOTIF_TTL_STEP_MS as i64));
+                app.status_msg = Some(format!("{} TTL: {} ms", kind.label(), new_ms));
+                prefs::save(&app.prefs);
+                changed = true;
+            }
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            if let Some(kind) = ttl_row_kind(row) {
+                let new_ms = app.prefs.bump_ttl(kind, prefs::NOTIF_TTL_STEP_MS as i64);
+                app.status_msg = Some(format!("{} TTL: {} ms", kind.label(), new_ms));
+                prefs::save(&app.prefs);
+                changed = true;
+            }
+        }
+        KeyCode::Char(' ') | KeyCode::Enter => {
+            if let Some(kind) = ttl_row_kind(row) {
+                let new_ms = app.prefs.bump_ttl(kind, prefs::NOTIF_TTL_STEP_MS as i64);
+                app.status_msg = Some(format!("{} TTL: {} ms", kind.label(), new_ms));
+            } else {
+                toggle_settings_row(app, row);
+            }
+            prefs::save(&app.prefs);
+            mirror_layout_from_prefs(app);
+            changed = true;
+        }
+        _ => {}
+    }
+    // Persist the (possibly moved) cursor by stashing the new state back
+    // into the overlay variant. Doing it here keeps every branch above
+    // unaware of the wrap.
+    let _ = changed;
+    app.overlay = Overlay::Settings(state);
+}
+
+/// Map a settings row to the corresponding `SoundKind` if it represents
+/// a TTL slider, else `None`. Used to disambiguate `←/→` (TTL bump) from
+/// `space/enter` (boolean toggle) in `handle_settings_key`.
+fn ttl_row_kind(row: SettingsRow) -> Option<prefs::SoundKind> {
+    match row {
+        SettingsRow::TtlInfo => Some(prefs::SoundKind::Info),
+        SettingsRow::TtlWarn => Some(prefs::SoundKind::Warn),
+        SettingsRow::TtlError => Some(prefs::SoundKind::Error),
+        _ => None,
+    }
+}
+
+/// Toggle the boolean represented by `row`. TTL rows are filtered out by
+/// the caller so this match is exhaustive over the boolean / action
+/// surface only. Each arm scopes its `&mut app.prefs` borrow tightly so
+/// it doesn't collide with `app.set_focus` (which needs `&mut app`).
+fn toggle_settings_row(app: &mut App, row: SettingsRow) {
+    let msg: String = match row {
+        SettingsRow::SoundMaster => {
+            let on = app.prefs.toggle_sound_master();
+            format!("sound master: {}", if on { "on" } else { "off" })
+        }
+        SettingsRow::SoundInfo => {
+            let on = app.prefs.toggle_sound_kind(prefs::SoundKind::Info);
+            format!("sound info: {}", if on { "on" } else { "off" })
+        }
+        SettingsRow::SoundWarn => {
+            let on = app.prefs.toggle_sound_kind(prefs::SoundKind::Warn);
+            format!("sound warn: {}", if on { "on" } else { "off" })
+        }
+        SettingsRow::SoundError => {
+            let on = app.prefs.toggle_sound_kind(prefs::SoundKind::Error);
+            format!("sound error: {}", if on { "on" } else { "off" })
+        }
+        SettingsRow::SidebarHidden => {
+            app.prefs.sidebar_hidden = !app.prefs.sidebar_hidden;
+            app.sidebar_hidden = app.prefs.sidebar_hidden;
+            if app.sidebar_hidden && app.focus == Focus::Tree {
+                app.set_focus(Focus::Term);
+            }
+            if app.sidebar_hidden {
+                "sidebar hidden".into()
+            } else {
+                "sidebar visible".into()
+            }
+        }
+        SettingsRow::RightPanelVisible => {
+            app.prefs.right_panel_visible = !app.prefs.right_panel_visible;
+            app.right_panel_visible = app.prefs.right_panel_visible;
+            if app.right_panel_visible {
+                "agent panel on".into()
+            } else {
+                "agent panel off".into()
+            }
+        }
+        SettingsRow::ChipWorkdir => {
+            app.prefs.toggle(prefs::StatusChip::Workdir);
+            "chip · workdir".into()
+        }
+        SettingsRow::ChipTool => {
+            app.prefs.toggle(prefs::StatusChip::Tool);
+            "chip · tool".into()
+        }
+        SettingsRow::ChipConn => {
+            app.prefs.toggle(prefs::StatusChip::Conn);
+            "chip · connection".into()
+        }
+        SettingsRow::ChipLazygit => {
+            app.prefs.toggle(prefs::StatusChip::Lazygit);
+            "chip · lazygit".into()
+        }
+        SettingsRow::ChipTheme => {
+            app.prefs.toggle(prefs::StatusChip::Theme);
+            "chip · theme".into()
+        }
+        SettingsRow::ChipIo => {
+            app.prefs.toggle(prefs::StatusChip::Io);
+            "chip · I/O speeds".into()
+        }
+        SettingsRow::ChipIoTotals => {
+            app.prefs.toggle(prefs::StatusChip::IoTotals);
+            "chip · I/O totals".into()
+        }
+        SettingsRow::ChipPaletteHint => {
+            app.prefs.toggle(prefs::StatusChip::PaletteHint);
+            "chip · palette hint".into()
+        }
+        SettingsRow::ChipHelpHint => {
+            app.prefs.toggle(prefs::StatusChip::HelpHint);
+            "chip · help hint".into()
+        }
+        SettingsRow::ResetAll => {
+            app.prefs.reset();
+            "settings · reset to defaults".into()
+        }
+        SettingsRow::TtlInfo | SettingsRow::TtlWarn | SettingsRow::TtlError => {
+            // Numeric rows are handled by the caller — should not reach.
+            return;
+        }
+    };
+    app.status_msg = Some(msg);
+}
+
+/// Copy a single field from `src` into `dst.<row>`. Used by the per-row
+/// `r` reset key in `handle_settings_key`.
+fn apply_settings_row_from(src: &prefs::Prefs, row: SettingsRow, dst: &mut prefs::Prefs) {
+    match row {
+        SettingsRow::SoundMaster => dst.sound_master = src.sound_master,
+        SettingsRow::SoundInfo => dst.sound_info = src.sound_info,
+        SettingsRow::SoundWarn => dst.sound_warn = src.sound_warn,
+        SettingsRow::SoundError => dst.sound_error = src.sound_error,
+        SettingsRow::TtlInfo => dst.notif_ttl_info_ms = src.notif_ttl_info_ms,
+        SettingsRow::TtlWarn => dst.notif_ttl_warn_ms = src.notif_ttl_warn_ms,
+        SettingsRow::TtlError => dst.notif_ttl_error_ms = src.notif_ttl_error_ms,
+        SettingsRow::SidebarHidden => dst.sidebar_hidden = src.sidebar_hidden,
+        SettingsRow::RightPanelVisible => dst.right_panel_visible = src.right_panel_visible,
+        SettingsRow::ChipWorkdir => dst.show_workdir = src.show_workdir,
+        SettingsRow::ChipTool => dst.show_tool = src.show_tool,
+        SettingsRow::ChipConn => dst.show_conn = src.show_conn,
+        SettingsRow::ChipLazygit => dst.show_lazygit = src.show_lazygit,
+        SettingsRow::ChipTheme => dst.show_theme = src.show_theme,
+        SettingsRow::ChipIo => dst.show_io = src.show_io,
+        SettingsRow::ChipIoTotals => dst.show_io_totals = src.show_io_totals,
+        SettingsRow::ChipPaletteHint => dst.show_palette_hint = src.show_palette_hint,
+        SettingsRow::ChipHelpHint => dst.show_help_hint = src.show_help_hint,
+        SettingsRow::ResetAll => *dst = src.clone(),
+    }
+}
+
+/// Re-sync the runtime layout copies on `App` from `app.prefs` after a
+/// settings change. Hot-path draw code reads `app.tree_width` etc.
+/// directly to avoid hashing through prefs every frame.
+fn mirror_layout_from_prefs(app: &mut App) {
+    app.tree_width = app.prefs.tree_width;
+    app.lazygit_width = app.prefs.lazygit_width;
+    app.term_split_pct = app.prefs.term_split_pct;
+    app.sidebar_hidden = app.prefs.sidebar_hidden;
+    app.right_panel_visible = app.prefs.right_panel_visible;
+}
+
+/// Short identifier used in transient status messages.
+fn settings_row_short_label(row: SettingsRow) -> &'static str {
+    match row {
+        SettingsRow::SoundMaster => "sound master",
+        SettingsRow::SoundInfo => "sound info",
+        SettingsRow::SoundWarn => "sound warn",
+        SettingsRow::SoundError => "sound error",
+        SettingsRow::TtlInfo => "TTL info",
+        SettingsRow::TtlWarn => "TTL warn",
+        SettingsRow::TtlError => "TTL error",
+        SettingsRow::SidebarHidden => "sidebar",
+        SettingsRow::RightPanelVisible => "agent panel",
+        SettingsRow::ChipWorkdir => "chip workdir",
+        SettingsRow::ChipTool => "chip tool",
+        SettingsRow::ChipConn => "chip connection",
+        SettingsRow::ChipLazygit => "chip lazygit",
+        SettingsRow::ChipTheme => "chip theme",
+        SettingsRow::ChipIo => "chip I/O speeds",
+        SettingsRow::ChipIoTotals => "chip I/O totals",
+        SettingsRow::ChipPaletteHint => "chip palette hint",
+        SettingsRow::ChipHelpHint => "chip help hint",
+        SettingsRow::ResetAll => "all",
+    }
+}
+
 fn handle_errors_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc
@@ -2480,6 +2885,8 @@ async fn run_palette_action(
             if app.sidebar_hidden && app.focus == Focus::Tree {
                 app.set_focus(Focus::Term);
             }
+            app.prefs.sidebar_hidden = app.sidebar_hidden;
+            prefs::save(&app.prefs);
             app.status_msg = Some(if app.sidebar_hidden {
                 "sidebar hidden".into()
             } else {
@@ -2488,6 +2895,8 @@ async fn run_palette_action(
         }
         ActionKind::ToggleRightPanel => {
             app.right_panel_visible = !app.right_panel_visible;
+            app.prefs.right_panel_visible = app.right_panel_visible;
+            prefs::save(&app.prefs);
             app.status_msg = Some(if app.right_panel_visible {
                 "agent panel on".into()
             } else {
@@ -3050,7 +3459,6 @@ async fn handle_event_msg(app: &mut App, msg: EventMsg, client: &Client) {
                     "event stream lagged".to_string(),
                     Some("some updates may be missing".to_string()),
                     NotifKind::Warn,
-                    NOTIF_TTL_WARN_MS,
                 );
             }
         }
@@ -3093,7 +3501,6 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                 format!("{name} crashed"),
                 reason,
                 NotifKind::Error,
-                NOTIF_TTL_ERROR_MS,
             );
             if let Some(id) = ev.session_id {
                 app.awaiting_input.remove(&id);
@@ -3117,7 +3524,6 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                 format!("{name} stopped"),
                 None,
                 NotifKind::Info,
-                NOTIF_TTL_INFO_MS,
             );
             if let Some(id) = ev.session_id {
                 app.awaiting_input.remove(&id);
@@ -3133,7 +3539,6 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                 format!("auto-compacted {name}"),
                 Some("watchdog detected low context and sent /compact".to_string()),
                 NotifKind::Info,
-                NOTIF_TTL_INFO_MS,
             );
         }
         "agent.finished" => {
@@ -3147,7 +3552,6 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                     format!("{name} finished"),
                     None,
                     NotifKind::Info,
-                    NOTIF_TTL_INFO_MS,
                 );
             }
             // Working→Idle: the agent is now sleeping at the prompt.
@@ -3170,7 +3574,6 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                 format!("{name} needs input"),
                 Some("agent is waiting on a permission prompt".to_string()),
                 NotifKind::Warn,
-                NOTIF_TTL_WARN_MS,
             );
             if let Some(id) = ev.session_id {
                 app.awaiting_input.insert(id);
@@ -3252,32 +3655,42 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
     }
 }
 
+/// Map an in-memory `NotifKind` to the prefs-side `SoundKind`. Two enums
+/// exist so `prefs.rs` stays free of upward dependencies; this is the
+/// canonical translation point.
+pub(super) fn sound_kind_of(kind: NotifKind) -> prefs::SoundKind {
+    match kind {
+        NotifKind::Info => prefs::SoundKind::Info,
+        NotifKind::Warn => prefs::SoundKind::Warn,
+        NotifKind::Error => prefs::SoundKind::Error,
+    }
+}
+
 /// Append a typed toast to the bottom-left notification stack and play
-/// the matching system sound (unless `app.sound_muted`). Evicts the
-/// oldest entry FIFO when the stack would exceed `MAX_NOTIFS`. Mirrors
-/// the dashboard's `pushToast` shape (id, kind, title, body, ttl_ms).
-fn push_notification(
-    app: &mut App,
-    title: String,
-    body: Option<String>,
-    kind: NotifKind,
-    ttl_ms: u64,
-) {
+/// the matching system sound when both the persisted prefs AND the CLI
+/// override allow it. Evicts the oldest entry FIFO when the stack would
+/// exceed `MAX_NOTIFS`. TTL is sourced from `prefs.ttl_for(kind)` so the
+/// user can tune it via the Settings overlay.
+fn push_notification(app: &mut App, title: String, body: Option<String>, kind: NotifKind) {
     let id = app.next_notif_id;
     app.next_notif_id = app.next_notif_id.saturating_add(1);
+    let sk = sound_kind_of(kind);
     app.notifications.push(Notification {
         id,
         title,
         body,
         kind,
         created_at: Instant::now(),
-        ttl: Duration::from_millis(ttl_ms),
+        ttl: app.prefs.ttl_for(sk),
     });
     if app.notifications.len() > MAX_NOTIFS {
         let drop_n = app.notifications.len() - MAX_NOTIFS;
         app.notifications.drain(0..drop_n);
     }
-    if !app.sound_muted {
+    // Two layers: persisted user pref AND one-shot CLI override (script
+    // use, --no-sound). CLI is OR'd on top because it's "extra silence",
+    // never re-enabling.
+    if !app.sound_muted_cli && app.prefs.sound_enabled_for(sk) {
         super::sound::play(kind);
     }
 }
@@ -3331,7 +3744,6 @@ async fn spawn_plain_terminal(
                     format!("shell: {name}"),
                     None,
                     NotifKind::Info,
-                    NOTIF_TTL_INFO_MS,
                 );
             }
             if let Ok(fresh) = client.list_sessions().await {
