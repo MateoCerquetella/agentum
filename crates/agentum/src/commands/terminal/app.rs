@@ -98,6 +98,12 @@ pub struct TermSlot {
     pub term: TerminalPane,
     pub term_in: Option<mpsc::UnboundedSender<TermOut>>,
     pub term_size: (u16, u16),
+    /// True between a `TerminalMsg::Reconnecting` and the next
+    /// `TerminalMsg::Connected` so the byte handler can snap any active
+    /// scrollback back to the live tail when the gap closes — mid-
+    /// disconnect scrollback positions are nearly always stale once
+    /// the server replays a delta or fresh snapshot.
+    pub term_reconnect_pending: bool,
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -615,6 +621,10 @@ pub struct App {
     /// Last `(cols, rows)` we told the server about. Tracked here so we
     /// only push a resize when the value actually changes.
     pub term_size: (u16, u16),
+    /// Mirror of [`TermSlot::term_reconnect_pending`] for the left slot.
+    /// True between a `TerminalMsg::Reconnecting` and the next
+    /// `TerminalMsg::Connected` for the primary terminal stream.
+    pub term_reconnect_pending: bool,
     /// Owned stream-task handles. Stored on `App` instead of threaded
     /// through every helper as `&mut Option<JoinHandle<()>>` — that
     /// pattern has to expand to TWO handles for split panes (left +
@@ -776,6 +786,7 @@ impl App {
             lg_tx: None,
             term_in: None,
             term_size: (0, 0),
+            term_reconnect_pending: false,
             stream_handle_left: None,
             stream_handle_right: None,
             term_tx_left: None,
@@ -1357,10 +1368,31 @@ pub async fn run_loop(
 
             Some(msg) = term_rx.recv() => {
                 handle_terminal_msg(&mut app, msg, Side::Left);
+                // Drain whatever else is already queued before yielding
+                // back to the draw step. A chatty agent (claude code mid-
+                // token-stream, a noisy `cargo build`, etc.) used to land
+                // one WS frame per parser feed and trigger one ratatui
+                // diff-render per chunk. Coalescing collapses bursts into
+                // a single redraw — parser-feeds are cheap, the diff
+                // render is the expensive part — without affecting input
+                // responsiveness because `biased` keeps crossterm ahead
+                // of these branches on the next iteration.
+                while let Ok(more) = term_rx.try_recv() {
+                    handle_terminal_msg(&mut app, more, Side::Left);
+                }
+                while let Ok(more) = term_rx_right.try_recv() {
+                    handle_terminal_msg(&mut app, more, Side::Right);
+                }
             }
 
             Some(msg) = term_rx_right.recv() => {
                 handle_terminal_msg(&mut app, msg, Side::Right);
+                while let Ok(more) = term_rx_right.try_recv() {
+                    handle_terminal_msg(&mut app, more, Side::Right);
+                }
+                while let Ok(more) = term_rx.try_recv() {
+                    handle_terminal_msg(&mut app, more, Side::Left);
+                }
             }
 
             Some(msg) = event_rx.recv() => {
@@ -2087,6 +2119,7 @@ async fn handle_key(
                 term: TerminalPane::new(),
                 term_in: None,
                 term_size: (0, 0),
+                term_reconnect_pending: false,
             });
             app.set_focus(Focus::TermRight);
             app.last_term_side = Side::Right;
@@ -3479,6 +3512,7 @@ async fn run_palette_action(
                     term: TerminalPane::new(),
                     term_in: None,
                     term_size: (0, 0),
+                    term_reconnect_pending: false,
                 });
                 app.set_focus(Focus::TermRight);
                 app.last_term_side = Side::Right;
@@ -3968,6 +4002,35 @@ fn update_selection(app: &mut App, client: &Client, side: Side) {
 
 fn handle_terminal_msg(app: &mut App, msg: TerminalMsg, side: Side) {
     match msg {
+        TerminalMsg::Connected => {
+            // Snap any in-progress scrollback back to the live tail when
+            // recovering from a network drop. Mid-disconnect scrollback
+            // is almost always stale once the server replays a delta or
+            // sends a fresh snapshot, and leaving the user staring at a
+            // pre-drop screen is the most common "is it still working?"
+            // confusion. Done once per reconnect cycle (gated on the
+            // pending flag) so the initial connect at startup and
+            // session-switch resumes don't disturb the user's
+            // intentional scrollback position.
+            match side {
+                Side::Left => {
+                    if app.term_reconnect_pending {
+                        app.term.scroll_to_bottom();
+                        app.term_reconnect_pending = false;
+                        app.status_msg = Some("terminal stream reconnected".into());
+                    }
+                }
+                Side::Right => {
+                    if let Some(slot) = app.split_right.as_mut() {
+                        if slot.term_reconnect_pending {
+                            slot.term.scroll_to_bottom();
+                            slot.term_reconnect_pending = false;
+                            app.status_msg = Some("right-pane stream reconnected".into());
+                        }
+                    }
+                }
+            }
+        }
         TerminalMsg::Bytes(b) => {
             app.io.record_in(b.len());
             match side {
@@ -3979,7 +4042,30 @@ fn handle_terminal_msg(app: &mut App, msg: TerminalMsg, side: Side) {
                 }
             }
         }
-        TerminalMsg::Reconnecting { .. } => {}
+        TerminalMsg::Reconnecting { attempt, delay_ms } => {
+            // Surface the reconnect cycle in the status bar so the user
+            // knows the stream is recovering (not silently dead) and
+            // mark the side so the next `Connected` snaps scrollback.
+            // The events stream has its own dedicated `app.conn` chip;
+            // reusing that for the terminal would conflate two
+            // independent streams that can drop on different schedules.
+            let secs = (delay_ms as f64 / 1000.0).max(0.1);
+            let label = match side {
+                Side::Left => format!("terminal reconnecting (#{attempt}, in {secs:.1}s)"),
+                Side::Right => {
+                    format!("right pane reconnecting (#{attempt}, in {secs:.1}s)")
+                }
+            };
+            app.status_msg = Some(label);
+            match side {
+                Side::Left => app.term_reconnect_pending = true,
+                Side::Right => {
+                    if let Some(slot) = app.split_right.as_mut() {
+                        slot.term_reconnect_pending = true;
+                    }
+                }
+            }
+        }
         TerminalMsg::Error(s) => {
             app.push_error(s.trim().to_string());
         }
@@ -3988,6 +4074,14 @@ fn handle_terminal_msg(app: &mut App, msg: TerminalMsg, side: Side) {
                 Side::Left => "terminal stream closed".into(),
                 Side::Right => "right-pane stream closed".into(),
             });
+            match side {
+                Side::Left => app.term_reconnect_pending = false,
+                Side::Right => {
+                    if let Some(slot) = app.split_right.as_mut() {
+                        slot.term_reconnect_pending = false;
+                    }
+                }
+            }
         }
     }
 }

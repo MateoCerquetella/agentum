@@ -392,19 +392,27 @@ impl Client {
         Ok(())
     }
 
-    /// Open a bidirectional terminal stream.
+    /// Open a bidirectional terminal stream with automatic reconnect.
     ///
     /// Server → client: tmux pane bytes arrive on `tx` as `TerminalMsg`s.
-    /// Client → server: each `Vec<u8>` pulled off `key_rx` is sent as a
-    /// binary WS frame, which the server forwards to the tmux pane via
-    /// `send-keys -H`. This is what makes the terminal pane interactive
+    /// Client → server: each entry pulled off `key_rx` is sent as either
+    /// a binary WS frame (raw keystrokes) or a JSON text frame (resize),
+    /// which the server forwards to the tmux pane via `send-keys -H` /
+    /// `resize-window`. This is what makes the terminal pane interactive
     /// (typing into claude code, sending Ctrl-C, arrow keys, etc.).
+    ///
+    /// On any connection drop the task transparently reconnects with
+    /// exponential backoff. After the first successful connect, every
+    /// retry passes `resume=true` so the server replays only the bytes
+    /// the client missed instead of clobbering the cached parser with a
+    /// fresh snapshot. `Closed` is only emitted when the caller drops
+    /// the receiver side of `tx` — there is no other terminal-loop exit.
     pub fn open_terminal_stream(
         &self,
         id: Uuid,
         tx: mpsc::UnboundedSender<TerminalMsg>,
         mut key_rx: mpsc::UnboundedReceiver<TermOut>,
-        resume: bool,
+        initial_resume: bool,
     ) -> JoinHandle<()> {
         let base = self.base.clone();
         let token = self.token.clone();
@@ -432,60 +440,114 @@ impl Client {
             // session-switch. Only first-connects (resume=false)
             // worked, which is why the bug only bit reconnects.
             let path = format!("/api/sessions/{id}/stream");
-            let extra: &[(&str, &str)] = if resume { &[("resume", "true")] } else { &[] };
-            let url = ws_url(&base, &path, &token, extra);
-            let connector = ws_connector(&url, &trust);
-            let result = connect_async_tls_with_config(url.as_str(), None, false, connector).await;
-            let stream = match result {
-                Ok((s, _)) => s,
-                Err(e) => {
-                    let _ = tx.send(TerminalMsg::Error(format!("ws connect: {e}")));
+            let mut want_resume = initial_resume;
+            let mut attempt: u32 = 0;
+            loop {
+                if tx.is_closed() {
+                    return;
+                }
+                let extra: &[(&str, &str)] =
+                    if want_resume { &[("resume", "true")] } else { &[] };
+                let url = ws_url(&base, &path, &token, extra);
+                let connector = ws_connector(&url, &trust);
+                let result =
+                    connect_async_tls_with_config(url.as_str(), None, false, connector).await;
+                let stream = match result {
+                    Ok((s, _)) => {
+                        attempt = 0;
+                        let _ = tx.send(TerminalMsg::Connected);
+                        s
+                    }
+                    Err(e) => {
+                        attempt = attempt.saturating_add(1);
+                        let delay = backoff_delay(attempt);
+                        // Surface the underlying error once per backoff cycle so
+                        // the user can see "ws connect: tcp connect: ..." in the
+                        // errors overlay. The `Reconnecting` chip carries the
+                        // attempt count + delay separately.
+                        let _ = tx.send(TerminalMsg::Error(format!("ws connect: {e}")));
+                        let _ = tx.send(TerminalMsg::Reconnecting {
+                            attempt,
+                            delay_ms: delay.as_millis() as u64,
+                        });
+                        tokio::time::sleep(delay).await;
+                        // Subsequent retries always resume — the parser still
+                        // holds state from the last good connect, so a fresh
+                        // capture-pane snapshot would clobber visible chat
+                        // history with whatever the agent's UI happens to look
+                        // like *now* (often near-empty after a task finishes).
+                        want_resume = true;
+                        continue;
+                    }
+                };
+                let (mut sink, mut src) = stream.split();
+
+                // Run the bidi pump on a single task. We deliberately do NOT
+                // split the writer onto its own `tokio::spawn(...)` like the
+                // pre-reconnect implementation did: that pattern moves
+                // `key_rx` into the writer, so when the WS dies, key_rx
+                // drops with the writer task and the caller's `term_in`
+                // sender starts erroring on every keystroke. Keeping the
+                // outer loop in possession of `key_rx` lets keystrokes
+                // queue across reconnects and flush the moment the next
+                // attempt succeeds.
+                let drop_reason: DropReason = loop {
+                    tokio::select! {
+                        biased;
+                        out = key_rx.recv() => {
+                            let Some(out) = out else {
+                                // Caller dropped the keystroke sender. No more
+                                // input is coming; close the WS politely.
+                                break DropReason::CallerClosed;
+                            };
+                            let msg = match out {
+                                TermOut::Bytes(b) => WsMsg::Binary(b),
+                                TermOut::Resize { cols, rows } => WsMsg::Text(format!(
+                                    "{{\"resize\":{{\"cols\":{cols},\"rows\":{rows}}}}}"
+                                )),
+                            };
+                            if sink.send(msg).await.is_err() {
+                                break DropReason::SinkErr;
+                            }
+                        }
+                        msg = src.next() => match msg {
+                            Some(Ok(WsMsg::Binary(b))) => {
+                                if tx.send(TerminalMsg::Bytes(b.into())).is_err() {
+                                    return;
+                                }
+                            }
+                            Some(Ok(WsMsg::Text(t))) => {
+                                if tx.send(TerminalMsg::Error(t)).is_err() {
+                                    return;
+                                }
+                            }
+                            Some(Ok(WsMsg::Close(_))) | None => break DropReason::Eof,
+                            Some(Ok(_)) => {} // ping/pong
+                            Some(Err(e)) => {
+                                let _ = tx.send(TerminalMsg::Error(format!("ws: {e}")));
+                                break DropReason::SrcErr;
+                            }
+                        }
+                    }
+                };
+                let _ = sink.close().await;
+                if matches!(drop_reason, DropReason::CallerClosed) {
                     let _ = tx.send(TerminalMsg::Closed);
                     return;
                 }
-            };
-            let (mut sink, mut src) = stream.split();
-
-            // Pump outbound keystrokes / resize messages onto the WS until
-            // the channel closes. Detached so a chatty pane never starves
-            // keystrokes.
-            let writer = tokio::spawn(async move {
-                while let Some(out) = key_rx.recv().await {
-                    let msg = match out {
-                        TermOut::Bytes(b) => WsMsg::Binary(b),
-                        TermOut::Resize { cols, rows } => WsMsg::Text(format!(
-                            "{{\"resize\":{{\"cols\":{cols},\"rows\":{rows}}}}}"
-                        )),
-                    };
-                    if sink.send(msg).await.is_err() {
-                        break;
-                    }
-                }
-                let _ = sink.close().await;
-            });
-
-            while let Some(msg) = src.next().await {
-                match msg {
-                    Ok(WsMsg::Binary(b)) => {
-                        if tx.send(TerminalMsg::Bytes(b.into())).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(WsMsg::Text(t)) => {
-                        if tx.send(TerminalMsg::Error(t.to_string())).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(WsMsg::Close(_)) => break,
-                    Ok(_) => {}
-                    Err(e) => {
-                        let _ = tx.send(TerminalMsg::Error(format!("ws: {e}")));
-                        break;
-                    }
-                }
+                // Server-side close, network error, or sink failure → roll
+                // into a backoff and reconnect with `resume=true`. We don't
+                // emit `Closed` here: the caller treats `Closed` as
+                // terminal, and we're still trying to recover.
+                attempt = attempt.saturating_add(1);
+                let delay = backoff_delay(attempt);
+                let _ = tx.send(TerminalMsg::Reconnecting {
+                    attempt,
+                    delay_ms: delay.as_millis() as u64,
+                });
+                tokio::time::sleep(delay).await;
+                want_resume = true;
             }
-            writer.abort();
-            let _ = tx.send(TerminalMsg::Closed);
         })
     }
 
@@ -561,10 +623,28 @@ impl Client {
 
 #[derive(Debug)]
 pub enum TerminalMsg {
+    /// A successful WS upgrade completed. After a `Reconnecting` cycle
+    /// this signals the gap closed and bytes are flowing again — the
+    /// TUI uses it to clear the reconnect overlay and snap any active
+    /// scrollback back to the live tail so the user sees fresh state.
+    Connected,
     Bytes(Bytes),
     Reconnecting { attempt: u32, delay_ms: u64 },
     Error(String),
+    /// Caller dropped the keystroke sender — the stream task is
+    /// shutting down for good. Auto-reconnect attempts do NOT emit
+    /// this; they emit `Reconnecting` and silently retry.
     Closed,
+}
+
+/// Reason the inner WS read/write loop exited. Distinguishes "caller is
+/// done with this stream" (terminal — emit `Closed`, return) from
+/// "connection died" (transient — backoff + reconnect).
+enum DropReason {
+    CallerClosed,
+    SinkErr,
+    SrcErr,
+    Eof,
 }
 
 /// Outbound terminal stream messages: keystrokes (binary frames) and

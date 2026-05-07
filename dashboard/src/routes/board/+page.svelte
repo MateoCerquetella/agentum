@@ -318,4 +318,70 @@
     text-align: center;
   }
   .empty.err { color: var(--crash); }
+
+  /* Stack rail beneath the board on tablets — keep it accessible
+     without crushing the columns. */
+  @media (max-width: 1100px) {
+    .row { flex-direction: column; }
+    :global(.rail) {
+      width: 100%;
+      border-left: 0;
+      border-top: 1px solid var(--border);
+      max-height: 280px;
+    }
+  }
+
+  /* Phone: collapse the kanban grid into a horizontal scroll-snap
+     carousel so each column is reachable but the page doesn't try to
+     squeeze 4 narrow columns into ~360px. */
+  @media (max-width: 720px) {
+    /* Sticky route header. */
+    :global(.toolbar) {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: color-mix(in srgb, var(--bg-chrome) 92%, transparent);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      padding: 10px 12px;
+    }
+    /* Hide the duplicate "+ Ticket" — bottom nav + (eventual) per-col
+     "+" still allow creation. */
+    :global(.toolbar .tb-btn.primary) { display: none; }
+    /* Hide the meta "group: status" / "assignee" pills which take a
+       full row but aren't actionable yet. */
+    :global(.toolbar .pill) { display: none; }
+
+    :global(.board) {
+      display: flex !important;
+      grid-template-columns: none !important;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scroll-snap-type: x mandatory;
+      padding: 12px;
+      gap: 10px;
+      -webkit-overflow-scrolling: touch;
+    }
+    :global(.board .col) {
+      flex: 0 0 84vw;
+      min-width: 240px;
+      max-width: 320px;
+      scroll-snap-align: center;
+    }
+
+    /* Stack the rail under the board on phone, with bounded height so
+       both rail content and board column carousel are reachable. */
+    :global(.rail) {
+      max-height: 320px;
+    }
+
+    .strip {
+      padding: 8px 12px;
+      gap: 6px;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+    .strip::-webkit-scrollbar { display: none; }
+    .strip .chip { padding: 7px 12px; font-size: 12px; }
+  }
 </style>

@@ -1,10 +1,13 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { get } from 'svelte/store';
   import { goto } from '$app/navigation';
   import { palette, closePalette } from '$stores/palette';
   import { openShortcuts } from '$stores/palette';
   import { sessions, loadSessions } from '$stores/sessions';
   import { openNewSession } from '$stores/newSession';
+  import { tweaks, setTheme } from '$stores/tweaks';
+  import { THEMES } from '$stores/themes';
   import { api } from '$lib/api';
 
   type Entry = {
@@ -12,6 +15,14 @@
     title: string;
     subtitle?: string;
     badge?: string;
+    /** Optional grouping label that renders as a non-selectable header
+     *  immediately before this entry. Used for the Dark / Light split
+     *  in the theme commands. */
+    section?: string;
+    /** Hex swatch shown to the left of the title. */
+    swatch?: string;
+    /** Marks the row with a check; used for the active theme. */
+    selected?: boolean;
     action: () => void;
   };
 
@@ -38,6 +49,35 @@
       out.push({ id: `page:${href}`, title: `Go to ${label}`, badge: 'page', action: () => goto(href) });
     }
 
+    // Themes — grouped under Dark / Light section headers. The first
+    // entry in each group carries a `section` label that renders as a
+    // non-selectable divider immediately above it.
+    const activeId = get(tweaks).theme;
+    const dark  = THEMES.filter(t => t.mode === 'dark');
+    const light = THEMES.filter(t => t.mode === 'light');
+    for (const t of dark) {
+      out.push({
+        id: `theme:${t.id}`,
+        title: `Theme · ${t.label}`,
+        badge: 'theme',
+        section: 'Dark themes',
+        swatch: t.swatch,
+        selected: t.id === activeId,
+        action: () => { closePalette(); setTheme(t.id); }
+      });
+    }
+    for (const t of light) {
+      out.push({
+        id: `theme:${t.id}`,
+        title: `Theme · ${t.label}`,
+        badge: 'theme',
+        section: 'Light themes',
+        swatch: t.swatch,
+        selected: t.id === activeId,
+        action: () => { closePalette(); setTheme(t.id); }
+      });
+    }
+
     // Sessions
     for (const s of $sessions.items) {
       out.push({
@@ -59,7 +99,7 @@
    */
   function score(item: Entry, q: string): number {
     if (!q) return 1;
-    const s = (item.title + ' ' + (item.subtitle ?? '')).toLowerCase();
+    const s = (item.title + ' ' + (item.subtitle ?? '') + ' ' + (item.badge ?? '') + ' ' + (item.section ?? '')).toLowerCase();
     const ql = q.toLowerCase();
     if (s.startsWith(ql)) return 100;
     const idx = s.indexOf(ql);
@@ -191,6 +231,9 @@
         <div class="empty muted">no matches</div>
       {/if}
       {#each filtered as e, i (e.id)}
+        {#if e.section && (i === 0 || filtered[i - 1].section !== e.section)}
+          <div class="section mono" role="presentation">{e.section}</div>
+        {/if}
         <button
           type="button"
           class="row"
@@ -198,8 +241,17 @@
           onmouseenter={() => (highlight = i)}
           onclick={() => pick(e)}
         >
-          {#if e.badge}<span class="badge mono">{e.badge}</span>{/if}
+          {#if e.swatch}
+            <span class="swatch" style:background={e.swatch}></span>
+          {:else if e.badge}
+            <span class="badge mono">{e.badge}</span>
+          {/if}
           <span class="title">{e.title}</span>
+          {#if e.selected}
+            <svg class="check" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3.5 8l3 3 6-6"/>
+            </svg>
+          {/if}
           {#if e.subtitle}<span class="sub mono">{e.subtitle}</span>{/if}
         </button>
       {/each}
@@ -272,6 +324,29 @@
     border-radius: 999px;
     flex-shrink: 0;
   }
+  /* Theme rows: small color disc instead of the badge so users can
+     eyeball the palette before committing to it. */
+  .swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    flex-shrink: 0;
+    border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  }
+  .check {
+    color: var(--accent);
+    flex-shrink: 0;
+    margin-left: 0.4rem;
+  }
+  /* Non-selectable section divider; sits between filtered theme groups. */
+  .section {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    padding: 0.6rem 0.7rem 0.25rem;
+    user-select: none;
+  }
   .title {
     flex: 1;
     font-size: 0.9rem;
@@ -311,4 +386,29 @@
   }
   .mono { font-family: var(--font-mono); }
   .muted { color: var(--muted); }
+
+  /* Phone: command palette becomes a near-fullscreen sheet that
+     surfaces the soft keyboard immediately. Hint footer collapses. */
+  @media (max-width: 720px) {
+    .palette {
+      top: env(safe-area-inset-top, 0px);
+      bottom: env(safe-area-inset-bottom, 0px);
+      left: 0;
+      right: 0;
+      width: 100%;
+      max-width: 100%;
+      max-height: none;
+      transform: none;
+      border-radius: 0;
+      border-left: 0;
+      border-right: 0;
+    }
+    .search {
+      padding: 14px 16px;
+      font-size: 16px;
+    }
+    .list { padding: 8px; gap: 4px; }
+    .row { padding: 12px; min-height: 44px; }
+    .hint { display: none; }
+  }
 </style>

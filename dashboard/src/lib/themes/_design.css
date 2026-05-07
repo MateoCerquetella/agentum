@@ -32,7 +32,7 @@
   align-items: center;
   gap: 12px;
   padding: 0 16px;
-  background: #0d0d0d;
+  background: var(--bg-chrome);
   flex-shrink: 0;
 }
 .db-top .brand {
@@ -108,7 +108,7 @@
 /* ---------- sidebar (220px) ---------- */
 .sb {
   width: 220px;
-  background: #0d0d0d;
+  background: var(--bg-chrome);
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column;
   flex-shrink: 0;
@@ -144,7 +144,7 @@
   text-decoration: none;
   font-family: var(--display);
 }
-.sb .item:hover { background: #161616; color: var(--fg); }
+.sb .item:hover { background: var(--bg-row-hover); color: var(--fg); }
 .sb .item.active { background: var(--surface); color: var(--fg); }
 .sb .item .ico { width: 14px; height: 14px; color: var(--fg-3); flex-shrink: 0; }
 .sb .item.active .ico { color: var(--fg); }
@@ -231,7 +231,7 @@
   display: flex; align-items: center; gap: 10px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
-  background: #0d0d0d;
+  background: var(--bg-chrome);
   flex-shrink: 0;
 }
 .toolbar .tabs { display: flex; gap: 2px; }
@@ -299,7 +299,7 @@
   display: inline-flex; align-items: center; gap: 6px;
   cursor: pointer;
 }
-.tb-btn:hover  { background: #2c2c2c; color: var(--fg); }
+.tb-btn:hover  { background: var(--bg-tb-hover); color: var(--fg); }
 .tb-btn.primary { background: var(--cta); border-color: var(--cta); color: #fff; }
 .tb-btn.primary:hover { background: var(--link); border-color: var(--link); }
 
@@ -327,7 +327,7 @@
   display: flex; align-items: center; gap: 8px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
-  background: #1a1a1a;
+  background: var(--bg-card-top);
 }
 .scard .top .stat {
   width: 8px; height: 8px;
@@ -354,7 +354,7 @@
   flex: 1; min-height: 88px;
   background:
     repeating-linear-gradient(0deg, rgba(255,255,255,0.014) 0 1px, transparent 1px 4px),
-    #0a0a0a;
+    var(--bg-card-body);
 }
 .scard .body .l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .scard .body .l .c-fg3 { color: var(--fg-3); }
@@ -369,7 +369,7 @@
   display: flex; align-items: center; gap: 10px;
   font-family: var(--mono); font-size: 10px;
   color: var(--fg-3); text-transform: uppercase; letter-spacing: 0.04em;
-  background: #161616;
+  background: var(--bg-row-hover);
 }
 .scard .foot .dot { width: 4px; height: 4px; border-radius: var(--radius-pill); background: var(--fg-3); }
 .scard .foot .ctx-bar {
@@ -389,7 +389,7 @@
 .term-host {
   flex: 1; min-height: 0;
   display: flex; flex-direction: column;
-  background: #050505;
+  background: var(--bg-term);
   overflow: hidden;
   position: relative;
 }
@@ -398,7 +398,7 @@
   height: 30px;
   padding: 0 14px;
   border-bottom: 1px solid var(--border);
-  background: #0d0d0d;
+  background: var(--bg-chrome);
   font-family: var(--mono); font-size: 11px; color: var(--fg-3);
   flex-shrink: 0;
 }
@@ -456,7 +456,7 @@
 .rail {
   width: 320px;
   border-left: 1px solid var(--border);
-  background: #0d0d0d;
+  background: var(--bg-chrome);
   display: flex; flex-direction: column;
   flex-shrink: 0;
   min-height: 0;
@@ -529,13 +529,13 @@
   border: 1px solid var(--border-2);
   border-radius: var(--radius);
   overflow: hidden;
-  background: #0a0a0a;
+  background: var(--bg-card-body);
   font-family: var(--mono); font-size: 11px;
 }
 .diff .dh {
   padding: 6px 10px;
   border-bottom: 1px solid var(--border);
-  background: #161616;
+  background: var(--bg-row-hover);
   color: var(--fg-2);
   display: flex; align-items: center; gap: 8px;
 }
@@ -574,7 +574,7 @@
 .col {
   display: flex; flex-direction: column;
   min-height: 0;
-  background: #0d0d0d;
+  background: var(--bg-chrome);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   overflow: hidden;
@@ -667,3 +667,33 @@
 .ticket .tk-foot .lbl.feat  { color: var(--green); border-color: rgba(25,214,0,0.4); }
 .ticket .tk-foot .lbl.chore { color: var(--blu);   border-color: rgba(85,190,255,0.4); }
 .ticket .tk-foot .lbl.spike { color: var(--amber); border-color: rgba(255,180,84,0.4); }
+
+/* ---------- mobile toolbar / nav helpers ---------- */
+@media (max-width: 720px) {
+  /* Toolbars become wrapping rows with bigger tap targets. The route
+     pages keep their semantic structure but actions get easier to hit. */
+  .toolbar { padding: 8px 12px; gap: 8px; flex-wrap: wrap; }
+  .tb-btn {
+    min-height: 36px;
+    padding: 0 12px;
+    font-size: 11.5px;
+  }
+  .tb-btn.primary {
+    min-height: 38px;
+    padding: 0 14px;
+  }
+  .pill {
+    padding: 5px 10px;
+    font-size: 11px;
+  }
+  /* Kanban board column on phone gets a bit more breathing room. */
+  .col-h { padding: 12px 14px; }
+  /* Right rail (session detail / board) when stacked under main: more
+     air for thumbs and bigger key-value rows. */
+  .rail .rh { height: 40px; padding: 0 14px; }
+  .rail .group { padding: 14px; }
+  .kv { font-size: 13px; }
+  .kv .v { font-size: 12.5px; }
+  /* Diff blocks already feel cramped on phones; ease line-height. */
+  .diff .ln { line-height: 1.7; }
+}

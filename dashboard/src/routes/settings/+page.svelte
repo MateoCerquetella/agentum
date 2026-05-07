@@ -2,14 +2,52 @@
   import RemoteAccessInfo from '$components/RemoteAccessInfo.svelte';
   import HostStrip from '$components/dashboard/HostStrip.svelte';
   import {
-    tweaks, setAccent, setDensity,
+    tweaks, setAccent, setDensity, setTheme,
     setNotifyAwaitingInput, setNotifyFinished, setNotifyCrashed, setNotifyCompact,
-    setHideHostStrip, setStuckMinutes,
+    setNotifyBrowser, setHideHostStrip, setStuckMinutes,
     ACCENTS, DENSITIES
   } from '$stores/tweaks';
+  import { THEMES } from '$stores/themes';
+
+  const darkThemes  = THEMES.filter(t => t.mode === 'dark');
+  const lightThemes = THEMES.filter(t => t.mode === 'light');
   import { host, fmtBytes } from '$stores/host';
+  import {
+    notifyPermission, isSupported as notifySupported,
+    requestPermission as requestNotifyPermission, refreshPermission, notify
+  } from '$stores/notify';
+  import { onMount } from 'svelte';
 
   const latest = $derived($host.latest);
+
+  onMount(() => {
+    // Permission can change in browser settings while the SPA is open;
+    // refresh on mount so the toggle reflects reality.
+    refreshPermission();
+  });
+
+  // Toggling browser notifications on prompts for permission. If the
+  // user denied previously the toggle is force-disabled with guidance
+  // — we can't re-prompt once they've said no.
+  async function onToggleBrowserNotify(next: boolean) {
+    if (!next) { setNotifyBrowser(false); return; }
+    if (!notifySupported()) { setNotifyBrowser(false); return; }
+    if ($notifyPermission === 'denied') return;
+    if ($notifyPermission !== 'granted') {
+      const result = await requestNotifyPermission();
+      if (result !== 'granted') { setNotifyBrowser(false); return; }
+    }
+    setNotifyBrowser(true);
+  }
+
+  function sendTestNotification() {
+    notify({
+      title: 'agentum',
+      body: 'Browser notifications are working.',
+      tag: 'test',
+      urgent: true
+    });
+  }
 </script>
 
 <div class="page">
@@ -24,6 +62,43 @@
         <span class="micro">Appearance</span>
         <h2>Theme &amp; density</h2>
       </header>
+
+      <div class="row">
+        <div class="lbl">
+          <span class="lbl-h">Theme</span>
+          <span class="lbl-d">Reskins surfaces and foreground; the accent above stays independent. Picking a theme snaps the accent to its signature color — re-pick below to override.</span>
+        </div>
+        <div class="opts theme-grid">
+          <span class="theme-group-lbl">Dark</span>
+          {#each darkThemes as t (t.id)}
+            <button
+              type="button"
+              class="theme-chip"
+              class:active={$tweaks.theme === t.id}
+              onclick={() => setTheme(t.id)}
+              title={t.label}
+              aria-label={`Use ${t.label} theme`}
+            >
+              <span class="theme-swatch" style:background={t.swatch}></span>
+              <span class="theme-name">{t.label}</span>
+            </button>
+          {/each}
+          <span class="theme-group-lbl">Light</span>
+          {#each lightThemes as t (t.id)}
+            <button
+              type="button"
+              class="theme-chip"
+              class:active={$tweaks.theme === t.id}
+              onclick={() => setTheme(t.id)}
+              title={t.label}
+              aria-label={`Use ${t.label} theme`}
+            >
+              <span class="theme-swatch" style:background={t.swatch}></span>
+              <span class="theme-name">{t.label}</span>
+            </button>
+          {/each}
+        </div>
+      </div>
 
       <div class="row">
         <div class="lbl">
@@ -112,12 +187,45 @@
     <section class="block">
       <header class="block-h">
         <span class="micro">Notifications</span>
-        <h2>Toast preferences</h2>
+        <h2>Toast &amp; browser alerts</h2>
       </header>
       <p class="body-text">
-        Each toggle gates a single event kind. Toasts only appear while the
-        dashboard tab is open — desktop / OS notifications land in a follow-up.
+        Each toggle gates a single event kind. In-app toasts appear in the
+        corner while the tab is open; browser alerts pop the OS notification
+        center when the dashboard is hidden or in another window.
       </p>
+
+      <div class="row">
+        <div class="lbl">
+          <span class="lbl-h">Browser notifications</span>
+          <span class="lbl-d">
+            Mirror toast events to OS-level alerts so you get pinged when the
+            dashboard is in another tab or behind another window. Requires
+            granting the browser permission.
+            {#if $notifyPermission === 'denied'}
+              <strong style="color: var(--cta);"> Permission was denied — re-enable in your browser's site settings to flip this on.</strong>
+            {:else if $notifyPermission === 'unsupported'}
+              <strong style="color: var(--fg-3);"> This browser doesn't expose the Notifications API.</strong>
+            {/if}
+          </span>
+        </div>
+        <div class="opts" style="flex-direction: column; align-items: flex-end; gap: 6px;">
+          <label class="switch" class:disabled={$notifyPermission === 'denied' || $notifyPermission === 'unsupported'}>
+            <input
+              type="checkbox"
+              checked={$tweaks.notifyBrowser && $notifyPermission === 'granted'}
+              disabled={$notifyPermission === 'denied' || $notifyPermission === 'unsupported'}
+              onchange={(e) => onToggleBrowserNotify((e.currentTarget as HTMLInputElement).checked)}
+            />
+            <span class="track"><span class="thumb"></span></span>
+          </label>
+          {#if $tweaks.notifyBrowser && $notifyPermission === 'granted'}
+            <button type="button" class="ghost-btn" onclick={sendTestNotification}>
+              Send test
+            </button>
+          {/if}
+        </div>
+      </div>
 
       <div class="row">
         <div class="lbl">
@@ -308,6 +416,55 @@
 
   .opts { display: inline-flex; gap: 8px; align-items: center; }
 
+  /* Theme picker — wraps so it doesn't overflow the settings column. */
+  .theme-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    justify-content: flex-end;
+    max-width: 520px;
+  }
+  .theme-group-lbl {
+    width: 100%;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--fg-3);
+    margin-top: 4px;
+    text-align: right;
+  }
+  .theme-group-lbl:first-child { margin-top: 0; }
+  .theme-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px 4px 6px;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--border-2);
+    background: var(--bg-2);
+    color: var(--fg-2);
+    font-size: 11.5px;
+    font-family: var(--mono);
+    cursor: pointer;
+    transition: color var(--t-hover), border-color var(--t-hover), background var(--t-hover);
+  }
+  .theme-chip:hover { color: var(--fg); border-color: var(--fg-3); }
+  .theme-chip.active {
+    color: var(--fg);
+    border-color: var(--cta);
+    background: color-mix(in srgb, var(--cta) 14%, var(--bg-2));
+  }
+  .theme-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: var(--radius-pill);
+    border: 1px solid color-mix(in srgb, var(--fg) 18%, transparent);
+    flex-shrink: 0;
+  }
+  .theme-name { white-space: nowrap; }
+
   .swatch {
     width: 26px;
     height: 26px;
@@ -354,6 +511,7 @@
 
   /* iOS-style toggle. */
   .switch { display: inline-flex; cursor: pointer; }
+  .switch.disabled { cursor: not-allowed; opacity: 0.45; }
   .switch input { display: none; }
   .switch .track {
     width: 36px;
@@ -431,4 +589,87 @@
     color: var(--fg);
   }
   .muted-mini { color: var(--fg-3); font-family: var(--mono); font-size: 11px; }
+
+  /* Subtle action button used inline beside switches. */
+  .ghost-btn {
+    padding: 4px 10px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border-2);
+    background: var(--bg-2);
+    color: var(--fg-2);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: color var(--t-hover), border-color var(--t-hover), background var(--t-hover);
+  }
+  .ghost-btn:hover {
+    color: var(--fg);
+    border-color: var(--cta);
+    background: color-mix(in srgb, var(--cta) 10%, var(--bg-2));
+  }
+
+  /* Stack the row above ~640px so labels never crash into the toggles
+     and so long descriptions read in a comfortable column on phones.
+     On desktop the original two-column grid stays intact. */
+  @media (max-width: 720px) {
+    /* Sticky route header so "Settings" stays visible while scrolling. */
+    :global(.toolbar) {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: color-mix(in srgb, var(--bg-chrome) 92%, transparent);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+    .scroll {
+      padding: 14px 12px 28px;
+      gap: 14px;
+    }
+    .block {
+      padding: 16px 14px;
+      border-radius: 12px;
+    }
+    /* Native iOS Settings feel: label hugs left, control hugs right.
+       Multi-row controls (swatches, segmented) opt back into stacking
+       via the row.row-stack helper class. */
+    .row {
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+    }
+    /* When the description is long, drop a second-row span; this is
+       just a wrapping fallback handled by .lbl-d's natural width. */
+    .opts { justify-content: flex-end; }
+    .seg { flex-wrap: wrap; }
+    .seg-opt { flex: 1 1 auto; min-height: 36px; padding: 8px 12px; }
+    .swatch { width: 32px; height: 32px; }
+    .num { width: 84px; padding: 9px 10px; font-size: 13px; }
+
+    /* iOS-size toggles. */
+    .switch .track { width: 46px; height: 28px; border-radius: 999px; }
+    .switch .thumb { width: 22px; height: 22px; top: 2px; left: 2px; }
+    .switch input:checked + .track .thumb { left: 21px; }
+
+    .lbl-h { font-size: 14px; }
+    .lbl-d { font-size: 12px; max-width: none; }
+    .block-h h2 { font-size: 16px; }
+
+    .kv {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+  /* Stack the row entirely on the smallest phones so the label can
+     breathe and the swatch row falls underneath. */
+  @media (max-width: 480px) {
+    .row {
+      grid-template-columns: 1fr;
+      align-items: flex-start;
+    }
+    .opts { justify-content: flex-start; width: 100%; }
+  }
+  @media (max-width: 380px) {
+    .kv { grid-template-columns: 1fr; }
+  }
 </style>

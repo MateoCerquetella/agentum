@@ -498,6 +498,48 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  @media (max-width: 720px) {
+    /* Bottom-sheet treatment on phones — slides up from below, full
+       width, rounded only on the top corners. Reads as native modal. */
+    .backdrop {
+      align-items: flex-end;
+      padding: 0;
+    }
+    .dialog {
+      width: 100%;
+      max-width: 100%;
+      max-height: 92dvh;
+      border-radius: 18px 18px 0 0;
+      padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px));
+      animation: sheet-in 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+    @keyframes sheet-in {
+      from { transform: translateY(100%); }
+      to   { transform: translateY(0); }
+    }
+    .x { font-size: 26px; padding: 4px 10px; }
+    .tool { padding: 12px 12px; }
+    .tool .t-name { font-size: 14px; }
+    input[type='text'] {
+      padding: 12px 12px;
+      font-size: 16px !important;
+      border-radius: 10px;
+    }
+    .toggle { padding: 12px; }
+    footer {
+      flex-direction: column-reverse;
+      gap: 10px;
+      padding-top: 14px;
+    }
+    footer button {
+      width: 100%;
+      justify-content: center;
+      padding: 12px 16px;
+      font-size: 13px;
+      border-radius: 10px;
+      min-height: 44px;
+    }
+  }
   @media (max-width: 540px) {
     .tools { grid-template-columns: repeat(2, 1fr); }
     .grid { grid-template-columns: 1fr; }

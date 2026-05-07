@@ -168,4 +168,36 @@
     height: calc(100vh - 0px);
     min-height: 100vh;
   }
+
+  /* Phone: the free-form multi-pane canvas is a desktop power feature
+     (drag, resize, tile). On a thumb-sized screen it's hostile. We
+     hint the user toward the per-session terminal which is already
+     fully mobile-tuned. */
+  @media (max-width: 720px) {
+    :global(.toolbar .micro:nth-of-type(2)) { display: none; }
+    :global(.toolbar) { gap: 8px; flex-wrap: wrap; }
+    .scroll { padding: 12px; }
+    .canvas {
+      min-width: 0;
+      height: auto;
+      min-height: 60dvh;
+      background: var(--bg-2);
+      border-style: solid;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .canvas::before {
+      content: "Multi-pane canvas needs a wider screen. Open a session from the Sessions tab to use the full terminal here.";
+      max-width: 36ch;
+      text-align: center;
+      color: var(--fg-3);
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    /* Hide the actual TerminalPanels on phone — they use absolute
+       positioning that breaks at narrow widths. */
+    .canvas :global(.panel) { display: none; }
+  }
 </style>

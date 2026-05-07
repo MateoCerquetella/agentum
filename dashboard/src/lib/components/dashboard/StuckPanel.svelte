@@ -176,4 +176,35 @@
   }
   .act { color: var(--amber); border-color: color-mix(in oklab, var(--amber) 40%, var(--border-2)); }
   .open:hover, .act:hover { border-color: var(--cta); color: var(--cta); }
+
+  /* Phone: the row was a single horizontal flex which crammed the
+     reason / name / actions into 360px and clipped. Rework into a
+     two-line block: name + reason on top, action buttons full-width
+     underneath. */
+  @media (max-width: 700px) {
+    .stuck { padding: 12px 14px; }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      grid-template-areas:
+        "name  reason"
+        "act   open";
+      gap: 6px 10px;
+      padding: 10px 8px;
+      align-items: center;
+    }
+    .reason { grid-area: reason; min-width: 0; text-align: right; font-size: 10px; }
+    .name   { grid-area: name; font-size: 14px; }
+    .meta   { display: none; }
+    .spacer { display: none; }
+    .act, .open {
+      padding: 8px 12px;
+      min-height: 36px;
+      font-size: 12px;
+    }
+    .act  { grid-area: act; }
+    .open { grid-area: open; }
+    /* When there's no .act, span open across both columns. */
+    .row:not(.awaiting) .open { grid-column: 1 / span 2; grid-area: auto; }
+  }
 </style>

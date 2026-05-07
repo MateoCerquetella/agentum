@@ -35,6 +35,17 @@ pub use transcript_store::TranscriptStore;
 
 pub use error::ApiError;
 
+/// Resume marker for a session's WS stream. Tracks the byte offset the
+/// client last received plus the pane size that was active at that
+/// moment, so the next `?resume=true` can replay only the missed delta
+/// — but only if the size still matches. See [`AppState::stream_positions`].
+#[derive(Clone, Copy, Debug)]
+pub struct StreamCheckpoint {
+    pub pos: u64,
+    pub cols: u16,
+    pub rows: u16,
+}
+
 /// Capacity of the broadcast bus that fans `Event`s out to every
 /// connected SSE / WS client. Slow consumers that lag behind by more
 /// than this many events get a `Lagged(n)` error and miss those
@@ -68,14 +79,20 @@ pub struct AppState {
     /// tailing each agent's Claude Code transcript. See
     /// [`transcript_store`] for how it stays in sync.
     pub transcripts: TranscriptStore,
-    /// Per-session log file position last forwarded over a WS stream.
-    /// When a client reconnects with `{"resume":true}`, the WS handler
-    /// uses this to replay only the bytes the client missed during the
-    /// gap (typically a session-switch round trip), instead of sending
-    /// a full `capture-pane` snapshot that would clobber the client's
-    /// preserved parser state with whatever the agent's UI happens to
-    /// look like *now*.
-    pub stream_positions: Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, u64>>>,
+    /// Per-session resume checkpoint. When a client reconnects with
+    /// `{"resume":true}`, the WS handler uses this to replay only the
+    /// bytes the client missed during the gap (typically a session-
+    /// switch round trip) instead of sending a full `capture-pane`
+    /// snapshot that would clobber the client's preserved parser state
+    /// with whatever the agent's UI happens to look like *now*. The
+    /// checkpoint also remembers the pane size at last save so the
+    /// handler can invalidate the resume when the client's viewport
+    /// changed during the disconnect — replaying bytes emitted at a
+    /// different grid size produces visible layout corruption (cursor
+    /// moves target stale cells) that's hard to recover from short of
+    /// a full snapshot.
+    pub stream_positions:
+        Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, StreamCheckpoint>>>,
 }
 
 impl AppState {

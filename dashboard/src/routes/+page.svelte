@@ -27,7 +27,7 @@
   type FleetGroup = 'none' | 'project' | 'status';
   let filterBy = $state<FleetFilter>('all');
   let sortBy   = $state<FleetSort>('activity');
-  let groupBy  = $state<FleetGroup>('none');
+  let groupBy  = $state<FleetGroup>('project');
 
   function refresh() {
     loadSessions();
@@ -199,7 +199,6 @@
     <span class="micro" style="color: var(--fg-2);">Overview</span>
     <span class="micro" style="margin-left: 4px;">· last 24h</span>
     <span class="spacer"></span>
-    <span class="pill live">auto-refresh 5s</span>
     <button type="button" class="tb-btn primary" onclick={openNewSession}>
       <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
         <path d="M3 8h10M8 3v10" stroke-linecap="round"/>
@@ -631,6 +630,98 @@
 
   @media (max-width: 1100px) {
     .hero { grid-template-columns: 1fr; }
-    .summary { grid-template-columns: 1fr; gap: 8px; }
+    .summary { grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  }
+
+  /* Tighten the hero text + collapse the summary to two columns on
+     tablets — the 3-up arrangement starts losing readability around
+     here once the sidebar is also open. */
+  @media (max-width: 1100px) {
+    /* The FleetRow drops to 6 columns at 1100px, so the desktop
+       8-col header would no longer line up — hide it. The first
+       FleetRow visually substitutes thanks to the always-on context
+       bar + Open button. */
+    .fleet-head { display: none; }
+  }
+  @media (max-width: 920px) {
+    .summary { grid-template-columns: repeat(2, 1fr); }
+    .hello { font-size: 26px; }
+    .scroll { padding: 14px 14px 14px; gap: 12px; }
+    .fleet-h {
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .fleet-h .seg-btn { padding: 4px 8px; }
+  }
+
+  /* Phone layout: full-width summary cards, collapse the fleet header
+     row to a single "Session · context" line. The full grid is replaced
+     by the card layout in FleetRow's own media query so this just
+     suppresses the desktop column header and tightens chrome. */
+  @media (max-width: 700px) {
+    /* Promote the toolbar to a sticky route header — feels like an iOS
+       large-title nav after the hero scrolls past. */
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: color-mix(in srgb, var(--bg-chrome) 92%, transparent);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      gap: 6px;
+      padding-left: 12px;
+      padding-right: 12px;
+    }
+    .scroll { padding: 12px 12px 18px; gap: 14px; }
+
+    .summary {
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+    .hello { font-size: 22px; line-height: 1.1; }
+    .narrative { gap: 6px; margin-top: 10px; }
+
+    /* Stack hero items full-width and let HostStrip lead so the live
+       CPU/RAM dashboard reads as the "device" pulse on a phone. */
+    .hero { gap: 14px; }
+    .hero-side { order: -1; justify-content: flex-start; }
+
+    .fleet { border-radius: 12px; }
+    .fleet-h {
+      padding: 12px 14px;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .fleet-h .seg {
+      flex: 1 1 auto;
+      justify-content: space-around;
+    }
+    .fleet-h .seg-btn {
+      flex: 1;
+      padding: 8px 6px;
+      font-size: 10.5px;
+    }
+    /* Hide the "Group" segmented control on phone — least-actionable
+       affordance, recovers a row of chrome. */
+    .fleet-h .seg:last-of-type { display: none; }
+
+    /* .fleet-head is already hidden by the 1100px rule above. */
+    .group-h { padding: 10px 14px 6px; }
+    .strips { flex-direction: column; }
+    .just-shipped {
+      padding: 12px 14px;
+      gap: 10px;
+    }
+    .chip-t { max-width: 160px; }
+  }
+
+  @media (max-width: 420px) {
+    .hello { font-size: 20px; }
+    /* Drop the "of" total once space is tight — keep the streaming
+       count, which is the actionable bit. */
+    .fleet-h .micro:nth-of-type(2) { display: none; }
+    /* Spawn button is duplicated by the bottom-nav FAB on phone — hide
+       the toolbar copy so the route header reads "Overview · 24h". */
+    .toolbar :global(.tb-btn.primary) { display: none; }
   }
 </style>

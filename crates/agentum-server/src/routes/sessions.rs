@@ -19,6 +19,7 @@ use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::StreamCheckpoint;
 use crate::error::ApiError;
 
 const GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -278,6 +279,7 @@ async fn stop(
         .store
         .update_status_and_target(id, Status::Stopped, None)
         .await?;
+    emit_stopped(&state, &session, "stop").await;
     Ok(Json(load(&state, id).await?))
 }
 
@@ -295,7 +297,24 @@ async fn kill(
         .store
         .update_status_and_target(id, Status::Stopped, None)
         .await?;
+    emit_stopped(&state, &session, "kill").await;
     Ok(Json(load(&state, id).await?))
+}
+
+/// Persist + broadcast a `session.stopped` event so the UI gets a benign
+/// "stopped" toast instead of letting the watchdog notice the dead pane on
+/// its next tick and fire `session.crashed`. The watchdog itself sees the
+/// `Stopped` status and bows out silently.
+async fn emit_stopped(state: &AppState, session: &Session, reason: &str) {
+    let ev = Event::new("session.stopped")
+        .with_session(session.id, &session.name)
+        .with_payload(serde_json::json!({"reason": reason}));
+    if let Err(e) = state.store.insert_event(&ev).await {
+        tracing::warn!(error = ?e, "could not persist session.stopped event");
+    }
+    // send() returns Err only when there are zero subscribers, which is
+    // fine — the event is already in the persisted log.
+    let _ = state.bus.send(ev);
 }
 
 async fn load(state: &AppState, id: Uuid) -> Result<Session, ApiError> {
@@ -431,7 +450,7 @@ async fn stream_session(
     mut socket: WebSocket,
     id: Uuid,
     target: String,
-    positions: Arc<std::sync::Mutex<std::collections::HashMap<Uuid, u64>>>,
+    positions: Arc<std::sync::Mutex<std::collections::HashMap<Uuid, StreamCheckpoint>>>,
     resume_requested: bool,
 ) {
     let log_path = match paths::pane_log(&id.to_string()) {
@@ -483,6 +502,11 @@ async fn stream_session(
     // existing capture-at-current-size path.
     let mut early_input: Vec<Bytes> = Vec::new();
     let mut got_resize = false;
+    // Captured on the first resize frame so the resume-replay path can
+    // bail out when the client's viewport changed during a disconnect
+    // — replaying bytes emitted at a different grid produces visible
+    // layout corruption (cursor moves target stale cells).
+    let mut current_size: Option<(u16, u16)> = None;
     let resize_deadline = tokio::time::Instant::now() + INITIAL_RESIZE_WAIT;
     loop {
         let remaining = resize_deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -494,6 +518,7 @@ async fn stream_session(
                 if let Some((cols, rows)) = parse_resize(&t) {
                     let _ = agentum_tmux::resize_window(&target, cols, rows).await;
                     got_resize = true;
+                    current_size = Some((cols, rows));
                     break;
                 }
                 // Non-resize text frame — preserve the legacy "treat as raw
@@ -574,30 +599,46 @@ async fn stream_session(
     //    UI looks like *now* — which after a task completes can be
     //    almost empty.
     //
-    // 2. FRESH SNAPSHOT (default): client has no cached state, so we
-    //    `capture-pane -e` the current visible grid and ship it after a
-    //    `\x1b[2J\x1b[H` clear. Same as v0.6.11+ behaviour.
+    // 2. FRESH SNAPSHOT (default): client has no cached state (or its
+    //    cached state is invalid because the pane size changed during
+    //    the disconnect), so we `capture-pane -e` the current visible
+    //    grid and ship it after an `ESC c` (RIS) full parser reset.
     let mut snapshot_sent = false;
-    // Resume only if we actually have a saved position for this session.
-    // Without this guard, `unwrap_or(0)` after a daemon restart wiped
-    // `stream_positions` (in-memory only) made the daemon ship the
-    // ENTIRE log as "delta" on top of the client's existing parser
-    // state — duplicate footer/content baked into scrollback every time
-    // the daemon was bounced. v0.6.26 falls through to the fresh
-    // snapshot path in that case: client gets `\x1b[2J\x1b[H` + a
-    // capture-pane render, parser cleanly resets to current truth.
-    let saved_pos_opt: Option<u64> = positions
+    // Resume only if we have a saved checkpoint AND its pane size matches
+    // the current viewport. Two guards:
+    //
+    //  1. `unwrap_or(0)` after a daemon restart wiped `stream_positions`
+    //     (in-memory only) made the daemon ship the ENTIRE log as
+    //     "delta" on top of the client's existing parser state —
+    //     duplicate footer/content baked into scrollback every time
+    //     the daemon was bounced. v0.6.26 fixed this by falling through
+    //     to the fresh snapshot path when no checkpoint exists.
+    //
+    //  2. Replaying bytes emitted at a stale grid size (e.g., user
+    //     dragged their tmux window during the disconnect) places
+    //     cursor moves and line wraps against the wrong cells, so the
+    //     visible layout ends up corrupted in ways that survive in the
+    //     vt100 parser's history. Mismatch → fall through to a fresh
+    //     snapshot at the new size and let the client's parser reset.
+    let saved_checkpoint: Option<StreamCheckpoint> = positions
         .lock()
         .ok()
         .and_then(|map| map.get(&id).copied());
-    if let (true, Some(saved_pos)) = (resume_requested, saved_pos_opt) {
+    let resume_size_matches = match (saved_checkpoint, current_size) {
+        (Some(cp), Some((cols, rows))) => cp.cols == cols && cp.rows == rows,
+        // No first-resize frame from the client, or no checkpoint — let
+        // the existing "resume only with checkpoint" gate handle it.
+        (Some(_), None) => true,
+        _ => false,
+    };
+    if let (true, Some(cp), true) = (resume_requested, saved_checkpoint, resume_size_matches) {
         if let Ok(end) = file.seek(std::io::SeekFrom::End(0)).await
-            && end >= saved_pos
+            && end >= cp.pos
         {
-            let delta = end - saved_pos;
+            let delta = end - cp.pos;
             if delta > 0
                 && file
-                    .seek(std::io::SeekFrom::Start(saved_pos))
+                    .seek(std::io::SeekFrom::Start(cp.pos))
                     .await
                     .is_ok()
             {
@@ -620,12 +661,24 @@ async fn stream_session(
         && let Ok(snap) = agentum_tmux::capture_pane_ansi(&target).await
         && !snap.is_empty()
     {
-        // Reset the client parser before painting the snapshot so any
-        // stale cells from a previous session are discarded:
-        //   ESC [ 2 J  — erase entire screen
-        //   ESC [ H    — cursor home
-        let mut payload = Vec::with_capacity(snap.len() + 8);
-        payload.extend_from_slice(b"\x1b[2J\x1b[H");
+        // Reset the client parser before painting the snapshot so EVERY
+        // bit of stale state from the previous session is discarded —
+        // not just the visible grid.
+        //
+        //   ESC c (RIS, "Reset to Initial State")
+        //
+        // This is more thorough than the previous `\x1b[2J\x1b[H`
+        // (clear-screen + cursor-home), which left SGR colors, saved
+        // cursor positions, scroll regions, alternate-screen state,
+        // application keypad/cursor mode, and mouse-tracking modes
+        // intact. Carrying any of those across a session-switch (or
+        // a crash-and-resume on a different agent type) showed up as
+        // hard-to-pin-down corruption: text in the wrong color long
+        // after the agent stopped emitting that SGR, scroll regions
+        // clipping vt100-parser updates to a strip of the screen,
+        // mouse events firing on a session that never asked for them.
+        let mut payload = Vec::with_capacity(snap.len() + 4);
+        payload.extend_from_slice(b"\x1bc");
         payload.extend_from_slice(&snap);
         if socket
             .send(Message::Binary(Bytes::from(payload)))
@@ -733,6 +786,11 @@ async fn stream_session(
                     // forwarded as raw input bytes (preserves the old
                     // behaviour for clients that send keystrokes as text).
                     if let Some((cols, rows)) = parse_resize(&t) {
+                        // Track every successful resize so the disconnect
+                        // checkpoint records the size at the time the
+                        // client actually left, not the size we captured
+                        // in the early-input window.
+                        current_size = Some((cols, rows));
                         if let Err(e) = agentum_tmux::resize_window(&target, cols, rows).await
                             && socket
                                 .send(Message::Text(format!("[resize dropped: {e}]").into()))
@@ -756,12 +814,23 @@ async fn stream_session(
         }
     }
     tail_handle.abort();
-    // Save the log position the next reconnect should resume from. We
-    // started tailing at `tail_start_pos` and the outer loop forwarded
-    // `bytes_forwarded` bytes to the client, so the file position to
-    // pick up from is the sum.
+    // Save the log position + pane size the next reconnect should
+    // resume from. We started tailing at `tail_start_pos` and the outer
+    // loop forwarded `bytes_forwarded` bytes to the client, so the
+    // file position to pick up from is the sum. The size is whatever
+    // the client last asked for (defaulting to 0×0 if they never sent
+    // a resize, in which case the size-mismatch gate will force a
+    // fresh snapshot on next connect — the safe choice).
     if let Ok(mut map) = positions.lock() {
-        map.insert(id, tail_start_pos.saturating_add(bytes_forwarded));
+        let (cols, rows) = current_size.unwrap_or((0, 0));
+        map.insert(
+            id,
+            StreamCheckpoint {
+                pos: tail_start_pos.saturating_add(bytes_forwarded),
+                cols,
+                rows,
+            },
+        );
     }
 }
 

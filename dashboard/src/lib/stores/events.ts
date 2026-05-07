@@ -1,5 +1,6 @@
 import { writable, type Writable, get } from 'svelte/store';
 import { tweaks } from './tweaks';
+import { notify } from './notify';
 
 export interface BusEvent {
   kind: string;
@@ -38,6 +39,34 @@ let ws: WebSocket | null = null;
 let stopRequested = false;
 let reconnectAttempt = 0;
 
+/**
+ * Wall-clock time the WS connected. Toasts/notifications fired within
+ * `RECONNECT_QUIET_MS` of that moment are suppressed — when the daemon
+ * restarts or the network blips, the watchdog often re-classifies a
+ * handful of panes simultaneously and we'd otherwise stack a toast per
+ * session for events the user did not cause and cannot meaningfully
+ * act on.
+ */
+let connectedAt = 0;
+const RECONNECT_QUIET_MS = 3000;
+
+/**
+ * Pending `agent.finished` notifications, keyed by session id. We
+ * defer them by `FINISHED_DEBOUNCE_MS` so a transient Working→Idle→
+ * Working flicker — common when a tool call returns an error and the
+ * agent immediately retries — gets cancelled by the follow-up
+ * `agent.working` event instead of toasting "X finished" mid-turn.
+ */
+const FINISHED_DEBOUNCE_MS = 2500;
+const pendingFinished = new Map<string, ReturnType<typeof setTimeout>>();
+function clearPendingFinished(sid: string) {
+  const t = pendingFinished.get(sid);
+  if (t) {
+    clearTimeout(t);
+    pendingFinished.delete(sid);
+  }
+}
+
 function eventsUrl(): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const token = localStorage.getItem('agentum_token') ?? '';
@@ -48,6 +77,12 @@ function eventsUrl(): string {
 function bind(socket: WebSocket) {
   socket.onopen = () => {
     reconnectAttempt = 0;
+    connectedAt = Date.now();
+    // Drop any pending finished-toasts queued from before the
+    // disconnect — the bus state is fresh now and replaying them
+    // would lie about current activity.
+    for (const t of pendingFinished.values()) clearTimeout(t);
+    pendingFinished.clear();
   };
   socket.onmessage = (ev) => {
     if (typeof ev.data !== 'string') return;
@@ -88,9 +123,24 @@ function fanOut(ev: BusEvent) {
 
 function handle(ev: BusEvent) {
   fanOut(ev);
+  // Quiet window after (re)connect: the bus often replays a flurry of
+  // watchdog re-classifications when the daemon restarts or the WS
+  // reconnects across a network blip. Let the data stores update via
+  // the event-bridge fan-out above, but suppress human-facing toasts /
+  // OS notifications so the user doesn't see "X finished" for every
+  // running pane.
+  const inQuiet = Date.now() - connectedAt < RECONNECT_QUIET_MS;
+
+  // `agent.working` always cancels any pending finished-toast for the
+  // same session — even inside the quiet window. A genuine flicker
+  // (Working → Idle → Working within ~2 s) shouldn't toast, period.
+  if (ev.kind === 'agent.working' && ev.session_id) {
+    clearPendingFinished(ev.session_id);
+  }
+
   switch (ev.kind) {
     case 'watchdog.compact': {
-      if (!get(tweaks).notifyCompact) break;
+      if (inQuiet || !get(tweaks).notifyCompact) break;
       const name = ev.session_name ?? 'session';
       pushToast({
         kind: 'info',
@@ -98,10 +148,18 @@ function handle(ev: BusEvent) {
         body: 'watchdog detected low context and sent /compact',
         ttl_ms: 6000
       });
+      maybeNotify({
+        title: `auto-compacted ${name}`,
+        body: 'watchdog detected low context and sent /compact',
+        tag: `${ev.session_id ?? 'global'}.compact`,
+        sessionId: ev.session_id
+      });
       break;
     }
     case 'session.crashed': {
-      if (!get(tweaks).notifyCrashed) break;
+      if (inQuiet || !get(tweaks).notifyCrashed) break;
+      // A crash invalidates any pending "finished" — never toast both.
+      if (ev.session_id) clearPendingFinished(ev.session_id);
       const name = ev.session_name ?? 'session';
       const reason = (ev.payload?.reason as string) ?? (ev.payload?.signature as string) ?? 'unknown';
       pushToast({
@@ -109,6 +167,15 @@ function handle(ev: BusEvent) {
         title: `${name} crashed`,
         body: `reason: ${reason}`,
         ttl_ms: 12000
+      });
+      // Crashes are urgent — fire even if the user is staring at the
+      // dashboard. They almost certainly want to triage immediately.
+      maybeNotify({
+        title: `${name} crashed`,
+        body: `reason: ${reason}`,
+        tag: `${ev.session_id ?? 'global'}.crashed`,
+        sessionId: ev.session_id,
+        urgent: true
       });
       break;
     }
@@ -136,24 +203,47 @@ function handle(ev: BusEvent) {
       break;
     }
     case 'agent.finished': {
-      if (!get(tweaks).notifyFinished) break;
-      // Watchdog saw the agent's busy spinner go away. Suppress the
-      // toast when the user is already on this session's detail page —
-      // they can see "finished" in the pane in front of them.
+      if (inQuiet || !get(tweaks).notifyFinished) break;
+      // Defer the user-facing notification by FINISHED_DEBOUNCE_MS —
+      // any `agent.working` event for the same session within that
+      // window cancels it, swallowing transient Working→Idle→Working
+      // flickers (tool error + retry, brief shell-out, etc.) so the
+      // user isn't told the agent finished when it's still mid-turn.
       const name = ev.session_name ?? 'agent';
-      if (!isViewingSession(ev.session_id)) {
-        pushToast({
-          kind: 'info',
+      const sid = ev.session_id;
+      if (!sid) break; // can't debounce without a key — skip
+      clearPendingFinished(sid);
+      const t = setTimeout(() => {
+        pendingFinished.delete(sid);
+        // Re-check viewer state at fire time, not enqueue time —
+        // the user may have navigated to the session in the gap.
+        if (!isViewingSession(sid) && !isOnTerminalsCanvas()) {
+          pushToast({
+            kind: 'info',
+            title: `${name} finished`,
+            ttl_ms: 6000
+          });
+        }
+        maybeNotify({
           title: `${name} finished`,
-          ttl_ms: 6000
+          body: 'agent is back at idle — output ready to review',
+          tag: `${sid}.finished`,
+          sessionId: sid
         });
-      }
+      }, FINISHED_DEBOUNCE_MS);
+      pendingFinished.set(sid, t);
       break;
     }
     case 'agent.awaiting_input': {
-      if (!get(tweaks).notifyAwaitingInput) break;
+      if (inQuiet || !get(tweaks).notifyAwaitingInput) break;
+      // An open prompt supersedes any pending "finished" for this
+      // session — the agent isn't done, it's waiting on you.
+      if (ev.session_id) clearPendingFinished(ev.session_id);
       // Permission prompt is open. Always toast — this is a "you have to
-      // do something" event and the user might be on another tab.
+      // do something" event and the user might be on another tab. The
+      // OS-level notify is urgent so it fires even when the dashboard
+      // is foregrounded; missing this one is the worst-case for the
+      // user (agent halts until they answer).
       const name = ev.session_name ?? 'agent';
       pushToast({
         kind: 'warn',
@@ -161,9 +251,44 @@ function handle(ev: BusEvent) {
         body: 'agent is waiting on a permission prompt',
         ttl_ms: 8000
       });
+      maybeNotify({
+        title: `${name} needs input`,
+        body: 'agent is waiting on a permission prompt',
+        tag: `${ev.session_id ?? 'global'}.awaiting_input`,
+        sessionId: ev.session_id,
+        urgent: true
+      });
       break;
     }
   }
+}
+
+/** Bridge to the OS notify layer. Gated on `notifyBrowser` and clicks
+ *  jump to the relevant session if one is attached. */
+function maybeNotify(opts: {
+  title: string;
+  body?: string;
+  tag?: string;
+  sessionId?: string | null;
+  urgent?: boolean;
+}) {
+  if (!get(tweaks).notifyBrowser) return;
+  notify({
+    title: opts.title,
+    body: opts.body,
+    tag: opts.tag,
+    urgent: opts.urgent,
+    onClick: opts.sessionId
+      ? () => {
+          // Best-effort deep-link. window.focus() already ran inside
+          // notify(); follow up by routing to the session so the user
+          // lands where they need to act.
+          if (typeof location !== 'undefined') {
+            location.href = `/sessions/${opts.sessionId}`;
+          }
+        }
+      : undefined
+  });
 }
 
 /** Best-effort "is the user looking at this session right now?" check.
@@ -173,6 +298,14 @@ function isViewingSession(id: string | null): boolean {
   if (!id) return false;
   if (typeof location === 'undefined') return false;
   return location.pathname.startsWith(`/sessions/${id}`);
+}
+
+/** True when the user is on the multi-pane terminals canvas. Every
+ *  running session is rendered there, so per-session "X finished"
+ *  toasts are redundant — the pane already shows the new state. */
+function isOnTerminalsCanvas(): boolean {
+  if (typeof location === 'undefined') return false;
+  return location.pathname.startsWith('/terminals');
 }
 
 export function connect() {

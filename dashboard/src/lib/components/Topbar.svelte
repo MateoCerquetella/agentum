@@ -56,7 +56,7 @@
   <div class="right">
     <button
       type="button"
-      class="iconbtn"
+      class="iconbtn desktop-only"
       title="Command palette (⌘K)"
       aria-label="Open command palette"
       onclick={openPalette}
@@ -68,7 +68,7 @@
     </button>
     <button
       type="button"
-      class="iconbtn"
+      class="iconbtn desktop-only"
       title="Fullscreen (Shift+F)"
       aria-label="Toggle fullscreen"
       onclick={toggleFullscreen}
@@ -90,3 +90,20 @@
     {/if}
   </div>
 </header>
+
+<style>
+  /* On phone the brand text crowds the route, since the bottom bar
+     already says where the user is. Keep just the logo glyph. */
+  @media (max-width: 480px) {
+    .brand :global(span) { display: none; }
+  }
+  /* Bigger tap target for the avatar on phone — matches Apple's 44pt
+     guidance without ballooning the visual. */
+  @media (max-width: 720px) {
+    .right :global(.avatar) {
+      width: 36px;
+      height: 36px;
+      font-size: 13px;
+    }
+  }
+</style>

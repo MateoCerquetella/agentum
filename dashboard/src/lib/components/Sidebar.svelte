@@ -233,4 +233,26 @@
     color: var(--fg-3);
     margin-left: auto;
   }
+
+  /* Phone: drawer-mode sidebar gets fatter rows so taps actually land
+     and the search bar reads as the dominant action. */
+  @media (max-width: 720px) {
+    :global(.sb .ws-switcher) { padding: 14px 12px 10px; }
+    :global(.sb .ws-search) {
+      padding: 11px 12px;
+      font-size: 14px;
+      border-radius: 10px;
+    }
+    :global(.sb .item) {
+      padding: 12px 10px;
+      font-size: 15px;
+      border-radius: 10px;
+    }
+    :global(.sb .item .ico) { width: 18px; height: 18px; }
+    :global(.sb .sect) { padding: 10px 12px; }
+    :global(.sb .footer) {
+      padding: 12px;
+      font-size: 12px;
+    }
+  }
 </style>

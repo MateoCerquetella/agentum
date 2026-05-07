@@ -21,6 +21,20 @@
   --border:      #212121;
   --border-2:    #353535;
 
+  /* Chrome surfaces — used by topbar / sidebar / toolbar / terminal / kanban
+     columns. Themes (themes.ts) reskin these so non-dark themes don't fall
+     back to the original near-black literals. */
+  --bg-chrome:    #0d0d0d;
+  --bg-row-hover: #161616;
+  --bg-card-top:  #1a1a1a;
+  --bg-card-body: #0a0a0a;
+  --bg-term:      #050505;
+  --bg-tb-hover:  #2c2c2c;
+  --selection-fg: #ffffff;
+  /* Faint scanline color used by the global ::before texture. Light
+     themes set this to transparent to drop the CRT atmosphere. */
+  --scanline:     rgba(255, 255, 255, 0.012);
+
   /* Foreground ramp (canonical names from the design) */
   --fg:          #ffffff;
   --fg-2:        #b9b9b9;

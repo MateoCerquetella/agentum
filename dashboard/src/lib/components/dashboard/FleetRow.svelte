@@ -144,7 +144,7 @@
     background: transparent;
     transition: background var(--t-hover);
   }
-  .row:hover { background: #161616; }
+  .row:hover { background: var(--bg-row-hover); }
   .row.live::before    { background: rgba(25,214,0,0.55); }
   .row.crash::before   { background: var(--crash); }
   .row.compact::before { background: var(--cta); }
@@ -301,5 +301,78 @@
     color: var(--fg);
     border-color: var(--cta);
     background: color-mix(in srgb, var(--cta) 12%, transparent);
+  }
+
+  /* Tablet: drop tokens/cost numerics — they're in the summary cards
+     already and the per-row figures aren't actionable from here. The
+     activity log stays so users still see "what is this agent doing
+     right now". */
+  @media (max-width: 1100px) {
+    .row {
+      grid-template-columns: 14px 18px 1.6fr 1.2fr 96px 80px;
+      gap: 12px;
+    }
+    .num { display: none; }
+  }
+
+  /* Narrow tablet: also drop the activity log — anchor the row on
+     name, context, and the open button. */
+  @media (max-width: 880px) {
+    .row {
+      grid-template-columns: 14px 18px 1.6fr 96px 80px;
+      gap: 10px;
+    }
+    .last { display: none; }
+  }
+
+  /* Phone: collapse the entire row into a stacked card. The dot, pin
+     and Open button stay visible at the edges; everything else flows
+     into a two-line block. */
+  @media (max-width: 700px) {
+    .row {
+      grid-template-columns: 14px 26px minmax(0, 1fr) auto;
+      grid-template-areas:
+        "dot pin title open"
+        "dot pin meta  meta";
+      gap: 6px 10px;
+      padding: 14px 14px;
+      align-items: start;
+    }
+    .row:active { background: var(--bg-row-hover); }
+    .dot { grid-area: dot; align-self: center; width: 8px; height: 8px; }
+    .pin { grid-area: pin; align-self: center; width: 26px; height: 26px; font-size: 16px; }
+    .title { grid-area: title; }
+    .open { grid-area: open; align-self: center; }
+
+    .last { display: none; }
+    .num  { display: none; }
+
+    /* Move ctx into the second row alongside the project label so the
+       user always sees how full the agent's context is. */
+    .ctx {
+      grid-area: meta;
+      justify-content: flex-start;
+      gap: 10px;
+      margin-top: 4px;
+      font-size: 11.5px;
+      color: var(--fg-3);
+    }
+    .ctx .bar { width: 80px; height: 4px; }
+    .ctx .pct { min-width: 0; }
+
+    .title-row { gap: 8px; }
+    .name { font-size: 15px; letter-spacing: -0.005em; }
+    .title-sub { font-size: 12px; margin-top: 2px; }
+
+    .open button {
+      padding: 8px 12px;
+      font-size: 11px;
+      min-height: 32px;
+    }
+  }
+
+  @media (max-width: 420px) {
+    .row { padding: 12px 12px; gap: 4px 8px; }
+    .tool { display: none; }
   }
 </style>

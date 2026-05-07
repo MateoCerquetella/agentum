@@ -8,9 +8,19 @@ html, body, #app {
   padding: 0;
   min-height: 100%;
   height: 100%;
+  /* Prevent accidental horizontal pan on phones — the layout is always
+     vertical on mobile, but a few wide grids could otherwise leak. */
+  overflow-x: hidden;
 }
 
-html { background: var(--bg); }
+html {
+  background: var(--bg);
+  /* Disable text auto-inflate on iOS so the app feels native rather
+     than a zoomable web page. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  touch-action: manipulation;
+}
 
 body {
   background: var(--bg);
@@ -22,6 +32,27 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   font-feature-settings: "calt" 0, "ss07";
+  /* Block overscroll bounce on iOS so the app doesn't reveal a white
+     gutter when the user pulls past the top of a list. */
+  overscroll-behavior-y: none;
+}
+
+/* Inputs ≥16px on mobile — anything smaller triggers Safari/iOS to
+   zoom the viewport on focus, which feels broken in an "app". */
+@media (max-width: 720px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* Momentum scroll for any explicit scroll container — feels native. */
+.scroll,
+.rb,
+.col-b,
+.sessions-scroll {
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Faint scanline texture across the canvas — the "nocturnal control room"
@@ -35,7 +66,7 @@ body::before {
   z-index: 0;
   background-image: repeating-linear-gradient(
     0deg,
-    rgba(255, 255, 255, 0.012) 0 1px,
+    var(--scanline) 0 1px,
     transparent 1px 4px
   );
   mask-image: radial-gradient(ellipse 90% 70% at 50% 30%, #000 30%, transparent 80%);
@@ -56,7 +87,7 @@ button {
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 }
 
-::selection { background: var(--accent); color: #fff; }
+::selection { background: var(--accent); color: var(--selection-fg); }
 
 :focus-visible {
   outline: 2px solid var(--accent);
@@ -78,6 +109,21 @@ main { animation: fade-in 220ms cubic-bezier(0.2, 0.7, 0.2, 1); }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* Phones: hide scrollbars entirely — they steal real estate inside
+   small panels and the OS handles momentum/overscroll feedback. */
+@media (max-width: 720px) {
+  ::-webkit-scrollbar { width: 0; height: 0; }
+}
+
+/* Utility: hide on phone / hide on desktop. Lets us swap between
+   touch-first and pointer-first treatments without duplicating markup. */
+.desktop-only { }
+.mobile-only  { display: none !important; }
+@media (max-width: 720px) {
+  .desktop-only { display: none !important; }
+  .mobile-only  { display: revert !important; }
+}
 
 /* ---------- editorial micro tag ----------
    Per design system § 3 — IBM Plex Mono uppercase, 11px, 500 weight,

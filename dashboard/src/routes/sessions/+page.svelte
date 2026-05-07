@@ -275,4 +275,49 @@
     padding: 1px 5px;
     border-radius: 3px;
   }
+
+  /* Hide the desktop column header on tablets — FleetRow already
+     collapses there. The first FleetRow is self-explanatory thanks to
+     the project label, context bar, and Open button. */
+  @media (max-width: 1100px) {
+    .fleet-head { display: none; }
+  }
+
+  @media (max-width: 720px) {
+    .scroll { padding: 12px; }
+    .search {
+      width: 100%;
+      min-width: 0;
+      flex: 1 1 100%;
+      order: 3;
+      padding: 10px 12px;
+      border-radius: 10px;
+    }
+    /* Hide the duplicate spawn button on phone — bottom-nav FAB owns
+       the primary spawn action. */
+    :global(.toolbar .tb-btn.primary) { display: none; }
+    /* Sticky route header so filters stay reachable while scrolling. */
+    :global(.toolbar) {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: color-mix(in srgb, var(--bg-chrome) 92%, transparent);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .filters {
+      flex: 1 1 100%;
+      order: 2;
+      width: 100%;
+    }
+    .seg {
+      flex: 1;
+      padding: 9px 8px;
+      font-size: 11px;
+      min-height: 36px;
+    }
+    .fleet { border-radius: 12px; }
+  }
 </style>

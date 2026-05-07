@@ -408,4 +408,97 @@
   }
   .meta-list dt { color: var(--fg-3); text-transform: uppercase; letter-spacing: 0.04em; }
   .meta-list dd { margin: 0; color: var(--fg-2); word-break: break-all; }
+
+  /* Stack the session rail beneath the terminal on tablets — keeps the
+     plan/todos panel reachable without crushing the terminal width.
+     SessionRail uses the global .rail class, so target it via :global. */
+  @media (max-width: 1100px) {
+    .row { flex-direction: column; }
+    .row :global(.rail) {
+      width: 100%;
+      max-height: 320px;
+      border-left: 0;
+      border-top: 1px solid var(--border);
+    }
+  }
+
+  @media (max-width: 720px) {
+    /* Sticky route header so the Pop out / /compact actions stay
+       reachable while the user scrolls the terminal. */
+    :global(.toolbar) {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: color-mix(in srgb, var(--bg-chrome) 92%, transparent);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+    /* Pop out only opens a new tab — useless on phones. */
+    :global(.toolbar .tb-btn:not(.primary)) { display: none; }
+    :global(.tabs .tab[disabled]) { display: none; }
+
+    /* Terminal + rail vertical stack: rail is collapsible meta below
+       the active terminal, never larger than 50dvh so it doesn't push
+       the input row off-screen on a phone. */
+    .row :global(.rail) {
+      max-height: 50dvh;
+    }
+
+    /* Input row redesign: prompt + input own the full width on the
+       primary line; quick-keys scroll horizontally as a chip rail
+       below — works like an extension of the soft keyboard. */
+    .input {
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 8px 10px 10px;
+      height: auto !important;
+      min-height: 56px;
+    }
+    .input input {
+      flex: 1 1 100%;
+      order: 1;
+      padding: 8px 10px;
+      background: var(--bg-2);
+      border: 1px solid var(--border-2);
+      border-radius: 8px;
+    }
+    .input .prompt { display: none; }
+    .input .right {
+      flex: 1 1 100%;
+      order: 2;
+      display: flex;
+      gap: 6px;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      padding-bottom: 2px;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+    .input .right::-webkit-scrollbar { display: none; }
+    .input .qk {
+      flex: 0 0 auto;
+      padding: 8px 10px;
+      font-size: 11px;
+      min-height: 32px;
+      min-width: 36px;
+    }
+
+    /* Term-bar context line scrolls horizontally — long workdir paths
+       were getting clipped before. */
+    :global(.term-host .term-bar) {
+      overflow-x: auto;
+      white-space: nowrap;
+      scrollbar-width: none;
+    }
+    :global(.term-host .term-bar::-webkit-scrollbar) { display: none; }
+
+    /* Lifecycle drawer becomes a clean stacked block on phone. */
+    .drawer-row { gap: 6px; }
+    .raw {
+      flex: 1 1 100%;
+      width: 100%;
+    }
+    .raw input { min-width: 0; flex: 1; }
+    .meta-list { grid-template-columns: 80px 1fr; font-size: 11.5px; }
+  }
 </style>
