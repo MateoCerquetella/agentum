@@ -102,6 +102,11 @@ pub struct Session {
     /// without stopping its tmux pane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<SessionState>,
+    /// User-toggled "favorite" flag. Pinned sessions float to the top
+    /// of every list view. Defaults to false; persisted to sqlite via
+    /// migration 0009.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// Lifecycle state surfaced on the dashboard. Mirrors the TypeScript

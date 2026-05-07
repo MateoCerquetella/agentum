@@ -115,6 +115,7 @@ pub struct ServeOptions {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::health::router())
+        .merge(routes::host::router())
         .merge(routes::cert::router())
         .merge(routes::doctor::router())
         .merge(routes::auth::router())
@@ -183,8 +184,14 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
         }
     });
 
-    let watchdog = agentum_watchdog::Watchdog::new(bus, state.store.clone());
+    let watchdog = agentum_watchdog::Watchdog::new(bus.clone(), state.store.clone());
     tokio::spawn(watchdog.run());
+
+    // Background ticker that publishes `host.metrics` (CPU + RAM) onto
+    // the broadcast bus every couple of seconds. The /api/events WS
+    // fans these out to every connected dashboard, so a single sampler
+    // feeds N tabs without per-client polling.
+    routes::host::spawn_ticker(bus);
 
     let app = router(state.clone());
 
