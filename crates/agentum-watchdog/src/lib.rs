@@ -165,6 +165,14 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
         match agentum_tmux::has_session(&target).await {
             Ok(true) => {}
             Ok(false) => {
+                // Pane is gone. Distinguish "user killed it" from "it
+                // crashed": if the DB already reflects Stopped (set by the
+                // /stop or /kill API route), the disappearance was
+                // intentional — exit silently rather than emit a misleading
+                // `session.crashed` toast and overwrite the status.
+                if intentionally_stopped(&store, sess.id).await {
+                    return;
+                }
                 let _ = store
                     .update_status_and_target(sess.id, Status::Crashed, None)
                     .await;
@@ -190,6 +198,12 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
 
         // Crash signatures first — exiting wins over compacting.
         if let Some(sig) = crash_sigs.iter().find(|s| pane.contains(*s)) {
+            // Same intentional-stop guard as the pane_exited branch: a
+            // crash signature seen during a /stop or /kill flow is just
+            // residue from the dying process, not a real crash.
+            if intentionally_stopped(&store, sess.id).await {
+                return;
+            }
             tracing::warn!(name = %sess.name, signature = sig, "crash signature matched");
             let _ = store
                 .update_status_and_target(sess.id, Status::Crashed, None)
@@ -333,6 +347,18 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
             activity = next;
         }
     }
+}
+
+/// `true` if the session's current persisted status is `Stopped`, meaning
+/// the API `/stop` or `/kill` route already retired it. Used to suppress
+/// the `session.crashed` event the watchdog would otherwise fire on the
+/// next tick when it sees the pane gone — that disappearance is the user's
+/// own doing, not an actual crash.
+async fn intentionally_stopped(store: &Store, id: Uuid) -> bool {
+    matches!(
+        store.get_session_by_id(id).await,
+        Ok(Some(s)) if s.status == Status::Stopped
+    )
 }
 
 /// Map a tmux `pane_current_command` value to the adapter id we store
