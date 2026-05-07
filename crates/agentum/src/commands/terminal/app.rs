@@ -3932,6 +3932,43 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                 spawn_agent_tasks_fetch(app, client, id);
             }
         }
+        // Sidebar metadata events. Both refetch the sessions list so
+        // the tree row label / tool chip update without manual refresh,
+        // and we keep the cursor pinned to the affected session.
+        "session.renamed" => {
+            if let Ok(fresh) = client.list_sessions().await {
+                app.refresh_sessions(fresh);
+                if let Some(id) = ev.session_id {
+                    app.tree.select_session(id);
+                }
+            }
+            // No toast — the rename action itself already flashed a
+            // status message. A second visible signal would be noise.
+        }
+        "session.tool_changed" => {
+            if let Ok(fresh) = client.list_sessions().await {
+                app.refresh_sessions(fresh);
+                if let Some(id) = ev.session_id {
+                    app.tree.select_session(id);
+                }
+            }
+            // Surface the swap as an info toast so the user notices
+            // without staring at the chip — the watchdog only fires
+            // this when the foreground process really did change.
+            let new_tool = ev
+                .payload
+                .get("tool")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            if let Some(tool) = new_tool {
+                push_notification(
+                    app,
+                    format!("{name} → {tool}"),
+                    None,
+                    NotifKind::Info,
+                );
+            }
+        }
         _ => {}
     }
 }
