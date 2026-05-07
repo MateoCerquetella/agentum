@@ -225,6 +225,27 @@ pub async fn pipe_pane(target: &str, out_path: &Path) -> Result<()> {
     run_checked(&mut c).await
 }
 
+/// Basename of the foreground process inside the pane (tmux's
+/// `pane_current_command` format token). Useful for figuring out which
+/// adapter the user is currently running — e.g. tells us "codex" vs
+/// "claude" vs "bash" without us having to scrape pane output.
+///
+/// Returns the trimmed string straight from tmux. On freshly-spawned
+/// panes this can briefly be the shell binary even when the intended
+/// adapter is mid-launch — callers that want stability should debounce
+/// across a few ticks rather than reacting to a single observation.
+pub async fn pane_current_command(target: &str) -> Result<String> {
+    let out = Command::new("tmux")
+        .args(["display-message", "-p", "-t"])
+        .arg(target)
+        .arg("#{pane_current_command}")
+        .output()
+        .await?;
+    check(&out)?;
+    let s = String::from_utf8(out.stdout)?;
+    Ok(s.trim().to_string())
+}
+
 /// PID of the foreground process inside the pane.
 pub async fn pane_pid(target: &str) -> Result<u32> {
     let out = Command::new("tmux")
