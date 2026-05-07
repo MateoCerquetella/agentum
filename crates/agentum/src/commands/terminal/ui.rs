@@ -881,6 +881,8 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         body("  Ctrl-K , / .      shrink / grow lazygit width", p),
         body("  Ctrl-\\            split the focused terminal pane", p),
         body("  Ctrl-W            close the split", p),
+        body("  Ctrl-Shift-←/→    resize the split divider (when split is open)", p),
+        body("  Ctrl-,            settings (notifications · layout · status bar)", p),
         body("  Mouse wheel       scroll the pane under the cursor", p),
         body("  Shift-PgUp/PgDn   scroll the focused pane (no mouse needed)", p),
         body("  F5                next panel", p),

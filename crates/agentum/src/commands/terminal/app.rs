@@ -2955,8 +2955,40 @@ async fn run_palette_action(
         }
         ActionKind::ResetStatusBar => {
             app.prefs = Prefs::default();
+            mirror_layout_from_prefs(app);
             prefs::save(&app.prefs);
             app.status_msg = Some("status bar reset to defaults".into());
+        }
+        ActionKind::OpenSettings => {
+            app.overlay = Overlay::Settings(SettingsState::new());
+            app.status_msg = Some(
+                "settings (Esc close · ↑↓ move · ←→ adjust · space toggle · r reset row)".into(),
+            );
+        }
+        ActionKind::ToggleSoundMaster => {
+            let on = app.prefs.toggle_sound_master();
+            prefs::save(&app.prefs);
+            app.status_msg = Some(format!("sound master: {}", if on { "on" } else { "off" }));
+        }
+        ActionKind::ToggleSoundKind(kind) => {
+            let on = app.prefs.toggle_sound_kind(kind);
+            prefs::save(&app.prefs);
+            app.status_msg = Some(format!(
+                "sound {}: {}",
+                kind.label(),
+                if on { "on" } else { "off" }
+            ));
+        }
+        ActionKind::BumpTtl(kind, delta) => {
+            let new_ms = app.prefs.bump_ttl(kind, delta);
+            prefs::save(&app.prefs);
+            app.status_msg = Some(format!("{} TTL: {} ms", kind.label(), new_ms));
+        }
+        ActionKind::ResetAllPrefs => {
+            app.prefs.reset();
+            mirror_layout_from_prefs(app);
+            prefs::save(&app.prefs);
+            app.status_msg = Some("settings · reset to defaults".into());
         }
     }
 }

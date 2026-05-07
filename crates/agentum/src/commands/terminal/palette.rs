@@ -110,6 +110,20 @@ pub enum ActionKind {
     ToggleStatusChip(StatusChip),
     /// Reset all status-bar prefs to their defaults.
     ResetStatusBar,
+    /// Open the Settings overlay. Mirrors the `Ctrl-,` keybinding so the
+    /// settings UI is also reachable through palette filtering (`~`).
+    OpenSettings,
+    /// Toggle the master sound switch. Persists to disk.
+    ToggleSoundMaster,
+    /// Toggle a per-kind notification sound. Persists to disk.
+    ToggleSoundKind(super::prefs::SoundKind),
+    /// Adjust a per-kind notification TTL by `±NOTIF_TTL_STEP_MS`.
+    /// Persists to disk.
+    BumpTtl(super::prefs::SoundKind, i64),
+    /// Reset every persisted setting to its default. Touches more than
+    /// `ResetStatusBar` — drops layout sizes, sounds, and TTLs back to
+    /// the ship-with values.
+    ResetAllPrefs,
 }
 
 pub struct Catalog {
@@ -292,6 +306,56 @@ impl Catalog {
             hint: "".into(),
             group: "settings",
             kind: ActionKind::ResetStatusBar,
+        });
+
+        // ---- Settings overlay & notification toggles ------------------
+        // Pinned at the top of the Settings group so `~` users see them
+        // first.  Sound + TTL toggles reuse the prefs helpers so the
+        // palette and Settings overlay stay in lockstep automatically.
+        a.push(Action {
+            label: "Settings…  (open overlay)".into(),
+            hint: "Ctrl-,".into(),
+            group: "settings",
+            kind: ActionKind::OpenSettings,
+        });
+        a.push(Action {
+            label: format!("Sound: master [{}]", onoff(prefs.sound_master)),
+            hint: "".into(),
+            group: "settings",
+            kind: ActionKind::ToggleSoundMaster,
+        });
+        for kind in super::prefs::SoundKind::ALL {
+            a.push(Action {
+                label: format!(
+                    "Sound: {} [{}]",
+                    kind.label(),
+                    onoff(prefs.sound_kind_on(*kind))
+                ),
+                hint: "".into(),
+                group: "settings",
+                kind: ActionKind::ToggleSoundKind(*kind),
+            });
+        }
+        for kind in super::prefs::SoundKind::ALL {
+            let secs = prefs.ttl_ms(*kind) as f64 / 1000.0;
+            a.push(Action {
+                label: format!("Notification TTL: {} − 0.5s ({:.1}s)", kind.label(), secs),
+                hint: "".into(),
+                group: "settings",
+                kind: ActionKind::BumpTtl(*kind, -(super::prefs::NOTIF_TTL_STEP_MS as i64)),
+            });
+            a.push(Action {
+                label: format!("Notification TTL: {} + 0.5s ({:.1}s)", kind.label(), secs),
+                hint: "".into(),
+                group: "settings",
+                kind: ActionKind::BumpTtl(*kind, super::prefs::NOTIF_TTL_STEP_MS as i64),
+            });
+        }
+        a.push(Action {
+            label: "Settings: reset everything to defaults".into(),
+            hint: "".into(),
+            group: "settings",
+            kind: ActionKind::ResetAllPrefs,
         });
 
         // Themes.
