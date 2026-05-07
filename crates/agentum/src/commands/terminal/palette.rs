@@ -92,13 +92,11 @@ pub enum ActionKind {
     CycleTheme,
     SelectSession(Uuid),
     /// Open the destructive-confirm overlay for `Kill` against this
-    /// session. Routed through the same prompt as Shift-K from tree
-    /// focus so a misclick in the palette can't drop a process by
-    /// accident.
+    /// session. Routed through the same prompt as Shift-K / Shift-D / x
+    /// from tree focus so a misclick in the palette can't drop a
+    /// process by accident. Kill is the single destructive verb — it
+    /// stops the process and removes the session in one step.
     KillSession(Uuid),
-    /// Open the destructive-confirm overlay for `Delete` against this
-    /// session. Same safety net as `KillSession`.
-    DeleteSession(Uuid),
     /// View toggles — same primitives the Ctrl-* shortcuts already
     /// drive, surfaced through the palette so users can find them
     /// without memorising chords.
@@ -145,7 +143,7 @@ pub struct ViewState {
 impl Catalog {
     /// Build the live action list. Pure — call from a draw or key handler.
     /// `selected` is the currently-highlighted session (if any). When
-    /// present, its kill/delete entries are pinned to the very top so
+    /// present, its kill entry is pinned to the very top so
     /// the most likely action ("get rid of *this* terminal") is one
     /// keystroke away with no typing.
     pub fn build(
@@ -166,21 +164,15 @@ impl Catalog {
         {
             a.push(Action {
                 label: format!("Kill this terminal: {name}"),
-                hint: "Shift-K".into(),
+                hint: "Shift-K · x · Shift-D".into(),
                 group: "sessions",
                 kind: ActionKind::KillSession(id),
-            });
-            a.push(Action {
-                label: format!("Delete this terminal: {name}"),
-                hint: "x · Shift-D".into(),
-                group: "sessions",
-                kind: ActionKind::DeleteSession(id),
             });
         }
 
         a.push(Action {
             label: "Quit agentum".into(),
-            hint: "q · Ctrl-C".into(),
+            hint: "Ctrl-Q · Ctrl-C".into(),
             group: "general",
             kind: ActionKind::Quit,
         });
@@ -374,18 +366,17 @@ impl Catalog {
             kind: ActionKind::CycleTheme,
         });
 
-        // Sessions. Each session contributes three entries (select /
-        // kill / delete) so destructive actions are discoverable from
-        // the palette without forcing the user to navigate the tree
-        // first. They share the `sessions` group so the `#` prefix
-        // surfaces all of them; in default mode the explicit
-        // "Kill: …" / "Delete: …" labels keep them distinguishable
+        // Sessions. Each session contributes two entries (select / kill)
+        // so the destructive action is discoverable from the palette
+        // without forcing the user to navigate the tree first. They
+        // share the `sessions` group so the `#` prefix surfaces all of
+        // them; the explicit "Kill: …" label keeps it distinguishable
         // from "Session: …" via subsequence match.
         //
-        // The currently-selected session's kill/delete entries are
-        // already pinned at the top (above), so we skip emitting them
-        // again here — keeps the catalogue tidy and stops the active
-        // session's kill from showing up twice.
+        // The currently-selected session's kill entry is already pinned
+        // at the top (above), so we skip emitting it again here — keeps
+        // the catalogue tidy and stops the active session's kill from
+        // showing up twice.
         for (id, name, workdir) in sessions {
             a.push(Action {
                 label: format!("Session: {name}"),
@@ -398,15 +389,9 @@ impl Catalog {
             }
             a.push(Action {
                 label: format!("Kill session: {name}"),
-                hint: "Shift-K".into(),
+                hint: "Shift-K · x · Shift-D".into(),
                 group: "sessions",
                 kind: ActionKind::KillSession(*id),
-            });
-            a.push(Action {
-                label: format!("Delete session: {name}"),
-                hint: "x · Shift-D".into(),
-                group: "sessions",
-                kind: ActionKind::DeleteSession(*id),
             });
         }
 

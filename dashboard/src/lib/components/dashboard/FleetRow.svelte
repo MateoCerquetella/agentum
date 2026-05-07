@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import type { Session } from '$lib/api';
+  import { api, type Session } from '$lib/api';
+  import { loadSessions } from '$stores/sessions';
   import {
     deriveState, ctxOf, ctxColor, fmtTokens, fmtCost, fmtRel, fmtUptime,
     toolShort, toolColor, projectOf, lastLogLine
@@ -13,12 +14,27 @@
   interface Props { s: Session }
   let { s }: Props = $props();
 
-  const state = $derived(deriveState(s));
+  let pinning = $state(false);
+  async function togglePin(e: MouseEvent) {
+    e.stopPropagation();
+    if (pinning) return;
+    pinning = true;
+    try {
+      await api.patchSession(s.id, { pinned: !s.pinned });
+      await loadSessions();
+    } catch (err) {
+      console.error('pin toggle failed', err);
+    } finally {
+      pinning = false;
+    }
+  }
+
+  const lifecycle = $derived(deriveState(s));
   const ctx = $derived(ctxOf(s));
   const stateColor = $derived(
-    state === 'live' ? 'var(--green)' :
-    state === 'compact' ? 'var(--cta)' :
-    state === 'crash' ? 'var(--crash)' : 'var(--fg-3)'
+    lifecycle === 'live' ? 'var(--green)' :
+    lifecycle === 'compact' ? 'var(--cta)' :
+    lifecycle === 'crash' ? 'var(--crash)' : 'var(--fg-3)'
   );
   const cColor = $derived(ctxColor(ctx));
   const tColor = $derived(toolColor(s.tool));
@@ -26,15 +42,29 @@
   const uptime  = $derived(fmtUptime(s.uptime_seconds, s.created_at));
   const ago     = $derived(fmtRel(s.last_activity_at));
 
+  // Stale-tinted activity color. Anything past 30 min reads red, past
+  // 5 min reads amber, fresh reads neutral. Useful at a glance for
+  // spotting "this agent has been idle for ages" vs "just now."
+  const staleMin = $derived.by(() => {
+    if (!s.last_activity_at) return Infinity;
+    const ms = Date.now() - new Date(s.last_activity_at).getTime();
+    return Number.isFinite(ms) && ms >= 0 ? ms / 60_000 : Infinity;
+  });
+  const agoColor = $derived(
+    staleMin >= 30 ? 'var(--cta)'
+    : staleMin >= 5 ? 'var(--amber)'
+    : 'var(--fg-3)'
+  );
+
   function open() { goto(`/sessions/${s.id}`); }
   function openClick(e: MouseEvent) { e.stopPropagation(); open(); }
 </script>
 
 <div
   class="row"
-  class:live={state === 'live'}
-  class:crash={state === 'crash'}
-  class:compact={state === 'compact'}
+  class:live={lifecycle === 'live'}
+  class:crash={lifecycle === 'crash'}
+  class:compact={lifecycle === 'compact'}
   role="button"
   tabindex="0"
   onclick={open}
@@ -43,8 +73,20 @@
   <span
     class="dot"
     style:background={stateColor}
-    style:box-shadow={state === 'live' ? '0 0 0 3px rgba(25,214,0,0.12)' : 'none'}
+    style:box-shadow={lifecycle === 'live' ? '0 0 0 3px rgba(25,214,0,0.12)' : 'none'}
   ></span>
+
+  <button
+    type="button"
+    class="pin"
+    class:on={s.pinned}
+    aria-label={s.pinned ? 'Unpin session' : 'Pin session'}
+    title={s.pinned ? 'Unpin session' : 'Pin session'}
+    onclick={togglePin}
+    disabled={pinning}
+  >
+    {s.pinned ? '★' : '☆'}
+  </button>
 
   <div class="title">
     <div class="title-row">
@@ -58,13 +100,13 @@
     </div>
     <div class="title-sub">
       <span class="task" title={s.workdir}>{project}</span>
-      {#if state === 'live'}<span class="up mono">{uptime}</span>{/if}
+      {#if lifecycle === 'live'}<span class="up mono">{uptime}</span>{/if}
     </div>
   </div>
 
   <div class="last">
     <span class="log">{lastLogLine(s)}</span>
-    <span class="ago mono">{ago}</span>
+    <span class="ago mono" style:color={agoColor}>{ago}</span>
   </div>
 
   <span class="right num">{fmtTokens(s.tokens)}</span>
@@ -83,7 +125,7 @@
 <style>
   .row {
     display: grid;
-    grid-template-columns: 14px 1.6fr 1.2fr 90px 80px 96px 80px;
+    grid-template-columns: 14px 18px 1.6fr 1.2fr 90px 80px 96px 80px;
     gap: 14px;
     padding: 9px 16px;
     border-bottom: 1px solid var(--border);
@@ -113,6 +155,21 @@
     height: 7px;
     border-radius: var(--radius-pill);
   }
+  .pin {
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    color: var(--fg-3);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color var(--t-hover), transform var(--t-hover);
+  }
+  .pin:hover { color: var(--amber); transform: scale(1.15); }
+  .pin.on { color: var(--amber); }
+  .pin:disabled { cursor: wait; opacity: 0.5; }
   .row.live .dot { animation: fleet-pulse 1.6s infinite; }
   @keyframes fleet-pulse { 50% { opacity: 0.45; } }
 
@@ -190,7 +247,7 @@
   }
   .ago {
     font-size: 10px;
-    color: var(--fg-3);
+    transition: color var(--t-hover);
   }
 
   .num {

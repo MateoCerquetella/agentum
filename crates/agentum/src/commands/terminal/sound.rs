@@ -21,12 +21,7 @@ static PLAYER: OnceLock<Option<&'static str>> = OnceLock::new();
 
 #[cfg(target_os = "linux")]
 fn detect_player() -> Option<&'static str> {
-    for cand in ["paplay", "pw-play"] {
-        if which(cand) {
-            return Some(cand);
-        }
-    }
-    None
+    ["paplay", "pw-play"].into_iter().find(|c| which(c))
 }
 
 #[cfg(target_os = "macos")]

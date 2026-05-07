@@ -118,6 +118,16 @@ fn resolve(raw: &str) -> Result<PathBuf, ApiError> {
         .ok_or_else(|| ApiError::Internal("HOME not set".into()))?;
 
     let trimmed = raw.trim();
+    // Strip trailing slashes so `/foo/bar/` and `/foo/bar` resolve to
+    // the same canonical PathBuf — otherwise the metadata check below
+    // can be jittery on certain filesystems / fuse mounts and the user
+    // sees "not a directory" for a path that's clearly there. Keep a
+    // bare `/` intact (root has no parent to trim).
+    let trimmed = if trimmed.len() > 1 {
+        trimmed.trim_end_matches('/')
+    } else {
+        trimmed
+    };
     let path = if trimmed.is_empty() || trimmed == "~" {
         home
     } else if let Some(rest) = trimmed.strip_prefix("~/") {

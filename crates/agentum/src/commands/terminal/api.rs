@@ -452,10 +452,10 @@ impl Client {
             let writer = tokio::spawn(async move {
                 while let Some(out) = key_rx.recv().await {
                     let msg = match out {
-                        TermOut::Bytes(b) => WsMsg::Binary(b.into()),
-                        TermOut::Resize { cols, rows } => WsMsg::Text(
-                            format!("{{\"resize\":{{\"cols\":{cols},\"rows\":{rows}}}}}").into(),
-                        ),
+                        TermOut::Bytes(b) => WsMsg::Binary(b),
+                        TermOut::Resize { cols, rows } => WsMsg::Text(format!(
+                            "{{\"resize\":{{\"cols\":{cols},\"rows\":{rows}}}}}"
+                        )),
                     };
                     if sink.send(msg).await.is_err() {
                         break;

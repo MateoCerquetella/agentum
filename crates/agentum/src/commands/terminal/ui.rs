@@ -122,7 +122,7 @@ pub fn compute_layout(
         0
     } else {
         let max_tree = v[1].width.saturating_sub(20);
-        tree_width.min(max_tree).max(0)
+        tree_width.min(max_tree)
     };
 
     // Lazygit gets its own outer column on the far right when it's open
@@ -134,26 +134,18 @@ pub fn compute_layout(
     } else {
         0
     };
-    // Try to fit tree + 20-col term + agent_tasks + lazygit. If lazygit
-    // can't fit at min width, leave it inline. If it fits but would
-    // squeeze agent_tasks, drop the agent panel first — keeping lazygit
-    // pinned right is the explicit user preference.
-    let lw = if lw_target == 0 {
-        0
-    } else if v[1]
-        .width
-        .saturating_sub(tw)
-        .saturating_sub(RIGHT_PANEL_WIDTH)
-        .saturating_sub(lw_target)
-        >= 20
+    // Try to fit tree + 20-col term + lazygit. If lazygit can't fit at
+    // min width, leave it inline. The agent_tasks panel gets dropped
+    // first (handled below in the `rw` calc) — keeping lazygit pinned
+    // right is the explicit user preference.
+    let lw = if lw_target == 0
+        || v[1].width.saturating_sub(tw).saturating_sub(lw_target) < 20
     {
-        lw_target
-    } else if v[1].width.saturating_sub(tw).saturating_sub(lw_target) >= 20 {
-        lw_target
-    } else {
         // Not enough room for a dedicated column: signal the in-pane
         // split fallback by leaving lw at zero.
         0
+    } else {
+        lw_target
     };
 
     // Reserve the right column when shown. Falls back to 0 if doing so
@@ -977,10 +969,9 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         body("  u                 start (up) the selected session", p),
         body("  s                 stop the selected session (graceful)", p),
         body(
-            "  K                 kill the selected session (immediate)",
+            "  K · x · D         kill the selected session (closes & removes)",
             p,
         ),
-        body("  x · D             delete the selected session", p),
         Line::from(""),
         head("  Extensions & appearance", p),
         body("  g                 toggle lazygit side pane", p),
@@ -999,7 +990,7 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         body("  + / -             widen / narrow sidebar tree", p),
         Line::from(""),
         body("  ?                 toggle this help", p),
-        body("  q                 quit (when tree is focused)", p),
+        body("  Ctrl-Q            quit (works from any focus)", p),
     ];
     if lazygit_open {
         lines.push(Line::from(""));
@@ -1521,7 +1512,7 @@ fn draw_new_session_overlay(f: &mut Frame<'_>, area: Rect, form: &NewSessionForm
         &form.workdir,
         form.field == NewSessionField::Workdir,
         "~/projects/foo",
-        Some("Enter opens the folder picker"),
+        Some("Tab autocompletes · Enter opens the folder picker"),
         p,
     );
     push_form_field_with_hint(
@@ -1810,20 +1801,20 @@ fn draw_reconnect_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette)
         2 => "..",
         _ => "...",
     };
+    // Title already says "reconnecting"; don't repeat it as a heading.
+    // Keep just the explanation line, the attempt/countdown, and the
+    // animated dots tacked onto the countdown so the user still gets
+    // visible "this is alive" feedback.
     let lines = vec![
-        Line::from(Span::styled(
-            format!("  reconnecting{dots}"),
-            Style::default()
-                .fg(p.accent)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
         Line::from(Span::styled(
             "  connection to the agentum daemon was lost",
             Style::default().fg(p.fg),
         )),
         Line::from(""),
-        Line::from(Span::styled(body_line, Style::default().fg(p.warning))),
+        Line::from(Span::styled(
+            format!("{body_line}{dots}"),
+            Style::default().fg(p.warning),
+        )),
         Line::from(""),
         Line::from(Span::styled(
             "  Ctrl-Q to quit",
@@ -1918,7 +1909,7 @@ fn draw_agent_tasks_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette)
             (
                 or_empty_hint(plan, "Waiting for /plan…", p),
                 or_empty_hint(todos, "No todos yet.", p),
-                or_empty_hint(tasks, "No background tasks.", p),
+                or_empty_hint(tasks, "No subagent runs yet.", p),
             )
         }
         None => {
@@ -1931,14 +1922,14 @@ fn draw_agent_tasks_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette)
             (
                 hint("Select a session to see its plan."),
                 hint("Select a session to see its todos."),
-                hint("Select a session to see its tasks."),
+                hint("Select a session to see its subagents."),
             )
         }
     };
 
     render_section(f, rows[0], &plan_title, plan_lines, p);
     render_section(f, rows[1], " Todos ", todos_lines, p);
-    render_section(f, rows[2], " Tasks ", tasks_lines, p);
+    render_section(f, rows[2], " Agents ", tasks_lines, p);
 }
 
 fn or_empty_hint(

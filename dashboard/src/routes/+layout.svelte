@@ -12,6 +12,8 @@
   import { authState } from '$stores/auth';
   import { connect as connectEvents, disconnect as disconnectEvents } from '$stores/events';
   import { startEventBridge, stopEventBridge } from '$stores/event-bridge';
+  import { startHostMetrics } from '$stores/host';
+  import { startAttentionBridge } from '$stores/attention';
   import { tweaks, applyTweaks } from '$stores/tweaks';
   import { get as getStore } from 'svelte/store';
   import {
@@ -70,6 +72,8 @@
       if (s === 'ok') {
         connectEvents();
         startEventBridge();
+        startHostMetrics();
+        startAttentionBridge();
       } else {
         stopEventBridge();
         disconnectEvents();

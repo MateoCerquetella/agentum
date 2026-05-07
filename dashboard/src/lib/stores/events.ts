@@ -1,4 +1,5 @@
-import { writable, type Writable } from 'svelte/store';
+import { writable, type Writable, get } from 'svelte/store';
+import { tweaks } from './tweaks';
 
 export interface BusEvent {
   kind: string;
@@ -89,6 +90,7 @@ function handle(ev: BusEvent) {
   fanOut(ev);
   switch (ev.kind) {
     case 'watchdog.compact': {
+      if (!get(tweaks).notifyCompact) break;
       const name = ev.session_name ?? 'session';
       pushToast({
         kind: 'info',
@@ -99,6 +101,7 @@ function handle(ev: BusEvent) {
       break;
     }
     case 'session.crashed': {
+      if (!get(tweaks).notifyCrashed) break;
       const name = ev.session_name ?? 'session';
       const reason = (ev.payload?.reason as string) ?? (ev.payload?.signature as string) ?? 'unknown';
       pushToast({
@@ -133,6 +136,7 @@ function handle(ev: BusEvent) {
       break;
     }
     case 'agent.finished': {
+      if (!get(tweaks).notifyFinished) break;
       // Watchdog saw the agent's busy spinner go away. Suppress the
       // toast when the user is already on this session's detail page —
       // they can see "finished" in the pane in front of them.
@@ -147,6 +151,7 @@ function handle(ev: BusEvent) {
       break;
     }
     case 'agent.awaiting_input': {
+      if (!get(tweaks).notifyAwaitingInput) break;
       // Permission prompt is open. Always toast — this is a "you have to
       // do something" event and the user might be on another tab.
       const name = ev.session_name ?? 'agent';

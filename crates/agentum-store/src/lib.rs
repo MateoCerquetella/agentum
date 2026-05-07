@@ -136,26 +136,54 @@ impl Store {
             last_log: None,
             uptime_seconds: None,
             state: None,
+            pinned: false,
         })
     }
 
     pub async fn list_sessions(&self, status: Option<Status>) -> Result<Vec<Session>> {
+        // `pinned DESC` first so favorited rows float to the top of every
+        // listing; ties fall back to the creation-order rule everyone
+        // already mentally models.
         let rows: Vec<SessionRow> = match status {
             Some(s) => {
                 sqlx::query_as::<_, SessionRow>(
-                    "SELECT * FROM sessions WHERE status = ? ORDER BY created_at DESC",
+                    "SELECT * FROM sessions WHERE status = ? \
+                     ORDER BY pinned DESC, created_at DESC",
                 )
                 .bind(s.as_str())
                 .fetch_all(&self.pool)
                 .await?
             }
             None => {
-                sqlx::query_as::<_, SessionRow>("SELECT * FROM sessions ORDER BY created_at DESC")
-                    .fetch_all(&self.pool)
-                    .await?
+                sqlx::query_as::<_, SessionRow>(
+                    "SELECT * FROM sessions ORDER BY pinned DESC, created_at DESC",
+                )
+                .fetch_all(&self.pool)
+                .await?
             }
         };
         rows.into_iter().map(Session::try_from).collect()
+    }
+
+    /// Toggle (or set) the `pinned` flag for a session. Pinned sessions
+    /// sort to the top of every list view. Returns the patched row.
+    pub async fn patch_session_pinned(&self, id: Uuid, pinned: bool) -> Result<Session> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let affected = sqlx::query(
+            "UPDATE sessions SET pinned = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(if pinned { 1_i64 } else { 0_i64 })
+        .bind(now_s)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if affected == 0 {
+            return Err(StoreError::NotFound(id.to_string()));
+        }
+        self.get_session_by_id(id)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(id.to_string()))
     }
 
     pub async fn get_session_by_name(&self, name: &str) -> Result<Option<Session>> {
@@ -931,6 +959,9 @@ struct SessionRow {
     last_log: Option<String>,
     uptime_seconds: Option<i64>,
     state: Option<String>,
+    /* ---- migration 0009 ---- */
+    #[sqlx(default)]
+    pinned: i64,
 }
 
 #[derive(Debug, FromRow)]
@@ -1090,6 +1121,7 @@ impl TryFrom<SessionRow> for Session {
             last_log: r.last_log,
             uptime_seconds: r.uptime_seconds,
             state,
+            pinned: r.pinned != 0,
         })
     }
 }

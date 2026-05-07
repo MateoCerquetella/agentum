@@ -29,10 +29,7 @@ pub async fn run(
         .into_owned();
 
     let mut flags: Vec<String> = args.iter().map(|a| arg_to_flag(a)).collect();
-    if yolo
-        && YOLO_TOOLS.iter().any(|t| *t == tool.as_str())
-        && !flags.iter().any(|f| f == YOLO_FLAG)
-    {
+    if yolo && YOLO_TOOLS.contains(&tool.as_str()) && !flags.iter().any(|f| f == YOLO_FLAG) {
         flags.push(YOLO_FLAG.to_string());
     }
 

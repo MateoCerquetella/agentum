@@ -309,7 +309,7 @@ impl NewSessionForm {
     /// the toggle so the flag stays out of their argv.
     pub fn yolo_active(&self) -> bool {
         let tool = self.tool.trim();
-        self.yolo && YOLO_TOOLS.iter().any(|t| *t == tool)
+        self.yolo && YOLO_TOOLS.contains(&tool)
     }
 
     /// Cycle the tool field through `TOOL_SUGGESTIONS`. Triggered by
@@ -392,11 +392,6 @@ pub enum PendingAction {
         id: Uuid,
         name: String,
     },
-    Delete {
-        id: Uuid,
-        name: String,
-        running: bool,
-    },
 }
 
 impl PendingAction {
@@ -408,15 +403,6 @@ impl PendingAction {
             }
             PendingAction::Kill { name, .. } => {
                 format!("kill `{name}`? Stops the process and removes the session.")
-            }
-            PendingAction::Delete { name, running, .. } => {
-                if *running {
-                    format!(
-                        "delete session `{name}`? It is currently running — will be killed first."
-                    )
-                } else {
-                    format!("delete session `{name}`?")
-                }
             }
         }
     }
@@ -1303,17 +1289,18 @@ pub async fn run_loop(
         // Tell the daemon (and through it tmux) about the new pane size so
         // the embedded TUI redraws into the right viewport. Without this
         // tmux clamps to its 80×24 default and you get overlapping text.
-        if (term_cols, term_rows) != app.term_size && term_cols > 0 && term_rows > 0 {
-            if let Some(tx) = app.term_in.as_ref()
-                && tx
-                    .send(TermOut::Resize {
-                        cols: term_cols,
-                        rows: term_rows,
-                    })
-                    .is_ok()
-            {
-                app.term_size = (term_cols, term_rows);
-            }
+        if (term_cols, term_rows) != app.term_size
+            && term_cols > 0
+            && term_rows > 0
+            && let Some(tx) = app.term_in.as_ref()
+            && tx
+                .send(TermOut::Resize {
+                    cols: term_cols,
+                    rows: term_rows,
+                })
+                .is_ok()
+        {
+            app.term_size = (term_cols, term_rows);
         }
         // Mirror the resize plumbing for the right split when active —
         // each side has its own parser, its own remembered size, and its
@@ -2210,11 +2197,12 @@ async fn handle_key(
                 return;
             }
             KeyCode::Char('D') => {
+                // Shift-D is now an alias for Kill — there's no separate
+                // delete verb. Same confirmation, same outcome.
                 if let Some(s) = app.selected_session() {
-                    app.overlay = Overlay::Confirm(PendingAction::Delete {
+                    app.overlay = Overlay::Confirm(PendingAction::Kill {
                         id: s.id,
                         name: s.name.clone(),
-                        running: matches!(s.status, Status::Running),
                     });
                 }
                 return;
@@ -2533,15 +2521,13 @@ async fn handle_key(
             }
         }
         KeyCode::Char('D') | KeyCode::Char('x') => {
-            // `x` is the more discoverable delete shortcut — vim/fzf-style
-            // and unshifted so the user doesn't have to learn that capital
-            // letters mean lifecycle actions. Shift-D stays bound for
-            // muscle memory; both route to the same confirmation prompt.
+            // `x` is the discoverable vim/fzf-style alias; Shift-D is the
+            // muscle-memory binding. Both route to the same Kill prompt
+            // as Shift-K — there's no separate delete verb anymore.
             if let Some(s) = app.selected_session() {
-                app.overlay = Overlay::Confirm(PendingAction::Delete {
+                app.overlay = Overlay::Confirm(PendingAction::Kill {
                     id: s.id,
                     name: s.name.clone(),
-                    running: matches!(s.status, Status::Running),
                 });
             } else {
                 app.status_msg = Some("no session selected".into());
@@ -2578,15 +2564,21 @@ async fn handle_new_session_key(
             return;
         }
 
-        // Tab/Shift-Tab moves between fields, EXCEPT on the Tool field
-        // where Tab cycles through suggestions (matches web's datalist).
-        KeyCode::Tab => {
-            if matches!(form.field, NewSessionField::Tool) {
-                form.cycle_tool();
-            } else {
-                form.next_field();
+        // Tab/Shift-Tab moves between fields, with two exceptions:
+        //   - Tool: Tab cycles through suggestions (web datalist parity)
+        //   - Workdir: Tab attempts shell-style path autocompletion. If
+        //     nothing to complete (no prefix, no matches, already at a
+        //     full match) it falls through to next_field so Tab still
+        //     advances the form when the path is empty / done.
+        KeyCode::Tab => match form.field {
+            NewSessionField::Tool => form.cycle_tool(),
+            NewSessionField::Workdir => {
+                if !autocomplete_workdir(&mut form, client).await {
+                    form.next_field();
+                }
             }
-        }
+            _ => form.next_field(),
+        },
         KeyCode::BackTab => form.prev_field(),
         // Down/Up always navigate fields.
         KeyCode::Down => form.next_field(),
@@ -2693,9 +2685,14 @@ async fn handle_new_session_key(
                         app.refresh_sessions(fresh);
                         app.tree.select_session(id);
                         {
-            let side = app.target_side();
-            update_selection(app, client, side);
-        }
+                            let side = app.target_side();
+                            update_selection(app, client, side);
+                        }
+                        // Jump straight into the new terminal so the user
+                        // can start typing — matches Space-from-tree.
+                        if app.selected == Some(id) {
+                            app.set_focus(Focus::Term);
+                        }
                     }
                     return;
                 }
@@ -2712,35 +2709,173 @@ async fn handle_new_session_key(
 }
 
 /// Fetch the listing for `seed` (or `$HOME` if seed is empty/None).
-/// Falls back to an empty listing on transport errors so the picker
-/// still opens with a visible error message.
+///
+/// If `seed` doesn't exist, walks up the path until an existing ancestor
+/// is found and surfaces a hint about the fallback. This way typing a
+/// stale workdir (project deleted, repo moved, typo) never traps the
+/// user in a dead-end picker with no `parent` to back out of — they
+/// land at the nearest real directory and can navigate from there.
 async fn open_dir_picker(seed: Option<&str>, client: &Client) -> DirPickerState {
-    let path = seed.map(|s| s.to_string());
-    match client.list_dir(path.as_deref()).await {
-        Ok(listing) => DirPickerState {
-            path: listing.path,
-            parent: listing.parent,
-            entries: listing
-                .dirs
-                .into_iter()
-                .map(|d| DirEntryView {
-                    name: d.name,
-                    path: d.path,
-                })
-                .collect(),
-            cursor: 0,
-            error: None,
-            loading: false,
-        },
-        Err(e) => DirPickerState {
-            path: seed.unwrap_or("~").to_string(),
-            parent: None,
-            entries: Vec::new(),
-            cursor: 0,
-            error: Some(e.to_string()),
-            loading: false,
-        },
+    let original = seed
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty());
+    let mut current = original.clone();
+    let mut last_err: Option<String> = None;
+
+    loop {
+        let attempt = current.as_deref();
+        match client.list_dir(attempt).await {
+            Ok(listing) => {
+                let fell_back = current != original;
+                let error = if fell_back {
+                    original
+                        .as_deref()
+                        .map(|o| format!("`{o}` not found — opened nearest parent"))
+                } else {
+                    None
+                };
+                return DirPickerState {
+                    path: listing.path,
+                    parent: listing.parent,
+                    entries: listing
+                        .dirs
+                        .into_iter()
+                        .map(|d| DirEntryView {
+                            name: d.name,
+                            path: d.path,
+                        })
+                        .collect(),
+                    cursor: 0,
+                    error,
+                    loading: false,
+                };
+            }
+            Err(e) => {
+                // Capture the first error only — that's the one that
+                // names the path the user actually asked for. Walking
+                // up past it would just produce noisier "no such dir"
+                // messages for paths the user never typed.
+                last_err.get_or_insert_with(|| e.to_string());
+                let next = current.as_deref().and_then(parent_path_string);
+                match next {
+                    Some(p) => current = Some(p),
+                    None => {
+                        // Already at $HOME / no parent. Bail with the
+                        // error so the overlay isn't silently empty.
+                        return DirPickerState {
+                            path: original.unwrap_or_else(|| "~".into()),
+                            parent: None,
+                            entries: Vec::new(),
+                            cursor: 0,
+                            error: last_err,
+                            loading: false,
+                        };
+                    }
+                }
+            }
+        }
     }
+}
+
+/// Shell-style Tab completion for the workdir field.
+///
+/// Splits the current input into "directory part" + "name prefix",
+/// asks the daemon for that directory's subdirs, and either:
+///   - replaces the prefix with the unique match (appending `/` so the
+///     user can keep tabbing into nested dirs), or
+///   - extends the prefix to the longest common prefix shared by all
+///     candidates (mimics bash readline behaviour).
+///
+/// Returns `true` when the workdir was changed — the caller uses this
+/// to decide whether to swallow the Tab or fall through to next_field.
+async fn autocomplete_workdir(form: &mut NewSessionForm, client: &Client) -> bool {
+    let current = form.workdir.clone();
+    if current.trim().is_empty() {
+        return false;
+    }
+    // Split at the last `/` so `~/Dev/agen` becomes ("~/Dev/", "agen").
+    // No slash → completion is meaningless ($HOME basenames vs cwd is
+    // ambiguous), so let Tab just advance fields.
+    let Some(slash_idx) = current.rfind('/') else {
+        return false;
+    };
+    let dir_part = &current[..=slash_idx];
+    let prefix = &current[slash_idx + 1..];
+
+    // List the parent. Empty/`~/` map to $HOME; root gets passed through.
+    let dir_query: Option<&str> = if dir_part == "/" {
+        Some("/")
+    } else {
+        // Strip trailing `/` so the server doesn't double-resolve.
+        let q = dir_part.trim_end_matches('/');
+        if q.is_empty() { None } else { Some(q) }
+    };
+    let listing = match client.list_dir(dir_query).await {
+        Ok(l) => l,
+        Err(_) => return false,
+    };
+    let matches: Vec<&str> = listing
+        .dirs
+        .iter()
+        .map(|d| d.name.as_str())
+        .filter(|n| n.starts_with(prefix))
+        .collect();
+    if matches.is_empty() {
+        return false;
+    }
+
+    let new_text = if matches.len() == 1 {
+        // Unique completion: full name + trailing slash so the next Tab
+        // dives straight into the dir.
+        format!("{dir_part}{}/", matches[0])
+    } else {
+        let common = longest_common_prefix(&matches);
+        if common.len() <= prefix.len() {
+            // Already at the boundary of an ambiguous fork — Tab can't
+            // advance. Treat as no-op so the user can keep typing or
+            // open the picker with Enter.
+            return false;
+        }
+        format!("{dir_part}{common}")
+    };
+    if new_text == current {
+        return false;
+    }
+    form.workdir = new_text;
+    true
+}
+
+fn longest_common_prefix(strs: &[&str]) -> String {
+    let Some(first) = strs.first() else {
+        return String::new();
+    };
+    let mut end = first.len();
+    for s in &strs[1..] {
+        let mut i = 0;
+        for (a, b) in first.bytes().zip(s.bytes()) {
+            if a != b {
+                break;
+            }
+            i += 1;
+        }
+        end = end.min(i);
+        if end == 0 {
+            break;
+        }
+    }
+    first[..end].to_string()
+}
+
+/// Parent of `p` as an owned String, or None at the filesystem root /
+/// when `p` no longer has a meaningful parent (e.g. just `~`).
+fn parent_path_string(p: &str) -> Option<String> {
+    let trimmed = p.trim_end_matches('/');
+    if trimmed.is_empty() || trimmed == "~" || trimmed == "/" {
+        return None;
+    }
+    let parent = std::path::Path::new(trimmed).parent()?;
+    let s = parent.to_string_lossy();
+    if s.is_empty() { None } else { Some(s.into_owned()) }
 }
 
 async fn handle_dir_picker_key(form: &mut NewSessionForm, key: KeyEvent, client: &Client) {
@@ -2810,27 +2945,24 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         PendingAction::Stop { id, .. } => client.stop_session(*id).await,
         // "Kill" in the TUI means kill-and-remove: drop the tmux session
         // AND the store record so the entry disappears from the tree.
-        // The split-brain behaviour where Kill stopped the process but
-        // left a corpse in the sidebar was confusing — users expect
-        // "kill terminal" to behave the same way every other multiplexer
-        // does (close + remove). The legacy stop-only verb is still
-        // reachable as `s`/Stop for the rare "I want to restart this
-        // exact session later" case.
+        // This is the only destructive verb — "delete" used to be a
+        // separate action but it overlapped enough with kill (kill also
+        // removed the record) that having both was just confusing UI
+        // with no semantic payoff. `s`/Stop is still here for the rare
+        // "I want to restart this exact session later" case.
         PendingAction::Kill { id, .. } => client.delete_session(*id, true).await,
-        PendingAction::Delete { id, running, .. } => client.delete_session(*id, *running).await,
     };
     let label = match &action {
         PendingAction::Start { name, .. } => format!("started `{name}`"),
         PendingAction::Stop { name, .. } => format!("stopped `{name}`"),
-        PendingAction::Kill { name, .. } => format!("killed & removed `{name}`"),
-        PendingAction::Delete { name, .. } => format!("deleted `{name}`"),
+        PendingAction::Kill { name, .. } => format!("killed `{name}`"),
     };
     match result {
         Ok(()) => {
             // Toast user-initiated lifecycle actions. The server's event
             // bus only re-emits `session.crashed` / `watchdog.compact` /
             // (silenced) `session.started`, so without this nudge a clean
-            // start/stop/kill/delete would silently update the tree with
+            // start/stop/kill would silently update the tree with
             // zero confirmation. Direct push lets the toast fire even
             // when the events WS is offline.
             app.status_msg = Some(label.clone());
@@ -3287,15 +3419,6 @@ async fn run_palette_action(
                 app.overlay = Overlay::Confirm(PendingAction::Kill {
                     id,
                     name: s.name.clone(),
-                });
-            }
-        }
-        ActionKind::DeleteSession(id) => {
-            if let Some(s) = app.sessions.iter().find(|s| s.id == id) {
-                app.overlay = Overlay::Confirm(PendingAction::Delete {
-                    id,
-                    name: s.name.clone(),
-                    running: matches!(s.status, Status::Running),
                 });
             }
         }
@@ -4064,18 +4187,18 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
             );
         }
         "agent.finished" => {
-            // Suppress the toast when the user is already looking at this
-            // session — they don't need a notification for an event they
-            // can see live in the pane in front of them. The dashboard
-            // applies the same filter on its end.
-            if ev.session_id != app.selected {
-                push_notification(
-                    app,
-                    format!("{name} finished"),
-                    None,
-                    NotifKind::Info,
-                );
-            }
+            // Always toast (and chime) — matches `agent.awaiting_input`.
+            // The user wants the same audible/visible cue whether they're
+            // staring at the pane or tabbed away to lazygit, the palette,
+            // or another tmux window. The pane-visible suppression we
+            // used to do here meant a long agent run could finish under
+            // your nose with zero alert.
+            push_notification(
+                app,
+                format!("{name} finished"),
+                None,
+                NotifKind::Info,
+            );
             // Working→Idle: the agent is now sleeping at the prompt.
             // Mirror the watchdog's ActivityState::Idle so the sidebar
             // dot shows a muted `◌` instead of a misleading green `●`.
@@ -4326,7 +4449,10 @@ pub fn status_dot(s: Status) -> (&'static str, ratatui::style::Color) {
     match s {
         Status::Running => ("●", Color::Green),
         Status::Idle => ("○", Color::DarkGray),
-        Status::Stopped => ("◐", Color::Yellow),
+        // Stopped is grey, not yellow — yellow now belongs exclusively to
+        // the awaiting-input overlay (▲) so the two states never collide
+        // at a glance. A stopped terminal is dormant, not blocked on you.
+        Status::Stopped => ("◐", Color::DarkGray),
         Status::Crashed => ("✗", Color::Red),
     }
 }

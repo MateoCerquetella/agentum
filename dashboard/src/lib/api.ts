@@ -41,6 +41,8 @@ export interface Session {
   uptime_seconds?: number | null;
   /** Lifecycle state with /compact awareness; `status` is still authoritative. */
   state?: SessionState;
+  /** User-toggled "favorite" — sorts to the top of every list. */
+  pinned?: boolean;
 }
 
 export interface NewSession {
@@ -305,7 +307,10 @@ export const api = {
     request<Session>(`/api/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
   killSession: (id: string) =>
     request<Session>(`/api/sessions/${encodeURIComponent(id)}/kill`, { method: 'POST' }),
-  patchSession: (id: string, body: { flags?: string[]; model?: string | null }) =>
+  patchSession: (
+    id: string,
+    body: { flags?: string[]; model?: string | null; name?: string; tool?: string; pinned?: boolean }
+  ) =>
     request<Session>(`/api/sessions/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteSession: (id: string, force = false) =>
     request<void>(

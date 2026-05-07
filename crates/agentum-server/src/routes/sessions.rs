@@ -103,6 +103,8 @@ struct PatchBody {
     flags: Option<Vec<String>>,
     #[serde(default)]
     model: Option<Option<String>>,
+    #[serde(default)]
+    pinned: Option<bool>,
 }
 
 async fn patch_session(
@@ -153,6 +155,21 @@ async fn patch_session(
             );
             current = updated;
         }
+    }
+
+    // Pin toggle is metadata-only — works on running and stopped
+    // sessions alike. Always emits `session.pinned` so multi-tab
+    // dashboards stay in sync without polling.
+    if let Some(pinned) = body.pinned
+        && current.pinned != pinned
+    {
+        let updated = state.store.patch_session_pinned(id, pinned).await?;
+        let _ = state.bus.send(
+            Event::new("session.pinned")
+                .with_session(updated.id, &updated.name)
+                .with_payload(serde_json::json!({"pinned": updated.pinned})),
+        );
+        current = updated;
     }
 
     // Flags + model still require the session to be stopped — they

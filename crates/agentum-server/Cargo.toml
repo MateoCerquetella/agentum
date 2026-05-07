@@ -36,3 +36,4 @@ password-hash  = { version = "0.5", features = ["getrandom"] }
 sha2           = "0.10"
 rustls         = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 notify         = "8"
+sysinfo        = { version = "0.32", default-features = false, features = ["system"] }

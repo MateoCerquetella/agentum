@@ -9,12 +9,25 @@
   import {
     deriveState, ctxOf, fmtTokens, fmtCost, greeting
   } from '$lib/dashboard';
-  import StatTile from '$components/dashboard/StatTile.svelte';
+  import SummaryCard from '$components/dashboard/SummaryCard.svelte';
   import NarrativeRow from '$components/dashboard/NarrativeRow.svelte';
   import FleetRow from '$components/dashboard/FleetRow.svelte';
   import AttentionStrip from '$components/dashboard/AttentionStrip.svelte';
+  import HostStrip from '$components/dashboard/HostStrip.svelte';
+  import StuckPanel from '$components/dashboard/StuckPanel.svelte';
+  import { tweaks } from '$stores/tweaks';
+  import { awaitingInput, staleMinutes } from '$stores/attention';
+  import { projectOf } from '$lib/dashboard';
+  import type { Session } from '$lib/api';
 
   let username = $state('there');
+
+  type FleetFilter = 'all' | 'live' | 'attention' | 'stopped';
+  type FleetSort = 'activity' | 'name' | 'ctx' | 'spend';
+  type FleetGroup = 'none' | 'project' | 'status';
+  let filterBy = $state<FleetFilter>('all');
+  let sortBy   = $state<FleetSort>('activity');
+  let groupBy  = $state<FleetGroup>('none');
 
   function refresh() {
     loadSessions();
@@ -47,6 +60,110 @@
 
   const tokens24  = $derived($sessions.items.reduce((a, s) => a + (s.tokens ?? 0), 0));
   const spend24   = $derived($sessions.items.reduce((a, s) => a + (s.cost ?? 0), 0));
+  const stoppedCount = $derived($sessions.items.filter(s => s.status === 'stopped').length);
+  const compactingCount = $derived(incidents.filter(i => deriveState(i) === 'compact').length);
+  const crashedCount = $derived(incidents.filter(i => deriveState(i) === 'crash').length);
+  const stuckCount = $derived.by(() => {
+    const lim = $tweaks.stuckMinutes;
+    let n = 0;
+    for (const s of $sessions.items) {
+      if (s.status !== 'running') continue;
+      if ($awaitingInput.has(s.id)) { n += 1; continue; }
+      if (deriveState(s) === 'idle' && staleMinutes(s) >= lim) n += 1;
+    }
+    return n;
+  });
+
+  // Filter → sort → group pipeline. Pinned always wins regardless of
+  // sort field so favorited rows stay at the top of every grouping.
+  const filteredSessions = $derived.by(() => {
+    const lim = $tweaks.stuckMinutes;
+    const isAttention = (s: Session) =>
+      $awaitingInput.has(s.id)
+      || deriveState(s) === 'crash'
+      || deriveState(s) === 'compact'
+      || (s.status === 'running' && deriveState(s) === 'idle' && staleMinutes(s) >= lim);
+    return $sessions.items.filter((s) => {
+      switch (filterBy) {
+        case 'live':      return deriveState(s) === 'live';
+        case 'attention': return isAttention(s);
+        case 'stopped':   return s.status === 'stopped' || s.status === 'crashed';
+        default:          return true;
+      }
+    });
+  });
+
+  const sortedSessions = $derived.by(() => {
+    const arr = [...filteredSessions];
+    arr.sort((a, b) => {
+      // Pinned first regardless of secondary sort.
+      const ap = a.pinned ? 1 : 0;
+      const bp = b.pinned ? 1 : 0;
+      if (ap !== bp) return bp - ap;
+      switch (sortBy) {
+        case 'name':     return a.name.localeCompare(b.name);
+        case 'ctx':      return ctxOf(a) - ctxOf(b);
+        case 'spend':    return (b.cost ?? 0) - (a.cost ?? 0);
+        case 'activity':
+        default: {
+          const at = a.last_activity_at ? new Date(a.last_activity_at).getTime() : 0;
+          const bt = b.last_activity_at ? new Date(b.last_activity_at).getTime() : 0;
+          return bt - at;
+        }
+      }
+    });
+    return arr;
+  });
+
+  // Grouped view: array of [groupLabel, sessions[]]. `none` returns a
+  // single bucket so the template always iterates over groups.
+  const groupedSessions = $derived.by((): Array<[string, Session[]]> => {
+    if (groupBy === 'none') return [['', sortedSessions]];
+    const map = new Map<string, Session[]>();
+    const keyFor = (s: Session) => {
+      if (groupBy === 'project') return projectOf(s.workdir);
+      // status grouping ladders by lifecycle so live sessions land first.
+      const st = deriveState(s);
+      if ($awaitingInput.has(s.id)) return 'attention';
+      if (st === 'crash') return 'crashed';
+      if (st === 'compact') return 'compacting';
+      if (st === 'live') return 'live';
+      if (s.status === 'stopped') return 'stopped';
+      return 'idle';
+    };
+    for (const s of sortedSessions) {
+      const k = keyFor(s);
+      const arr = map.get(k) ?? [];
+      arr.push(s);
+      map.set(k, arr);
+    }
+    // Preserve insertion order (sortedSessions is already in the right
+    // order, so first-seen-key is the right group order too).
+    return Array.from(map.entries());
+  });
+
+  // Most-active project last 24h, by session count. Ties broken by
+  // total spend so the "expensive workdir" surfaces over equal-count
+  // ones. Returns null when there's no fleet to inspect.
+  const topProject = $derived.by(() => {
+    if ($sessions.items.length === 0) return null;
+    const buckets = new Map<string, { count: number; spend: number; sessions: Session[] }>();
+    for (const s of $sessions.items) {
+      const k = projectOf(s.workdir);
+      const b = buckets.get(k) ?? { count: 0, spend: 0, sessions: [] };
+      b.count += 1;
+      b.spend += s.cost ?? 0;
+      b.sessions.push(s);
+      buckets.set(k, b);
+    }
+    let best: { name: string; count: number; spend: number; sessions: Session[] } | null = null;
+    for (const [name, b] of buckets) {
+      if (!best || b.count > best.count || (b.count === best.count && b.spend > best.spend)) {
+        best = { name, ...b };
+      }
+    }
+    return best;
+  });
 
   const doneItems = $derived.by(() => {
     const data = $board.data;
@@ -143,38 +260,75 @@
         {/if}
       </div>
 
-      <div class="hero-stats">
-        <StatTile k="Live" v={String(live.length)} sub={`/ ${$sessions.items.length} pane${$sessions.items.length === 1 ? '' : 's'}`} />
-        <StatTile
-          k="Avg ctx"
-          v={`${avgCtx}%`}
-          sub="across live sessions"
-          accent={avgCtx >= 70 ? 'var(--green)' : avgCtx >= 50 ? 'var(--amber)' : 'var(--cta)'}
-        />
-        <StatTile
-          k="Incidents"
-          v={String(incidents.length)}
-          sub={incidents.length > 0 ? incidents.map(i => deriveState(i)).join(' · ') : 'none'}
-          accent={incidents.length > 0 ? 'var(--amber)' : 'var(--green)'}
-        />
-        <StatTile k="Tokens 24h" v={fmtTokens(tokens24)} sub="all tools" />
-        <StatTile k="Spend 24h" v={fmtCost(spend24)} sub={doneItems.length > 0 ? `${fmtCost(spend24 / doneItems.length)} / ticket` : '—'} />
-        <StatTile
-          k="Shipped"
-          v={String(doneItems.length)}
-          sub={`${reviewItems.length} in review`}
-          accent="var(--green)"
-        />
+      <div class="hero-side">
+        {#if !$tweaks.hideHostStrip}
+          <HostStrip />
+        {/if}
       </div>
     </section>
+
+    <div class="summary">
+      <SummaryCard
+        k="Fleet"
+        v={String(live.length)}
+        accent={stuckCount + crashedCount > 0 ? 'var(--cta)' : 'var(--green)'}
+        tags={[
+          { label: `${$sessions.items.length} total`, color: 'var(--fg-3)' },
+          ...(stuckCount > 0 ? [{ label: `${stuckCount} stuck`, color: 'var(--amber)' }] : []),
+          ...(crashedCount > 0 ? [{ label: `${crashedCount} crashed`, color: 'var(--crash)' }] : []),
+          ...(stoppedCount > 0 ? [{ label: `${stoppedCount} stopped`, color: 'var(--fg-3)' }] : [])
+        ]}
+        foot={live.length > 0 ? 'streaming now' : 'no agents running'}
+      />
+
+      <SummaryCard
+        k="Context"
+        v={live.length > 0 ? `${avgCtx}%` : '—'}
+        accent={live.length === 0 ? undefined : (avgCtx >= 70 ? 'var(--green)' : avgCtx >= 50 ? 'var(--amber)' : 'var(--cta)')}
+        tags={[
+          ...(lowCtx.length > 0
+            ? [{ label: `${lowCtx.length} below 55%`, color: 'var(--cta)' }]
+            : live.length > 0 ? [{ label: 'all healthy', color: 'var(--green)' }] : []),
+          ...(compactingCount > 0 ? [{ label: `${compactingCount} compacting`, color: 'var(--amber)' }] : [])
+        ]}
+        foot={lowCtx[0] ? `${lowCtx[0].name} lowest at ${ctxOf(lowCtx[0])}%` : 'avg across live sessions'}
+      />
+
+      <SummaryCard
+        k="Spend · 24h"
+        v={fmtCost(spend24)}
+        accent={spend24 > 0 ? 'var(--link)' : undefined}
+        tags={[
+          { label: `${fmtTokens(tokens24)} tokens` },
+          ...(doneItems.length > 0 ? [{ label: `${doneItems.length} shipped`, color: 'var(--green)' }] : []),
+          ...(reviewItems.length > 0 ? [{ label: `${reviewItems.length} in review`, color: 'var(--amber)' }] : [])
+        ]}
+        foot={doneItems.length > 0 ? `${fmtCost(spend24 / doneItems.length)} / shipped ticket` : (topProject ? `most active: ${topProject.name} · ${topProject.count} sess` : '—')}
+      />
+    </div>
+
+    <StuckPanel stuckMinutes={$tweaks.stuckMinutes} />
 
     <section class="fleet">
       <div class="fleet-h">
         <span class="micro" style="color: var(--fg);">Fleet</span>
-        <span class="micro">· {$sessions.items.length} session{$sessions.items.length === 1 ? '' : 's'} · {live.length} streaming</span>
+        <span class="micro">· {filteredSessions.length} of {$sessions.items.length} · {live.length} streaming</span>
         <span class="spacer"></span>
-        <span class="micro action" role="button" tabindex="0">sort: ctx ↑</span>
-        <span class="micro action" role="button" tabindex="0">filter</span>
+        <div class="seg" role="tablist" aria-label="Filter">
+          {#each [['all','All'], ['live','Live'], ['attention','Attention'], ['stopped','Stopped']] as [v, label]}
+            <button type="button" class="seg-btn" class:on={filterBy === v} onclick={() => filterBy = v as FleetFilter}>{label}</button>
+          {/each}
+        </div>
+        <div class="seg" role="tablist" aria-label="Sort">
+          {#each [['activity','Recent'], ['name','Name'], ['ctx','Ctx'], ['spend','Spend']] as [v, label]}
+            <button type="button" class="seg-btn" class:on={sortBy === v} onclick={() => sortBy = v as FleetSort}>{label}</button>
+          {/each}
+        </div>
+        <div class="seg" role="tablist" aria-label="Group">
+          {#each [['none','Flat'], ['project','Project'], ['status','Status']] as [v, label]}
+            <button type="button" class="seg-btn" class:on={groupBy === v} onclick={() => groupBy = v as FleetGroup}>{label}</button>
+          {/each}
+        </div>
       </div>
 
       {#if incidents.length + reviewItems.length > 0}
@@ -208,6 +362,7 @@
 
       <div class="fleet-head">
         <span></span>
+        <span></span>
         <span>Session · task</span>
         <span>Last activity</span>
         <span style="text-align: right;">Tokens</span>
@@ -224,9 +379,19 @@
         <div class="empty mono">
           No sessions yet — <button type="button" class="link" onclick={openNewSession}>spawn one</button>.
         </div>
+      {:else if filteredSessions.length === 0}
+        <div class="empty mono">No sessions match this filter.</div>
       {:else}
-        {#each $sessions.items as s (s.id)}
-          <FleetRow {s} />
+        {#each groupedSessions as [groupLabel, rows] (groupLabel || 'flat')}
+          {#if groupLabel}
+            <div class="group-h">
+              <span class="g-name">{groupLabel}</span>
+              <span class="g-count">{rows.length}</span>
+            </div>
+          {/if}
+          {#each rows as s (s.id)}
+            <FleetRow {s} />
+          {/each}
         {/each}
       {/if}
 
@@ -300,11 +465,17 @@
     background: rgba(255, 255, 255, 0.18);
     font-size: 10px;
   }
-  .hero-stats {
+  .hero-side {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 12px;
+    min-width: 0;
+  }
+  .summary {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    grid-template-rows: 1fr 1fr;
-    gap: 8px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
   }
 
   .fleet {
@@ -321,8 +492,54 @@
     gap: 10px;
   }
   .spacer { flex: 1; }
-  .fleet-h .action { cursor: pointer; }
-  .fleet-h .action:hover { color: var(--fg-2); }
+  .fleet-h .seg {
+    display: inline-flex;
+    border: 1px solid var(--border-2);
+    border-radius: 999px;
+    overflow: hidden;
+    background: var(--bg-2);
+  }
+  .fleet-h .seg-btn {
+    background: transparent;
+    border: 0;
+    color: var(--fg-3);
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 4px 10px;
+    cursor: pointer;
+    border-right: 1px solid var(--border-2);
+    transition: color var(--t-hover), background var(--t-hover);
+  }
+  .fleet-h .seg-btn:last-child { border-right: 0; }
+  .fleet-h .seg-btn:hover { color: var(--fg-2); }
+  .fleet-h .seg-btn.on {
+    background: var(--surface);
+    color: var(--fg);
+  }
+
+  .group-h {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px 4px;
+    background: #0c0c0c;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--fg-3);
+  }
+  .group-h .g-name { color: var(--fg-2); }
+  .group-h .g-count {
+    background: var(--bg-2);
+    border: 1px solid var(--border-2);
+    padding: 0 7px;
+    border-radius: 999px;
+    font-size: 9.5px;
+  }
 
   .strips {
     display: flex;
@@ -333,7 +550,7 @@
 
   .fleet-head {
     display: grid;
-    grid-template-columns: 14px 1.6fr 1.2fr 90px 80px 96px 80px;
+    grid-template-columns: 14px 18px 1.6fr 1.2fr 90px 80px 96px 80px;
     gap: 14px;
     padding: 9px 16px;
     background: #0a0a0a;
@@ -414,6 +631,6 @@
 
   @media (max-width: 1100px) {
     .hero { grid-template-columns: 1fr; }
-    .hero-stats { grid-template-columns: 1fr 1fr; grid-template-rows: auto; }
+    .summary { grid-template-columns: 1fr; gap: 8px; }
   }
 </style>
