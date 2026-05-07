@@ -2358,7 +2358,13 @@ async fn handle_key(
     }
 
     match key.code {
-        KeyCode::Char('q') => app.should_quit = true,
+        // Plain `q` used to quit the app, but it's a high-collision
+        // letter — easy to fat-finger after typing into the terminal,
+        // and the tree-filter prompt accepts `q` as a search char so
+        // there's no good "tree wants q for navigation" excuse to keep
+        // it. Ctrl-Q stays as the universal hard-quit (handled
+        // earlier in this function); the palette also offers an
+        // explicit Quit action.
         KeyCode::Char('?') => app.overlay = Overlay::Help,
         KeyCode::Char('!') => {
             // Open the error log overlay. Always available (even when

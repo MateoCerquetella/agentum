@@ -15,7 +15,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   attempt count + delay so the status bar can show "reconnecting
   (try N)" instead of a final-looking "disconnected". The
   pre-first-connect `Closed` / `Error` no longer flashes
-  Disconnected — gated on `was_connected`.
+  Disconnected — gated on `was_connected`. Status bar shows a
+  `⟳ reconnecting` chip and a centered overlay surfaces the
+  current attempt number plus retry-in-N-seconds countdown.
 
 ### Changed
 - **`Space` now selects + focuses the terminal in the tree
@@ -26,6 +28,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for "preview / open" — Enter freed up for bulk-action UX.
 
 ### Fixed
+- **Plan / Todos / Tasks panel was permanently empty when the
+  agent's first turn started after agentum's slot bootstrap.**
+  Pre-pin sessions (and any case where claude hadn't yet
+  materialized `<agentum-uuid>.jsonl`) locked the slot onto a
+  fallback transcript at creation time and never re-checked,
+  even after claude finally wrote the pinned file. The
+  per-session refresh path now promotes to `pinned_path` the
+  moment it appears on disk, wiping the cursor + replayed state
+  so the panel rehydrates from the agent's own transcript
+  instead of staying pinned to a cross-pollinated stranger.
+- **Plain `q` from the tree no longer quits the app.** Easy to
+  fat-finger after typing into the terminal, and the filter
+  prompt accepts `q` as a search character with no warning
+  flag. Ctrl-Q remains the universal hard-quit (handled
+  earlier in the dispatcher), and the command palette still
+  carries an explicit Quit action.
 - **Mouse-select-to-copy disabled to stop visible text corruption
   inside tmux.** The v0.6.31 OSC 52 implementation wrote the
   escape sequence directly to stdout from the input handler,

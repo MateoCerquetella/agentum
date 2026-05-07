@@ -43,11 +43,19 @@ struct Slot {
     workdir: PathBuf,
     state: AgentTaskState,
     /// Deterministic path of this session's JSONL transcript
-    /// (`<project_dir>/<agentum-session-id>.jsonl`). The file may not
-    /// exist yet at slot creation — claude only materializes it on the
-    /// first turn — but the path itself is fixed for the slot's
-    /// lifetime, so we never have to re-resolve "which file is current"
-    /// and never wipe state on a perceived rotation.
+    /// (`<project_dir>/<agentum-session-id>.jsonl`). Always set, even
+    /// when the file doesn't exist yet — claude materializes it on
+    /// the first turn. We *promote* to this path the moment it
+    /// appears on disk, swapping out any fallback we picked at slot
+    /// creation time so the panel snaps to the agent's own transcript
+    /// the instant claude starts writing.
+    pinned_path: PathBuf,
+    /// What we're actually reading right now. Equals `pinned_path`
+    /// when claude has begun writing; otherwise it's a best-guess
+    /// fallback (the latest `*.jsonl` in the project dir at the
+    /// moment we resolved). `refresh` re-checks for `pinned_path` on
+    /// every tick so a slot that started with a stale fallback
+    /// recovers automatically.
     transcript_path: PathBuf,
     /// Bytes already consumed from `transcript_path`. Lets each event
     /// apply only the newly appended slice instead of re-parsing the
@@ -135,10 +143,10 @@ impl TranscriptStore {
         // pollination risk for pre-pin sessions in exchange for a
         // working panel — the alternative is a silent dead-end UI.
         let transcript_path = if pinned_path.exists() {
-            pinned_path
+            pinned_path.clone()
         } else {
             transcript::latest_transcript_excluding(&project_dir, Some(&pinned_path))
-                .unwrap_or(pinned_path)
+                .unwrap_or_else(|| pinned_path.clone())
         };
 
         // Make the directory if it doesn't exist yet — Claude Code creates
@@ -183,6 +191,7 @@ impl TranscriptStore {
                 Slot {
                     workdir,
                     state,
+                    pinned_path,
                     transcript_path,
                     cursor,
                     pending_tasks: pending,
@@ -231,6 +240,21 @@ impl TranscriptStore {
             let Some(slot) = guard.get_mut(&id) else {
                 return;
             };
+
+            // Promote to the pinned (agentum-UUID) transcript the
+            // moment claude creates it. Pre-pin sessions or sessions
+            // whose first turn lands AFTER agentum's slot was
+            // initialised would otherwise stay locked on whatever
+            // fallback we picked at slot creation — usually a stale
+            // cross-pollinated transcript from another agent in the
+            // same workdir. Wiping cursor + state forces a clean
+            // re-parse from the new file.
+            if slot.transcript_path != slot.pinned_path && slot.pinned_path.exists() {
+                slot.transcript_path = slot.pinned_path.clone();
+                slot.cursor = 0;
+                slot.state = AgentTaskState::default();
+                slot.pending_tasks.clear();
+            }
 
             let path = slot.transcript_path.clone();
 
