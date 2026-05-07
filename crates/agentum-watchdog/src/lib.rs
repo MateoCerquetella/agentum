@@ -224,6 +224,17 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
                         .with_session(sess.id, &sess.name);
                     let _ = emit(&bus, &store, ev).await;
                 }
+                // Idle → Working: the agent picked up a new turn after
+                // sitting at the prompt. Without this event the TUI keeps
+                // the session pinned in its idle set and the sidebar dot
+                // stays grey while the agent is visibly working. No
+                // toast: a quietly-resumed agent isn't notification-
+                // worthy on its own.
+                (ActivityState::Idle, ActivityState::Working) => {
+                    let ev = Event::new("agent.working")
+                        .with_session(sess.id, &sess.name);
+                    let _ = emit(&bus, &store, ev).await;
+                }
                 (prev, ActivityState::AwaitingInput)
                     if prev != ActivityState::AwaitingInput
                         && prev != ActivityState::Unknown =>
