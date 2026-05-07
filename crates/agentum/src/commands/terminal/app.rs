@@ -1171,16 +1171,11 @@ pub async fn run_loop(
                 // bottom-left stack drains without us having to schedule
                 // a per-toast sleep future.
                 app.tick_expire();
-                // Selection changed since the last tick? Fire an
-                // immediate agent-tasks fetch so the right panel
-                // tracks tree navigation without the user having to
-                // wait for the 5-second refresh window.
-                if app.selected != last_selected {
-                    last_selected = app.selected;
-                    if let Some(id) = app.selected {
-                        refresh_agent_tasks(&mut app, &client, id).await;
-                    }
-                }
+                // Track the latest selection here purely so the
+                // 5-second slow path below has the correct id to fetch
+                // for. Nav-driven fetches happen inline inside
+                // `update_selection` — no double-fetch on keypress.
+                last_selected = app.selected;
                 if last_refresh.elapsed() >= REFRESH_INTERVAL {
                     last_refresh = Instant::now();
                     if let Ok(fresh) = client.list_sessions().await {
@@ -1523,7 +1518,7 @@ async fn handle_key(
             app.tree.select_session(prev);
             {
             let side = app.target_side();
-            update_selection(app, client, side);
+            update_selection(app, client, side).await;
         }
         } else {
             app.status_msg = Some("no previous session".into());
@@ -1632,7 +1627,7 @@ async fn handle_key(
             app.set_focus(Focus::TermRight);
             app.last_term_side = Side::Right;
             // Drive the right pane to the tree's current session.
-            update_selection(app, client, Side::Right);
+            update_selection(app, client, Side::Right).await;
             app.status_msg = Some("split (Ctrl-W to close)".into());
         }
         return;
@@ -1855,7 +1850,7 @@ async fn handle_key(
     // the tree-key match so chars like `/`, `n`, `q` extend the filter
     // instead of triggering their tree shortcuts.
     if app.filter_input_active {
-        handle_filter_input_key(app, &key, client);
+        handle_filter_input_key(app, &key, client).await;
         return;
     }
 
@@ -1945,14 +1940,14 @@ async fn handle_key(
             app.tree.move_cursor(1);
             {
             let side = app.target_side();
-            update_selection(app, client, side);
+            update_selection(app, client, side).await;
         }
         }
         KeyCode::Char('k') | KeyCode::Up => {
             app.tree.move_cursor(-1);
             {
             let side = app.target_side();
-            update_selection(app, client, side);
+            update_selection(app, client, side).await;
         }
         }
         KeyCode::Char('h') | KeyCode::Left => app.tree.collapse(),
@@ -1965,7 +1960,7 @@ async fn handle_key(
             let on_leaf = matches!(app.tree.current_row(), Some(Row::Leaf { .. }));
             {
             let side = app.target_side();
-            update_selection(app, client, side);
+            update_selection(app, client, side).await;
         }
             if on_leaf && app.selected.is_some() {
                 app.set_focus(Focus::Term);
@@ -2179,7 +2174,7 @@ async fn handle_new_session_key(
                         app.tree.select_session(id);
                         {
             let side = app.target_side();
-            update_selection(app, client, side);
+            update_selection(app, client, side).await;
         }
                     }
                     return;
@@ -2460,7 +2455,7 @@ async fn run_palette_action(
             app.tree.select_session(id);
             {
             let side = app.target_side();
-            update_selection(app, client, side);
+            update_selection(app, client, side).await;
         }
         }
         ActionKind::KillSession(id) => {
@@ -2536,7 +2531,7 @@ async fn run_palette_action(
                 });
                 app.set_focus(Focus::TermRight);
                 app.last_term_side = Side::Right;
-                update_selection(app, client, Side::Right);
+                update_selection(app, client, Side::Right).await;
                 app.status_msg = Some("split open (Ctrl-W to close)".into());
             }
         }
@@ -2795,7 +2790,7 @@ fn key_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
 /// After every edit we run `update_selection` so the right-hand terminal
 /// pane keeps tracking the highlighted session — typing into the filter
 /// feels like a live drill-down, not a deferred commit.
-fn handle_filter_input_key(
+async fn handle_filter_input_key(
     app: &mut App,
     key: &KeyEvent,
     client: &Client,
@@ -2851,7 +2846,7 @@ fn handle_filter_input_key(
     if changed {
         {
             let side = app.target_side();
-            update_selection(app, client, side);
+            update_selection(app, client, side).await;
         }
     }
 }
@@ -2861,7 +2856,7 @@ fn handle_filter_input_key(
 /// open a new one. `side` decides which slot to retarget; the unselected
 /// slot is left alone. Stream handle and term-tx live on `App` now, so
 /// this needs no extra channel parameters.
-fn update_selection(app: &mut App, client: &Client, side: Side) {
+async fn update_selection(app: &mut App, client: &Client, side: Side) {
     let new_id = app.tree.current_session(&app.sessions);
     let current = match side {
         Side::Left => app.selected,
@@ -2967,8 +2962,23 @@ fn update_selection(app: &mut App, client: &Client, side: Side) {
     // `lazygit_cwd` only tracks one repo. If a user wants lazygit on
     // the right pane's workdir, focusing it as the left pane (close
     // split with Ctrl-W) does the right thing.
+    //
+    // Fire the lazygit respawn FIRST (sync, but spawns a background
+    // PTY process) so its cold-boot overlaps with the agent-tasks
+    // network fetch that follows.
     if side == Side::Left {
         refresh_lazygit_for_selection(app);
+    }
+    // Pull a fresh agent-tasks snapshot for the new selection on the
+    // primary (left) side so the right-hand plan/todos panel updates
+    // in-step with navigation. Without this we'd wait up to one tick
+    // (~100 ms) for the run-loop's selection-change watchdog to fire
+    // — perceptible jank on j/k spam. Skipped for right-side splits
+    // because the panel tracks `app.selected` only.
+    if side == Side::Left
+        && let Some(id) = new_id
+    {
+        refresh_agent_tasks(app, client, id).await;
     }
 }
 
@@ -3170,6 +3180,16 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                 app.idle.remove(&id);
             }
         }
+        "agent.working" => {
+            // Agent just resumed work (Idle → Working). Without this the
+            // sidebar dot stays grey while the agent is visibly working —
+            // the bug that ships before this handler exists. No toast: a
+            // quiet resume isn't notification-worthy.
+            if let Some(id) = ev.session_id {
+                app.idle.remove(&id);
+                app.awaiting_input.remove(&id);
+            }
+        }
         "agent.input_resolved" => {
             // User answered the prompt (or it was dismissed). Clear the
             // yellow attention dot — no toast: the action that resolved
@@ -3319,7 +3339,7 @@ async fn spawn_plain_terminal(
                 app.tree.select_session(id);
                 {
             let side = app.target_side();
-            update_selection(app, client, side);
+            update_selection(app, client, side).await;
         }
                 app.set_focus(Focus::Term);
             }

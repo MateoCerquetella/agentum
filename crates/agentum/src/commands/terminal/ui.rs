@@ -470,7 +470,13 @@ fn render_tree_row(
                     } else if app.awaiting_input.contains(&s.id) {
                         ("▲", p.warning)
                     } else if app.idle.contains(&s.id) {
-                        ("◌", p.muted)
+                        // accent_alt instead of muted — muted is the same
+                        // dim grey used for the placeholder `—` and the
+                        // tool/model label, so a sleeping agent
+                        // disappeared into the background. accent_alt is
+                        // distinct from green (working), yellow
+                        // (awaiting), and red (crashed).
+                        ("◌", p.accent_alt)
                     } else {
                         status_dot(s.status)
                     };

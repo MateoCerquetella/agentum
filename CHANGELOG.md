@@ -4,6 +4,23 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.30] — 2026-05-07
+
+### Fixed
+- **Sidebar dot stayed grey while an agent was actively working
+  again after a previous turn.** v0.6.28 added the muted `◌`
+  sleeping dot, populated by `agent.finished` (Working→Idle), but
+  the watchdog never emitted anything for the reverse Idle→Working
+  transition — so the TUI kept the session pinned in its idle set
+  forever and the dot stayed grey while the agent was visibly
+  busy. Watchdog now emits a new `agent.working` event for that
+  transition; the TUI clears the idle bit on receipt.
+- **Idle dot was the same dim grey as the placeholder `—` and the
+  tool/model label**, which made it easy to miss at a glance.
+  Switched the colour from `p.muted` to `p.accent_alt` so a
+  sleeping agent reads as a distinct cool-tone `◌` against the
+  green/yellow/red of the other states.
+
 ## [0.6.29] — 2026-05-06
 
 ### Changed
