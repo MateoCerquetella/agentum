@@ -4,6 +4,35 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.31] — 2026-05-07
+
+### Added
+- **Mouse-select-to-copy inside the terminal pane.** Click-drag now
+  highlights cells in real time and OSC 52 ships the text to the
+  host terminal's clipboard on release. The status bar shows
+  `copied N chars` for confirmation. When the inner program (claude
+  code, vim, k9s, …) has its own mouse tracking on, **Shift+click-
+  drag** bypasses forwarding and starts a selection — the same
+  convention xterm / Alacritty / kitty / iTerm use. Works over SSH
+  because the local terminal interprets OSC 52, not the daemon.
+  Selection rendering uses `Modifier::REVERSED` so glyphs and
+  per-cell colour are preserved; release clears it.
+
+### Changed
+- **Plan / todos / background-tasks panel updates instantly on
+  agent navigation.** Fetches now run spawn-detached (the keystroke
+  handler never blocks on HTTP), the cache is pre-warmed for every
+  known session at startup so j/k is a pure cache hit after the
+  first frame, and concurrent fetches for the same id are coalesced
+  via an in-flight set. Newly-discovered sessions on the 5-second
+  refresh are also primed in the background.
+- **Lazygit follow-up is debounced through the tick loop** so a
+  held-j burst across many repos fires exactly one PTY respawn at
+  the user's settled destination instead of one per session. The
+  120 ms window is below the human "instant" threshold for a single
+  nav yet long enough to coalesce typematic keystrokes (~30 ms
+  apart).
+
 ## [0.6.30] — 2026-05-07
 
 ### Fixed

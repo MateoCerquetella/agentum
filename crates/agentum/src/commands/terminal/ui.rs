@@ -13,7 +13,7 @@ use agentum_core::transcript::{AgentTaskState, TaskStatus, TodoStatus};
 
 use super::app::{
     App, ConnState, DirPickerState, ErrorEntry, Focus, NewSessionField, NewSessionForm, NotifKind,
-    Notification, Overlay, PendingAction, RenameState, Row, SettingsRow, SettingsState,
+    Notification, Overlay, PendingAction, RenameState, Row, SettingsRow, SettingsState, Side,
     palette_catalog, status_dot,
 };
 use super::extensions::{self, Extension, LAZYGIT};
@@ -556,6 +556,7 @@ fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let pseudo = PseudoTerminal::new(app.term.screen());
     f.render_widget(pseudo, inner);
     fill_default_bg(f, inner, p.panel_bg);
+    overlay_term_selection(f, inner, app, Side::Left);
 }
 
 fn draw_terminal_right(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
@@ -587,6 +588,7 @@ fn draw_terminal_right(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let pseudo = PseudoTerminal::new(slot.term.screen());
     f.render_widget(pseudo, inner);
     fill_default_bg(f, inner, p.panel_bg);
+    overlay_term_selection(f, inner, app, Side::Right);
 }
 
 fn draw_lazygit(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
@@ -633,6 +635,57 @@ fn fill_default_bg(f: &mut Frame<'_>, area: Rect, bg: Color) {
                 && cell.bg == Color::Reset
             {
                 cell.set_bg(bg);
+            }
+        }
+    }
+}
+
+/// Paint an inverted-colour highlight over the cells covered by an
+/// active mouse selection. Runs after the `PseudoTerminal` widget so
+/// it stamps directly on the rendered cells via `Modifier::REVERSED`,
+/// which preserves the underlying glyph + colour and just flips fg/bg
+/// — exactly the look users expect from xterm/iTerm/Alacritty's
+/// native selection.
+///
+/// `inner` is the pane's content rect (post-border). Selection coords
+/// are 1-based pane-local; we offset by (`inner.x`, `inner.y`) and
+/// clamp into the rect. No-op when the selection belongs to a
+/// different pane or doesn't exist.
+fn overlay_term_selection(f: &mut Frame<'_>, inner: Rect, app: &App, side: Side) {
+    let Some(sel) = app.term_selection else {
+        return;
+    };
+    if sel.side != side {
+        return;
+    }
+    let ((s_col, s_row), (e_col, e_row)) = sel.ordered();
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let max_col = inner.width;
+    let max_row = inner.height;
+    // 1-based → 0-based, clamp into the visible content rect.
+    let s_row0 = s_row.saturating_sub(1).min(max_row.saturating_sub(1));
+    let e_row0 = e_row.saturating_sub(1).min(max_row.saturating_sub(1));
+    let s_col0 = s_col.saturating_sub(1).min(max_col.saturating_sub(1));
+    let e_col0 = e_col.saturating_sub(1).min(max_col.saturating_sub(1));
+
+    let buf = f.buffer_mut();
+    for r in s_row0..=e_row0 {
+        let (col_lo, col_hi) = if s_row0 == e_row0 {
+            (s_col0.min(e_col0), s_col0.max(e_col0))
+        } else if r == s_row0 {
+            (s_col0, max_col.saturating_sub(1))
+        } else if r == e_row0 {
+            (0, e_col0)
+        } else {
+            (0, max_col.saturating_sub(1))
+        };
+        for c in col_lo..=col_hi {
+            let x = inner.x + c;
+            let y = inner.y + r;
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.modifier.insert(Modifier::REVERSED);
             }
         }
     }

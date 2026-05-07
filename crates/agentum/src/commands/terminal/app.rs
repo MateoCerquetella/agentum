@@ -108,6 +108,43 @@ pub enum ConnState {
     Disconnected,
 }
 
+/// Active mouse-driven text selection inside a terminal pane. Tracks
+/// the anchor (first click), the live cursor (drag head), and which
+/// pane the selection belongs to. `dragging` flips false the instant
+/// the user releases the button — at which point `handle_mouse` reads
+/// the selection one last time, copies the text via OSC 52, and drops
+/// the field. Stays `Some` purely for the brief moment before drop so
+/// the renderer can paint the highlight one final time.
+///
+/// Coords are 1-based pane-local (xterm/vt100 convention) so they
+/// translate cleanly into both `vt100::Screen::cell(row, col)` lookups
+/// and ratatui buffer offsets `(inner.x + col - 1, inner.y + row - 1)`.
+#[derive(Clone, Copy)]
+pub struct TermSelection {
+    pub side: Side,
+    pub anchor: (u16, u16),
+    pub cursor: (u16, u16),
+    pub dragging: bool,
+}
+
+impl TermSelection {
+    /// Lexicographically smaller endpoint (top-left of the row range,
+    /// modulo same-row reverse drag). Used by both the renderer and
+    /// the text extractor so they walk the cells in the same order.
+    pub fn ordered(&self) -> ((u16, u16), (u16, u16)) {
+        let (a, b) = (self.anchor, self.cursor);
+        if (a.1, a.0) <= (b.1, b.0) { (a, b) } else { (b, a) }
+    }
+
+    /// True when the selection covers no cells (single-cell click with
+    /// no drag). We skip the copy on these so a stray click in the
+    /// pane doesn't overwrite the user's clipboard with a single
+    /// character or empty string.
+    pub fn is_empty(&self) -> bool {
+        self.anchor == self.cursor
+    }
+}
+
 /// Modal overlays. At most one is up at a time.
 ///
 /// `Copy` was dropped here when `NewSession` and `Confirm` were added —
@@ -668,6 +705,12 @@ pub struct App {
     /// in the tick loop so we only honour `pending_lazygit_cwd` once
     /// the user has stopped moving.
     pub last_nav_at: Option<Instant>,
+    /// Active or just-released mouse selection inside one of the
+    /// terminal panes. `Some` from mouse-down through mouse-up; the
+    /// release handler reads it, runs OSC 52, and drops the value.
+    /// The renderer paints a highlight whenever this is `Some` and
+    /// `side` matches the pane it's drawing.
+    pub term_selection: Option<TermSelection>,
     /// Show the right-side plan/todo/task panel. Toggled with `Ctrl-T`.
     /// Default on so users see the feature without having to discover
     /// the binding.
@@ -758,6 +801,7 @@ impl App {
             agent_tasks_inflight: HashSet::new(),
             pending_lazygit_cwd: None,
             last_nav_at: None,
+            term_selection: None,
             right_panel_visible: prefs.right_panel_visible,
             lazygit_width: prefs.lazygit_width,
             term_split_pct: prefs.term_split_pct,
@@ -1419,22 +1463,27 @@ async fn handle_crossterm(
     }
 }
 
-/// Route mouse events. Two-layer dispatch:
+/// Route mouse events. Three-layer dispatch (most specific wins):
 ///
-/// 1. If the inner program (claude code, vim, k9s, htop, …) has turned
-///    on mouse tracking, encode the event as an SGR escape sequence and
-///    forward it to the pane. Alt-screen TUIs all want this — the
-///    program owns scroll/click semantics, same as Alacritty / kitty /
-///    iTerm. Crucially, this is what unblocks scrollback inside claude
-///    code: vt100's local scrollback is empty in alt-screen mode, so
-///    the only way `Shift-PgUp`-style scrolling works is to let claude
-///    handle it natively.
-/// 2. Otherwise, scroll-wheel ticks drive agentum's own per-pane
-///    scrollback for shell-style output. Click / drag / move events are
-///    dropped (host terminal's Shift-click still works for native
-///    selection).
+/// 1. **Active text selection**: once a click-drag selection has been
+///    started inside a pane, drag/up events extend or finalize it,
+///    regardless of `wants_mouse`. Releasing the button copies the
+///    extracted text to the host terminal's clipboard via OSC 52 and
+///    drops the selection.
+///
+/// 2. **Inner program owns the mouse**: when the embedded TUI (claude
+///    code, vim, k9s, htop, …) has turned on mouse tracking, encode the
+///    event as an SGR escape sequence and forward it to the pane.
+///    Holding **Shift** during left-click bypasses this and starts a
+///    selection instead — matching the `xterm` / Alacritty / kitty
+///    convention so users can still copy text out of an alt-screen
+///    program.
+///
+/// 3. **Pane owns the mouse**: scroll-wheel ticks drive agentum's own
+///    per-pane scrollback. Plain left-click also starts a selection
+///    (no Shift needed because nothing else wants the click).
 fn handle_mouse(app: &mut App, ev: crossterm::event::MouseEvent) {
-    use crossterm::event::MouseEventKind;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
     let Some(areas) = app.last_areas else {
         return; // first frame hasn't drawn yet
     };
@@ -1458,9 +1507,43 @@ fn handle_mouse(app: &mut App, ev: crossterm::event::MouseEvent) {
         return;
     };
 
-    // Does the inner pane want the mouse? Inspect the slot's vt100
-    // mouse-protocol mode. When it's on, encode + forward; otherwise
-    // we own the event.
+    // Translate absolute terminal coords into 1-based pane-local
+    // coords. The panel border is 1 cell, so the inner content starts
+    // at `(rect.x + 1, rect.y + 1)`.
+    let pane_col = col.saturating_sub(rect.x.saturating_add(1)).saturating_add(1);
+    let pane_row = row.saturating_sub(rect.y.saturating_add(1)).saturating_add(1);
+
+    // Layer 1: continue an in-progress selection. Once started it
+    // captures every mouse event in the same pane until the user
+    // releases the button. This is what makes Shift-click-drag feel
+    // sticky even after the user lets go of Shift mid-drag.
+    if let Some(sel) = app.term_selection.as_mut()
+        && sel.dragging
+        && sel.side == side
+    {
+        match ev.kind {
+            MouseEventKind::Drag(MouseButton::Left) => {
+                sel.cursor = (pane_col, pane_row);
+                return;
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                sel.dragging = false;
+                let snapshot = *sel;
+                app.term_selection = None;
+                if !snapshot.is_empty() {
+                    let text = extract_selection_text(app, snapshot);
+                    if !text.is_empty() {
+                        write_osc52(&text);
+                        app.status_msg =
+                            Some(format!("copied {} chars", text.chars().count()));
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
+    }
+
     let wants_mouse = match side {
         Side::Left => app.term.wants_mouse_events(),
         Side::Right => app
@@ -1468,15 +1551,26 @@ fn handle_mouse(app: &mut App, ev: crossterm::event::MouseEvent) {
             .as_ref()
             .is_some_and(|s| s.term.wants_mouse_events()),
     };
+    let shift = ev.modifiers.contains(KeyModifiers::SHIFT);
 
+    // Layer 2: start a fresh selection on left-click when the inner
+    // program either doesn't want the mouse, or the user is asserting
+    // override via Shift. This must run BEFORE the SGR forwarding
+    // path so a Shift+click never reaches the embedded TUI as input.
+    if matches!(ev.kind, MouseEventKind::Down(MouseButton::Left)) && (!wants_mouse || shift) {
+        app.term_selection = Some(TermSelection {
+            side,
+            anchor: (pane_col, pane_row),
+            cursor: (pane_col, pane_row),
+            dragging: true,
+        });
+        return;
+    }
+
+    // Layer 3a: forward to the inner program when it asked for mouse
+    // events and the user isn't trying to select.
     if wants_mouse {
-        // Translate absolute terminal coords into 1-based pane-local
-        // coords. The panel border is 1 cell, so the inner content
-        // starts at `(rect.x + 1, rect.y + 1)`. Subtract that, then add
-        // 1 because xterm coords are 1-based.
-        let inner_col = col.saturating_sub(rect.x.saturating_add(1)).saturating_add(1);
-        let inner_row = row.saturating_sub(rect.y.saturating_add(1)).saturating_add(1);
-        if let Some(seq) = encode_mouse_sgr(ev.kind, ev.modifiers, inner_col, inner_row) {
+        if let Some(seq) = encode_mouse_sgr(ev.kind, ev.modifiers, pane_col, pane_row) {
             let tx = match side {
                 Side::Left => app.term_in.as_ref(),
                 Side::Right => app.split_right.as_ref().and_then(|s| s.term_in.as_ref()),
@@ -1490,7 +1584,7 @@ fn handle_mouse(app: &mut App, ev: crossterm::event::MouseEvent) {
         return;
     }
 
-    // Local scrollback path — only ever ScrollUp / ScrollDown.
+    // Layer 3b: local scrollback wheel — only ever ScrollUp / Down.
     let scroll_up = match ev.kind {
         MouseEventKind::ScrollUp => true,
         MouseEventKind::ScrollDown => false,
@@ -1515,6 +1609,104 @@ fn handle_mouse(app: &mut App, ev: crossterm::event::MouseEvent) {
             }
         }
     }
+}
+
+/// Walk a vt100 screen between the selection's ordered endpoints and
+/// concatenate cell contents. Trailing whitespace per row is stripped
+/// (vt100 pads short lines with blanks; users want clean copy). Rows
+/// are separated by `\n` so the result drops cleanly into a shell
+/// paste / editor / chat client.
+fn extract_selection_text(app: &App, sel: TermSelection) -> String {
+    let screen = match sel.side {
+        Side::Left => app.term.screen(),
+        Side::Right => match app.split_right.as_ref() {
+            Some(s) => s.term.screen(),
+            None => return String::new(),
+        },
+    };
+    let (rows, cols) = screen.size();
+    let ((s_col, s_row), (e_col, e_row)) = sel.ordered();
+    // Convert 1-based coords to 0-based and clamp to the live screen.
+    let s_row0 = s_row.saturating_sub(1).min(rows.saturating_sub(1));
+    let e_row0 = e_row.saturating_sub(1).min(rows.saturating_sub(1));
+    let s_col0 = s_col.saturating_sub(1).min(cols.saturating_sub(1));
+    let e_col0 = e_col.saturating_sub(1).min(cols.saturating_sub(1));
+
+    let mut out = String::new();
+    for r in s_row0..=e_row0 {
+        let (col_lo, col_hi) = if s_row0 == e_row0 {
+            (s_col0.min(e_col0), s_col0.max(e_col0))
+        } else if r == s_row0 {
+            (s_col0, cols.saturating_sub(1))
+        } else if r == e_row0 {
+            (0, e_col0)
+        } else {
+            (0, cols.saturating_sub(1))
+        };
+        let mut line = String::new();
+        for c in col_lo..=col_hi {
+            if let Some(cell) = screen.cell(r, c) {
+                line.push_str(&cell.contents());
+            }
+        }
+        // vt100 pads short lines with empty-content cells; strip
+        // trailing whitespace so the copy reflects what the user sees.
+        let trimmed = line.trim_end();
+        out.push_str(trimmed);
+        if r != e_row0 {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Copy text to the host terminal's clipboard via OSC 52. Works over
+/// SSH (the local terminal interprets the escape, never sends our
+/// content over the wire as data) and across kitty / Alacritty /
+/// iTerm / wezterm / Ghostty / xterm without any new dependencies.
+/// Best-effort: failures are silent — if the host disallows OSC 52
+/// the user just won't see anything new in their clipboard, no toast
+/// to spam them with.
+fn write_osc52(text: &str) {
+    use std::io::Write;
+    let encoded = base64_encode(text.as_bytes());
+    // OSC 52 ; c ; <data> ST
+    let seq = format!("\x1b]52;c;{encoded}\x1b\\");
+    let mut out = std::io::stdout().lock();
+    let _ = out.write_all(seq.as_bytes());
+    let _ = out.flush();
+}
+
+/// Tiny self-contained base64 encoder so OSC 52 doesn't drag in a
+/// crate dependency. Standard alphabet, `=` padding — exactly what
+/// every terminal's OSC 52 parser expects.
+fn base64_encode(input: &[u8]) -> String {
+    const TBL: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    let mut chunks = input.chunks_exact(3);
+    for chunk in chunks.by_ref() {
+        let n = ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8) | (chunk[2] as u32);
+        out.push(TBL[((n >> 18) & 0x3f) as usize] as char);
+        out.push(TBL[((n >> 12) & 0x3f) as usize] as char);
+        out.push(TBL[((n >> 6) & 0x3f) as usize] as char);
+        out.push(TBL[(n & 0x3f) as usize] as char);
+    }
+    let rem = chunks.remainder();
+    if !rem.is_empty() {
+        let b0 = rem[0] as u32;
+        let b1 = rem.get(1).copied().unwrap_or(0) as u32;
+        let n = (b0 << 16) | (b1 << 8);
+        out.push(TBL[((n >> 18) & 0x3f) as usize] as char);
+        out.push(TBL[((n >> 12) & 0x3f) as usize] as char);
+        if rem.len() == 2 {
+            out.push(TBL[((n >> 6) & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        out.push('=');
+    }
+    out
 }
 
 /// Encode a crossterm mouse event as an xterm SGR sequence (DECSET 1006
