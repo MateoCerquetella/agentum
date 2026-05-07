@@ -284,7 +284,10 @@
   }
 
   @media (max-width: 720px) {
-    .scroll { padding: 12px; }
+    .scroll {
+      padding: 12px;
+      overscroll-behavior: contain;
+    }
     .search {
       width: 100%;
       min-width: 0;
@@ -316,7 +319,7 @@
       flex: 1;
       padding: 9px 8px;
       font-size: 11px;
-      min-height: 36px;
+      min-height: 44px;
     }
     .fleet { border-radius: 12px; }
   }

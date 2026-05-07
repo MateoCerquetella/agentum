@@ -19,6 +19,9 @@
   const MIN_W = 280;
   const MIN_H = 180;
 
+  /** On mobile viewports drag/resize is disabled — panels stack vertically. */
+  const isMobile = typeof window !== 'undefined' && window.matchMedia('(max-width: 880px)').matches;
+
   // Reactive flags so `class:active` updates while the user drags/resizes.
   let dragging = $state(false);
   let resizing = $state<null | 'r' | 'b' | 'br'>(null);
@@ -31,6 +34,7 @@
   const isYolo = $derived(session.flags.includes(YOLO_FLAG));
 
   function captureStart(e: PointerEvent, mode: 'drag' | 'r' | 'b' | 'br') {
+    if (isMobile) return;
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
@@ -249,4 +253,19 @@
     pointer-events: none;
   }
   .panel:hover .resize.br::after { border-color: var(--muted); }
+
+  /* Mobile: no drag/resize, panels are full-width cards in a stack. */
+  @media (max-width: 880px) {
+    .head { cursor: default; }
+    .head:active { cursor: default; }
+    .grip { display: none; }
+    .resize { display: none; }
+    .iconbtn {
+      min-width: 44px;
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+  }
 </style>

@@ -321,6 +321,7 @@
     padding: 8px 8px 50px;
     overflow: hidden;
     background: #050505;
+    overscroll-behavior: contain;
   }
   .term-shell :global(.terminal),
   .term-shell :global(.xterm) {
@@ -481,6 +482,33 @@
       font-size: 11px;
       min-height: 32px;
       min-width: 36px;
+    }
+
+    /* Term-shell: reduce desktop bottom padding (input row overlay area)
+       on mobile since input is sticky below, not overlaid. */
+    .term-shell {
+      padding-bottom: 8px;
+    }
+
+    /* Input row: sticky above the MobileNav so it stays visible when
+       the soft keyboard is open. */
+    .input {
+      position: sticky;
+      bottom: 0;
+      z-index: 4;
+      background: var(--bg-chrome);
+      border-top: 1px solid var(--border);
+    }
+
+    /* Quick-key chips: 44×44px minimum touch targets (WCAG). */
+    .input .qk {
+      min-height: 44px;
+      min-width: 44px;
+      padding: 8px 12px;
+      font-size: 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
     }
 
     /* Term-bar context line scrolls horizontally — long workdir paths

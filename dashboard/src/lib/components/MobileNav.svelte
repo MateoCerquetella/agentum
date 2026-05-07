@@ -37,13 +37,13 @@
       <path d="M3 8h10M8 3v10" stroke-linecap="round"/>
     </svg>
   </button>
-  <a class="tab" class:on={isActive('/board')} href="/board" aria-label="Board">
+  <a class="tab" class:on={isActive('/terminals')} href="/terminals" aria-label="Terminals">
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-      <rect x="2" y="2" width="3.5" height="12" rx="0.6"/>
-      <rect x="6.5" y="2" width="3" height="8" rx="0.6"/>
-      <rect x="10.5" y="2" width="3.5" height="6" rx="0.6"/>
+      <rect x="2" y="3" width="12" height="10" rx="1.5"/>
+      <path d="M5 7l2 2-2 2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M9 11h3" stroke-linecap="round"/>
     </svg>
-    <span>Board</span>
+    <span>Terms</span>
   </a>
   <a class="tab" class:on={isActive('/settings')} href="/settings" aria-label="Settings">
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">

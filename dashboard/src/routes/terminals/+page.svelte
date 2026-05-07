@@ -169,35 +169,39 @@
     min-height: 100vh;
   }
 
-  /* Phone: the free-form multi-pane canvas is a desktop power feature
-     (drag, resize, tile). On a thumb-sized screen it's hostile. We
-     hint the user toward the per-session terminal which is already
-     fully mobile-tuned. */
-  @media (max-width: 720px) {
+  /* Phone: replace the free-form draggable canvas with a simple
+     vertical stack of full-width terminal cards. */
+  @media (max-width: 880px) {
     :global(.toolbar .micro:nth-of-type(2)) { display: none; }
     :global(.toolbar) { gap: 8px; flex-wrap: wrap; }
-    .scroll { padding: 12px; }
+    .scroll {
+      padding: 12px;
+      overscroll-behavior: contain;
+    }
     .canvas {
+      /* Kill absolute positioning — panels become flow children. */
+      position: static;
       min-width: 0;
+      width: 100%;
       height: auto;
-      min-height: 60dvh;
-      background: var(--bg-2);
-      border-style: solid;
-      display: grid;
-      place-items: center;
-      padding: 24px;
+      min-height: auto;
+      background: transparent;
+      border: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow: visible;
     }
-    .canvas::before {
-      content: "Multi-pane canvas needs a wider screen. Open a session from the Sessions tab to use the full terminal here.";
-      max-width: 36ch;
-      text-align: center;
-      color: var(--fg-3);
-      font-family: var(--mono);
-      font-size: 12px;
-      line-height: 1.6;
+    /* Panels: override absolute pos → static flow, full-width cards. */
+    .canvas :global(.panel) {
+      position: static !important;
+      left: auto !important;
+      top: auto !important;
+      width: 100% !important;
+      height: 75dvh !important;
+      min-height: 300px;
+      z-index: auto !important;
+      border-radius: 10px;
     }
-    /* Hide the actual TerminalPanels on phone — they use absolute
-       positioning that breaks at narrow widths. */
-    .canvas :global(.panel) { display: none; }
   }
 </style>

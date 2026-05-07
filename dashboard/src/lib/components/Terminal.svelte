@@ -63,11 +63,14 @@
 
   let destroyed = false;
 
+  /** Bump font size on narrow viewports for thumb-readability. */
+  const isMobile = typeof window !== 'undefined' && window.matchMedia('(max-width: 720px)').matches;
+
   onMount(async () => {
     term = new Terminal({
       fontFamily:
         'JetBrains Mono, "SF Mono", Menlo, Consolas, monospace',
-      fontSize: compact ? 12 : 13,
+      fontSize: compact ? 12 : isMobile ? 14 : 13,
       lineHeight: 1.2,
       cursorBlink: true,
       scrollback: 5000,
@@ -257,4 +260,11 @@
 
   /* xterm.js needs the canvas to inherit theme bg via this hook */
   :global(.xterm-viewport) { background: transparent !important; }
+
+  @media (max-width: 880px) {
+    .wrap:not(.compact) { min-height: 200px; min-height: 40dvh; }
+  }
+  @media (max-width: 720px) {
+    .wrap:not(.compact) { min-height: 50dvh; }
+  }
 </style>
