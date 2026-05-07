@@ -3,7 +3,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use agentum_core::{NewSession, Session, Status};
+use agentum_core::{Event, NewSession, Session, Status};
 use agentum_store::paths;
 use axum::Json;
 use axum::Router;
@@ -96,6 +96,10 @@ struct DeleteQuery {
 #[derive(Deserialize)]
 struct PatchBody {
     #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    tool: Option<String>,
+    #[serde(default)]
     flags: Option<Vec<String>>,
     #[serde(default)]
     model: Option<Option<String>>,
@@ -108,20 +112,67 @@ async fn patch_session(
 ) -> Result<Json<Session>, ApiError> {
     let id = parse_uuid(&id)?;
     let session = load(&state, id).await?;
-    if matches!(session.status, Status::Running) {
-        return Err(ApiError::BadRequest(
-            "cannot patch a running session; stop it first".into(),
-        ));
+    let running = matches!(session.status, Status::Running);
+
+    // Rename is allowed even on a running session — it's pure metadata
+    // (tmux target stays put because we keyed it by id at start time, not
+    // by name).
+    let mut current = session;
+    if let Some(raw_name) = body.name.as_ref() {
+        let name = raw_name.trim();
+        if name.is_empty() {
+            return Err(ApiError::BadRequest("name cannot be empty".into()));
+        }
+        if name.len() > 64 {
+            return Err(ApiError::BadRequest("name too long (max 64 chars)".into()));
+        }
+        if name != current.name {
+            let updated = state.store.patch_session_name(id, name).await?;
+            let _ = state.bus.send(
+                Event::new("session.renamed")
+                    .with_session(updated.id, &updated.name),
+            );
+            current = updated;
+        }
     }
-    if let Some(flags) = body.flags {
-        let updated = state.store.patch_session_flags(id, &flags).await?;
-        return Ok(Json(updated));
+
+    // Tool patch is allowed at any time — the watchdog uses this path
+    // to keep the chip in sync with the foreground process. UI clients
+    // are also free to PATCH it manually if they want to relabel.
+    if let Some(raw_tool) = body.tool.as_ref() {
+        let tool = raw_tool.trim();
+        if tool.is_empty() {
+            return Err(ApiError::BadRequest("tool cannot be empty".into()));
+        }
+        if tool != current.tool {
+            let updated = state.store.patch_session_tool(id, tool).await?;
+            let _ = state.bus.send(
+                Event::new("session.tool_changed")
+                    .with_session(updated.id, &updated.name)
+                    .with_payload(serde_json::json!({"tool": updated.tool})),
+            );
+            current = updated;
+        }
     }
-    if let Some(model) = body.model {
-        // Future: patch model — not yet implemented in store
-        let _ = model;
+
+    // Flags + model still require the session to be stopped — they
+    // affect how the agent is launched and rewriting them under a live
+    // process would be a footgun.
+    if body.flags.is_some() || body.model.is_some() {
+        if running {
+            return Err(ApiError::BadRequest(
+                "cannot patch flags / model on a running session; stop it first".into(),
+            ));
+        }
+        if let Some(flags) = body.flags {
+            current = state.store.patch_session_flags(id, &flags).await?;
+        }
+        if let Some(model) = body.model {
+            // Future: patch model — not yet implemented in store
+            let _ = model;
+        }
     }
-    Ok(Json(session))
+    Ok(Json(current))
 }
 
 async fn delete(
