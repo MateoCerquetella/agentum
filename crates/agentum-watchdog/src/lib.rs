@@ -25,7 +25,14 @@ use tokio::task::JoinHandle;
 use tokio::time::interval;
 use uuid::Uuid;
 
-const TICK: Duration = Duration::from_secs(5);
+/// How often each session's pane is sampled for activity / crash
+/// signatures. Was 5 s; halved to 1 s so the sidebar dot follows the
+/// agent's Working ↔ Idle ↔ AwaitingInput transitions on perceived-
+/// instant latency rather than after a full breath. tmux
+/// `capture-pane` is a few ms per call — 5× more invocations is still
+/// negligible against the value of a snappy "is my agent done yet"
+/// indicator.
+const TICK: Duration = Duration::from_secs(1);
 const COMPACT_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 
 /// How long the orchestrator waits between reconcile passes. Visible for

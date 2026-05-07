@@ -35,7 +35,15 @@ pub use transcript_store::TranscriptStore;
 
 pub use error::ApiError;
 
-const EVENT_BUS_CAPACITY: usize = 256;
+/// Capacity of the broadcast bus that fans `Event`s out to every
+/// connected SSE / WS client. Slow consumers that lag behind by more
+/// than this many events get a `Lagged(n)` error and miss those
+/// events — for the activity dots that means a sticky grey while the
+/// agent is actually working again. Bumped from 256 → 1024 so a
+/// transient client hiccup (focus-stolen TUI, network roundtrip
+/// stall, etc.) won't drop a state-change event the user is staring
+/// at.
+const EVENT_BUS_CAPACITY: usize = 1024;
 
 /// Login + register attempts per remote IP per window.
 const AUTH_RATE_LIMIT_ATTEMPTS: usize = 8;
