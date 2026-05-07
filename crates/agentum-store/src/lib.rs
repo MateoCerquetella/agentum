@@ -207,6 +207,54 @@ impl Store {
         Ok(())
     }
 
+    /// Patch the session's display name. Empty / whitespace-only inputs
+    /// must be rejected by the caller (API does this); on a duplicate
+    /// name the underlying UNIQUE index surfaces a `Sqlx` error.
+    pub async fn patch_session_name(&self, id: Uuid, new_name: &str) -> Result<Session> {
+        let now = OffsetDateTime::now_utc();
+        let now_s = now.format(&Rfc3339)?;
+        let affected = sqlx::query(
+            "UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(new_name)
+        .bind(now_s)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if affected == 0 {
+            return Err(StoreError::NotFound(id.to_string()));
+        }
+        self.get_session_by_id(id)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(id.to_string()))
+    }
+
+    /// Patch the session's `tool` field. Used by the watchdog when it
+    /// detects the user switched the foreground process to a different
+    /// adapter (e.g. ran `codex` from a `bash` session) so the sidebar
+    /// chip reflects what's actually running, not what was originally
+    /// requested. Caller is responsible for rejecting empty inputs.
+    pub async fn patch_session_tool(&self, id: Uuid, new_tool: &str) -> Result<Session> {
+        let now = OffsetDateTime::now_utc();
+        let now_s = now.format(&Rfc3339)?;
+        let affected = sqlx::query(
+            "UPDATE sessions SET tool = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(new_tool)
+        .bind(now_s)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if affected == 0 {
+            return Err(StoreError::NotFound(id.to_string()));
+        }
+        self.get_session_by_id(id)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(id.to_string()))
+    }
+
     /// Patch session flags (JSON array). Returns the updated session.
     pub async fn patch_session_flags(&self, id: Uuid, flags: &[String]) -> Result<Session> {
         let now = OffsetDateTime::now_utc();
