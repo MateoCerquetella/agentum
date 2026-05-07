@@ -133,18 +133,14 @@
             />
           {/if}
         </div>
-        <div class="hero-actions">
-          {#if incidents.length > 0}
+        {#if incidents.length > 0}
+          <div class="hero-actions">
             <button type="button" class="tb-btn primary" onclick={triageIncidents}>
               Triage incidents
               <span class="incident-count">{incidents.length}</span>
             </button>
-          {/if}
-          <button type="button" class="tb-btn" onclick={openNewSession}>
-            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h10M8 3v10" stroke-linecap="round"/></svg>
-            New session
-          </button>
-        </div>
+          </div>
+        {/if}
       </div>
 
       <div class="hero-stats">

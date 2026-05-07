@@ -68,6 +68,24 @@ export function toolShort(tool: string | null): string {
   return tool;
 }
 
+/** Brand-aligned dot color for a given tool. Falls back to fg-3 for
+ *  anything we don't have a token for. */
+export function toolColor(tool: string | null | undefined): string {
+  if (!tool) return 'var(--fg-3)';
+  if (tool.startsWith('claude'))           return 'var(--tool-claude)';
+  if (tool === 'codex' || tool === 'gpt')  return 'var(--tool-codex)';
+  if (tool === 'gemini')                   return 'var(--tool-gemini)';
+  if (tool === 'opencode' || tool === 'aider') return 'var(--amber)';
+  return 'var(--fg-3)';
+}
+
+/** Last segment of a workdir path → "agentum", "foo", etc. */
+export function projectOf(workdir: string | null | undefined): string {
+  if (!workdir) return '—';
+  const parts = workdir.replace(/\/+$/, '').split('/');
+  return parts[parts.length - 1] || workdir || '—';
+}
+
 /** "Last activity" cell — server-pushed `last_log`, falling back to the
  *  most recent log line equivalent we can synthesize from existing
  *  session metadata. */

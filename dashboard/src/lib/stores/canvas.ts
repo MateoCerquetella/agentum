@@ -15,7 +15,11 @@ export interface PanelLayout {
   z: number;
 }
 
-const KEY = 'agentum_canvas_layout_v1';
+// Bumped from v1 → v2 when we changed default tiling from 2 cols at
+// 520×360 to 3 cols at 400×300. Old saved layouts pinned existing
+// users to the legacy grid, so the bump auto-migrates them to the new
+// default the next time /terminals loads.
+const KEY = 'agentum_canvas_layout_v2';
 
 type LayoutMap = Record<string, PanelLayout>;
 
@@ -53,9 +57,9 @@ export function patchLayout(id: string, patch: Partial<PanelLayout>) {
 
 /** Make sure every session id has a layout entry. New ones get tiled. */
 export function ensureLayouts(ids: string[], opts?: { tileCols?: number; tileW?: number; tileH?: number }) {
-  const cols = opts?.tileCols ?? 2;
-  const w = opts?.tileW ?? 520;
-  const h = opts?.tileH ?? 360;
+  const cols = opts?.tileCols ?? 3;
+  const w = opts?.tileW ?? 400;
+  const h = opts?.tileH ?? 300;
   layouts.update((m) => {
     let next = m;
     let mutated = false;

@@ -1,6 +1,5 @@
 <script lang="ts">
   import { page } from '$app/state';
-  import { goto } from '$app/navigation';
   import { sessions } from '$stores/sessions';
   import { openPalette } from '$stores/palette';
   import { openNewSession } from '$stores/newSession';
@@ -33,27 +32,45 @@
   });
 
   const liveCount = $derived($sessions.items.filter(s => s.status === 'running').length);
+
+  // Group the sidebar sessions by project (basename of `workdir`).
+  // Live first within each group, then alphabetical. Group order
+  // reflects first-encounter order so the most-recently-touched
+  // project tends to bubble up.
+  function projectOf(workdir: string | null | undefined): string {
+    if (!workdir) return '—';
+    const parts = workdir.replace(/\/+$/, '').split('/');
+    return parts[parts.length - 1] || workdir || '—';
+  }
+  const groups = $derived.by(() => {
+    const order: string[] = [];
+    const map = new Map<string, typeof $sessions.items>();
+    for (const s of $sessions.items) {
+      const k = projectOf(s.workdir);
+      if (!map.has(k)) { map.set(k, []); order.push(k); }
+      map.get(k)!.push(s);
+    }
+    for (const k of order) {
+      map.get(k)!.sort((a, b) => {
+        const la = a.status === 'running' ? 0 : 1;
+        const lb = b.status === 'running' ? 0 : 1;
+        return la - lb || a.name.localeCompare(b.name);
+      });
+    }
+    return order.map(k => ({ project: k, items: map.get(k)! }));
+  });
 </script>
 
 <aside class="sb">
-  <!-- Workspace switcher -->
+  <!-- Full-width search — replaces the workspace card chrome which had
+       no functional behavior. -->
   <div class="ws-switcher">
-    <button type="button" class="ws-card" aria-label="Switch workspace">
-      <span class="glyph">A</span>
-      <span class="meta">
-        <span class="name">Agentum</span>
-        <span class="host">localhost · 8822</span>
-      </span>
-      <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" style="color: var(--fg-3); flex-shrink: 0;">
-        <path d="M5 6l3 3 3-3M5 10l3 3 3-3"/>
-      </svg>
-    </button>
-    <button type="button" class="ws-search" onclick={openPalette}>
-      <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+    <button type="button" class="ws-search" onclick={openPalette} aria-label="Open command palette">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
         <circle cx="7" cy="7" r="4.5"/>
         <path d="M10.5 10.5L13.5 13.5"/>
       </svg>
-      <span class="lbl">Search</span>
+      <span class="lbl">Search sessions, commands…</span>
       <span class="kbd">⌘K</span>
     </button>
   </div>
@@ -102,23 +119,29 @@
     </a>
   </div>
 
-  <!-- Sessions list (live updating) -->
+  <!-- Sessions list (live updating, grouped by project) -->
   <div class="sect sessions-sect">
     <div class="sect-lbl">
       <span>Sessions · {liveCount} live</span>
       <button type="button" class="add" onclick={openNewSession} title="Spawn session" aria-label="Spawn session">+</button>
     </div>
     <div class="sessions-scroll">
-      {#each $sessions.items as s (s.id)}
-        <a
-          href={`/sessions/${s.id}`}
-          class="item"
-          class:active={s.id === activeSessionId}
-        >
-          <span class={`stat ${stateClass(s.status)}`}></span>
-          <span class="nm">{s.name}</span>
-          <span class="count">{s.tool}</span>
-        </a>
+      {#each groups as g (g.project)}
+        <div class="group-head">
+          <span class="g-name">{g.project}</span>
+          <span class="g-count">{g.items.length}</span>
+        </div>
+        {#each g.items as s (s.id)}
+          <a
+            href={`/sessions/${s.id}`}
+            class="item"
+            class:active={s.id === activeSessionId}
+          >
+            <span class={`stat ${stateClass(s.status)}`}></span>
+            <span class="nm">{s.name}</span>
+            <span class="count">{s.tool}</span>
+          </a>
+        {/each}
       {/each}
       {#if $sessions.items.length === 0}
         <div class="empty">No sessions yet.</div>
@@ -138,6 +161,24 @@
 <style>
   /* Most styles come from .sb in _design.css. Locals here cover only
      overrides that depend on this component's structure. */
+
+  /* Override _design.css: drop the inset on the switcher container so
+     the search bar sits flush, then upsize the search itself into a
+     prominent full-width primary control. */
+  :global(.sb .ws-switcher) {
+    padding: 10px 10px;
+  }
+  :global(.sb .ws-search) {
+    width: 100%;
+    margin-top: 0;
+    padding: 8px 10px;
+    font-size: 12.5px;
+  }
+  :global(.sb .ws-search:hover) {
+    color: var(--fg-2);
+    border-color: var(--fg-3);
+  }
+
   .sessions-sect {
     flex: 1;
     min-height: 0;
@@ -154,5 +195,29 @@
     font-size: 12px;
     color: var(--fg-3);
     font-family: var(--mono);
+  }
+
+  /* Project group header within the sessions list. */
+  .group-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 10px 8px 4px;
+  }
+  .group-head .g-name {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .group-head .g-count {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    color: var(--fg-3);
+    margin-left: auto;
   }
 </style>
