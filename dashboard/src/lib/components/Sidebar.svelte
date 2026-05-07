@@ -1,9 +1,10 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { page } from '$app/state';
   import { sessions } from '$stores/sessions';
   import { openPalette } from '$stores/palette';
   import { openNewSession } from '$stores/newSession';
-  import type { Status } from '$lib/api';
+  import { api, type Status } from '$lib/api';
 
   /**
    * Map server-side Status onto the design's state vocabulary used for
@@ -32,6 +33,18 @@
   });
 
   const liveCount = $derived($sessions.items.filter(s => s.status === 'running').length);
+
+  // Version chip pulls from /api/health so it tracks the actual
+  // `agentum serve` we're talking to — not dashboard/package.json
+  // (which has been stuck at 0.1.0 since project init).
+  let serverVersion = $state<string | null>(null);
+  onMount(() => {
+    let cancelled = false;
+    api.health()
+      .then(h => { if (!cancelled) serverVersion = h.version; })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  });
 
   // Group the sidebar sessions by project (basename of `workdir`).
   // Live first within each group, then alphabetical. Group order
@@ -154,7 +167,7 @@
     <span style="color: var(--fg-2);">tmux</span>
     <span>· {liveCount} pane{liveCount === 1 ? '' : 's'}</span>
     <span style="flex: 1;"></span>
-    <span style="color: var(--fg-2);">v{__APP_VERSION__}</span>
+    <span style="color: var(--fg-2);">{serverVersion ? `v${serverVersion}` : ''}</span>
   </div>
 </aside>
 
