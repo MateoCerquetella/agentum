@@ -2299,6 +2299,24 @@ async fn handle_key(
             Focus::TermRight => app.split_right.as_ref().and_then(|s| s.term_in.as_ref()),
             _ => app.term_in.as_ref(),
         };
+        // Optimistically clear runtime activity state for whichever
+        // session we're typing into. The user wouldn't be sending
+        // input to a sleeping/awaiting agent unless the dot is about
+        // to be wrong — and the watchdog confirms the new state on
+        // its next tick anyway. Without this the dot can stay grey
+        // after a single Working→Idle cycle if the daemon's
+        // `agent.working` event was dropped (bus.lagged, WS hiccup,
+        // pre-v0.6.30 daemon). A keypress is a strong "the agent is
+        // working again" signal locally — believe it now, let
+        // server-side events confirm it within 1 s.
+        let typed_id = match app.focus {
+            Focus::TermRight => app.split_right.as_ref().and_then(|s| s.selected),
+            _ => app.selected,
+        };
+        if let Some(id) = typed_id {
+            app.idle.remove(&id);
+            app.awaiting_input.remove(&id);
+        }
         let nbytes = bytes.len();
         let send_result = tx_opt.map(|tx| tx.send(TermOut::Bytes(bytes)));
         match send_result {

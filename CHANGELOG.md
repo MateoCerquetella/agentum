@@ -4,6 +4,33 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.32] — 2026-05-07
+
+### Fixed
+- **Sidebar dot stuck grey after the first Working→Idle cycle.**
+  v0.6.30 added the `agent.working` event for the reverse Idle→
+  Working transition, but a single dropped event (bus capacity
+  exhaustion, transient WS hiccup, or a stale pre-v0.6.30 daemon)
+  would pin the session in `app.idle` indefinitely — exactly the
+  "works once then never again" symptom users hit. Three layered
+  fixes so a missed event can't strand the indicator:
+  1. **TUI optimistically clears `app.idle` / `app.awaiting_input`
+     when the user types into a session.** A keypress is a strong
+     local "the agent is working again" signal; believe it now and
+     let server-side events confirm on the next watchdog tick.
+     Self-heals the foreground-pane case without any server-side
+     dependency.
+  2. **Watchdog tick tightened from 5 s → 1 s.** The `tmux
+     capture-pane` call is a few ms — 5× more invocations is still
+     trivial, and now Working↔Idle transitions surface fast enough
+     to feel instant. Also gives missed events a 5× faster
+     recovery window.
+  3. **Event bus capacity raised from 256 → 1024.** A slow client
+     (focus-stolen TUI, brief network stall) used to drop events
+     past the 256-message backlog; the activity-dot events live
+     longer in the queue now so a momentary stall doesn't cost a
+     state change.
+
 ## [0.6.31] — 2026-05-07
 
 ### Added

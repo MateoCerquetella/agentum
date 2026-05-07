@@ -763,19 +763,14 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         ));
     }
 
-    if app.prefs.get(StatusChip::Lazygit) {
-        let lg_chip = if app.lazygit_open() {
-            Span::styled(
-                " lazygit ",
-                Style::default()
-                    .bg(p.chip_bg)
-                    .fg(p.chip_fg)
-                    .add_modifier(Modifier::BOLD),
-            )
-        } else {
-            Span::styled(" g lazygit ", Style::default().fg(p.muted).bg(p.chrome_bg))
-        };
-        right.push(lg_chip);
+    if app.prefs.get(StatusChip::Lazygit) && app.lazygit_open() {
+        right.push(Span::styled(
+            " lazygit ",
+            Style::default()
+                .bg(p.chip_bg)
+                .fg(p.chip_fg)
+                .add_modifier(Modifier::BOLD),
+        ));
     }
 
     if app.prefs.get(StatusChip::Theme) {
