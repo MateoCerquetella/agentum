@@ -141,6 +141,13 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
     //   Working → Idle             → emit `agent.finished`
     //   (Working|Idle) → Awaiting  → emit `agent.awaiting_input`
     let mut activity = ActivityState::Unknown;
+    // Track the tool we last persisted so we don't spam UPDATE for every
+    // tick. Seeded from the session record. The candidate slot debounces
+    // brief shell-outs (git, ls) so they don't get latched as the
+    // foreground tool — we require two consecutive observations of the
+    // same recognised adapter before committing.
+    let mut current_tool = sess.tool.clone();
+    let mut tool_candidate: Option<String> = None;
     let mut tick = interval(TICK);
     // Drop the immediate first tick so we don't fire before the pane is alive.
     tick.tick().await;
@@ -210,6 +217,51 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
             }
         }
 
+        // Tool drift → `session.tool_changed`. Cheap: one extra
+        // `tmux display-message` per tick. We map the foreground command
+        // to a known adapter id and only commit on the second
+        // consecutive observation of the same NEW value, so a brief
+        // shell-out (git, ls, …) doesn't get latched as the active tool.
+        // The `tool_candidate` slot is reset whenever the observation
+        // doesn't match it.
+        if let Ok(cmd) = agentum_tmux::pane_current_command(&target).await
+            && let Some(detected) = canonical_tool_from_command(&cmd)
+            && detected != current_tool
+        {
+            if tool_candidate.as_deref() == Some(detected) {
+                // Second observation in a row — commit.
+                match store.patch_session_tool(sess.id, detected).await {
+                    Ok(updated) => {
+                        let prev = std::mem::replace(&mut current_tool, detected.to_string());
+                        tool_candidate = None;
+                        let ev = Event::new("session.tool_changed")
+                            .with_session(updated.id, &updated.name)
+                            .with_payload(serde_json::json!({
+                                "tool": updated.tool,
+                                "previous_tool": prev,
+                            }));
+                        let _ = emit(&bus, &store, ev).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            session = %sess.name,
+                            tool = %detected,
+                            error = ?e,
+                            "watchdog: patch_session_tool failed"
+                        );
+                    }
+                }
+            } else {
+                tool_candidate = Some(detected.to_string());
+            }
+        } else {
+            // Either we couldn't query tmux, the foreground process
+            // isn't a recognised adapter, or it matches the stored
+            // tool — clear any pending candidate so we don't latch on
+            // a one-off mismatch.
+            tool_candidate = None;
+        }
+
         // Activity-state transitions → agent.finished / agent.awaiting_input
         // / agent.input_resolved. Only fires for adapters that declared a
         // busy_signature or any awaiting_input_signatures — others stay in
@@ -273,6 +325,25 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
             }
             activity = next;
         }
+    }
+}
+
+/// Map a tmux `pane_current_command` value to the adapter id we store
+/// on the session. Returns `None` for shells / unknown binaries so
+/// briefly running `git`, `ls`, `bash` etc. doesn't trigger a tool
+/// flip — only first-class adapter binaries swap the chip.
+///
+/// Conservative on purpose: matches both the bare binary names and
+/// common npm/yarn wrapper variants (`claude-code`, `codex-cli`).
+/// Add aliases here as we discover them in the wild.
+fn canonical_tool_from_command(cmd: &str) -> Option<&'static str> {
+    let c = cmd.trim();
+    match c {
+        "claude" | "claude-code" => Some("claude"),
+        "codex" | "codex-cli" => Some("codex"),
+        "gemini" | "gemini-cli" => Some("gemini"),
+        "hermes" | "hermes-cli" => Some("hermes"),
+        _ => None,
     }
 }
 
