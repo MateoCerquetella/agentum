@@ -11,7 +11,7 @@
 //! callers that allow free-form tool input should accept anything; this
 //! endpoint only describes the curated palette.
 
-use agentum_executor::{FIRST_CLASS, adapter_for, binary_for};
+use agentum_executor::{adapter_for, binary_for, probed_tools};
 use axum::Json;
 use axum::Router;
 use axum::routing::get;
@@ -49,8 +49,8 @@ async fn list_agents() -> Json<Vec<AgentInfo>> {
     // microseconds for cached PATH entries — keeping this synchronous
     // is simpler than spawning a blocking task and the endpoint is
     // already off the hot path.
-    let mut out = Vec::with_capacity(FIRST_CLASS.len());
-    for &name in FIRST_CLASS {
+    let mut out = Vec::new();
+    for name in probed_tools() {
         let bin = binary_for(name);
         let resolved = which::which(bin).ok();
         let adapter = adapter_for(name);
