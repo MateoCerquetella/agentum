@@ -53,6 +53,17 @@ export interface NewSession {
   flags?: string[];
 }
 
+/// Mirrors `agentum_server::routes::agents::AgentInfo`. The dashboard
+/// uses this to gate the agent picker on whether the underlying CLI
+/// is actually installed on the daemon's PATH.
+export interface AgentInfo {
+  name: string;
+  binary: string;
+  available: boolean;
+  yolo_flag: string | null;
+  path: string | null;
+}
+
 export interface DoctorCheck {
   label: string;
   passed: boolean;
@@ -107,17 +118,25 @@ export interface Health {
   capabilities?: string[];
 }
 
-const TOKEN_KEY = 'agentum_token';
+import {
+  apiUrl,
+  clearActiveToken,
+  getActiveProfile,
+  setActiveToken,
+  wsUrl as profileWsUrl
+} from './profiles';
 
 function readToken(): string | null {
-  if (typeof localStorage === 'undefined') return null;
-  return localStorage.getItem(TOKEN_KEY);
+  return getActiveProfile().token || null;
 }
 
+/// Set or clear the bearer token for the *active* profile. Callers
+/// shouldn't need to reach into the profile store directly for the
+/// common login / logout flow — this preserves the prior single-token
+/// shape.
 export function setToken(token: string | null) {
-  if (typeof localStorage === 'undefined') return;
-  if (token === null) localStorage.removeItem(TOKEN_KEY);
-  else localStorage.setItem(TOKEN_KEY, token);
+  if (token === null) clearActiveToken();
+  else setActiveToken(token);
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -128,7 +147,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = readToken();
   if (token) headers.set('authorization', `Bearer ${token}`);
 
-  const res = await fetch(path, { ...init, headers });
+  const res = await fetch(apiUrl(path), { ...init, headers });
   if (res.status === 401) {
     // Stale or missing token — clear so the gate can re-prompt.
     setToken(null);
@@ -294,6 +313,7 @@ export const api = {
   certFingerprint: () => request<CertFingerprint>('/api/cert/fingerprint'),
   logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
   me: () => request<MeResp>('/api/auth/me'),
+  listAgents: () => request<AgentInfo[]>('/api/agents'),
   listSessions: (status?: Status) => {
     const qs = status ? `?status=${encodeURIComponent(status)}` : '';
     return request<Session[]>(`/api/sessions${qs}`);
@@ -332,17 +352,23 @@ export const api = {
     }),
 
   /**
-   * Open a WebSocket to the session's pane stream. Caller is responsible for
-   * closing it. Resolves the URL relative to the current origin so dev (vite
-   * proxy) and prod (embedded SPA) both work. Browsers cannot set custom
-   * headers on WS upgrades, so the bearer token is passed as a `?token=`
-   * query param (the backend accepts both forms).
+   * Open a WebSocket to the session's pane stream. Caller is responsible
+   * for closing it. Resolves against the active profile's base URL when
+   * one is set, otherwise the current page origin (vite proxy in dev,
+   * embedded SPA in prod). Browsers cannot set custom headers on WS
+   * upgrades, so the bearer token is passed as a `?token=` query param
+   * (the backend accepts both forms).
    */
   streamUrl(id: string): string {
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const base = `${proto}//${location.host}/api/sessions/${encodeURIComponent(id)}/stream`;
-    const token = readToken();
-    return token ? `${base}?token=${encodeURIComponent(token)}` : base;
+    return profileWsUrl(`/api/sessions/${encodeURIComponent(id)}/stream`);
+  },
+
+  /// Same wiring for `/api/events` so a profile switch routes the
+  /// global event stream at the new server. Components that opened a
+  /// stream before the switch are responsible for tearing the old one
+  /// down — the URL helper alone can't migrate an in-flight socket.
+  eventsUrl(): string {
+    return profileWsUrl('/api/events');
   },
 
   // ---------- board ----------

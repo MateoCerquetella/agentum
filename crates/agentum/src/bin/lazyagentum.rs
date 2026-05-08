@@ -32,17 +32,25 @@ struct Args {
     /// `AGENTUM_TUI_NO_SOUND` env var.
     #[arg(long)]
     no_sound: bool,
+
+    /// Named endpoint profile to load (manage with
+    /// `agentum profiles add NAME …`). Falls back to the file's
+    /// `default = …` when omitted.
+    #[arg(long)]
+    profile: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    agentum::init_tracing();
+    // Tracing must go to a file, never stderr — we own the alt-screen.
+    agentum::init_tracing_for_tui();
     let args = Args::parse();
     agentum::commands::terminal::run(agentum::commands::terminal::Options {
         api: args.api,
         fingerprint: args.fingerprint,
         insecure: args.insecure,
         no_sound: args.no_sound,
+        profile: args.profile,
     })
     .await
 }

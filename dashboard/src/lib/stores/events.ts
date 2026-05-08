@@ -67,11 +67,14 @@ function clearPendingFinished(sid: string) {
   }
 }
 
+// Wire the events WS through the profile-aware helper so a profile
+// switch routes future reconnects at the new endpoint. The legacy
+// inline URL builder pre-dated multi-endpoint support and only ever
+// looked at the page origin; that broke remote-profile event streams.
+import { eventsUrlForActiveProfile } from './profile-bridge';
+
 function eventsUrl(): string {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const token = localStorage.getItem('agentum_token') ?? '';
-  const qs = token ? `?token=${encodeURIComponent(token)}` : '';
-  return `${proto}//${location.host}/api/events${qs}`;
+  return eventsUrlForActiveProfile();
 }
 
 function bind(socket: WebSocket) {

@@ -111,6 +111,30 @@ impl ToolAdapter for CodexAdapter {
     }
 }
 
+// ---------- cursor ----------
+
+/// Cursor's headless agent CLI — distributed as `cursor-agent` (separate
+/// from the Cursor IDE binary). Honors `--model`, accepts free-form user
+/// flags, and uses `--force` as its skip-confirmations toggle.
+pub struct CursorAdapter;
+
+impl ToolAdapter for CursorAdapter {
+    fn name(&self) -> &'static str {
+        "cursor"
+    }
+
+    fn launch(&self, session: &Session) -> LaunchCommand {
+        let mut argv = vec!["cursor-agent".to_string()];
+        push_model(&mut argv, session);
+        push_user_flags(&mut argv, session, self.yolo_flag());
+        LaunchCommand::argv_only(argv)
+    }
+
+    fn yolo_flag(&self) -> Option<&'static str> {
+        Some("--force")
+    }
+}
+
 // ---------- gemini ----------
 
 pub struct GeminiAdapter;
@@ -230,6 +254,7 @@ mod tests {
             last_log: None,
             uptime_seconds: None,
             state: None,
+            pinned: false,
         }
     }
 
@@ -339,11 +364,28 @@ mod tests {
 
     #[test]
     fn registry_routes_first_class() {
-        for &t in &["claude", "codex", "gemini", "hermes"] {
+        for &t in &["claude", "codex", "cursor", "gemini", "hermes"] {
             let a = adapter_for(t);
             assert_eq!(a.name(), t);
         }
         let a = adapter_for("totally-custom");
         assert_eq!(a.name(), "passthrough");
+    }
+
+    #[test]
+    fn cursor_translates_yolo_marker_to_force() {
+        // Cursor-agent's skip-confirmations toggle is `--force`. The TUI
+        // and dashboard always wire YOLO as the Claude marker; the
+        // adapter must translate it.
+        let s = fixture("cursor", None, &["--dangerously-skip-permissions"]);
+        let cmd = CursorAdapter.launch(&s);
+        assert_eq!(cmd.argv, vec!["cursor-agent", "--force"]);
+    }
+
+    #[test]
+    fn cursor_argv_uses_cursor_agent_binary() {
+        let s = fixture("cursor", Some("auto"), &[]);
+        let cmd = CursorAdapter.launch(&s);
+        assert_eq!(cmd.argv, vec!["cursor-agent", "--model=auto"]);
     }
 }

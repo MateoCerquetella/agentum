@@ -18,6 +18,7 @@ mod extensions;
 mod iometer;
 mod palette;
 mod prefs;
+pub mod profiles;
 mod pty;
 mod sound;
 mod term;
@@ -61,9 +62,21 @@ pub struct Options {
     /// `AGENTUM_TUI_NO_SOUND` env var so users can set it once in their
     /// shell rc instead of remembering the flag.
     pub no_sound: bool,
+    /// Named endpoint profile to load (`agentum profiles add NAME …`).
+    /// Resolved before `--api`: an explicit `--api` always wins so a
+    /// profile-using user can still override the URL ad-hoc. When
+    /// neither is set, `profiles.toml`'s `default = …` is consulted
+    /// before the loopback probe.
+    pub profile: Option<String>,
 }
 
 pub async fn run(opts: Options) -> Result<()> {
+    // Profile pre-resolution: an explicit `--profile` (or, failing
+    // that, the file's `default = …`) supplies sane defaults for
+    // `--api` / `--fingerprint` / `--insecure` so the rest of the
+    // wiring stays unchanged. CLI flags still override profile-
+    // sourced values when both are set.
+    let opts = apply_profile(opts)?;
     let base = resolve_base(opts.api.clone()).await?;
     let trust = establish_trust(&base, &opts).await?;
     let token = obtain_token(&base, &trust).await?;
@@ -225,6 +238,57 @@ async fn probe_token(base: &Url, trust_setting: &TlsTrust, token: &str) -> bool 
         return false;
     };
     client.me().await.is_ok()
+}
+
+/// Layer profile defaults under any explicit CLI flags. Returns the
+/// merged `Options` so the rest of `run()` reads from one source. A
+/// missing profile name resolves to the file's `default = …`; an
+/// explicit `--profile` that doesn't exist is an error so the user
+/// notices typos instead of silently dropping back to the loopback.
+fn apply_profile(mut opts: Options) -> Result<Options> {
+    let profiles = match profiles::Profiles::load() {
+        Ok(p) => p,
+        Err(e) => {
+            // A broken / missing profiles file should never block the
+            // common path of running with no profiles at all. Surface
+            // the parse error to the user, then carry on with whatever
+            // they passed on the command line.
+            eprintln!(
+                "{}: failed to load profiles.toml: {e}\n  Continuing without profile defaults.",
+                warn_label()
+            );
+            return Ok(opts);
+        }
+    };
+
+    let active = match opts.profile.clone() {
+        Some(name) => Some(name),
+        None => profiles.default_name().map(str::to_string),
+    };
+    let Some(name) = active else {
+        return Ok(opts);
+    };
+
+    let Some(profile) = profiles.get(&name) else {
+        // Explicit `--profile` to a missing entry is a hard error;
+        // a stale `default` field merits the same loud failure so
+        // typos get caught.
+        bail!(
+            "profile `{name}` not found in {} — list with `agentum profiles list`",
+            profiles.path().display()
+        );
+    };
+
+    if opts.api.is_none() {
+        opts.api = Some(profile.url.clone());
+    }
+    if opts.fingerprint.is_none() {
+        opts.fingerprint = profile.fingerprint.clone();
+    }
+    // The profile's `insecure` is opt-in; we OR it with the CLI flag
+    // so an --insecure on the command line is never quietly discarded.
+    opts.insecure = opts.insecure || profile.insecure;
+    Ok(opts)
 }
 
 async fn resolve_base(override_url: Option<String>) -> Result<Url> {

@@ -13,7 +13,8 @@ use agentum_core::Session;
 mod adapters;
 
 pub use adapters::{
-    ClaudeAdapter, CodexAdapter, GeminiAdapter, HermesAdapter, PassthroughAdapter, TerminalAdapter,
+    ClaudeAdapter, CodexAdapter, CursorAdapter, GeminiAdapter, HermesAdapter, PassthroughAdapter,
+    TerminalAdapter,
 };
 
 /// What tmux actually launches: argv plus per-session environment overrides.
@@ -119,6 +120,7 @@ pub fn adapter_for(tool: &str) -> Box<dyn ToolAdapter> {
     match tool {
         "claude" => Box::new(ClaudeAdapter),
         "codex" => Box::new(CodexAdapter),
+        "cursor" => Box::new(CursorAdapter),
         "gemini" => Box::new(GeminiAdapter),
         "hermes" => Box::new(HermesAdapter),
         "terminal" => Box::new(TerminalAdapter),
@@ -126,5 +128,18 @@ pub fn adapter_for(tool: &str) -> Box<dyn ToolAdapter> {
     }
 }
 
-/// Names of the four first-class executors agentum ships with built-in support for.
-pub const FIRST_CLASS: &[&str] = &["claude", "codex", "gemini", "hermes"];
+/// Names of the first-class executors agentum ships with built-in support for.
+pub const FIRST_CLASS: &[&str] = &["claude", "codex", "cursor", "gemini", "hermes"];
+
+/// Tool name → expected binary name on `PATH`. Used by the agent-availability
+/// probe so the TUI / dashboard can gate selection on whether the user
+/// actually has the CLI installed (e.g. `cursor` ↦ `cursor-agent`).
+///
+/// Only the names that disagree with the tool id need an entry; for the
+/// rest the tool id *is* the binary name.
+pub fn binary_for(tool: &str) -> &str {
+    match tool {
+        "cursor" => "cursor-agent",
+        other => other,
+    }
+}

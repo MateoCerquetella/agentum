@@ -5,6 +5,7 @@
   import { currentUser, logout } from '$stores/auth';
   import { sessions } from '$stores/sessions';
   import { get } from 'svelte/store';
+  import EndpointSwitcher from './EndpointSwitcher.svelte';
 
   /** Optional override. When omitted, crumbs are derived from the route. */
   interface Props { crumbs?: string[]; }
@@ -54,6 +55,7 @@
   <span class="spacer"></span>
 
   <div class="right">
+    <span class="desktop-only"><EndpointSwitcher /></span>
     <button
       type="button"
       class="iconbtn desktop-only"

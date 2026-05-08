@@ -314,7 +314,14 @@
   }
 
   /* Wrap xterm so it fills the .term-host middle. xterm.js owns its
-     own canvas; our padding mirrors the design's `.term { padding: 14px 18px 50px }`. */
+     own canvas/viewport — keep the wrapper a flex container so the
+     terminal stretches to the full height instead of collapsing to
+     its scrollback's intrinsic size. The 50px bottom padding clears
+     the absolutely-positioned input bar in `_design.css .term-host
+     .input`. NEVER set `overflow-y: auto` on the xterm host div: that
+     used to cascade from a now-removed `.term-host .term` design
+     preview rule, which made the host scroll *and* fed FitAddon a
+     wrong row count, so each repaint scrolled the page upward. */
   .term-shell {
     flex: 1;
     min-height: 0;
@@ -322,6 +329,7 @@
     overflow: hidden;
     background: #050505;
     overscroll-behavior: contain;
+    display: flex;
   }
   .term-shell :global(.terminal),
   .term-shell :global(.xterm) {

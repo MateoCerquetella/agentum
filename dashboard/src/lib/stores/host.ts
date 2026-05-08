@@ -1,5 +1,6 @@
 import { writable, type Writable } from 'svelte/store';
 import { onEvent } from './events';
+import { apiUrl, getActiveProfile } from '../profiles';
 
 export interface HostMetrics {
   cpu_pct: number;
@@ -38,7 +39,7 @@ export function startHostMetrics(): void {
   if (stopBus || unsubscribed) return;
 
   // One-shot prime. Doesn't block the WS attach below.
-  fetch('/api/host/metrics', { headers: authHeader() })
+  fetch(apiUrl('/api/host/metrics'), { headers: authHeader() })
     .then((r) => (r.ok ? (r.json() as Promise<HostMetrics>) : null))
     .then((m) => {
       if (!m) return;
@@ -74,7 +75,11 @@ function clamp(xs: number[]): number[] {
 }
 
 function authHeader(): HeadersInit {
-  const t = typeof localStorage !== 'undefined' ? localStorage.getItem('agentum_token') : null;
+  // Source the bearer from the active profile so a remote endpoint's
+  // own token is used instead of the legacy single-token slot. The
+  // legacy key stays mirrored by `setActiveToken` so older code paths
+  // keep working during the transition.
+  const t = getActiveProfile().token || null;
   return t ? { Authorization: `Bearer ${t}` } : {};
 }
 

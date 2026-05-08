@@ -42,6 +42,24 @@ pub struct DirEntry {
     pub path: String,
 }
 
+/// Mirrors `agentum_server::routes::agents::AgentInfo`. Returned by
+/// `/api/agents`; the TUI gates the New Session form's tool picker on
+/// `available` so users can't pick an agent whose CLI isn't installed.
+/// `binary`, `yolo_flag`, and `path` round-trip the full server shape so
+/// future surfaces (status overlay, doctor view) can render them
+/// without re-extending this struct.
+#[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
+pub struct AgentInfo {
+    pub name: String,
+    pub binary: String,
+    pub available: bool,
+    #[serde(default)]
+    pub yolo_flag: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
 /// Optional pinned fingerprint, plus an "insecure" escape hatch. The
 /// escape hatch is *only* exposed via an explicit CLI flag and only
 /// covers the user's own machine in throwaway test setups.
@@ -191,6 +209,21 @@ impl Client {
         } else {
             bail!("health returned {}", resp.status())
         }
+    }
+
+    /// `GET /api/agents` — runtime probe of which first-class agent
+    /// binaries resolve on the daemon's PATH. Older daemons return 404;
+    /// the TUI treats that as "fail open" and skips installation gating.
+    pub async fn list_agents(&self) -> Result<Vec<AgentInfo>> {
+        let url = self.base.join("/api/agents")?;
+        let resp = self.http.get(url).bearer_auth(&self.token).send().await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
+        if !resp.status().is_success() {
+            bail!("agents returned {}", resp.status());
+        }
+        Ok(resp.json::<Vec<AgentInfo>>().await.unwrap_or_default())
     }
 
     /// Probe the server's `/api/health` for advertised capabilities.

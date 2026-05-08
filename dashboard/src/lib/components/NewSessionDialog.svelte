@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, type NewSession } from '$lib/api';
+  import { api, type NewSession, type AgentInfo } from '$lib/api';
   import { loadSessions } from '$stores/sessions';
   import DirPicker from './DirPicker.svelte';
 
@@ -15,6 +15,11 @@
   let yolo = $state(false);
   let submitting = $state(false);
   let error = $state<string | null>(null);
+  /// Set of tool ids whose binary resolves on the daemon's PATH. Empty
+  /// while the probe is in flight; populated from `/api/agents` on
+  /// dialog open. Tools missing from the map are treated as available
+  /// (passthrough) so unknown free-form tool ids stay spawnable.
+  let availability = $state<Record<string, AgentInfo>>({});
 
   type Tool = {
     id: string;
@@ -22,25 +27,77 @@
     desc: string;
     dot: string;
     yoloable: boolean;
+    /// First-class tool ids appear in `/api/agents` and are gated on
+    /// installation. Non-first-class entries (terminal, bash, aider…)
+    /// are always shown.
+    firstClass: boolean;
   };
 
   // Tool palette — must match `YOLO_TOOLS` in
   // crates/agentum/src/commands/terminal/app.rs and the executor
   // adapters. The on-the-wire YOLO marker is always
   // --dangerously-skip-permissions; the server translates per-tool
-  // (codex: --dangerously-bypass-approvals-and-sandbox, gemini: --yolo).
+  // (codex: --dangerously-bypass-approvals-and-sandbox, gemini: --yolo,
+  // cursor: --force).
   const TOOLS: Tool[] = [
-    { id: 'claude',   label: 'Claude',   desc: 'Anthropic',    dot: 'var(--tool-claude)', yoloable: true  },
-    { id: 'codex',    label: 'Codex',    desc: 'OpenAI',       dot: 'var(--tool-codex)',  yoloable: true  },
-    { id: 'gemini',   label: 'Gemini',   desc: 'Google',       dot: 'var(--tool-gemini)', yoloable: true  },
-    { id: 'opencode', label: 'opencode', desc: 'open-source',  dot: 'var(--amber)',       yoloable: false },
-    { id: 'aider',    label: 'aider',    desc: 'aider.chat',   dot: 'var(--magenta)',     yoloable: false },
-    { id: 'terminal', label: 'Terminal', desc: 'plain shell',  dot: 'var(--fg-3)',        yoloable: false },
-    { id: 'bash',     label: 'bash',     desc: 'plain shell',  dot: 'var(--fg-3)',        yoloable: false }
+    { id: 'claude',   label: 'Claude',   desc: 'Anthropic',    dot: 'var(--tool-claude)',  yoloable: true,  firstClass: true  },
+    { id: 'codex',    label: 'Codex',    desc: 'OpenAI',       dot: 'var(--tool-codex)',   yoloable: true,  firstClass: true  },
+    { id: 'cursor',   label: 'Cursor',   desc: 'cursor-agent', dot: 'var(--tool-cursor, var(--cta))', yoloable: true,  firstClass: true  },
+    { id: 'gemini',   label: 'Gemini',   desc: 'Google',       dot: 'var(--tool-gemini)',  yoloable: true,  firstClass: true  },
+    { id: 'opencode', label: 'opencode', desc: 'open-source',  dot: 'var(--amber)',        yoloable: false, firstClass: false },
+    { id: 'aider',    label: 'aider',    desc: 'aider.chat',   dot: 'var(--magenta)',      yoloable: false, firstClass: false },
+    { id: 'terminal', label: 'Terminal', desc: 'plain shell',  dot: 'var(--fg-3)',         yoloable: false, firstClass: false },
+    { id: 'bash',     label: 'bash',     desc: 'plain shell',  dot: 'var(--fg-3)',         yoloable: false, firstClass: false }
   ];
 
   const currentTool = $derived(TOOLS.find(t => t.id === tool) ?? null);
   const isYoloable  = $derived(currentTool?.yoloable === true);
+
+  /// First-class tools missing from PATH are disabled (no spawn) with a
+  /// tooltip pointing at the missing binary. Non-first-class tools and
+  /// any tool whose probe hasn't returned yet stay enabled.
+  function toolAvailable(t: Tool): boolean {
+    if (!t.firstClass) return true;
+    const info = availability[t.id];
+    if (!info) return true; // probe pending / endpoint absent
+    return info.available;
+  }
+
+  function toolUnavailableReason(t: Tool): string | null {
+    if (!t.firstClass) return null;
+    const info = availability[t.id];
+    if (!info || info.available) return null;
+    return `${info.binary} not found on the daemon's PATH`;
+  }
+
+  async function refreshAvailability() {
+    try {
+      const list = await api.listAgents();
+      const map: Record<string, AgentInfo> = {};
+      for (const a of list) map[a.name] = a;
+      availability = map;
+    } catch {
+      // Older daemons (pre-this-change) won't expose /api/agents. Fail
+      // open: the picker shows everything and a missing binary surfaces
+      // as a `command not found` later instead of being blocked here.
+      availability = {};
+    }
+  }
+
+  $effect(() => {
+    if (open) refreshAvailability();
+  });
+
+  // If the user had selected a tool that just became unavailable
+  // (rare — happens if the daemon's PATH changes between dialog opens),
+  // bounce them back to the first available first-class option.
+  $effect(() => {
+    const t = TOOLS.find(x => x.id === tool);
+    if (t && t.firstClass && !toolAvailable(t)) {
+      const fallback = TOOLS.find(x => x.firstClass && toolAvailable(x));
+      if (fallback) tool = fallback.id;
+    }
+  });
 
   function reset() {
     name = '';
@@ -146,15 +203,20 @@
         <span class="eyebrow">Agent</span>
         <div class="tools">
           {#each TOOLS as t (t.id)}
+            {@const avail = toolAvailable(t)}
+            {@const reason = toolUnavailableReason(t)}
             <button
               type="button"
               class="tool"
               class:on={tool === t.id}
-              onclick={() => (tool = t.id)}
+              class:off={!avail}
+              disabled={!avail}
+              title={reason ?? ''}
+              onclick={() => avail && (tool = t.id)}
             >
               <span class="dot" style:background={t.dot}></span>
               <span class="t-name">{t.label}</span>
-              <span class="t-desc">{t.desc}</span>
+              <span class="t-desc">{avail ? t.desc : 'not installed'}</span>
             </button>
           {/each}
         </div>
@@ -342,12 +404,20 @@
     transition: border-color var(--t-hover), background var(--t-hover), color var(--t-hover);
     text-align: left;
   }
-  .tool:hover { border-color: var(--fg-3); color: var(--fg); }
+  .tool:hover:not(:disabled) { border-color: var(--fg-3); color: var(--fg); }
   .tool.on {
     border-color: var(--cta);
     background: color-mix(in srgb, var(--cta) 10%, var(--surface));
     color: var(--fg);
   }
+  .tool.off {
+    opacity: 0.4;
+    cursor: not-allowed;
+    /* Strike through the dot so the "missing binary" state reads even
+       without hovering for the tooltip. */
+    filter: grayscale(0.6);
+  }
+  .tool.off .t-desc { color: var(--crash); }
   .tool .dot {
     width: 7px;
     height: 7px;

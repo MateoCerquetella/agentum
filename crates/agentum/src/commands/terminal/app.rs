@@ -197,7 +197,7 @@ pub struct ErrorEntry {
 
 /// Suggested tool names. Mirrors the web's datalist on the New Session
 /// dialog. Pressing Tab on the `Tool` field cycles through these.
-pub const TOOL_SUGGESTIONS: &[&str] = &["claude", "codex", "opencode", "aider", "bash"];
+pub const TOOL_SUGGESTIONS: &[&str] = &["claude", "codex", "cursor", "opencode", "aider", "bash"];
 
 /// Tools that support YOLO / skip-permissions mode. Must mirror the
 /// `yoloTools` set in `dashboard/src/lib/components/NewSessionDialog.svelte`
@@ -205,8 +205,10 @@ pub const TOOL_SUGGESTIONS: &[&str] = &["claude", "codex", "opencode", "aider", 
 /// `crates/agentum-executor/src/adapters.rs`. `opencode` was previously
 /// listed here under the (wrong) assumption that it accepts Claude's
 /// flag — that footgun was the v0.6.24 fix; only add tools back once
-/// their adapter declares the correct per-tool flag.
-pub const YOLO_TOOLS: &[&str] = &["claude", "codex", "gemini"];
+/// their adapter declares the correct per-tool flag. Cursor's adapter
+/// translates the YOLO marker to its own `--force` switch, so it's
+/// safe to include here.
+pub const YOLO_TOOLS: &[&str] = &["claude", "codex", "cursor", "gemini"];
 
 /// Wire-format YOLO marker. Both surfaces push this exact string into
 /// `Session::flags` when the YOLO toggle is on, regardless of tool.
@@ -319,16 +321,26 @@ impl NewSessionForm {
     }
 
     /// Cycle the tool field through `TOOL_SUGGESTIONS`. Triggered by
-    /// pressing Tab when the Tool field has focus and isn't already on
-    /// the last suggestion. Wraps to `claude` after the last entry.
-    pub fn cycle_tool(&mut self) {
+    /// pressing Tab when the Tool field has focus. Wraps to `claude`
+    /// after the last entry. `is_available` skips first-class agents
+    /// whose binary isn't installed on the daemon's PATH so the user
+    /// never lands on an unspawnable name. If every entry is filtered
+    /// out (cold daemon, no agents installed) we leave the field
+    /// alone — the user can still type a passthrough name by hand.
+    pub fn cycle_tool(&mut self, is_available: impl Fn(&str) -> bool) {
         let current = self.tool.trim();
-        let idx = TOOL_SUGGESTIONS.iter().position(|t| *t == current);
-        let next = match idx {
-            Some(i) => TOOL_SUGGESTIONS[(i + 1) % TOOL_SUGGESTIONS.len()],
-            None => TOOL_SUGGESTIONS[0],
-        };
-        self.tool = next.to_string();
+        let start = TOOL_SUGGESTIONS
+            .iter()
+            .position(|t| *t == current)
+            .map(|i| (i + 1) % TOOL_SUGGESTIONS.len())
+            .unwrap_or(0);
+        for step in 0..TOOL_SUGGESTIONS.len() {
+            let cand = TOOL_SUGGESTIONS[(start + step) % TOOL_SUGGESTIONS.len()];
+            if is_available(cand) {
+                self.tool = cand.to_string();
+                return;
+            }
+        }
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -747,6 +759,14 @@ pub struct App {
     /// from one that's actively working — without needing a wider
     /// 2-cell emoji that would shift the rest of the row.
     pub idle: HashSet<Uuid>,
+    /// First-class agents whose binary is installed on the daemon's
+    /// PATH. Populated once at startup from `/api/agents`; consulted by
+    /// the New Session form and the tool-cycle key to skip agents the
+    /// user can't actually launch (cursor without `cursor-agent`,
+    /// codex without the codex CLI, etc.). When `None` the probe is
+    /// pending OR the daemon is older than this change — both paths
+    /// fail open at the call site so the picker stays usable.
+    pub agent_availability: Option<HashSet<String>>,
 }
 
 impl App {
@@ -811,6 +831,26 @@ impl App {
             prefs,
             awaiting_input: HashSet::new(),
             idle: HashSet::new(),
+            agent_availability: None,
+        }
+    }
+
+    /// Returns `true` if `tool` is selectable in the picker. Non-first-
+    /// class tools (terminal, bash, aider, …) and unknown free-form
+    /// strings always pass; first-class tools are gated on the daemon
+    /// probe in `agent_availability`. While the probe is pending
+    /// (`None`) we fail open — the user sees no spurious blocks if the
+    /// daemon predates the `/api/agents` endpoint.
+    pub fn tool_available(&self, tool: &str) -> bool {
+        let trimmed = tool.trim();
+        let is_first_class = TOOL_SUGGESTIONS.contains(&trimmed)
+            && !matches!(trimmed, "opencode" | "aider" | "bash" | "terminal" | "");
+        if !is_first_class {
+            return true;
+        }
+        match &self.agent_availability {
+            Some(set) => set.contains(trimmed),
+            None => true,
         }
     }
 
@@ -1231,6 +1271,23 @@ pub async fn run_loop(
 ) -> Result<()> {
     let mut app = App::new(sessions);
     app.sound_muted_cli = sound_muted;
+
+    // One-shot probe of the daemon's PATH so the New Session form can
+    // grey out first-class adapters the user hasn't installed (cursor
+    // without `cursor-agent`, etc.). Older daemons return 404; that
+    // path leaves `agent_availability` as `None` and the picker fails
+    // open.
+    match client.list_agents().await {
+        Ok(list) if !list.is_empty() => {
+            app.agent_availability = Some(
+                list.into_iter()
+                    .filter(|a| a.available)
+                    .map(|a| a.name)
+                    .collect(),
+            );
+        }
+        _ => {}
+    }
 
     let (term_tx, mut term_rx) = mpsc::unbounded_channel::<TerminalMsg>();
     let (term_tx_right, mut term_rx_right) = mpsc::unbounded_channel::<TerminalMsg>();
@@ -2604,7 +2661,23 @@ async fn handle_new_session_key(
         //     full match) it falls through to next_field so Tab still
         //     advances the form when the path is empty / done.
         KeyCode::Tab => match form.field {
-            NewSessionField::Tool => form.cycle_tool(),
+            NewSessionField::Tool => {
+                let avail = app.agent_availability.clone();
+                form.cycle_tool(|t| match &avail {
+                    // Mirrors `App::tool_available`. Inlined here to
+                    // sidestep the borrow conflict between the App-owned
+                    // overlay (taken via `mem::replace` above) and the
+                    // closure capturing `&app`.
+                    Some(set) => {
+                        let first_class = matches!(
+                            t,
+                            "claude" | "codex" | "cursor" | "gemini" | "hermes"
+                        );
+                        !first_class || set.contains(t)
+                    }
+                    None => true,
+                });
+            }
             NewSessionField::Workdir => {
                 if !autocomplete_workdir(&mut form, client).await {
                     form.next_field();
@@ -2658,6 +2731,20 @@ async fn handle_new_session_key(
             // Submit.
             if let Err(msg) = form.validate() {
                 form.error = Some(msg.into());
+                app.overlay = Overlay::NewSession(form);
+                return;
+            }
+            // Block first-class agents the daemon can't actually launch
+            // (cursor without `cursor-agent`, etc.). The web dialog
+            // disables those tiles outright; the TUI text field will
+                // still let the user type the name, so we bounce here
+            // before sending a request the executor will fail later.
+            if !app.tool_available(form.tool.trim()) {
+                let bin = match form.tool.trim() {
+                    "cursor" => "cursor-agent",
+                    other => other,
+                };
+                form.error = Some(format!("{bin} not installed on the daemon"));
                 app.overlay = Overlay::NewSession(form);
                 return;
             }

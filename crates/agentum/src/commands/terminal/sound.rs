@@ -100,11 +100,13 @@ pub fn play(kind: NotifKind) {
     }
 }
 
-/// BEL fallback. Writes `\x07` to stdout — the host terminal honours its
-/// own bell setting (visual flash, native sound, or silent depending on
-/// user prefs). Best-effort; we never propagate the IO error.
-fn bell() {
-    use std::io::Write;
-    let _ = std::io::stdout().write_all(b"\x07");
-    let _ = std::io::stdout().flush();
-}
+/// BEL fallback. Disabled in v0.6.36+ — same reason `write_osc52` is
+/// disabled (see `app::write_osc52`): a raw byte to stdout *while
+/// ratatui owns the screen* bypasses the diff renderer, splits a
+/// neighbouring escape sequence at the byte boundary, and the host
+/// terminal (especially inside tmux) can drop into a "swallowing
+/// parameters until I see a final byte" state — which on some
+/// emulators presents as the alt-screen going entirely black until
+/// the next full repaint. Reinstate by routing through a between-
+/// frames flush queue, not by writing to `std::io::stdout()` directly.
+fn bell() {}

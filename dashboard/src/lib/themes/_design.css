@@ -411,24 +411,6 @@
 .term-host .term-bar .pane.active { background: var(--surface); color: var(--fg); }
 .term-host .term-bar .pane:hover:not(.active) { color: var(--fg-2); }
 .term-host .term-bar .spacer { flex: 1; }
-.term-host .term {
-  flex: 1; min-height: 0;
-  padding: 14px 18px 50px;
-  font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
-  color: var(--fg);
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-.term-host .term .ln { white-space: pre-wrap; word-break: break-word; }
-.term-host .term .ln.blank { min-height: 1.6em; }
-.term-host .term .c-fg3 { color: var(--fg-3); }
-.term-host .term .c-fg2 { color: var(--fg-2); }
-.term-host .term .c-cta { color: var(--cta); }
-.term-host .term .c-grn { color: var(--green); }
-.term-host .term .c-mag { color: var(--magenta); }
-.term-host .term .c-amb { color: var(--amber); }
-.term-host .term .c-blu { color: var(--blu); }
-.term-host .term .c-white { color: #fff; }
 .term-host .input {
   position: absolute; left: 0; right: 0; bottom: 0;
   border-top: 1px solid var(--border);

@@ -4,6 +4,71 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-05-08
+
+Minor bump because of two new user-facing features (Cursor adapter +
+named connection profiles) on top of the v0.6.x series.
+
+### Added
+- **Cursor agent adapter (`cursor`).** First-class support for the
+  `cursor-agent` headless CLI: passes `--model` through, accepts
+  free-form user flags, and translates the wire-format YOLO marker
+  to Cursor's `--force` switch. Listed in the New Session form's
+  Tab-cycle and the dashboard's tool dropdown. `cursor` joins the
+  `YOLO_TOOLS` set since its adapter declares the correct per-tool
+  flag (the v0.6.24 lesson — never add a tool to that set without
+  an adapter mapping).
+- **Named connection profiles for the TUI (`agentum profiles
+  list/add/remove/use`).** Save multiple `agentum serve` endpoints
+  (URL + pinned fingerprint + `--insecure` toggle) and switch
+  between them with `agentum terminal --profile NAME` instead of
+  retyping `--api https://…` every time. A `default` pointer lets
+  `agentum terminal` (no flag) hit the right endpoint
+  automatically; falls back to the loopback probe if no default
+  is set. Storage is a TOML file alongside `known_hosts.toml` so
+  cert pins and credentials cache hit the same per-host key.
+- **`EndpointSwitcher` chip in the dashboard topbar.** Surfaces
+  the active profile, opens a dropdown to switch / add / remove
+  endpoints. Switching reloads the page (cheapest correct
+  refresh — every store / WS / cached query reflects the new
+  endpoint without per-store invalidation logic). Profile state
+  lives in `localStorage` keyed by user.
+- **`GET /api/agents` endpoint.** Single-shot probe of which
+  first-class agent binaries are actually on the daemon's `PATH`.
+  The TUI / dashboard hit it once on startup so the agent picker
+  can grey out unavailable entries with a clear hint instead of
+  silently letting the user spawn a session that crashes with
+  `command not found` on the next `tmux send-keys`. The Tab-cycle
+  on the `Tool` field skips unavailable entries.
+
+### Fixed
+- **Dashboard terminal scrolled the page upward indefinitely on
+  session entry.** `_design.css` carried a leftover
+  `.term-host .term { padding: 14px 18px 50px; overflow-y: auto;
+  ... }` block from a static design preview that no longer
+  exists. The selector matched the xterm host div in
+  `Terminal.svelte` (whose class was also `term`), so FitAddon
+  read a wrong row count *and* the host div itself became
+  scrollable on top of xterm's internal viewport. Each repaint
+  scrolled the outer host upward, dragging the page with it.
+  Removed the dead block. `.term-shell` is now a flex container
+  so xterm stretches to the available height instead of
+  collapsing to its scrollback's intrinsic size.
+- **TUI alt-screen sometimes went completely black with no
+  visible text.** Two compounding writes-outside-ratatui bugs:
+  (1) `sound::bell()` wrote `\x07` (BEL) directly to stdout when
+  no system audio player was on PATH, bypassing ratatui's diff
+  renderer — same anti-pattern the v0.6.33 `write_osc52` fix
+  disabled. Inside tmux a raw byte mid-frame can split a
+  neighbouring CSI escape and leave the alt-screen swallowing
+  parameters until a final byte appears. (2) `init_tracing`
+  routed every `tracing::*` event to *stderr*, which shares the
+  TTY with the alt-screen. Any `info+` log from a dependency
+  (tungstenite, rustls, h2…) landed directly on the rendered
+  cells. Bell is now a no-op (visual notification still fires);
+  TUI tracing now writes to `$XDG_CACHE_HOME/agentum/tui.log`
+  via `init_tracing_for_tui` instead of stderr.
+
 ## [0.6.33] — 2026-05-07
 
 ### Added

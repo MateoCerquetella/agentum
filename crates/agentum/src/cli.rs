@@ -191,6 +191,7 @@ pub enum Cmd {
     Terminal {
         /// Override API base URL (defaults to https://127.0.0.1:8822 → http fallback).
         /// To connect to a remote agentum, e.g. `--api https://my-vps:8822`.
+        /// Wins over `--profile` when both are given.
         #[arg(long)]
         api: Option<String>,
 
@@ -209,12 +210,24 @@ pub enum Cmd {
         /// `AGENTUM_TUI_NO_SOUND` env var.
         #[arg(long)]
         no_sound: bool,
+
+        /// Named endpoint profile to load. Manage profiles with
+        /// `agentum profiles list/add/remove/use`. Falls back to the
+        /// file's `default` entry, then the loopback probe.
+        #[arg(long)]
+        profile: Option<String>,
     },
 
     /// Manage the SSH-style known_hosts file used by `agentum terminal`.
     Hosts {
         #[command(subcommand)]
         action: HostsCmd,
+    },
+
+    /// Manage named connection profiles (multiple agentum endpoints).
+    Profiles {
+        #[command(subcommand)]
+        action: ProfilesCmd,
     },
 
     /// Update agentum to the latest release (re-runs install.sh).
@@ -243,6 +256,41 @@ pub enum HostsCmd {
     List,
     /// Forget a pinned host (also drops its cached login token).
     Forget { host: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ProfilesCmd {
+    /// List configured profiles. The default (if any) is marked.
+    List,
+    /// Create or update a profile.
+    Add {
+        /// Profile name (alphanumeric, `.`, `_`, `-`).
+        name: String,
+        /// Base URL, e.g. `https://my-vps.example.com:8822`.
+        url: String,
+        /// Pre-pinned SHA-256 fingerprint (`AB:CD:…`).
+        #[arg(long)]
+        fingerprint: Option<String>,
+        /// Skip TLS verification when connecting to this profile.
+        #[arg(long)]
+        insecure: bool,
+        /// Make this the default profile (used when `--profile` is
+        /// omitted on `agentum terminal`).
+        #[arg(long)]
+        set_default: bool,
+    },
+    /// Delete a profile. Does not touch its cached credentials —
+    /// run `agentum hosts forget HOST:PORT` if you also want to drop
+    /// the bearer token.
+    Rm { name: String },
+    /// Set or clear the default profile. Pass `--clear` to remove.
+    Use {
+        /// Profile name to mark as default. Required unless `--clear`.
+        name: Option<String>,
+        /// Clear the default profile pointer.
+        #[arg(long)]
+        clear: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -325,16 +373,19 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             fingerprint,
             insecure,
             no_sound,
+            profile,
         } => {
             crate::commands::terminal::run(crate::commands::terminal::Options {
                 api,
                 fingerprint,
                 insecure,
                 no_sound,
+                profile,
             })
             .await
         }
         Cmd::Hosts { action } => crate::commands::hosts::run(action).await,
+        Cmd::Profiles { action } => crate::commands::profiles::run(action).await,
         Cmd::Update { mode, force } => {
             let mode = match mode.as_deref() {
                 Some("server") => Some(crate::commands::update::Mode::Server),
@@ -405,11 +456,25 @@ mod tests {
                 fingerprint,
                 insecure,
                 no_sound,
+                profile,
             } => {
                 assert_eq!(api.as_deref(), Some("https://vps:8822"));
                 assert_eq!(fingerprint.as_deref(), Some("AB:CD"));
                 assert!(insecure);
                 assert!(no_sound);
+                assert!(profile.is_none());
+            }
+            _ => panic!("expected Terminal"),
+        }
+    }
+
+    #[test]
+    fn terminal_accepts_profile() {
+        use clap::Parser;
+        let cli = Cli::parse_from(["agentum", "terminal", "--profile", "vps"]);
+        match cli.command {
+            Cmd::Terminal { profile, .. } => {
+                assert_eq!(profile.as_deref(), Some("vps"));
             }
             _ => panic!("expected Terminal"),
         }
