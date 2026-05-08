@@ -29,13 +29,19 @@ use axum::response::Response;
 // `'unsafe-inline'` for script-src; everything else still requires
 // same-origin. Same posture for style-src — Svelte components emit inline
 // `style` attributes for transitions/dynamic props.
+// `connect-src` allows any HTTP/HTTPS origin (plus any ws/wss) so the
+// named-profiles feature works: a dashboard hosted by one daemon can
+// fetch /api/health, /api/auth/*, /api/sessions, etc. from another
+// daemon the user added as an endpoint. The bearer-token wall on the
+// daemon side is what actually gates access — `connect-src *` only
+// decides which origins the SPA's *own* JS is allowed to dial out to.
 const CSP: &str = concat!(
     "default-src 'self'; ",
     "script-src 'self' 'unsafe-inline'; ",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; ",
     "img-src 'self' data: blob:; ",
     "font-src 'self' data: https://fonts.gstatic.com; ",
-    "connect-src 'self' ws: wss:; ",
+    "connect-src 'self' http: https: ws: wss:; ",
     "worker-src 'self' blob:; ",
     "manifest-src 'self'; ",
     "frame-ancestors 'none'; ",
