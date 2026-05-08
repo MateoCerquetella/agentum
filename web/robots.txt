@@ -4,8 +4,8 @@ Disallow: /api/
 
 # Crawl-delay: 1
 
-Sitemap: https://agentum.dev/sitemap.xml
-Sitemap: https://agentum.dev/sitemap-news.xml
+Sitemap: https://agentum-app.netlify.app/sitemap.xml
+Sitemap: https://agentum-app.netlify.app/sitemap-news.xml
 
 # AI crawlers — allow for discovery
 User-agent: GPTBot
