@@ -115,6 +115,15 @@
           {toolShort(s.tool)}{s.model ? `·${s.model}` : ''}
         </span>
       {/if}
+      {#if s.profile_label}
+        <!-- Endpoint pill: which agentum daemon this session lives on.
+             Only shown when the row was tagged by the multi-endpoint
+             aggregator; single-endpoint runs leave it off so the row
+             stays uncluttered. -->
+        <span class="endpoint" title={`Endpoint: ${s.profile_label}`}>
+          @{s.profile_label}
+        </span>
+      {/if}
     </div>
     <div class="title-sub">
       <span class="task" title={s.workdir}>{project}</span>
@@ -239,6 +248,20 @@
     width: 5px;
     height: 5px;
     border-radius: var(--radius-pill);
+  }
+  .endpoint {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    background: color-mix(in srgb, var(--cta) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cta) 35%, var(--border));
+    border-radius: var(--radius-pill);
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--cta);
+    letter-spacing: 0;
+    white-space: nowrap;
   }
 
   .title-sub {

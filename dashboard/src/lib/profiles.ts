@@ -196,7 +196,40 @@ export function apiUrl(path: string): string {
  * page's own origin when the profile is empty-string-base.
  */
 export function wsUrl(path: string): string {
-  const profile = getActiveProfile();
+  return wsUrlForProfile(getActiveProfile().id, path);
+}
+
+/**
+ * Look up a profile by id. Returns the active profile when `id` is
+ * empty / unknown so per-profile call sites degrade gracefully into
+ * the active-profile path.
+ */
+export function profileById(id: string | null | undefined): Profile {
+  if (!id) return getActiveProfile();
+  const list = get(profiles);
+  return list.find((p) => p.id === id) ?? getActiveProfile();
+}
+
+/**
+ * Build an HTTP URL against `profileId`. Multi-endpoint aggregation
+ * uses this to fan out fetches across every configured profile.
+ * Falls back to the active profile when `profileId` doesn't match
+ * any configured one (degrades to the existing single-endpoint path).
+ */
+export function apiUrlForProfile(profileId: string, path: string): string {
+  const profile = profileById(profileId);
+  const base = profile.baseUrl;
+  if (!base) return path;
+  return base.replace(/\/+$/, '') + path;
+}
+
+/**
+ * Build a WS URL against `profileId`. Same fallback semantics as
+ * `apiUrlForProfile`. The bearer token gets appended as `?token=…`
+ * because browsers can't set custom headers on WS upgrades.
+ */
+export function wsUrlForProfile(profileId: string, path: string): string {
+  const profile = profileById(profileId);
   const token = profile.token;
   let baseProto: string;
   let baseHost: string;
@@ -206,9 +239,6 @@ export function wsUrl(path: string): string {
       baseProto = u.protocol === 'https:' ? 'wss:' : 'ws:';
       baseHost = u.host;
     } catch {
-      // Invalid URL string: fall back to current origin so the WS
-      // attempt fails at connect time with a coherent error rather
-      // than throwing here and breaking the UI.
       baseProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       baseHost = location.host;
     }
@@ -218,4 +248,24 @@ export function wsUrl(path: string): string {
   }
   const url = `${baseProto}//${baseHost}${path}`;
   return token ? `${url}?token=${encodeURIComponent(token)}` : url;
+}
+
+/**
+ * Profile-pinned `fetch`. Used by aggregating call sites (sessions
+ * store, fleet view) to talk to a specific endpoint regardless of
+ * which one is "active". Wraps the same auth-header injection the
+ * single-profile `request` does in `api.ts`.
+ */
+export async function fetchProfile(
+  profileId: string,
+  path: string,
+  init: RequestInit = {}
+): Promise<Response> {
+  const profile = profileById(profileId);
+  const headers = new Headers(init.headers);
+  if (!headers.has('content-type') && init.body) {
+    headers.set('content-type', 'application/json');
+  }
+  if (profile.token) headers.set('authorization', `Bearer ${profile.token}`);
+  return fetch(apiUrlForProfile(profileId, path), { ...init, headers });
 }

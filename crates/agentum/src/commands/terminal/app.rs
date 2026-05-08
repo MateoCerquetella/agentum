@@ -573,6 +573,9 @@ pub enum PendingAction {
         id: Uuid,
         name: String,
     },
+    RemoveEndpoint {
+        name: String,
+    },
 }
 
 impl PendingAction {
@@ -584,6 +587,9 @@ impl PendingAction {
             }
             PendingAction::Kill { name, .. } => {
                 format!("kill `{name}`? Stops the process and removes the session.")
+            }
+            PendingAction::RemoveEndpoint { name } => {
+                format!("delete endpoint `{name}`? This cannot be undone.")
             }
         }
     }
@@ -962,6 +968,46 @@ pub struct App {
     /// Cursor index inside the Endpoints section (only meaningful when
     /// `tree_section == TreeSection::Endpoints`).
     pub endpoints_cursor: usize,
+    /// Live clients keyed by profile name. The empty string `""` keys
+    /// the loopback / `--api` connection (one launch can only have at
+    /// most one of those). Each entry tracks its reachability so the
+    /// sidebar can render `(unreachable)` / `(login needed)` markers
+    /// in place of an empty session list. Populated at run-loop
+    /// startup; never empty after that — the *default* client always
+    /// has a slot, even if its `client` is `None` because the user
+    /// is multi-profile-only with no loopback.
+    pub clients: HashMap<String, ClientEntry>,
+    /// Session-id → owning profile name. Used by ops that take a
+    /// session id (start / stop / stream) to look up the right client
+    /// without threading the profile through every call site. Empty
+    /// string means "default / loopback / `--api`" — same key shape
+    /// as `clients`.
+    pub session_profile: HashMap<Uuid, String>,
+}
+
+/// One slot in [`App::clients`]. Tracks whether the endpoint is
+/// reachable, what error stopped it (if any), and the live `Client`
+/// when reachability succeeded.
+pub struct ClientEntry {
+    pub client: Option<Client>,
+    pub status: EndpointStatus,
+    pub last_error: Option<String>,
+    /// Cached `/api/agents` response per endpoint so the New Session
+    /// form can gate the agent picker against the right daemon's
+    /// `PATH`. `None` means the probe is pending or the endpoint
+    /// pre-dates the route.
+    pub agent_availability: Option<HashSet<String>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EndpointStatus {
+    /// HTTP + auth check both passed; the client is usable.
+    Live,
+    /// We couldn't reach the server at all (DNS, TCP, TLS, timeout).
+    Unreachable,
+    /// Server answered but rejected the bearer token. The user has to
+    /// log in on this endpoint before its sessions appear.
+    LoginNeeded,
 }
 
 /// Which sidebar section currently has the cursor.
@@ -1053,8 +1099,49 @@ impl App {
             profiles: Vec::new(),
             tree_section: TreeSection::Sessions,
             endpoints_cursor: 0,
+            clients: HashMap::new(),
+            session_profile: HashMap::new(),
         }
     }
+
+    /// Look up which profile owns `id`. Falls back to the empty key —
+    /// the conventional "default / loopback" slot — for sessions that
+    /// were created before the multi-client refactor or for which
+    /// the tag wasn't recorded.
+    pub fn profile_for_session(&self, id: Uuid) -> &str {
+        self.session_profile
+            .get(&id)
+            .map(String::as_str)
+            .unwrap_or("")
+    }
+
+    /// Borrow the live `Client` that owns `id`. `None` means the
+    /// owning endpoint is unreachable or login-needed; callers that
+    /// need to operate on the session should surface a hint to the
+    /// user instead of trying anyway.
+    pub fn client_for_session(&self, id: Uuid) -> Option<&Client> {
+        let key = self.profile_for_session(id);
+        self.clients.get(key).and_then(|e| e.client.as_ref())
+    }
+
+    /// Borrow the *default* profile's client — the one new sessions
+    /// land on by default and the one most legacy call sites still
+    /// use. `None` only when even the default endpoint failed to
+    /// connect, which is also the cold-start failure path.
+    pub fn default_client(&self) -> Option<&Client> {
+        let key = self.active_profile.as_deref().unwrap_or("");
+        self.clients.get(key).and_then(|e| e.client.as_ref())
+    }
+
+    /// Iterate over `(profile_name, &Client)` for every live endpoint.
+    /// Used by the aggregating refresh so multi-endpoint runs see a
+    /// unified session list refreshed from every reachable daemon.
+    pub fn live_clients(&self) -> impl Iterator<Item = (&str, &Client)> {
+        self.clients
+            .iter()
+            .filter_map(|(name, entry)| entry.client.as_ref().map(|c| (name.as_str(), c)))
+    }
+
 
     /// Load the on-disk profiles into `app.profiles`. Called once at
     /// run-loop start and again any time the user adds/removes a
@@ -1141,18 +1228,33 @@ impl App {
         self.sessions.iter().find(|s| s.id == id)
     }
 
+    /// Replace the session list with a freshly aggregated one and
+    /// also refresh the owner map. Used by call sites that just did
+    /// a multi-endpoint fanout — the existing `refresh_sessions`
+    /// would otherwise leave the owner map stale (newly-created
+    /// peer sessions wouldn't be tagged).
+    pub fn refresh_sessions_with_owners(
+        &mut self,
+        sessions: Vec<Session>,
+        owners: HashMap<Uuid, String>,
+    ) {
+        self.session_profile = owners;
+        self.refresh_sessions(sessions);
+    }
+
     pub fn refresh_sessions(&mut self, sessions: Vec<Session>) {
         let prev_state: HashMap<String, bool> = self
             .tree
             .groups
             .iter()
-            .map(|g| (g.workdir.clone(), g.expanded))
+            .map(|g| (format!("{}::{}", g.profile, g.workdir), g.expanded))
             .collect();
         // Preserve the active filter across rebuilds — the user's typed
         // search shouldn't vanish just because the session list changed.
         let prev_filter = self.tree.filter_str().to_string();
         self.sessions = sessions;
-        self.tree = Tree::build(&self.sessions, &prev_state);
+        self.tree =
+            Tree::build_with_profiles(&self.sessions, &self.session_profile, &prev_state);
         if !prev_filter.is_empty() {
             self.tree.set_filter(&prev_filter);
         }
@@ -1253,6 +1355,49 @@ impl App {
     }
 }
 
+/// One-call helper for refresh sites: fan out across every live
+/// endpoint, then atomically replace the session list + owner map.
+/// Replaces the historical `if let Ok(fresh) = client.list_sessions()`
+/// pattern; aggregation never errors (per-endpoint failures degrade
+/// to an empty list for that profile).
+pub async fn refresh_all(app: &mut App) {
+    let (fresh, owners) = aggregate_sessions_with_owners(&*app).await;
+    app.refresh_sessions_with_owners(fresh, owners);
+}
+
+/// Re-fetch the session list from every live endpoint and merge them
+/// into one aggregated `Vec<Session>` plus an updated owner map keyed
+/// by session id. Used in place of `client.list_sessions()` at every
+/// refresh call site so a session created on a peer endpoint actually
+/// shows up in the sidebar without forcing a profile switch.
+///
+/// Returns the merged session list and the owner map; the caller
+/// applies both in lockstep via `App::refresh_sessions` for tree
+/// rebuild + selection clamping in the same pattern as the
+/// single-client path.
+pub async fn aggregate_sessions_with_owners(
+    app: &App,
+) -> (Vec<Session>, HashMap<Uuid, String>) {
+    let probes: Vec<_> = app
+        .live_clients()
+        .map(|(name, c)| {
+            let name = name.to_string();
+            let c = c.clone();
+            async move { (name, c.list_sessions().await.unwrap_or_default()) }
+        })
+        .collect();
+    let results = futures_util::future::join_all(probes).await;
+    let mut merged: Vec<Session> = Vec::new();
+    let mut owners: HashMap<Uuid, String> = HashMap::new();
+    for (name, list) in results {
+        for s in list {
+            owners.insert(s.id, name.clone());
+            merged.push(s);
+        }
+    }
+    (merged, owners)
+}
+
 // ---------- Tree ----------
 
 pub struct Tree {
@@ -1273,6 +1418,12 @@ pub struct Tree {
 }
 
 pub struct Group {
+    /// Owning profile name; `""` for the default / loopback / `--api`
+    /// connection. Used as the primary sort key + drives the
+    /// `@profile · workdir` label in the sidebar so a multi-endpoint
+    /// fleet reads correctly even when several daemons happen to
+    /// share a workdir.
+    pub profile: String,
     pub workdir: String,
     pub sessions: Vec<Uuid>,
     pub expanded: bool,
@@ -1329,24 +1480,50 @@ fn collapse_home_str(p: &str) -> String {
 
 impl Tree {
     pub fn build(sessions: &[Session], prev_expanded: &HashMap<String, bool>) -> Self {
+        Self::build_with_profiles(sessions, &HashMap::new(), prev_expanded)
+    }
+
+    /// Multi-endpoint variant: groups by `(profile, workdir)` so the
+    /// sidebar can render every endpoint's sessions inline, sorted
+    /// with the default profile (empty key) first. `session_profile`
+    /// maps session id → owning profile name; missing entries fall
+    /// back to the default key.
+    pub fn build_with_profiles(
+        sessions: &[Session],
+        session_profile: &HashMap<Uuid, String>,
+        prev_expanded: &HashMap<String, bool>,
+    ) -> Self {
         // Normalize workdirs before grouping so `/x/proj` and `/x/proj/`
-        // don't show up as two separate groups in the sidebar.
-        let mut by_workdir: HashMap<String, Vec<&Session>> = HashMap::new();
+        // don't show up as two separate groups. Group key is the
+        // composite (profile_name, workdir) so two endpoints that
+        // share a workdir don't accidentally merge.
+        let mut by_key: HashMap<(String, String), Vec<&Session>> = HashMap::new();
         for s in sessions {
-            let key = normalize_workdir(&s.workdir);
-            by_workdir.entry(key).or_default().push(s);
+            let profile = session_profile.get(&s.id).cloned().unwrap_or_default();
+            let key = (profile, normalize_workdir(&s.workdir));
+            by_key.entry(key).or_default().push(s);
         }
-        let mut keys: Vec<String> = by_workdir.keys().cloned().collect();
-        keys.sort();
+        let mut keys: Vec<(String, String)> = by_key.keys().cloned().collect();
+        // Default profile (empty key) first; then alphabetical by
+        // profile name; then by workdir within each profile.
+        keys.sort_by(|a, b| match (a.0.is_empty(), b.0.is_empty()) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.cmp(b),
+        });
         let groups: Vec<Group> = keys
             .into_iter()
-            .map(|k| {
-                let mut sess = by_workdir.remove(&k).unwrap();
+            .map(|(profile, workdir)| {
+                let mut sess = by_key
+                    .remove(&(profile.clone(), workdir.clone()))
+                    .unwrap();
                 sess.sort_by(|a, b| a.name.cmp(&b.name));
+                let expand_key = format!("{profile}::{workdir}");
                 Group {
-                    expanded: *prev_expanded.get(&k).unwrap_or(&true),
+                    expanded: *prev_expanded.get(&expand_key).unwrap_or(&true),
                     sessions: sess.iter().map(|s| s.id).collect(),
-                    workdir: k,
+                    profile,
+                    workdir,
                 }
             })
             .collect();
@@ -1531,11 +1708,52 @@ pub async fn run_loop(
     sound_muted: bool,
     active_profile: Option<String>,
     pending: Option<PendingAfterSwitch>,
+    extras: Vec<(String, super::ProfileConnect)>,
+    session_profile_map: HashMap<Uuid, String>,
 ) -> Result<RunOutcome> {
     let mut app = App::new(sessions);
     app.sound_muted_cli = sound_muted;
     app.active_profile = active_profile.clone();
     app.reload_profiles();
+    app.session_profile = session_profile_map;
+    // Rebuild the tree now that we know which profile owns each
+    // session. `App::new` builds with an empty profile map, which
+    // would put every session in the "default" group; rebuilding
+    // here gives the correct (profile, workdir) grouping.
+    app.tree = Tree::build_with_profiles(
+        &app.sessions,
+        &app.session_profile,
+        &HashMap::new(),
+    );
+
+    // Default profile: the live `client` we got from `connect_once`.
+    // Keyed under the active profile name (or "" for loopback) so
+    // `client_for_session` finds it via the same lookup as peers.
+    let default_key = active_profile.clone().unwrap_or_default();
+    app.clients.insert(
+        default_key.clone(),
+        ClientEntry {
+            client: Some(client.clone()),
+            status: EndpointStatus::Live,
+            last_error: None,
+            agent_availability: None, // populated below by the same probe path
+        },
+    );
+    // Peer profiles: each one carries its own ClientEntry from the
+    // fanout. `extras` was already aggregated into `sessions` and
+    // `session_profile` by the caller, so all we do here is insert
+    // the entry so future ops can route by profile name.
+    for (name, conn) in extras {
+        app.clients.insert(
+            name,
+            ClientEntry {
+                client: conn.client,
+                status: conn.status,
+                last_error: conn.last_error,
+                agent_availability: conn.agent_availability,
+            },
+        );
+    }
 
     // Apply a follow-up action queued by the previous run-loop's
     // profile-switch path. Today only one variant: re-open the
@@ -2404,6 +2622,30 @@ async fn handle_key(
 
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
+    // Ctrl-D — delete an endpoint when the Endpoints sidebar section
+    // has focus. Shows a confirmation prompt to prevent accidental
+    // deletion. When a terminal pane is focused, Ctrl-D still
+    // forwards EOF (^D) to the running agent — standard Unix
+    // behaviour — so this only intercepts when the sidebar cursor
+    // is actually on an endpoint entry.
+    if ctrl
+        && matches!(key.code, KeyCode::Char('d') | KeyCode::Char('D'))
+        && app.focus == Focus::Tree
+        && app.tree_section == TreeSection::Endpoints
+    {
+        if let Some(entry) = app.profiles.get(app.endpoints_cursor).cloned() {
+            if app.active_profile.as_deref() == Some(entry.name.as_str()) {
+                app.status_msg =
+                    Some("can't remove the active endpoint — switch first".into());
+            } else {
+                app.overlay = Overlay::Confirm(PendingAction::RemoveEndpoint {
+                    name: entry.name.clone(),
+                });
+            }
+        }
+        return;
+    }
+
     // F5 / F6 — global panel switchers, work even with a pane focused.
     // The Ctrl-Shift-] / Ctrl-Shift-[ pair was removed (it conflicted
     // with bracket typing on emulators that report shifted brackets as
@@ -2856,10 +3098,12 @@ async fn handle_key(
             app.set_focus(prev_focus(app.focus, app.lazygit_open(), app.split_open()));
         }
         KeyCode::Char('r') => {
-            if let Ok(fresh) = client.list_sessions().await {
-                app.refresh_sessions(fresh);
-                app.status_msg = Some("refreshed".into());
-            }
+            // Manual refresh aggregates across every live endpoint
+            // so a session created on a peer (via TUI on another
+            // host, or via the dashboard) shows up here without
+            // restart.
+            refresh_all(app).await;
+            app.status_msg = Some("refreshed (all endpoints)".into());
         }
         KeyCode::Char('j') | KeyCode::Down => {
             // Cursor moves through Endpoints first, then Sessions. At
@@ -3081,7 +3325,26 @@ async fn handle_new_session_key(
                 if names.is_empty() {
                     form.next_field();
                 } else {
+                    let old_profile = form.profile.clone();
                     form.cycle_profile(&names);
+                    // When the profile changes, fetch the default
+                    // workdir from the newly-selected endpoint so the
+                    // user doesn't need to retype a path that may not
+                    // exist on the other machine.
+                    if form.profile != old_profile {
+                        let target_client = if form.profile.is_empty() {
+                            Some(client.clone())
+                        } else {
+                            app.clients
+                                .get(&form.profile)
+                                .and_then(|e| e.client.clone())
+                        };
+                        if let Some(tc) = target_client {
+                            if let Ok(listing) = tc.list_dir(None).await {
+                                form.workdir = listing.path;
+                            }
+                        }
+                    }
                 }
             }
             NewSessionField::Tool => {
@@ -3147,30 +3410,12 @@ async fn handle_new_session_key(
             }
         }
         KeyCode::Enter => {
-            // Submit. First, if the form's profile differs from the
-            // active one, queue a soft restart that re-opens this
-            // form on the new daemon — so `agentum terminal` users
-            // can spawn against any of their endpoints without
-            // leaving the New Session UI. The form fields ride
-            // through the reconnect via `PendingAfterSwitch`.
-            let target_profile = form.profile.trim();
-            let active_profile = app.active_profile.as_deref().unwrap_or("");
-            if !target_profile.is_empty() && target_profile != active_profile {
-                let target_name = target_profile.to_string();
-                // Validate the chosen profile actually exists before
-                // tearing down the connection — a typo (or a stale
-                // form entry from before a remove) shouldn't drop
-                // the user into the cold-start onboarding flow.
-                if !app.profiles.iter().any(|p| p.name == target_name) {
-                    form.error = Some(format!("profile `{target_name}` not found"));
-                    app.overlay = Overlay::NewSession(form);
-                    return;
-                }
-                app.pending_switch_profile = Some(target_name);
-                app.pending_after_switch = Some(PendingAfterSwitch::OpenNewSession(form));
-                app.should_quit = true;
-                return;
-            }
+            // Submit. The form's Profile field decides which client to
+            // POST against — no more soft-restart for cross-profile
+            // spawns now that every endpoint is connected in parallel.
+            // Empty profile string means "the default / loopback / --api
+            // connection", same key shape as `app.clients`.
+            let target_profile = form.profile.trim().to_string();
             if let Err(msg) = form.validate() {
                 form.error = Some(msg.into());
                 app.overlay = Overlay::NewSession(form);
@@ -3202,7 +3447,27 @@ async fn handle_new_session_key(
             if form.yolo_active() && !flags.iter().any(|f| f == YOLO_FLAG) {
                 flags.push(YOLO_FLAG.to_string());
             }
-            match client
+            // Route create + start to the chosen profile's client.
+            // Falls back to the default `client` when the user picked
+            // "(current connection)" or the profile lookup misses
+            // (an unreachable peer would have a None client; we
+            // surface that as an error instead of silently routing
+            // to the default).
+            let target_client = if target_profile.is_empty() {
+                Some(client.clone())
+            } else {
+                match app.clients.get(&target_profile) {
+                    Some(entry) => entry.client.clone(),
+                    None => None,
+                }
+            };
+            let Some(target_client) = target_client else {
+                form.error =
+                    Some(format!("profile `{target_profile}` is not currently reachable"));
+                app.overlay = Overlay::NewSession(form);
+                return;
+            };
+            match target_client
                 .create_session(
                     form.name.trim(),
                     form.workdir.trim(),
@@ -3215,8 +3480,12 @@ async fn handle_new_session_key(
                 Ok(created) => {
                     let id = created.id;
                     let name = created.name.clone();
+                    // Tag the new session with its owning profile so
+                    // the tree groups it under the right endpoint
+                    // header on the next refresh.
+                    app.session_profile.insert(id, target_profile.clone());
                     if form.up_after {
-                        if let Err(e) = client.start_session(id).await {
+                        if let Err(e) = target_client.start_session(id).await {
                             let msg = format!("created `{name}` (start failed)");
                             app.status_msg = Some(msg.clone());
                             app.push_error(format!("start `{name}`: {e}"));
@@ -3246,18 +3515,20 @@ async fn handle_new_session_key(
                             NotifKind::Info,
                         );
                     }
-                    if let Ok(fresh) = client.list_sessions().await {
-                        app.refresh_sessions(fresh);
-                        app.tree.select_session(id);
-                        {
-                            let side = app.target_side();
-                            update_selection(app, client, side);
-                        }
-                        // Jump straight into the new terminal so the user
-                        // can start typing — matches Space-from-tree.
-                        if app.selected == Some(id) {
-                            app.set_focus(Focus::Term);
-                        }
+                    // Aggregating refresh so the new session shows
+                    // up regardless of which endpoint it landed on
+                    // (cross-profile spawn just took the soft-restart
+                    // path; same-profile lands here directly).
+                    refresh_all(app).await;
+                    app.tree.select_session(id);
+                    {
+                        let side = app.target_side();
+                        update_selection(app, client, side);
+                    }
+                    // Jump straight into the new terminal so the user
+                    // can start typing — matches Space-from-tree.
+                    if app.selected == Some(id) {
+                        app.set_focus(Focus::Term);
                     }
                     return;
                 }
@@ -3505,9 +3776,41 @@ async fn handle_confirm_key(app: &mut App, key: KeyEvent, client: &Client) {
 }
 
 async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
+    // Endpoint removal is purely local — it touches profiles.toml
+    // and the app's in-memory profile list without a daemon round trip.
+    if let PendingAction::RemoveEndpoint { name } = &action {
+        let label = format!("removed endpoint `{name}`");
+        match super::profiles::Profiles::load() {
+            Ok(mut store) => {
+                let _ = store.remove(name);
+                app.reload_profiles();
+                app.status_msg = Some(label.clone());
+                push_notification(app, label, None, NotifKind::Info);
+            }
+            Err(e) => {
+                app.push_error(format!("remove endpoint `{name}`: {e}"));
+            }
+        }
+        refresh_all(app).await;
+        return;
+    }
+
+    // Lifecycle ops (start/stop/kill) target a specific session id, so
+    // they have to talk to whichever endpoint owns that session — not
+    // the default. Look up the owner's client; fall back to `client`
+    // for legacy / unmapped sessions so behaviour matches the
+    // single-endpoint world when nothing's tagged.
+    let session_id = match &action {
+        PendingAction::Start { id, .. }
+        | PendingAction::Stop { id, .. }
+        | PendingAction::Kill { id, .. } => *id,
+        PendingAction::RemoveEndpoint { .. } => unreachable!(),
+    };
+    let owner = app.client_for_session(session_id).cloned();
+    let target = owner.unwrap_or_else(|| client.clone());
     let result = match &action {
-        PendingAction::Start { id, .. } => client.start_session(*id).await,
-        PendingAction::Stop { id, .. } => client.stop_session(*id).await,
+        PendingAction::Start { id, .. } => target.start_session(*id).await,
+        PendingAction::Stop { id, .. } => target.stop_session(*id).await,
         // "Kill" in the TUI means kill-and-remove: drop the tmux session
         // AND the store record so the entry disappears from the tree.
         // This is the only destructive verb — "delete" used to be a
@@ -3515,12 +3818,14 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         // removed the record) that having both was just confusing UI
         // with no semantic payoff. `s`/Stop is still here for the rare
         // "I want to restart this exact session later" case.
-        PendingAction::Kill { id, .. } => client.delete_session(*id, true).await,
+        PendingAction::Kill { id, .. } => target.delete_session(*id, true).await,
+        _ => unreachable!(),
     };
     let label = match &action {
         PendingAction::Start { name, .. } => format!("started `{name}`"),
         PendingAction::Stop { name, .. } => format!("stopped `{name}`"),
         PendingAction::Kill { name, .. } => format!("killed `{name}`"),
+        PendingAction::RemoveEndpoint { .. } => unreachable!(),
     };
     match result {
         Ok(()) => {
@@ -3542,9 +3847,9 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
             app.push_error(format!("{label}: {e}"));
         }
     }
-    if let Ok(fresh) = client.list_sessions().await {
-        app.refresh_sessions(fresh);
-    }
+    // Aggregating refresh so peers' state changes still flow into
+    // the sidebar even when the action targeted a peer-owned session.
+    refresh_all(app).await;
 }
 
 /// Build the live action catalog from current app state.
@@ -4719,7 +5024,13 @@ fn update_selection(app: &mut App, client: &Client, side: Side) {
         // this by gating on capabilities; v0.6.21 makes the signal
         // structurally impossible to misinterpret).
         let want_resume = side == Side::Left && restored_from_cache;
-        let handle = client.open_terminal_stream(id, term_tx, key_rx, want_resume);
+        // Route the WS stream through the client that owns this
+        // session — so a peer-profile session is streamed from the
+        // right daemon, not the default. Falls back to the passed-in
+        // client when the lookup misses (legacy / unmapped sessions).
+        let owner = app.client_for_session(id).cloned();
+        let stream_client = owner.unwrap_or_else(|| client.clone());
+        let handle = stream_client.open_terminal_stream(id, term_tx, key_rx, want_resume);
         match side {
             Side::Left => {
                 app.stream_handle_left = Some(handle);
@@ -4915,9 +5226,13 @@ fn spawn_agent_tasks_fetch(app: &mut App, client: &Client, id: Uuid) {
     if !app.agent_tasks_inflight.insert(id) {
         return; // already in-flight — coalesce
     }
-    let client = client.clone();
+    // Route to the owning endpoint's client. agent_tasks for a peer
+    // session has to ask that peer's daemon — the default knows
+    // nothing about it. Fall back to `client` for legacy / unmapped.
+    let owner = app.client_for_session(id).cloned();
+    let target = owner.unwrap_or_else(|| client.clone());
     tokio::spawn(async move {
-        let payload = match client.agent_tasks(id).await {
+        let payload = match target.agent_tasks(id).await {
             Ok(state) => Some(state),
             Err(e) => {
                 tracing::debug!(session = %id, error = %e, "agent_tasks fetch failed");

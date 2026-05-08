@@ -4,6 +4,61 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] — 2026-05-08
+
+The "all in one control plane" release. The TUI and dashboard both
+now connect to every configured profile in parallel and aggregate
+their sessions into a unified view, grouped by endpoint.
+
+### Added
+- **Multi-endpoint fanout in the TUI.** At startup, every configured
+  profile gets a non-interactive connect attempt in parallel. The
+  default profile keeps the existing interactive auth path so a
+  cold start still bootstraps; peers use cached credentials and
+  degrade to `(unreachable)` / `(login needed)` placeholders in the
+  sidebar when they can't authenticate. `App.clients` holds the
+  per-profile `Client` map; `App.session_profile` tags each session
+  with its owning profile name.
+- **Sessions grouped by endpoint in the TUI sidebar.** `Tree::build`
+  now groups by `(profile, workdir)` so each daemon's sessions
+  cluster under their own header. The default profile sorts first;
+  peers follow alphabetically. Group labels show
+  `@profile · workdir-basename`.
+- **Per-profile op routing.** All session ops — start, stop, kill,
+  delete, terminal stream open, agent_tasks fetch — consult
+  `App.client_for_session(id)` and talk to the right daemon. Peer
+  endpoints' sessions are now fully operable from one TUI.
+- **New Session form posts to the chosen profile's client.** Picking
+  a different profile in the form's first field no longer triggers
+  a soft restart; the create + start go straight to the chosen
+  endpoint's `Client`. The new session gets its `profile` tag at
+  creation time so it lands in the right sidebar group.
+- **Endpoint status indicators in the sidebar.** Hollow vs filled
+  dot, active vs default markers, and `unreachable` / `login needed`
+  suffix labels show endpoint health at a glance.
+- **Multi-endpoint fanout in the dashboard.** `lib/profiles.ts`
+  gains `apiUrlForProfile`, `wsUrlForProfile`, and `fetchProfile`
+  helpers. The sessions store calls all of them in parallel and
+  tags each `Session` with `profile` + `profile_label`.
+- **Endpoint pill on every fleet row.** Sessions from non-active
+  profiles render an `@profile_label` pill in the FleetRow header
+  so the unified view stays legible.
+- **Per-session terminal routes WS to the owning endpoint.**
+  `Terminal.svelte` looks the session up in the store, reads its
+  profile tag, and uses `wsUrlForProfile` to stream from the right
+  daemon. A dashboard tab can now drive sessions on any endpoint
+  it has credentials for.
+
+### Known limitations (follow-up)
+- Live event stream (status dots, watchdog events) flows from the
+  *active* profile only. Peer sessions update on manual `r` refresh
+  in the TUI / on `loadSessions()` triggers in the dashboard. A
+  per-profile event WS multiplexer is the obvious next step.
+- Cross-host clipboard, OSC52, and similar terminal-side
+  integrations target the active profile only.
+- Profiles must be added (`agentum profiles add NAME URL`) and
+  logged into individually; there's no bulk-credentials flow yet.
+
 ## [0.7.3] — 2026-05-08
 
 Lands the TUI sidebar + spawn-form work that 0.7.2's release notes

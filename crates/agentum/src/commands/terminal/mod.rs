@@ -31,6 +31,7 @@ mod ui;
 // `app` module public.
 pub use app::{YOLO_FLAG, YOLO_TOOLS};
 
+use std::collections::HashMap;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::time::Duration;
 
@@ -119,12 +120,32 @@ pub async fn run(opts: Options) -> Result<()> {
     loop {
         let sound_muted =
             current_opts.no_sound || std::env::var_os("AGENTUM_TUI_NO_SOUND").is_some();
+        // Fan out to every *other* configured profile in parallel so
+        // the sidebar can show a unified, multi-endpoint view of the
+        // user's fleet. The default profile (the one we just got a
+        // live `client` for above) is already covered; the rest go
+        // through `try_connect_profile`, which never prompts.
+        let extras = fanout_other_profiles(active_profile_name.as_deref().unwrap_or("")).await;
+        // Aggregate sessions: default profile's first, then every
+        // reachable peer's. Tag each session with its owning profile
+        // name (empty string = default / loopback).
+        let active_key = active_profile_name.clone().unwrap_or_default();
+        let mut session_profile: HashMap<uuid::Uuid, String> =
+            sessions.iter().map(|s| (s.id, active_key.clone())).collect();
+        for (pname, conn) in &extras {
+            for s in &conn.sessions {
+                session_profile.insert(s.id, pname.clone());
+            }
+            sessions.extend(conn.sessions.iter().cloned());
+        }
         let outcome = run_tui_session(
             client,
             sessions,
             sound_muted,
             active_profile_name.clone(),
             pending_after.take(),
+            extras,
+            session_profile,
         )
         .await?;
         match outcome {
@@ -177,6 +198,8 @@ async fn run_tui_session(
     sound_muted: bool,
     active_profile: Option<String>,
     pending: Option<app::PendingAfterSwitch>,
+    extras: Vec<(String, ProfileConnect)>,
+    session_profile: HashMap<uuid::Uuid, String>,
 ) -> Result<app::RunOutcome> {
     enable_raw_mode().context("enable raw mode")?;
     let mut stdout = io::stdout();
@@ -202,6 +225,8 @@ async fn run_tui_session(
         sound_muted,
         active_profile,
         pending,
+        extras,
+        session_profile,
     )
     .await
 }
@@ -332,6 +357,154 @@ async fn probe_token(base: &Url, trust_setting: &TlsTrust, token: &str) -> bool 
         return false;
     };
     client.me().await.is_ok()
+}
+
+/// Probe every configured profile *except* `skip_name` (the default
+/// profile we already connected synchronously in `run`). Returns a
+/// list of (profile_name, ProfileConnect) tuples in profile-order.
+/// All probes run in parallel via `join_all` so the boot path
+/// doesn't serialise on a slow / unresponsive remote endpoint.
+async fn fanout_other_profiles(skip_name: &str) -> Vec<(String, ProfileConnect)> {
+    let store = match profiles::Profiles::load() {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let entries: Vec<(String, profiles::Profile)> = store
+        .list()
+        .into_iter()
+        .filter_map(|(name, profile, _is_default)| {
+            if name == skip_name {
+                None
+            } else {
+                Some((name, profile))
+            }
+        })
+        .collect();
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let probes = entries.iter().map(|(_, p)| try_connect_profile(p));
+    let results = futures_util::future::join_all(probes).await;
+    entries
+        .into_iter()
+        .zip(results)
+        .map(|((name, _), conn)| (name, conn))
+        .collect()
+}
+
+/// Result of attempting a non-interactive connect to one named
+/// profile. Used by the multi-profile fanout in [`run`] so the
+/// sidebar can render every endpoint with a coherent status (live,
+/// unreachable, login-needed) instead of blocking on prompts the
+/// user may not want to fill for every endpoint at startup.
+pub struct ProfileConnect {
+    pub status: app::EndpointStatus,
+    pub client: Option<api::Client>,
+    pub sessions: Vec<agentum_core::Session>,
+    pub last_error: Option<String>,
+    pub agent_availability: Option<std::collections::HashSet<String>>,
+}
+
+/// Best-effort connect for a single profile. Never prompts — that's
+/// the contract that lets the fanout call this for every profile in
+/// parallel without freezing the boot path. Failures degrade
+/// gracefully into a status the sidebar can render.
+async fn try_connect_profile(profile: &profiles::Profile) -> ProfileConnect {
+    let unreachable = |msg: String| ProfileConnect {
+        status: app::EndpointStatus::Unreachable,
+        client: None,
+        sessions: Vec::new(),
+        last_error: Some(msg),
+        agent_availability: None,
+    };
+
+    let base = match Url::parse(&profile.url) {
+        Ok(u) => u,
+        Err(e) => return unreachable(format!("invalid URL: {e}")),
+    };
+    let trust = match trust_for_profile(&base, profile) {
+        Ok(t) => t,
+        Err(e) => return unreachable(format!("trust: {e}")),
+    };
+    // Pull a cached token from the per-host credentials cache. No
+    // cache → mark login-needed; the user can sign in via the
+    // sidebar / overlay later without restarting the TUI.
+    let host_key = match trust::host_key(&base) {
+        Ok(k) => k,
+        Err(e) => return unreachable(format!("host key: {e}")),
+    };
+    let creds = match trust::Credentials::load() {
+        Ok(c) => c,
+        Err(e) => return unreachable(format!("creds: {e}")),
+    };
+    let Some(token) = creds.token(&host_key).map(str::to_string) else {
+        return ProfileConnect {
+            status: app::EndpointStatus::LoginNeeded,
+            client: None,
+            sessions: Vec::new(),
+            last_error: Some(format!("no cached token for {host_key}")),
+            agent_availability: None,
+        };
+    };
+    let client = match api::Client::new(base, token, trust) {
+        Ok(c) => c,
+        Err(e) => return unreachable(format!("build client: {e}")),
+    };
+    if client.health().await.is_err() {
+        return unreachable(format!("health probe failed at {}", profile.url));
+    }
+    // Health passed but token rejected ⇒ login-needed. We can't
+    // prompt here; the user has to log in on this endpoint via the
+    // overlay before its sessions appear.
+    if client.me().await.is_err() {
+        return ProfileConnect {
+            status: app::EndpointStatus::LoginNeeded,
+            client: Some(client),
+            sessions: Vec::new(),
+            last_error: Some("token rejected".to_string()),
+            agent_availability: None,
+        };
+    }
+    let sessions = client.list_sessions().await.unwrap_or_default();
+    let agent_availability = match client.list_agents().await {
+        Ok(list) if !list.is_empty() => Some(
+            list.into_iter()
+                .filter(|a| a.available)
+                .map(|a| a.name)
+                .collect(),
+        ),
+        _ => None,
+    };
+    ProfileConnect {
+        status: app::EndpointStatus::Live,
+        client: Some(client),
+        sessions,
+        last_error: None,
+        agent_availability,
+    }
+}
+
+/// Resolve TLS trust for a named profile *non-interactively*. Mirrors
+/// [`establish_trust`] but never prompts — the fanout caller treats
+/// missing pins as "unreachable" instead of asking the user to
+/// confirm every endpoint at startup.
+fn trust_for_profile(base: &Url, profile: &profiles::Profile) -> Result<api::TlsTrust> {
+    if base.scheme() == "http" {
+        return Ok(api::TlsTrust::Plain);
+    }
+    if profile.insecure {
+        return Ok(api::TlsTrust::AcceptAny);
+    }
+    if let Some(raw) = &profile.fingerprint {
+        let fp = trust::normalize_fingerprint(raw)
+            .with_context(|| format!("invalid fingerprint for profile: {raw}"))?;
+        return Ok(api::TlsTrust::Pinned(fp));
+    }
+    let host_key = trust::host_key(base)?;
+    if let Some(pinned) = trust::KnownHosts::load()?.pin(&host_key) {
+        return Ok(api::TlsTrust::Pinned(pinned.to_string()));
+    }
+    bail!("no pinned fingerprint for {host_key} — connect once with `agentum terminal --profile <name>` interactively");
 }
 
 /// Layer profile defaults under any explicit CLI flags. Returns the

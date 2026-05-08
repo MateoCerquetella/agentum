@@ -674,20 +674,26 @@
     }
     .scroll { padding: 12px 12px 18px; gap: 14px; }
 
-    /* On phone the user lands here to find their sessions, not stats —
-       reorder the flex children so the fleet leads, the stuck panel
-       sits above when relevant, and the hero/summary fall to the
-       bottom as decorative footer cards. CSS `order` reshuffles
-       without DOM churn so desktop/tablet keep the original layout. */
-    :global(.scroll > .stuck) { order: -2; }
-    .fleet { order: -1; border-radius: 12px; }
-    .summary { order: 1; grid-template-columns: 1fr; gap: 10px; }
-    .hero { order: 2; gap: 12px; padding-top: 4px; }
-
-    /* Compact the hero so it reads as a footer summary on phone. */
-    .hello { font-size: 20px; line-height: 1.15; }
-    .narrative { gap: 6px; margin-top: 8px; }
+    /* Compact hero so the greeting is just a friendly one-liner and
+       the fleet lands inside the viewport on first paint. The host
+       strip moves to /settings on phone, the narrative items drop
+       to a single line, and the spawn-incidents button is replaced
+       by the bottom-nav FAB + the fleet row's own "Inspect" action. */
+    .hero { gap: 8px; }
     .hero-side { display: none; }
+    .hero-text { gap: 6px; }
+    .hello { font-size: 20px; line-height: 1.15; margin: 0; }
+    .narrative { gap: 4px; margin-top: 4px; font-size: 12px; }
+    .narrative :global(.row) { padding: 0 !important; }
+    .hero-actions { display: none; }
+
+    /* Drop the 3 summary cards on phone — their numbers are redundant
+       once the fleet is visible (live count = visible rows, ctx is
+       per-row, spend lives in /settings). Keeps the fleet right
+       below the greeting where the user expects it. */
+    .summary { display: none; }
+
+    .fleet { border-radius: 12px; }
     .fleet-h {
       padding: 12px 14px;
       flex-wrap: wrap;

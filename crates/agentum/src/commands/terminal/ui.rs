@@ -466,8 +466,25 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
             } else {
                 Style::default().bg(p.panel_bg).fg(p.fg)
             };
-            let dot_glyph = if is_active { "●" } else { "○" };
-            let dot_color = if is_active { p.success } else { p.muted };
+            // Live status comes from `app.clients`. The dot reflects
+            // both reachability and active-ness: filled green = active
+            // & live, hollow = peer & live, red = unreachable, amber
+            // = login needed. Never shows "live but not active" with
+            // the same color as "active" — they're functionally
+            // different (active = default for new sessions).
+            let status = app
+                .clients
+                .get(entry.name.as_str())
+                .map(|e| e.status);
+            use super::app::EndpointStatus;
+            let (dot_glyph, dot_color) = match (status, is_active) {
+                (Some(EndpointStatus::Live), true) => ("●", p.success),
+                (Some(EndpointStatus::Live), false) => ("○", p.success),
+                (Some(EndpointStatus::Unreachable), _) => ("●", p.error),
+                (Some(EndpointStatus::LoginNeeded), _) => ("●", p.warning),
+                (None, true) => ("●", p.success),
+                (None, false) => ("○", p.muted),
+            };
             let mut spans = vec![
                 Span::raw("   "),
                 Span::styled(dot_glyph.to_string(), Style::default().fg(dot_color)),
@@ -494,6 +511,23 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
                     "  default".to_string(),
                     Style::default().fg(p.accent),
                 ));
+            }
+            // Visible reachability label so the user doesn't have to
+            // hover or guess what the dot color means.
+            match status {
+                Some(EndpointStatus::Unreachable) => {
+                    spans.push(Span::styled(
+                        "  unreachable".to_string(),
+                        Style::default().fg(p.error),
+                    ));
+                }
+                Some(EndpointStatus::LoginNeeded) => {
+                    spans.push(Span::styled(
+                        "  login needed".to_string(),
+                        Style::default().fg(p.warning),
+                    ));
+                }
+                _ => {}
             }
             items.push(ListItem::new(Line::from(spans)).style(row_style));
         }
@@ -550,12 +584,21 @@ fn render_tree_row(
             let arrow = if g.expanded { "▾" } else { "▸" };
             // Show the project name (basename) rather than the full path —
             // the full workdir is still visible in the title bar / status.
+            // Multi-endpoint runs prepend `@profile · ` so the user can
+            // tell which daemon owns this workdir at a glance.
             let label = super::app::group_label(&g.workdir);
-            ListItem::new(Line::from(vec![
-                Span::raw(format!(" {arrow} ")),
-                Span::styled(label, Style::default().add_modifier(Modifier::BOLD)),
-            ]))
-            .style(row_style)
+            let mut spans = vec![Span::raw(format!(" {arrow} "))];
+            if !g.profile.is_empty() {
+                spans.push(Span::styled(
+                    format!("@{}  ", g.profile),
+                    Style::default().fg(p.accent_alt),
+                ));
+            }
+            spans.push(Span::styled(
+                label,
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+            ListItem::new(Line::from(spans)).style(row_style)
         }
         Row::Leaf { group, leaf } => {
             let id = app.tree.groups[group].sessions[leaf];

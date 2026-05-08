@@ -4,6 +4,9 @@
   import { FitAddon } from '@xterm/addon-fit';
   import '@xterm/xterm/css/xterm.css';
   import { api } from '$lib/api';
+  import { wsUrlForProfile } from '$lib/profiles';
+  import { sessions } from '$stores/sessions';
+  import { get } from 'svelte/store';
 
   interface Props {
     sessionId: string;
@@ -129,7 +132,18 @@
     } catch { /* leave resizeSupported = false */ }
     if (destroyed) return;
 
-    ws = new WebSocket(api.streamUrl(sessionId));
+    // Route the WS to the endpoint that owns this session, not just
+    // the active profile. Look up the session's profile tag in the
+    // store; missing tag means a single-endpoint flow and we fall
+    // back to `api.streamUrl` (active profile / current origin).
+    const owner = get(sessions).items.find((s) => s.id === sessionId);
+    const wsUrl = owner?.profile
+      ? wsUrlForProfile(
+          owner.profile,
+          `/api/sessions/${encodeURIComponent(sessionId)}/stream`
+        )
+      : api.streamUrl(sessionId);
+    ws = new WebSocket(wsUrl);
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {

@@ -43,6 +43,16 @@ export interface Session {
   state?: SessionState;
   /** User-toggled "favorite" — sorts to the top of every list. */
   pinned?: boolean;
+  /* --- Multi-endpoint aggregation. Tagged client-side by the
+     sessions store; not on the wire. The id matches a `Profile.id`
+     in `lib/profiles.ts`. Empty / undefined for sessions returned
+     from the active profile or for older single-endpoint flows. */
+  /** Owning endpoint profile id. Used by FleetRow's pill + the
+   *  per-session terminal page to build the right WS URL. */
+  profile?: string;
+  /** Display label for the owning profile, captured at fetch time
+   *  so renderers don't have to re-derive from the profile store. */
+  profile_label?: string;
 }
 
 export interface NewSession {
