@@ -1,0 +1,27 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+
+# Crawl-delay: 1
+
+Sitemap: https://agentum.dev/sitemap.xml
+Sitemap: https://agentum.dev/sitemap-news.xml
+
+# AI crawlers — allow for discovery
+User-agent: GPTBot
+Allow: /
+
+User-agent: Claude-Web
+Allow: /
+
+User-agent: anthropic-ai
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /

@@ -3,7 +3,36 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Agentum — A control plane for AI coding agents</title>
+
+<!-- Primary -->
+<title>Agentum — Self-Hosted Control Plane for AI Coding Agents | Open Source</title>
+<meta name="description" content="Agentum is a self-hosted control plane for AI coding agents. One Rust binary, one dashboard — spawn Claude Code, Codex, Gemini, and OpenCode in tmux sessions. Keep your agents running 24/7 on your own machine. Open source, MIT license." />
+<meta name="keywords" content="AI coding agents, Claude Code, Codex, Gemini, OpenCode, tmux, self-hosted, AI agent orchestration, PWA dashboard, Rust, Svelte, open source, agent management, terminal multiplexer, AI automation, coding agent control plane" />
+<meta name="author" content="Mateo Cerquetella" />
+<meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1" />
+<meta name="theme-color" content="#0b0b0b" />
+<link rel="canonical" href="https://agentum.dev" />
+
+<!-- Open Graph -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Agentum" />
+<meta property="og:title" content="Agentum — Self-Hosted Control Plane for AI Coding Agents" />
+<meta property="og:description" content="Keep your AI agents running even when you close your laptop. Self-hosted, single binary, open source. Built by a developer who just wanted his agents to survive a closed MacBook lid." />
+<meta property="og:url" content="https://agentum.dev" />
+<meta property="og:locale" content="en_US" />
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:site" content="@0xmalloc" />
+<meta name="twitter:creator" content="@0xmalloc" />
+<meta name="twitter:title" content="Agentum — Self-Hosted AI Agent Control Plane" />
+<meta name="twitter:description" content="One Rust binary, one dashboard — spawn Claude Code, Codex, Gemini, and OpenCode in tmux. Keep your agents running 24/7. Open source, MIT." />
+
+<!-- Geo -->
+<meta name="geo.region" content="AR" />
+<meta name="geo.placename" content="Argentina" />
+
+<!-- Preconnects -->
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -1157,6 +1186,89 @@
   .gap-32 { display: grid; gap: 32px; }
   .copy-flash { color: var(--green) !important; }
 </style>
+<!-- JSON-LD Structured Data -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Agentum",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Linux, macOS",
+  "description": "Self-hosted control plane for AI coding agents. One Rust binary, one dashboard — spawn Claude Code, Codex, Gemini, and OpenCode in tmux sessions.",
+  "url": "https://agentum.dev",
+  "author": {
+    "@type": "Person",
+    "name": "Mateo Cerquetella",
+    "url": "https://github.com/mateocerquetella"
+  },
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  },
+  "license": "https://opensource.org/licenses/MIT",
+  "softwareVersion": "0.7.5",
+  "datePublished": "2026-04-01",
+  "dateModified": "2026-05-08",
+  "inLanguage": "en",
+  "featureList": "AI agent orchestration, tmux session management, PWA dashboard, live terminal streaming, WebSocket API, kanban board, watchdog monitoring, TLS encryption, multi-endpoint support, theme engine",
+  "downloadUrl": "https://github.com/mateocerquetella/agentum/releases/latest",
+  "installUrl": "https://github.com/mateocerquetella/agentum",
+  "screenshot": "https://agentum.dev/screenshots/dashboard.png",
+  "mainEntityOfPage": "https://agentum.dev",
+  "isAccessibleForFree": true,
+  "keywords": "AI agents, Claude Code, tmux, self-hosted, PWA, Rust, Svelte, agent orchestration",
+  "browserRequirements": "Requires modern browser with WebSocket support"
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "What is Agentum?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Agentum is a self-hosted control plane for AI coding agents. It lets you spawn, watch, and manage Claude Code, Codex, Gemini, and OpenCode agents in tmux sessions — all from a single dashboard or terminal UI. Run it on your own machine, keep your agents working 24/7."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does Agentum require a subscription?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No. Agentum is open source (MIT license) and fully self-hosted. You run it on your own hardware — an old PC, a VPS, or a Raspberry Pi. No subscriptions, no cloud lock-in, no recurring costs."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What AI agents does Agentum support?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "First-class support for Claude Code, Codex, Gemini CLI, and Hermes Agent. Any CLI tool can be added as a passthrough agent. Multi-agent orchestration with real-time terminal streaming."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can I use Agentum on my phone?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Agentum includes a PWA dashboard installable on iOS Safari and Chrome Android. Check your agents' progress, send messages, and manage sessions from your phone — all self-hosted, no cloud dependencies."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How do I install Agentum?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Install with one command: curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh | sh. Or build from source with cargo install. Single 12 MB binary, runs on Linux and macOS."
+      }
+    }
+  ]
+}
+</script>
 </head>
 <body>
 
