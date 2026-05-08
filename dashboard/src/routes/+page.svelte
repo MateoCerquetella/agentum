@@ -684,7 +684,6 @@
     .hero-text { gap: 6px; }
     .hello { font-size: 20px; line-height: 1.15; margin: 0; }
     .narrative { gap: 4px; margin-top: 4px; font-size: 12px; }
-    .narrative :global(.row) { padding: 0 !important; }
     .hero-actions { display: none; }
 
     /* Drop the 3 summary cards on phone — their numbers are redundant
@@ -695,22 +694,29 @@
 
     .fleet { border-radius: 12px; }
     .fleet-h {
-      padding: 12px 14px;
+      padding: 10px 12px;
       flex-wrap: wrap;
-      gap: 8px;
+      gap: 6px;
     }
     .fleet-h .seg {
-      flex: 1 1 auto;
+      flex: 1 1 100%;
       justify-content: space-around;
     }
     .fleet-h .seg-btn {
       flex: 1;
-      padding: 8px 6px;
+      padding: 7px 6px;
       font-size: 10.5px;
     }
-    /* Hide the "Group" segmented control on phone — least-actionable
-       affordance, recovers a row of chrome. */
+    /* Hide the "Sort" and "Group" segmented controls on phone —
+       defaults to "Recent" which is what users want; they can always
+       pop open /sessions for the full filter/sort UI. Recovers two
+       rows of chrome so the fleet rows lift into the viewport. */
+    .fleet-h .seg:nth-of-type(2),
     .fleet-h .seg:last-of-type { display: none; }
+    /* Drop the secondary "·  X of Y · N streaming" line on phone —
+       redundant with the visible row count, and the title is already
+       just "Fleet". */
+    .fleet-h :global(.micro:nth-of-type(2)) { display: none; }
 
     /* .fleet-head is already hidden by the 1100px rule above. */
     .group-h { padding: 10px 14px 6px; }
