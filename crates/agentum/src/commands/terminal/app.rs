@@ -278,10 +278,18 @@ impl AddProfileForm {
 /// loop after re-resolving the API base + token from the named
 /// profile. The wrapper in `commands::terminal::run` owns the retry
 /// machinery so `run_loop` itself stays in one connection's lifetime.
+///
+/// `SwitchProfile.then` carries a follow-up the wrapper hands back
+/// to the next `run_loop` so a multi-step user action (e.g. submitting
+/// the New Session form against a different profile) survives the
+/// reconnect.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunOutcome {
     Quit,
-    SwitchProfile(String),
+    SwitchProfile {
+        name: String,
+        then: Option<PendingAfterSwitch>,
+    },
 }
 
 /// One observed error, surfaced to the user via the error overlay.
@@ -334,9 +342,15 @@ pub const YOLO_FLAG: &str = "--dangerously-skip-permissions";
 /// directory-picker sub-overlay), extra args, an "up after create" toggle,
 /// and a YOLO toggle that appends `--dangerously-skip-permissions` for
 /// permission-skipping agents.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewSessionForm {
     pub field: NewSessionField,
+    /// Endpoint profile this session will be created on. Empty string
+    /// means "current connection" (loopback or ad-hoc `--api`); a
+    /// non-empty value either matches the active profile (no-op on
+    /// submit) or triggers a soft restart that re-opens the form on
+    /// the new daemon. Tab cycles through `App.profiles`.
+    pub profile: String,
     pub name: String,
     pub tool: String,
     pub model: String,
@@ -372,8 +386,16 @@ pub struct DirEntryView {
 
 impl NewSessionForm {
     pub fn new(default_workdir: String) -> Self {
+        Self::with_profile(String::new(), default_workdir)
+    }
+
+    /// Constructor that lets the caller pre-fill the profile field.
+    /// Used by the run-loop to seed the form with the active profile
+    /// when the user opens it from any sidebar / palette / key path.
+    pub fn with_profile(default_profile: String, default_workdir: String) -> Self {
         Self {
-            field: NewSessionField::Name,
+            field: NewSessionField::Profile,
+            profile: default_profile,
             name: String::new(),
             tool: "claude".into(),
             model: String::new(),
@@ -888,10 +910,46 @@ pub struct App {
     /// reads this on `Quit` and re-enters the connect loop with the
     /// named profile instead of returning to the shell.
     pub pending_switch_profile: Option<String>,
+    /// Optional follow-up to fire after a profile switch lands. Used
+    /// when the user submitted the New Session form against a different
+    /// profile than the active one — the form state survives the
+    /// soft-restart so they finish the spawn on the right server.
+    pub pending_after_switch: Option<PendingAfterSwitch>,
     /// Name of the active profile (or `None` if the TUI was launched
     /// with an ad-hoc `--api`). Shown in the title bar so users
     /// targeting multiple endpoints can tell which one they're on.
     pub active_profile: Option<String>,
+    /// Configured endpoint profiles, cached at startup so the sidebar
+    /// can render an "Endpoints" section without re-reading the file
+    /// on every frame. Refreshed via `reload_profiles` after add /
+    /// remove from any surface (overlay, sidebar action, CLI).
+    pub profiles: Vec<ProfileEntry>,
+    /// Which sidebar section the cursor is on. Two sections share one
+    /// pane: an Endpoints list at the top, then the Sessions tree.
+    /// `j`/`k` flips between them at the boundaries.
+    pub tree_section: TreeSection,
+    /// Cursor index inside the Endpoints section (only meaningful when
+    /// `tree_section == TreeSection::Endpoints`).
+    pub endpoints_cursor: usize,
+}
+
+/// Which sidebar section currently has the cursor.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TreeSection {
+    Endpoints,
+    Sessions,
+}
+
+/// Carry-over data used when a profile switch needs to fire a follow-up
+/// action after the new connection lands. Today only one variant: re-
+/// open the New Session form on the freshly-connected daemon with the
+/// same fields the user already typed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PendingAfterSwitch {
+    /// Re-open the New Session overlay with this form pre-populated.
+    /// The Profile field gets normalised to the new active profile so
+    /// hitting Enter again creates without another switch.
+    OpenNewSession(Box<NewSessionForm>),
 }
 
 impl App {
@@ -959,7 +1017,37 @@ impl App {
             idle: HashSet::new(),
             agent_availability: None,
             pending_switch_profile: None,
+            pending_after_switch: None,
             active_profile: None,
+            profiles: Vec::new(),
+            tree_section: TreeSection::Sessions,
+            endpoints_cursor: 0,
+        }
+    }
+
+    /// Load the on-disk profiles into `app.profiles`. Called once at
+    /// run-loop start and again any time the user adds/removes a
+    /// profile via the sidebar or overlay so the sidebar stays in
+    /// sync without re-reading the file every frame. Errors are
+    /// non-fatal — they leave `profiles` empty and the sidebar
+    /// renders an "no endpoints" hint.
+    pub fn reload_profiles(&mut self) {
+        self.profiles = match super::profiles::Profiles::load() {
+            Ok(store) => store
+                .list()
+                .into_iter()
+                .map(|(name, p, is_default)| ProfileEntry {
+                    name,
+                    url: p.url,
+                    fingerprint: p.fingerprint,
+                    is_default,
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        // Bring the cursor back into range when the list shrank under it.
+        if self.endpoints_cursor >= self.profiles.len() {
+            self.endpoints_cursor = self.profiles.len().saturating_sub(1);
         }
     }
 
@@ -1411,10 +1499,29 @@ pub async fn run_loop(
     sessions: Vec<Session>,
     sound_muted: bool,
     active_profile: Option<String>,
+    pending: Option<PendingAfterSwitch>,
 ) -> Result<RunOutcome> {
     let mut app = App::new(sessions);
     app.sound_muted_cli = sound_muted;
-    app.active_profile = active_profile;
+    app.active_profile = active_profile.clone();
+    app.reload_profiles();
+
+    // Apply a follow-up action queued by the previous run-loop's
+    // profile-switch path. Today only one variant: re-open the
+    // New Session form pre-filled. The form's profile field gets
+    // normalised to the now-active profile so the user's next Enter
+    // creates immediately instead of triggering another switch.
+    if let Some(action) = pending {
+        match action {
+            PendingAfterSwitch::OpenNewSession(form) => {
+                let mut form = *form;
+                form.profile = active_profile.clone().unwrap_or_default();
+                form.error = None;
+                form.submitting = false;
+                app.overlay = Overlay::NewSession(Box::new(form));
+            }
+        }
+    }
 
     // One-shot probe of the daemon's PATH so the New Session form can
     // grey out first-class adapters the user hasn't installed (cursor
@@ -1547,7 +1654,8 @@ pub async fn run_loop(
             // wrapper in `commands::terminal::run` can reconnect to
             // the new endpoint without re-entering the OS shell.
             if let Some(name) = app.pending_switch_profile.take() {
-                return Ok(RunOutcome::SwitchProfile(name));
+                let then = app.pending_after_switch.take();
+                return Ok(RunOutcome::SwitchProfile { name, then });
             }
             return Ok(RunOutcome::Quit);
         }
@@ -3517,8 +3625,10 @@ fn handle_profiles_key(app: &mut App, key: KeyEvent) {
                 // Schedule a soft restart with the chosen profile.
                 // run_loop reads `pending_switch_profile` on quit and
                 // `commands::terminal::run` re-enters with the new
-                // endpoint.
+                // endpoint. `pending_after_switch` stays None — the
+                // overlay path doesn't carry a follow-up.
                 app.pending_switch_profile = Some(entry.name.clone());
+                app.pending_after_switch = None;
                 app.should_quit = true;
                 return;
             }

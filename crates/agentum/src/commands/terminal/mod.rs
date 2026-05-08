@@ -115,14 +115,21 @@ pub async fn run(opts: Options) -> Result<()> {
     let mut client = client;
     let mut sessions = sessions;
     let mut active_profile_name = current_opts.profile.clone();
+    let mut pending_after: Option<app::PendingAfterSwitch> = None;
     loop {
         let sound_muted =
             current_opts.no_sound || std::env::var_os("AGENTUM_TUI_NO_SOUND").is_some();
-        let outcome =
-            run_tui_session(client, sessions, sound_muted, active_profile_name.clone()).await?;
+        let outcome = run_tui_session(
+            client,
+            sessions,
+            sound_muted,
+            active_profile_name.clone(),
+            pending_after.take(),
+        )
+        .await?;
         match outcome {
             app::RunOutcome::Quit => return Ok(()),
-            app::RunOutcome::SwitchProfile(name) => {
+            app::RunOutcome::SwitchProfile { name, then } => {
                 // Re-resolve the entire connection from the chosen
                 // profile and re-enter the TUI. Errors here drop back
                 // into the same connect-or-onboard loop the cold start
@@ -155,6 +162,7 @@ pub async fn run(opts: Options) -> Result<()> {
                 client = connected.0;
                 sessions = connected.2;
                 active_profile_name = current_opts.profile.clone();
+                pending_after = then;
             }
         }
     }
@@ -168,6 +176,7 @@ async fn run_tui_session(
     sessions: Vec<agentum_core::Session>,
     sound_muted: bool,
     active_profile: Option<String>,
+    pending: Option<app::PendingAfterSwitch>,
 ) -> Result<app::RunOutcome> {
     enable_raw_mode().context("enable raw mode")?;
     let mut stdout = io::stdout();
@@ -186,7 +195,15 @@ async fn run_tui_session(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("init ratatui terminal")?;
 
-    app::run_loop(&mut terminal, client, sessions, sound_muted, active_profile).await
+    app::run_loop(
+        &mut terminal,
+        client,
+        sessions,
+        sound_muted,
+        active_profile,
+        pending,
+    )
+    .await
 }
 
 struct TerminalGuard;

@@ -4,6 +4,39 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] — 2026-05-08
+
+### Added
+- **Endpoints section in the TUI sidebar.** The tree pane now hosts
+  two sections: an Endpoints list at the top (each configured
+  profile, default marked) and the Sessions tree below. `j` / `k`
+  flips between them at the boundaries; cached at startup into
+  `app.profiles` so the file is read once, not per frame, and
+  refreshed via `reload_profiles` after add / remove from any
+  surface (overlay, sidebar action, CLI).
+- **New Session form survives a profile switch.** Submitting the
+  form against a different profile than the active one now
+  carries the typed-in fields through the soft-restart via a new
+  `PendingAfterSwitch::OpenNewSession` outcome. The `Profile`
+  field gets normalised to the freshly-connected daemon so the
+  user's next `Enter` creates immediately instead of ricocheting
+  through another switch.
+
+### Fixed
+- **More room for the terminal on the mobile session detail page.**
+  Three small CSS changes that compound: SessionRail's mobile
+  `max-height` drops from `50dvh` to `28dvh` (the rail's `.rb`
+  body already scrolls, so users keep access to the full meta
+  block via drag); the desktop `term-bar` row is hidden on phone
+  because its info (tool / workdir / model / tmux / ctx%) is
+  already covered by the toolbar pills and the rail's KV table —
+  dropping the 30px chrome hands the height back to the
+  terminal; `term-shell` gutters tighten from `8px 8px 50px` to
+  `4px 4px 8px` (the absolute-bottom input bar's stub padding
+  was already overridden separately on phone). Net effect: the
+  xterm canvas fills near the chrome on a phone instead of
+  fighting a half-screen rail and a redundant header strip.
+
 ## [0.7.1] — 2026-05-08
 
 Patch on top of 0.7.0 closing the TUI ↔ dashboard parity gaps in the
