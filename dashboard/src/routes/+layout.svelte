@@ -16,6 +16,7 @@
   import { startHostMetrics } from '$stores/host';
   import { startAttentionBridge } from '$stores/attention';
   import { tweaks, applyTweaks } from '$stores/tweaks';
+  import { startThemeBridge, pullPreferences } from '$stores/theme-bridge';
   import { get as getStore } from 'svelte/store';
   import {
     palette, togglePalette, closePalette,
@@ -81,9 +82,19 @@
   onMount(() => {
     // Push the persisted accent + density onto :root before first paint.
     applyTweaks(getStore(tweaks));
-    window.addEventListener('keydown', onKey);
+    // Capture-phase listener so Escape closes the palette/shortcuts even
+    // when an embedded xterm.js pane has focus and would otherwise call
+    // preventDefault on the keydown before it bubbles up.
+    window.addEventListener('keydown', onKey, true);
+    // Start the dashboard↔TUI theme bridge. `startThemeBridge` is
+    // idempotent and safe pre-auth; `pullPreferences` no-ops when the
+    // request fails (older daemon, unauthenticated, offline).
+    startThemeBridge();
     const unsub = authState.subscribe((s) => {
       if (s === 'ok') {
+        // Auth just landed — sync from the server so the active theme
+        // matches whatever the TUI last persisted.
+        void pullPreferences();
         connectEvents();
         startEventBridge();
         startHostMetrics();
@@ -94,7 +105,7 @@
       }
     });
     return () => {
-      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onKey, true);
       unsub();
     };
   });

@@ -9,12 +9,14 @@ use tui_term::widget::PseudoTerminal;
 
 use std::time::SystemTime;
 
+use agentum_core::Status as SessionStatus;
 use agentum_core::transcript::{AgentTaskState, TaskStatus, TodoStatus};
 
 use super::app::{
-    App, ConnState, DirPickerState, ErrorEntry, Focus, NewSessionField, NewSessionForm, NotifKind,
-    Notification, Overlay, PendingAction, RenameState, Row, SettingsRow, SettingsState, Side,
-    palette_catalog, status_dot,
+    AddProfileField, AddProfileForm, App, ConnState, DirPickerState, ErrorEntry, Focus,
+    NewSessionField, NewSessionForm, NotifKind, Notification, Overlay, PendingAction,
+    ProfilesOverlay, RenameState, Row, SettingsRow, SettingsState, Side, palette_catalog,
+    status_dot,
 };
 use super::extensions::{self, Extension, LAZYGIT};
 use super::iometer::{fmt_bytes, fmt_rate};
@@ -312,10 +314,20 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         Overlay::LazygitInstall => draw_install_overlay(f, f.area(), &LAZYGIT, p),
         Overlay::Palette => draw_palette_overlay(f, f.area(), app, p),
         Overlay::Errors => draw_errors_overlay(f, f.area(), app, p),
-        Overlay::NewSession(form) => draw_new_session_overlay(f, f.area(), form, p),
+        Overlay::NewSession(form) => {
+            // Pass `app.tool_available(...)` through as a precomputed
+            // bool so the renderer can show "(not installed)" next to
+            // the Tool field without taking a borrow on `app` itself
+            // (the overlay's `form` is already a borrow against `app`).
+            let tool_unavailable = !app.tool_available(form.tool.trim());
+            draw_new_session_overlay(f, f.area(), form, tool_unavailable, p)
+        }
         Overlay::Confirm(action) => draw_confirm_overlay(f, f.area(), action, p),
         Overlay::Settings(state) => draw_settings_overlay(f, f.area(), state, &app.prefs, p),
         Overlay::Rename(state) => draw_rename_overlay(f, f.area(), state, p),
+        Overlay::Profiles(state) => {
+            draw_profiles_overlay(f, f.area(), state, app.active_profile.as_deref(), p)
+        }
     }
 }
 
@@ -342,9 +354,17 @@ fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     // chip used to live in the bottom status bar; pulling it up here
     // keeps the bottom row reserved for non-error feedback while still
     // surfacing "something failed — press !" in the user's eye-line.
+    // Endpoint suffix surfaces the active profile so users juggling
+    // multiple agentum servers (local + VPS) can see which one drives
+    // the current pane without opening Ctrl-O. Hidden when no profile
+    // is active (loopback, ad-hoc `--api`) to keep the bar tidy.
+    let endpoint_suffix = match app.active_profile.as_deref() {
+        Some(name) => format!(" · @{name}"),
+        None => String::new(),
+    };
     let title = match app.selected_session() {
-        Some(s) => format!(" agentum · {} ", s.name),
-        None => " agentum · no session selected ".to_string(),
+        Some(s) => format!(" agentum · {}{endpoint_suffix} ", s.name),
+        None => format!(" agentum · no session selected{endpoint_suffix} "),
     };
     let title_span = Span::styled(
         title,
@@ -546,6 +566,42 @@ fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         let hint = Paragraph::new("Select a session on the left and press Space.")
             .style(Style::default().fg(p.muted).bg(p.panel_bg))
             .wrap(Wrap { trim: true });
+        f.render_widget(hint, inner);
+        return;
+    }
+
+    // Stopped/crashed session in the focused pane: nothing useful to
+    // render from the (closed) WS, and "press u to start" is hard to
+    // discover without first switching to tree focus. Surface the
+    // start affordance front-and-centre so Enter / u kick the agent
+    // back to life from right here.
+    if let Some(s) = app.selected_session()
+        && matches!(s.status, SessionStatus::Stopped | SessionStatus::Crashed)
+    {
+        let label = if matches!(s.status, SessionStatus::Crashed) {
+            "crashed"
+        } else {
+            "stopped"
+        };
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("  ● {} — `{}`", label, s.name),
+                Style::default().fg(p.warning).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  press  u  or  Enter  to start",
+                Style::default().fg(p.fg_strong),
+            )),
+            Line::from(Span::styled(
+                "  Ctrl-E to focus the tree · Shift-D to remove",
+                Style::default().fg(p.muted),
+            )),
+        ];
+        let hint = Paragraph::new(lines)
+            .style(Style::default().bg(p.panel_bg))
+            .wrap(Wrap { trim: false });
         f.render_widget(hint, inner);
         return;
     }
@@ -1351,6 +1407,149 @@ fn draw_rename_overlay(f: &mut Frame<'_>, area: Rect, state: &RenameState, p: &P
     overlay_box(f, area, " rename ", lines, 60, p);
 }
 
+fn draw_profiles_overlay(
+    f: &mut Frame<'_>,
+    area: Rect,
+    state: &ProfilesOverlay,
+    active: Option<&str>,
+    p: &Palette,
+) {
+    // Two visual modes: a list of profiles, or the inline add-form.
+    // Shared frame so the size doesn't jump between them.
+    if let Some(form) = &state.add_form {
+        draw_profiles_add_form(f, area, form, p);
+        return;
+    }
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(head("Endpoints", p));
+    lines.push(Line::from(""));
+
+    if let Some(err) = state.error.as_ref() {
+        lines.push(Line::from(Span::styled(
+            format!("  ⚠ {err}"),
+            Style::default().fg(p.error),
+        )));
+        lines.push(Line::from(""));
+    }
+
+    if state.entries.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  no profiles defined".to_string(),
+            Style::default().fg(p.muted),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  press `a` to add the first one".to_string(),
+            Style::default().fg(p.muted),
+        )));
+    } else {
+        for (i, entry) in state.entries.iter().enumerate() {
+            let selected = i == state.cursor;
+            let is_active = active == Some(entry.name.as_str());
+            // Marker conveys two facts: which one's selected (▶) and
+            // which one's the active connection (●). The default
+            // pointer surfaces as a separate "default" suffix.
+            let marker: &str = if selected { "▶ " } else { "  " };
+            let active_dot: &str = if is_active { "● " } else { "  " };
+            let mut row_spans = vec![
+                Span::styled(
+                    marker.to_string(),
+                    Style::default()
+                        .fg(if selected { p.accent } else { p.muted })
+                        .add_modifier(if selected {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                ),
+                Span::styled(active_dot.to_string(), Style::default().fg(p.success)),
+                Span::styled(
+                    entry.name.clone(),
+                    Style::default()
+                        .fg(if selected { p.fg_strong } else { p.fg })
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ];
+            if entry.is_default {
+                row_spans.push(Span::styled(
+                    "  · default".to_string(),
+                    Style::default().fg(p.accent),
+                ));
+            }
+            if entry.fingerprint.is_some() {
+                row_spans.push(Span::styled(
+                    "  · pinned".to_string(),
+                    Style::default().fg(p.muted),
+                ));
+            }
+            lines.push(Line::from(row_spans));
+            lines.push(Line::from(Span::styled(
+                format!("    {}", entry.url),
+                Style::default().fg(p.muted),
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Enter switch · a add · d remove · Esc close".to_string(),
+        Style::default().fg(p.muted),
+    )));
+
+    overlay_box(f, area, " endpoints ", lines, 80, p);
+}
+
+fn draw_profiles_add_form(f: &mut Frame<'_>, area: Rect, form: &AddProfileForm, p: &Palette) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(head("Add endpoint", p));
+    lines.push(Line::from(""));
+    push_form_field(
+        &mut lines,
+        "Name",
+        &form.name,
+        form.field == AddProfileField::Name,
+        "vps",
+        p,
+    );
+    push_form_field(
+        &mut lines,
+        "URL",
+        &form.url,
+        form.field == AddProfileField::Url,
+        "https://my-vps.example.com:8822",
+        p,
+    );
+    push_form_field_with_hint(
+        &mut lines,
+        "Fingerprint",
+        &form.fingerprint,
+        form.field == AddProfileField::Fingerprint,
+        "AB:CD:…",
+        Some("(optional — leave blank to prompt on first connect)"),
+        p,
+    );
+    push_toggle_field(
+        &mut lines,
+        "Set as default",
+        form.set_default,
+        form.field == AddProfileField::SetDefault,
+        p,
+    );
+    if let Some(err) = form.error.as_ref() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  ⚠ {err}"),
+            Style::default().fg(p.error),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Tab next · Space toggle · Enter save · Esc back".to_string(),
+        Style::default().fg(p.muted),
+    )));
+    overlay_box(f, area, " add endpoint ", lines, 80, p);
+}
+
 fn draw_errors_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let w = 100.min(area.width.saturating_sub(4));
     let h = 28.min(area.height.saturating_sub(4));
@@ -1469,7 +1668,13 @@ fn format_short_age(at: SystemTime) -> String {
     }
 }
 
-fn draw_new_session_overlay(f: &mut Frame<'_>, area: Rect, form: &NewSessionForm, p: &Palette) {
+fn draw_new_session_overlay(
+    f: &mut Frame<'_>,
+    area: Rect,
+    form: &NewSessionForm,
+    tool_unavailable: bool,
+    p: &Palette,
+) {
     // If the directory picker is up, it owns the overlay box.
     if let Some(picker) = &form.picker {
         draw_dir_picker_overlay(f, area, picker, p);
@@ -1488,15 +1693,32 @@ fn draw_new_session_overlay(f: &mut Frame<'_>, area: Rect, form: &NewSessionForm
         "alpha",
         p,
     );
-    push_form_field_with_hint(
-        &mut lines,
-        "Tool",
-        &form.tool,
-        form.field == NewSessionField::Tool,
-        "claude",
-        Some("Tab cycles claude → codex → opencode → aider"),
-        p,
-    );
+    // The Tool field's hint normally lists the cycle order; when the
+    // typed name resolves to an uninstalled binary the hint is
+    // replaced by a red warning so the user sees the gating reason
+    // without having to submit and wait for an error toast. Mirrors
+    // the tile-dimming on the dashboard.
+    if tool_unavailable {
+        push_form_field_with_warn_hint(
+            &mut lines,
+            "Tool",
+            &form.tool,
+            form.field == NewSessionField::Tool,
+            "claude",
+            "(not installed on the daemon)",
+            p,
+        );
+    } else {
+        push_form_field_with_hint(
+            &mut lines,
+            "Tool",
+            &form.tool,
+            form.field == NewSessionField::Tool,
+            "claude",
+            Some("Tab cycles claude → codex → cursor → opencode → aider"),
+            p,
+        );
+    }
     push_form_field_with_hint(
         &mut lines,
         "Model",
@@ -1612,6 +1834,50 @@ fn push_form_field_with_hint(
         let mut spans = vec![Span::styled(
             format!("    {value}"),
             Style::default().fg(p.fg),
+        )];
+        if focused {
+            spans.push(Span::styled("▍", Style::default().fg(p.accent)));
+        }
+        Line::from(spans)
+    };
+    lines.push(value_line);
+}
+
+/// Same shape as `push_form_field_with_hint` but renders the hint in
+/// the palette's danger color. Used for the Tool field's "(not
+/// installed)" callout — see [`draw_new_session_overlay`].
+fn push_form_field_with_warn_hint(
+    lines: &mut Vec<Line<'static>>,
+    label: &str,
+    value: &str,
+    focused: bool,
+    placeholder: &str,
+    hint: &str,
+    p: &Palette,
+) {
+    let label_color = if focused { p.accent } else { p.muted };
+    let label_spans = vec![
+        Span::styled(
+            format!("  {label}"),
+            Style::default().fg(label_color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  {hint}"),
+            Style::default().fg(p.error).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    lines.push(Line::from(label_spans));
+    let value_line = if value.is_empty() && !focused {
+        Line::from(Span::styled(
+            format!("    {placeholder}"),
+            Style::default().fg(p.muted),
+        ))
+    } else {
+        let mut spans = vec![Span::styled(
+            format!("    {value}"),
+            // Tint the value itself to reinforce the warn state. The
+            // input is still editable; the colour is purely advisory.
+            Style::default().fg(p.error),
         )];
         if focused {
             spans.push(Span::styled("▍", Style::default().fg(p.accent)));

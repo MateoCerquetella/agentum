@@ -10,5 +10,6 @@ pub mod fs;
 pub mod health;
 pub mod host;
 pub mod notes;
+pub mod preferences;
 pub mod sessions;
 pub mod watchdog;

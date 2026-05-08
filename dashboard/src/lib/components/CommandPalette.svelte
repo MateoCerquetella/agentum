@@ -23,21 +23,87 @@
     swatch?: string;
     /** Marks the row with a check; used for the active theme. */
     selected?: boolean;
+    /** When true, render a chevron to hint this row pushes a sub-view. */
+    chevron?: boolean;
     action: () => void;
   };
+
+  type View = 'main' | 'themes';
 
   let inputEl: HTMLInputElement | null = $state(null);
   let highlight = $state(0);
   let entries = $state<Entry[]>([]);
   let filtered = $state<Entry[]>([]);
+  // Sub-view stack. Themes used to clutter the main list; now they live
+  // behind a "Themes…" entry that pushes the palette into a focused
+  // theme-picker view, similar to VS Code's "Color Theme" command.
+  let view = $state<View>('main');
+
+  function pushThemes() {
+    view = 'themes';
+    palette.update((s) => ({ ...s, query: '' }));
+  }
+
+  function popView() {
+    if (view !== 'main') {
+      view = 'main';
+      palette.update((s) => ({ ...s, query: '' }));
+    } else {
+      closePalette();
+    }
+  }
 
   function rebuild() {
     const out: Entry[] = [];
+    const activeId = get(tweaks).theme;
+
+    if (view === 'themes') {
+      const dark  = THEMES.filter(t => t.mode === 'dark');
+      const light = THEMES.filter(t => t.mode === 'light');
+      for (const t of dark) {
+        out.push({
+          id: `theme:${t.id}`,
+          title: t.label,
+          badge: 'theme',
+          section: 'Dark themes',
+          swatch: t.swatch,
+          selected: t.id === activeId,
+          action: () => { closePalette(); setTheme(t.id); }
+        });
+      }
+      for (const t of light) {
+        out.push({
+          id: `theme:${t.id}`,
+          title: t.label,
+          badge: 'theme',
+          section: 'Light themes',
+          swatch: t.swatch,
+          selected: t.id === activeId,
+          action: () => { closePalette(); setTheme(t.id); }
+        });
+      }
+      entries = out;
+      refilter();
+      return;
+    }
 
     // Built-in commands
     out.push({ id: 'cmd:shortcuts',             title: 'Show keyboard shortcuts (?)',   badge: 'cmd', action: () => { closePalette(); openShortcuts(); } });
     out.push({ id: 'cmd:new-session',            title: 'New agent…',                    badge: 'cmd', subtitle: 'agentum new', action: () => { closePalette(); openNewSession(); } });
     out.push({ id: 'cmd:spawn-shell',            title: 'Spawn plain shell (bash)',      badge: 'cmd', subtitle: 'TUI parity: t', action: () => { closePalette(); spawnShellFromPalette(); } });
+    // "Themes…" pushes a focused sub-view so the main list stays tidy
+    // even with 14+ themes installed. The active theme name shows as
+    // subtitle so the current pick is visible without drilling in.
+    const activeTheme = THEMES.find(t => t.id === activeId);
+    out.push({
+      id: 'cmd:themes',
+      title: 'Themes…',
+      badge: 'cmd',
+      subtitle: activeTheme?.label,
+      swatch: activeTheme?.swatch,
+      chevron: true,
+      action: pushThemes
+    });
     out.push({ id: 'cmd:settings',               title: 'Open settings',                 badge: 'cmd', action: () => goto('/settings') });
 
     // Pages
@@ -47,35 +113,6 @@
     ];
     for (const [href, label] of pages) {
       out.push({ id: `page:${href}`, title: `Go to ${label}`, badge: 'page', action: () => goto(href) });
-    }
-
-    // Themes — grouped under Dark / Light section headers. The first
-    // entry in each group carries a `section` label that renders as a
-    // non-selectable divider immediately above it.
-    const activeId = get(tweaks).theme;
-    const dark  = THEMES.filter(t => t.mode === 'dark');
-    const light = THEMES.filter(t => t.mode === 'light');
-    for (const t of dark) {
-      out.push({
-        id: `theme:${t.id}`,
-        title: `Theme · ${t.label}`,
-        badge: 'theme',
-        section: 'Dark themes',
-        swatch: t.swatch,
-        selected: t.id === activeId,
-        action: () => { closePalette(); setTheme(t.id); }
-      });
-    }
-    for (const t of light) {
-      out.push({
-        id: `theme:${t.id}`,
-        title: `Theme · ${t.label}`,
-        badge: 'theme',
-        section: 'Light themes',
-        swatch: t.swatch,
-        selected: t.id === activeId,
-        action: () => { closePalette(); setTheme(t.id); }
-      });
     }
 
     // Sessions
@@ -156,15 +193,20 @@
   }
 
   let unsubPalette: (() => void) | null = null;
+  let lastOpen = false;
 
   onMount(() => {
     unsubPalette = palette.subscribe((s) => {
-      if (s.open) {
-        // refresh data & entries each open
+      // Only react to open transitions — the previous version re-ran
+      // loadSessions/rebuild/focus on EVERY query keystroke, which both
+      // stole focus and reset the highlight cursor mid-search.
+      if (s.open && !lastOpen) {
+        view = 'main';
         loadSessions();
         rebuild();
         queueMicrotask(() => inputEl?.focus());
       }
+      lastOpen = s.open;
     });
   });
   onDestroy(() => unsubPalette?.());
@@ -172,6 +214,11 @@
   // Re-filter whenever the query or any source store changes.
   $effect(() => {
     if (!$palette.open) return;
+    // tracked deps: query, sessions, view, theme
+    void $palette.query;
+    void $sessions;
+    void view;
+    void $tweaks.theme;
     rebuild();
   });
 
@@ -183,7 +230,12 @@
   function onKeyDown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
       e.preventDefault();
-      closePalette();
+      e.stopPropagation();
+      popView();
+    } else if (e.key === 'Backspace' && view === 'themes' && $palette.query === '') {
+      // Backspace inside themes sub-view with empty query pops back to main.
+      e.preventDefault();
+      popView();
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
       highlight = Math.min(highlight + 1, filtered.length - 1);
@@ -193,16 +245,16 @@
     } else if (e.key === 'Enter') {
       e.preventDefault();
       const ent = filtered[highlight];
-      if (ent) {
-        closePalette();
-        ent.action();
-      }
+      if (ent) ent.action();
     }
   }
 
   function pick(e: Entry) {
-    closePalette();
     e.action();
+  }
+
+  function onBackdropClick() {
+    closePalette();
   }
 </script>
 
@@ -210,15 +262,23 @@
   <div
     class="backdrop"
     role="presentation"
-    onclick={closePalette}
+    onpointerdown={onBackdropClick}
     onkeydown={onKeyDown}
     tabindex="-1"
   ></div>
   <div class="palette" role="dialog" aria-label="Command palette">
+    {#if view === 'themes'}
+      <button type="button" class="crumb mono" onclick={popView} title="Back (Esc)">
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9.5 4l-4 4 4 4"/>
+        </svg>
+        Themes
+      </button>
+    {/if}
     <input
       class="search mono"
       type="text"
-      placeholder="Type a command, or jump to a session, board item, note…"
+      placeholder={view === 'themes' ? 'Filter themes…' : 'Type a command, or jump to a session, board item, note…'}
       value={$palette.query}
       oninput={onInput}
       onkeydown={onKeyDown}
@@ -253,11 +313,16 @@
             </svg>
           {/if}
           {#if e.subtitle}<span class="sub mono">{e.subtitle}</span>{/if}
+          {#if e.chevron}
+            <svg class="chev" width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 4l4 4-4 4"/>
+            </svg>
+          {/if}
         </button>
       {/each}
     </div>
     <footer class="hint mono">
-      <span>↑↓</span> nav <span>↩</span> open <span>esc</span> close
+      <span>↑↓</span> nav <span>↩</span> open <span>esc</span> {view === 'themes' ? 'back' : 'close'}
     </footer>
   </div>
 {/if}
@@ -338,6 +403,30 @@
     flex-shrink: 0;
     margin-left: 0.4rem;
   }
+  .chev {
+    color: var(--muted);
+    flex-shrink: 0;
+    margin-left: 0.4rem;
+  }
+  /* Sub-view crumb above the search input — clicking pops back to the
+     main palette. Mirrors VS Code's command-palette nested views. */
+  .crumb {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    align-self: flex-start;
+    margin: 0.5rem 0.6rem 0;
+    padding: 0.25rem 0.55rem;
+    border-radius: 4px;
+    background: transparent;
+    border: 0;
+    color: var(--muted);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+  }
+  .crumb:hover { color: var(--text); background: var(--surface-2); }
   /* Non-selectable section divider; sits between filtered theme groups. */
   .section {
     font-size: 0.65rem;

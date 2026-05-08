@@ -129,7 +129,23 @@ pub fn adapter_for(tool: &str) -> Box<dyn ToolAdapter> {
 }
 
 /// Names of the first-class executors agentum ships with built-in support for.
+/// Each entry has a matching adapter in [`adapter_for`] with hand-tuned
+/// argv, YOLO flag, and watchdog signatures.
 pub const FIRST_CLASS: &[&str] = &["claude", "codex", "cursor", "gemini", "hermes"];
+
+/// Names that the dashboard / TUI agent picker shows but that route
+/// through [`PassthroughAdapter`] instead of a hand-tuned adapter.
+/// They still belong in the availability probe so the picker can grey
+/// them out when the binary isn't installed; their YOLO toggle is a
+/// no-op until someone verifies the right flag spelling.
+pub const PASSTHROUGH_PROBED: &[&str] = &["opencode", "aider"];
+
+/// Every tool name the `/api/agents` probe should report. Order matters
+/// — both surfaces render entries in this sequence so the picker stays
+/// stable across releases.
+pub fn probed_tools() -> impl Iterator<Item = &'static str> {
+    FIRST_CLASS.iter().chain(PASSTHROUGH_PROBED.iter()).copied()
+}
 
 /// Tool name → expected binary name on `PATH`. Used by the agent-availability
 /// probe so the TUI / dashboard can gate selection on whether the user

@@ -246,6 +246,36 @@ impl Client {
         Ok(h.capabilities)
     }
 
+    /// PUT the shared user preferences blob — keeps the dashboard's
+    /// theme picker (and any future shared knob) in sync with the TUI.
+    /// Best-effort: failures are logged by the caller as a status hint
+    /// and the local file write is what actually persists the change.
+    pub async fn put_preferences(
+        &self,
+        theme: Option<&str>,
+        tui_theme: Option<&str>,
+    ) -> Result<()> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            theme: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            tui_theme: Option<&'a str>,
+        }
+        let url = self.base.join("/api/preferences")?;
+        let resp = self
+            .http
+            .put(url)
+            .bearer_auth(&self.token)
+            .json(&Body { theme, tui_theme })
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            bail!("preferences returned {}", resp.status());
+        }
+        Ok(())
+    }
+
     pub async fn me(&self) -> Result<String> {
         let url = self.base.join("/api/auth/me")?;
         let resp = self.http.get(url).bearer_auth(&self.token).send().await?;

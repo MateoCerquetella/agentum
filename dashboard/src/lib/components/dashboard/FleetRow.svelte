@@ -29,6 +29,24 @@
     }
   }
 
+  // Inline start for stopped/crashed sessions — saves the user a trip
+  // to the detail page just to kick a dormant terminal back to life.
+  let starting = $state(false);
+  const isStopped = $derived(s.status === 'stopped' || s.status === 'crashed');
+  async function startSession(e: MouseEvent) {
+    e.stopPropagation();
+    if (starting) return;
+    starting = true;
+    try {
+      await api.startSession(s.id);
+      await loadSessions();
+    } catch (err) {
+      console.error('start session failed', err);
+    } finally {
+      starting = false;
+    }
+  }
+
   const lifecycle = $derived(deriveState(s));
   const ctx = $derived(ctxOf(s));
   const stateColor = $derived(
@@ -118,7 +136,19 @@
   </div>
 
   <div class="open">
-    <button type="button" onclick={openClick}>Open</button>
+    {#if isStopped}
+      <button
+        type="button"
+        class="start"
+        onclick={startSession}
+        disabled={starting}
+        title="Start session"
+      >
+        {starting ? '…' : 'Start'}
+      </button>
+    {:else}
+      <button type="button" onclick={openClick}>Open</button>
+    {/if}
   </div>
 </div>
 
@@ -302,6 +332,16 @@
     border-color: var(--cta);
     background: color-mix(in srgb, var(--cta) 12%, transparent);
   }
+  .open button.start {
+    color: var(--green);
+    border-color: color-mix(in srgb, var(--green) 45%, transparent);
+  }
+  .open button.start:hover:not(:disabled) {
+    color: var(--bg);
+    background: var(--green);
+    border-color: var(--green);
+  }
+  .open button.start:disabled { opacity: 0.6; cursor: wait; }
 
   /* Tablet: drop tokens/cost numerics — they're in the summary cards
      already and the per-row figures aren't actionable from here. The

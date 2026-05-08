@@ -31,7 +31,7 @@ mod ui;
 // `app` module public.
 pub use app::{YOLO_FLAG, YOLO_TOOLS};
 
-use std::io;
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -71,26 +71,104 @@ pub struct Options {
 }
 
 pub async fn run(opts: Options) -> Result<()> {
-    // Profile pre-resolution: an explicit `--profile` (or, failing
-    // that, the file's `default = …`) supplies sane defaults for
-    // `--api` / `--fingerprint` / `--insecure` so the rest of the
-    // wiring stays unchanged. CLI flags still override profile-
-    // sourced values when both are set.
-    let opts = apply_profile(opts)?;
-    let base = resolve_base(opts.api.clone()).await?;
-    let trust = establish_trust(&base, &opts).await?;
-    let token = obtain_token(&base, &trust).await?;
+    // Connect-or-onboard loop: if the requested daemon (profile, --api,
+    // or loopback) doesn't answer, an interactive TTY user gets a
+    // numbered menu to add a remote endpoint and retry. Non-TTY
+    // invocations (CI, scripts) fall through to the same bail! they
+    // got before — the prompt would just hang.
+    let initial_opts = opts.clone();
+    let mut current_opts = apply_profile(opts)?;
+    let (client, base, sessions) = loop {
+        match connect_once(&current_opts).await {
+            Ok(connected) => break connected,
+            Err(e) => {
+                if !is_interactive_tty() {
+                    return Err(e);
+                }
+                match prompt_unreachable_menu(&current_opts, &e)? {
+                    UnreachableAction::AddEndpoint => {
+                        let new_profile = interactive_add_profile()?;
+                        // Re-resolve from a fresh base so the next attempt
+                        // honours the just-added profile (and any default
+                        // pointer it set). `--api` from the original CLI
+                        // call is preserved only when it was the explicit
+                        // override path; if the user is here it's because
+                        // that override didn't reach a daemon, so we
+                        // respect their new profile choice instead.
+                        let mut next = initial_opts.clone();
+                        next.api = None;
+                        next.fingerprint = None;
+                        next.profile = Some(new_profile);
+                        current_opts = apply_profile(next)?;
+                    }
+                    UnreachableAction::Retry => {
+                        // No-op: just loop. Useful when the user just
+                        // ran `agentum serve` in another window.
+                    }
+                    UnreachableAction::Quit => return Err(e),
+                }
+            }
+        }
+    };
+    let _ = base; // base is bundled in `client`; kept for future use.
 
-    let client = api::Client::new(base.clone(), token, trust)?;
-    client.health().await.with_context(|| {
-        format!("agentum daemon not reachable at {base} — start it with `agentum serve`")
-    })?;
+    let mut client = client;
+    let mut sessions = sessions;
+    let mut active_profile_name = current_opts.profile.clone();
+    loop {
+        let sound_muted =
+            current_opts.no_sound || std::env::var_os("AGENTUM_TUI_NO_SOUND").is_some();
+        let outcome =
+            run_tui_session(client, sessions, sound_muted, active_profile_name.clone()).await?;
+        match outcome {
+            app::RunOutcome::Quit => return Ok(()),
+            app::RunOutcome::SwitchProfile(name) => {
+                // Re-resolve the entire connection from the chosen
+                // profile and re-enter the TUI. Errors here drop back
+                // into the same connect-or-onboard loop the cold start
+                // uses, so a misconfigured remote endpoint is recoverable
+                // without restarting the binary.
+                let mut next = initial_opts.clone();
+                next.api = None;
+                next.fingerprint = None;
+                next.profile = Some(name.clone());
+                current_opts = apply_profile(next)?;
+                let connected = match connect_once(&current_opts).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        if !is_interactive_tty() {
+                            return Err(e);
+                        }
+                        eprintln!();
+                        eprintln!("  switch to profile `{name}` failed: {e}");
+                        eprintln!("  staying on the previous endpoint.");
+                        eprintln!();
+                        // Restore the previous profile by re-running the
+                        // initial resolution; this re-enters the connect
+                        // loop with whatever the user originally asked
+                        // for. Anything still failing there will pop the
+                        // same prompt as the cold start.
+                        current_opts = apply_profile(initial_opts.clone())?;
+                        connect_once(&current_opts).await?
+                    }
+                };
+                client = connected.0;
+                sessions = connected.2;
+                active_profile_name = current_opts.profile.clone();
+            }
+        }
+    }
+}
 
-    let sessions = client
-        .list_sessions()
-        .await
-        .context("failed to list sessions")?;
-
+/// One full TUI lifetime: enter alt-screen, run the event loop, tear
+/// down. Returning a `RunOutcome` lets `run` decide whether to quit or
+/// reconnect with a new profile.
+async fn run_tui_session(
+    client: api::Client,
+    sessions: Vec<agentum_core::Session>,
+    sound_muted: bool,
+    active_profile: Option<String>,
+) -> Result<app::RunOutcome> {
     enable_raw_mode().context("enable raw mode")?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen).context("enter alt screen")?;
@@ -108,8 +186,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("init ratatui terminal")?;
 
-    let sound_muted = opts.no_sound || std::env::var_os("AGENTUM_TUI_NO_SOUND").is_some();
-    app::run_loop(&mut terminal, client, sessions, sound_muted).await
+    app::run_loop(&mut terminal, client, sessions, sound_muted, active_profile).await
 }
 
 struct TerminalGuard;
@@ -321,4 +398,137 @@ async fn resolve_base(override_url: Option<String>) -> Result<Url> {
     Err(anyhow!(
         "no agentum daemon found on loopback. Start one with `agentum serve` or pass --api https://<host>:<port>"
     ))
+}
+
+// ---------- empty-daemon onboarding ----------
+
+/// One full attempt to materialise an authenticated [`api::Client`] for
+/// `opts`. Returns the client, the resolved base URL, and an initial
+/// session list. Used by [`run`]'s connect-or-onboard loop so a probe
+/// failure can ask the user "want to add an endpoint?" before bailing.
+async fn connect_once(opts: &Options) -> Result<(api::Client, Url, Vec<agentum_core::Session>)> {
+    let base = resolve_base(opts.api.clone()).await?;
+    let trust = establish_trust(&base, opts).await?;
+    let token = obtain_token(&base, &trust).await?;
+    let client = api::Client::new(base.clone(), token, trust)?;
+    client.health().await.with_context(|| {
+        format!("agentum daemon not reachable at {base} — start it with `agentum serve`")
+    })?;
+    let sessions = client
+        .list_sessions()
+        .await
+        .context("failed to list sessions")?;
+    Ok((client, base, sessions))
+}
+
+#[derive(Debug)]
+enum UnreachableAction {
+    AddEndpoint,
+    Retry,
+    Quit,
+}
+
+/// Stdin and stdout both have to be on a TTY for the prompt to make
+/// sense — `agentum terminal | tee log` would otherwise hang waiting
+/// on input that never comes. Plain non-TTY callers fall back to the
+/// pre-existing bail behaviour.
+fn is_interactive_tty() -> bool {
+    io::stdin().is_terminal() && io::stdout().is_terminal()
+}
+
+/// Print a numbered menu and read a single keystroke + Enter from
+/// stdin. Loops on invalid input. The caller is expected to be on
+/// the controlling terminal — see `is_interactive_tty`.
+fn prompt_unreachable_menu(opts: &Options, err: &anyhow::Error) -> Result<UnreachableAction> {
+    let target = opts
+        .api
+        .clone()
+        .unwrap_or_else(|| "loopback (127.0.0.1:8822)".to_string());
+    eprintln!();
+    eprintln!("  agentum couldn't reach a daemon at {target}.");
+    eprintln!("  ↳ {err}");
+    eprintln!();
+    eprintln!("  What would you like to do?");
+    eprintln!("    [1] Add a remote endpoint");
+    eprintln!("    [2] Retry (e.g. after running `agentum serve` in another window)");
+    eprintln!("    [3] Quit");
+    eprintln!();
+    loop {
+        eprint!("  > ");
+        io::stderr().flush().ok();
+        let mut buf = String::new();
+        let n = io::stdin().lock().read_line(&mut buf)?;
+        if n == 0 {
+            // EOF — treat like Quit so a piped/closed stdin doesn't loop.
+            return Ok(UnreachableAction::Quit);
+        }
+        match buf.trim() {
+            "1" | "a" | "add" => return Ok(UnreachableAction::AddEndpoint),
+            "2" | "r" | "retry" => return Ok(UnreachableAction::Retry),
+            "3" | "q" | "quit" | "exit" | "" => return Ok(UnreachableAction::Quit),
+            other => {
+                eprintln!("  unrecognised input: {other:?} — pick 1, 2, or 3");
+                continue;
+            }
+        }
+    }
+}
+
+/// Walk the user through creating + saving a profile, returning the
+/// chosen name. Reuses [`profiles::Profiles`] so the TUI subcommand,
+/// CLI subcommand, and dashboard switcher all share one storage shape.
+fn interactive_add_profile() -> Result<String> {
+    eprintln!();
+    eprintln!("  Add a new endpoint:");
+    let name = read_line("    name (e.g. vps): ")?;
+    if name.trim().is_empty() {
+        bail!("name is required");
+    }
+    let url = read_line("    URL (e.g. https://my-vps.example.com:8822): ")?;
+    if url.trim().is_empty() {
+        bail!("URL is required");
+    }
+    Url::parse(url.trim()).with_context(|| format!("invalid URL: {url}"))?;
+    let fp_raw = read_line("    fingerprint (optional, AB:CD:…): ")?;
+    let fingerprint = if fp_raw.trim().is_empty() {
+        None
+    } else {
+        Some(
+            trust::normalize_fingerprint(fp_raw.trim())
+                .with_context(|| format!("invalid fingerprint: {fp_raw}"))?,
+        )
+    };
+    let make_default_raw = read_line("    set as default? [y/N]: ")?;
+    let set_default = matches!(make_default_raw.trim(), "y" | "Y" | "yes");
+
+    let mut store = profiles::Profiles::load().context("load profiles.toml")?;
+    store
+        .upsert(
+            name.trim().to_string(),
+            profiles::Profile {
+                url: url.trim().to_string(),
+                fingerprint,
+                insecure: false,
+            },
+        )
+        .with_context(|| format!("save profile `{}`", name.trim()))?;
+    if set_default {
+        store
+            .set_default(Some(name.trim().to_string()))
+            .with_context(|| format!("mark `{}` default", name.trim()))?;
+    }
+    eprintln!("  saved profile `{}` to {}", name.trim(), store.path().display());
+    eprintln!();
+    Ok(name.trim().to_string())
+}
+
+fn read_line(prompt: &str) -> Result<String> {
+    eprint!("{prompt}");
+    io::stderr().flush().ok();
+    let mut buf = String::new();
+    let n = io::stdin().lock().read_line(&mut buf)?;
+    if n == 0 {
+        bail!("unexpected EOF on stdin");
+    }
+    Ok(buf.trim_end_matches(['\r', '\n']).to_string())
 }

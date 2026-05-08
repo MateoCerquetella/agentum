@@ -186,6 +186,15 @@ export async function probeAuth(): Promise<'ok' | 'unauthorized' | 'unreachable'
   }
 }
 
+/** Mirror of the server's `routes::preferences::Preferences` struct.
+ *  Both keys are optional — partial PUTs only overwrite the fields
+ *  present in the body, so the dashboard can update `theme` without
+ *  clobbering whatever `tui_theme` the TUI last saved. */
+export interface Preferences {
+  theme?: string;
+  tui_theme?: string;
+}
+
 export interface SendInput {
   text?: string;
   keys?: string;
@@ -338,6 +347,15 @@ export const api = {
       { method: 'DELETE' }
     ),
   doctor: () => request<DoctorReport>('/api/doctor'),
+
+  // ---------- preferences (shared with TUI) ----------
+
+  getPreferences: () => request<Preferences>('/api/preferences'),
+  putPreferences: (body: Preferences) =>
+    request<Preferences>('/api/preferences', {
+      method: 'PUT',
+      body: JSON.stringify(body)
+    }),
 
   // ---------- filesystem (workdir picker) ----------
 

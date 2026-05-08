@@ -96,6 +96,14 @@ async fn add(
             .with_context(|| format!("mark `{name}` default"))?;
     }
     println!("saved profile `{name}` to {}", profiles.path().display());
+    // Drop a copy-pasteable next-step hint after every successful
+    // save. The most common confusion is "I added a profile, now what?"
+    // so naming the exact command here closes the loop.
+    if set_default {
+        println!("default profile is now `{name}` — run `agentum terminal` to connect.");
+    } else {
+        println!("connect with: agentum terminal --profile {name}");
+    }
     Ok(())
 }
 

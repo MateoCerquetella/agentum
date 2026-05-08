@@ -225,6 +225,32 @@ pub enum Cmd {
     },
 
     /// Manage named connection profiles (multiple agentum endpoints).
+    ///
+    /// A *profile* is a named (URL, optional fingerprint) pair so you
+    /// can switch between several agentum servers without retyping
+    /// `--api …` every time. The TUI's Ctrl-O overlay and the
+    /// dashboard's endpoint chip drive the same store.
+    ///
+    /// Examples:
+    ///   agentum profiles add vps https://my-vps.example.com:8822 \
+    ///                          --fingerprint AB:CD:... --set-default
+    ///   agentum profiles list
+    ///   agentum terminal --profile vps
+    ///   agentum profiles use vps
+    #[command(after_help = "\
+EXAMPLES:
+    Add a remote endpoint and set it as default:
+        agentum profiles add vps https://my-vps:8822 --set-default
+
+    Add another endpoint without making it default:
+        agentum profiles add staging https://staging:8822 --fingerprint AB:CD
+
+    Connect to a specific profile:
+        agentum terminal --profile staging
+
+    List all profiles (the default is marked with `*`):
+        agentum profiles list
+")]
     Profiles {
         #[command(subcommand)]
         action: ProfilesCmd,

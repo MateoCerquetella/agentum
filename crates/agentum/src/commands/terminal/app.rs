@@ -184,6 +184,104 @@ pub enum Overlay {
     NewSession(Box<NewSessionForm>),
     /// Generic confirmation prompt for destructive session actions.
     Confirm(PendingAction),
+    /// Endpoint switcher. Lists configured agentum servers, lets the
+    /// user switch between them or add a new one without leaving the
+    /// TUI. Selecting a different profile triggers a soft restart of
+    /// the run-loop so every store / WS / cache rebuilds against the
+    /// new daemon.
+    Profiles(ProfilesOverlay),
+}
+
+/// In-memory state for the [`Overlay::Profiles`] switcher.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProfilesOverlay {
+    pub entries: Vec<ProfileEntry>,
+    pub cursor: usize,
+    pub default_name: Option<String>,
+    pub error: Option<String>,
+    /// `Some` when the user is editing the inline "add endpoint" form
+    /// instead of the list. Mirrors the dashboard's EndpointSwitcher.
+    pub add_form: Option<AddProfileForm>,
+}
+
+/// One row in the profile picker. Mirrors the on-disk profile but is
+/// detached from the file so the overlay can re-render without
+/// re-reading after every keystroke.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProfileEntry {
+    pub name: String,
+    pub url: String,
+    pub fingerprint: Option<String>,
+    pub is_default: bool,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct AddProfileForm {
+    pub field: AddProfileField,
+    pub name: String,
+    pub url: String,
+    pub fingerprint: String,
+    pub set_default: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AddProfileField {
+    Name,
+    Url,
+    Fingerprint,
+    SetDefault,
+}
+
+impl AddProfileForm {
+    pub fn new() -> Self {
+        Self {
+            field: AddProfileField::Name,
+            name: String::new(),
+            url: String::new(),
+            fingerprint: String::new(),
+            set_default: false,
+            error: None,
+        }
+    }
+
+    pub fn next_field(&mut self) {
+        self.field = match self.field {
+            AddProfileField::Name => AddProfileField::Url,
+            AddProfileField::Url => AddProfileField::Fingerprint,
+            AddProfileField::Fingerprint => AddProfileField::SetDefault,
+            AddProfileField::SetDefault => AddProfileField::Name,
+        };
+    }
+
+    pub fn prev_field(&mut self) {
+        self.field = match self.field {
+            AddProfileField::Name => AddProfileField::SetDefault,
+            AddProfileField::Url => AddProfileField::Name,
+            AddProfileField::Fingerprint => AddProfileField::Url,
+            AddProfileField::SetDefault => AddProfileField::Fingerprint,
+        };
+    }
+
+    pub fn field_value_mut(&mut self) -> Option<&mut String> {
+        match self.field {
+            AddProfileField::Name => Some(&mut self.name),
+            AddProfileField::Url => Some(&mut self.url),
+            AddProfileField::Fingerprint => Some(&mut self.fingerprint),
+            AddProfileField::SetDefault => None,
+        }
+    }
+}
+
+/// What a single `run_loop` invocation wants the caller to do next.
+/// `Quit` returns control to the OS; `SwitchProfile` re-enters the
+/// loop after re-resolving the API base + token from the named
+/// profile. The wrapper in `commands::terminal::run` owns the retry
+/// machinery so `run_loop` itself stays in one connection's lifetime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunOutcome {
+    Quit,
+    SwitchProfile(String),
 }
 
 /// One observed error, surfaced to the user via the error overlay.
@@ -198,6 +296,18 @@ pub struct ErrorEntry {
 /// Suggested tool names. Mirrors the web's datalist on the New Session
 /// dialog. Pressing Tab on the `Tool` field cycles through these.
 pub const TOOL_SUGGESTIONS: &[&str] = &["claude", "codex", "cursor", "opencode", "aider", "bash"];
+
+/// Returns `true` when the daemon's `/api/agents` reports availability
+/// for this tool name. Mirrors `agentum_executor::probed_tools()` so
+/// the TUI knows which entries should be gated. Free-form names
+/// (`terminal`, `bash`, anything outside the curated list) always
+/// route through PassthroughAdapter and are never gated.
+pub fn is_probed_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        "claude" | "codex" | "cursor" | "gemini" | "hermes" | "opencode" | "aider"
+    )
+}
 
 /// Tools that support YOLO / skip-permissions mode. Must mirror the
 /// `yoloTools` set in `dashboard/src/lib/components/NewSessionDialog.svelte`
@@ -609,6 +719,12 @@ pub struct App {
     pub was_connected: bool,
     pub tick_count: u64,
     pub status_msg: Option<String>,
+    /// Drained by the run-loop tick: when `Some`, the daemon's shared
+    /// preferences blob is updated so the dashboard picks up the
+    /// change. Set whenever the user picks a new theme from the
+    /// palette or via `T`. Pulled out of the local theme handlers
+    /// because the handlers don't have access to the API client.
+    pub pending_pref_push: Option<String>,
     pub should_quit: bool,
     pub overlay: Overlay,
     pub palette: PaletteState,
@@ -767,6 +883,15 @@ pub struct App {
     /// pending OR the daemon is older than this change — both paths
     /// fail open at the call site so the picker stays usable.
     pub agent_availability: Option<HashSet<String>>,
+    /// When `Some`, the run-loop is exiting because the user picked a
+    /// different profile in the endpoint switcher. `commands::terminal::run`
+    /// reads this on `Quit` and re-enters the connect loop with the
+    /// named profile instead of returning to the shell.
+    pub pending_switch_profile: Option<String>,
+    /// Name of the active profile (or `None` if the TUI was launched
+    /// with an ad-hoc `--api`). Shown in the title bar so users
+    /// targeting multiple endpoints can tell which one they're on.
+    pub active_profile: Option<String>,
 }
 
 impl App {
@@ -798,6 +923,7 @@ impl App {
             was_connected: false,
             tick_count: 0,
             status_msg: None,
+            pending_pref_push: None,
             should_quit: false,
             overlay: Overlay::None,
             palette: PaletteState::new(),
@@ -832,20 +958,20 @@ impl App {
             awaiting_input: HashSet::new(),
             idle: HashSet::new(),
             agent_availability: None,
+            pending_switch_profile: None,
+            active_profile: None,
         }
     }
 
-    /// Returns `true` if `tool` is selectable in the picker. Non-first-
-    /// class tools (terminal, bash, aider, …) and unknown free-form
-    /// strings always pass; first-class tools are gated on the daemon
-    /// probe in `agent_availability`. While the probe is pending
-    /// (`None`) we fail open — the user sees no spurious blocks if the
-    /// daemon predates the `/api/agents` endpoint.
+    /// Returns `true` if `tool` is selectable in the picker. Non-probed
+    /// names (`terminal`, `bash`, free-form passthrough strings) always
+    /// pass; probed names — anything `/api/agents` reports — are gated
+    /// on the daemon probe in `agent_availability`. While the probe is
+    /// pending (`None`) we fail open so users with an older daemon
+    /// don't see spurious blocks.
     pub fn tool_available(&self, tool: &str) -> bool {
         let trimmed = tool.trim();
-        let is_first_class = TOOL_SUGGESTIONS.contains(&trimmed)
-            && !matches!(trimmed, "opencode" | "aider" | "bash" | "terminal" | "");
-        if !is_first_class {
+        if !is_probed_tool(trimmed) {
             return true;
         }
         match &self.agent_availability {
@@ -867,12 +993,28 @@ impl App {
         self.theme = Theme::by_name(name);
         theme::save(self.theme.name);
         self.status_msg = Some(format!("theme: {}", self.theme.name));
+        self.pending_pref_push = Some(self.theme.name.to_string());
+    }
+
+    /// Apply a theme by name without queueing a server push. Used by
+    /// the `preferences.changed` event handler so adopting an
+    /// externally-pushed theme doesn't immediately echo back to the
+    /// server (which would round-trip endlessly across surfaces).
+    pub fn set_theme_by_name(&mut self, name: &str) {
+        let resolved = Theme::by_name(name);
+        if resolved.name == self.theme.name {
+            return;
+        }
+        self.theme = resolved;
+        theme::save(self.theme.name);
+        self.status_msg = Some(format!("theme: {} (synced)", self.theme.name));
     }
 
     pub fn cycle_theme(&mut self) {
         self.theme = Theme::next(self.theme.name);
         theme::save(self.theme.name);
         self.status_msg = Some(format!("theme: {}", self.theme.name));
+        self.pending_pref_push = Some(self.theme.name.to_string());
     }
 
     pub fn selected_session(&self) -> Option<&Session> {
@@ -1268,9 +1410,11 @@ pub async fn run_loop(
     client: Client,
     sessions: Vec<Session>,
     sound_muted: bool,
-) -> Result<()> {
+    active_profile: Option<String>,
+) -> Result<RunOutcome> {
     let mut app = App::new(sessions);
     app.sound_muted_cli = sound_muted;
+    app.active_profile = active_profile;
 
     // One-shot probe of the daemon's PATH so the New Session form can
     // grey out first-class adapters the user hasn't installed (cursor
@@ -1399,7 +1543,13 @@ pub async fn run_loop(
 
         terminal.draw(|f| ui::draw(f, &app))?;
         if app.should_quit {
-            return Ok(());
+            // Honor a pending profile switch over a plain quit so the
+            // wrapper in `commands::terminal::run` can reconnect to
+            // the new endpoint without re-entering the OS shell.
+            if let Some(name) = app.pending_switch_profile.take() {
+                return Ok(RunOutcome::SwitchProfile(name));
+            }
+            return Ok(RunOutcome::Quit);
         }
 
         // If lazygit exited on its own, drop it and revert focus.
@@ -1479,6 +1629,16 @@ pub async fn run_loop(
                 // bottom-left stack drains without us having to schedule
                 // a per-toast sleep future.
                 app.tick_expire();
+                // Fan a queued theme change out to the daemon so any open
+                // dashboard tab picks it up live. Fire-and-forget — a
+                // failed PUT just means surfaces re-sync on next launch
+                // via the on-disk theme file.
+                if let Some(name) = app.pending_pref_push.take() {
+                    let c = client.clone();
+                    tokio::spawn(async move {
+                        let _ = c.put_preferences(None, Some(&name)).await;
+                    });
+                }
                 // Lazygit follow-up for cross-repo navigation. We defer
                 // the PTY respawn out of `update_selection` itself so
                 // rapid j/k bursts can't thrash lazygit children: the
@@ -2145,6 +2305,16 @@ async fn handle_key(
         return;
     }
 
+    // Ctrl-O — open the endpoint switcher overlay from any focus.
+    // Mnemonic: "open endpoint". Mirrors the dashboard's
+    // EndpointSwitcher chip in the topbar. Available from anywhere so
+    // a user driving multiple agentum servers can hop without
+    // releasing focus; also surfaced in the command palette.
+    if ctrl && matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O')) {
+        open_profiles_overlay(app);
+        return;
+    }
+
     // Ctrl-G — toggle the lazygit side pane from any focus. Plain `g`
     // also toggles it but only fires when the tree is focused (otherwise
     // it gets forwarded as a literal keystroke to the running agent).
@@ -2254,6 +2424,10 @@ async fn handle_key(
             handle_rename_key(app, key, client).await;
             return;
         }
+        Overlay::Profiles(_) => {
+            handle_profiles_key(app, key);
+            return;
+        }
         Overlay::None => {}
         // Help / cheatsheet / install: any of these dismiss it.
         _ => {
@@ -2337,6 +2511,24 @@ async fn handle_key(
                 app.push_error(format!("lazygit write: {e}"));
             }
         }
+        return;
+    }
+
+    // Stopped/crashed session in the focused term pane: there's no live
+    // PTY to forward bytes to, and the empty-screen state used to leave
+    // users guessing how to revive it. Accept `u` or `Enter` (without
+    // any modifier) as a start shortcut so the prompt drawn by the
+    // overlay matches what the keyboard actually does.
+    if matches!(app.focus, Focus::Term | Focus::TermRight)
+        && key.modifiers.is_empty()
+        && matches!(key.code, KeyCode::Char('u') | KeyCode::Enter)
+        && let Some(s) = app.selected_session()
+        && matches!(s.status, Status::Stopped | Status::Crashed)
+    {
+        app.overlay = Overlay::Confirm(PendingAction::Start {
+            id: s.id,
+            name: s.name.clone(),
+        });
         return;
     }
 
@@ -2664,17 +2856,13 @@ async fn handle_new_session_key(
             NewSessionField::Tool => {
                 let avail = app.agent_availability.clone();
                 form.cycle_tool(|t| match &avail {
-                    // Mirrors `App::tool_available`. Inlined here to
-                    // sidestep the borrow conflict between the App-owned
-                    // overlay (taken via `mem::replace` above) and the
-                    // closure capturing `&app`.
-                    Some(set) => {
-                        let first_class = matches!(
-                            t,
-                            "claude" | "codex" | "cursor" | "gemini" | "hermes"
-                        );
-                        !first_class || set.contains(t)
-                    }
+                    // Mirrors `App::tool_available`. Inlined to sidestep
+                    // the borrow conflict between the App-owned overlay
+                    // (taken via `mem::replace` above) and the closure
+                    // capturing `&app`. Uses the same probed-tools list
+                    // as `is_probed_tool` so opencode/aider also get
+                    // skipped when their binaries aren't installed.
+                    Some(set) => !is_probed_tool(t) || set.contains(t),
                     None => true,
                 });
             }
@@ -2740,6 +2928,9 @@ async fn handle_new_session_key(
                 // still let the user type the name, so we bounce here
             // before sending a request the executor will fail later.
             if !app.tool_available(form.tool.trim()) {
+                // Mirror `agentum_executor::binary_for` so the error
+                // names the actual missing binary (cursor → cursor-agent)
+                // instead of the friendly tool id.
                 let bin = match form.tool.trim() {
                     "cursor" => "cursor-agent",
                     other => other,
@@ -3116,6 +3307,227 @@ pub fn palette_catalog(app: &App) -> Catalog {
         split_open: app.split_open(),
     };
     Catalog::build(app.lazygit_open(), &sessions, app.selected, view, &app.prefs)
+}
+
+/// Build a [`ProfilesOverlay`] from the on-disk profiles file and
+/// install it on `app`. Surfaces a friendly error in the overlay
+/// itself when the file is unreadable or empty rather than silently
+/// no-op'ing — the user just hit Ctrl-O for a reason.
+pub fn open_profiles_overlay(app: &mut App) {
+    let (entries, default_name, error) =
+        match super::profiles::Profiles::load() {
+            Ok(store) => {
+                let default_name = store.default_name().map(str::to_string);
+                let mut rows: Vec<ProfileEntry> = store
+                    .list()
+                    .into_iter()
+                    .map(|(name, p, is_default)| ProfileEntry {
+                        name,
+                        url: p.url,
+                        fingerprint: p.fingerprint,
+                        is_default,
+                    })
+                    .collect();
+                // Surface the active profile at the top of the picker
+                // when it isn't the default — saves a step on the most
+                // common task ("which one am I on right now?").
+                if let Some(active) = &app.active_profile {
+                    if let Some(idx) = rows.iter().position(|r| &r.name == active) {
+                        let row = rows.remove(idx);
+                        rows.insert(0, row);
+                    }
+                }
+                (rows, default_name, None)
+            }
+            Err(e) => (Vec::new(), None, Some(format!("load profiles.toml: {e}"))),
+        };
+    let cursor = entries
+        .iter()
+        .position(|p| Some(&p.name) == app.active_profile.as_ref())
+        .unwrap_or(0);
+    app.overlay = Overlay::Profiles(ProfilesOverlay {
+        entries,
+        cursor,
+        default_name,
+        error,
+        add_form: None,
+    });
+}
+
+/// Profile-switcher overlay key handler. Two modes:
+///
+/// - **List mode** (default): Up/Down moves the cursor, Enter switches
+///   to the highlighted profile (triggering a soft restart of the
+///   run-loop), `a` opens the inline add form, `d` removes the
+///   highlighted profile, `Esc`/`q` dismisses.
+/// - **Add-form mode** (when `add_form.is_some()`): Tab cycles fields,
+///   Enter submits, Esc returns to list mode.
+fn handle_profiles_key(app: &mut App, key: KeyEvent) {
+    let Overlay::Profiles(mut state) = std::mem::replace(&mut app.overlay, Overlay::None) else {
+        return;
+    };
+
+    if let Some(mut form) = state.add_form.take() {
+        // ----- add-form mode -----
+        match key.code {
+            KeyCode::Esc => {
+                // Drop the form, return to the list.
+                app.overlay = Overlay::Profiles(state);
+                return;
+            }
+            KeyCode::Tab | KeyCode::Down => form.next_field(),
+            KeyCode::BackTab | KeyCode::Up => form.prev_field(),
+            KeyCode::Char(' ') if form.field == AddProfileField::SetDefault => {
+                form.set_default = !form.set_default;
+            }
+            KeyCode::Backspace => {
+                if let Some(v) = form.field_value_mut() {
+                    v.pop();
+                }
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(v) = form.field_value_mut() {
+                    v.push(c);
+                }
+            }
+            KeyCode::Enter => {
+                form.error = None;
+                let name = form.name.trim().to_string();
+                let url = form.url.trim().to_string();
+                if name.is_empty() {
+                    form.error = Some("name is required".into());
+                    state.add_form = Some(form);
+                    app.overlay = Overlay::Profiles(state);
+                    return;
+                }
+                if url.is_empty() {
+                    form.error = Some("URL is required".into());
+                    state.add_form = Some(form);
+                    app.overlay = Overlay::Profiles(state);
+                    return;
+                }
+                if let Err(e) = url::Url::parse(&url) {
+                    form.error = Some(format!("invalid URL: {e}"));
+                    state.add_form = Some(form);
+                    app.overlay = Overlay::Profiles(state);
+                    return;
+                }
+                let fingerprint = if form.fingerprint.trim().is_empty() {
+                    None
+                } else {
+                    match super::trust::normalize_fingerprint(form.fingerprint.trim()) {
+                        Ok(fp) => Some(fp),
+                        Err(e) => {
+                            form.error = Some(format!("invalid fingerprint: {e}"));
+                            state.add_form = Some(form);
+                            app.overlay = Overlay::Profiles(state);
+                            return;
+                        }
+                    }
+                };
+                match super::profiles::Profiles::load() {
+                    Ok(mut store) => {
+                        if let Err(e) = store.upsert(
+                            name.clone(),
+                            super::profiles::Profile {
+                                url: url.clone(),
+                                fingerprint,
+                                insecure: false,
+                            },
+                        ) {
+                            form.error = Some(format!("save failed: {e}"));
+                            state.add_form = Some(form);
+                            app.overlay = Overlay::Profiles(state);
+                            return;
+                        }
+                        if form.set_default {
+                            let _ = store.set_default(Some(name.clone()));
+                        }
+                        // Reload the list and snap the cursor onto the
+                        // freshly added profile so Enter switches to
+                        // it immediately.
+                        open_profiles_overlay(app);
+                        if let Overlay::Profiles(ref mut s) = app.overlay {
+                            if let Some(idx) = s.entries.iter().position(|e| e.name == name) {
+                                s.cursor = idx;
+                            }
+                        }
+                        return;
+                    }
+                    Err(e) => {
+                        form.error = Some(format!("open profiles.toml: {e}"));
+                        state.add_form = Some(form);
+                        app.overlay = Overlay::Profiles(state);
+                        return;
+                    }
+                }
+            }
+            _ => {}
+        }
+        state.add_form = Some(form);
+        app.overlay = Overlay::Profiles(state);
+        return;
+    }
+
+    // ----- list mode -----
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.overlay = Overlay::None;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            state.cursor = state.cursor.saturating_sub(1);
+            app.overlay = Overlay::Profiles(state);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if state.cursor + 1 < state.entries.len() {
+                state.cursor += 1;
+            }
+            app.overlay = Overlay::Profiles(state);
+        }
+        KeyCode::Char('a') | KeyCode::Char('+') | KeyCode::Char('n') => {
+            state.add_form = Some(AddProfileForm::new());
+            app.overlay = Overlay::Profiles(state);
+        }
+        KeyCode::Char('d') | KeyCode::Char('D') => {
+            // Refuse to remove the active profile so the user doesn't
+            // accidentally leave themselves without a target. They can
+            // switch first, then delete.
+            if let Some(entry) = state.entries.get(state.cursor) {
+                if app.active_profile.as_deref() == Some(entry.name.as_str()) {
+                    state.error = Some("can't remove the active profile — switch first".into());
+                    app.overlay = Overlay::Profiles(state);
+                    return;
+                }
+                let name = entry.name.clone();
+                if let Ok(mut store) = super::profiles::Profiles::load() {
+                    let _ = store.remove(&name);
+                }
+                open_profiles_overlay(app);
+                return;
+            }
+            app.overlay = Overlay::Profiles(state);
+        }
+        KeyCode::Enter => {
+            if let Some(entry) = state.entries.get(state.cursor) {
+                if app.active_profile.as_deref() == Some(entry.name.as_str()) {
+                    // Already on this one — just close.
+                    app.overlay = Overlay::None;
+                    return;
+                }
+                // Schedule a soft restart with the chosen profile.
+                // run_loop reads `pending_switch_profile` on quit and
+                // `commands::terminal::run` re-enters with the new
+                // endpoint.
+                app.pending_switch_profile = Some(entry.name.clone());
+                app.should_quit = true;
+                return;
+            }
+            app.overlay = Overlay::Profiles(state);
+        }
+        _ => {
+            app.overlay = Overlay::Profiles(state);
+        }
+    }
 }
 
 /// Errors-overlay key handler. Treats the overlay as a vim-ish list:
@@ -3627,6 +4039,11 @@ async fn run_palette_action(
             app.status_msg = Some(
                 "settings (Esc close · ↑↓ move · ←→ adjust · space toggle · r reset row)".into(),
             );
+        }
+        ActionKind::OpenProfiles => {
+            open_profiles_overlay(app);
+            app.status_msg =
+                Some("endpoints (Enter switch · a add · d remove · Esc close)".into());
         }
         ActionKind::ToggleSoundMaster => {
             let on = app.prefs.toggle_sound_master();
@@ -4512,6 +4929,14 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                     None,
                     NotifKind::Info,
                 );
+            }
+        }
+        "preferences.changed" => {
+            // Dashboard (or another TUI) just persisted a different theme.
+            // Adopt the new TUI palette in place — no notification, the
+            // visible repaint is the feedback.
+            if let Some(name) = ev.payload.get("tui_theme").and_then(|v| v.as_str()) {
+                app.set_theme_by_name(name);
             }
         }
         _ => {}

@@ -1,6 +1,7 @@
 import { writable, type Writable, get } from 'svelte/store';
 import { tweaks } from './tweaks';
 import { notify } from './notify';
+import { applyServerPrefs } from './theme-bridge';
 
 export interface BusEvent {
   kind: string;
@@ -192,6 +193,16 @@ function handle(ev: BusEvent) {
         kind: 'info',
         title: `${name} stopped`,
         ttl_ms: 4000
+      });
+      break;
+    }
+    case 'preferences.changed': {
+      // The TUI (or another dashboard tab) just persisted a different
+      // theme. Adopt it locally before any user-visible toast — the
+      // bridge guards against echo loops via `lastSent`.
+      applyServerPrefs({
+        theme: (ev.payload?.theme as string | null) ?? undefined,
+        tui_theme: (ev.payload?.tui_theme as string | null) ?? undefined
       });
       break;
     }

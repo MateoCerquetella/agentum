@@ -4,6 +4,70 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] — 2026-05-08
+
+Patch on top of 0.7.0 closing the TUI ↔ dashboard parity gaps in the
+profile + agent-gating story shipped there.
+
+### Added
+- **In-TUI endpoint switcher (`Ctrl-O`).** New `Overlay::Profiles`
+  lists configured profiles with the active one marked, lets the user
+  switch (Enter), add (`a`), or remove (`d`) endpoints without leaving
+  the TUI. Switching triggers a soft restart of the run-loop —
+  `commands::terminal::run` tears down the alt-screen, reconnects via
+  `connect_once`, and re-enters `run_tui_session` against the new
+  daemon. Surfaced in the command palette as "Switch endpoint…" too.
+- **Active-profile indicator in the TUI title bar.** Title now reads
+  `agentum · <session> · @<profile>` so users driving multiple
+  agentum servers can tell at a glance which one's behind the active
+  pane. Hidden when no profile is in play (loopback / ad-hoc `--api`).
+- **Empty-daemon onboarding.** When `agentum terminal` can't reach a
+  daemon (no `--api`, no `--profile`, no resolvable default,
+  loopback unreachable) and stdin is a TTY, the CLI prints a
+  numbered menu — `[1] Add a remote endpoint`, `[2] Retry`,
+  `[3] Quit` — instead of failing hard. Picking add walks through
+  name + URL + optional fingerprint, saves the profile, and retries
+  the connection. Non-TTY callers (CI, scripts) keep the previous
+  hard-bail behaviour.
+- **Dashboard "no daemon reachable" recovery.** `TokenGate.svelte`'s
+  `unreachable` state now shows an inline "Add endpoint" form
+  alongside the retry button, so a user landing on a dead origin
+  can point the dashboard at a different agentum without leaving
+  the page. Saves to the same `localStorage` profile store the
+  topbar `EndpointSwitcher` uses; submit reloads.
+- **`(not installed on the daemon)` inline hint on the TUI's Tool
+  field.** Mirrors the dashboard tile dimming. The hint replaces
+  the cycle-order subtitle and tints the value red while the picker
+  is parked on an uninstalled binary, so the user sees the gating
+  reason without having to submit and wait for an error toast.
+- **`opencode` and `aider` now appear in the agent-availability
+  probe.** `agentum-executor` exposes a new `PASSTHROUGH_PROBED`
+  list + `probed_tools()` iterator that `/api/agents` consumes, so
+  the dashboard tiles and TUI Tab-cycle can grey out either one
+  when its binary isn't on `PATH`. Their launch path stays through
+  `PassthroughAdapter` (no hard-coded YOLO flag yet); promoting
+  them to first-class adapters is a follow-up.
+- **`agentum profiles` `--help` examples + post-add hint.** The
+  subcommand grew an `EXAMPLES` block, and `agentum profiles add`
+  now prints the next-step usage (`connect with: agentum terminal
+  --profile NAME`, or `default profile is now NAME — run agentum
+  terminal to connect`). Closes the "I added a profile, now what?"
+  loop.
+- **`CLAUDE.md`.** Top-level codebase guide for Claude (and humans):
+  crate map, rebuild rhythm (the rust-embed compile-time gotcha),
+  adapter-pattern checklist, YOLO marker translation table, agent
+  gating story, profiles end-to-end, route layer reference,
+  parity table between TUI and dashboard, common gotchas, quick
+  reference commands.
+
+### Fixed
+- **Agent gating only applied to Cursor.** The dashboard's `TOOLS`
+  array marked `opencode` and `aider` as `firstClass: false`, so
+  they were never gated even though `/api/agents` could probe them.
+  Now they're `firstClass: true`; `terminal` and `bash` stay
+  always-available since they don't need a probe (`$SHELL` is
+  universally present).
+
 ## [0.7.0] — 2026-05-08
 
 Minor bump because of two new user-facing features (Cursor adapter +
