@@ -446,12 +446,17 @@
     :global(.toolbar .tb-btn:not(.primary)) { display: none; }
     :global(.tabs .tab[disabled]) { display: none; }
 
-    /* Terminal + rail vertical stack: rail is collapsible meta below
-       the active terminal, never larger than 50dvh so it doesn't push
-       the input row off-screen on a phone. */
+    /* Terminal + rail vertical stack: keep the rail compact so the
+       terminal owns the majority of the viewport. The rail body
+       (.rb) is already scrollable, so users can drag inside it for
+       more detail without stealing space from the terminal. */
     .row :global(.rail) {
-      max-height: 50dvh;
+      max-height: 28dvh;
     }
+    /* Slim the rail header on phone so the visible portion is mostly
+       useful content, not chrome. */
+    .row :global(.rail .rh) { height: 32px; }
+    .row :global(.rail .group) { padding: 10px 14px; }
 
     /* Input row redesign: prompt + input own the full width on the
        primary line; quick-keys scroll horizontally as a chip rail
@@ -519,14 +524,18 @@
       justify-content: center;
     }
 
-    /* Term-bar context line scrolls horizontally — long workdir paths
-       were getting clipped before. */
-    :global(.term-host .term-bar) {
-      overflow-x: auto;
-      white-space: nowrap;
-      scrollbar-width: none;
+    /* Hide the desktop term-bar on phone — its info (tool, workdir,
+       model, tmux, ctx%) is already covered by the toolbar pills and
+       the SessionRail's KV table, and dropping the 30px row hands
+       that height back to the terminal. */
+    :global(.term-host .term-bar) { display: none; }
+
+    /* Reclaim the desktop top/side padding too — the absolute-bottom
+       50px stub was already overridden to 8px above; shrink the
+       remaining gutters so the xterm canvas can fill near the chrome. */
+    .term-shell {
+      padding: 4px 4px 8px;
     }
-    :global(.term-host .term-bar::-webkit-scrollbar) { display: none; }
 
     /* Lifecycle drawer becomes a clean stacked block on phone. */
     .drawer-row { gap: 6px; }
