@@ -15,8 +15,8 @@ use agentum_core::transcript::{AgentTaskState, TaskStatus, TodoStatus};
 use super::app::{
     AddProfileField, AddProfileForm, App, ConnState, DirPickerState, ErrorEntry, Focus,
     NewSessionField, NewSessionForm, NotifKind, Notification, Overlay, PendingAction,
-    ProfilesOverlay, RenameState, Row, SettingsRow, SettingsState, Side, palette_catalog,
-    status_dot,
+    ProfilesOverlay, RenameState, Row, SettingsRow, SettingsState, Side, TreeSection,
+    palette_catalog, status_dot,
 };
 use super::extensions::{self, Extension, LAZYGIT};
 use super::iometer::{fmt_bytes, fmt_rate};
@@ -438,17 +438,87 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let block = panel_block(&title, focused, p);
 
     let mut items: Vec<ListItem> = Vec::new();
+
+    // Endpoints section: rendered above the sessions tree as a small
+    // header + one line per configured profile. Active profile gets
+    // a filled dot; cursor highlight uses the same row-style helper
+    // as the sessions tree so the two sections look like one pane.
+    items.push(ListItem::new(Line::from(Span::styled(
+        " ENDPOINTS".to_string(),
+        Style::default()
+            .fg(p.muted)
+            .add_modifier(Modifier::BOLD),
+    ))));
+    if app.profiles.is_empty() {
+        items.push(ListItem::new(Line::from(Span::styled(
+            "   (no endpoints — press a)".to_string(),
+            Style::default().fg(p.muted),
+        ))));
+    } else {
+        for (i, entry) in app.profiles.iter().enumerate() {
+            let is_active = app.active_profile.as_deref() == Some(entry.name.as_str());
+            let is_cursor =
+                app.tree_section == TreeSection::Endpoints && i == app.endpoints_cursor;
+            let row_style = if is_cursor {
+                Style::default()
+                    .bg(p.cursor_bg)
+                    .fg(if focused { p.cursor_fg } else { p.fg })
+            } else {
+                Style::default().bg(p.panel_bg).fg(p.fg)
+            };
+            let dot_glyph = if is_active { "●" } else { "○" };
+            let dot_color = if is_active { p.success } else { p.muted };
+            let mut spans = vec![
+                Span::raw("   "),
+                Span::styled(dot_glyph.to_string(), Style::default().fg(dot_color)),
+                Span::raw(" "),
+                Span::styled(
+                    entry.name.clone(),
+                    Style::default()
+                        .fg(if is_cursor && focused {
+                            p.cursor_fg
+                        } else if is_active {
+                            p.fg_strong
+                        } else {
+                            p.fg
+                        })
+                        .add_modifier(if is_cursor || is_active {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                ),
+            ];
+            if entry.is_default {
+                spans.push(Span::styled(
+                    "  default".to_string(),
+                    Style::default().fg(p.accent),
+                ));
+            }
+            items.push(ListItem::new(Line::from(spans)).style(row_style));
+        }
+    }
+
+    // Visual separator between the two sections.
+    items.push(ListItem::new(Line::from(Span::styled(
+        " SESSIONS".to_string(),
+        Style::default()
+            .fg(p.muted)
+            .add_modifier(Modifier::BOLD),
+    ))));
+
     let cursor = app.tree.cursor;
+    let in_sessions = app.tree_section == TreeSection::Sessions;
     for (i, row) in app.tree.rows().iter().enumerate() {
-        let is_cursor = i == cursor;
+        let is_cursor = in_sessions && i == cursor;
         items.push(render_tree_row(app, *row, is_cursor, focused, p));
     }
 
-    if items.is_empty() {
+    if app.tree.rows().is_empty() {
         let hint = if !filter.is_empty() {
-            format!("  (no matches for ⌕{filter})")
+            format!("   (no matches for ⌕{filter})")
         } else {
-            "  (no sessions — `agentum new …`)".to_string()
+            "   (no sessions — press n)".to_string()
         };
         items.push(ListItem::new(Line::from(Span::styled(
             hint,
@@ -1685,6 +1755,24 @@ fn draw_new_session_overlay(
     lines.push(head("New session", p));
     lines.push(Line::from(""));
 
+    // Profile pick comes first — same order as the user's mental
+    // model ("which agentum, then which folder, then which agent").
+    // Empty string renders as "(current connection)" so a user who
+    // launched with --api or no profile sees something coherent.
+    let profile_display = if form.profile.trim().is_empty() {
+        "(current connection)".to_string()
+    } else {
+        format!("@{}", form.profile.trim())
+    };
+    push_form_field_with_hint(
+        &mut lines,
+        "Profile",
+        &profile_display,
+        form.field == NewSessionField::Profile,
+        "(current connection)",
+        Some("Tab cycles configured endpoints"),
+        p,
+    );
     push_form_field(
         &mut lines,
         "Name",

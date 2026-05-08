@@ -283,7 +283,7 @@ impl AddProfileForm {
 /// to the next `run_loop` so a multi-step user action (e.g. submitting
 /// the New Session form against a different profile) survives the
 /// reconnect.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum RunOutcome {
     Quit,
     SwitchProfile {
@@ -342,7 +342,7 @@ pub const YOLO_FLAG: &str = "--dangerously-skip-permissions";
 /// directory-picker sub-overlay), extra args, an "up after create" toggle,
 /// and a YOLO toggle that appends `--dangerously-skip-permissions` for
 /// permission-skipping agents.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct NewSessionForm {
     pub field: NewSessionField,
     /// Endpoint profile this session will be created on. Empty string
@@ -385,6 +385,7 @@ pub struct DirEntryView {
 }
 
 impl NewSessionForm {
+    #[allow(dead_code)]
     pub fn new(default_workdir: String) -> Self {
         Self::with_profile(String::new(), default_workdir)
     }
@@ -411,19 +412,21 @@ impl NewSessionForm {
 
     pub fn next_field(&mut self) {
         self.field = match self.field {
+            NewSessionField::Profile => NewSessionField::Name,
             NewSessionField::Name => NewSessionField::Tool,
             NewSessionField::Tool => NewSessionField::Model,
             NewSessionField::Model => NewSessionField::Workdir,
             NewSessionField::Workdir => NewSessionField::Args,
             NewSessionField::Args => NewSessionField::UpAfter,
             NewSessionField::UpAfter => NewSessionField::Yolo,
-            NewSessionField::Yolo => NewSessionField::Name,
+            NewSessionField::Yolo => NewSessionField::Profile,
         };
     }
 
     pub fn prev_field(&mut self) {
         self.field = match self.field {
-            NewSessionField::Name => NewSessionField::Yolo,
+            NewSessionField::Profile => NewSessionField::Yolo,
+            NewSessionField::Name => NewSessionField::Profile,
             NewSessionField::Tool => NewSessionField::Name,
             NewSessionField::Model => NewSessionField::Tool,
             NewSessionField::Workdir => NewSessionField::Model,
@@ -435,6 +438,12 @@ impl NewSessionForm {
 
     pub fn field_value_mut(&mut self) -> Option<&mut String> {
         match self.field {
+            // Profile is cycle-only — typing a free-form name is
+            // unreliable since the value has to match an entry in
+            // `App.profiles` (or be empty for "current connection").
+            // Tab cycles the value; backspace clears to the empty
+            // string. See `cycle_profile`.
+            NewSessionField::Profile => None,
             NewSessionField::Name => Some(&mut self.name),
             NewSessionField::Tool => Some(&mut self.tool),
             NewSessionField::Model => Some(&mut self.model),
@@ -442,6 +451,24 @@ impl NewSessionForm {
             NewSessionField::Args => Some(&mut self.args),
             NewSessionField::UpAfter | NewSessionField::Yolo => None, // toggles, not text
         }
+    }
+
+    /// Cycle the profile field through `available` plus the empty
+    /// string (which represents the current loopback / `--api`
+    /// connection). Wraps; preserves order. Used by Tab on the
+    /// Profile field.
+    pub fn cycle_profile(&mut self, available: &[String]) {
+        // Build the wheel: empty string ("current") → every named
+        // profile in disk order. Empty string is always present so
+        // an ad-hoc connection without a named profile is still a
+        // selectable target.
+        let mut wheel: Vec<String> = vec![String::new()];
+        wheel.extend(available.iter().cloned());
+        if wheel.len() <= 1 {
+            return; // nothing to cycle through
+        }
+        let idx = wheel.iter().position(|n| n == &self.profile).unwrap_or(0);
+        self.profile = wheel[(idx + 1) % wheel.len()].clone();
     }
 
     /// True when YOLO mode is enabled and the active tool actually supports
@@ -516,6 +543,10 @@ pub fn parse_args_field(input: &str) -> Vec<String> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NewSessionField {
+    /// Endpoint profile this session targets. New first field — see
+    /// `NewSessionForm::with_profile`. Tab cycles through configured
+    /// profiles + an empty entry meaning "current connection".
+    Profile,
     Name,
     Tool,
     Model,
@@ -944,7 +975,7 @@ pub enum TreeSection {
 /// action after the new connection lands. Today only one variant: re-
 /// open the New Session form on the freshly-connected daemon with the
 /// same fields the user already typed.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum PendingAfterSwitch {
     /// Re-open the New Session overlay with this form pre-populated.
     /// The Profile field gets normalised to the new active profile so
@@ -1513,12 +1544,15 @@ pub async fn run_loop(
     // creates immediately instead of triggering another switch.
     if let Some(action) = pending {
         match action {
-            PendingAfterSwitch::OpenNewSession(form) => {
-                let mut form = *form;
+            PendingAfterSwitch::OpenNewSession(mut form) => {
                 form.profile = active_profile.clone().unwrap_or_default();
                 form.error = None;
                 form.submitting = false;
-                app.overlay = Overlay::NewSession(Box::new(form));
+                // Drop straight to the Name field so the user resumes
+                // typing where they were going, not at the Profile
+                // step they just resolved.
+                form.field = NewSessionField::Name;
+                app.overlay = Overlay::NewSession(form);
             }
         }
     }
@@ -2828,18 +2862,44 @@ async fn handle_key(
             }
         }
         KeyCode::Char('j') | KeyCode::Down => {
-            app.tree.move_cursor(1);
-            {
-            let side = app.target_side();
-            update_selection(app, client, side);
-        }
+            // Cursor moves through Endpoints first, then Sessions. At
+            // the bottom of Endpoints, a `j` flips the section to
+            // Sessions. Inside Sessions the original tree cursor
+            // drives selection.
+            match app.tree_section {
+                TreeSection::Endpoints => {
+                    if app.endpoints_cursor + 1 < app.profiles.len() {
+                        app.endpoints_cursor += 1;
+                    } else {
+                        app.tree_section = TreeSection::Sessions;
+                    }
+                }
+                TreeSection::Sessions => {
+                    app.tree.move_cursor(1);
+                    let side = app.target_side();
+                    update_selection(app, client, side);
+                }
+            }
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            app.tree.move_cursor(-1);
-            {
-            let side = app.target_side();
-            update_selection(app, client, side);
-        }
+            match app.tree_section {
+                TreeSection::Endpoints => {
+                    app.endpoints_cursor = app.endpoints_cursor.saturating_sub(1);
+                }
+                TreeSection::Sessions => {
+                    if app.tree.cursor == 0 && !app.profiles.is_empty() {
+                        // At the top of the sessions list, flip focus
+                        // into the Endpoints header so a `k` from the
+                        // first session reaches the last endpoint.
+                        app.tree_section = TreeSection::Endpoints;
+                        app.endpoints_cursor = app.profiles.len().saturating_sub(1);
+                    } else {
+                        app.tree.move_cursor(-1);
+                        let side = app.target_side();
+                        update_selection(app, client, side);
+                    }
+                }
+            }
         }
         KeyCode::Char('h') | KeyCode::Left => app.tree.collapse(),
         KeyCode::Char('l') | KeyCode::Right => app.tree.expand(),
@@ -2859,13 +2919,58 @@ async fn handle_key(
             }
         }
         KeyCode::Enter => {
-            // WIP: Enter will toggle multi-select on the cursor row so
-            // bulk actions (stop / archive / delete several sessions at
-            // once) can be issued from the tree. Tracked for follow-up;
-            // surface a status hint for now so the keystroke isn't a
-            // silent no-op while users adjust to Space-to-enter-terminal.
-            app.status_msg =
-                Some("multi-select coming soon — use Space to enter the terminal".into());
+            match app.tree_section {
+                TreeSection::Endpoints => {
+                    // Switch to the highlighted profile via the same
+                    // soft-restart path the Ctrl-O overlay uses. No
+                    // pending follow-up — the user's intent is just
+                    // "drive that endpoint now".
+                    if let Some(entry) = app.profiles.get(app.endpoints_cursor) {
+                        if app.active_profile.as_deref() == Some(entry.name.as_str()) {
+                            app.status_msg = Some(format!("already on @{}", entry.name));
+                        } else {
+                            app.pending_switch_profile = Some(entry.name.clone());
+                            app.pending_after_switch = None;
+                            app.should_quit = true;
+                            return;
+                        }
+                    }
+                }
+                TreeSection::Sessions => {
+                    // WIP: Enter will toggle multi-select on the cursor row so
+                    // bulk actions (stop / archive / delete several sessions at
+                    // once) can be issued from the tree. Tracked for follow-up;
+                    // surface a status hint for now so the keystroke isn't a
+                    // silent no-op while users adjust to Space-to-enter-terminal.
+                    app.status_msg = Some(
+                        "multi-select coming soon — use Space to enter the terminal".into(),
+                    );
+                }
+            }
+        }
+        // Endpoints section actions: `a` adds, `d` removes. Only fire
+        // when the cursor is actually in the Endpoints section so the
+        // Sessions tree's existing `d` (delete-session) keybind, if
+        // any, doesn't get hijacked.
+        KeyCode::Char('a') if app.tree_section == TreeSection::Endpoints => {
+            // Reuse the same overlay the Ctrl-O switcher uses; the
+            // overlay's add-form handles validation + persistence.
+            open_profiles_overlay(app);
+            if let Overlay::Profiles(ref mut state) = app.overlay {
+                state.add_form = Some(AddProfileForm::new());
+            }
+        }
+        KeyCode::Char('d') if app.tree_section == TreeSection::Endpoints => {
+            if let Some(entry) = app.profiles.get(app.endpoints_cursor).cloned() {
+                if app.active_profile.as_deref() == Some(entry.name.as_str()) {
+                    app.status_msg =
+                        Some("can't remove the active endpoint — switch first".into());
+                } else if let Ok(mut store) = super::profiles::Profiles::load() {
+                    let _ = store.remove(&entry.name);
+                    app.reload_profiles();
+                    app.status_msg = Some(format!("removed `{}`", entry.name));
+                }
+            }
         }
 
         // Session lifecycle ------------------------------------------------
@@ -2878,7 +2983,12 @@ async fn handle_key(
                 .map(|s| s.workdir.clone())
                 .or_else(|| std::env::var("HOME").ok())
                 .unwrap_or_default();
-            app.overlay = Overlay::NewSession(Box::new(NewSessionForm::new(workdir)));
+            // Seed the form's Profile field with the active one so
+            // the user's first Enter creates on the current daemon.
+            // `cycle_profile` from there walks the rest.
+            let profile = app.active_profile.clone().unwrap_or_default();
+            app.overlay =
+                Overlay::NewSession(Box::new(NewSessionForm::with_profile(profile, workdir)));
         }
         KeyCode::Char('u') => {
             if let Some(s) = app.selected_session() {
@@ -2961,6 +3071,19 @@ async fn handle_new_session_key(
         //     full match) it falls through to next_field so Tab still
         //     advances the form when the path is empty / done.
         KeyCode::Tab => match form.field {
+            NewSessionField::Profile => {
+                // Cycle through configured profiles plus an empty
+                // entry meaning "current connection". When only the
+                // empty entry exists (no profiles defined), advance
+                // to the next field so the user isn't trapped.
+                let names: Vec<String> =
+                    app.profiles.iter().map(|p| p.name.clone()).collect();
+                if names.is_empty() {
+                    form.next_field();
+                } else {
+                    form.cycle_profile(&names);
+                }
+            }
             NewSessionField::Tool => {
                 let avail = app.agent_availability.clone();
                 form.cycle_tool(|t| match &avail {
@@ -3024,7 +3147,30 @@ async fn handle_new_session_key(
             }
         }
         KeyCode::Enter => {
-            // Submit.
+            // Submit. First, if the form's profile differs from the
+            // active one, queue a soft restart that re-opens this
+            // form on the new daemon — so `agentum terminal` users
+            // can spawn against any of their endpoints without
+            // leaving the New Session UI. The form fields ride
+            // through the reconnect via `PendingAfterSwitch`.
+            let target_profile = form.profile.trim();
+            let active_profile = app.active_profile.as_deref().unwrap_or("");
+            if !target_profile.is_empty() && target_profile != active_profile {
+                let target_name = target_profile.to_string();
+                // Validate the chosen profile actually exists before
+                // tearing down the connection — a typo (or a stale
+                // form entry from before a remove) shouldn't drop
+                // the user into the cold-start onboarding flow.
+                if !app.profiles.iter().any(|p| p.name == target_name) {
+                    form.error = Some(format!("profile `{target_name}` not found"));
+                    app.overlay = Overlay::NewSession(form);
+                    return;
+                }
+                app.pending_switch_profile = Some(target_name);
+                app.pending_after_switch = Some(PendingAfterSwitch::OpenNewSession(form));
+                app.should_quit = true;
+                return;
+            }
             if let Err(msg) = form.validate() {
                 form.error = Some(msg.into());
                 app.overlay = Overlay::NewSession(form);

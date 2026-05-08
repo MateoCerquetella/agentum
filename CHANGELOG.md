@@ -4,7 +4,12 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.2] — 2026-05-08
+## [0.7.3] — 2026-05-08
+
+Lands the TUI sidebar + spawn-form work that 0.7.2's release notes
+described. The 0.7.2 binary on origin only carried the mobile
+session-detail fix; the endpoint sidebar + form-survives-switch
+features described in its commit message ship here.
 
 ### Added
 - **Endpoints section in the TUI sidebar.** The tree pane now hosts
@@ -21,6 +26,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   field gets normalised to the freshly-connected daemon so the
   user's next `Enter` creates immediately instead of ricocheting
   through another switch.
+- **Profile is now the first field of the New Session form.** The
+  user picks the endpoint before the folder so the spawn lands on
+  the intended daemon by default. Tab cycles through configured
+  profiles plus an `(current connection)` entry for ad-hoc
+  `--api`/loopback runs. Submitting against a non-active profile
+  triggers the soft restart described above; same-profile submits
+  go straight to creation.
+- **Sidebar endpoint actions: `a` to add, `d` to remove, Enter to
+  switch.** When the cursor is in the Endpoints section, these
+  keys do what they say on the tin without leaving the tree pane.
+  Add reuses the same overlay form as Ctrl-O; remove guards the
+  active profile so users can't accidentally orphan their session.
+
+## [0.7.2] — 2026-05-08
 
 ### Fixed
 - **More room for the terminal on the mobile session detail page.**
