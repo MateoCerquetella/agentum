@@ -446,17 +446,12 @@
     :global(.toolbar .tb-btn:not(.primary)) { display: none; }
     :global(.tabs .tab[disabled]) { display: none; }
 
-    /* Terminal + rail vertical stack: keep the rail compact so the
-       terminal owns the majority of the viewport. The rail body
-       (.rb) is already scrollable, so users can drag inside it for
-       more detail without stealing space from the terminal. */
-    .row :global(.rail) {
-      max-height: 28dvh;
-    }
-    /* Slim the rail header on phone so the visible portion is mostly
-       useful content, not chrome. */
-    .row :global(.rail .rh) { height: 32px; }
-    .row :global(.rail .group) { padding: 10px 14px; }
+    /* Hide the rail entirely on phone so the terminal can fill almost
+       the full viewport — only the toolbar and input row stay. The
+       rail's data (plan/todos/KV) is still reachable via "Pop out"
+       on tablet, or by rotating to landscape where the tablet rules
+       (max-width: 1100px) keep it visible. */
+    .row :global(.rail) { display: none; }
 
     /* Input row redesign: prompt + input own the full width on the
        primary line; quick-keys scroll horizontally as a chip rail

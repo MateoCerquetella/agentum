@@ -674,19 +674,20 @@
     }
     .scroll { padding: 12px 12px 18px; gap: 14px; }
 
-    .summary {
-      grid-template-columns: 1fr;
-      gap: 10px;
-    }
-    .hello { font-size: 22px; line-height: 1.1; }
-    .narrative { gap: 6px; margin-top: 10px; }
+    /* On phone the user lands here to find their sessions, not stats —
+       reorder the flex children so the fleet leads, the stuck panel
+       sits above when relevant, and the hero/summary fall to the
+       bottom as decorative footer cards. CSS `order` reshuffles
+       without DOM churn so desktop/tablet keep the original layout. */
+    :global(.scroll > .stuck) { order: -2; }
+    .fleet { order: -1; border-radius: 12px; }
+    .summary { order: 1; grid-template-columns: 1fr; gap: 10px; }
+    .hero { order: 2; gap: 12px; padding-top: 4px; }
 
-    /* Stack hero items full-width and let HostStrip lead so the live
-       CPU/RAM dashboard reads as the "device" pulse on a phone. */
-    .hero { gap: 14px; }
-    .hero-side { order: -1; justify-content: flex-start; }
-
-    .fleet { border-radius: 12px; }
+    /* Compact the hero so it reads as a footer summary on phone. */
+    .hello { font-size: 20px; line-height: 1.15; }
+    .narrative { gap: 6px; margin-top: 8px; }
+    .hero-side { display: none; }
     .fleet-h {
       padding: 12px 14px;
       flex-wrap: wrap;
