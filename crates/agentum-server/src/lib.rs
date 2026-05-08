@@ -155,6 +155,20 @@ pub fn router(state: AppState) -> Router {
         // Security response headers wrap everything, including the embedded
         // SPA. See `headers.rs` for the CSP rationale.
         .layer(axum_mw::from_fn(headers::security_headers))
+        // CORS: permissive on origin so a dashboard hosted by one daemon
+        // can talk to another daemon (the named-profiles feature). The
+        // API is still bearer-protected — an open `Allow-Origin` only
+        // grants the same access an unauthenticated cross-origin call
+        // would already get (none, except `/api/health` + `/api/cert`).
+        // We intentionally do NOT set `Allow-Credentials: true` because
+        // we don't use cookies; the bearer is sent via `Authorization`
+        // header (or `?token=` for WS), so wildcard-origin is safe.
+        .layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods(tower_http::cors::Any)
+                .allow_headers(tower_http::cors::Any),
+        )
         .layer(logging::redacting_trace_layer())
 }
 

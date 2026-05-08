@@ -250,8 +250,15 @@
           </label>
           {#if formError}<p class="err-msg">{formError}</p>{/if}
           <div class="actions">
-            <button type="submit" class="primary">Save & connect</button>
-            <button type="button" class="ghost" onclick={() => (showAddForm = false)}>
+            <button type="submit" class="primary" disabled={formChecking}>
+              {formChecking ? 'checking…' : 'Save & connect'}
+            </button>
+            <button
+              type="button"
+              class="ghost"
+              onclick={() => (showAddForm = false)}
+              disabled={formChecking}
+            >
               Cancel
             </button>
           </div>

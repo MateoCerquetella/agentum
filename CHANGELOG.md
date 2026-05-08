@@ -59,6 +59,52 @@ their sessions into a unified view, grouped by endpoint.
 - Profiles must be added (`agentum profiles add NAME URL`) and
   logged into individually; there's no bulk-credentials flow yet.
 
+### Fixed
+- **"Add a remote endpoint" now health-probes before saving.** The
+  dashboard's unreachable card used to save any well-formed URL,
+  reload, and bounce the user back to the same overlay with a
+  stale entry to clean up. The form now hits `<url>/api/health`
+  via `fetch` first (with a 4 s timeout) and refuses to save
+  unless the response is a 200 with a recognisable
+  `{"status":"ok"}` shape. Network / CORS / mixed-content errors
+  are surfaced inline with hints (HTTPS-served dashboard hitting
+  HTTP endpoint, etc.).
+- **Cross-origin endpoint switching actually works in the
+  browser.** Two compounding gates were silently blocking it:
+  the daemon shipped no CORS headers (so `fetch` from a
+  different origin was rejected pre-flight), and the
+  dashboard's `Content-Security-Policy` `connect-src 'self'
+  ws: wss:` blocked even reaching out to other origins. Added
+  a permissive `tower_http::cors::CorsLayer` (Allow-Origin: any
+  — bearer-token wall on the daemon side is the actual access
+  gate; we don't use credentialed cookies, so wildcard is
+  safe) and loosened CSP to `connect-src 'self' http: https:
+  ws: wss:`. A dashboard hosted by daemon A can now talk to
+  daemon B once the user adds B as a profile.
+
+### Removed
+- **"← back to landing page" link on the unreachable card.**
+  The dashboard *is* the landing page; the link reloaded into
+  the same gate. Replaced with a list of every other saved
+  profile so users can switch endpoints without leaving the
+  card (each row has a × to drop a stale entry).
+
+### Changed
+- **Mobile home page lifts the fleet into the viewport.** Hero stays
+  on top in DOM order so the greeting reads first, but it's
+  compressed on phone (host strip + spawn-incidents button
+  hidden, narrative tightened) and the three summary cards drop
+  entirely below 700px — their numbers are redundant once the
+  fleet rows are visible. The fleet header trims to filter tabs
+  only; sort and group default sensibly and aren't worth the
+  chrome cost on a 4-inch viewport.
+- **Mobile session-detail terminal goes near full-screen.** The
+  right `SessionRail` (plan / KV / watchdog) is hidden below
+  700px, and the redundant `term-bar` row drops too — the
+  terminal canvas now fills almost the entire space between the
+  toolbar and the sticky input row. Tablet (≤1100px) keeps the
+  rail.
+
 ## [0.7.3] — 2026-05-08
 
 Lands the TUI sidebar + spawn-form work that 0.7.2's release notes
