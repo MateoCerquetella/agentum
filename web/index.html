@@ -551,6 +551,51 @@
 
   .section-pad { padding: clamp(72px, 11vw, 140px) 0; border-top: 1px solid var(--border); }
 
+  /* ---------- origin story ---------- */
+  .origin {
+    padding: clamp(56px, 8vw, 96px) 0;
+    position: relative;
+  }
+  .origin::before {
+    content: "";
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse 60% 50% at 50% 50%, rgba(5,82,239,0.06), transparent);
+    pointer-events: none;
+  }
+  .origin-inner {
+    position: relative; z-index: 2;
+    text-align: center;
+    max-width: 680px;
+    margin: 0 auto;
+  }
+  .origin-label {
+    font-family: var(--mono);
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--link);
+    margin-bottom: 28px;
+  }
+  .origin-quote {
+    font-size: clamp(17px, 1.5vw, 20px);
+    line-height: 1.6;
+    color: var(--fg-2);
+    margin: 0;
+  }
+  .origin-quote .break {
+    display: block;
+    margin-top: 1.2em;
+  }
+  .origin-quote em {
+    font-style: normal;
+    color: var(--fg);
+  }
+  .origin-attr {
+    margin-top: 24px;
+    font-size: 14px;
+    color: var(--fg-3);
+    font-family: var(--mono);
+  }
+  .origin-attr strong { color: var(--fg); font-weight: 500; }
+
   /* ---------- problem→solution narrative ---------- */
   .narrative {
     position: relative;
@@ -1381,6 +1426,31 @@
           </div>
         </div>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ORIGIN STORY ============ -->
+<section class="origin">
+  <div class="wrap">
+    <div class="origin-inner">
+      <div class="origin-label">Why I built this</div>
+      <p class="origin-quote">
+        I was running five AI agents on my Mac. Then I closed the lid to go to the supermarket
+        and they all died.
+        <span class="break">
+          So I moved them to an old PC with Arch Linux, piped everything through tmux and WireGuard,
+          and wrote shell scripts to spawn agents remotely. It worked — but now I was babysitting
+          twenty tmux panes instead of writing code.
+        </span>
+        <span class="break">
+          <em>agentum started as a weekend hack to get my life back.</em>
+          One Rust binary that turns tmux into a real control plane,
+          plus a self-hosted dashboard I can check from my phone. No subscriptions,
+          no cloud lock-in — just my agents, still running when I get home.
+        </span>
+      </p>
+      <div class="origin-attr"><strong>Mateo</strong> — creator of agentum</div>
     </div>
   </div>
 </section>
