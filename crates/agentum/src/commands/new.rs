@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use crate::cli::arg_to_flag;
 use crate::commands::terminal::{YOLO_FLAG, YOLO_TOOLS};
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     name: String,
     tool: String,

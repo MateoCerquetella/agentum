@@ -62,6 +62,7 @@ pub enum NotifKind {
 /// `apply_event` from incoming bus events. Expires automatically once
 /// `created_at.elapsed() >= ttl` — see `App::tick_expire`.
 #[derive(Clone, Debug)]
+#[allow(dead_code)] // fields populated for future toast-dedup logic
 pub struct Notification {
     pub id: u64,
     pub title: String,
@@ -988,6 +989,7 @@ pub struct App {
 /// One slot in [`App::clients`]. Tracks whether the endpoint is
 /// reachable, what error stopped it (if any), and the live `Client`
 /// when reachability succeeded.
+#[allow(dead_code)] // fields wired up but reads pending multi-endpoint UI
 pub struct ClientEntry {
     pub client: Option<Client>,
     pub status: EndpointStatus,
@@ -1022,6 +1024,7 @@ pub enum TreeSection {
 /// open the New Session form on the freshly-connected daemon with the
 /// same fields the user already typed.
 #[derive(Clone, PartialEq, Eq)]
+#[allow(dead_code)] // variant reserved for post-switch session creation
 pub enum PendingAfterSwitch {
     /// Re-open the New Session overlay with this form pre-populated.
     /// The Profile field gets normalised to the new active profile so
@@ -1128,6 +1131,7 @@ impl App {
     /// land on by default and the one most legacy call sites still
     /// use. `None` only when even the default endpoint failed to
     /// connect, which is also the cold-start failure path.
+    #[allow(dead_code)] // wired up for upcoming multi-endpoint session routing
     pub fn default_client(&self) -> Option<&Client> {
         let key = self.active_profile.as_deref().unwrap_or("");
         self.clients.get(key).and_then(|e| e.client.as_ref())
@@ -1701,6 +1705,7 @@ fn first_visible_session(tree: &Tree, sessions: &[Session]) -> Option<Uuid> {
 
 // ---------- Event loop ----------
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     client: Client,
@@ -3176,7 +3181,6 @@ async fn handle_key(
                             app.pending_switch_profile = Some(entry.name.clone());
                             app.pending_after_switch = None;
                             app.should_quit = true;
-                            return;
                         }
                     }
                 }

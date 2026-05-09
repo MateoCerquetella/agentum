@@ -1190,6 +1190,8 @@ mod tests {
                 title: "ship phase 7".into(),
                 body: Some("kanban + atomic claim".into()),
                 status: None,
+                lbl: None,
+                tool: None,
             })
             .await
             .unwrap();
@@ -1223,6 +1225,8 @@ mod tests {
                 title: "x".into(),
                 body: Some("orig".into()),
                 status: None,
+                lbl: None,
+                tool: None,
             })
             .await
             .unwrap();

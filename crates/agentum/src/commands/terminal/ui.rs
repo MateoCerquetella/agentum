@@ -64,6 +64,7 @@ pub const TERM_SPLIT_MAX_PCT: u16 = 75;
 /// Step size per `Ctrl-Shift-←/→` press.
 pub const TERM_SPLIT_STEP: u16 = 5;
 
+#[allow(clippy::too_many_arguments)]
 pub fn compute_layout(
     area: Rect,
     lazygit_open: bool,

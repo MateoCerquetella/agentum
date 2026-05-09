@@ -288,6 +288,7 @@ pub fn save(prefs: &Prefs) {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)] // tests mutate between assertions
 mod tests {
     use super::*;
 
