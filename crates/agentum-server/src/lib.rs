@@ -1,9 +1,8 @@
 //! axum HTTP(S) server for agentum.
 //!
-//! - Phase 1: plain HTTP, no auth.
-//! - Phase 5: HTTPS via rustls (self-signed) + bearer-token middleware on
-//!   `/api/*` (excluding `/api/health` + `/api/cert`). A small plain-HTTP
-//!   cert-server runs on a side port for trust-on-first-use.
+//! HTTPS via self-signed rustls cert + bearer-token middleware on `/api/*`
+//! (excluding `/api/health` + `/api/cert`). A plain-HTTP cert-server runs
+//! on a side port for trust-on-first-use bootstrap.
 
 use std::net::SocketAddr;
 use std::sync::Arc;

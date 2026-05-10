@@ -374,11 +374,6 @@ pub struct DirEntryView {
 }
 
 impl NewSessionForm {
-    #[allow(dead_code)]
-    pub fn new(default_workdir: String) -> Self {
-        Self::with_profile(String::new(), default_workdir)
-    }
-
     /// Constructor that lets the caller pre-fill the profile field.
     /// Used by the run-loop to seed the form with the active profile
     /// when the user opens it from any sidebar / palette / key path.
@@ -2277,38 +2272,6 @@ fn extract_selection_text(app: &App, sel: TermSelection) -> String {
 /// just doesn't get the host-clipboard copy.
 fn write_osc52(_text: &str) {}
 
-/// Tiny self-contained base64 encoder so OSC 52 doesn't drag in a
-/// crate dependency. Standard alphabet, `=` padding — exactly what
-/// every terminal's OSC 52 parser expects.
-#[allow(dead_code)] // re-enabled when write_osc52 comes back
-fn base64_encode(input: &[u8]) -> String {
-    const TBL: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
-    let mut chunks = input.chunks_exact(3);
-    for chunk in chunks.by_ref() {
-        let n = ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8) | (chunk[2] as u32);
-        out.push(TBL[((n >> 18) & 0x3f) as usize] as char);
-        out.push(TBL[((n >> 12) & 0x3f) as usize] as char);
-        out.push(TBL[((n >> 6) & 0x3f) as usize] as char);
-        out.push(TBL[(n & 0x3f) as usize] as char);
-    }
-    let rem = chunks.remainder();
-    if !rem.is_empty() {
-        let b0 = rem[0] as u32;
-        let b1 = rem.get(1).copied().unwrap_or(0) as u32;
-        let n = (b0 << 16) | (b1 << 8);
-        out.push(TBL[((n >> 18) & 0x3f) as usize] as char);
-        out.push(TBL[((n >> 12) & 0x3f) as usize] as char);
-        if rem.len() == 2 {
-            out.push(TBL[((n >> 6) & 0x3f) as usize] as char);
-        } else {
-            out.push('=');
-        }
-        out.push('=');
-    }
-    out
-}
 
 /// Encode a crossterm mouse event as an xterm SGR sequence (DECSET 1006
 /// / `\x1b[<…M|m`). xterm SGR is what every modern alt-screen TUI
@@ -3173,11 +3136,6 @@ async fn handle_key(
                     }
                 }
                 TreeSection::Sessions => {
-                    // WIP: Enter will toggle multi-select on the cursor row so
-                    // bulk actions (stop / archive / delete several sessions at
-                    // once) can be issued from the tree. Tracked for follow-up;
-                    // surface a status hint for now so the keystroke isn't a
-                    // silent no-op while users adjust to Space-to-enter-terminal.
                     app.status_msg = Some(
                         "multi-select coming soon — use Space to enter the terminal".into(),
                     );
