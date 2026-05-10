@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { sessions, loadSessions } from '$stores/sessions';
   import { openNewSession } from '$stores/newSession';
-  import { deriveState, ctxOf } from '$lib/dashboard';
+  import { deriveState, ctxOf, projectOf } from '$lib/dashboard';
   import FleetRow from '$components/dashboard/FleetRow.svelte';
 
   type SortKey = 'ctx' | 'tokens' | 'cost' | 'name' | 'state';
@@ -19,16 +19,6 @@
     const id = setInterval(refresh, 5000);
     return () => clearInterval(id);
   });
-
-  // Project key: last meaningful segment of workdir, fallback to "—".
-  // ~/Developer/projects/agentum  →  agentum
-  // /opt/work/foo/                 →  foo
-  function projectOf(workdir: string | null | undefined): string {
-    if (!workdir) return '—';
-    const parts = workdir.replace(/\/+$/, '').split('/');
-    const tail = parts[parts.length - 1] || workdir;
-    return tail || '—';
-  }
 
   const filtered = $derived.by(() => {
     let xs = $sessions.items.slice();
