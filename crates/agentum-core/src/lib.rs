@@ -75,11 +75,9 @@ pub struct Session {
     #[serde(with = "time::serde::rfc3339::option")]
     pub last_activity_at: Option<OffsetDateTime>,
 
-    /* ---------------------------------------------------------------
-     * Redesign fields (phase 8). All optional — populated by the
-     * watchdog crate as it observes the agent. The HTTP layer skips
-     * `None` values so the wire format stays compact.
-     * ------------------------------------------------------------- */
+    // Observability fields — populated by the watchdog as it monitors
+    // the agent. Optional; the HTTP layer skips `None` to keep the wire
+    // format compact.
     /// Cumulative tokens consumed by this session (input + output).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<i64>,
@@ -262,7 +260,7 @@ pub enum WatchdogKind {
     Crash,
 }
 
-// ---------- board items (Phase 7) ----------
+// ---------- board items ----------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoardItem {
@@ -336,7 +334,7 @@ pub struct ClaimRequest {
     pub claimed_by: String,
 }
 
-// ---------- notes (Phase 8) ----------
+// ---------- notes ----------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Note {
@@ -369,7 +367,7 @@ pub struct NotePatch {
     pub tags: Option<Vec<String>>,
 }
 
-// ---------- channels + messages (Phase 8) ----------
+// ---------- channels + messages ----------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Channel {
