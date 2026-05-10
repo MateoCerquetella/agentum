@@ -68,7 +68,7 @@
     // For idle stalls, Enter is a no-op which is fine.
     try {
       await api.sendInput(id, { keys: '', append_enter: true });
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error('unblock failed', e); }
   }
 </script>
 

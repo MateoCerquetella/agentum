@@ -298,12 +298,6 @@
     outline: none;
     border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
   }
-  .hint {
-    color: var(--muted);
-    font-size: 0.74rem;
-    line-height: 1.45;
-  }
-
   .actions {
     display: flex;
     align-items: center;

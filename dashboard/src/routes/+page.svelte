@@ -190,7 +190,7 @@
   async function compactSession(id: string) {
     try {
       await api.sendInput(id, { keys: '/compact', append_enter: true });
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error('compact failed', e); }
   }
 </script>
 

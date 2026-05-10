@@ -35,18 +35,6 @@ const TICK_INTERVAL: Duration = Duration::from_millis(100);
 /// entries are evicted FIFO when a new one arrives — same ceiling as
 /// the dashboard's `ToastStack`.
 pub const MAX_NOTIFS: usize = 4;
-/// Default TTLs in milliseconds for the three severities, mirroring
-/// `dashboard/src/lib/stores/events.ts`. Runtime TTLs are read from
-/// `app.prefs.ttl_for(kind)` at every notification site so the user can
-/// tune them via the Settings overlay; these constants only define the
-/// ship-with values used by `Prefs::default()`.
-#[allow(dead_code)]
-pub const NOTIF_TTL_INFO_MS: u64 = 6000;
-#[allow(dead_code)]
-pub const NOTIF_TTL_WARN_MS: u64 = 4000;
-#[allow(dead_code)]
-pub const NOTIF_TTL_ERROR_MS: u64 = 12000;
-
 /// Severity buckets for bottom-left toasts. Drives both the colour of
 /// the toast border and which system sound `sound::play` triggers.
 /// Mirrors `Toast['kind']` in the dashboard so the two surfaces stay in

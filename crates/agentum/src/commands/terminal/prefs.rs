@@ -10,7 +10,7 @@
 //! Status-bar chips are opt-out so first-launch matches the historical
 //! look. Layout sizes default to the same values App::new used to hardcode
 //! (tree 32, lazygit 60, split 50/50) so existing users see no change after
-//! upgrade. Notification TTLs match the original NOTIF_TTL_*_MS constants.
+//! upgrade. Notification TTLs use the NOTIF_TTL_*_DEFAULT_MS constants.
 //!
 //! Both the command palette and the Settings overlay write the file on
 //! every change, so the next launch comes up the way the user left it.
@@ -88,6 +88,10 @@ pub const NOTIF_TTL_MIN_MS: u64 = 1000;
 pub const NOTIF_TTL_MAX_MS: u64 = 30_000;
 /// Step size for the TTL +/- controls in the Settings overlay and palette.
 pub const NOTIF_TTL_STEP_MS: u64 = 500;
+/// Default TTLs per severity, mirroring `dashboard/src/lib/stores/events.ts`.
+pub const NOTIF_TTL_INFO_DEFAULT_MS: u64 = 6000;
+pub const NOTIF_TTL_WARN_DEFAULT_MS: u64 = 4000;
+pub const NOTIF_TTL_ERROR_DEFAULT_MS: u64 = 12_000;
 
 /// Mirror of the disk file. Keep field names stable — they're the TOML
 /// keys users will see if they peek at the file.
@@ -151,9 +155,9 @@ impl Default for Prefs {
             sound_info: true,
             sound_warn: true,
             sound_error: true,
-            notif_ttl_info_ms: 6000,
-            notif_ttl_warn_ms: 4000,
-            notif_ttl_error_ms: 12_000,
+            notif_ttl_info_ms: NOTIF_TTL_INFO_DEFAULT_MS,
+            notif_ttl_warn_ms: NOTIF_TTL_WARN_DEFAULT_MS,
+            notif_ttl_error_ms: NOTIF_TTL_ERROR_DEFAULT_MS,
         }
     }
 }
