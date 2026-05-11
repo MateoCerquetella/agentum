@@ -4,6 +4,26 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.15] — 2026-05-11
+
+### Fixed
+- **`n` pre-fills the form with a matching (profile, workdir) pair.**
+  Previously the form opened with `profile = active server` and
+  `workdir = selected session's workdir`, even if that session was
+  owned by a different daemon. The user would then submit and either
+  hit a "path doesn't exist" error or land on an empty workdir on
+  the active server. Now: when a session is selected, the form's
+  Servers field is pre-filled with that session's *owning* profile
+  (via `App::profile_for_session`) so the pre-filled workdir is a
+  real path on the chosen daemon.
+- **Tab on the Servers field always advances when there's nothing
+  to cycle to.** v0.7.14's check (`if names.is_empty() && !has_local`)
+  trapped the cursor on the Profile field in the
+  loopback-with-zero-peers case (names empty, has_local true,
+  wheel of just `[""]`). The condition is now `wheel_size <= 1`,
+  matching what `cycle_profile` actually sees: zero or one entry =
+  nothing to cycle = advance to the next field.
+
 ## [0.7.14] — 2026-05-11
 
 ### Fixed

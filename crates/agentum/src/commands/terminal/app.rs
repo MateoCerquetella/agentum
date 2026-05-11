@@ -575,6 +575,32 @@ pub enum PendingAction {
     RemoveServer {
         name: String,
     },
+    /// Bulk variant of Start/Stop/Kill driven by the multi-select set.
+    /// `names` is preserved alongside `ids` so the confirm prompt can
+    /// list a few before falling back to a count, even if a session is
+    /// removed between confirm-open and confirm-commit.
+    Bulk {
+        kind: BulkKind,
+        ids: Vec<Uuid>,
+        names: Vec<String>,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BulkKind {
+    Start,
+    Stop,
+    Kill,
+}
+
+impl BulkKind {
+    fn verb(self) -> &'static str {
+        match self {
+            BulkKind::Start => "start",
+            BulkKind::Stop => "stop",
+            BulkKind::Kill => "kill",
+        }
+    }
 }
 
 impl PendingAction {
@@ -590,11 +616,43 @@ impl PendingAction {
             PendingAction::RemoveServer { name } => {
                 format!("delete server `{name}`? This cannot be undone.")
             }
+            PendingAction::Bulk { kind, ids, names } => {
+                let n = ids.len();
+                let preview = bulk_preview(names);
+                match kind {
+                    BulkKind::Start => format!("start {n} checked sessions ({preview})?"),
+                    BulkKind::Stop => format!(
+                        "stop {n} checked sessions ({preview})? (graceful, SIGTERM then kill after 5s)"
+                    ),
+                    BulkKind::Kill => format!(
+                        "kill {n} checked sessions ({preview})? Stops the processes and removes the records."
+                    ),
+                }
+            }
         }
     }
 
     pub fn is_destructive(&self) -> bool {
-        !matches!(self, PendingAction::Start { .. })
+        !matches!(
+            self,
+            PendingAction::Start { .. }
+                | PendingAction::Bulk {
+                    kind: BulkKind::Start,
+                    ..
+                }
+        )
+    }
+}
+
+/// Render up to two names from a bulk set, then `+N more` so the
+/// confirm prompt stays one line regardless of how many sessions were
+/// checked.
+fn bulk_preview(names: &[String]) -> String {
+    match names.len() {
+        0 => String::new(),
+        1 => format!("`{}`", names[0]),
+        2 => format!("`{}`, `{}`", names[0], names[1]),
+        n => format!("`{}`, `{}` +{} more", names[0], names[1], n - 2),
     }
 }
 
@@ -789,6 +847,12 @@ pub struct App {
     /// `session.crashed` branch. The set is small (only your in-flight
     /// destructive verbs) so no eviction policy is needed.
     pub recently_killed: std::collections::HashSet<Uuid>,
+    /// Multi-select set, populated by pressing Enter on a leaf row in
+    /// the Sessions tree. When non-empty, lifecycle keys (u/s/K/x/D
+    /// and Ctrl-D) fan out across the checked ids instead of operating
+    /// on the cursor row. Pruned in `refresh_sessions` so dead ids
+    /// don't linger after a session is removed elsewhere.
+    pub checked: HashSet<Uuid>,
     pub tick_count: u64,
     pub status_msg: Option<String>,
     /// Drained by the run-loop tick: when `Some`, the daemon's shared
@@ -1073,6 +1137,7 @@ impl App {
             was_connected: false,
             http_fail_count: 0,
             recently_killed: std::collections::HashSet::new(),
+            checked: HashSet::new(),
             tick_count: 0,
             status_msg: None,
             pending_pref_push: None,
@@ -1286,6 +1351,13 @@ impl App {
         self.tree.clamp_cursor();
         if let Some(id) = self.selected {
             self.tree.select_session(id);
+        }
+        // Drop any check that's pointing at a session that no longer
+        // exists (killed locally, removed by a peer, profile gone…).
+        // Without this, a refreshed list could leave ghost ids in the
+        // set and the next bulk action would silently skip them.
+        if !self.checked.is_empty() {
+            self.checked.retain(|id| self.sessions.iter().any(|s| s.id == *id));
         }
     }
 
@@ -2704,7 +2776,9 @@ async fn handle_key(
                 return;
             }
             TreeSection::Sessions => {
-                if let Some(s) = app.selected_session() {
+                if let Some(bulk) = bulk_action_from_checks(app, BulkKind::Kill) {
+                    app.overlay = Overlay::Confirm(bulk);
+                } else if let Some(s) = app.selected_session() {
                     app.overlay = Overlay::Confirm(PendingAction::Kill {
                         id: s.id,
                         name: s.name.clone(),
@@ -2907,7 +2981,9 @@ async fn handle_key(
     if shift && app.focus == Focus::Tree {
         match key.code {
             KeyCode::Char('K') => {
-                if let Some(s) = app.selected_session() {
+                if let Some(bulk) = bulk_action_from_checks(app, BulkKind::Kill) {
+                    app.overlay = Overlay::Confirm(bulk);
+                } else if let Some(s) = app.selected_session() {
                     app.overlay = Overlay::Confirm(PendingAction::Kill {
                         id: s.id,
                         name: s.name.clone(),
@@ -2918,7 +2994,9 @@ async fn handle_key(
             KeyCode::Char('D') => {
                 // Shift-D is now an alias for Kill — there's no separate
                 // delete verb. Same confirmation, same outcome.
-                if let Some(s) = app.selected_session() {
+                if let Some(bulk) = bulk_action_from_checks(app, BulkKind::Kill) {
+                    app.overlay = Overlay::Confirm(bulk);
+                } else if let Some(s) = app.selected_session() {
                     app.overlay = Overlay::Confirm(PendingAction::Kill {
                         id: s.id,
                         name: s.name.clone(),
@@ -2927,7 +3005,9 @@ async fn handle_key(
                 return;
             }
             KeyCode::Char('U') => {
-                if let Some(s) = app.selected_session() {
+                if let Some(bulk) = bulk_action_from_checks(app, BulkKind::Start) {
+                    app.overlay = Overlay::Confirm(bulk);
+                } else if let Some(s) = app.selected_session() {
                     app.overlay = Overlay::Confirm(PendingAction::Start {
                         id: s.id,
                         name: s.name.clone(),
@@ -2936,7 +3016,9 @@ async fn handle_key(
                 return;
             }
             KeyCode::Char('S') => {
-                if let Some(s) = app.selected_session() {
+                if let Some(bulk) = bulk_action_from_checks(app, BulkKind::Stop) {
+                    app.overlay = Overlay::Confirm(bulk);
+                } else if let Some(s) = app.selected_session() {
                     app.overlay = Overlay::Confirm(PendingAction::Stop {
                         id: s.id,
                         name: s.name.clone(),
@@ -3122,6 +3204,15 @@ async fn handle_key(
             app.fullscreen = false;
             app.status_msg = Some("fullscreen off".into());
         }
+        // Esc clears the multi-select set first — it's the most
+        // recently entered transient state, and matches the way Esc
+        // works in the rest of the TUI (peel one layer at a time). If
+        // nothing's checked, fall through to filter / fullscreen / etc.
+        KeyCode::Esc if !app.checked.is_empty() => {
+            let n = app.checked.len();
+            app.checked.clear();
+            app.status_msg = Some(format!("cleared {n} checked"));
+        }
         // Esc clears an active tree filter when filter-input mode isn't
         // running (that case is handled inside `handle_filter_input_key`).
         // Lets the user blow away a stale filter without remembering the
@@ -3229,8 +3320,7 @@ async fn handle_key(
             // Space: select the session under the cursor AND jump focus
             // into the terminal so the user can start typing immediately.
             // On a group row, this is a no-op (update_selection ignores
-            // group rows). Enter is reserved for an upcoming multi-select
-            // mode (see WIP note below).
+            // group rows). Enter is the multi-select toggle (see below).
             let on_leaf = matches!(app.tree.current_row(), Some(Row::Leaf { .. }));
             {
                 let side = app.target_side();
@@ -3275,9 +3365,23 @@ async fn handle_key(
                     }
                 }
                 TreeSection::Sessions => {
-                    app.status_msg = Some(
-                        "multi-select coming soon — use Space to enter the terminal".into(),
-                    );
+                    // Toggle the leaf under the cursor in the multi-select
+                    // set. No-op on group rows so an accidental Enter on a
+                    // collapsed project doesn't sweep every child in. Once
+                    // anything is checked, lifecycle keys (u/s/K/x/D and
+                    // Ctrl-D) act on the set; Esc clears it.
+                    if let Some(Row::Leaf { group, leaf }) = app.tree.current_row() {
+                        let id = app.tree.groups[group].sessions[leaf];
+                        if !app.checked.insert(id) {
+                            app.checked.remove(&id);
+                        }
+                        let n = app.checked.len();
+                        app.status_msg = Some(if n == 0 {
+                            "checks cleared".into()
+                        } else {
+                            format!("{n} checked · u/s/K/x to act · Esc to clear")
+                        });
+                    }
                 }
             }
         }
@@ -3326,26 +3430,35 @@ async fn handle_key(
             // daemon. Asking the server resolves to whatever its own
             // `$HOME` is, matching what Tab-cycling profiles inside the
             // form already does.
-            let workdir = if let Some(s) = app.selected_session() {
-                s.workdir.clone()
+            // Seed the form with a *consistent* (profile, workdir)
+            // pair. When a session is selected, pre-fill against
+            // the server that actually owns it — its workdir is a
+            // path on that server, so opening on a different profile
+            // (e.g. the laptop's active connection) would hand the
+            // user a path that doesn't exist on the target.
+            //
+            // No selection → fall back to the active connection and
+            // ask the daemon for its `$HOME`. If the network hiccups
+            // we use the laptop's `$HOME` as a last resort so the
+            // form still opens with something editable.
+            let (profile, workdir) = if let Some(s) = app.selected_session() {
+                let owning_profile = app.profile_for_session(s.id).to_string();
+                (owning_profile, s.workdir.clone())
             } else {
-                match client.list_dir(None).await {
+                let active = app.active_profile.clone().unwrap_or_default();
+                let home = match client.list_dir(None).await {
                     Ok(listing) => listing.path,
-                    // Network hiccup / older daemon — fall back to the
-                    // laptop's $HOME so the form still opens with
-                    // something editable.
                     Err(_) => std::env::var("HOME").unwrap_or_default(),
-                }
+                };
+                (active, home)
             };
-            // Seed the form's Profile field with the active one so
-            // the user's first Enter creates on the current daemon.
-            // `cycle_profile` from there walks the rest.
-            let profile = app.active_profile.clone().unwrap_or_default();
             app.overlay =
                 Overlay::NewSession(Box::new(NewSessionForm::with_profile(profile, workdir)));
         }
         KeyCode::Char('u') => {
-            if let Some(s) = app.selected_session() {
+            if let Some(bulk) = bulk_action_from_checks(app, BulkKind::Start) {
+                app.overlay = Overlay::Confirm(bulk);
+            } else if let Some(s) = app.selected_session() {
                 app.overlay = Overlay::Confirm(PendingAction::Start {
                     id: s.id,
                     name: s.name.clone(),
@@ -3355,7 +3468,9 @@ async fn handle_key(
             }
         }
         KeyCode::Char('s') => {
-            if let Some(s) = app.selected_session() {
+            if let Some(bulk) = bulk_action_from_checks(app, BulkKind::Stop) {
+                app.overlay = Overlay::Confirm(bulk);
+            } else if let Some(s) = app.selected_session() {
                 app.overlay = Overlay::Confirm(PendingAction::Stop {
                     id: s.id,
                     name: s.name.clone(),
@@ -3365,7 +3480,9 @@ async fn handle_key(
             }
         }
         KeyCode::Char('K') => {
-            if let Some(s) = app.selected_session() {
+            if let Some(bulk) = bulk_action_from_checks(app, BulkKind::Kill) {
+                app.overlay = Overlay::Confirm(bulk);
+            } else if let Some(s) = app.selected_session() {
                 app.overlay = Overlay::Confirm(PendingAction::Kill {
                     id: s.id,
                     name: s.name.clone(),
@@ -3378,7 +3495,9 @@ async fn handle_key(
             // `x` is the discoverable vim/fzf-style alias; Shift-D is the
             // muscle-memory binding. Both route to the same Kill prompt
             // as Shift-K — there's no separate delete verb anymore.
-            if let Some(s) = app.selected_session() {
+            if let Some(bulk) = bulk_action_from_checks(app, BulkKind::Kill) {
+                app.overlay = Overlay::Confirm(bulk);
+            } else if let Some(s) = app.selected_session() {
                 app.overlay = Overlay::Confirm(PendingAction::Kill {
                     id: s.id,
                     name: s.name.clone(),
@@ -3435,7 +3554,13 @@ async fn handle_new_session_key(
                 let names: Vec<String> =
                     app.profiles.iter().map(|p| p.name.clone()).collect();
                 let has_local = app.clients.contains_key("");
-                if names.is_empty() && !has_local {
+                // Wheel size is what `cycle_profile` would build:
+                // configured peers + optional empty entry for local.
+                // If that has zero or one entry there's nothing to
+                // cycle through, so Tab should advance to the next
+                // field instead of trapping the cursor here.
+                let wheel_size = names.len() + if has_local { 1 } else { 0 };
+                if wheel_size <= 1 {
                     form.next_field();
                 } else {
                     let old_profile = form.profile.clone();
@@ -3916,6 +4041,28 @@ async fn handle_confirm_key(app: &mut App, key: KeyEvent, client: &Client) {
     }
 }
 
+/// Build a `PendingAction::Bulk` from the multi-select set, or return
+/// `None` if nothing is checked / every checked id has gone stale. The
+/// returned action lists ids+names sorted by current sidebar order so
+/// the confirm preview reads in the same order the user sees.
+fn bulk_action_from_checks(app: &App, kind: BulkKind) -> Option<PendingAction> {
+    if app.checked.is_empty() {
+        return None;
+    }
+    let mut ids: Vec<Uuid> = Vec::with_capacity(app.checked.len());
+    let mut names: Vec<String> = Vec::with_capacity(app.checked.len());
+    for s in &app.sessions {
+        if app.checked.contains(&s.id) {
+            ids.push(s.id);
+            names.push(s.name.clone());
+        }
+    }
+    if ids.is_empty() {
+        return None;
+    }
+    Some(PendingAction::Bulk { kind, ids, names })
+}
+
 async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
     // Server removal is purely local — it touches profiles.toml
     // and the app's in-memory profile list without a daemon round trip.
@@ -3936,6 +4083,58 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         return;
     }
 
+    // Bulk variant: fan out per-id, routing each to its owning client,
+    // and aggregate the result into one toast. We mirror the single-id
+    // path's recently_killed + selection cleanup so the watchdog
+    // crash-suppression and post-kill empty pane both behave the same.
+    if let PendingAction::Bulk { kind, ids, .. } = action {
+        let verb = kind.verb();
+        let total = ids.len();
+        let mut ok = 0usize;
+        let mut errs: Vec<String> = Vec::new();
+        for id in ids {
+            let owner = app.client_for_session(id).cloned();
+            let target = owner.unwrap_or_else(|| client.clone());
+            if matches!(kind, BulkKind::Kill) {
+                app.recently_killed.insert(id);
+                if app.selected == Some(id) {
+                    app.selected = None;
+                    app.term.reset();
+                }
+            }
+            let res = match kind {
+                BulkKind::Start => target.start_session(id).await,
+                BulkKind::Stop => target.stop_session(id).await,
+                BulkKind::Kill => target.delete_session(id, true).await,
+            };
+            match res {
+                Ok(()) => ok += 1,
+                Err(e) => errs.push(format!("{id}: {e}")),
+            }
+        }
+        // Clear the checks regardless of outcome — leaving them
+        // around after a fan-out would invite a second accidental
+        // bulk press on an already-dispatched set. The user can
+        // re-check from scratch if they need to retry failures.
+        app.checked.clear();
+        let label = if errs.is_empty() {
+            format!("{verb} {ok}/{total} checked")
+        } else {
+            format!("{verb} {ok}/{total} checked ({} failed)", errs.len())
+        };
+        if errs.is_empty() {
+            app.status_msg = Some(label.clone());
+            push_notification(app, label, None, NotifKind::Info);
+        } else {
+            for e in &errs {
+                app.push_error(format!("bulk {verb}: {e}"));
+            }
+            app.status_msg = Some(label);
+        }
+        refresh_all(app).await;
+        return;
+    }
+
     // Lifecycle ops (start/stop/kill) target a specific session id, so
     // they have to talk to whichever server owns that session — not
     // the default. Look up the owner's client; fall back to `client`
@@ -3945,7 +4144,7 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         PendingAction::Start { id, .. }
         | PendingAction::Stop { id, .. }
         | PendingAction::Kill { id, .. } => *id,
-        PendingAction::RemoveServer { .. } => unreachable!(),
+        PendingAction::RemoveServer { .. } | PendingAction::Bulk { .. } => unreachable!(),
     };
     let owner = app.client_for_session(session_id).cloned();
     let target = owner.unwrap_or_else(|| client.clone());
@@ -3984,7 +4183,7 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         PendingAction::Start { name, .. } => format!("started `{name}`"),
         PendingAction::Stop { name, .. } => format!("stopped `{name}`"),
         PendingAction::Kill { name, .. } => format!("killed `{name}`"),
-        PendingAction::RemoveServer { .. } => unreachable!(),
+        PendingAction::RemoveServer { .. } | PendingAction::Bulk { .. } => unreachable!(),
     };
     match result {
         Ok(()) => {
