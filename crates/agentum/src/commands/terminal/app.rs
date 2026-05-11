@@ -1605,7 +1605,10 @@ pub struct Project {
 #[derive(Clone, Copy)]
 pub enum Row {
     Group(usize),
-    Project { group: usize, project: usize },
+    Project {
+        group: usize,
+        project: usize,
+    },
     Leaf {
         group: usize,
         project: usize,
@@ -1946,9 +1949,8 @@ impl Tree {
                     } else if let Some(g) = self.groups.get_mut(group) {
                         if g.expanded {
                             g.expanded = false;
-                            self.cursor = self
-                                .row_index_of(Row::Group(group))
-                                .unwrap_or(self.cursor);
+                            self.cursor =
+                                self.row_index_of(Row::Group(group)).unwrap_or(self.cursor);
                         }
                     }
                 }
@@ -1956,8 +1958,7 @@ impl Tree {
                     if let Some(g) = self.groups.get_mut(gi) {
                         if g.expanded {
                             g.expanded = false;
-                            self.cursor =
-                                self.row_index_of(Row::Group(gi)).unwrap_or(self.cursor);
+                            self.cursor = self.row_index_of(Row::Group(gi)).unwrap_or(self.cursor);
                         }
                     }
                 }
