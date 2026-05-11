@@ -170,9 +170,19 @@ pub async fn run(opts: Options) -> Result<()> {
                             return Err(e);
                         }
                         eprintln!();
-                        eprintln!("  switch to profile `{name}` failed: {e}");
-                        eprintln!("  staying on the previous server.");
+                        eprintln!("  ✗ switch to profile `{name}` failed:");
+                        eprintln!("    {e}");
                         eprintln!();
+                        eprintln!("  staying on the previous server.");
+                        // Pause so the user actually sees the error
+                        // before the alt-screen redraws over it. Without
+                        // this, the failure flashes by in <100ms and the
+                        // user thinks "nothing happened" after typing
+                        // their credentials.
+                        eprint!("  press Enter to continue… ");
+                        std::io::stderr().flush().ok();
+                        let mut _buf = String::new();
+                        let _ = std::io::stdin().read_line(&mut _buf);
                         // Restore the previous profile by re-running the
                         // initial resolution; this re-enters the connect
                         // loop with whatever the user originally asked
@@ -319,6 +329,14 @@ fn warn_label() -> &'static str {
 
 /// Get a usable bearer token: try the per-host cached one first, validate
 /// it, else prompt for username/password and exchange via /api/auth/login.
+///
+/// On failure (bad credentials, network error, etc.) the user gets up to
+/// three attempts before we surface the error. Password reads use
+/// `rpassword` so the typed characters don't echo — pre-v0.7.9 this used a
+/// plain `stdin().read_line` and the password rendered in the terminal,
+/// which on macOS surfaced as "I typed credentials and nothing happened"
+/// because the user couldn't tell which characters were the password vs.
+/// echo noise.
 async fn obtain_token(base: &Url, trust_setting: &TlsTrust) -> Result<String> {
     let host_key = trust::host_key(base)?;
     let mut creds = trust::Credentials::load()?;
@@ -333,24 +351,52 @@ async fn obtain_token(base: &Url, trust_setting: &TlsTrust) -> Result<String> {
 
     use std::io::{self, Write};
     eprintln!();
-    eprintln!("Log in to agentum at {base}");
-    eprint!("  username: ");
-    io::stderr().flush().ok();
-    let mut user = String::new();
-    io::stdin().read_line(&mut user).context("read username")?;
-    let user = user.trim().to_string();
+    eprintln!("Sign in to agentum at {base}");
 
-    eprint!("  password: ");
-    io::stderr().flush().ok();
-    let mut pw = String::new();
-    io::stdin().read_line(&mut pw).context("read password")?;
-    let pw = pw.trim_end_matches(['\n', '\r']).to_string();
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 1..=MAX_ATTEMPTS {
+        if attempt > 1 {
+            eprintln!();
+            eprintln!("  attempt {attempt} of {MAX_ATTEMPTS} — try again");
+        }
+        eprint!("  username: ");
+        io::stderr().flush().ok();
+        let mut user = String::new();
+        io::stdin().read_line(&mut user).context("read username")?;
+        let user = user.trim().to_string();
 
-    let token = api::login(base, trust_setting, &user, &pw)
-        .await
-        .context("login failed")?;
-    creds.put(host_key, token.clone(), Some(user))?;
-    Ok(token)
+        // rpassword reads from /dev/tty when available, falling back to
+        // stdin. The "  password: " prompt is written to stderr by us so
+        // it lines up visually with the username field. `prompt_password`
+        // would write its own to stdout; we drive it manually.
+        eprint!("  password: ");
+        io::stderr().flush().ok();
+        let pw = match rpassword::read_password() {
+            Ok(p) => p,
+            Err(e) => {
+                return Err(anyhow!("read password: {e}"));
+            }
+        };
+
+        eprintln!("  signing in…");
+        match api::login(base, trust_setting, &user, &pw).await {
+            Ok(token) => {
+                creds.put(host_key, token.clone(), Some(user))?;
+                eprintln!("  ✓ signed in");
+                return Ok(token);
+            }
+            Err(e) => {
+                eprintln!("  ✗ {e}");
+                last_err = Some(e);
+                // Continue the loop and re-prompt unless we're out of attempts.
+            }
+        }
+    }
+
+    Err(last_err
+        .map(|e| anyhow!("login failed after {MAX_ATTEMPTS} attempts: {e}"))
+        .unwrap_or_else(|| anyhow!("login failed after {MAX_ATTEMPTS} attempts")))
 }
 
 async fn probe_token(base: &Url, trust_setting: &TlsTrust, token: &str) -> bool {

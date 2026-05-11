@@ -4,6 +4,46 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.11] — 2026-05-11
+
+### Added
+- **`Ctrl-D` on the tree deletes the row under the cursor.** Routes
+  by section: on Sessions it raises the Kill confirmation, on Servers
+  it raises the RemoveServer confirmation. Either way the existing
+  y/N prompt acts as the double-check before anything is actually
+  removed. When a terminal pane (not the tree) is focused, `Ctrl-D`
+  still forwards EOF to the running agent as before.
+
+### Fixed
+- **TUI profile-switch login no longer reads as "nothing happened."**
+  Switching to a `login needed` server prompted for username/password
+  on the host TTY after exiting the alt-screen, but the password was
+  echoed in plaintext and any failure flashed by in <100ms before the
+  TUI redrew on the previous profile. Now: passwords are masked (via
+  `rpassword`), the prompt shows a `signing in…` / `✓ signed in` /
+  `✗ <error>` banner, and the user gets up to 3 attempts before
+  giving up. On the outer switch-profile failure path, the TUI now
+  pauses on `press Enter to continue…` so the error is actually
+  readable.
+
+### Changed
+- **New-session form: `Profile` → `Servers`, with `this machine` as
+  an explicit peer.** The empty/loopback entry used to render as
+  `(current connection)`, which read as a stale fallback rather than
+  "the local daemon." It now shows as `this machine` so Tab cycles
+  `this machine` ↔ `@vps1` ↔ `@vps2` with every target looking like
+  the same shape.
+- **`Working directory` moved directly below `Servers` in the form.**
+  Matches the mental order "which agentum, then which folder."
+  Cycling Servers (which already refetches `$HOME` from the picked
+  daemon) now lands the cursor on the workdir it just populated.
+- **`n` on the tree pre-fills workdir from the daemon's `$HOME`, not
+  the laptop's.** When driving a remote profile from macOS, the old
+  behaviour pre-filled `/Users/you` which doesn't exist on a Linux
+  VPS. The form now calls `/api/fs/list` to resolve the server-side
+  `$HOME` and uses that; falls back to local `$HOME` on network
+  error so cold/offline daemons don't leave the field empty.
+
 ## [0.7.10] — 2026-05-11
 
 ### Added

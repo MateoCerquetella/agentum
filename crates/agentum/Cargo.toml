@@ -46,6 +46,7 @@ tui-term           = "0.2"
 vt100              = "0.15"
 portable-pty       = "0.9"
 reqwest            = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+rpassword          = "7"
 tokio-tungstenite  = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 futures-util       = "0.3"
 url                = "2"

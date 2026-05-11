@@ -2645,28 +2645,43 @@ async fn handle_key(
 
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-    // Ctrl-D — delete an server when the Servers sidebar section
-    // has focus. Shows a confirmation prompt to prevent accidental
-    // deletion. When a terminal pane is focused, Ctrl-D still
+    // Ctrl-D — delete the row under the tree cursor. Routes by
+    // section: Servers → `RemoveServer` confirmation, Sessions →
+    // `Kill` confirmation. Either way the user gets a y/N prompt
+    // (the "double check" — `handle_confirm_key` only commits on
+    // y/Y/Enter). When a terminal pane is focused, Ctrl-D still
     // forwards EOF (^D) to the running agent — standard Unix
-    // behaviour — so this only intercepts when the sidebar cursor
-    // is actually on an server entry.
+    // behaviour — so this only intercepts when Focus::Tree.
     if ctrl
         && matches!(key.code, KeyCode::Char('d') | KeyCode::Char('D'))
         && app.focus == Focus::Tree
-        && app.tree_section == TreeSection::Servers
     {
-        if let Some(entry) = app.profiles.get(app.servers_cursor).cloned() {
-            if app.active_profile.as_deref() == Some(entry.name.as_str()) {
-                app.status_msg =
-                    Some("can't remove the active server — switch first".into());
-            } else {
-                app.overlay = Overlay::Confirm(PendingAction::RemoveServer {
-                    name: entry.name.clone(),
-                });
+        match app.tree_section {
+            TreeSection::Servers => {
+                if let Some(entry) = app.profiles.get(app.servers_cursor).cloned() {
+                    if app.active_profile.as_deref() == Some(entry.name.as_str()) {
+                        app.status_msg =
+                            Some("can't remove the active server — switch first".into());
+                    } else {
+                        app.overlay = Overlay::Confirm(PendingAction::RemoveServer {
+                            name: entry.name.clone(),
+                        });
+                    }
+                }
+                return;
+            }
+            TreeSection::Sessions => {
+                if let Some(s) = app.selected_session() {
+                    app.overlay = Overlay::Confirm(PendingAction::Kill {
+                        id: s.id,
+                        name: s.name.clone(),
+                    });
+                } else {
+                    app.status_msg = Some("no session selected".into());
+                }
+                return;
             }
         }
-        return;
     }
 
     // F5 / F6 — global panel switchers, work even with a pane focused.
