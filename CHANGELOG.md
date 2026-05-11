@@ -4,6 +4,27 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.18] — 2026-05-11
+
+### Fixed
+- **`agentum terminal` no longer hard-fails on `default = ""` in
+  `profiles.toml`.** A stale or hand-edited empty default would
+  resolve to `Some("")`, which then failed the `profiles.get("")`
+  lookup and bailed with the unhelpful `profile `` not found`
+  message — leaving the user unable to launch the TUI without
+  editing the TOML by hand. The default-name reader now treats an
+  empty (or whitespace-only) string the same as a missing field
+  and falls through to the loopback probe.
+- **Workdir Tab in the New Session form stays on the field when it
+  hits an ambiguous fork.** Pressing Tab on a path like `~/D` with
+  Desktop/Documents/Developer present (no common prefix to extend)
+  used to bump the cursor out to the Tool field — making it
+  impossible to continue typing the path without first re-focusing
+  Workdir. The function returned `false` (the "advance" signal)
+  while its comment said "no-op"; now it returns `true` so the
+  field stays selected, matching bash readline. Empty workdir or
+  path with no `/` still advances the field as before.
+
 ## [0.7.17] — 2026-05-11
 
 ### Fixed

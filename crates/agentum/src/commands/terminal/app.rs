@@ -3924,15 +3924,21 @@ async fn autocomplete_workdir(form: &mut NewSessionForm, client: &Client) -> boo
     } else {
         let common = longest_common_prefix(&matches);
         if common.len() <= prefix.len() {
-            // Already at the boundary of an ambiguous fork — Tab can't
-            // advance. Treat as no-op so the user can keep typing or
-            // open the picker with Enter.
-            return false;
+            // Ambiguous fork with no further common prefix to fill in
+            // (e.g. `~/D` vs Desktop/Documents/Developer). Return `true`
+            // so the caller stays on the workdir field instead of
+            // advancing to Tool — bumping the user out of the field
+            // they're trying to type into is the opposite of what
+            // bash readline would do. The user can keep typing to
+            // disambiguate, or press Enter to open the picker.
+            return true;
         }
         format!("{dir_part}{common}")
     };
     if new_text == current {
-        return false;
+        // Same situation as the ambiguous-fork branch above: Tab found
+        // matches but couldn't extend the buffer. Stay on the field.
+        return true;
     }
     form.workdir = new_text;
     true

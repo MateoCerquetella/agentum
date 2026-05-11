@@ -82,7 +82,7 @@ impl Profiles {
     }
 
     pub fn list(&self) -> Vec<(String, Profile, bool)> {
-        let default = self.file.default.as_deref();
+        let default = self.normalized_default();
         self.file
             .profiles
             .iter()
@@ -95,7 +95,21 @@ impl Profiles {
     }
 
     pub fn default_name(&self) -> Option<&str> {
-        self.file.default.as_deref()
+        self.normalized_default()
+    }
+
+    /// `self.file.default` filtered so an empty string reads as "no
+    /// default". A stray `default = ""` (legacy file, manual edit,
+    /// pre-validation migration) used to make startup bail with
+    /// `profile `` not found` and refuse to launch the TUI; we treat
+    /// it as a missing field instead and fall through to the loopback
+    /// probe.
+    fn normalized_default(&self) -> Option<&str> {
+        self.file
+            .default
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
     }
 
     pub fn upsert(&mut self, name: String, profile: Profile) -> Result<()> {
@@ -116,7 +130,7 @@ impl Profiles {
             // entry; otherwise the next launch would still try to
             // resolve it and fall through to the loopback probe with a
             // confusing "profile X not found" error.
-            if self.file.default.as_deref() == Some(name) {
+            if self.normalized_default() == Some(name) {
                 self.file.default = None;
             }
             self.save()?;
