@@ -355,17 +355,17 @@ fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     // chip used to live in the bottom status bar; pulling it up here
     // keeps the bottom row reserved for non-error feedback while still
     // surfacing "something failed — press !" in the user's eye-line.
-    // Endpoint suffix surfaces the active profile so users juggling
+    // Server suffix surfaces the active profile so users juggling
     // multiple agentum servers (local + VPS) can see which one drives
     // the current pane without opening Ctrl-O. Hidden when no profile
     // is active (loopback, ad-hoc `--api`) to keep the bar tidy.
-    let endpoint_suffix = match app.active_profile.as_deref() {
+    let server_suffix = match app.active_profile.as_deref() {
         Some(name) => format!(" · @{name}"),
         None => String::new(),
     };
     let title = match app.selected_session() {
-        Some(s) => format!(" agentum · {}{endpoint_suffix} ", s.name),
-        None => format!(" agentum · no session selected{endpoint_suffix} "),
+        Some(s) => format!(" agentum · {}{server_suffix} ", s.name),
+        None => format!(" agentum · no session selected{server_suffix} "),
     };
     let title_span = Span::styled(
         title,
@@ -440,26 +440,26 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
 
     let mut items: Vec<ListItem> = Vec::new();
 
-    // Endpoints section: rendered above the sessions tree as a small
+    // Servers section: rendered above the sessions tree as a small
     // header + one line per configured profile. Active profile gets
     // a filled dot; cursor highlight uses the same row-style helper
     // as the sessions tree so the two sections look like one pane.
     items.push(ListItem::new(Line::from(Span::styled(
-        " ENDPOINTS".to_string(),
+        " SERVERS".to_string(),
         Style::default()
             .fg(p.muted)
             .add_modifier(Modifier::BOLD),
     ))));
     if app.profiles.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
-            "   (no endpoints — press a)".to_string(),
+            "   (no servers — press a)".to_string(),
             Style::default().fg(p.muted),
         ))));
     } else {
         for (i, entry) in app.profiles.iter().enumerate() {
             let is_active = app.active_profile.as_deref() == Some(entry.name.as_str());
             let is_cursor =
-                app.tree_section == TreeSection::Endpoints && i == app.endpoints_cursor;
+                app.tree_section == TreeSection::Servers && i == app.servers_cursor;
             let row_style = if is_cursor {
                 Style::default()
                     .bg(p.cursor_bg)
@@ -477,12 +477,12 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
                 .clients
                 .get(entry.name.as_str())
                 .map(|e| e.status);
-            use super::app::EndpointStatus;
+            use super::app::ServerStatus;
             let (dot_glyph, dot_color) = match (status, is_active) {
-                (Some(EndpointStatus::Live), true) => ("●", p.success),
-                (Some(EndpointStatus::Live), false) => ("○", p.success),
-                (Some(EndpointStatus::Unreachable), _) => ("●", p.error),
-                (Some(EndpointStatus::LoginNeeded), _) => ("●", p.warning),
+                (Some(ServerStatus::Live), true) => ("●", p.success),
+                (Some(ServerStatus::Live), false) => ("○", p.success),
+                (Some(ServerStatus::Unreachable), _) => ("●", p.error),
+                (Some(ServerStatus::LoginNeeded), _) => ("●", p.warning),
                 (None, true) => ("●", p.success),
                 (None, false) => ("○", p.muted),
             };
@@ -516,13 +516,13 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
             // Visible reachability label so the user doesn't have to
             // hover or guess what the dot color means.
             match status {
-                Some(EndpointStatus::Unreachable) => {
+                Some(ServerStatus::Unreachable) => {
                     spans.push(Span::styled(
                         "  unreachable".to_string(),
                         Style::default().fg(p.error),
                     ));
                 }
-                Some(EndpointStatus::LoginNeeded) => {
+                Some(ServerStatus::LoginNeeded) => {
                     spans.push(Span::styled(
                         "  login needed".to_string(),
                         Style::default().fg(p.warning),
@@ -585,7 +585,7 @@ fn render_tree_row(
             let arrow = if g.expanded { "▾" } else { "▸" };
             // Show the project name (basename) rather than the full path —
             // the full workdir is still visible in the title bar / status.
-            // Multi-endpoint runs prepend `@profile · ` so the user can
+            // Multi-server runs prepend `@profile · ` so the user can
             // tell which daemon owns this workdir at a glance.
             let label = super::app::group_label(&g.workdir);
             let mut spans = vec![Span::raw(format!(" {arrow} "))];
@@ -1536,7 +1536,7 @@ fn draw_profiles_overlay(
     }
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(head("Endpoints", p));
+    lines.push(head("Servers", p));
     lines.push(Line::from(""));
 
     if let Some(err) = state.error.as_ref() {
@@ -1610,12 +1610,12 @@ fn draw_profiles_overlay(
         Style::default().fg(p.muted),
     )));
 
-    overlay_box(f, area, " endpoints ", lines, 80, p);
+    overlay_box(f, area, " servers ", lines, 80, p);
 }
 
 fn draw_profiles_add_form(f: &mut Frame<'_>, area: Rect, form: &AddProfileForm, p: &Palette) {
     let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(head("Add endpoint", p));
+    lines.push(head("Add server", p));
     lines.push(Line::from(""));
     push_form_field(
         &mut lines,
@@ -1661,7 +1661,7 @@ fn draw_profiles_add_form(f: &mut Frame<'_>, area: Rect, form: &AddProfileForm, 
         "  Tab next · Space toggle · Enter save · Esc back".to_string(),
         Style::default().fg(p.muted),
     )));
-    overlay_box(f, area, " add endpoint ", lines, 80, p);
+    overlay_box(f, area, " add server ", lines, 80, p);
 }
 
 fn draw_errors_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
@@ -1814,7 +1814,7 @@ fn draw_new_session_overlay(
         &profile_display,
         form.field == NewSessionField::Profile,
         "(current connection)",
-        Some("Tab cycles configured endpoints"),
+        Some("Tab cycles configured servers"),
         p,
     );
     push_form_field(

@@ -173,7 +173,7 @@ pub enum Overlay {
     NewSession(Box<NewSessionForm>),
     /// Generic confirmation prompt for destructive session actions.
     Confirm(PendingAction),
-    /// Endpoint switcher. Lists configured agentum servers, lets the
+    /// Server switcher. Lists configured agentum servers, lets the
     /// user switch between them or add a new one without leaving the
     /// TUI. Selecting a different profile triggers a soft restart of
     /// the run-loop so every store / WS / cache rebuilds against the
@@ -188,8 +188,8 @@ pub struct ProfilesOverlay {
     pub cursor: usize,
     pub default_name: Option<String>,
     pub error: Option<String>,
-    /// `Some` when the user is editing the inline "add endpoint" form
-    /// instead of the list. Mirrors the dashboard's EndpointSwitcher.
+    /// `Some` when the user is editing the inline "add server" form
+    /// instead of the list. Mirrors the dashboard's ServerSwitcher.
     pub add_form: Option<AddProfileForm>,
 }
 
@@ -334,7 +334,7 @@ pub const YOLO_FLAG: &str = "--dangerously-skip-permissions";
 #[derive(Clone, PartialEq, Eq)]
 pub struct NewSessionForm {
     pub field: NewSessionField,
-    /// Endpoint profile this session will be created on. Empty string
+    /// Server profile this session will be created on. Empty string
     /// means "current connection" (loopback or ad-hoc `--api`); a
     /// non-empty value either matches the active profile (no-op on
     /// submit) or triggers a soft restart that re-opens the form on
@@ -527,7 +527,7 @@ pub fn parse_args_field(input: &str) -> Vec<String> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NewSessionField {
-    /// Endpoint profile this session targets. New first field — see
+    /// Server profile this session targets. New first field — see
     /// `NewSessionForm::with_profile`. Tab cycles through configured
     /// profiles + an empty entry meaning "current connection".
     Profile,
@@ -557,7 +557,7 @@ pub enum PendingAction {
         id: Uuid,
         name: String,
     },
-    RemoveEndpoint {
+    RemoveServer {
         name: String,
     },
 }
@@ -572,8 +572,8 @@ impl PendingAction {
             PendingAction::Kill { name, .. } => {
                 format!("kill `{name}`? Stops the process and removes the session.")
             }
-            PendingAction::RemoveEndpoint { name } => {
-                format!("delete endpoint `{name}`? This cannot be undone.")
+            PendingAction::RemoveServer { name } => {
+                format!("delete server `{name}`? This cannot be undone.")
             }
         }
     }
@@ -927,7 +927,7 @@ pub struct App {
     /// fail open at the call site so the picker stays usable.
     pub agent_availability: Option<HashSet<String>>,
     /// When `Some`, the run-loop is exiting because the user picked a
-    /// different profile in the endpoint switcher. `commands::terminal::run`
+    /// different profile in the server switcher. `commands::terminal::run`
     /// reads this on `Quit` and re-enters the connect loop with the
     /// named profile instead of returning to the shell.
     pub pending_switch_profile: Option<String>,
@@ -938,20 +938,20 @@ pub struct App {
     pub pending_after_switch: Option<PendingAfterSwitch>,
     /// Name of the active profile (or `None` if the TUI was launched
     /// with an ad-hoc `--api`). Shown in the title bar so users
-    /// targeting multiple endpoints can tell which one they're on.
+    /// targeting multiple servers can tell which one they're on.
     pub active_profile: Option<String>,
-    /// Configured endpoint profiles, cached at startup so the sidebar
-    /// can render an "Endpoints" section without re-reading the file
+    /// Configured server profiles, cached at startup so the sidebar
+    /// can render an "Servers" section without re-reading the file
     /// on every frame. Refreshed via `reload_profiles` after add /
     /// remove from any surface (overlay, sidebar action, CLI).
     pub profiles: Vec<ProfileEntry>,
     /// Which sidebar section the cursor is on. Two sections share one
-    /// pane: an Endpoints list at the top, then the Sessions tree.
+    /// pane: an Servers list at the top, then the Sessions tree.
     /// `j`/`k` flips between them at the boundaries.
     pub tree_section: TreeSection,
-    /// Cursor index inside the Endpoints section (only meaningful when
-    /// `tree_section == TreeSection::Endpoints`).
-    pub endpoints_cursor: usize,
+    /// Cursor index inside the Servers section (only meaningful when
+    /// `tree_section == TreeSection::Servers`).
+    pub servers_cursor: usize,
     /// Live clients keyed by profile name. The empty string `""` keys
     /// the loopback / `--api` connection (one launch can only have at
     /// most one of those). Each entry tracks its reachability so the
@@ -969,36 +969,36 @@ pub struct App {
     pub session_profile: HashMap<Uuid, String>,
 }
 
-/// One slot in [`App::clients`]. Tracks whether the endpoint is
+/// One slot in [`App::clients`]. Tracks whether the server is
 /// reachable, what error stopped it (if any), and the live `Client`
 /// when reachability succeeded.
-#[allow(dead_code)] // fields wired up but reads pending multi-endpoint UI
+#[allow(dead_code)] // fields wired up but reads pending multi-server UI
 pub struct ClientEntry {
     pub client: Option<Client>,
-    pub status: EndpointStatus,
+    pub status: ServerStatus,
     pub last_error: Option<String>,
-    /// Cached `/api/agents` response per endpoint so the New Session
+    /// Cached `/api/agents` response per server so the New Session
     /// form can gate the agent picker against the right daemon's
-    /// `PATH`. `None` means the probe is pending or the endpoint
+    /// `PATH`. `None` means the probe is pending or the server
     /// pre-dates the route.
     pub agent_availability: Option<HashSet<String>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EndpointStatus {
+pub enum ServerStatus {
     /// HTTP + auth check both passed; the client is usable.
     Live,
     /// We couldn't reach the server at all (DNS, TCP, TLS, timeout).
     Unreachable,
     /// Server answered but rejected the bearer token. The user has to
-    /// log in on this endpoint before its sessions appear.
+    /// log in on this server before its sessions appear.
     LoginNeeded,
 }
 
 /// Which sidebar section currently has the cursor.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TreeSection {
-    Endpoints,
+    Servers,
     Sessions,
 }
 
@@ -1084,7 +1084,7 @@ impl App {
             active_profile: None,
             profiles: Vec::new(),
             tree_section: TreeSection::Sessions,
-            endpoints_cursor: 0,
+            servers_cursor: 0,
             clients: HashMap::new(),
             session_profile: HashMap::new(),
         }
@@ -1102,7 +1102,7 @@ impl App {
     }
 
     /// Borrow the live `Client` that owns `id`. `None` means the
-    /// owning endpoint is unreachable or login-needed; callers that
+    /// owning server is unreachable or login-needed; callers that
     /// need to operate on the session should surface a hint to the
     /// user instead of trying anyway.
     pub fn client_for_session(&self, id: Uuid) -> Option<&Client> {
@@ -1112,16 +1112,16 @@ impl App {
 
     /// Borrow the *default* profile's client — the one new sessions
     /// land on by default and the one most legacy call sites still
-    /// use. `None` only when even the default endpoint failed to
+    /// use. `None` only when even the default server failed to
     /// connect, which is also the cold-start failure path.
-    #[allow(dead_code)] // wired up for upcoming multi-endpoint session routing
+    #[allow(dead_code)] // wired up for upcoming multi-server session routing
     pub fn default_client(&self) -> Option<&Client> {
         let key = self.active_profile.as_deref().unwrap_or("");
         self.clients.get(key).and_then(|e| e.client.as_ref())
     }
 
-    /// Iterate over `(profile_name, &Client)` for every live endpoint.
-    /// Used by the aggregating refresh so multi-endpoint runs see a
+    /// Iterate over `(profile_name, &Client)` for every live server.
+    /// Used by the aggregating refresh so multi-server runs see a
     /// unified session list refreshed from every reachable daemon.
     pub fn live_clients(&self) -> impl Iterator<Item = (&str, &Client)> {
         self.clients
@@ -1135,7 +1135,7 @@ impl App {
     /// profile via the sidebar or overlay so the sidebar stays in
     /// sync without re-reading the file every frame. Errors are
     /// non-fatal — they leave `profiles` empty and the sidebar
-    /// renders an "no endpoints" hint.
+    /// renders an "no servers" hint.
     pub fn reload_profiles(&mut self) {
         self.profiles = match super::profiles::Profiles::load() {
             Ok(store) => store
@@ -1151,8 +1151,8 @@ impl App {
             Err(_) => Vec::new(),
         };
         // Bring the cursor back into range when the list shrank under it.
-        if self.endpoints_cursor >= self.profiles.len() {
-            self.endpoints_cursor = self.profiles.len().saturating_sub(1);
+        if self.servers_cursor >= self.profiles.len() {
+            self.servers_cursor = self.profiles.len().saturating_sub(1);
         }
     }
 
@@ -1217,7 +1217,7 @@ impl App {
 
     /// Replace the session list with a freshly aggregated one and
     /// also refresh the owner map. Used by call sites that just did
-    /// a multi-endpoint fanout — the existing `refresh_sessions`
+    /// a multi-server fanout — the existing `refresh_sessions`
     /// would otherwise leave the owner map stale (newly-created
     /// peer sessions wouldn't be tagged).
     pub fn refresh_sessions_with_owners(
@@ -1343,19 +1343,19 @@ impl App {
 }
 
 /// One-call helper for refresh sites: fan out across every live
-/// endpoint, then atomically replace the session list + owner map.
+/// server, then atomically replace the session list + owner map.
 /// Replaces the historical `if let Ok(fresh) = client.list_sessions()`
-/// pattern; aggregation never errors (per-endpoint failures degrade
+/// pattern; aggregation never errors (per-server failures degrade
 /// to an empty list for that profile).
 pub async fn refresh_all(app: &mut App) {
     let (fresh, owners) = aggregate_sessions_with_owners(&*app).await;
     app.refresh_sessions_with_owners(fresh, owners);
 }
 
-/// Re-fetch the session list from every live endpoint and merge them
+/// Re-fetch the session list from every live server and merge them
 /// into one aggregated `Vec<Session>` plus an updated owner map keyed
 /// by session id. Used in place of `client.list_sessions()` at every
-/// refresh call site so a session created on a peer endpoint actually
+/// refresh call site so a session created on a peer server actually
 /// shows up in the sidebar without forcing a profile switch.
 ///
 /// Returns the merged session list and the owner map; the caller
@@ -1365,6 +1365,7 @@ pub async fn refresh_all(app: &mut App) {
 pub async fn aggregate_sessions_with_owners(
     app: &App,
 ) -> (Vec<Session>, HashMap<Uuid, String>) {
+    let active_key = app.active_profile.clone().unwrap_or_default();
     let probes: Vec<_> = app
         .live_clients()
         .map(|(name, c)| {
@@ -1374,15 +1375,56 @@ pub async fn aggregate_sessions_with_owners(
         })
         .collect();
     let results = futures_util::future::join_all(probes).await;
+    merge_sessions_dedup(results, &active_key)
+}
+
+/// Merge per-profile session lists into a single owner-tagged vec,
+/// keeping exactly one copy of each session id. Two profiles pointing
+/// at the same daemon would otherwise produce phantom duplicates that
+/// flicker in/out as events repopulate the tree.
+///
+/// Owner preference for a contested id: active profile > any named
+/// profile > loopback ("") > first-seen.
+pub fn merge_sessions_dedup(
+    per_profile: Vec<(String, Vec<Session>)>,
+    active_key: &str,
+) -> (Vec<Session>, HashMap<Uuid, String>) {
     let mut merged: Vec<Session> = Vec::new();
     let mut owners: HashMap<Uuid, String> = HashMap::new();
-    for (name, list) in results {
+    let mut idx_by_id: HashMap<Uuid, usize> = HashMap::new();
+    for (name, list) in per_profile {
         for s in list {
-            owners.insert(s.id, name.clone());
-            merged.push(s);
+            match idx_by_id.get(&s.id).copied() {
+                None => {
+                    idx_by_id.insert(s.id, merged.len());
+                    owners.insert(s.id, name.clone());
+                    merged.push(s);
+                }
+                Some(idx) => {
+                    let current = owners.get(&s.id).cloned().unwrap_or_default();
+                    if owner_beats(&name, &current, active_key) {
+                        owners.insert(s.id, name.clone());
+                        merged[idx] = s;
+                    }
+                }
+            }
         }
     }
     (merged, owners)
+}
+
+fn owner_beats(candidate: &str, current: &str, active_key: &str) -> bool {
+    if candidate == current {
+        return false;
+    }
+    if candidate == active_key {
+        return true;
+    }
+    if current == active_key {
+        return false;
+    }
+    // Named profile wins over the loopback "" key; otherwise first-seen.
+    current.is_empty() && !candidate.is_empty()
 }
 
 // ---------- Tree ----------
@@ -1407,7 +1449,7 @@ pub struct Tree {
 pub struct Group {
     /// Owning profile name; `""` for the default / loopback / `--api`
     /// connection. Used as the primary sort key + drives the
-    /// `@profile · workdir` label in the sidebar so a multi-endpoint
+    /// `@profile · workdir` label in the sidebar so a multi-server
     /// fleet reads correctly even when several daemons happen to
     /// share a workdir.
     pub profile: String,
@@ -1470,8 +1512,8 @@ impl Tree {
         Self::build_with_profiles(sessions, &HashMap::new(), prev_expanded)
     }
 
-    /// Multi-endpoint variant: groups by `(profile, workdir)` so the
-    /// sidebar can render every endpoint's sessions inline, sorted
+    /// Multi-server variant: groups by `(profile, workdir)` so the
+    /// sidebar can render every server's sessions inline, sorted
     /// with the default profile (empty key) first. `session_profile`
     /// maps session id → owning profile name; missing entries fall
     /// back to the default key.
@@ -1482,7 +1524,7 @@ impl Tree {
     ) -> Self {
         // Normalize workdirs before grouping so `/x/proj` and `/x/proj/`
         // don't show up as two separate groups. Group key is the
-        // composite (profile_name, workdir) so two endpoints that
+        // composite (profile_name, workdir) so two servers that
         // share a workdir don't accidentally merge.
         let mut by_key: HashMap<(String, String), Vec<&Session>> = HashMap::new();
         for s in sessions {
@@ -1722,7 +1764,7 @@ pub async fn run_loop(
         default_key.clone(),
         ClientEntry {
             client: Some(client.clone()),
-            status: EndpointStatus::Live,
+            status: ServerStatus::Live,
             last_error: None,
             agent_availability: None, // populated below by the same probe path
         },
@@ -1892,7 +1934,7 @@ pub async fn run_loop(
         if app.should_quit {
             // Honor a pending profile switch over a plain quit so the
             // wrapper in `commands::terminal::run` can reconnect to
-            // the new endpoint without re-entering the OS shell.
+            // the new server without re-entering the OS shell.
             if let Some(name) = app.pending_switch_profile.take() {
                 let then = app.pending_after_switch.take();
                 return Ok(RunOutcome::SwitchProfile { name, then });
@@ -2578,23 +2620,23 @@ async fn handle_key(
 
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-    // Ctrl-D — delete an endpoint when the Endpoints sidebar section
+    // Ctrl-D — delete an server when the Servers sidebar section
     // has focus. Shows a confirmation prompt to prevent accidental
     // deletion. When a terminal pane is focused, Ctrl-D still
     // forwards EOF (^D) to the running agent — standard Unix
     // behaviour — so this only intercepts when the sidebar cursor
-    // is actually on an endpoint entry.
+    // is actually on an server entry.
     if ctrl
         && matches!(key.code, KeyCode::Char('d') | KeyCode::Char('D'))
         && app.focus == Focus::Tree
-        && app.tree_section == TreeSection::Endpoints
+        && app.tree_section == TreeSection::Servers
     {
-        if let Some(entry) = app.profiles.get(app.endpoints_cursor).cloned() {
+        if let Some(entry) = app.profiles.get(app.servers_cursor).cloned() {
             if app.active_profile.as_deref() == Some(entry.name.as_str()) {
                 app.status_msg =
-                    Some("can't remove the active endpoint — switch first".into());
+                    Some("can't remove the active server — switch first".into());
             } else {
-                app.overlay = Overlay::Confirm(PendingAction::RemoveEndpoint {
+                app.overlay = Overlay::Confirm(PendingAction::RemoveServer {
                     name: entry.name.clone(),
                 });
             }
@@ -2645,9 +2687,9 @@ async fn handle_key(
         return;
     }
 
-    // Ctrl-O — open the endpoint switcher overlay from any focus.
-    // Mnemonic: "open endpoint". Mirrors the dashboard's
-    // EndpointSwitcher chip in the topbar. Available from anywhere so
+    // Ctrl-O — open the server switcher overlay from any focus.
+    // Mnemonic: "open server". Mirrors the dashboard's
+    // ServerSwitcher chip in the topbar. Available from anywhere so
     // a user driving multiple agentum servers can hop without
     // releasing focus; also surfaced in the command palette.
     if ctrl && matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O')) {
@@ -3054,22 +3096,22 @@ async fn handle_key(
             app.set_focus(prev_focus(app.focus, app.lazygit_open(), app.split_open()));
         }
         KeyCode::Char('r') => {
-            // Manual refresh aggregates across every live endpoint
+            // Manual refresh aggregates across every live server
             // so a session created on a peer (via TUI on another
             // host, or via the dashboard) shows up here without
             // restart.
             refresh_all(app).await;
-            app.status_msg = Some("refreshed (all endpoints)".into());
+            app.status_msg = Some("refreshed (all servers)".into());
         }
         KeyCode::Char('j') | KeyCode::Down => {
-            // Cursor moves through Endpoints first, then Sessions. At
-            // the bottom of Endpoints, a `j` flips the section to
+            // Cursor moves through Servers first, then Sessions. At
+            // the bottom of Servers, a `j` flips the section to
             // Sessions. Inside Sessions the original tree cursor
             // drives selection.
             match app.tree_section {
-                TreeSection::Endpoints => {
-                    if app.endpoints_cursor + 1 < app.profiles.len() {
-                        app.endpoints_cursor += 1;
+                TreeSection::Servers => {
+                    if app.servers_cursor + 1 < app.profiles.len() {
+                        app.servers_cursor += 1;
                     } else {
                         app.tree_section = TreeSection::Sessions;
                     }
@@ -3083,16 +3125,16 @@ async fn handle_key(
         }
         KeyCode::Char('k') | KeyCode::Up => {
             match app.tree_section {
-                TreeSection::Endpoints => {
-                    app.endpoints_cursor = app.endpoints_cursor.saturating_sub(1);
+                TreeSection::Servers => {
+                    app.servers_cursor = app.servers_cursor.saturating_sub(1);
                 }
                 TreeSection::Sessions => {
                     if app.tree.cursor == 0 && !app.profiles.is_empty() {
                         // At the top of the sessions list, flip focus
-                        // into the Endpoints header so a `k` from the
-                        // first session reaches the last endpoint.
-                        app.tree_section = TreeSection::Endpoints;
-                        app.endpoints_cursor = app.profiles.len().saturating_sub(1);
+                        // into the Servers header so a `k` from the
+                        // first session reaches the last server.
+                        app.tree_section = TreeSection::Servers;
+                        app.servers_cursor = app.profiles.len().saturating_sub(1);
                     } else {
                         app.tree.move_cursor(-1);
                         let side = app.target_side();
@@ -3120,12 +3162,12 @@ async fn handle_key(
         }
         KeyCode::Enter => {
             match app.tree_section {
-                TreeSection::Endpoints => {
+                TreeSection::Servers => {
                     // Switch to the highlighted profile via the same
                     // soft-restart path the Ctrl-O overlay uses. No
                     // pending follow-up — the user's intent is just
-                    // "drive that endpoint now".
-                    if let Some(entry) = app.profiles.get(app.endpoints_cursor) {
+                    // "drive that server now".
+                    if let Some(entry) = app.profiles.get(app.servers_cursor) {
                         if app.active_profile.as_deref() == Some(entry.name.as_str()) {
                             app.status_msg = Some(format!("already on @{}", entry.name));
                         } else {
@@ -3142,11 +3184,11 @@ async fn handle_key(
                 }
             }
         }
-        // Endpoints section actions: `a` adds, `d` removes. Only fire
-        // when the cursor is actually in the Endpoints section so the
+        // Servers section actions: `a` adds, `d` removes. Only fire
+        // when the cursor is actually in the Servers section so the
         // Sessions tree's existing `d` (delete-session) keybind, if
         // any, doesn't get hijacked.
-        KeyCode::Char('a') if app.tree_section == TreeSection::Endpoints => {
+        KeyCode::Char('a') if app.tree_section == TreeSection::Servers => {
             // Reuse the same overlay the Ctrl-O switcher uses; the
             // overlay's add-form handles validation + persistence.
             open_profiles_overlay(app);
@@ -3154,11 +3196,11 @@ async fn handle_key(
                 state.add_form = Some(AddProfileForm::new());
             }
         }
-        KeyCode::Char('d') if app.tree_section == TreeSection::Endpoints => {
-            if let Some(entry) = app.profiles.get(app.endpoints_cursor).cloned() {
+        KeyCode::Char('d') if app.tree_section == TreeSection::Servers => {
+            if let Some(entry) = app.profiles.get(app.servers_cursor).cloned() {
                 if app.active_profile.as_deref() == Some(entry.name.as_str()) {
                     app.status_msg =
-                        Some("can't remove the active endpoint — switch first".into());
+                        Some("can't remove the active server — switch first".into());
                 } else if let Ok(mut store) = super::profiles::Profiles::load() {
                     let _ = store.remove(&entry.name);
                     app.reload_profiles();
@@ -3278,7 +3320,7 @@ async fn handle_new_session_key(
                     let old_profile = form.profile.clone();
                     form.cycle_profile(&names);
                     // When the profile changes, fetch the default
-                    // workdir from the newly-selected endpoint so the
+                    // workdir from the newly-selected server so the
                     // user doesn't need to retype a path that may not
                     // exist on the other machine.
                     if form.profile != old_profile {
@@ -3362,7 +3404,7 @@ async fn handle_new_session_key(
         KeyCode::Enter => {
             // Submit. The form's Profile field decides which client to
             // POST against — no more soft-restart for cross-profile
-            // spawns now that every endpoint is connected in parallel.
+            // spawns now that every server is connected in parallel.
             // Empty profile string means "the default / loopback / --api
             // connection", same key shape as `app.clients`.
             let target_profile = form.profile.trim().to_string();
@@ -3431,7 +3473,7 @@ async fn handle_new_session_key(
                     let id = created.id;
                     let name = created.name.clone();
                     // Tag the new session with its owning profile so
-                    // the tree groups it under the right endpoint
+                    // the tree groups it under the right server
                     // header on the next refresh.
                     app.session_profile.insert(id, target_profile.clone());
                     if form.up_after {
@@ -3466,7 +3508,7 @@ async fn handle_new_session_key(
                         );
                     }
                     // Aggregating refresh so the new session shows
-                    // up regardless of which endpoint it landed on
+                    // up regardless of which server it landed on
                     // (cross-profile spawn just took the soft-restart
                     // path; same-profile lands here directly).
                     refresh_all(app).await;
@@ -3726,10 +3768,10 @@ async fn handle_confirm_key(app: &mut App, key: KeyEvent, client: &Client) {
 }
 
 async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
-    // Endpoint removal is purely local — it touches profiles.toml
+    // Server removal is purely local — it touches profiles.toml
     // and the app's in-memory profile list without a daemon round trip.
-    if let PendingAction::RemoveEndpoint { name } = &action {
-        let label = format!("removed endpoint `{name}`");
+    if let PendingAction::RemoveServer { name } = &action {
+        let label = format!("removed server `{name}`");
         match super::profiles::Profiles::load() {
             Ok(mut store) => {
                 let _ = store.remove(name);
@@ -3738,7 +3780,7 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
                 push_notification(app, label, None, NotifKind::Info);
             }
             Err(e) => {
-                app.push_error(format!("remove endpoint `{name}`: {e}"));
+                app.push_error(format!("remove server `{name}`: {e}"));
             }
         }
         refresh_all(app).await;
@@ -3746,15 +3788,15 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
     }
 
     // Lifecycle ops (start/stop/kill) target a specific session id, so
-    // they have to talk to whichever endpoint owns that session — not
+    // they have to talk to whichever server owns that session — not
     // the default. Look up the owner's client; fall back to `client`
     // for legacy / unmapped sessions so behaviour matches the
-    // single-endpoint world when nothing's tagged.
+    // single-server world when nothing's tagged.
     let session_id = match &action {
         PendingAction::Start { id, .. }
         | PendingAction::Stop { id, .. }
         | PendingAction::Kill { id, .. } => *id,
-        PendingAction::RemoveEndpoint { .. } => unreachable!(),
+        PendingAction::RemoveServer { .. } => unreachable!(),
     };
     let owner = app.client_for_session(session_id).cloned();
     let target = owner.unwrap_or_else(|| client.clone());
@@ -3775,7 +3817,7 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         PendingAction::Start { name, .. } => format!("started `{name}`"),
         PendingAction::Stop { name, .. } => format!("stopped `{name}`"),
         PendingAction::Kill { name, .. } => format!("killed `{name}`"),
-        PendingAction::RemoveEndpoint { .. } => unreachable!(),
+        PendingAction::RemoveServer { .. } => unreachable!(),
     };
     match result {
         Ok(()) => {
@@ -4026,7 +4068,7 @@ fn handle_profiles_key(app: &mut App, key: KeyEvent) {
                 // Schedule a soft restart with the chosen profile.
                 // run_loop reads `pending_switch_profile` on quit and
                 // `commands::terminal::run` re-enters with the new
-                // endpoint. `pending_after_switch` stays None — the
+                // server. `pending_after_switch` stays None — the
                 // overlay path doesn't carry a follow-up.
                 app.pending_switch_profile = Some(entry.name.clone());
                 app.pending_after_switch = None;
@@ -4554,7 +4596,7 @@ async fn run_palette_action(
         ActionKind::OpenProfiles => {
             open_profiles_overlay(app);
             app.status_msg =
-                Some("endpoints (Enter switch · a add · d remove · Esc close)".into());
+                Some("servers (Enter switch · a add · d remove · Esc close)".into());
         }
         ActionKind::ToggleSoundMaster => {
             let on = app.prefs.toggle_sound_master();
@@ -5176,7 +5218,7 @@ fn spawn_agent_tasks_fetch(app: &mut App, client: &Client, id: Uuid) {
     if !app.agent_tasks_inflight.insert(id) {
         return; // already in-flight — coalesce
     }
-    // Route to the owning endpoint's client. agent_tasks for a peer
+    // Route to the owning server's client. agent_tasks for a peer
     // session has to ask that peer's daemon — the default knows
     // nothing about it. Fall back to `client` for legacy / unmapped.
     let owner = app.client_for_session(id).cloned();
@@ -5581,5 +5623,82 @@ pub fn status_dot(s: Status) -> (&'static str, ratatui::style::Color) {
         // at a glance. A stopped terminal is dormant, not blocked on you.
         Status::Stopped => ("◐", Color::DarkGray),
         Status::Crashed => ("✗", Color::Red),
+    }
+}
+
+#[cfg(test)]
+mod merge_dedup_tests {
+    use super::*;
+    use agentum_core::Status;
+    use time::OffsetDateTime;
+
+    fn sess(id: Uuid, name: &str) -> Session {
+        let now = OffsetDateTime::now_utc();
+        Session {
+            id,
+            name: name.to_string(),
+            workdir: "/tmp".to_string(),
+            tool: "claude".to_string(),
+            model: None,
+            flags: Vec::new(),
+            status: Status::Idle,
+            tmux_target: None,
+            created_at: now,
+            updated_at: now,
+            last_activity_at: None,
+            tokens: None,
+            cost_usd: None,
+            ctx: None,
+            last_log: None,
+            uptime_seconds: None,
+            state: None,
+            pinned: false,
+        }
+    }
+
+    // The bug we're guarding: same daemon reached via two profiles (a
+    // loopback "" key + a named "macos") returns the same session id
+    // from both list_sessions calls. Without dedup, the sidebar paints
+    // the session twice — once per profile group.
+    #[test]
+    fn dedupes_same_id_across_profiles() {
+        let id = Uuid::new_v4();
+        let per_profile = vec![
+            ("".to_string(), vec![sess(id, "alpha")]),
+            ("macos".to_string(), vec![sess(id, "alpha")]),
+        ];
+        let (merged, owners) = merge_sessions_dedup(per_profile, "macos");
+        assert_eq!(merged.len(), 1);
+        // Active profile "macos" wins the contested id.
+        assert_eq!(owners.get(&id).map(String::as_str), Some("macos"));
+    }
+
+    #[test]
+    fn named_profile_beats_loopback_when_neither_is_active() {
+        let id = Uuid::new_v4();
+        let per_profile = vec![
+            ("".to_string(), vec![sess(id, "alpha")]),
+            ("macos".to_string(), vec![sess(id, "alpha")]),
+        ];
+        // active_key = "" → loopback is active; loopback should win.
+        let (_, owners) = merge_sessions_dedup(per_profile.clone(), "");
+        assert_eq!(owners.get(&id).map(String::as_str), Some(""));
+        // active_key = "other" (neither): named beats loopback.
+        let (_, owners) = merge_sessions_dedup(per_profile, "other");
+        assert_eq!(owners.get(&id).map(String::as_str), Some("macos"));
+    }
+
+    #[test]
+    fn distinct_ids_all_kept() {
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let per_profile = vec![
+            ("".to_string(), vec![sess(a, "alpha")]),
+            ("macos".to_string(), vec![sess(b, "beta")]),
+        ];
+        let (merged, owners) = merge_sessions_dedup(per_profile, "");
+        assert_eq!(merged.len(), 2);
+        assert_eq!(owners.get(&a).map(String::as_str), Some(""));
+        assert_eq!(owners.get(&b).map(String::as_str), Some("macos"));
     }
 }

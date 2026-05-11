@@ -101,7 +101,7 @@
     aria-haspopup="menu"
     aria-expanded={open}
     onclick={() => (open = !open)}
-    title="Active agentum endpoint — click to switch"
+    title="Active agentum server — click to switch"
   >
     <span class="dot"></span>
     <span class="label">{active?.label ?? 'this server'}</span>
@@ -110,7 +110,7 @@
 
   {#if open}
     <div class="menu" role="menu">
-      <div class="menu-head">Endpoints</div>
+      <div class="menu-head">Servers</div>
       {#each $profiles as p (p.id)}
         <div class="row" class:on={p.id === $activeProfileId}>
           <button
@@ -139,7 +139,7 @@
           type="button"
           class="add-toggle"
           onclick={() => (formOpen = true)}
-        >+ Add endpoint</button>
+        >+ Add server</button>
       {:else}
         <form class="add" onsubmit={submitNew}>
           <input

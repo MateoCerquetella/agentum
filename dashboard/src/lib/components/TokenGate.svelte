@@ -51,7 +51,7 @@
   }
 
   function dropProfile(id: string) {
-    if (!confirm(`Remove this saved endpoint?`)) return;
+    if (!confirm(`Remove this saved server?`)) return;
     removeProfile(id);
   }
 
@@ -170,12 +170,12 @@
       {#if !showAddForm}
         <p class="muted">
           Either start a local daemon with <code>agentum serve</code> and
-          refresh, or switch to one of your saved endpoints.
+          refresh, or switch to one of your saved servers.
         </p>
 
         {#if otherProfiles.length > 0}
           <div class="endpoints">
-            <p class="muted small endpoints-header">switch to a saved endpoint:</p>
+            <p class="muted small endpoints-header">switch to a saved server:</p>
             {#each otherProfiles as p (p.id)}
               <div class="endpoint-row">
                 <button
@@ -192,7 +192,7 @@
                   class="endpoint-rm"
                   onclick={() => dropProfile(p.id)}
                   title="Remove {p.label}"
-                  aria-label="Remove endpoint"
+                  aria-label="Remove server"
                 >×</button>
               </div>
             {/each}
@@ -201,7 +201,7 @@
 
         <div class="actions">
           <button type="button" class="primary" onclick={() => (showAddForm = true)}>
-            Add a remote endpoint
+            Add a remote server
           </button>
           <button type="button" class="ghost" onclick={() => location.reload()}>
             Retry

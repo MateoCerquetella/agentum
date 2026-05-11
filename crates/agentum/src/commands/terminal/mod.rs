@@ -63,7 +63,7 @@ pub struct Options {
     /// `AGENTUM_TUI_NO_SOUND` env var so users can set it once in their
     /// shell rc instead of remembering the flag.
     pub no_sound: bool,
-    /// Named endpoint profile to load (`agentum profiles add NAME …`).
+    /// Named server profile to load (`agentum profiles add NAME …`).
     /// Resolved before `--api`: an explicit `--api` always wins so a
     /// profile-using user can still override the URL ad-hoc. When
     /// neither is set, `profiles.toml`'s `default = …` is consulted
@@ -74,7 +74,7 @@ pub struct Options {
 pub async fn run(opts: Options) -> Result<()> {
     // Connect-or-onboard loop: if the requested daemon (profile, --api,
     // or loopback) doesn't answer, an interactive TTY user gets a
-    // numbered menu to add a remote endpoint and retry. Non-TTY
+    // numbered menu to add a remote server and retry. Non-TTY
     // invocations (CI, scripts) fall through to the same bail! they
     // got before — the prompt would just hang.
     let initial_opts = opts.clone();
@@ -87,7 +87,7 @@ pub async fn run(opts: Options) -> Result<()> {
                     return Err(e);
                 }
                 match prompt_unreachable_menu(&current_opts, &e)? {
-                    UnreachableAction::AddEndpoint => {
+                    UnreachableAction::AddServer => {
                         let new_profile = interactive_add_profile()?;
                         // Re-resolve from a fresh base so the next attempt
                         // honours the just-added profile (and any default
@@ -121,23 +121,25 @@ pub async fn run(opts: Options) -> Result<()> {
         let sound_muted =
             current_opts.no_sound || std::env::var_os("AGENTUM_TUI_NO_SOUND").is_some();
         // Fan out to every *other* configured profile in parallel so
-        // the sidebar can show a unified, multi-endpoint view of the
+        // the sidebar can show a unified, multi-server view of the
         // user's fleet. The default profile (the one we just got a
         // live `client` for above) is already covered; the rest go
         // through `try_connect_profile`, which never prompts.
         let extras = fanout_other_profiles(active_profile_name.as_deref().unwrap_or("")).await;
         // Aggregate sessions: default profile's first, then every
-        // reachable peer's. Tag each session with its owning profile
-        // name (empty string = default / loopback).
+        // reachable peer's. Two profiles pointing at the same daemon
+        // share session ids; dedupe by id so the sidebar can't show
+        // the same session under two servers. Active profile wins
+        // ties, otherwise named beats the loopback "" key.
         let active_key = active_profile_name.clone().unwrap_or_default();
-        let mut session_profile: HashMap<uuid::Uuid, String> =
-            sessions.iter().map(|s| (s.id, active_key.clone())).collect();
+        let mut per_profile: Vec<(String, Vec<agentum_core::Session>)> =
+            Vec::with_capacity(1 + extras.len());
+        per_profile.push((active_key.clone(), std::mem::take(&mut sessions)));
         for (pname, conn) in &extras {
-            for s in &conn.sessions {
-                session_profile.insert(s.id, pname.clone());
-            }
-            sessions.extend(conn.sessions.iter().cloned());
+            per_profile.push((pname.clone(), conn.sessions.clone()));
         }
+        let (merged, session_profile) = app::merge_sessions_dedup(per_profile, &active_key);
+        sessions = merged;
         let outcome = run_tui_session(
             client,
             sessions,
@@ -154,7 +156,7 @@ pub async fn run(opts: Options) -> Result<()> {
                 // Re-resolve the entire connection from the chosen
                 // profile and re-enter the TUI. Errors here drop back
                 // into the same connect-or-onboard loop the cold start
-                // uses, so a misconfigured remote endpoint is recoverable
+                // uses, so a misconfigured remote server is recoverable
                 // without restarting the binary.
                 let mut next = initial_opts.clone();
                 next.api = None;
@@ -169,7 +171,7 @@ pub async fn run(opts: Options) -> Result<()> {
                         }
                         eprintln!();
                         eprintln!("  switch to profile `{name}` failed: {e}");
-                        eprintln!("  staying on the previous endpoint.");
+                        eprintln!("  staying on the previous server.");
                         eprintln!();
                         // Restore the previous profile by re-running the
                         // initial resolution; this re-enters the connect
@@ -363,7 +365,7 @@ async fn probe_token(base: &Url, trust_setting: &TlsTrust, token: &str) -> bool 
 /// profile we already connected synchronously in `run`). Returns a
 /// list of (profile_name, ProfileConnect) tuples in profile-order.
 /// All probes run in parallel via `join_all` so the boot path
-/// doesn't serialise on a slow / unresponsive remote endpoint.
+/// doesn't serialise on a slow / unresponsive remote server.
 async fn fanout_other_profiles(skip_name: &str) -> Vec<(String, ProfileConnect)> {
     let store = match profiles::Profiles::load() {
         Ok(s) => s,
@@ -394,11 +396,11 @@ async fn fanout_other_profiles(skip_name: &str) -> Vec<(String, ProfileConnect)>
 
 /// Result of attempting a non-interactive connect to one named
 /// profile. Used by the multi-profile fanout in [`run`] so the
-/// sidebar can render every endpoint with a coherent status (live,
+/// sidebar can render every server with a coherent status (live,
 /// unreachable, login-needed) instead of blocking on prompts the
-/// user may not want to fill for every endpoint at startup.
+/// user may not want to fill for every server at startup.
 pub struct ProfileConnect {
-    pub status: app::EndpointStatus,
+    pub status: app::ServerStatus,
     pub client: Option<api::Client>,
     pub sessions: Vec<agentum_core::Session>,
     pub last_error: Option<String>,
@@ -411,7 +413,7 @@ pub struct ProfileConnect {
 /// gracefully into a status the sidebar can render.
 async fn try_connect_profile(profile: &profiles::Profile) -> ProfileConnect {
     let unreachable = |msg: String| ProfileConnect {
-        status: app::EndpointStatus::Unreachable,
+        status: app::ServerStatus::Unreachable,
         client: None,
         sessions: Vec::new(),
         last_error: Some(msg),
@@ -439,7 +441,7 @@ async fn try_connect_profile(profile: &profiles::Profile) -> ProfileConnect {
     };
     let Some(token) = creds.token(&host_key).map(str::to_string) else {
         return ProfileConnect {
-            status: app::EndpointStatus::LoginNeeded,
+            status: app::ServerStatus::LoginNeeded,
             client: None,
             sessions: Vec::new(),
             last_error: Some(format!("no cached token for {host_key}")),
@@ -454,11 +456,11 @@ async fn try_connect_profile(profile: &profiles::Profile) -> ProfileConnect {
         return unreachable(format!("health probe failed at {}", profile.url));
     }
     // Health passed but token rejected ⇒ login-needed. We can't
-    // prompt here; the user has to log in on this endpoint via the
+    // prompt here; the user has to log in on this server via the
     // overlay before its sessions appear.
     if client.me().await.is_err() {
         return ProfileConnect {
-            status: app::EndpointStatus::LoginNeeded,
+            status: app::ServerStatus::LoginNeeded,
             client: Some(client),
             sessions: Vec::new(),
             last_error: Some("token rejected".to_string()),
@@ -476,7 +478,7 @@ async fn try_connect_profile(profile: &profiles::Profile) -> ProfileConnect {
         _ => None,
     };
     ProfileConnect {
-        status: app::EndpointStatus::Live,
+        status: app::ServerStatus::Live,
         client: Some(client),
         sessions,
         last_error: None,
@@ -487,7 +489,7 @@ async fn try_connect_profile(profile: &profiles::Profile) -> ProfileConnect {
 /// Resolve TLS trust for a named profile *non-interactively*. Mirrors
 /// [`establish_trust`] but never prompts — the fanout caller treats
 /// missing pins as "unreachable" instead of asking the user to
-/// confirm every endpoint at startup.
+/// confirm every server at startup.
 fn trust_for_profile(base: &Url, profile: &profiles::Profile) -> Result<api::TlsTrust> {
     if base.scheme() == "http" {
         return Ok(api::TlsTrust::Plain);
@@ -595,7 +597,7 @@ async fn resolve_base(override_url: Option<String>) -> Result<Url> {
 /// One full attempt to materialise an authenticated [`api::Client`] for
 /// `opts`. Returns the client, the resolved base URL, and an initial
 /// session list. Used by [`run`]'s connect-or-onboard loop so a probe
-/// failure can ask the user "want to add an endpoint?" before bailing.
+/// failure can ask the user "want to add an server?" before bailing.
 async fn connect_once(opts: &Options) -> Result<(api::Client, Url, Vec<agentum_core::Session>)> {
     let base = resolve_base(opts.api.clone()).await?;
     let trust = establish_trust(&base, opts).await?;
@@ -613,7 +615,7 @@ async fn connect_once(opts: &Options) -> Result<(api::Client, Url, Vec<agentum_c
 
 #[derive(Debug)]
 enum UnreachableAction {
-    AddEndpoint,
+    AddServer,
     Retry,
     Quit,
 }
@@ -639,7 +641,7 @@ fn prompt_unreachable_menu(opts: &Options, err: &anyhow::Error) -> Result<Unreac
     eprintln!("  ↳ {err}");
     eprintln!();
     eprintln!("  What would you like to do?");
-    eprintln!("    [1] Add a remote endpoint");
+    eprintln!("    [1] Add a remote server");
     eprintln!("    [2] Retry (e.g. after running `agentum serve` in another window)");
     eprintln!("    [3] Quit");
     eprintln!();
@@ -653,7 +655,7 @@ fn prompt_unreachable_menu(opts: &Options, err: &anyhow::Error) -> Result<Unreac
             return Ok(UnreachableAction::Quit);
         }
         match buf.trim() {
-            "1" | "a" | "add" => return Ok(UnreachableAction::AddEndpoint),
+            "1" | "a" | "add" => return Ok(UnreachableAction::AddServer),
             "2" | "r" | "retry" => return Ok(UnreachableAction::Retry),
             "3" | "q" | "quit" | "exit" | "" => return Ok(UnreachableAction::Quit),
             other => {
@@ -669,7 +671,7 @@ fn prompt_unreachable_menu(opts: &Options, err: &anyhow::Error) -> Result<Unreac
 /// CLI subcommand, and dashboard switcher all share one storage shape.
 fn interactive_add_profile() -> Result<String> {
     eprintln!();
-    eprintln!("  Add a new endpoint:");
+    eprintln!("  Add a new server:");
     let name = read_line("    name (e.g. vps): ")?;
     if name.trim().is_empty() {
         bail!("name is required");

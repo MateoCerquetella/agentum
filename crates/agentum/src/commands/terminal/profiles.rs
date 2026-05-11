@@ -1,4 +1,4 @@
-//! Named-endpoint profiles for the agentum TUI.
+//! Named-server profiles for the agentum TUI.
 //!
 //! A *profile* is a pinned set of connection inputs the user wants to
 //! reach repeatedly: a base URL (with scheme + port), an optional cert
@@ -34,7 +34,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
-/// One stored endpoint. `url` is the user-facing string; we re-parse on
+/// One stored server. `url` is the user-facing string; we re-parse on
 /// every load so a malformed entry surfaces immediately instead of
 /// drifting into the active client.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -122,9 +122,9 @@ pub enum ActionKind {
     /// `ResetStatusBar` — drops layout sizes, sounds, and TTLs back to
     /// the ship-with values.
     ResetAllPrefs,
-    /// Open the endpoint switcher overlay. Mirrors the Ctrl-O
+    /// Open the server switcher overlay. Mirrors the Ctrl-O
     /// keybinding so the profile picker is reachable through palette
-    /// filtering ("endpoint" / "profile" / "switch").
+    /// filtering ("server" / "profile" / "switch").
     OpenProfiles,
 }
 
@@ -314,10 +314,10 @@ impl Catalog {
             group: "settings",
             kind: ActionKind::OpenSettings,
         });
-        // Endpoint switcher — palette parity with Ctrl-O so users
-        // typing "endpoint" / "profile" / "switch server" find it.
+        // Server switcher — palette parity with Ctrl-O so users
+        // typing "server" / "profile" / "switch server" find it.
         a.push(Action {
-            label: "Switch endpoint…  (agentum server)".into(),
+            label: "Switch server…  (agentum daemon)".into(),
             hint: "Ctrl-O".into(),
             group: "general",
             kind: ActionKind::OpenProfiles,

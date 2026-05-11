@@ -37,7 +37,7 @@ use tokio_rustls::TlsConnector;
 use url::Url;
 
 /// Convenient host:port key. We don't pin per-path because all agentum
-/// endpoints live on the same authority.
+/// servers live on the same authority.
 pub fn host_key(url: &Url) -> Result<String> {
     let host = url
         .host_str()
