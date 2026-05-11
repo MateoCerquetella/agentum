@@ -4,6 +4,27 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.8] — 2026-05-11
+
+### Fixed
+- **Duplicate sessions when two profiles share a daemon.** Pointing a
+  loopback profile and a named profile at the same daemon (e.g.
+  `""` and `macos` both on `127.0.0.1:8822`) produced two copies of
+  every session in the sidebar, flickering as refresh events
+  re-fired. The aggregator now keeps one entry per session id with
+  a deterministic owner: active profile > any named profile >
+  loopback > first-seen. Locked in by `merge_dedup_tests`.
+
+### Changed
+- **Sidebar rename: "Endpoints" → "Servers".** Less technical wording
+  in the sidebar header, profile overlays, palette ("Switch
+  server…"), and dashboard topbar / TokenGate. Code identifiers
+  follow (`TreeSection::Servers`, `ServerStatus`, `servers_cursor`,
+  `PendingAction::RemoveServer`, `UnreachableAction::AddServer`)
+  so the codebase stays coherent. WebSocket-URL "endpoint" and
+  selection-coord "endpoints" preserved — those refer to URLs and
+  coordinates, not profiles.
+
 ## [0.7.4] — 2026-05-08
 
 The "all in one control plane" release. The TUI and dashboard both
