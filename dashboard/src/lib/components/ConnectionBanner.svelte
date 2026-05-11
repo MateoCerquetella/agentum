@@ -41,6 +41,10 @@
   const label = $derived.by(() => {
     if ($connStatus.state !== 'reconnecting') return '';
     const a = $connStatus.attempt;
+    if ($connStatus.nextDelayMs === 0) {
+      // HTTP-failure-driven state — no backoff, just an outage signal.
+      return `Daemon not responding · ${a} failed request${a === 1 ? '' : 's'}`;
+    }
     return `Reconnecting to the agentum daemon · attempt ${a} · retry in ${secsLeft.toFixed(1)}s`;
   });
 </script>

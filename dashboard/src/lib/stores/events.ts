@@ -39,6 +39,45 @@ export type ConnStatus =
 
 export const connStatus: Writable<ConnStatus> = writable({ state: 'idle' });
 
+// Track HTTP failures alongside the WS one. The WS connect/disconnect
+// flips connStatus directly; the HTTP path can flip to `reconnecting`
+// when fetches start failing (daemon went away, LAN dropped, …) even
+// before the WS notices via its own onclose. Only the WS onopen is
+// allowed to flip back to `connected` — that's the authoritative
+// signal. Counted as "the next WS retry attempt" so the same `>= 2`
+// threshold in the UI keeps both halves debounced consistently.
+let httpFailures = 0;
+const HTTP_FAIL_THRESHOLD = 2;
+
+/** Called by the HTTP request layer on every successful fetch. */
+export function markFetchOk(): void {
+  httpFailures = 0;
+  // Do NOT flip to `connected` here — the WS is the source of truth
+  // for the bus being live. A single successful HTTP probe doesn't
+  // mean the event stream is back.
+}
+
+/**
+ * Called when a fetch throws (network error) or returns 5xx. 4xx is
+ * not a network problem so skip; 401 is the gate's job. We count
+ * consecutive failures and flip to `reconnecting` once we cross the
+ * threshold, mirroring the WS retry counter.
+ */
+export function markFetchFailed(): void {
+  httpFailures += 1;
+  if (httpFailures < HTTP_FAIL_THRESHOLD) return;
+  connStatus.update((s) => {
+    // Already reconnecting via the WS path? Leave it — the WS-side
+    // attempt counter is more precise.
+    if (s.state === 'reconnecting') return s;
+    return {
+      state: 'reconnecting',
+      attempt: httpFailures,
+      nextDelayMs: 0,
+    };
+  });
+}
+
 function pushToast(t: Omit<Toast, 'id' | 'created_at'>) {
   const toast: Toast = { ...t, id: nextToastId++, created_at: Date.now() };
   toasts.update((xs) => [...xs, toast]);

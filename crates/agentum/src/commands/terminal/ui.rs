@@ -268,13 +268,17 @@ fn split_terminal(
 }
 
 /// True when the connection has stayed bad long enough to be worth
-/// telling the user about — i.e. we've been connected before, then
-/// either disconnected, or the events-bus has failed at least its
-/// first retry. The 2-attempt floor debounces a typical sub-second
-/// blip so the banner doesn't flicker on every reconnect cycle.
+/// telling the user about — either the events-bus WS has failed at
+/// least its first retry, the WS is fully Disconnected, or the
+/// periodic HTTP poll has missed twice in a row. The 2-failure floor
+/// (on both axes) debounces a typical sub-second blip so the banner
+/// doesn't flicker on every reconnect cycle.
 pub fn should_show_reconnect_ui(app: &App) -> bool {
     if !app.was_connected {
         return false;
+    }
+    if app.http_fail_count >= 2 {
+        return true;
     }
     match app.conn {
         ConnState::Connected | ConnState::Connecting => false,
@@ -1831,22 +1835,34 @@ fn draw_new_session_overlay(
     lines.push(head("New session", p));
     lines.push(Line::from(""));
 
-    // Profile pick comes first — same order as the user's mental
+    // Servers pick comes first — same order as the user's mental
     // model ("which agentum, then which folder, then which agent").
-    // Empty string renders as "(current connection)" so a user who
-    // launched with --api or no profile sees something coherent.
+    // The empty string renders as `this machine` so the local
+    // loopback is a peer of any named remote profile in the cycle
+    // (pre-v0.7.9 said "(current connection)" which a user reported
+    // as confusing — they wanted the local case to look like just
+    // another server entry).
     let profile_display = if form.profile.trim().is_empty() {
-        "(current connection)".to_string()
+        "this machine".to_string()
     } else {
         format!("@{}", form.profile.trim())
     };
     push_form_field_with_hint(
         &mut lines,
-        "Profile",
+        "Servers",
         &profile_display,
         form.field == NewSessionField::Profile,
-        "(current connection)",
-        Some("Tab cycles configured servers"),
+        "this machine",
+        Some("Tab cycles this machine + configured servers"),
+        p,
+    );
+    push_form_field_with_hint(
+        &mut lines,
+        "Working directory",
+        &form.workdir,
+        form.field == NewSessionField::Workdir,
+        "~/projects/foo",
+        Some("Tab autocompletes · Enter opens the folder picker"),
         p,
     );
     push_form_field(
@@ -1890,15 +1906,6 @@ fn draw_new_session_overlay(
         form.field == NewSessionField::Model,
         "e.g. claude-opus-4-7",
         Some("(optional)"),
-        p,
-    );
-    push_form_field_with_hint(
-        &mut lines,
-        "Working directory",
-        &form.workdir,
-        form.field == NewSessionField::Workdir,
-        "~/projects/foo",
-        Some("Tab autocompletes · Enter opens the folder picker"),
         p,
     );
     push_form_field_with_hint(
@@ -2275,7 +2282,17 @@ fn draw_reconnect_banner(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) 
             format!(" ⟳ reconnecting · attempt {attempt} · retrying in {secs:.1}s{dots}")
         }
         ConnState::Disconnected => format!(" ✗ disconnected · reconnecting{dots}"),
-        _ => return,
+        // WS is technically fine but HTTP polls keep failing — the
+        // daemon may be hung or the TCP path went stale. Surface it
+        // distinctly so the user knows the bus isn't the problem.
+        ConnState::Connected | ConnState::Connecting => {
+            format!(
+                " ⚠ daemon not responding · {} HTTP failure{}{}",
+                app.http_fail_count,
+                if app.http_fail_count == 1 { "" } else { "s" },
+                dots
+            )
+        }
     };
     let para = Paragraph::new(Line::from(Span::styled(
         label,

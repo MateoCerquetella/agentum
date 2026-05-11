@@ -4,6 +4,19 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.10] — 2026-05-11
+
+### Added
+- **HTTP-failure detection feeds the reconnect banner.** v0.7.9 only
+  watched the events-bus WebSocket; this release adds the second
+  trigger from the original spec: when HTTP fetches start failing
+  while the WS is still nominally connected (TCP keepalive lag —
+  daemon may be hung or the path went stale), the banner surfaces
+  with a distinct "daemon not responding" copy. Dashboard counts
+  consecutive `fetch` throws + 5xx responses; TUI counts consecutive
+  periodic `list_sessions` poll failures. Same `>= 2` debounce as
+  the WS path.
+
 ## [0.7.9] — 2026-05-11
 
 ### Added

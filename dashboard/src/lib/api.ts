@@ -135,6 +135,7 @@ import {
   setActiveToken,
   wsUrl as profileWsUrl
 } from './profiles';
+import { markFetchFailed, markFetchOk } from './stores/events';
 
 function readToken(): string | null {
   return getActiveProfile().token || null;
@@ -157,16 +158,35 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = readToken();
   if (token) headers.set('authorization', `Bearer ${token}`);
 
-  const res = await fetch(apiUrl(path), { ...init, headers });
+  let res: Response;
+  try {
+    res = await fetch(apiUrl(path), { ...init, headers });
+  } catch (e) {
+    // Network-level failure (DNS, TCP refuse, TLS error, offline). Feed
+    // the reconnect detector; the throw still bubbles for the caller.
+    markFetchFailed();
+    throw e;
+  }
   if (res.status === 401) {
-    // Stale or missing token — clear so the gate can re-prompt.
+    // Stale or missing token — clear so the gate can re-prompt. Not a
+    // reconnect signal: the daemon is reachable, the token isn't.
     setToken(null);
     throw new ApiError(401, 'unauthorized');
   }
-  if (!res.ok) {
+  if (res.status >= 500) {
+    // Daemon-side error counts as reachability failure for banner
+    // purposes — the user's actions aren't landing anywhere useful.
+    markFetchFailed();
     const text = await res.text().catch(() => '');
     throw new ApiError(res.status, text || res.statusText);
   }
+  if (!res.ok) {
+    // 4xx that isn't 401: legitimate client-side rejection, not a
+    // network/health signal.
+    const text = await res.text().catch(() => '');
+    throw new ApiError(res.status, text || res.statusText);
+  }
+  markFetchOk();
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }

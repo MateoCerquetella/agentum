@@ -396,11 +396,17 @@ impl NewSessionForm {
 
     pub fn next_field(&mut self) {
         self.field = match self.field {
-            NewSessionField::Profile => NewSessionField::Name,
+            // Workdir lives directly under the Servers field — the
+            // user's mental model is "which agentum, then which folder"
+            // — and re-fetching `$HOME` when the server changes only
+            // makes sense if Workdir is the very next stop. Name / Tool
+            // / Model trail because they're typed independently of which
+            // daemon owns the session.
+            NewSessionField::Profile => NewSessionField::Workdir,
+            NewSessionField::Workdir => NewSessionField::Name,
             NewSessionField::Name => NewSessionField::Tool,
             NewSessionField::Tool => NewSessionField::Model,
-            NewSessionField::Model => NewSessionField::Workdir,
-            NewSessionField::Workdir => NewSessionField::Args,
+            NewSessionField::Model => NewSessionField::Args,
             NewSessionField::Args => NewSessionField::UpAfter,
             NewSessionField::UpAfter => NewSessionField::Yolo,
             NewSessionField::Yolo => NewSessionField::Profile,
@@ -410,11 +416,11 @@ impl NewSessionForm {
     pub fn prev_field(&mut self) {
         self.field = match self.field {
             NewSessionField::Profile => NewSessionField::Yolo,
-            NewSessionField::Name => NewSessionField::Profile,
+            NewSessionField::Workdir => NewSessionField::Profile,
+            NewSessionField::Name => NewSessionField::Workdir,
             NewSessionField::Tool => NewSessionField::Name,
             NewSessionField::Model => NewSessionField::Tool,
-            NewSessionField::Workdir => NewSessionField::Model,
-            NewSessionField::Args => NewSessionField::Workdir,
+            NewSessionField::Args => NewSessionField::Model,
             NewSessionField::UpAfter => NewSessionField::Args,
             NewSessionField::Yolo => NewSessionField::UpAfter,
         };
@@ -760,6 +766,11 @@ pub struct App {
     pub errors_scroll: usize,
     pub conn: ConnState,
     pub was_connected: bool,
+    /// Consecutive failures of the periodic `list_sessions` poll. Used
+    /// alongside `conn` to surface the reconnect banner when HTTP dies
+    /// but the events-bus WS hasn't yet noticed (TCP keepalive lag).
+    /// Reset to 0 on the next successful poll.
+    pub http_fail_count: u32,
     pub tick_count: u64,
     pub status_msg: Option<String>,
     /// Drained by the run-loop tick: when `Some`, the daemon's shared
@@ -1042,6 +1053,7 @@ impl App {
             errors_scroll: 0,
             conn: ConnState::Connecting,
             was_connected: false,
+            http_fail_count: 0,
             tick_count: 0,
             status_msg: None,
             pending_pref_push: None,
@@ -1796,10 +1808,10 @@ pub async fn run_loop(
                 form.profile = active_profile.clone().unwrap_or_default();
                 form.error = None;
                 form.submitting = false;
-                // Drop straight to the Name field so the user resumes
-                // typing where they were going, not at the Profile
+                // Drop straight to the Workdir field so the user resumes
+                // typing where they were going, not at the Servers
                 // step they just resolved.
-                form.field = NewSessionField::Name;
+                form.field = NewSessionField::Workdir;
                 app.overlay = Overlay::NewSession(form);
             }
         }
@@ -2041,21 +2053,33 @@ pub async fn run_loop(
                 drive_pending_lazygit(&mut app);
                 if last_refresh.elapsed() >= REFRESH_INTERVAL {
                     last_refresh = Instant::now();
-                    if let Ok(fresh) = client.list_sessions().await {
-                        app.refresh_sessions(fresh);
-                        // Pre-warm the cache for any newly-discovered
-                        // sessions so the first nav to them is also a
-                        // pure cache hit. Existing ids skip via the
-                        // in-flight dedup or because the channel hasn't
-                        // delivered a stale fetch result yet.
-                        let new_ids: Vec<Uuid> = app
-                            .sessions
-                            .iter()
-                            .filter(|s| !app.agent_tasks.contains_key(&s.id))
-                            .map(|s| s.id)
-                            .collect();
-                        for id in new_ids {
-                            spawn_agent_tasks_fetch(&mut app, &client, id);
+                    match client.list_sessions().await {
+                        Ok(fresh) => {
+                            app.http_fail_count = 0;
+                            app.refresh_sessions(fresh);
+                            // Pre-warm the cache for any newly-discovered
+                            // sessions so the first nav to them is also a
+                            // pure cache hit. Existing ids skip via the
+                            // in-flight dedup or because the channel hasn't
+                            // delivered a stale fetch result yet.
+                            let new_ids: Vec<Uuid> = app
+                                .sessions
+                                .iter()
+                                .filter(|s| !app.agent_tasks.contains_key(&s.id))
+                                .map(|s| s.id)
+                                .collect();
+                            for id in new_ids {
+                                spawn_agent_tasks_fetch(&mut app, &client, id);
+                            }
+                        }
+                        Err(_) => {
+                            // Count consecutive periodic poll failures so
+                            // the reconnect banner can surface even when
+                            // the events-bus WS hasn't yet noticed the
+                            // daemon went away (TCP keepalive can lag the
+                            // HTTP layer by tens of seconds).
+                            app.http_fail_count =
+                                app.http_fail_count.saturating_add(1);
                         }
                     }
                     // Slow-path safety net for the agent-tasks panel:
@@ -3213,13 +3237,23 @@ async fn handle_key(
         // Session lifecycle ------------------------------------------------
         KeyCode::Char('n') => {
             // Default the workdir to the selected session's workdir if any,
-            // else the user's $HOME. Saves typing for "another agent in
-            // the same repo" — by far the most common case.
-            let workdir = app
-                .selected_session()
-                .map(|s| s.workdir.clone())
-                .or_else(|| std::env::var("HOME").ok())
-                .unwrap_or_default();
+            // else the *daemon's* $HOME (not the laptop's). When the user
+            // is driving a remote profile from macOS, `std::env::var("HOME")`
+            // resolves to `/Users/…` which doesn't exist on the Linux
+            // daemon. Asking the server resolves to whatever its own
+            // `$HOME` is, matching what Tab-cycling profiles inside the
+            // form already does.
+            let workdir = if let Some(s) = app.selected_session() {
+                s.workdir.clone()
+            } else {
+                match client.list_dir(None).await {
+                    Ok(listing) => listing.path,
+                    // Network hiccup / older daemon — fall back to the
+                    // laptop's $HOME so the form still opens with
+                    // something editable.
+                    Err(_) => std::env::var("HOME").unwrap_or_default(),
+                }
+            };
             // Seed the form's Profile field with the active one so
             // the user's first Enter creates on the current daemon.
             // `cycle_profile` from there walks the rest.
