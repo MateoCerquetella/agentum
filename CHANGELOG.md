@@ -4,6 +4,27 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.19] — 2026-05-11
+
+### Changed
+- **Sessions tree groups by server, not (server × workdir).** Previously
+  a fleet with 3 workdirs on `@vps` produced 3 `@vps · workdir` headers
+  interleaved with `this machine`'s headers — pretty hard to tell at a
+  glance which sessions belonged to which machine. Now each server
+  collapses to a single top-level header (`this machine`, `@vps`, …)
+  with every session it owns nested beneath, sorted by `(workdir,
+  name)` so same-project sessions still cluster visually. The workdir
+  basename moved from the group header to a trailing badge on each
+  leaf row so project context stays visible.
+- **Enter on a Server row now jumps the cursor to that server's group
+  in the Sessions tree** instead of soft-restarting with that profile
+  active. The whole fleet's sessions are already rendered together in
+  one tree, so Enter is a navigation, not a re-target. Active-profile
+  switching (which only matters as the *default* server for new spawns
+  and the `t` plain-bash shortcut) stays available via Ctrl-O
+  (Profiles overlay), the New Session form's Profile field, or
+  `agentum profiles use <name>`.
+
 ## [0.7.18] — 2026-05-11
 
 ### Fixed

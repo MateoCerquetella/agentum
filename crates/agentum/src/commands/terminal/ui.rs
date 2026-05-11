@@ -646,22 +646,28 @@ fn render_tree_row(
         Row::Group(gi) => {
             let g = &app.tree.groups[gi];
             let arrow = if g.expanded { "▾" } else { "▸" };
-            // Show the project name (basename) rather than the full path —
-            // the full workdir is still visible in the title bar / status.
-            // Multi-server runs prepend `@profile · ` so the user can
-            // tell which daemon owns this workdir at a glance.
-            let label = super::app::group_label(&g.workdir);
-            let mut spans = vec![Span::raw(format!(" {arrow} "))];
-            if !g.profile.is_empty() {
-                spans.push(Span::styled(
-                    format!("@{}  ", g.profile),
-                    Style::default().fg(p.accent_alt),
-                ));
-            }
-            spans.push(Span::styled(
-                label,
-                Style::default().add_modifier(Modifier::BOLD),
-            ));
+            // One group per server — `this machine` for loopback,
+            // `@vps` for named profiles. Workdir context moved to the
+            // leaf row's trailing badge so a multi-project server
+            // collapses to a single readable header instead of N
+            // `@profile · workdir` lines.
+            let label = super::app::profile_label(&g.profile);
+            let count = g.sessions.len();
+            let label_color = if g.profile.is_empty() {
+                p.fg_strong
+            } else {
+                p.accent_alt
+            };
+            let spans = vec![
+                Span::raw(format!(" {arrow} ")),
+                Span::styled(
+                    label,
+                    Style::default()
+                        .fg(label_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("  ({count})"), Style::default().fg(p.muted)),
+            ];
             ListItem::new(Line::from(spans)).style(row_style)
         }
         Row::Leaf { group, leaf } => {
@@ -713,6 +719,13 @@ fn render_tree_row(
             } else {
                 Span::raw("    ")
             };
+            // Trailing workdir badge — only present now that groups
+            // collapse to a single per-server header. Without it the
+            // user would lose the project context that the old
+            // `(profile, workdir)` grouping carried in the header.
+            let workdir_badge = session
+                .map(|s| super::app::workdir_label(&s.workdir))
+                .filter(|w| !w.is_empty());
             let mut spans = vec![
                 check_span,
                 Span::raw(format!("{:<14}", truncate(&name, 14))),
@@ -721,6 +734,12 @@ fn render_tree_row(
                 Span::raw(" "),
                 Span::styled(tool_label, Style::default().fg(p.muted)),
             ];
+            if let Some(w) = workdir_badge {
+                spans.push(Span::styled(
+                    format!("  {w}"),
+                    Style::default().fg(p.subtle),
+                ));
+            }
             if is_cursor {
                 spans[1].style = Style::default().add_modifier(Modifier::BOLD);
             }

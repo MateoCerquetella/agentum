@@ -1336,7 +1336,7 @@ impl App {
             .tree
             .groups
             .iter()
-            .map(|g| (format!("{}::{}", g.profile, g.workdir), g.expanded))
+            .map(|g| (g.profile.clone(), g.expanded))
             .collect();
         // Preserve the active filter across rebuilds — the user's typed
         // search shouldn't vanish just because the session list changed.
@@ -1555,12 +1555,11 @@ pub struct Tree {
 
 pub struct Group {
     /// Owning profile name; `""` for the default / loopback / `--api`
-    /// connection. Used as the primary sort key + drives the
-    /// `@profile · workdir` label in the sidebar so a multi-server
-    /// fleet reads correctly even when several daemons happen to
-    /// share a workdir.
+    /// connection. One Group per server — sessions across different
+    /// workdirs all roll up under the same header so the user can see
+    /// "this machine" and "@vps" as two siblings instead of N×M
+    /// (profile×workdir) flat headers.
     pub profile: String,
-    pub workdir: String,
     pub sessions: Vec<Uuid>,
     pub expanded: bool,
 }
@@ -1581,10 +1580,23 @@ pub fn normalize_workdir(p: &str) -> String {
     }
 }
 
-/// Friendly label for a tree group: the basename of the workdir, with
-/// `~` for the home dir. Falls back to the (collapsed) path if there's
-/// no basename — only happens for filesystem-root groups.
-pub fn group_label(workdir: &str) -> String {
+/// Display name for a server-level group. `""` (loopback) renders as
+/// `this machine`; named profiles get an `@` prefix so the sidebar
+/// reads `@vps` instead of just `vps`.
+pub fn profile_label(profile: &str) -> String {
+    if profile.is_empty() {
+        "this machine".to_string()
+    } else {
+        format!("@{profile}")
+    }
+}
+
+/// Friendly label for a workdir: the basename with `~` for the home
+/// dir. Falls back to the (collapsed) path if there's no basename —
+/// only happens for filesystem-root paths. Used in the leaf row's
+/// trailing workdir badge so the project context stays visible even
+/// after we stopped grouping by workdir.
+pub fn workdir_label(workdir: &str) -> String {
     let collapsed = collapse_home_str(workdir);
     if collapsed == "~" || collapsed == "/" {
         return collapsed;
@@ -1619,45 +1631,45 @@ impl Tree {
         Self::build_with_profiles(sessions, &HashMap::new(), prev_expanded)
     }
 
-    /// Multi-server variant: groups by `(profile, workdir)` so the
-    /// sidebar can render every server's sessions inline, sorted
-    /// with the default profile (empty key) first. `session_profile`
-    /// maps session id → owning profile name; missing entries fall
-    /// back to the default key.
+    /// Multi-server variant: groups by **profile only** so each server
+    /// renders as a single top-level header (`this machine`, `@vps`)
+    /// with every session it owns nested beneath, regardless of
+    /// workdir. Sessions are sorted by `(workdir, name)` within the
+    /// group so same-project sessions still cluster visually. The
+    /// workdir is surfaced on each leaf row instead of in the group
+    /// header.
     pub fn build_with_profiles(
         sessions: &[Session],
         session_profile: &HashMap<Uuid, String>,
         prev_expanded: &HashMap<String, bool>,
     ) -> Self {
-        // Normalize workdirs before grouping so `/x/proj` and `/x/proj/`
-        // don't show up as two separate groups. Group key is the
-        // composite (profile_name, workdir) so two servers that
-        // share a workdir don't accidentally merge.
-        let mut by_key: HashMap<(String, String), Vec<&Session>> = HashMap::new();
+        let mut by_profile: HashMap<String, Vec<&Session>> = HashMap::new();
         for s in sessions {
             let profile = session_profile.get(&s.id).cloned().unwrap_or_default();
-            let key = (profile, normalize_workdir(&s.workdir));
-            by_key.entry(key).or_default().push(s);
+            by_profile.entry(profile).or_default().push(s);
         }
-        let mut keys: Vec<(String, String)> = by_key.keys().cloned().collect();
-        // Default profile (empty key) first; then alphabetical by
-        // profile name; then by workdir within each profile.
-        keys.sort_by(|a, b| match (a.0.is_empty(), b.0.is_empty()) {
+        let mut keys: Vec<String> = by_profile.keys().cloned().collect();
+        // Loopback (empty key) first; then alphabetical by profile name.
+        keys.sort_by(|a, b| match (a.is_empty(), b.is_empty()) {
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
             _ => a.cmp(b),
         });
         let groups: Vec<Group> = keys
             .into_iter()
-            .map(|(profile, workdir)| {
-                let mut sess = by_key.remove(&(profile.clone(), workdir.clone())).unwrap();
-                sess.sort_by(|a, b| a.name.cmp(&b.name));
-                let expand_key = format!("{profile}::{workdir}");
+            .map(|profile| {
+                let mut sess = by_profile.remove(&profile).unwrap();
+                // (workdir, name) sort so project clusters stay visually
+                // adjacent without re-introducing per-workdir headers.
+                sess.sort_by(|a, b| {
+                    normalize_workdir(&a.workdir)
+                        .cmp(&normalize_workdir(&b.workdir))
+                        .then_with(|| a.name.cmp(&b.name))
+                });
                 Group {
-                    expanded: *prev_expanded.get(&expand_key).unwrap_or(&true),
+                    expanded: *prev_expanded.get(&profile).unwrap_or(&true),
                     sessions: sess.iter().map(|s| s.id).collect(),
                     profile,
-                    workdir,
                 }
             })
             .collect();
@@ -2933,8 +2945,8 @@ async fn handle_key(
         let n = n as usize;
         if app.tree.focus_group(n) {
             app.focus = Focus::Tree;
-            let label = &app.tree.groups[n - 1].workdir;
-            app.status_msg = Some(format!("project {n}: {label}"));
+            let label = profile_label(&app.tree.groups[n - 1].profile);
+            app.status_msg = Some(format!("server {n}: {label}"));
         } else {
             app.status_msg = Some(format!("no project {n}"));
         }
@@ -3346,32 +3358,47 @@ async fn handle_key(
         KeyCode::Enter => {
             match app.tree_section {
                 TreeSection::Servers => {
-                    // Switch to the highlighted profile via the same
-                    // soft-restart path the Ctrl-O overlay uses. No
-                    // pending follow-up — the user's intent is just
-                    // "drive that server now". Cursor 0 is the synthetic
-                    // "this machine" entry which switches to the empty
-                    // profile (local loopback).
-                    if app.servers_cursor == 0 {
-                        let already_local = app
-                            .active_profile
-                            .as_deref()
-                            .map(|n| n.is_empty())
-                            .unwrap_or(true);
-                        if already_local {
-                            app.status_msg = Some("already on this machine".into());
-                        } else {
-                            app.pending_switch_profile = Some(String::new());
-                            app.pending_after_switch = None;
-                            app.should_quit = true;
+                    // Jump the cursor down into the Sessions tree's
+                    // group for this server. No soft-restart, no active-
+                    // profile switch — the whole fleet's sessions are
+                    // already rendered together in one tree, so the user's
+                    // intent here is navigation, not re-targeting. To
+                    // change which server new spawns default to, use
+                    // Ctrl-O (Profiles overlay) or the New Session form's
+                    // Profile field.
+                    //
+                    // Cursor 0 is the synthetic "this machine" row → "".
+                    // Cursors 1..=N map to `app.profiles[0..N]`.
+                    let target_profile: Option<String> = if app.servers_cursor == 0 {
+                        Some(String::new())
+                    } else {
+                        app.profiles
+                            .get(app.servers_cursor - 1)
+                            .map(|e| e.name.clone())
+                    };
+                    let Some(target) = target_profile else {
+                        return;
+                    };
+                    let gi = app.tree.groups.iter().position(|g| g.profile == target);
+                    match gi {
+                        Some(idx) => {
+                            // Expand the group so the user sees its
+                            // sessions; the cursor jump lands on the
+                            // group header itself (move-down with j to
+                            // dive into the leaves).
+                            app.tree.groups[idx].expanded = true;
+                            if let Some(row_idx) = app.tree.row_index_of(Row::Group(idx)) {
+                                app.tree.cursor = row_idx;
+                            }
+                            app.tree_section = TreeSection::Sessions;
                         }
-                    } else if let Some(entry) = app.profiles.get(app.servers_cursor - 1) {
-                        if app.active_profile.as_deref() == Some(entry.name.as_str()) {
-                            app.status_msg = Some(format!("already on @{}", entry.name));
-                        } else {
-                            app.pending_switch_profile = Some(entry.name.clone());
-                            app.pending_after_switch = None;
-                            app.should_quit = true;
+                        None => {
+                            // No sessions for this server yet — stay on
+                            // the Servers section but tell the user why
+                            // the jump didn't go anywhere so it doesn't
+                            // look like Enter is silently broken.
+                            let label = profile_label(&target);
+                            app.status_msg = Some(format!("no sessions on {label} yet"));
                         }
                     }
                 }
