@@ -234,9 +234,62 @@ pub fn apply_line(
         match kind {
             "tool_use" => apply_tool_use(state, pending, block, timestamp),
             "tool_result" => apply_tool_result(state, pending, block, timestamp),
+            "text" => apply_text(state, pending, block),
             _ => {}
         }
     }
+}
+
+/// Claude Code injects slash-commands into the transcript as a user
+/// text block wrapped in `<command-name>…</command-name>` /
+/// `<command-message>…</command-message>` tags. `/clear` (and
+/// `/compact` to a lesser extent) wipes the conversation context, so
+/// the plan / todos / tasks tied to the previous context need to go
+/// too — otherwise the right-side panel keeps showing stale entries
+/// after the agent's own UI has dropped them.
+///
+/// Detection is in the parser instead of the TUI keystroke path
+/// because the keystroke shadow can't survive Claude's slash-command
+/// picker (Up/Down to navigate, Tab to autocomplete, picker-Enter to
+/// commit). A transcript-level event lands no matter how the command
+/// was entered, on any client.
+fn apply_text(
+    state: &mut AgentTaskState,
+    pending: &mut HashMap<String, OffsetDateTime>,
+    block: &serde_json::Value,
+) {
+    let Some(text) = block.get("text").and_then(|t| t.as_str()) else {
+        return;
+    };
+    // Cheap substring check before the more expensive parse — the
+    // `<command-name>` envelope only appears for slash-commands, so
+    // 99% of text blocks bail here.
+    if !text.contains("<command-name>") {
+        return;
+    }
+    let Some(cmd) = extract_command_name(text) else {
+        return;
+    };
+    // Normalize to the bare verb so future commands (e.g. /clear-cache,
+    // /clear-context) opt in deliberately instead of accidentally
+    // matching a substring.
+    let verb = cmd.trim().trim_start_matches('/').to_ascii_lowercase();
+    if matches!(verb.as_str(), "clear" | "compact") {
+        *state = AgentTaskState::default();
+        pending.clear();
+    }
+}
+
+/// Pull the value out of a single `<command-name>…</command-name>`
+/// envelope. Returns `None` if either tag is missing or malformed —
+/// we don't try to handle multiple commands per text block because
+/// Claude's transcripts only ever emit one envelope per slash run.
+fn extract_command_name(text: &str) -> Option<&str> {
+    let start_tag = "<command-name>";
+    let end_tag = "</command-name>";
+    let start = text.find(start_tag)? + start_tag.len();
+    let end_rel = text[start..].find(end_tag)?;
+    Some(&text[start..start + end_rel])
 }
 
 fn apply_tool_use(
@@ -721,5 +774,74 @@ mod tests {
         apply_line(&mut state, &mut pending, r#"{"truncated":"#);
         apply_line(&mut state, &mut pending, r#"{"type":"system"}"#);
         assert!(state.is_empty());
+    }
+
+    #[test]
+    fn clear_command_resets_state() {
+        // Build up a state with a plan + a todo, then drop a `/clear`
+        // command in the transcript. The plan/todo should be wiped so
+        // the right-side panel doesn't carry over context the agent
+        // has forgotten about.
+        let mut state = AgentTaskState::default();
+        let mut pending = HashMap::new();
+        apply_line(
+            &mut state,
+            &mut pending,
+            r#"{"type":"assistant","timestamp":"2025-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"p1","name":"ExitPlanMode","input":{"plan":"step one"}}]}}"#,
+        );
+        apply_line(
+            &mut state,
+            &mut pending,
+            r#"{"type":"assistant","timestamp":"2025-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"c1","name":"TaskCreate","input":{"subject":"X"}}]}}"#,
+        );
+        assert!(!state.is_empty(), "state should have plan + todo");
+
+        apply_line(
+            &mut state,
+            &mut pending,
+            r#"{"type":"user","timestamp":"2025-01-01T00:00:02Z","message":{"content":[{"type":"text","text":"<command-name>/clear</command-name><command-message>clear</command-message>"}]}}"#,
+        );
+        assert!(
+            state.is_empty(),
+            "state should be wiped after /clear, got {state:?}"
+        );
+    }
+
+    #[test]
+    fn compact_command_also_resets_state() {
+        let mut state = AgentTaskState::default();
+        let mut pending = HashMap::new();
+        apply_line(
+            &mut state,
+            &mut pending,
+            r#"{"type":"assistant","timestamp":"2025-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"c1","name":"TaskCreate","input":{"subject":"X"}}]}}"#,
+        );
+        assert!(!state.is_empty());
+        apply_line(
+            &mut state,
+            &mut pending,
+            r#"{"type":"user","timestamp":"2025-01-01T00:00:02Z","message":{"content":[{"type":"text","text":"<command-name>/compact</command-name>"}]}}"#,
+        );
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn unrelated_command_does_not_reset_state() {
+        // Defensive — make sure `/clear-cache` or other commands that
+        // happen to contain "clear" as a substring don't trigger the
+        // wipe.
+        let mut state = AgentTaskState::default();
+        let mut pending = HashMap::new();
+        apply_line(
+            &mut state,
+            &mut pending,
+            r#"{"type":"assistant","timestamp":"2025-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"c1","name":"TaskCreate","input":{"subject":"X"}}]}}"#,
+        );
+        apply_line(
+            &mut state,
+            &mut pending,
+            r#"{"type":"user","timestamp":"2025-01-01T00:00:02Z","message":{"content":[{"type":"text","text":"<command-name>/help</command-name>"}]}}"#,
+        );
+        assert!(!state.is_empty(), "/help shouldn't wipe state");
     }
 }
