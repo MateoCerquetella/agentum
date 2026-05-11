@@ -293,8 +293,7 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
         if next != activity {
             match (activity, next) {
                 (ActivityState::Working, ActivityState::Idle) => {
-                    let ev = Event::new("agent.finished")
-                        .with_session(sess.id, &sess.name);
+                    let ev = Event::new("agent.finished").with_session(sess.id, &sess.name);
                     let _ = emit(&bus, &store, ev).await;
                 }
                 // Idle → Working: the agent picked up a new turn after
@@ -304,16 +303,13 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
                 // toast: a quietly-resumed agent isn't notification-
                 // worthy on its own.
                 (ActivityState::Idle, ActivityState::Working) => {
-                    let ev = Event::new("agent.working")
-                        .with_session(sess.id, &sess.name);
+                    let ev = Event::new("agent.working").with_session(sess.id, &sess.name);
                     let _ = emit(&bus, &store, ev).await;
                 }
                 (prev, ActivityState::AwaitingInput)
-                    if prev != ActivityState::AwaitingInput
-                        && prev != ActivityState::Unknown =>
+                    if prev != ActivityState::AwaitingInput && prev != ActivityState::Unknown =>
                 {
-                    let ev = Event::new("agent.awaiting_input")
-                        .with_session(sess.id, &sess.name);
+                    let ev = Event::new("agent.awaiting_input").with_session(sess.id, &sess.name);
                     let _ = emit(&bus, &store, ev).await;
                 }
                 // Leaving AwaitingInput → user has answered (or the prompt
@@ -395,11 +391,7 @@ enum ActivityState {
 /// signatures take precedence over the busy/idle distinction — Claude
 /// keeps "esc to interrupt" on screen while a permission box is open,
 /// and the user-facing important fact is "you need to answer this".
-fn classify_activity(
-    pane: &str,
-    busy_sig: Option<&str>,
-    awaiting_sigs: &[&str],
-) -> ActivityState {
+fn classify_activity(pane: &str, busy_sig: Option<&str>, awaiting_sigs: &[&str]) -> ActivityState {
     if !awaiting_sigs.is_empty() && awaiting_sigs.iter().any(|s| pane.contains(s)) {
         return ActivityState::AwaitingInput;
     }

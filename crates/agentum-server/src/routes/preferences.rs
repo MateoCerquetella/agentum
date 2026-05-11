@@ -38,10 +38,7 @@ pub struct Preferences {
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new().route(
-        "/api/preferences",
-        get(get_prefs).put(put_prefs),
-    )
+    Router::new().route("/api/preferences", get(get_prefs).put(put_prefs))
 }
 
 fn prefs_path() -> Option<PathBuf> {
@@ -104,12 +101,12 @@ async fn put_prefs(
     // Best-effort fan-out so the other surface (TUI / dashboard) reflects
     // the change without polling. A dropped receiver here just means
     // there are no subscribers — not a failure.
-    let _ = state.bus.send(
-        Event::new("preferences.changed").with_payload(json!({
+    let _ = state
+        .bus
+        .send(Event::new("preferences.changed").with_payload(json!({
             "theme": current.theme,
             "tui_theme": current.tui_theme,
-        })),
-    );
+        })));
 
     Ok(Json(current))
 }

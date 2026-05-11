@@ -27,7 +27,10 @@ const GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/sessions", get(list).post(create))
-        .route("/api/sessions/{id}", get(get_one).patch(patch_session).delete(delete))
+        .route(
+            "/api/sessions/{id}",
+            get(get_one).patch(patch_session).delete(delete),
+        )
         .route("/api/sessions/{id}/start", post(start))
         .route("/api/sessions/{id}/stop", post(stop))
         .route("/api/sessions/{id}/kill", post(kill))
@@ -131,10 +134,9 @@ async fn patch_session(
         }
         if name != current.name {
             let updated = state.store.patch_session_name(id, name).await?;
-            let _ = state.bus.send(
-                Event::new("session.renamed")
-                    .with_session(updated.id, &updated.name),
-            );
+            let _ = state
+                .bus
+                .send(Event::new("session.renamed").with_session(updated.id, &updated.name));
             current = updated;
         }
     }
@@ -528,9 +530,9 @@ async fn stream_session(
             Ok(Some(Ok(Message::Binary(b)))) if !b.is_empty() => {
                 early_input.push(b);
             }
-            Ok(Some(Ok(_))) => {} // ping/pong/etc.
+            Ok(Some(Ok(_))) => {}                  // ping/pong/etc.
             Ok(Some(Err(_))) | Ok(None) => return, // socket already gone
-            Err(_) => break, // timeout — fall through with no resize
+            Err(_) => break,                       // timeout — fall through with no resize
         }
     }
     if got_resize {
@@ -620,10 +622,8 @@ async fn stream_session(
     //     visible layout ends up corrupted in ways that survive in the
     //     vt100 parser's history. Mismatch → fall through to a fresh
     //     snapshot at the new size and let the client's parser reset.
-    let saved_checkpoint: Option<StreamCheckpoint> = positions
-        .lock()
-        .ok()
-        .and_then(|map| map.get(&id).copied());
+    let saved_checkpoint: Option<StreamCheckpoint> =
+        positions.lock().ok().and_then(|map| map.get(&id).copied());
     let resume_size_matches = match (saved_checkpoint, current_size) {
         (Some(cp), Some((cols, rows))) => cp.cols == cols && cp.rows == rows,
         // No first-resize frame from the client, or no checkpoint — let
@@ -636,12 +636,7 @@ async fn stream_session(
             && end >= cp.pos
         {
             let delta = end - cp.pos;
-            if delta > 0
-                && file
-                    .seek(std::io::SeekFrom::Start(cp.pos))
-                    .await
-                    .is_ok()
-            {
+            if delta > 0 && file.seek(std::io::SeekFrom::Start(cp.pos)).await.is_ok() {
                 let mut buf = vec![0u8; delta as usize];
                 if file.read_exact(&mut buf).await.is_ok()
                     && socket
@@ -697,9 +692,7 @@ async fn stream_session(
     // Fallback: if capture-pane didn't yield anything (early in session
     // life, before tmux has rendered, or for non-tmux sessions), keep the
     // old 4 KB tail behaviour so users still see *something* on connect.
-    if !snapshot_sent
-        && let Ok(end) = file.seek(std::io::SeekFrom::End(0)).await
-    {
+    if !snapshot_sent && let Ok(end) = file.seek(std::io::SeekFrom::End(0)).await {
         let backfill = end.min(BACKFILL_BYTES);
         if backfill > 0
             && file
@@ -850,7 +843,10 @@ fn parse_resize(t: &str) -> Option<(u16, u16)> {
     let resize = v.get("resize")?;
     let cols = resize.get("cols")?.as_u64()?;
     let rows = resize.get("rows")?.as_u64()?;
-    Some((cols.min(u16::MAX as u64) as u16, rows.min(u16::MAX as u64) as u16))
+    Some((
+        cols.min(u16::MAX as u64) as u16,
+        rows.min(u16::MAX as u64) as u16,
+    ))
 }
 
 #[cfg(test)]

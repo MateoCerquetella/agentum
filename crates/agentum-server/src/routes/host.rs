@@ -135,9 +135,7 @@ pub fn spawn_ticker(bus: broadcast::Sender<Event>) {
                     swap_total: s.total_swap(),
                 }
             };
-            let _ = bus.send(
-                Event::new("host.metrics").with_payload(json!(snap)),
-            );
+            let _ = bus.send(Event::new("host.metrics").with_payload(json!(snap)));
         }
     });
 }
