@@ -2674,7 +2674,15 @@ async fn handle_key(
     {
         match app.tree_section {
             TreeSection::Servers => {
-                if let Some(entry) = app.profiles.get(app.servers_cursor).cloned() {
+                // Cursor 0 is the synthetic "this machine" row, which
+                // doesn't correspond to a persisted profile entry —
+                // there's nothing to remove.
+                if app.servers_cursor == 0 {
+                    app.status_msg =
+                        Some("can't remove this machine — it's the local loopback".into());
+                } else if let Some(entry) =
+                    app.profiles.get(app.servers_cursor - 1).cloned()
+                {
                     if app.active_profile.as_deref() == Some(entry.name.as_str()) {
                         app.status_msg =
                             Some("can't remove the active server — switch first".into());
@@ -3164,9 +3172,14 @@ async fn handle_key(
             // the bottom of Servers, a `j` flips the section to
             // Sessions. Inside Sessions the original tree cursor
             // drives selection.
+            //
+            // The Servers section has `profiles.len() + 1` rows: row 0
+            // is the synthetic "this machine" entry, rows 1..=N map to
+            // configured peer profiles.
             match app.tree_section {
                 TreeSection::Servers => {
-                    if app.servers_cursor + 1 < app.profiles.len() {
+                    let last = app.profiles.len(); // index of last row
+                    if app.servers_cursor < last {
                         app.servers_cursor += 1;
                     } else {
                         app.tree_section = TreeSection::Sessions;
@@ -3185,12 +3198,14 @@ async fn handle_key(
                     app.servers_cursor = app.servers_cursor.saturating_sub(1);
                 }
                 TreeSection::Sessions => {
-                    if app.tree.cursor == 0 && !app.profiles.is_empty() {
+                    if app.tree.cursor == 0 {
                         // At the top of the sessions list, flip focus
                         // into the Servers header so a `k` from the
-                        // first session reaches the last server.
+                        // first session reaches the last server row
+                        // (always present now — at minimum the "this
+                        // machine" entry exists).
                         app.tree_section = TreeSection::Servers;
-                        app.servers_cursor = app.profiles.len().saturating_sub(1);
+                        app.servers_cursor = app.profiles.len();
                     } else {
                         app.tree.move_cursor(-1);
                         let side = app.target_side();
@@ -3222,8 +3237,25 @@ async fn handle_key(
                     // Switch to the highlighted profile via the same
                     // soft-restart path the Ctrl-O overlay uses. No
                     // pending follow-up — the user's intent is just
-                    // "drive that server now".
-                    if let Some(entry) = app.profiles.get(app.servers_cursor) {
+                    // "drive that server now". Cursor 0 is the synthetic
+                    // "this machine" entry which switches to the empty
+                    // profile (local loopback).
+                    if app.servers_cursor == 0 {
+                        let already_local = app
+                            .active_profile
+                            .as_deref()
+                            .map(|n| n.is_empty())
+                            .unwrap_or(true);
+                        if already_local {
+                            app.status_msg = Some("already on this machine".into());
+                        } else {
+                            app.pending_switch_profile = Some(String::new());
+                            app.pending_after_switch = None;
+                            app.should_quit = true;
+                        }
+                    } else if let Some(entry) =
+                        app.profiles.get(app.servers_cursor - 1)
+                    {
                         if app.active_profile.as_deref() == Some(entry.name.as_str()) {
                             app.status_msg = Some(format!("already on @{}", entry.name));
                         } else {
@@ -3259,7 +3291,12 @@ async fn handle_key(
             // so an accidental keypress doesn't silently nuke the
             // profile. The previous direct-`store.remove` path was the
             // muscle-memory landmine the user kept hitting.
-            if let Some(entry) = app.profiles.get(app.servers_cursor).cloned() {
+            if app.servers_cursor == 0 {
+                app.status_msg =
+                    Some("can't remove this machine — it's the local loopback".into());
+            } else if let Some(entry) =
+                app.profiles.get(app.servers_cursor - 1).cloned()
+            {
                 if app.active_profile.as_deref() == Some(entry.name.as_str()) {
                     app.status_msg =
                         Some("can't remove the active server — switch first".into());
@@ -3381,9 +3418,10 @@ async fn handle_new_session_key(
         KeyCode::Tab => match form.field {
             NewSessionField::Profile => {
                 // Cycle through configured profiles plus an empty
-                // entry meaning "current connection". When only the
-                // empty entry exists (no profiles defined), advance
-                // to the next field so the user isn't trapped.
+                // entry meaning the local loopback ("this machine").
+                // When only the empty entry exists (no profiles
+                // defined), advance to the next field so the user
+                // isn't trapped.
                 let names: Vec<String> =
                     app.profiles.iter().map(|p| p.name.clone()).collect();
                 if names.is_empty() {
@@ -3395,18 +3433,50 @@ async fn handle_new_session_key(
                     // workdir from the newly-selected server so the
                     // user doesn't need to retype a path that may not
                     // exist on the other machine.
+                    //
+                    // We resolve through `app.clients` first — the
+                    // empty-string key holds the actual local loopback
+                    // client when one is connected. Falling back to the
+                    // run-loop's `client` keeps things working when the
+                    // user launched with `--profile`: there's no
+                    // separate local entry in `app.clients`, but the
+                    // active client still lists *some* $HOME we can
+                    // pre-fill (rather than leaving the workdir stuck
+                    // on the previous server's path).
                     if form.profile != old_profile {
-                        let target_client = if form.profile.is_empty() {
-                            Some(client.clone())
-                        } else {
-                            app.clients
-                                .get(&form.profile)
-                                .and_then(|e| e.client.clone())
-                        };
+                        let target_client = app
+                            .clients
+                            .get(form.profile.as_str())
+                            .and_then(|e| e.client.clone())
+                            .or_else(|| {
+                                if form.profile.is_empty() {
+                                    Some(client.clone())
+                                } else {
+                                    None
+                                }
+                            });
                         if let Some(tc) = target_client {
-                            if let Ok(listing) = tc.list_dir(None).await {
-                                form.workdir = listing.path;
+                            match tc.list_dir(None).await {
+                                Ok(listing) => form.workdir = listing.path,
+                                Err(e) => {
+                                    // Surface the failure inline so the
+                                    // user understands why the workdir
+                                    // didn't move with the cycle.
+                                    form.error = Some(format!(
+                                        "couldn't reach {}: {e}",
+                                        if form.profile.is_empty() {
+                                            "this machine".to_string()
+                                        } else {
+                                            format!("@{}", form.profile)
+                                        }
+                                    ));
+                                }
                             }
+                        } else {
+                            form.error = Some(format!(
+                                "@{} isn't connected — try Ctrl-O to re-add",
+                                form.profile
+                            ));
                         }
                     }
                 }

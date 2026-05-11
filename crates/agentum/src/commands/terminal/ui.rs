@@ -477,97 +477,138 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let mut items: Vec<ListItem> = Vec::new();
 
     // Servers section: rendered above the sessions tree as a small
-    // header + one line per configured profile. Active profile gets
-    // a filled dot; cursor highlight uses the same row-style helper
-    // as the sessions tree so the two sections look like one pane.
+    // header + one line per server. Cursor 0 is the implicit local
+    // loopback ("this machine"); cursors 1..=N map to `app.profiles[0..N]`.
+    // Showing the local entry unconditionally keeps the sidebar in lockstep
+    // with the New Session form, which also lists "this machine" as a
+    // first-class cycle target.
     items.push(ListItem::new(Line::from(Span::styled(
         " SERVERS".to_string(),
         Style::default()
             .fg(p.muted)
             .add_modifier(Modifier::BOLD),
     ))));
-    if app.profiles.is_empty() {
-        items.push(ListItem::new(Line::from(Span::styled(
-            "   (no servers — press a)".to_string(),
-            Style::default().fg(p.muted),
-        ))));
-    } else {
-        for (i, entry) in app.profiles.iter().enumerate() {
-            let is_active = app.active_profile.as_deref() == Some(entry.name.as_str());
-            let is_cursor =
-                app.tree_section == TreeSection::Servers && i == app.servers_cursor;
-            let row_style = if is_cursor {
+    use super::app::ServerStatus;
+    // Row 0 — "this machine". Active when the active profile is None
+    // (loopback launch) or maps to the empty profile-name key.
+    {
+        let is_active = app
+            .active_profile
+            .as_deref()
+            .map(|n| n.is_empty())
+            .unwrap_or(true);
+        let is_cursor =
+            app.tree_section == TreeSection::Servers && app.servers_cursor == 0;
+        let row_style = if is_cursor {
+            Style::default()
+                .bg(p.cursor_bg)
+                .fg(if focused { p.cursor_fg } else { p.fg })
+        } else {
+            Style::default().bg(p.panel_bg).fg(p.fg)
+        };
+        // The local loopback is keyed by "" in `app.clients` when the
+        // user launched without `--profile`. With a `--profile` launch
+        // there's no local entry — we render the row anyway so the
+        // sidebar shape doesn't shift around launch flags.
+        let status = app.clients.get("").map(|e| e.status);
+        let (dot_glyph, dot_color) = match (status, is_active) {
+            (Some(ServerStatus::Live), true) => ("●", p.success),
+            (Some(ServerStatus::Live), false) => ("○", p.success),
+            (Some(ServerStatus::Unreachable), _) => ("●", p.error),
+            (Some(ServerStatus::LoginNeeded), _) => ("●", p.warning),
+            (None, true) => ("●", p.success),
+            (None, false) => ("○", p.muted),
+        };
+        let spans = vec![
+            Span::raw("   "),
+            Span::styled(dot_glyph.to_string(), Style::default().fg(dot_color)),
+            Span::raw(" "),
+            Span::styled(
+                "this machine".to_string(),
                 Style::default()
-                    .bg(p.cursor_bg)
-                    .fg(if focused { p.cursor_fg } else { p.fg })
-            } else {
-                Style::default().bg(p.panel_bg).fg(p.fg)
-            };
-            // Live status comes from `app.clients`. The dot reflects
-            // both reachability and active-ness: filled green = active
-            // & live, hollow = peer & live, red = unreachable, amber
-            // = login needed. Never shows "live but not active" with
-            // the same color as "active" — they're functionally
-            // different (active = default for new sessions).
-            let status = app
-                .clients
-                .get(entry.name.as_str())
-                .map(|e| e.status);
-            use super::app::ServerStatus;
-            let (dot_glyph, dot_color) = match (status, is_active) {
-                (Some(ServerStatus::Live), true) => ("●", p.success),
-                (Some(ServerStatus::Live), false) => ("○", p.success),
-                (Some(ServerStatus::Unreachable), _) => ("●", p.error),
-                (Some(ServerStatus::LoginNeeded), _) => ("●", p.warning),
-                (None, true) => ("●", p.success),
-                (None, false) => ("○", p.muted),
-            };
-            let mut spans = vec![
-                Span::raw("   "),
-                Span::styled(dot_glyph.to_string(), Style::default().fg(dot_color)),
-                Span::raw(" "),
-                Span::styled(
-                    entry.name.clone(),
-                    Style::default()
-                        .fg(if is_cursor && focused {
-                            p.cursor_fg
-                        } else if is_active {
-                            p.fg_strong
-                        } else {
-                            p.fg
-                        })
-                        .add_modifier(if is_cursor || is_active {
-                            Modifier::BOLD
-                        } else {
-                            Modifier::empty()
-                        }),
-                ),
-            ];
-            if entry.is_default {
+                    .fg(if is_cursor && focused {
+                        p.cursor_fg
+                    } else if is_active {
+                        p.fg_strong
+                    } else {
+                        p.fg
+                    })
+                    .add_modifier(if is_cursor || is_active {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+            ),
+        ];
+        items.push(ListItem::new(Line::from(spans)).style(row_style));
+    }
+    for (i, entry) in app.profiles.iter().enumerate() {
+        let is_active = app.active_profile.as_deref() == Some(entry.name.as_str());
+        // +1 to account for the synthetic "this machine" row above.
+        let is_cursor =
+            app.tree_section == TreeSection::Servers && (i + 1) == app.servers_cursor;
+        let row_style = if is_cursor {
+            Style::default()
+                .bg(p.cursor_bg)
+                .fg(if focused { p.cursor_fg } else { p.fg })
+        } else {
+            Style::default().bg(p.panel_bg).fg(p.fg)
+        };
+        let status = app
+            .clients
+            .get(entry.name.as_str())
+            .map(|e| e.status);
+        let (dot_glyph, dot_color) = match (status, is_active) {
+            (Some(ServerStatus::Live), true) => ("●", p.success),
+            (Some(ServerStatus::Live), false) => ("○", p.success),
+            (Some(ServerStatus::Unreachable), _) => ("●", p.error),
+            (Some(ServerStatus::LoginNeeded), _) => ("●", p.warning),
+            (None, true) => ("●", p.success),
+            (None, false) => ("○", p.muted),
+        };
+        let mut spans = vec![
+            Span::raw("   "),
+            Span::styled(dot_glyph.to_string(), Style::default().fg(dot_color)),
+            Span::raw(" "),
+            Span::styled(
+                entry.name.clone(),
+                Style::default()
+                    .fg(if is_cursor && focused {
+                        p.cursor_fg
+                    } else if is_active {
+                        p.fg_strong
+                    } else {
+                        p.fg
+                    })
+                    .add_modifier(if is_cursor || is_active {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+            ),
+        ];
+        if entry.is_default {
+            spans.push(Span::styled(
+                "  default".to_string(),
+                Style::default().fg(p.accent),
+            ));
+        }
+        match status {
+            Some(ServerStatus::Unreachable) => {
                 spans.push(Span::styled(
-                    "  default".to_string(),
-                    Style::default().fg(p.accent),
+                    "  unreachable".to_string(),
+                    Style::default().fg(p.error),
                 ));
             }
-            // Visible reachability label so the user doesn't have to
-            // hover or guess what the dot color means.
-            match status {
-                Some(ServerStatus::Unreachable) => {
-                    spans.push(Span::styled(
-                        "  unreachable".to_string(),
-                        Style::default().fg(p.error),
-                    ));
-                }
-                Some(ServerStatus::LoginNeeded) => {
-                    spans.push(Span::styled(
-                        "  login needed".to_string(),
-                        Style::default().fg(p.warning),
-                    ));
-                }
-                _ => {}
+            Some(ServerStatus::LoginNeeded) => {
+                spans.push(Span::styled(
+                    "  login needed".to_string(),
+                    Style::default().fg(p.warning),
+                ));
             }
-            items.push(ListItem::new(Line::from(spans)).style(row_style));
+            _ => {}
         }
+        items.push(ListItem::new(Line::from(spans)).style(row_style));
     }
 
     // Visual separator between the two sections.
@@ -1832,8 +1873,10 @@ fn draw_new_session_overlay(
     }
 
     let mut lines: Vec<Line<'_>> = Vec::new();
-    lines.push(head("New session", p));
-    lines.push(Line::from(""));
+    // Title used to be duplicated — once as the overlay-box border title
+    // and once as a `head("New session", …)` line inside the box. We
+    // keep the box title (set at the `overlay_box` call below) and drop
+    // the inner heading so the form starts straight on its first field.
 
     // Servers pick comes first — same order as the user's mental
     // model ("which agentum, then which folder, then which agent").

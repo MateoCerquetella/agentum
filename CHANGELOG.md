@@ -4,6 +4,32 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.13] — 2026-05-11
+
+### Fixed
+- **New Session form: duplicate title removed.** The overlay used to
+  render "New session" twice — once as the overlay-box border title,
+  once as a `head()` line inside the box. The inner heading is gone;
+  the box title remains as the single label.
+- **"this machine" is now a permanent row in the SERVERS sidebar.**
+  Previously the section showed `(no servers — press a)` when no
+  peer profiles were configured, and configured peers only when
+  they were. Cursor 0 is now a synthetic "this machine" entry
+  (mapping to the empty / loopback profile) that always renders,
+  with configured peers following at cursors 1..N. Navigation,
+  Enter (switch profile), `d` / Ctrl-D (remove) and bounds checks
+  in `app.rs` were updated to account for the offset; deleting the
+  "this machine" row is rejected with an explicit status message.
+- **Workdir follows the Servers cycle in the New Session form.**
+  Tab-cycling the Servers field now resolves the target client
+  through `app.clients` first (the empty key holds the real local
+  loopback when one is connected) and only falls back to the
+  run-loop's client for the empty case. Failed `/api/fs/list`
+  fetches surface inline (`couldn't reach @vps1: …`) instead of
+  silently leaving the workdir on the previous server's `$HOME`,
+  and peers that aren't connected get a clear
+  `@vps1 isn't connected — try Ctrl-O to re-add` hint.
+
 ## [0.7.12] — 2026-05-11
 
 ### Fixed
