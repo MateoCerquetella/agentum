@@ -5413,13 +5413,35 @@ fn refresh_lazygit_for_selection(app: &mut App) {
     let Some(lg_tx) = app.lg_tx.clone() else {
         return;
     };
-    let Some(sess) = app.selected_session() else {
+    // Extract the workdir as an owned string so the &Session borrow
+    // doesn't outlive into the later `app.focus = ...` /
+    // `app.lazygit = ...` mutations.
+    let remote_workdir = match app.selected_session() {
+        Some(s) => s.workdir.clone(),
+        None => return,
+    };
+    // Try the session's workdir literally first; if it doesn't resolve
+    // to a local directory (typical when the session lives on a remote
+    // daemon and the path is Linux-side while the TUI runs on macOS),
+    // try replacing the foreign home prefix with the local $HOME so a
+    // user with parallel `~/Developer/projects/<name>` checkouts on
+    // both machines sees lazygit follow into the local copy.
+    let Some(new_cwd) = resolve_local_workdir(&remote_workdir) else {
+        // No local equivalent for this session's workdir — drop the
+        // stale pane rather than leaving it pinned to a totally
+        // unrelated project. lazygit_cwd is cleared too so the next
+        // switch to a local-workdir session triggers a fresh spawn
+        // instead of being short-circuited by the "same cwd" check.
+        if app.focus == Focus::Lazygit {
+            app.focus = Focus::Tree;
+        }
+        app.lazygit = None;
+        app.lazygit_cwd = None;
+        app.status_msg = Some(format!(
+            "lazygit closed — `{remote_workdir}` isn't a local directory"
+        ));
         return;
     };
-    let new_cwd = PathBuf::from(&sess.workdir);
-    if !new_cwd.is_dir() {
-        return;
-    }
     if app.lazygit_cwd.as_ref() == Some(&new_cwd) {
         return;
     }
@@ -5877,6 +5899,36 @@ async fn handle_event_msg(app: &mut App, msg: EventMsg, client: &Client) {
 /// gets cleared — the panel keeps showing the last good snapshot.
 /// No-op if the channel hasn't been wired yet (pre-`run_loop`
 /// contexts only).
+/// Map a session's workdir to a real local directory the lazygit
+/// child can spawn into. Tries three things in order:
+///   1. The path verbatim — the common case for purely-local fleets.
+///   2. The trailing path past the first match of `/home/<user>/` or
+///      `/Users/<user>/`, joined against the local `$HOME`. Lets a
+///      Mac user with `~/Developer/projects/agentum` follow into a
+///      remote Linux session whose workdir is
+///      `/home/malloc/Developer/projects/agentum`.
+///   3. None — telling the caller to drop the pane rather than show
+///      stale state from a previous project.
+fn resolve_local_workdir(remote: &str) -> Option<PathBuf> {
+    let direct = PathBuf::from(remote);
+    if direct.is_dir() {
+        return Some(direct);
+    }
+    let local_home = std::env::var_os("HOME").map(PathBuf::from)?;
+    // Match `/home/<u>/` or `/Users/<u>/` and pull the suffix.
+    for prefix in ["/home/", "/Users/"] {
+        if let Some(rest) = remote.strip_prefix(prefix)
+            && let Some((_, suffix)) = rest.split_once('/')
+        {
+            let candidate = local_home.join(suffix);
+            if candidate.is_dir() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
 /// Shadow the user's current input line for one terminal pane so we
 /// can spot when they type `/clear` (or `\clear`) and submit it. When
 /// the line commits with that command, we both wipe the local plan/

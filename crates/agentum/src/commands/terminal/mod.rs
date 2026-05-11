@@ -605,6 +605,19 @@ fn apply_profile(mut opts: Options) -> Result<Options> {
     // The profile's `insecure` is opt-in; we OR it with the CLI flag
     // so an --insecure on the command line is never quietly discarded.
     opts.insecure = opts.insecure || profile.insecure;
+    // Write the resolved profile name back to `opts.profile` so the
+    // rest of the TUI knows *which named profile* this connection
+    // belongs to — not just "we connected to some URL". This matters
+    // for the default-profile path (`agentum terminal` with no
+    // `--profile` flag but a `default = "omarchy"` in profiles.toml):
+    // without this writeback, `current_opts.profile` stays `None`,
+    // `active_key` ends up `""` in the session-list-tagging in
+    // `mod.rs` (the `merge_sessions_dedup` call site), and every
+    // session from the remote daemon gets tagged as loopback. The
+    // sidebar then files them under the hostname-derived local row
+    // ("macbook-pro") instead of `@omarchy`, which is exactly the
+    // "why are my omarchy sessions on my macbook?" bug the user hit.
+    opts.profile = Some(name);
     Ok(opts)
 }
 

@@ -4,6 +4,37 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.24] — 2026-05-11
+
+### Fixed
+- **`/clear` detection now lives in the transcript parser, not the
+  TUI keystroke shadow.** The v0.7.21 client-side line shadow
+  couldn't survive Claude Code's slash-command picker (Up/Down to
+  navigate, Tab to autocomplete, picker-Enter to commit) — the
+  buffer cleared on arrows, so a user who typed `/cle` and Enter
+  on the picker highlight never tripped the match. `apply_line` in
+  `agentum-core::transcript` now scans user text blocks for the
+  `<command-name>…</command-name>` envelope Claude Code injects for
+  every slash run and resets `AgentTaskState` to default on `/clear`
+  or `/compact`. Works regardless of how the command was entered
+  and on every client (TUI, dashboard) because the wipe lives in
+  the daemon's transcript watcher. The client-side shadow +
+  `/agent-tasks/reset` endpoint stay as a fast path so the local
+  panel goes blank without waiting for the FS-watcher tick.
+- **Lazygit pane no longer stays pinned to a stale project when the
+  selected session's workdir isn't a local directory.** Previously
+  `refresh_lazygit_for_selection` would silently bail on
+  `!is_dir()` — typical for remote sessions where the daemon's
+  workdir is a Linux path that doesn't exist on the macOS TUI host
+  — leaving lazygit attached to whatever project it was spawned in.
+  Now it translates the foreign home prefix (`/home/<u>/…` or
+  `/Users/<u>/…`) into the local `$HOME` so a user with parallel
+  `~/Developer/projects/<name>` checkouts on both machines follows
+  into the local copy. If no local equivalent exists, the pane is
+  dropped and `lazygit_cwd` cleared so the next switch into a
+  local-workdir session re-spawns cleanly instead of staying on a
+  totally unrelated project.
+
 ## [0.7.23] — 2026-05-11
 
 ### Changed
