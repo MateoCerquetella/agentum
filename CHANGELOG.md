@@ -4,6 +4,29 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.12] — 2026-05-11
+
+### Fixed
+- **Plain `d` on a server entry now also confirms before removing.**
+  v0.7.11 added `Ctrl-D` with a y/N prompt but left lowercase `d`
+  wired to a direct `store.remove` — the muscle-memory key was still
+  the silent-delete one. Both keys now route through the same
+  `RemoveServer` confirmation.
+- **No more "● crashed" toast / banner echo after the user kills a
+  session.** The watchdog emits `session.crashed` microseconds after
+  the row is deleted (the tmux pane vanishing trips its detector),
+  which read as "killing it crashed it" — confusing for an
+  intentional action. A new `recently_killed` set in `App` is
+  populated in `execute_action` and consumed in `apply_event`'s
+  crash branch so the echo gets dropped silently. When the killed
+  session is the currently-selected one, selection drops to `None`
+  and the term pane resets — no more auto-jumping to another
+  crashed session and resurrecting the same banner.
+- **CLI-side server removals (`agentum profiles rm vps`) now
+  propagate to running TUIs.** The 5s refresh tick reloads
+  `profiles.toml` from disk, so the sidebar's Servers section stays
+  in sync with out-of-band edits without forcing a TUI restart.
+
 ## [0.7.11] — 2026-05-11
 
 ### Added

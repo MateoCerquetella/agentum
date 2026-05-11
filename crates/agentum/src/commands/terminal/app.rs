@@ -771,6 +771,15 @@ pub struct App {
     /// but the events-bus WS hasn't yet noticed (TCP keepalive lag).
     /// Reset to 0 on the next successful poll.
     pub http_fail_count: u32,
+    /// Session ids the user has just killed locally. Watchdog often
+    /// emits a `session.crashed` event microseconds after the row is
+    /// deleted (the tmux pane vanishing trips its detector), and the
+    /// resulting toast / error overlay reads as "killing it crashed it"
+    /// — confusing for what was an intentional action. Ids land here
+    /// inside `execute_action` and get filtered out of `apply_event`'s
+    /// `session.crashed` branch. The set is small (only your in-flight
+    /// destructive verbs) so no eviction policy is needed.
+    pub recently_killed: std::collections::HashSet<Uuid>,
     pub tick_count: u64,
     pub status_msg: Option<String>,
     /// Drained by the run-loop tick: when `Some`, the daemon's shared
@@ -1054,6 +1063,7 @@ impl App {
             conn: ConnState::Connecting,
             was_connected: false,
             http_fail_count: 0,
+            recently_killed: std::collections::HashSet::new(),
             tick_count: 0,
             status_msg: None,
             pending_pref_push: None,
@@ -2053,6 +2063,12 @@ pub async fn run_loop(
                 drive_pending_lazygit(&mut app);
                 if last_refresh.elapsed() >= REFRESH_INTERVAL {
                     last_refresh = Instant::now();
+                    // Pick up out-of-band edits to profiles.toml — e.g.
+                    // `agentum profiles rm vps` from a different shell.
+                    // Cheap (one small TOML read) and lets external
+                    // tooling stay coherent with the running TUI's
+                    // sidebar without forcing a restart.
+                    app.reload_profiles();
                     match client.list_sessions().await {
                         Ok(fresh) => {
                             app.http_fail_count = 0;
@@ -3236,15 +3252,21 @@ async fn handle_key(
                 state.add_form = Some(AddProfileForm::new());
             }
         }
-        KeyCode::Char('d') if app.tree_section == TreeSection::Servers => {
+        KeyCode::Char('d') | KeyCode::Char('D')
+            if app.tree_section == TreeSection::Servers =>
+        {
+            // Route through the same confirmation overlay as `Ctrl-D`
+            // so an accidental keypress doesn't silently nuke the
+            // profile. The previous direct-`store.remove` path was the
+            // muscle-memory landmine the user kept hitting.
             if let Some(entry) = app.profiles.get(app.servers_cursor).cloned() {
                 if app.active_profile.as_deref() == Some(entry.name.as_str()) {
                     app.status_msg =
                         Some("can't remove the active server — switch first".into());
-                } else if let Ok(mut store) = super::profiles::Profiles::load() {
-                    let _ = store.remove(&entry.name);
-                    app.reload_profiles();
-                    app.status_msg = Some(format!("removed `{}`", entry.name));
+                } else {
+                    app.overlay = Overlay::Confirm(PendingAction::RemoveServer {
+                        name: entry.name.clone(),
+                    });
                 }
             }
         }
@@ -3850,6 +3872,24 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
     };
     let owner = app.client_for_session(session_id).cloned();
     let target = owner.unwrap_or_else(|| client.clone());
+    // Mark a Kill target as recently-killed BEFORE the API call so
+    // any watchdog `session.crashed` event the server emits between
+    // "tmux pane gone" and "row deleted" gets suppressed in
+    // `apply_event`. If the kill itself fails we still leave the id
+    // in the set briefly — refresh_all below reconciles the truth
+    // either way.
+    if let PendingAction::Kill { id, .. } = &action {
+        app.recently_killed.insert(*id);
+        // If the user killed the session they were looking at, drop
+        // selection + reset the pane so the empty state shows. Without
+        // this, `refresh_sessions` would auto-jump selection to the
+        // next visible session — which often is another crashed one,
+        // and the "● crashed" banner reappears as if the kill failed.
+        if app.selected == Some(*id) {
+            app.selected = None;
+            app.term.reset();
+        }
+    }
     let result = match &action {
         PendingAction::Start { id, .. } => target.start_session(*id).await,
         PendingAction::Stop { id, .. } => target.stop_session(*id).await,
@@ -5343,21 +5383,31 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
     let name = ev.session_name.unwrap_or_else(|| "?".into());
     match ev.kind.as_str() {
         "session.crashed" | "watchdog.crashed" => {
-            // Log + toast both. The errors overlay is the audit trail;
-            // the toast is the in-the-moment alert.
-            let reason = ev
-                .payload
-                .get("reason")
-                .and_then(|v| v.as_str())
-                .or_else(|| ev.payload.get("signature").and_then(|v| v.as_str()))
-                .map(|s| format!("reason: {s}"));
-            app.push_error(format!("crashed: {name}"));
-            push_notification(
-                app,
-                format!("{name} crashed"),
-                reason,
-                NotifKind::Error,
-            );
+            // User-initiated kills emit a watchdog `session.crashed`
+            // microseconds after the row is deleted (the tmux pane
+            // vanishing trips the detector). If the id is in our
+            // recently-killed set, this is that echo — drop it
+            // silently rather than telling the user their kill
+            // crashed the agent. Otherwise: log + toast both.
+            let already_killed = ev
+                .session_id
+                .map(|id| app.recently_killed.remove(&id))
+                .unwrap_or(false);
+            if !already_killed {
+                let reason = ev
+                    .payload
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| ev.payload.get("signature").and_then(|v| v.as_str()))
+                    .map(|s| format!("reason: {s}"));
+                app.push_error(format!("crashed: {name}"));
+                push_notification(
+                    app,
+                    format!("{name} crashed"),
+                    reason,
+                    NotifKind::Error,
+                );
+            }
             if let Some(id) = ev.session_id {
                 app.awaiting_input.remove(&id);
                 app.idle.remove(&id);
