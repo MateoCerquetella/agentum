@@ -1344,12 +1344,18 @@ impl App {
     }
 
     pub fn refresh_sessions(&mut self, sessions: Vec<Session>) {
-        let prev_state: HashMap<String, bool> = self
-            .tree
-            .groups
-            .iter()
-            .map(|g| (g.profile.clone(), g.expanded))
-            .collect();
+        // Capture both server- and project-level collapse state so a
+        // tree rebuild (which happens every time the session list
+        // changes — and that's *often*) doesn't reset every fold the
+        // user set. Namespaced keys (`server::` / `project::`) keep
+        // the two levels distinct in one flat map.
+        let mut prev_state: HashMap<String, bool> = HashMap::new();
+        for g in &self.tree.groups {
+            prev_state.insert(server_expand_key(&g.profile), g.expanded);
+            for p in &g.projects {
+                prev_state.insert(project_expand_key(&g.profile, &p.workdir), p.expanded);
+            }
+        }
         // Preserve the active filter across rebuilds — the user's typed
         // search shouldn't vanish just because the session list changed.
         let prev_filter = self.tree.filter_str().to_string();
@@ -1575,11 +1581,23 @@ pub struct Tree {
 
 pub struct Group {
     /// Owning profile name; `""` for the default / loopback / `--api`
-    /// connection. One Group per server — sessions across different
-    /// workdirs all roll up under the same header so the user can see
-    /// "this machine" and "@vps" as two siblings instead of N×M
-    /// (profile×workdir) flat headers.
+    /// connection. Top-level node in a three-level tree:
+    ///   Group (server) → Project (workdir) → Leaf (session).
+    /// We keep the server collapse-state up here so a multi-project
+    /// server can be folded as a unit (one chevron click hides every
+    /// project + session it owns).
     pub profile: String,
+    pub projects: Vec<Project>,
+    pub expanded: bool,
+}
+
+pub struct Project {
+    /// Workdir-normalized path (no trailing `/`). Sessions sharing a
+    /// workdir on the same server roll up under this sub-header so the
+    /// sidebar reads as `<server> → <project> → <sessions>` instead of
+    /// a flat list — which is what the v0.7.19 collapse cost us and
+    /// what the user wants back.
+    pub workdir: String,
     pub sessions: Vec<Uuid>,
     pub expanded: bool,
 }
@@ -1587,7 +1605,12 @@ pub struct Group {
 #[derive(Clone, Copy)]
 pub enum Row {
     Group(usize),
-    Leaf { group: usize, leaf: usize },
+    Project { group: usize, project: usize },
+    Leaf {
+        group: usize,
+        project: usize,
+        leaf: usize,
+    },
 }
 
 /// Strip a single trailing `/` (but keep the root `/`) so `/foo` and
@@ -1642,6 +1665,21 @@ pub fn workdir_label(workdir: &str) -> String {
     }
 }
 
+/// Snapshot key for a server-level group's collapse state. Namespaced
+/// (`server::`) so it can't collide with project keys in the same
+/// `HashMap<String, bool>` snapshot.
+pub fn server_expand_key(profile: &str) -> String {
+    format!("server::{profile}")
+}
+
+/// Snapshot key for a project-level subgroup's collapse state. The
+/// `\0` separator can't appear in a workdir path, so a profile named
+/// "x\0y" — pathological but possible — can't collide with another
+/// `(profile, workdir)` pair.
+pub fn project_expand_key(profile: &str, workdir: &str) -> String {
+    format!("project::{profile}\0{workdir}")
+}
+
 fn collapse_home_str(p: &str) -> String {
     if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok())
         && !home.is_empty()
@@ -1661,44 +1699,78 @@ impl Tree {
         Self::build_with_profiles(sessions, &HashMap::new(), prev_expanded)
     }
 
-    /// Multi-server variant: groups by **profile only** so each server
-    /// renders as a single top-level header (`this machine`, `@vps`)
-    /// with every session it owns nested beneath, regardless of
-    /// workdir. Sessions are sorted by `(workdir, name)` within the
-    /// group so same-project sessions still cluster visually. The
-    /// workdir is surfaced on each leaf row instead of in the group
-    /// header.
+    /// Multi-server variant: groups by `(profile, workdir)` so each
+    /// server renders as a top-level header (`MY MACHINE (macos)`,
+    /// `@vps`) and each workdir on that server renders as a sub-header
+    /// underneath, with sessions as leaves. Three levels keep the
+    /// fleet view scannable: server identity at the top, project
+    /// identity inline, session identity on the leaves — no more
+    /// repeating workdirs across N flat headers and no more flat
+    /// session lists where the project context lives in a trailing
+    /// badge.
     pub fn build_with_profiles(
         sessions: &[Session],
         session_profile: &HashMap<Uuid, String>,
         prev_expanded: &HashMap<String, bool>,
     ) -> Self {
-        let mut by_profile: HashMap<String, Vec<&Session>> = HashMap::new();
+        // Two-level bucket: profile → workdir → sessions. Normalize the
+        // workdir before bucketing so `/x/proj` and `/x/proj/` don't
+        // double-up as two siblings.
+        let mut by_profile: HashMap<String, HashMap<String, Vec<&Session>>> = HashMap::new();
         for s in sessions {
             let profile = session_profile.get(&s.id).cloned().unwrap_or_default();
-            by_profile.entry(profile).or_default().push(s);
+            let workdir = normalize_workdir(&s.workdir);
+            by_profile
+                .entry(profile)
+                .or_default()
+                .entry(workdir)
+                .or_default()
+                .push(s);
         }
-        let mut keys: Vec<String> = by_profile.keys().cloned().collect();
+        let mut profile_keys: Vec<String> = by_profile.keys().cloned().collect();
         // Loopback (empty key) first; then alphabetical by profile name.
-        keys.sort_by(|a, b| match (a.is_empty(), b.is_empty()) {
+        profile_keys.sort_by(|a, b| match (a.is_empty(), b.is_empty()) {
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
             _ => a.cmp(b),
         });
-        let groups: Vec<Group> = keys
+        let groups: Vec<Group> = profile_keys
             .into_iter()
             .map(|profile| {
-                let mut sess = by_profile.remove(&profile).unwrap();
-                // (workdir, name) sort so project clusters stay visually
-                // adjacent without re-introducing per-workdir headers.
-                sess.sort_by(|a, b| {
-                    normalize_workdir(&a.workdir)
-                        .cmp(&normalize_workdir(&b.workdir))
-                        .then_with(|| a.name.cmp(&b.name))
+                let mut by_workdir = by_profile.remove(&profile).unwrap();
+                // Sort projects by basename (`workdir_label`) so the
+                // visible order matches what the user reads, not the
+                // raw absolute path. Tie-break on the full path so the
+                // order is deterministic when two projects share a
+                // basename across different parent dirs.
+                let mut workdir_keys: Vec<String> = by_workdir.keys().cloned().collect();
+                workdir_keys.sort_by(|a, b| {
+                    workdir_label(a)
+                        .to_ascii_lowercase()
+                        .cmp(&workdir_label(b).to_ascii_lowercase())
+                        .then_with(|| a.cmp(b))
                 });
+                let projects: Vec<Project> = workdir_keys
+                    .into_iter()
+                    .map(|workdir| {
+                        let mut sess = by_workdir.remove(&workdir).unwrap();
+                        sess.sort_by(|a, b| a.name.cmp(&b.name));
+                        let proj_key = project_expand_key(&profile, &workdir);
+                        Project {
+                            // Default projects to expanded — the user
+                            // wants to *see* the sessions; if they
+                            // explicitly collapsed one before the
+                            // rebuild, honour that.
+                            expanded: *prev_expanded.get(&proj_key).unwrap_or(&true),
+                            sessions: sess.iter().map(|s| s.id).collect(),
+                            workdir,
+                        }
+                    })
+                    .collect();
+                let server_key = server_expand_key(&profile);
                 Group {
-                    expanded: *prev_expanded.get(&profile).unwrap_or(&true),
-                    sessions: sess.iter().map(|s| s.id).collect(),
+                    expanded: *prev_expanded.get(&server_key).unwrap_or(&true),
+                    projects,
                     profile,
                 }
             })
@@ -1732,30 +1804,52 @@ impl Tree {
         let filtering = !needle.is_empty();
         let mut rows = Vec::new();
         for (gi, g) in self.groups.iter().enumerate() {
-            // While filtering, only count leaves whose name contains the
-            // needle; while unfiltered, all leaves count.
-            let visible_leaves: Vec<usize> = if filtering {
-                (0..g.sessions.len())
-                    .filter(|li| {
-                        let id = g.sessions[*li];
-                        self.name_index.get(&id).is_some_and(|n| n.contains(needle))
-                    })
-                    .collect()
-            } else {
-                (0..g.sessions.len()).collect()
-            };
+            // Per-project visible-leaf lists, paired with their project
+            // indices. While filtering, only sessions whose name
+            // contains the needle count; while unfiltered, all do.
+            let mut visible_by_project: Vec<(usize, Vec<usize>)> = Vec::new();
+            for (pi, proj) in g.projects.iter().enumerate() {
+                let leaves: Vec<usize> = if filtering {
+                    (0..proj.sessions.len())
+                        .filter(|li| {
+                            let id = proj.sessions[*li];
+                            self.name_index.get(&id).is_some_and(|n| n.contains(needle))
+                        })
+                        .collect()
+                } else {
+                    (0..proj.sessions.len()).collect()
+                };
+                if filtering && leaves.is_empty() {
+                    continue;
+                }
+                visible_by_project.push((pi, leaves));
+            }
             // Drop empty groups while filtering; otherwise keep the
             // group header so the user can expand/collapse it.
-            if filtering && visible_leaves.is_empty() {
+            if filtering && visible_by_project.is_empty() {
                 continue;
             }
             rows.push(Row::Group(gi));
-            // Filter mode forces every group expanded — flat search behaves
-            // like a single list. Unfiltered mode honours `g.expanded`.
-            if filtering || g.expanded {
-                for li in visible_leaves {
+            // Filter mode forces every group + project expanded so flat
+            // search behaves like a single list; unfiltered mode honours
+            // the user's saved collapse-state.
+            let server_open = filtering || g.expanded;
+            if !server_open {
+                continue;
+            }
+            for (pi, leaves) in visible_by_project {
+                rows.push(Row::Project {
+                    group: gi,
+                    project: pi,
+                });
+                let project_open = filtering || g.projects[pi].expanded;
+                if !project_open {
+                    continue;
+                }
+                for li in leaves {
                     rows.push(Row::Leaf {
                         group: gi,
+                        project: pi,
                         leaf: li,
                     });
                 }
@@ -1790,46 +1884,150 @@ impl Tree {
 
     pub fn current_session(&self, sessions: &[Session]) -> Option<Uuid> {
         match self.current_row()? {
-            Row::Leaf { group, leaf } => Some(self.groups[group].sessions[leaf]),
+            Row::Leaf {
+                group,
+                project,
+                leaf,
+            } => Some(self.groups[group].projects[project].sessions[leaf]),
+            Row::Project { group, project } => self
+                .groups
+                .get(group)
+                .and_then(|g| g.projects.get(project))
+                .and_then(|p| p.sessions.first().copied())
+                .filter(|_| !sessions.is_empty()),
             Row::Group(gi) => self
                 .groups
                 .get(gi)
-                .and_then(|g| g.sessions.first().copied())
+                .and_then(|g| g.projects.first())
+                .and_then(|p| p.sessions.first().copied())
                 .filter(|_| !sessions.is_empty()),
         }
     }
 
     pub fn collapse(&mut self) {
+        // Collapse semantics — fold the nearest closed ancestor:
+        //   leaf      → collapse the parent project (so a Vim-style
+        //               `h` from a session hides its siblings, not the
+        //               whole server).
+        //   project   → collapse the project itself; if it was already
+        //               folded, walk up and collapse the server.
+        //   server    → collapse the server.
         if let Some(row) = self.current_row() {
-            let gi = match row {
-                Row::Group(gi) => gi,
-                Row::Leaf { group, .. } => group,
-            };
-            if let Some(g) = self.groups.get_mut(gi) {
-                if g.expanded {
-                    g.expanded = false;
-                    // Move cursor to the group header.
-                    self.cursor = self.row_index_of(Row::Group(gi)).unwrap_or(self.cursor);
+            match row {
+                Row::Leaf { group, project, .. } => {
+                    if let Some(p) = self
+                        .groups
+                        .get_mut(group)
+                        .and_then(|g| g.projects.get_mut(project))
+                    {
+                        if p.expanded {
+                            p.expanded = false;
+                            self.cursor = self
+                                .row_index_of(Row::Project { group, project })
+                                .unwrap_or(self.cursor);
+                        }
+                    }
+                }
+                Row::Project { group, project } => {
+                    let already_folded = self
+                        .groups
+                        .get(group)
+                        .and_then(|g| g.projects.get(project))
+                        .map(|p| !p.expanded)
+                        .unwrap_or(true);
+                    if !already_folded {
+                        if let Some(p) = self
+                            .groups
+                            .get_mut(group)
+                            .and_then(|g| g.projects.get_mut(project))
+                        {
+                            p.expanded = false;
+                        }
+                    } else if let Some(g) = self.groups.get_mut(group) {
+                        if g.expanded {
+                            g.expanded = false;
+                            self.cursor = self
+                                .row_index_of(Row::Group(group))
+                                .unwrap_or(self.cursor);
+                        }
+                    }
+                }
+                Row::Group(gi) => {
+                    if let Some(g) = self.groups.get_mut(gi) {
+                        if g.expanded {
+                            g.expanded = false;
+                            self.cursor =
+                                self.row_index_of(Row::Group(gi)).unwrap_or(self.cursor);
+                        }
+                    }
                 }
             }
         }
     }
 
     pub fn expand(&mut self) {
+        // Expand semantics — open the nearest closed level:
+        //   server   → if folded, open it. If already open, open every
+        //              project inside (one keystroke shouldn't strand
+        //              the user with all projects still hidden).
+        //   project  → open the project itself.
+        //   leaf     → no-op (already at the bottom).
         if let Some(row) = self.current_row() {
-            let gi = match row {
-                Row::Group(gi) => gi,
-                Row::Leaf { group, .. } => group,
-            };
-            if let Some(g) = self.groups.get_mut(gi) {
-                g.expanded = true;
+            match row {
+                Row::Group(gi) => {
+                    if let Some(g) = self.groups.get_mut(gi) {
+                        if !g.expanded {
+                            g.expanded = true;
+                        } else {
+                            for p in &mut g.projects {
+                                p.expanded = true;
+                            }
+                        }
+                    }
+                }
+                Row::Project { group, project } => {
+                    if let Some(p) = self
+                        .groups
+                        .get_mut(group)
+                        .and_then(|g| g.projects.get_mut(project))
+                    {
+                        p.expanded = true;
+                    }
+                }
+                Row::Leaf { .. } => {}
             }
         }
     }
 
     fn row_index_of(&self, target: Row) -> Option<usize> {
         for (i, r) in self.rows().iter().enumerate() {
-            if matches!((r, target), (Row::Group(a), Row::Group(b)) if *a == b) {
+            let hit = match (r, target) {
+                (Row::Group(a), Row::Group(b)) => *a == b,
+                (
+                    Row::Project {
+                        group: ga,
+                        project: pa,
+                    },
+                    Row::Project {
+                        group: gb,
+                        project: pb,
+                    },
+                ) => *ga == gb && *pa == pb,
+                (
+                    Row::Leaf {
+                        group: ga,
+                        project: pa,
+                        leaf: la,
+                    },
+                    Row::Leaf {
+                        group: gb,
+                        project: pb,
+                        leaf: lb,
+                    },
+                ) => *ga == gb && *pa == pb && *la == lb,
+                _ => false,
+            };
+            if hit {
                 return Some(i);
             }
         }
@@ -1838,8 +2036,12 @@ impl Tree {
 
     pub fn select_session(&mut self, id: Uuid) {
         for (i, r) in self.rows().iter().enumerate() {
-            if let Row::Leaf { group, leaf } = r
-                && self.groups[*group].sessions[*leaf] == id
+            if let Row::Leaf {
+                group,
+                project,
+                leaf,
+            } = r
+                && self.groups[*group].projects[*project].sessions[*leaf] == id
             {
                 self.cursor = i;
                 return;
@@ -1847,7 +2049,7 @@ impl Tree {
         }
     }
 
-    /// Move the cursor to the Nth project group (1-based) and expand it.
+    /// Move the cursor to the Nth server group (1-based) and expand it.
     /// Returns true if the group exists.
     pub fn focus_group(&mut self, n: usize) -> bool {
         if n == 0 || n > self.groups.len() {
@@ -1866,8 +2068,13 @@ impl Tree {
 
 fn first_visible_session(tree: &Tree, sessions: &[Session]) -> Option<Uuid> {
     for r in tree.rows() {
-        if let Row::Leaf { group, leaf } = r {
-            return Some(tree.groups[group].sessions[leaf]);
+        if let Row::Leaf {
+            group,
+            project,
+            leaf,
+        } = r
+        {
+            return Some(tree.groups[group].projects[project].sessions[leaf]);
         }
     }
     sessions.first().map(|s| s.id)
@@ -2656,9 +2863,13 @@ async fn handle_key(
     // entire project group in.
     if key.modifiers.contains(KeyModifiers::ALT)
         && matches!(key.code, KeyCode::Enter)
-        && let Some(Row::Leaf { group, leaf }) = app.tree.current_row()
+        && let Some(Row::Leaf {
+            group,
+            project,
+            leaf,
+        }) = app.tree.current_row()
     {
-        let id = app.tree.groups[group].sessions[leaf];
+        let id = app.tree.groups[group].projects[project].sessions[leaf];
         if !app.checked.insert(id) {
             app.checked.remove(&id);
         }
@@ -3450,8 +3661,13 @@ async fn handle_key(
                     // collapsed project doesn't sweep every child in. Once
                     // anything is checked, lifecycle keys (u/s/K/x/D and
                     // Ctrl-D) act on the set; Esc clears it.
-                    if let Some(Row::Leaf { group, leaf }) = app.tree.current_row() {
-                        let id = app.tree.groups[group].sessions[leaf];
+                    if let Some(Row::Leaf {
+                        group,
+                        project,
+                        leaf,
+                    }) = app.tree.current_row()
+                    {
+                        let id = app.tree.groups[group].projects[project].sessions[leaf];
                         if !app.checked.insert(id) {
                             app.checked.remove(&id);
                         }
@@ -3483,7 +3699,10 @@ async fn handle_key(
             // profile. The previous direct-`store.remove` path was the
             // muscle-memory landmine the user kept hitting.
             if app.servers_cursor == 0 {
-                app.status_msg = Some("can't remove this machine — it's the local loopback".into());
+                app.status_msg = Some(format!(
+                    "can't remove {} — it's the local loopback",
+                    local_machine_label()
+                ));
             } else if let Some(entry) = app.profiles.get(app.servers_cursor - 1).cloned() {
                 if app.active_profile.as_deref() == Some(entry.name.as_str()) {
                     app.status_msg = Some("can't remove the active server — switch first".into());
@@ -3661,22 +3880,14 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
                                     // didn't move with the cycle.
                                     form.error = Some(format!(
                                         "couldn't reach {}: {e}",
-                                        if form.profile.is_empty() {
-                                            "this machine".to_string()
-                                        } else {
-                                            format!("@{}", form.profile)
-                                        }
+                                        profile_label(&form.profile)
                                     ));
                                 }
                             }
                         } else {
                             form.error = Some(format!(
                                 "{} isn't connected — try Ctrl-O to re-add",
-                                if form.profile.is_empty() {
-                                    "this machine".to_string()
-                                } else {
-                                    format!("@{}", form.profile)
-                                }
+                                profile_label(&form.profile)
                             ));
                         }
                     }

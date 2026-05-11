@@ -516,7 +516,7 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
             Span::styled(dot_glyph.to_string(), Style::default().fg(dot_color)),
             Span::raw(" "),
             Span::styled(
-                "this machine".to_string(),
+                super::app::local_machine_label(),
                 Style::default()
                     .fg(if is_cursor && focused {
                         p.cursor_fg
@@ -646,13 +646,14 @@ fn render_tree_row(
         Row::Group(gi) => {
             let g = &app.tree.groups[gi];
             let arrow = if g.expanded { "▾" } else { "▸" };
-            // One group per server — `this machine` for loopback,
-            // `@vps` for named profiles. Workdir context moved to the
-            // leaf row's trailing badge so a multi-project server
-            // collapses to a single readable header instead of N
-            // `@profile · workdir` lines.
+            // Server header — top-level row. `MY MACHINE (<os>)` for the
+            // loopback (rendered in `fg_strong`) and `@vps` for named
+            // profiles (rendered in `accent_alt`) so the local row is
+            // visually distinct from the remote rows at a glance. The
+            // trailing count is the total number of sessions across
+            // every project on this server.
             let label = super::app::profile_label(&g.profile);
-            let count = g.sessions.len();
+            let count: usize = g.projects.iter().map(|pr| pr.sessions.len()).sum();
             let label_color = if g.profile.is_empty() {
                 p.fg_strong
             } else {
@@ -670,8 +671,29 @@ fn render_tree_row(
             ];
             ListItem::new(Line::from(spans)).style(row_style)
         }
-        Row::Leaf { group, leaf } => {
-            let id = app.tree.groups[group].sessions[leaf];
+        Row::Project { group, project } => {
+            let proj = &app.tree.groups[group].projects[project];
+            let arrow = if proj.expanded { "▾" } else { "▸" };
+            // Project header — indented under its server. Reads as the
+            // workdir basename (`agentum`, `mc-site`, …) so the user
+            // sees project identity without scanning a full absolute
+            // path; the trailing count keeps the "how busy is this
+            // project" signal that the v0.7.19 flat list lost.
+            let label = super::app::workdir_label(&proj.workdir);
+            let count = proj.sessions.len();
+            let spans = vec![
+                Span::raw(format!("   {arrow} ")),
+                Span::styled(label, Style::default().fg(p.fg)),
+                Span::styled(format!("  ({count})"), Style::default().fg(p.muted)),
+            ];
+            ListItem::new(Line::from(spans)).style(row_style)
+        }
+        Row::Leaf {
+            group,
+            project,
+            leaf,
+        } => {
+            let id = app.tree.groups[group].projects[project].sessions[leaf];
             let checked = app.checked.contains(&id);
             let session = app.sessions.iter().find(|s| s.id == id);
             let (name, dot, dot_color, tool_label) = match session {
@@ -710,7 +732,10 @@ fn render_tree_row(
             // Reserve a 4-cell prefix so checked/unchecked rows align.
             // `[x] ` (4 cells) when in the multi-select set; same width
             // of spaces otherwise. Coloured with `accent` so a checked
-            // session is unmistakable against a long tree.
+            // session is unmistakable against a long tree. The extra
+            // leading "   " puts the leaf two indent steps deep — one
+            // for the server header, one for the project header — so
+            // the three-level hierarchy reads visually.
             let check_span = if checked {
                 Span::styled(
                     "[x] ".to_string(),
@@ -719,14 +744,8 @@ fn render_tree_row(
             } else {
                 Span::raw("    ")
             };
-            // Trailing workdir badge — only present now that groups
-            // collapse to a single per-server header. Without it the
-            // user would lose the project context that the old
-            // `(profile, workdir)` grouping carried in the header.
-            let workdir_badge = session
-                .map(|s| super::app::workdir_label(&s.workdir))
-                .filter(|w| !w.is_empty());
             let mut spans = vec![
+                Span::raw("     "),
                 check_span,
                 Span::raw(format!("{:<14}", truncate(&name, 14))),
                 Span::raw(" "),
@@ -734,14 +753,10 @@ fn render_tree_row(
                 Span::raw(" "),
                 Span::styled(tool_label, Style::default().fg(p.muted)),
             ];
-            if let Some(w) = workdir_badge {
-                spans.push(Span::styled(
-                    format!("  {w}"),
-                    Style::default().fg(p.subtle),
-                ));
-            }
             if is_cursor {
-                spans[1].style = Style::default().add_modifier(Modifier::BOLD);
+                // index 2 = the name span — bold it so the cursor row's
+                // identity reads.
+                spans[2].style = Style::default().add_modifier(Modifier::BOLD);
             }
             ListItem::new(Line::from(spans)).style(row_style)
         }
@@ -1947,23 +1962,20 @@ fn draw_new_session_overlay(
 
     // Servers pick comes first — same order as the user's mental
     // model ("which agentum, then which folder, then which agent").
-    // The empty string renders as `this machine` so the local
+    // The empty string renders as the local-machine label so the
     // loopback is a peer of any named remote profile in the cycle
     // (pre-v0.7.9 said "(current connection)" which a user reported
     // as confusing — they wanted the local case to look like just
     // another server entry).
-    let profile_display = if form.profile.trim().is_empty() {
-        "this machine".to_string()
-    } else {
-        format!("@{}", form.profile.trim())
-    };
+    let local_label = super::app::local_machine_label();
+    let profile_display = super::app::profile_label(form.profile.trim());
     push_form_field_with_hint(
         &mut lines,
         "Servers",
         &profile_display,
         form.field == NewSessionField::Profile,
-        "this machine",
-        Some("Tab cycles this machine + configured servers"),
+        &local_label,
+        Some("Tab cycles the local machine + configured servers"),
         p,
     );
     push_form_field_with_hint(

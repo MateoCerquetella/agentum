@@ -4,6 +4,40 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.22] — 2026-05-11
+
+### Changed
+- **Sessions sidebar is a three-level tree again — server → project →
+  session.** v0.7.19 collapsed each server's sessions into a flat
+  list with a trailing workdir badge, which made a fleet across
+  multiple projects unscannable. The tree is now:
+  - **Server** header (`MY MACHINE (<os>)` for the loopback,
+    `@<profile>` for named profiles) with the total session count.
+  - **Project** sub-header per workdir under each server, showing the
+    workdir basename + the session count for that project.
+  - **Session** leaves indented under their project, with the name,
+    status dot, and tool label (no more trailing workdir badge —
+    project identity now lives in the project header where it belongs).
+- **Loopback row reads as `MY MACHINE (<os>)`** instead of "this
+  machine". `<os>` comes from `std::env::consts::OS` (`macos`,
+  `linux`, …) so the local row materially says which OS the TUI is
+  running on, and the local row is visually distinct from any
+  `@<remote>` row. Replaces the literal in the Servers panel, the
+  Sessions tree header, the New Session form's profile field, and
+  every "can't reach <x>" / "<x> isn't connected" status message.
+  Named profiles keep the `@<name>` prefix.
+- **Collapse cascades inward.** Pressing `h` / `←` on a session row
+  folds the parent project (so a single keystroke hides siblings
+  without burying the rest of the server). On a project row it folds
+  the project; on a server row it folds the server. `l` / `→` opens
+  the nearest closed level, and on an already-open server it
+  expands every project inside in one keystroke.
+- **Per-server and per-project fold state survives tree rebuilds.**
+  `refresh_sessions` now snapshots both levels under namespaced
+  `server::` / `project::` keys so the session-list refresh that
+  fires on every WS event doesn't reset every fold the user just
+  set.
+
 ## [0.7.21] — 2026-05-11
 
 ### Added
