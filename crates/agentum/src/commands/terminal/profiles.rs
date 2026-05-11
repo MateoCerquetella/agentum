@@ -136,9 +136,8 @@ impl Profiles {
 
     fn save(&self) -> Result<()> {
         if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("create parent dir for {}", self.path.display())
-            })?;
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create parent dir for {}", self.path.display()))?;
         }
         let body = toml::to_string_pretty(&self.file)?;
         std::fs::write(&self.path, body)
@@ -162,8 +161,7 @@ fn is_valid_name(s: &str) -> bool {
 }
 
 fn path() -> Result<PathBuf> {
-    let dir =
-        agentum_store::paths::config_dir().map_err(|e| anyhow!("resolve config dir: {e}"))?;
+    let dir = agentum_store::paths::config_dir().map_err(|e| anyhow!("resolve config dir: {e}"))?;
     Ok(dir.join("profiles.toml"))
 }
 

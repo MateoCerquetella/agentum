@@ -131,7 +131,9 @@ impl IoMeter {
         // at WINDOW so a single recent sample doesn't read as a decade
         // of throughput.
         let span = match earliest {
-            Some(t) => now.saturating_duration_since(t).max(Duration::from_millis(1)),
+            Some(t) => now
+                .saturating_duration_since(t)
+                .max(Duration::from_millis(1)),
             None => return 0.0,
         };
         let span = span.min(WINDOW);

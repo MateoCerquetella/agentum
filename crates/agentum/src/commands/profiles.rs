@@ -41,12 +41,7 @@ async fn list() -> Result<()> {
         .max()
         .unwrap_or(8)
         .max(8);
-    println!(
-        "{:width$}  {:<3}  URL",
-        "NAME",
-        "DEF",
-        width = name_w,
-    );
+    println!("{:width$}  {:<3}  URL", "NAME", "DEF", width = name_w,);
     for (name, p, is_default) in entries {
         let mut suffix = String::new();
         if let Some(fp) = &p.fingerprint {

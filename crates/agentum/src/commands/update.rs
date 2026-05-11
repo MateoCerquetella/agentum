@@ -26,9 +26,8 @@ pub async fn run(mode: Option<Mode>, force: bool) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
     eprintln!("agentum update — current version: v{current}");
 
-    let downloader = pick_downloader().context(
-        "neither `curl` nor `wget` is available on PATH; install one to update agentum",
-    )?;
+    let downloader = pick_downloader()
+        .context("neither `curl` nor `wget` is available on PATH; install one to update agentum")?;
 
     let pipe = which("sh").context("`sh` is required to run the installer")?;
     let _ = pipe; // presence check only

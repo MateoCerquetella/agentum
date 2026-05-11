@@ -169,15 +169,13 @@ impl Store {
     /// sort to the top of every list view. Returns the patched row.
     pub async fn patch_session_pinned(&self, id: Uuid, pinned: bool) -> Result<Session> {
         let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
-        let affected = sqlx::query(
-            "UPDATE sessions SET pinned = ?, updated_at = ? WHERE id = ?",
-        )
-        .bind(if pinned { 1_i64 } else { 0_i64 })
-        .bind(now_s)
-        .bind(id.to_string())
-        .execute(&self.pool)
-        .await?
-        .rows_affected();
+        let affected = sqlx::query("UPDATE sessions SET pinned = ?, updated_at = ? WHERE id = ?")
+            .bind(if pinned { 1_i64 } else { 0_i64 })
+            .bind(now_s)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
         if affected == 0 {
             return Err(StoreError::NotFound(id.to_string()));
         }
@@ -247,15 +245,13 @@ impl Store {
     pub async fn patch_session_name(&self, id: Uuid, new_name: &str) -> Result<Session> {
         let now = OffsetDateTime::now_utc();
         let now_s = now.format(&Rfc3339)?;
-        let affected = sqlx::query(
-            "UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?",
-        )
-        .bind(new_name)
-        .bind(now_s)
-        .bind(id.to_string())
-        .execute(&self.pool)
-        .await?
-        .rows_affected();
+        let affected = sqlx::query("UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?")
+            .bind(new_name)
+            .bind(now_s)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
         if affected == 0 {
             return Err(StoreError::NotFound(id.to_string()));
         }
@@ -272,15 +268,13 @@ impl Store {
     pub async fn patch_session_tool(&self, id: Uuid, new_tool: &str) -> Result<Session> {
         let now = OffsetDateTime::now_utc();
         let now_s = now.format(&Rfc3339)?;
-        let affected = sqlx::query(
-            "UPDATE sessions SET tool = ?, updated_at = ? WHERE id = ?",
-        )
-        .bind(new_tool)
-        .bind(now_s)
-        .bind(id.to_string())
-        .execute(&self.pool)
-        .await?
-        .rows_affected();
+        let affected = sqlx::query("UPDATE sessions SET tool = ?, updated_at = ? WHERE id = ?")
+            .bind(new_tool)
+            .bind(now_s)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
         if affected == 0 {
             return Err(StoreError::NotFound(id.to_string()));
         }
@@ -294,15 +288,13 @@ impl Store {
         let now = OffsetDateTime::now_utc();
         let now_s = now.format(&Rfc3339)?;
         let flags_json = serde_json::to_string(&flags)?;
-        let affected = sqlx::query(
-            "UPDATE sessions SET flags = ?, updated_at = ? WHERE id = ?",
-        )
-        .bind(&flags_json)
-        .bind(now_s)
-        .bind(id.to_string())
-        .execute(&self.pool)
-        .await?
-        .rows_affected();
+        let affected = sqlx::query("UPDATE sessions SET flags = ?, updated_at = ? WHERE id = ?")
+            .bind(&flags_json)
+            .bind(now_s)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
         if affected == 0 {
             return Err(StoreError::NotFound(id.to_string()));
         }
@@ -393,7 +385,7 @@ impl Store {
         .bind(&patch.status)
         .bind(if body_set { 1i32 } else { 0i32 })
         .bind(&body_value)
-        .bind(if lbl_set  { 1i32 } else { 0i32 })
+        .bind(if lbl_set { 1i32 } else { 0i32 })
         .bind(&lbl_value)
         .bind(if tool_set { 1i32 } else { 0i32 })
         .bind(&tool_value)
@@ -1043,11 +1035,7 @@ impl TryFrom<EventRow> for Event {
     fn try_from(r: EventRow) -> Result<Self> {
         Ok(Event {
             kind: r.kind,
-            session_id: r
-                .session_id
-                .as_deref()
-                .map(Uuid::parse_str)
-                .transpose()?,
+            session_id: r.session_id.as_deref().map(Uuid::parse_str).transpose()?,
             // session_name is not persisted in the events table; the SSE
             // path passes it through directly. Cold-start GETs leave it
             // None and the watchdog projection falls back to session_id.

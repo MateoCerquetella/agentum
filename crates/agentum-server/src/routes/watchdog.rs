@@ -32,7 +32,6 @@ async fn list(
 ) -> Result<Json<Vec<WatchdogEvent>>, ApiError> {
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
     let events = state.store.list_watchdog_events(limit).await?;
-    let projected: Vec<WatchdogEvent> =
-        events.iter().filter_map(|e| e.to_watchdog()).collect();
+    let projected: Vec<WatchdogEvent> = events.iter().filter_map(|e| e.to_watchdog()).collect();
     Ok(Json(projected))
 }

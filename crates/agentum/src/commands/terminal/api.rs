@@ -498,8 +498,11 @@ impl Client {
                 if tx.is_closed() {
                     return;
                 }
-                let extra: &[(&str, &str)] =
-                    if want_resume { &[("resume", "true")] } else { &[] };
+                let extra: &[(&str, &str)] = if want_resume {
+                    &[("resume", "true")]
+                } else {
+                    &[]
+                };
                 let url = ws_url(&base, &path, &token, extra);
                 let connector = ws_connector(&url, &trust);
                 let result =
@@ -660,9 +663,9 @@ impl Client {
                         },
                         Ok(WsMsg::Close(_)) => break,
                         Ok(_) => {}
-                    Err(err) => {
-                        let _ = tx.send(EventMsg::Error(format!("ws: {err}")));
-                        break;
+                        Err(err) => {
+                            let _ = tx.send(EventMsg::Error(format!("ws: {err}")));
+                            break;
                         }
                     }
                 }
@@ -681,7 +684,10 @@ pub enum TerminalMsg {
     /// scrollback back to the live tail so the user sees fresh state.
     Connected,
     Bytes(Bytes),
-    Reconnecting { attempt: u32, delay_ms: u64 },
+    Reconnecting {
+        attempt: u32,
+        delay_ms: u64,
+    },
     Error(String),
     /// Caller dropped the keystroke sender — the stream task is
     /// shutting down for good. Auto-reconnect attempts do NOT emit

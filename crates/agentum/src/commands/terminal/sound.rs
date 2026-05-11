@@ -26,7 +26,11 @@ fn detect_player() -> Option<&'static str> {
 
 #[cfg(target_os = "macos")]
 fn detect_player() -> Option<&'static str> {
-    if which("afplay") { Some("afplay") } else { None }
+    if which("afplay") {
+        Some("afplay")
+    } else {
+        None
+    }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]

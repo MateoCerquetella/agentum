@@ -16,10 +16,7 @@ use crate::AppState;
 use crate::error::ApiError;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route(
-        "/api/sessions/{id}/agent-tasks",
-        get(get_agent_tasks),
-    )
+    Router::new().route("/api/sessions/{id}/agent-tasks", get(get_agent_tasks))
 }
 
 async fn get_agent_tasks(

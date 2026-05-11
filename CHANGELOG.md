@@ -4,6 +4,27 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.17] — 2026-05-11
+
+### Fixed
+- **CI is green again.** v0.7.15/v0.7.16 landed with rustfmt drift across
+  20 files (agentum-core, agentum-server, agentum-store, agentum-watchdog,
+  and the agentum CLI/TUI). `cargo fmt --all -- --check` failed in CI
+  and blocked the release pipeline. Pure whitespace + line-wrapping
+  changes — no logic moved. Verified clean with `cargo build`,
+  `cargo clippy`, and `cargo test --workspace --lib` (81 tests pass).
+
+### Added
+- **TUI multi-select indicator + help overlay.** The `app.rs` half of
+  the multi-select feature landed in v0.7.15, but the rendering layer
+  was missing: checked rows had no visual cue and the help overlay
+  still advertised "Enter — multi-select (WIP — coming soon)". The
+  Sessions tree now renders a bold `[x]` accent on every checked
+  leaf, and the help overlay describes the real keybindings:
+  `Enter` checks/unchecks, `u`/`s`/`K`/`x`/`D` act on the checked set
+  (or fall through to the cursor row when nothing is checked), and
+  `Esc` clears the checks before falling through to filter/fullscreen.
+
 ## [0.7.16] — 2026-05-11
 
 ### Added

@@ -28,8 +28,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use agentum_core::transcript::{self, AgentTaskState};
 use agentum_core::Event;
+use agentum_core::transcript::{self, AgentTaskState};
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::json;
 use time::OffsetDateTime;
@@ -86,11 +86,7 @@ impl TranscriptStore {
     /// Snapshot the current state for a session. `None` when the store
     /// has never seen this session id.
     pub fn snapshot(&self, id: Uuid) -> Option<AgentTaskState> {
-        self.inner
-            .lock()
-            .ok()?
-            .get(&id)
-            .map(|s| s.state.clone())
+        self.inner.lock().ok()?.get(&id).map(|s| s.state.clone())
     }
 
     /// Begin watching this session's transcript file if we aren't
@@ -122,7 +118,10 @@ impl TranscriptStore {
         }
 
         let Some(project_dir) = transcript::project_dir_for(&workdir) else {
-            tracing::debug!(?workdir, "transcript: no $HOME or relative workdir; skipping watcher");
+            tracing::debug!(
+                ?workdir,
+                "transcript: no $HOME or relative workdir; skipping watcher"
+            );
             return;
         };
         let Some(pinned_path) = transcript::transcript_path_for(&workdir, id) else {
@@ -221,8 +220,7 @@ impl TranscriptStore {
         // initial snapshot without waiting for the agent to type
         // anything.
         let _ = self.bus.send(
-            Event::new("agent_tasks.updated")
-                .with_payload(json!({ "session_id": id.to_string() })),
+            Event::new("agent_tasks.updated").with_payload(json!({ "session_id": id.to_string() })),
         );
     }
 

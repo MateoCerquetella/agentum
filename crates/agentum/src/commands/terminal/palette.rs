@@ -249,19 +249,13 @@ impl Catalog {
         // user can read off what's on without flipping it first.
         let onoff = |b: bool| if b { "on" } else { "off" };
         a.push(Action {
-            label: format!(
-                "View: sidebar [{}]",
-                onoff(!view.sidebar_hidden)
-            ),
+            label: format!("View: sidebar [{}]", onoff(!view.sidebar_hidden)),
             hint: "Ctrl-B".into(),
             group: "view",
             kind: ActionKind::ToggleSidebar,
         });
         a.push(Action {
-            label: format!(
-                "View: agent panel [{}]",
-                onoff(view.right_panel_visible)
-            ),
+            label: format!("View: agent panel [{}]", onoff(view.right_panel_visible)),
             hint: "Ctrl-T".into(),
             group: "view",
             kind: ActionKind::ToggleRightPanel,
@@ -273,10 +267,7 @@ impl Catalog {
             kind: ActionKind::ToggleFullscreen,
         });
         a.push(Action {
-            label: format!(
-                "View: split terminal [{}]",
-                onoff(view.split_open)
-            ),
+            label: format!("View: split terminal [{}]", onoff(view.split_open)),
             hint: "Ctrl-\\".into(),
             group: "view",
             kind: ActionKind::ToggleSplit,
@@ -287,11 +278,7 @@ impl Catalog {
         // does before flipping it.
         for chip in StatusChip::ALL {
             a.push(Action {
-                label: format!(
-                    "Status bar: {} [{}]",
-                    chip.label(),
-                    onoff(prefs.get(*chip))
-                ),
+                label: format!("Status bar: {} [{}]", chip.label(), onoff(prefs.get(*chip))),
                 hint: "".into(),
                 group: "settings",
                 kind: ActionKind::ToggleStatusChip(*chip),

@@ -85,16 +85,14 @@ pub fn compute_layout(
     // narrow to host it without crushing the terminal area. It stays
     // visible alongside lazygit so the agent's plan/todos/tasks remain
     // in view while the user works in git.
-    let show_right = right_panel_visible
-        && !fullscreen
-        && area.width >= RIGHT_PANEL_MIN_TOTAL_WIDTH;
+    let show_right =
+        right_panel_visible && !fullscreen && area.width >= RIGHT_PANEL_MIN_TOTAL_WIDTH;
 
     // Fullscreen: drop the title row, tree column, and status row so the
     // active panes consume every available cell. The empty Rects keep the
     // draw_* helpers no-op (they short-circuit on `area.width == 0`).
     if fullscreen {
-        let (terminal_rect, lazygit_rect) =
-            split_main(area, lazygit_open, lazygit_width);
+        let (terminal_rect, lazygit_rect) = split_main(area, lazygit_open, lazygit_width);
         let (term_left, term_right) = split_terminal(terminal_rect, split_open, term_split_pct);
         let empty = Rect {
             x: area.x,
@@ -152,9 +150,7 @@ pub fn compute_layout(
     // min width, leave it inline. The agent_tasks panel gets dropped
     // first (handled below in the `rw` calc) — keeping lazygit pinned
     // right is the explicit user preference.
-    let lw = if lw_target == 0
-        || v[2].width.saturating_sub(tw).saturating_sub(lw_target) < 20
-    {
+    let lw = if lw_target == 0 || v[2].width.saturating_sub(tw).saturating_sub(lw_target) < 20 {
         // Not enough room for a dedicated column: signal the in-pane
         // split fallback by leaving lw at zero.
         0
@@ -241,11 +237,7 @@ fn split_main(area: Rect, lazygit_open: bool, lazygit_width: u16) -> (Rect, Opti
 /// narrow ones stack vertically so each pane keeps a usable width. We
 /// use 80 columns as the cutoff because below that horizontal halves
 /// pinch every embedded TUI under the 40-col floor most expect.
-fn split_terminal(
-    area: Rect,
-    split_open: bool,
-    term_split_pct: u16,
-) -> (Rect, Option<Rect>) {
+fn split_terminal(area: Rect, split_open: bool, term_split_pct: u16) -> (Rect, Option<Rect>) {
     if !split_open {
         return (area, None);
     }
@@ -253,7 +245,10 @@ fn split_terminal(
     if area.width >= 80 {
         let cols = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(pct), Constraint::Percentage(100 - pct)])
+            .constraints([
+                Constraint::Percentage(pct),
+                Constraint::Percentage(100 - pct),
+            ])
             .split(area);
         (cols[0], Some(cols[1]))
     } else {
@@ -415,8 +410,8 @@ fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     // so the chip doesn't smear into the (possibly truncated) title when
     // the terminal is narrow.
     if app.error_count == 0 {
-        let para = Paragraph::new(Line::from(vec![title_span]))
-            .style(Style::default().bg(p.body_bg));
+        let para =
+            Paragraph::new(Line::from(vec![title_span])).style(Style::default().bg(p.body_bg));
         f.render_widget(para, area);
         return;
     }
@@ -446,8 +441,8 @@ fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         ])
         .split(area);
 
-    let title_para = Paragraph::new(Line::from(vec![title_span]))
-        .style(Style::default().bg(p.body_bg));
+    let title_para =
+        Paragraph::new(Line::from(vec![title_span])).style(Style::default().bg(p.body_bg));
     f.render_widget(title_para, cols[0]);
     let gap = Paragraph::new("").style(Style::default().bg(p.body_bg));
     f.render_widget(gap, cols[1]);
@@ -484,9 +479,7 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     // first-class cycle target.
     items.push(ListItem::new(Line::from(Span::styled(
         " SERVERS".to_string(),
-        Style::default()
-            .fg(p.muted)
-            .add_modifier(Modifier::BOLD),
+        Style::default().fg(p.muted).add_modifier(Modifier::BOLD),
     ))));
     use super::app::ServerStatus;
     // Row 0 — "this machine". Active when the active profile is None
@@ -497,8 +490,7 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
             .as_deref()
             .map(|n| n.is_empty())
             .unwrap_or(true);
-        let is_cursor =
-            app.tree_section == TreeSection::Servers && app.servers_cursor == 0;
+        let is_cursor = app.tree_section == TreeSection::Servers && app.servers_cursor == 0;
         let row_style = if is_cursor {
             Style::default()
                 .bg(p.cursor_bg)
@@ -545,8 +537,7 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     for (i, entry) in app.profiles.iter().enumerate() {
         let is_active = app.active_profile.as_deref() == Some(entry.name.as_str());
         // +1 to account for the synthetic "this machine" row above.
-        let is_cursor =
-            app.tree_section == TreeSection::Servers && (i + 1) == app.servers_cursor;
+        let is_cursor = app.tree_section == TreeSection::Servers && (i + 1) == app.servers_cursor;
         let row_style = if is_cursor {
             Style::default()
                 .bg(p.cursor_bg)
@@ -554,10 +545,7 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         } else {
             Style::default().bg(p.panel_bg).fg(p.fg)
         };
-        let status = app
-            .clients
-            .get(entry.name.as_str())
-            .map(|e| e.status);
+        let status = app.clients.get(entry.name.as_str()).map(|e| e.status);
         let (dot_glyph, dot_color) = match (status, is_active) {
             (Some(ServerStatus::Live), true) => ("●", p.success),
             (Some(ServerStatus::Live), false) => ("○", p.success),
@@ -614,9 +602,7 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     // Visual separator between the two sections.
     items.push(ListItem::new(Line::from(Span::styled(
         " SESSIONS".to_string(),
-        Style::default()
-            .fg(p.muted)
-            .add_modifier(Modifier::BOLD),
+        Style::default().fg(p.muted).add_modifier(Modifier::BOLD),
     ))));
 
     let cursor = app.tree.cursor;
@@ -680,6 +666,7 @@ fn render_tree_row(
         }
         Row::Leaf { group, leaf } => {
             let id = app.tree.groups[group].sessions[leaf];
+            let checked = app.checked.contains(&id);
             let session = app.sessions.iter().find(|s| s.id == id);
             let (name, dot, dot_color, tool_label) = match session {
                 Some(s) => {
@@ -714,8 +701,20 @@ fn render_tree_row(
                 }
                 None => ("?".into(), "?", p.error, "".into()),
             };
+            // Reserve a 4-cell prefix so checked/unchecked rows align.
+            // `[x] ` (4 cells) when in the multi-select set; same width
+            // of spaces otherwise. Coloured with `accent` so a checked
+            // session is unmistakable against a long tree.
+            let check_span = if checked {
+                Span::styled(
+                    "[x] ".to_string(),
+                    Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::raw("    ")
+            };
             let mut spans = vec![
-                Span::raw("    "),
+                check_span,
                 Span::raw(format!("{:<14}", truncate(&name, 14))),
                 Span::raw(" "),
                 Span::styled(dot, Style::default().fg(dot_color)),
@@ -744,7 +743,11 @@ fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     // away from live output, so it's visually obvious why fresh bytes
     // aren't appearing. Any keystroke into the pane snaps back.
     let title = if app.term.is_scrolled_back() {
-        format!("{} ↑ scroll {} ", base.trim_end(), app.term.scrollback_offset())
+        format!(
+            "{} ↑ scroll {} ",
+            base.trim_end(),
+            app.term.scrollback_offset()
+        )
     } else {
         base.to_string()
     };
@@ -814,7 +817,11 @@ fn draw_terminal_right(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         return; // shouldn't happen — only drawn while split is open
     };
     let title = if slot.term.is_scrolled_back() {
-        format!("{} ↑ scroll {} ", base.trim_end(), slot.term.scrollback_offset())
+        format!(
+            "{} ↑ scroll {} ",
+            base.trim_end(),
+            slot.term.scrollback_offset()
+        )
     } else {
         base.to_string()
     };
@@ -1148,16 +1155,15 @@ fn toast_widget<'a>(n: &'a Notification, p: &Palette) -> Paragraph<'a> {
     if let Some(body) = n.body.as_deref()
         && !body.is_empty()
     {
-        lines.push(Line::from(Span::styled(
-            body,
-            Style::default().fg(p.muted),
-        )));
+        lines.push(Line::from(Span::styled(body, Style::default().fg(p.muted))));
     }
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(color))
         .style(Style::default().bg(p.surface_bg));
-    Paragraph::new(lines).block(block).wrap(Wrap { trim: false })
+    Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false })
 }
 
 fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Palette) {
@@ -1170,19 +1176,37 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         body("  Ctrl-G            toggle lazygit side pane", p),
         body("  Ctrl-Tab          flip back to last session", p),
         body("  Ctrl-B            toggle the sidebar tree", p),
-        body("  Ctrl-T            toggle the agent plan/todo/task panel", p),
+        body(
+            "  Ctrl-T            toggle the agent plan/todo/task panel",
+            p,
+        ),
         body("  Ctrl-K Z          toggle fullscreen (zen)", p),
         body("  Ctrl-K , / .      shrink / grow lazygit width", p),
         body("  Ctrl-\\            split the focused terminal pane", p),
         body("  Ctrl-W            close the split", p),
-        body("  Ctrl-Shift-←/→    resize the split divider (when split is open)", p),
-        body("  Ctrl-,            settings (notifications · layout · status bar)", p),
-        body("  Ctrl-R            rename the highlighted session (tree only)", p),
+        body(
+            "  Ctrl-Shift-←/→    resize the split divider (when split is open)",
+            p,
+        ),
+        body(
+            "  Ctrl-,            settings (notifications · layout · status bar)",
+            p,
+        ),
+        body(
+            "  Ctrl-R            rename the highlighted session (tree only)",
+            p,
+        ),
         body("  Mouse wheel       scroll the pane under the cursor", p),
-        body("  Shift-PgUp/PgDn   scroll the focused pane (no mouse needed)", p),
+        body(
+            "  Shift-PgUp/PgDn   scroll the focused pane (no mouse needed)",
+            p,
+        ),
         body("  F5                next panel", p),
         body("  F6                previous panel", p),
-        body("  Ctrl-1 … Ctrl-9   jump to Nth project group in the tree", p),
+        body(
+            "  Ctrl-1 … Ctrl-9   jump to Nth project group in the tree",
+            p,
+        ),
         body("  Ctrl-Q            quit", p),
         body("  Ctrl-C            interrupt focused pane (else quit)", p),
         Line::from(""),
@@ -1190,14 +1214,25 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         body("  1 / 2 / 3         focus tree / terminal / lazygit", p),
         body("  Tab               next panel", p),
         body("  Shift-Tab         previous panel", p),
-        body("  Ctrl-F            filter sessions by name (Esc clears)", p),
+        body(
+            "  Ctrl-F            filter sessions by name (Esc clears)",
+            p,
+        ),
         body("  j / k / ↑ / ↓     move selection", p),
         body("  h / l / ← / →     collapse / expand group", p),
         body(
             "  Space             select session and focus the terminal",
             p,
         ),
-        body("  Enter             multi-select (WIP — coming soon)", p),
+        body(
+            "  Enter / Alt-Enter check / uncheck cursor row (Alt works from any focus)",
+            p,
+        ),
+        body(
+            "  u · s · K/x/D     act on checked set (else cursor row)",
+            p,
+        ),
+        body("  Esc               clear checks · filter · fullscreen", p),
         body("  r                 refresh sessions", p),
         body("  t                 spawn plain bash terminal", p),
         body("  !                 view recent error log", p),
@@ -1214,7 +1249,10 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
             p,
         ),
         body("  u                 start (up) the selected session", p),
-        body("  s                 stop the selected session (graceful)", p),
+        body(
+            "  s                 stop the selected session (graceful)",
+            p,
+        ),
         body(
             "  K · x · D         kill the selected session (closes & removes)",
             p,
@@ -1228,7 +1266,10 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
             "  Ctrl-P then ~     status bar settings (toggle each chip individually)",
             p,
         ),
-        body("  ↓ rate ↑ rate     live WS throughput · toggle via ~ I/O speeds", p),
+        body(
+            "  ↓ rate ↑ rate     live WS throughput · toggle via ~ I/O speeds",
+            p,
+        ),
         body(
             "  Shift-F           toggle fullscreen (hide tree + chrome)",
             p,
@@ -1452,10 +1493,7 @@ fn fmt_ttl_ms(ms: u64) -> String {
 fn settings_row_label(row: SettingsRow, prefs: &Prefs) -> (String, String) {
     let onoff = |b: bool| if b { "on" } else { "off" };
     match row {
-        SettingsRow::SoundMaster => (
-            "  Sound: master".into(),
-            onoff(prefs.sound_master).into(),
-        ),
+        SettingsRow::SoundMaster => ("  Sound: master".into(), onoff(prefs.sound_master).into()),
         SettingsRow::SoundInfo => ("  Sound: info".into(), onoff(prefs.sound_info).into()),
         SettingsRow::SoundWarn => ("  Sound: warn".into(), onoff(prefs.sound_warn).into()),
         SettingsRow::SoundError => ("  Sound: error".into(), onoff(prefs.sound_error).into()),
@@ -1533,12 +1571,18 @@ fn draw_settings_overlay(
             .saturating_sub(value.chars().count());
         let pad = " ".repeat(pad.max(2));
         let label_style = if i == cursor {
-            Style::default().fg(p.fg_strong).bg(p.chip_bg).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(p.fg_strong)
+                .bg(p.chip_bg)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(p.fg)
         };
         let value_style = if i == cursor {
-            Style::default().fg(p.accent).bg(p.chip_bg).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(p.accent)
+                .bg(p.chip_bg)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(p.muted)
         };
@@ -1832,7 +1876,11 @@ fn format_error_line<'a>(entry: &ErrorEntry, text_w: usize, p: &Palette) -> Line
     let stamp_text = format!("  [{stamp:>4}] ");
     let mut text = entry.text.replace('\n', " ");
     if text_w > 1 && text.chars().count() > text_w {
-        text = text.chars().take(text_w.saturating_sub(1)).collect::<String>() + "…";
+        text = text
+            .chars()
+            .take(text_w.saturating_sub(1))
+            .collect::<String>()
+            + "…";
     }
     Line::from(vec![
         Span::styled(stamp_text, Style::default().fg(p.muted)),
@@ -2030,13 +2078,12 @@ fn push_form_field_with_hint(
     let label_color = if focused { p.accent } else { p.muted };
     let mut label_spans = vec![Span::styled(
         format!("  {label}"),
-        Style::default().fg(label_color).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(label_color)
+            .add_modifier(Modifier::BOLD),
     )];
     if let Some(h) = hint {
-        label_spans.push(Span::styled(
-            format!("  {h}"),
-            Style::default().fg(p.muted),
-        ));
+        label_spans.push(Span::styled(format!("  {h}"), Style::default().fg(p.muted)));
     }
     lines.push(Line::from(label_spans));
     let value_line = if value.is_empty() && !focused {
@@ -2073,7 +2120,9 @@ fn push_form_field_with_warn_hint(
     let label_spans = vec![
         Span::styled(
             format!("  {label}"),
-            Style::default().fg(label_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(label_color)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("  {hint}"),
@@ -2132,7 +2181,10 @@ fn draw_dir_picker_overlay(f: &mut Frame<'_>, area: Rect, picker: &DirPickerStat
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled("  current  ", Style::default().fg(p.muted)),
-        Span::styled(picker.path.clone(), Style::default().fg(p.fg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            picker.path.clone(),
+            Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
+        ),
     ]));
     if picker.parent.is_some() {
         lines.push(Line::from(Span::styled(
@@ -2456,11 +2508,7 @@ fn draw_agent_tasks_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette)
     render_section(f, rows[2], " Agents ", tasks_lines, p);
 }
 
-fn or_empty_hint(
-    lines: Vec<Line<'static>>,
-    hint: &str,
-    p: &Palette,
-) -> Vec<Line<'static>> {
+fn or_empty_hint(lines: Vec<Line<'static>>, hint: &str, p: &Palette) -> Vec<Line<'static>> {
     if lines.is_empty() {
         vec![Line::from(Span::styled(
             hint.to_string(),
@@ -2484,12 +2532,16 @@ fn render_section(
     let block = Block::default()
         .title(Span::styled(
             title.to_string(),
-            Style::default().fg(p.fg_strong).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(p.fg_strong)
+                .add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(p.idle_border).bg(p.panel_bg))
         .style(Style::default().bg(p.panel_bg).fg(p.fg));
-    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }
 

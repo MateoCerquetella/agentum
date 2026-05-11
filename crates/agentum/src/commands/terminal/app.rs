@@ -100,7 +100,10 @@ pub enum ConnState {
     #[default]
     Connecting,
     Connected,
-    Reconnecting { attempt: u32, delay_ms: u64 },
+    Reconnecting {
+        attempt: u32,
+        delay_ms: u64,
+    },
     Disconnected,
 }
 
@@ -129,7 +132,11 @@ impl TermSelection {
     /// the text extractor so they walk the cells in the same order.
     pub fn ordered(&self) -> ((u16, u16), (u16, u16)) {
         let (a, b) = (self.anchor, self.cursor);
-        if (a.1, a.0) <= (b.1, b.0) { (a, b) } else { (b, a) }
+        if (a.1, a.0) <= (b.1, b.0) {
+            (a, b)
+        } else {
+            (b, a)
+        }
     }
 
     /// True when the selection covers no cells (single-cell click with
@@ -1225,7 +1232,6 @@ impl App {
             .filter_map(|(name, entry)| entry.client.as_ref().map(|c| (name.as_str(), c)))
     }
 
-
     /// Load the on-disk profiles into `app.profiles`. Called once at
     /// run-loop start and again any time the user adds/removes a
     /// profile via the sidebar or overlay so the sidebar stays in
@@ -1336,8 +1342,7 @@ impl App {
         // search shouldn't vanish just because the session list changed.
         let prev_filter = self.tree.filter_str().to_string();
         self.sessions = sessions;
-        self.tree =
-            Tree::build_with_profiles(&self.sessions, &self.session_profile, &prev_state);
+        self.tree = Tree::build_with_profiles(&self.sessions, &self.session_profile, &prev_state);
         if !prev_filter.is_empty() {
             self.tree.set_filter(&prev_filter);
         }
@@ -1357,7 +1362,8 @@ impl App {
         // Without this, a refreshed list could leave ghost ids in the
         // set and the next bulk action would silently skip them.
         if !self.checked.is_empty() {
-            self.checked.retain(|id| self.sessions.iter().any(|s| s.id == *id));
+            self.checked
+                .retain(|id| self.sessions.iter().any(|s| s.id == *id));
         }
     }
 
@@ -1465,9 +1471,7 @@ pub async fn refresh_all(app: &mut App) {
 /// applies both in lockstep via `App::refresh_sessions` for tree
 /// rebuild + selection clamping in the same pattern as the
 /// single-client path.
-pub async fn aggregate_sessions_with_owners(
-    app: &App,
-) -> (Vec<Session>, HashMap<Uuid, String>) {
+pub async fn aggregate_sessions_with_owners(app: &App) -> (Vec<Session>, HashMap<Uuid, String>) {
     let active_key = app.active_profile.clone().unwrap_or_default();
     let probes: Vec<_> = app
         .live_clients()
@@ -1646,9 +1650,7 @@ impl Tree {
         let groups: Vec<Group> = keys
             .into_iter()
             .map(|(profile, workdir)| {
-                let mut sess = by_key
-                    .remove(&(profile.clone(), workdir.clone()))
-                    .unwrap();
+                let mut sess = by_key.remove(&(profile.clone(), workdir.clone())).unwrap();
                 sess.sort_by(|a, b| a.name.cmp(&b.name));
                 let expand_key = format!("{profile}::{workdir}");
                 Group {
@@ -1694,9 +1696,7 @@ impl Tree {
                 (0..g.sessions.len())
                     .filter(|li| {
                         let id = g.sessions[*li];
-                        self.name_index
-                            .get(&id)
-                            .is_some_and(|n| n.contains(needle))
+                        self.name_index.get(&id).is_some_and(|n| n.contains(needle))
                     })
                     .collect()
             } else {
@@ -1853,11 +1853,7 @@ pub async fn run_loop(
     // session. `App::new` builds with an empty profile map, which
     // would put every session in the "default" group; rebuilding
     // here gives the correct (profile, workdir) grouping.
-    app.tree = Tree::build_with_profiles(
-        &app.sessions,
-        &app.session_profile,
-        &HashMap::new(),
-    );
+    app.tree = Tree::build_with_profiles(&app.sessions, &app.session_profile, &HashMap::new());
 
     // Default profile: the live `client` we got from `connect_once`.
     // Keyed under the active profile name (or "" for loopback) so
@@ -2208,7 +2204,9 @@ async fn handle_crossterm(
     lg_tx: &mpsc::UnboundedSender<PtyMsg>,
 ) {
     match ev {
-        CtEvent::Key(key) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
+        CtEvent::Key(key)
+            if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
+        {
             handle_key(app, key, client, lg_tx).await;
         }
         CtEvent::Mouse(me) => handle_mouse(app, me),
@@ -2264,8 +2262,12 @@ fn handle_mouse(app: &mut App, ev: crossterm::event::MouseEvent) {
     // Translate absolute terminal coords into 1-based pane-local
     // coords. The panel border is 1 cell, so the inner content starts
     // at `(rect.x + 1, rect.y + 1)`.
-    let pane_col = col.saturating_sub(rect.x.saturating_add(1)).saturating_add(1);
-    let pane_row = row.saturating_sub(rect.y.saturating_add(1)).saturating_add(1);
+    let pane_col = col
+        .saturating_sub(rect.x.saturating_add(1))
+        .saturating_add(1);
+    let pane_row = row
+        .saturating_sub(rect.y.saturating_add(1))
+        .saturating_add(1);
 
     // Layer 1: continue an in-progress selection. Once started it
     // captures every mouse event in the same pane until the user
@@ -2288,8 +2290,7 @@ fn handle_mouse(app: &mut App, ev: crossterm::event::MouseEvent) {
                     let text = extract_selection_text(app, snapshot);
                     if !text.is_empty() {
                         write_osc52(&text);
-                        app.status_msg =
-                            Some(format!("copied {} chars", text.chars().count()));
+                        app.status_msg = Some(format!("copied {} chars", text.chars().count()));
                     }
                 }
                 return;
@@ -2436,7 +2437,6 @@ fn extract_selection_text(app: &App, sel: TermSelection) -> String {
 /// just doesn't get the host-clipboard copy.
 fn write_osc52(_text: &str) {}
 
-
 /// Encode a crossterm mouse event as an xterm SGR sequence (DECSET 1006
 /// / `\x1b[<…M|m`). xterm SGR is what every modern alt-screen TUI
 /// requests, so always emitting it is the safe default.
@@ -2578,13 +2578,10 @@ async fn handle_key(
     // the top of this function on the next event). Cleared after the
     // very next event regardless of match, so a stray prefix never
     // sticks. Currently bound: K-Z fullscreen, K-B sidebar.
-    if key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key.code, KeyCode::Char('k'))
-    {
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('k')) {
         app.chord = Some('K');
-        app.status_msg = Some(
-            "Ctrl-K · waiting (Z fullscreen · B sidebar · , / . lazygit width)".into(),
-        );
+        app.status_msg =
+            Some("Ctrl-K · waiting (Z fullscreen · B sidebar · , / . lazygit width)".into());
         return;
     }
 
@@ -2592,9 +2589,7 @@ async fn handle_key(
     // column; title and status bars stay so the user keeps the
     // breadcrumb. Distinct from Shift-F / Ctrl-K Z fullscreen which
     // strips everything.
-    if key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key.code, KeyCode::Char('b'))
-    {
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('b')) {
         app.sidebar_hidden = !app.sidebar_hidden;
         if app.sidebar_hidden && app.focus == Focus::Tree {
             app.set_focus(Focus::Term);
@@ -2609,13 +2604,36 @@ async fn handle_key(
         return;
     }
 
+    // Alt-Enter — toggle the multi-select check on the session row
+    // under the tree cursor, *from any focus*. The tree-section
+    // handler at the bottom of this fn also reacts to plain Enter
+    // when the tree is focused; this global variant lets the user
+    // mark sessions without giving up terminal focus (which is the
+    // mode most users live in). Group rows and non-leaf cursor
+    // positions no-op so an accidental Alt-Enter never sweeps an
+    // entire project group in.
+    if key.modifiers.contains(KeyModifiers::ALT)
+        && matches!(key.code, KeyCode::Enter)
+        && let Some(Row::Leaf { group, leaf }) = app.tree.current_row()
+    {
+        let id = app.tree.groups[group].sessions[leaf];
+        if !app.checked.insert(id) {
+            app.checked.remove(&id);
+        }
+        let n = app.checked.len();
+        app.status_msg = Some(if n == 0 {
+            "checks cleared".into()
+        } else {
+            format!("{n} checked · u/s/K/x to act · Esc to clear")
+        });
+        return;
+    }
+
     // Ctrl-T — toggle the right-side agent-tasks panel (plan / todos /
     // background tasks). Mirror of Ctrl-B for the opposite edge. Hidden
     // automatically on terminals narrower than ~110 cols regardless of
     // this flag — see `ui::compute_layout`.
-    if key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key.code, KeyCode::Char('t'))
-    {
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('t')) {
         app.right_panel_visible = !app.right_panel_visible;
         app.prefs.right_panel_visible = app.right_panel_visible;
         prefs::save(&app.prefs);
@@ -2669,12 +2687,10 @@ async fn handle_key(
     // Ctrl-, opens the Settings overlay. Mirrors VS Code's "Preferences:
     // Open Settings" binding. Runs ahead of pane forwarding so it works
     // from any focus, including inside the terminal pane.
-    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char(','))
-    {
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char(',')) {
         app.overlay = Overlay::Settings(SettingsState::new());
-        app.status_msg = Some(
-            "settings (Esc close · ↑↓ move · ←→ adjust · space toggle · r reset row)".into(),
-        );
+        app.status_msg =
+            Some("settings (Esc close · ↑↓ move · ←→ adjust · space toggle · r reset row)".into());
         return;
     }
 
@@ -2710,9 +2726,9 @@ async fn handle_key(
         {
             app.tree.select_session(prev);
             {
-            let side = app.target_side();
-            update_selection(app, client, side);
-        }
+                let side = app.target_side();
+                update_selection(app, client, side);
+            }
         } else {
             app.status_msg = Some("no previous session".into());
         }
@@ -2761,9 +2777,7 @@ async fn handle_key(
                 if app.servers_cursor == 0 {
                     app.status_msg =
                         Some("can't remove this machine — it's the local loopback".into());
-                } else if let Some(entry) =
-                    app.profiles.get(app.servers_cursor - 1).cloned()
-                {
+                } else if let Some(entry) = app.profiles.get(app.servers_cursor - 1).cloned() {
                     if app.active_profile.as_deref() == Some(entry.name.as_str()) {
                         app.status_msg =
                             Some("can't remove the active server — switch first".into());
@@ -3147,8 +3161,7 @@ async fn handle_key(
             }
             None => {
                 app.status_msg = Some(
-                    "no terminal stream (no session selected?) — Ctrl-E tree · Ctrl-Q quit"
-                        .into(),
+                    "no terminal stream (no session selected?) — Ctrl-E tree · Ctrl-Q quit".into(),
                 );
             }
         }
@@ -3352,9 +3365,7 @@ async fn handle_key(
                             app.pending_after_switch = None;
                             app.should_quit = true;
                         }
-                    } else if let Some(entry) =
-                        app.profiles.get(app.servers_cursor - 1)
-                    {
+                    } else if let Some(entry) = app.profiles.get(app.servers_cursor - 1) {
                         if app.active_profile.as_deref() == Some(entry.name.as_str()) {
                             app.status_msg = Some(format!("already on @{}", entry.name));
                         } else {
@@ -3397,22 +3408,16 @@ async fn handle_key(
                 state.add_form = Some(AddProfileForm::new());
             }
         }
-        KeyCode::Char('d') | KeyCode::Char('D')
-            if app.tree_section == TreeSection::Servers =>
-        {
+        KeyCode::Char('d') | KeyCode::Char('D') if app.tree_section == TreeSection::Servers => {
             // Route through the same confirmation overlay as `Ctrl-D`
             // so an accidental keypress doesn't silently nuke the
             // profile. The previous direct-`store.remove` path was the
             // muscle-memory landmine the user kept hitting.
             if app.servers_cursor == 0 {
-                app.status_msg =
-                    Some("can't remove this machine — it's the local loopback".into());
-            } else if let Some(entry) =
-                app.profiles.get(app.servers_cursor - 1).cloned()
-            {
+                app.status_msg = Some("can't remove this machine — it's the local loopback".into());
+            } else if let Some(entry) = app.profiles.get(app.servers_cursor - 1).cloned() {
                 if app.active_profile.as_deref() == Some(entry.name.as_str()) {
-                    app.status_msg =
-                        Some("can't remove the active server — switch first".into());
+                    app.status_msg = Some("can't remove the active server — switch first".into());
                 } else {
                     app.overlay = Overlay::Confirm(PendingAction::RemoveServer {
                         name: entry.name.clone(),
@@ -3511,11 +3516,7 @@ async fn handle_key(
     }
 }
 
-async fn handle_new_session_key(
-    app: &mut App,
-    key: KeyEvent,
-    client: &Client,
-) {
+async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
     let Overlay::NewSession(mut form) = std::mem::replace(&mut app.overlay, Overlay::None) else {
         return;
     };
@@ -3551,8 +3552,7 @@ async fn handle_new_session_key(
                 // client is connected — otherwise cycling to "" would
                 // silently fall back to the active server's `$HOME`
                 // and the workdir field wouldn't appear to change.
-                let names: Vec<String> =
-                    app.profiles.iter().map(|p| p.name.clone()).collect();
+                let names: Vec<String> = app.profiles.iter().map(|p| p.name.clone()).collect();
                 let has_local = app.clients.contains_key("");
                 // Wheel size is what `cycle_profile` would build:
                 // configured peers + optional empty entry for local.
@@ -3690,7 +3690,7 @@ async fn handle_new_session_key(
             // Block first-class agents the daemon can't actually launch
             // (cursor without `cursor-agent`, etc.). The web dialog
             // disables those tiles outright; the TUI text field will
-                // still let the user type the name, so we bounce here
+            // still let the user type the name, so we bounce here
             // before sending a request the executor will fail later.
             if !app.tool_available(form.tool.trim()) {
                 // Mirror `agentum_executor::binary_for` so the error
@@ -3728,8 +3728,9 @@ async fn handle_new_session_key(
                 }
             };
             let Some(target_client) = target_client else {
-                form.error =
-                    Some(format!("profile `{target_profile}` is not currently reachable"));
+                form.error = Some(format!(
+                    "profile `{target_profile}` is not currently reachable"
+                ));
                 app.overlay = Overlay::NewSession(form);
                 return;
             };
@@ -3764,22 +3765,12 @@ async fn handle_new_session_key(
                         } else {
                             let msg = format!("created + started `{name}`");
                             app.status_msg = Some(msg.clone());
-                            push_notification(
-                                app,
-                                msg,
-                                None,
-                                NotifKind::Info,
-                            );
+                            push_notification(app, msg, None, NotifKind::Info);
                         }
                     } else {
                         let msg = format!("created `{name}` (idle)");
                         app.status_msg = Some(msg.clone());
-                        push_notification(
-                            app,
-                            msg,
-                            None,
-                            NotifKind::Info,
-                        );
+                        push_notification(app, msg, None, NotifKind::Info);
                     }
                     // Aggregating refresh so the new session shows
                     // up regardless of which server it landed on
@@ -3977,7 +3968,11 @@ fn parent_path_string(p: &str) -> Option<String> {
     }
     let parent = std::path::Path::new(trimmed).parent()?;
     let s = parent.to_string_lossy();
-    if s.is_empty() { None } else { Some(s.into_owned()) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.into_owned())
+    }
 }
 
 async fn handle_dir_picker_key(form: &mut NewSessionForm, key: KeyEvent, client: &Client) {
@@ -4194,12 +4189,7 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
             // zero confirmation. Direct push lets the toast fire even
             // when the events WS is offline.
             app.status_msg = Some(label.clone());
-            push_notification(
-                app,
-                label,
-                None,
-                NotifKind::Info,
-            );
+            push_notification(app, label, None, NotifKind::Info);
         }
         Err(e) => {
             app.push_error(format!("{label}: {e}"));
@@ -4223,7 +4213,13 @@ pub fn palette_catalog(app: &App) -> Catalog {
         fullscreen: app.fullscreen,
         split_open: app.split_open(),
     };
-    Catalog::build(app.lazygit_open(), &sessions, app.selected, view, &app.prefs)
+    Catalog::build(
+        app.lazygit_open(),
+        &sessions,
+        app.selected,
+        view,
+        &app.prefs,
+    )
 }
 
 /// Build a [`ProfilesOverlay`] from the on-disk profiles file and
@@ -4231,33 +4227,32 @@ pub fn palette_catalog(app: &App) -> Catalog {
 /// itself when the file is unreadable or empty rather than silently
 /// no-op'ing — the user just hit Ctrl-O for a reason.
 pub fn open_profiles_overlay(app: &mut App) {
-    let (entries, default_name, error) =
-        match super::profiles::Profiles::load() {
-            Ok(store) => {
-                let default_name = store.default_name().map(str::to_string);
-                let mut rows: Vec<ProfileEntry> = store
-                    .list()
-                    .into_iter()
-                    .map(|(name, p, is_default)| ProfileEntry {
-                        name,
-                        url: p.url,
-                        fingerprint: p.fingerprint,
-                        is_default,
-                    })
-                    .collect();
-                // Surface the active profile at the top of the picker
-                // when it isn't the default — saves a step on the most
-                // common task ("which one am I on right now?").
-                if let Some(active) = &app.active_profile {
-                    if let Some(idx) = rows.iter().position(|r| &r.name == active) {
-                        let row = rows.remove(idx);
-                        rows.insert(0, row);
-                    }
+    let (entries, default_name, error) = match super::profiles::Profiles::load() {
+        Ok(store) => {
+            let default_name = store.default_name().map(str::to_string);
+            let mut rows: Vec<ProfileEntry> = store
+                .list()
+                .into_iter()
+                .map(|(name, p, is_default)| ProfileEntry {
+                    name,
+                    url: p.url,
+                    fingerprint: p.fingerprint,
+                    is_default,
+                })
+                .collect();
+            // Surface the active profile at the top of the picker
+            // when it isn't the default — saves a step on the most
+            // common task ("which one am I on right now?").
+            if let Some(active) = &app.active_profile {
+                if let Some(idx) = rows.iter().position(|r| &r.name == active) {
+                    let row = rows.remove(idx);
+                    rows.insert(0, row);
                 }
-                (rows, default_name, None)
             }
-            Err(e) => (Vec::new(), None, Some(format!("load profiles.toml: {e}"))),
-        };
+            (rows, default_name, None)
+        }
+        Err(e) => (Vec::new(), None, Some(format!("load profiles.toml: {e}"))),
+    };
     let cursor = entries
         .iter()
         .position(|p| Some(&p.name) == app.active_profile.as_ref())
@@ -4492,9 +4487,7 @@ fn handle_settings_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Left | KeyCode::Char('h') => {
             if let Some(kind) = ttl_row_kind(row) {
-                let new_ms = app
-                    .prefs
-                    .bump_ttl(kind, -(prefs::NOTIF_TTL_STEP_MS as i64));
+                let new_ms = app.prefs.bump_ttl(kind, -(prefs::NOTIF_TTL_STEP_MS as i64));
                 app.status_msg = Some(format!("{} TTL: {} ms", kind.label(), new_ms));
                 prefs::save(&app.prefs);
                 changed = true;
@@ -4760,10 +4753,7 @@ async fn handle_rename_key(app: &mut App, key: KeyEvent, client: &Client) {
 
 fn handle_errors_key(app: &mut App, key: KeyEvent) {
     match key.code {
-        KeyCode::Esc
-        | KeyCode::Char('q')
-        | KeyCode::Char('!')
-        | KeyCode::Enter => {
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('!') | KeyCode::Enter => {
             app.overlay = Overlay::None;
         }
         KeyCode::Up | KeyCode::Char('k') => {
@@ -4861,9 +4851,9 @@ async fn run_palette_action(
             // Move tree cursor + reopen the stream for this id.
             app.tree.select_session(id);
             {
-            let side = app.target_side();
-            update_selection(app, client, side);
-        }
+                let side = app.target_side();
+                update_selection(app, client, side);
+            }
         }
         ActionKind::KillSession(id) => {
             if let Some(s) = app.sessions.iter().find(|s| s.id == id) {
@@ -4961,8 +4951,7 @@ async fn run_palette_action(
         }
         ActionKind::OpenProfiles => {
             open_profiles_overlay(app);
-            app.status_msg =
-                Some("servers (Enter switch · a add · d remove · Esc close)".into());
+            app.status_msg = Some("servers (Enter switch · a add · d remove · Esc close)".into());
         }
         ActionKind::ToggleSoundMaster => {
             let on = app.prefs.toggle_sound_master();
@@ -5055,8 +5044,7 @@ async fn toggle_lazygit(app: &mut App, lg_tx: &mpsc::UnboundedSender<PtyMsg>) {
     // current dir and surface the substitution clearly. Without this fallback
     // lazygit silently fails with `chdir: no such file or directory` and the
     // pane just reports "lazygit exited" milliseconds after spawn.
-    let local_cwd =
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let local_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let (cwd, fell_back) = match app.selected_session() {
         Some(s) => {
             let p = PathBuf::from(&s.workdir);
@@ -5230,11 +5218,7 @@ fn key_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
 /// After every edit we run `update_selection` so the right-hand terminal
 /// pane keeps tracking the highlighted session — typing into the filter
 /// feels like a live drill-down, not a deferred commit.
-fn handle_filter_input_key(
-    app: &mut App,
-    key: &KeyEvent,
-    client: &Client,
-) {
+fn handle_filter_input_key(app: &mut App, key: &KeyEvent, client: &Client) {
     let mut filter = app.tree.filter_str().to_string();
     let mut changed = false;
     match key.code {
@@ -5318,7 +5302,9 @@ fn update_selection(app: &mut App, client: &Client, side: Side) {
     // isn't tracked yet (one per side would double the state for a
     // marginal feature; revisit if Ctrl-Tab on the right side becomes
     // a thing).
-    if side == Side::Left && let Some(prev) = app.selected {
+    if side == Side::Left
+        && let Some(prev) = app.selected
+    {
         app.prev_selected = Some(prev);
     }
     // Stash the current parser keyed by its session id, then either
@@ -5677,12 +5663,7 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                     .or_else(|| ev.payload.get("signature").and_then(|v| v.as_str()))
                     .map(|s| format!("reason: {s}"));
                 app.push_error(format!("crashed: {name}"));
-                push_notification(
-                    app,
-                    format!("{name} crashed"),
-                    reason,
-                    NotifKind::Error,
-                );
+                push_notification(app, format!("{name} crashed"), reason, NotifKind::Error);
             }
             if let Some(id) = ev.session_id {
                 app.awaiting_input.remove(&id);
@@ -5701,12 +5682,7 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
             }
         }
         "session.stopped" => {
-            push_notification(
-                app,
-                format!("{name} stopped"),
-                None,
-                NotifKind::Info,
-            );
+            push_notification(app, format!("{name} stopped"), None, NotifKind::Info);
             if let Some(id) = ev.session_id {
                 app.awaiting_input.remove(&id);
                 app.idle.remove(&id);
@@ -5730,12 +5706,7 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
             // or another tmux window. The pane-visible suppression we
             // used to do here meant a long agent run could finish under
             // your nose with zero alert.
-            push_notification(
-                app,
-                format!("{name} finished"),
-                None,
-                NotifKind::Info,
-            );
+            push_notification(app, format!("{name} finished"), None, NotifKind::Info);
             // Working→Idle: the agent is now sleeping at the prompt.
             // Mirror the watchdog's ActivityState::Idle so the sidebar
             // dot shows a muted `◌` instead of a misleading green `●`.
@@ -5827,8 +5798,7 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                 .and_then(|s| Uuid::parse_str(s).ok())
                 .or(ev.session_id);
             let Some(id) = target else { return };
-            let interesting =
-                Some(id) == app.selected || app.agent_tasks.contains_key(&id);
+            let interesting = Some(id) == app.selected || app.agent_tasks.contains_key(&id);
             if interesting {
                 spawn_agent_tasks_fetch(app, client, id);
             }
@@ -5862,12 +5832,7 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
             if let Some(tool) = new_tool {
-                push_notification(
-                    app,
-                    format!("{name} → {tool}"),
-                    None,
-                    NotifKind::Info,
-                );
+                push_notification(app, format!("{name} → {tool}"), None, NotifKind::Info);
             }
         }
         "preferences.changed" => {
@@ -5947,10 +5912,7 @@ fn next_shell_name(sessions: &[Session]) -> String {
 /// open a new tab in their host terminal. Stored as a regular session
 /// so it appears in the tree and can be killed/deleted like any other
 /// agent.
-async fn spawn_plain_terminal(
-    app: &mut App,
-    client: &Client,
-) {
+async fn spawn_plain_terminal(app: &mut App, client: &Client) {
     let name = next_shell_name(&app.sessions);
     let workdir = app
         .selected_session()
@@ -5966,20 +5928,15 @@ async fn spawn_plain_terminal(
             if let Err(e) = client.start_session(id).await {
                 app.push_error(format!("shell start failed: {e}"));
             } else {
-                push_notification(
-                    app,
-                    format!("shell: {name}"),
-                    None,
-                    NotifKind::Info,
-                );
+                push_notification(app, format!("shell: {name}"), None, NotifKind::Info);
             }
             if let Ok(fresh) = client.list_sessions().await {
                 app.refresh_sessions(fresh);
                 app.tree.select_session(id);
                 {
-            let side = app.target_side();
-            update_selection(app, client, side);
-        }
+                    let side = app.target_side();
+                    update_selection(app, client, side);
+                }
                 app.set_focus(Focus::Term);
             }
         }

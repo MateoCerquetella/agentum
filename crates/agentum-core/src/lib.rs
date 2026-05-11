@@ -195,9 +195,9 @@ impl Event {
         let kind = if let Some(rest) = self.kind.strip_prefix("watchdog.") {
             match rest {
                 "compact" => WatchdogKind::Compact,
-                "crash"   => WatchdogKind::Crash,
-                "warn"    => WatchdogKind::Warn,
-                _         => WatchdogKind::Ok,
+                "crash" => WatchdogKind::Crash,
+                "warn" => WatchdogKind::Warn,
+                _ => WatchdogKind::Ok,
             }
         } else if self.kind == "session.crashed" {
             WatchdogKind::Crash
@@ -213,20 +213,16 @@ impl Event {
             .get("label")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                self.kind.rsplit('.').next().unwrap_or("event").to_string()
-            });
+            .unwrap_or_else(|| self.kind.rsplit('.').next().unwrap_or("event").to_string());
         let msg = self
             .payload
             .get("msg")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                match (&self.session_name, &self.session_id) {
-                    (Some(n), _) => format!("{n} · {}", self.kind),
-                    (None, Some(id)) => format!("{id} · {}", self.kind),
-                    _ => self.kind.clone(),
-                }
+            .unwrap_or_else(|| match (&self.session_name, &self.session_id) {
+                (Some(n), _) => format!("{n} · {}", self.kind),
+                (None, Some(id)) => format!("{id} · {}", self.kind),
+                _ => self.kind.clone(),
             });
         Some(WatchdogEvent {
             ts: self.ts,

@@ -552,7 +552,9 @@ fn trust_for_profile(base: &Url, profile: &profiles::Profile) -> Result<api::Tls
     if let Some(pinned) = trust::KnownHosts::load()?.pin(&host_key) {
         return Ok(api::TlsTrust::Pinned(pinned.to_string()));
     }
-    bail!("no pinned fingerprint for {host_key} — connect once with `agentum terminal --profile <name>` interactively");
+    bail!(
+        "no pinned fingerprint for {host_key} — connect once with `agentum terminal --profile <name>` interactively"
+    );
 }
 
 /// Layer profile defaults under any explicit CLI flags. Returns the
@@ -755,7 +757,11 @@ fn interactive_add_profile() -> Result<String> {
             .set_default(Some(name.trim().to_string()))
             .with_context(|| format!("mark `{}` default", name.trim()))?;
     }
-    eprintln!("  saved profile `{}` to {}", name.trim(), store.path().display());
+    eprintln!(
+        "  saved profile `{}` to {}",
+        name.trim(),
+        store.path().display()
+    );
     eprintln!();
     Ok(name.trim().to_string())
 }

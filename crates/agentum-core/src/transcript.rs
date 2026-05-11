@@ -199,7 +199,11 @@ pub fn latest_transcript_excluding(dir: &Path, exclude: Option<&Path>) -> Option
 /// Apply one JSONL line to `state`. Unknown / malformed lines are
 /// silently ignored (transcripts are written incrementally and a
 /// half-flushed line at EOF is normal).
-pub fn apply_line(state: &mut AgentTaskState, pending: &mut HashMap<String, OffsetDateTime>, line: &str) {
+pub fn apply_line(
+    state: &mut AgentTaskState,
+    pending: &mut HashMap<String, OffsetDateTime>,
+    line: &str,
+) {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return;
@@ -249,10 +253,7 @@ fn apply_tool_use(
         // with status `pending`; the assigned numeric id arrives later
         // in the matching tool_result and is wired up there.
         "TaskCreate" => {
-            let Some(tool_use_id) = block
-                .get("id")
-                .and_then(|i| i.as_str())
-                .map(str::to_string)
+            let Some(tool_use_id) = block.get("id").and_then(|i| i.as_str()).map(str::to_string)
             else {
                 return;
             };
@@ -308,7 +309,9 @@ fn apply_tool_use(
 
             // Deletion: drop the row entirely.
             if status_str.as_deref() == Some("deleted") {
-                state.todos.retain(|t| t.task_id.as_deref() != Some(task_id.as_str()));
+                state
+                    .todos
+                    .retain(|t| t.task_id.as_deref() != Some(task_id.as_str()));
                 return;
             }
 
@@ -554,7 +557,9 @@ mod tests {
         let pb = transcript_path_for(workdir, id_b).unwrap();
         assert_eq!(
             pa,
-            PathBuf::from("/tmp/h/.claude/projects/-home-me-proj/00000000-0000-0000-0000-00000000000a.jsonl")
+            PathBuf::from(
+                "/tmp/h/.claude/projects/-home-me-proj/00000000-0000-0000-0000-00000000000a.jsonl"
+            )
         );
         assert_ne!(pa, pb);
         unsafe {
