@@ -89,6 +89,45 @@ impl TranscriptStore {
         self.inner.lock().ok()?.get(&id).map(|s| s.state.clone())
     }
 
+    /// Clear the cached plan/todos/tasks for this session **and** fast-
+    /// forward the file cursor to the current end-of-file so anything
+    /// already in the transcript is treated as consumed. Used by the
+    /// TUI when it sees the user run `/clear` (or `\clear`) in the
+    /// agent pane — the agent itself wipes its conversation context,
+    /// and the plan/todo panel needs to mirror that even though the
+    /// transcript file stays append-only.
+    ///
+    /// No-op if the slot doesn't exist yet (nothing cached → nothing
+    /// to wipe). Broadcasts an `agent_tasks.updated` so every connected
+    /// client refetches and lands on the empty state in lockstep.
+    pub fn reset(&self, id: Uuid) {
+        let cleared;
+        {
+            let Ok(mut guard) = self.inner.lock() else {
+                return;
+            };
+            let Some(slot) = guard.get_mut(&id) else {
+                return;
+            };
+            slot.state = AgentTaskState::default();
+            slot.pending_tasks.clear();
+            // Cursor → current file length so the next refresh() only
+            // sees bytes appended after the reset. Without this the
+            // FS watcher's first refresh would re-parse the entire
+            // file from offset 0 and rebuild the cleared state.
+            if let Ok(meta) = std::fs::metadata(&slot.transcript_path) {
+                slot.cursor = meta.len();
+            }
+            cleared = true;
+        }
+        if cleared {
+            let _ = self.bus.send(
+                Event::new("agent_tasks.updated")
+                    .with_payload(json!({ "session_id": id.to_string() })),
+            );
+        }
+    }
+
     /// Begin watching this session's transcript file if we aren't
     /// already. Idempotent. Performs an initial parse so callers see
     /// data without having to wait for the next FS event.

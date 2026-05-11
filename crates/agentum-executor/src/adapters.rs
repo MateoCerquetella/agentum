@@ -167,15 +167,18 @@ impl ToolAdapter for HermesAdapter {
     }
 
     fn launch(&self, session: &Session) -> LaunchCommand {
-        // bash-bridge convention: `hermes run --workdir <dir> [--model <m>] [user flags]`
-        let mut argv = vec!["hermes".to_string(), "run".to_string()];
-        argv.push("--workdir".to_string());
-        argv.push(session.workdir.clone());
-        if let Some(m) = &session.model {
-            argv.push(format!("--model={m}"));
-        }
+        // `hermes chat` is the interactive entry. The pre-0.9 `hermes run`
+        // subcommand and its `--workdir` flag were both removed; the pane's
+        // tmux cwd already pins the working directory like every other
+        // adapter, so we just exec `hermes chat [--model=…] [user flags]`.
+        let mut argv = vec!["hermes".to_string(), "chat".to_string()];
+        push_model(&mut argv, session);
         push_user_flags(&mut argv, session, self.yolo_flag());
         LaunchCommand::argv_only(argv)
+    }
+
+    fn yolo_flag(&self) -> Option<&'static str> {
+        Some("--yolo")
     }
 }
 
@@ -298,19 +301,15 @@ mod tests {
     }
 
     #[test]
-    fn hermes_argv_includes_workdir() {
+    fn hermes_launches_chat_with_model() {
+        // Regression: pre-v0.7.21 the adapter launched `hermes run
+        // --workdir <dir>`, but Hermes 0.9 dropped both the `run`
+        // subcommand and the `--workdir` flag, so panes died with
+        // "invalid choice: 'run'". The pane's tmux cwd already pins
+        // the workdir like every other adapter.
         let s = fixture("hermes", Some("hermes-3"), &[]);
         let cmd = HermesAdapter.launch(&s);
-        assert_eq!(
-            cmd.argv,
-            vec![
-                "hermes",
-                "run",
-                "--workdir",
-                "/tmp/work",
-                "--model=hermes-3"
-            ]
-        );
+        assert_eq!(cmd.argv, vec!["hermes", "chat", "--model=hermes-3"]);
     }
 
     #[test]
@@ -345,14 +344,12 @@ mod tests {
     }
 
     #[test]
-    fn hermes_drops_yolo_marker_when_unsupported() {
-        // HermesAdapter has no yolo_flag; translation drops the marker
-        // rather than passing Claude's flag to a binary that doesn't
-        // know it. The user effectively gets non-YOLO; preferable to a
-        // crash on launch.
+    fn hermes_translates_yolo_marker_to_yolo() {
+        // Hermes 0.9 exposes a top-level `--yolo` flag; the adapter
+        // translates Claude's wire marker into it.
         let s = fixture("hermes", None, &["--dangerously-skip-permissions"]);
         let cmd = HermesAdapter.launch(&s);
-        assert_eq!(cmd.argv, vec!["hermes", "run", "--workdir", "/tmp/work"]);
+        assert_eq!(cmd.argv, vec!["hermes", "chat", "--yolo"]);
     }
 
     #[test]
