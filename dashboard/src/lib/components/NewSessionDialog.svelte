@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type NewSession, type AgentInfo } from '$lib/api';
   import { loadSessions } from '$stores/sessions';
+  import { profiles, activeProfileId, type Profile } from '$lib/profiles';
   import DirPicker from './DirPicker.svelte';
 
   type Props = { open: boolean; onClose: () => void };
@@ -15,11 +16,41 @@
   let yolo = $state(false);
   let submitting = $state(false);
   let error = $state<string | null>(null);
+  /// Target server profile id. Mirrors the TUI's `Servers` field on the
+  /// New Session form — spawning goes against this profile's daemon
+  /// regardless of which one the topbar EndpointSwitcher has "active".
+  /// Defaults to the active profile so the most common "spawn here"
+  /// flow still works without extra clicks.
+  let targetProfileId = $state('');
+  /// Used to no-op the workdir refetch effect when the dialog isn't
+  /// open yet — otherwise we'd fire a fetch every time the active
+  /// profile changes outside of an open form.
+  let lastFetchedFor = $state<string | null>(null);
   /// Set of tool ids whose binary resolves on the daemon's PATH. Empty
   /// while the probe is in flight; populated from `/api/agents` on
   /// dialog open. Tools missing from the map are treated as available
   /// (passthrough) so unknown free-form tool ids stay spawnable.
   let availability = $state<Record<string, AgentInfo>>({});
+
+  /// Profiles list rendered as Servers tiles. We don't synthesize a
+  /// virtual "this machine" entry the way the TUI does — the dashboard's
+  /// `profiles` store already includes the local profile (the default
+  /// `{ id: 'local', baseUrl: '' }` entry created on first load),
+  /// so it sits naturally at the top of the list. Labels: any profile
+  /// with an empty `baseUrl` shows as "this machine" so the matching
+  /// label parity with the TUI is preserved.
+  const serverTiles = $derived<Profile[]>($profiles);
+  function serverLabel(p: Profile): string {
+    return p.baseUrl ? p.label : 'this machine';
+  }
+  function serverHost(p: Profile): string {
+    if (!p.baseUrl) return 'local loopback';
+    try {
+      return new URL(p.baseUrl).host;
+    } catch {
+      return p.baseUrl;
+    }
+  }
 
   type Tool = {
     id: string;
@@ -72,7 +103,7 @@
 
   async function refreshAvailability() {
     try {
-      const list = await api.listAgents();
+      const list = await api.listAgentsOn(targetProfileId);
       const map: Record<string, AgentInfo> = {};
       for (const a of list) map[a.name] = a;
       availability = map;
@@ -84,9 +115,53 @@
     }
   }
 
+  /// Pre-fill the workdir with the *target* daemon's `$HOME` so the
+  /// user doesn't end up typing a path that exists on the laptop but
+  /// not on the chosen server (the same trap the TUI's Servers cycle
+  /// has been fixing across v0.7.13–v0.7.15). Only fires when the
+  /// target profile changes since the last fetch — otherwise editing
+  /// the workdir manually and then refocusing the dialog would clobber
+  /// the user's typed path.
+  async function refreshWorkdirHome() {
+    if (lastFetchedFor === targetProfileId) return;
+    try {
+      const listing = await api.listDirOn(targetProfileId, undefined);
+      workdir = listing.path;
+      lastFetchedFor = targetProfileId;
+      // A successful refetch means the target is reachable; clear any
+      // stale per-target error so the user isn't staring at a message
+      // that no longer applies.
+      if (error && error.startsWith("couldn't reach ")) error = null;
+    } catch (e) {
+      const label = (() => {
+        const p = $profiles.find((x) => x.id === targetProfileId);
+        return p ? serverLabel(p) : targetProfileId;
+      })();
+      error = `couldn't reach ${label}: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
   $effect(() => {
-    if (open) refreshAvailability();
+    if (open) {
+      // Seed the target profile from the active one each time the
+      // dialog opens. The user can switch via the Servers tiles
+      // afterwards; we don't want the field to be sticky across
+      // opens or the topbar's EndpointSwitcher would feel like it
+      // wasn't doing anything when re-opening the dialog.
+      if (!targetProfileId) targetProfileId = $activeProfileId;
+      void refreshAvailability();
+      void refreshWorkdirHome();
+    }
   });
+
+  /// When the user picks a different server in the dialog, re-probe
+  /// availability (the new server may have different agents installed)
+  /// and refetch its `$HOME` for the workdir field.
+  async function pickServer(id: string) {
+    if (id === targetProfileId) return;
+    targetProfileId = id;
+    await Promise.all([refreshAvailability(), refreshWorkdirHome()]);
+  }
 
   // If the user had selected a tool that just became unavailable
   // (rare — happens if the daemon's PATH changes between dialog opens),
@@ -109,6 +184,8 @@
     yolo = false;
     submitting = false;
     error = null;
+    targetProfileId = '';
+    lastFetchedFor = null;
   }
 
   function close() {
@@ -152,10 +229,14 @@
         model: model.trim() || null,
         flags
       };
-      const created = await api.createSession(body);
+      // Spawn against the *target* server picked by the Servers tiles,
+      // not just whatever the topbar EndpointSwitcher has active.
+      // Empty target degrades to the active profile inside
+      // `createSessionOn`, so existing single-server flows still work.
+      const created = await api.createSessionOn(targetProfileId, body);
       if (upAfter) {
         try {
-          await api.startSession(created.id);
+          await api.startSessionOn(targetProfileId, created.id);
         } catch (startErr) {
           error = startErr instanceof Error ? startErr.message : String(startErr);
           submitting = false;
@@ -198,6 +279,25 @@
         </div>
         <button type="button" class="x" onclick={close} aria-label="close">×</button>
       </header>
+
+      <section>
+        <span class="eyebrow">Servers</span>
+        <div class="tools servers">
+          {#each serverTiles as p (p.id)}
+            <button
+              type="button"
+              class="tool"
+              class:on={targetProfileId === p.id}
+              onclick={() => pickServer(p.id)}
+              title={p.baseUrl || 'http://current-origin'}
+            >
+              <span class="dot" style:background={p.baseUrl ? 'var(--cta)' : 'var(--green, #2ea043)'}></span>
+              <span class="t-name">{serverLabel(p)}</span>
+              <span class="t-desc">{serverHost(p)}</span>
+            </button>
+          {/each}
+        </div>
+      </section>
 
       <section>
         <span class="eyebrow">Agent</span>

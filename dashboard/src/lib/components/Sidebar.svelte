@@ -5,6 +5,12 @@
   import { openPalette } from '$stores/palette';
   import { openNewSession } from '$stores/newSession';
   import { api, type Status } from '$lib/api';
+  import {
+    profiles,
+    activeProfileId,
+    setActiveProfile,
+    type Profile
+  } from '$lib/profiles';
 
   /**
    * Map server-side Status onto the design's state vocabulary used for
@@ -72,6 +78,22 @@
     }
     return order.map(k => ({ project: k, items: map.get(k)! }));
   });
+
+  // Mirror the TUI's SERVERS sidebar section: list every configured
+  // profile, label loopback (empty baseUrl) as "this machine", and
+  // make the active profile read at a glance. Clicking a server
+  // switches the dashboard's active endpoint via the same reload
+  // path the topbar EndpointSwitcher uses — keeps every store, WS,
+  // and cache coherent with the new origin without per-store
+  // re-init logic.
+  function serverLabel(p: Profile): string {
+    return p.baseUrl ? p.label : 'this machine';
+  }
+  function pickServer(id: string) {
+    if (id === $activeProfileId) return;
+    setActiveProfile(id);
+    if (typeof location !== 'undefined') location.reload();
+  }
 </script>
 
 <aside class="sb">
@@ -132,6 +154,31 @@
     </a>
   </div>
 
+  <!-- Servers section: mirrors the TUI sidebar. Always shows the
+       full profile list — loopback included — so the user can see
+       "this machine" sitting alongside any configured peers without
+       having to open the topbar dropdown. -->
+  <div class="sect servers-sect">
+    <div class="sect-lbl">
+      <span>Servers</span>
+    </div>
+    {#each $profiles as p (p.id)}
+      <button
+        type="button"
+        class="server-row"
+        class:active={p.id === $activeProfileId}
+        onclick={() => pickServer(p.id)}
+        title={p.baseUrl || 'current origin'}
+      >
+        <span class="srv-dot" class:loopback={!p.baseUrl}></span>
+        <span class="srv-name">{serverLabel(p)}</span>
+        {#if p.id === $activeProfileId}
+          <span class="srv-tag">active</span>
+        {/if}
+      </button>
+    {/each}
+  </div>
+
   <!-- Sessions list (live updating, grouped by project) -->
   <div class="sect sessions-sect">
     <div class="sect-lbl">
@@ -190,6 +237,66 @@
   :global(.sb .ws-search:hover) {
     color: var(--fg-2);
     border-color: var(--fg-3);
+  }
+
+  .servers-sect {
+    /* Stays at a fixed height so the sessions list below still owns
+       the scroll. Caps with a short max-height + internal overflow so
+       a user with many servers doesn't lose the sessions area. */
+    flex: 0 0 auto;
+    max-height: 30vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .server-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-sm, 4px);
+    color: var(--fg-2);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--t-hover, 150ms ease), color var(--t-hover, 150ms ease);
+  }
+  .server-row:hover {
+    background: color-mix(in srgb, var(--fg) 5%, transparent);
+    color: var(--fg);
+  }
+  .server-row.active {
+    background: color-mix(in srgb, var(--cta) 12%, transparent);
+    color: var(--fg);
+  }
+  .srv-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-pill, 50%);
+    background: var(--cta);
+    flex: 0 0 auto;
+  }
+  /* "this machine" / loopback gets a different glyph so the user
+     reads it as a special row even before checking the label. */
+  .srv-dot.loopback {
+    background: var(--green, #2ea043);
+  }
+  .srv-name {
+    flex: 1;
+    font-size: 12.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .srv-tag {
+    font-family: var(--mono);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--cta);
   }
 
   .sessions-sect {

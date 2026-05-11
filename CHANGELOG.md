@@ -4,6 +4,30 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.16] — 2026-05-11
+
+### Added
+- **Dashboard parity with the TUI's "this machine" + Servers picker.**
+  Three matching pieces, lifted directly from the
+  v0.7.13–v0.7.15 TUI work:
+  - The sidebar now has a permanent **Servers** section above the
+    Sessions list. Every configured profile renders (loopback labels
+    as "this machine"), the active one is tagged, and clicking
+    another row switches the dashboard's active endpoint via the
+    same reload path the topbar `EndpointSwitcher` uses.
+  - The **New Session** dialog gained a **Servers** field (tiles
+    above the Agent picker). Selecting a server changes which
+    daemon the spawn POSTs against, re-probes `/api/agents` for
+    that server's installed tools, and refetches `$HOME` via
+    `/api/fs/list` so the **Working directory** field follows
+    the picked server — same contract as the TUI's Tab cycle.
+  - The legacy `request()` is unchanged; new profile-pinned
+    siblings `listDirOn`, `createSessionOn`, `startSessionOn`,
+    `listAgentsOn` route through `fetchProfile` so the dialog can
+    target a non-active endpoint without flipping the topbar.
+    `requestOn` (a `request()`-shaped helper for arbitrary
+    profiles) backs all four.
+
 ## [0.7.15] — 2026-05-11
 
 ### Fixed

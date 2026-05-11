@@ -131,6 +131,7 @@ export interface Health {
 import {
   apiUrl,
   clearActiveToken,
+  fetchProfile,
   getActiveProfile,
   setActiveToken,
   wsUrl as profileWsUrl
@@ -196,6 +197,47 @@ export class ApiError extends Error {
     super(`HTTP ${status}: ${message}`);
     this.name = 'ApiError';
   }
+}
+
+/**
+ * Profile-pinned variant of `request()`. Used by call sites that need
+ * to talk to a *specific* endpoint (e.g. the New Session dialog's
+ * Servers picker, which spawns on the chosen server regardless of which
+ * profile is "active" in the topbar). Falls back to the active profile
+ * when `profileId` is empty / unknown — `fetchProfile` itself enforces
+ * that contract — so callers can pass an empty string for "use the
+ * current profile" without special-casing.
+ */
+async function requestOn<T>(
+  profileId: string,
+  path: string,
+  init: RequestInit = {}
+): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetchProfile(profileId, path, init);
+  } catch (e) {
+    markFetchFailed();
+    throw e;
+  }
+  if (res.status === 401) {
+    // Clearing the active token here would be wrong — the failing
+    // request was for a *different* profile. The caller surfaces the
+    // 401 inline; the per-profile login flow is the user's recourse.
+    throw new ApiError(401, 'unauthorized');
+  }
+  if (res.status >= 500) {
+    markFetchFailed();
+    const text = await res.text().catch(() => '');
+    throw new ApiError(res.status, text || res.statusText);
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new ApiError(res.status, text || res.statusText);
+  }
+  markFetchOk();
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
 }
 
 /// Public probe: does the server accept the current (or absent) token?
@@ -393,6 +435,29 @@ export const api = {
     const qs = path ? `?path=${encodeURIComponent(path)}` : '';
     return request<DirListing>(`/api/fs/list${qs}`);
   },
+
+  /**
+   * Profile-pinned siblings of the session/listDir endpoints. Used by
+   * the New Session dialog's Servers picker — the user chooses *where*
+   * to spawn, so listDir (to pre-fill `$HOME`) and createSession both
+   * need to target that server regardless of which profile is active
+   * in the topbar.
+   */
+  listDirOn: (profileId: string, path?: string) => {
+    const qs = path ? `?path=${encodeURIComponent(path)}` : '';
+    return requestOn<DirListing>(profileId, `/api/fs/list${qs}`);
+  },
+  createSessionOn: (profileId: string, body: NewSession) =>
+    requestOn<Session>(profileId, '/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  startSessionOn: (profileId: string, id: string) =>
+    requestOn<Session>(profileId, `/api/sessions/${encodeURIComponent(id)}/start`, {
+      method: 'POST'
+    }),
+  listAgentsOn: (profileId: string) =>
+    requestOn<AgentInfo[]>(profileId, '/api/agents'),
   sendInput: (id: string, body: SendInput) =>
     request<void>(`/api/sessions/${encodeURIComponent(id)}/send`, {
       method: 'POST',
