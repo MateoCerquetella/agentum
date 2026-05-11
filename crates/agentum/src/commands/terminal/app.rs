@@ -1627,11 +1627,16 @@ pub fn normalize_workdir(p: &str) -> String {
 }
 
 /// Display name for a server-level group. `""` (loopback) renders as
-/// `MY MACHINE (<os>)` where `<os>` is the host OS (`macos`, `linux`,
-/// `windows`, …) so the user sees which OS the TUI itself is running
-/// on — the local row is materially different from the remote rows
-/// and should read that way. Named profiles keep the `@` prefix so
-/// the sidebar reads `@vps` instead of just `vps`.
+/// the host's own hostname (e.g. `omarchy`, `mateo-mac`) so the user
+/// sees exactly which box's daemon they're attached to — the row is
+/// labelled by *whose machine is hosting the daemon*, not by a
+/// generic "this is local". When the TUI runs on the same box as the
+/// daemon they're labelled identically anyway; when the TUI runs on
+/// a different box via `--profile`, only the named profile appears
+/// (the loopback row is suppressed by the runtime when no local
+/// daemon is connected). Named profiles keep the `@` prefix so the
+/// sidebar reads `@vps` instead of just `vps`, which makes the user-
+/// chosen alias visually distinct from the hostname-derived one.
 pub fn profile_label(profile: &str) -> String {
     if profile.is_empty() {
         local_machine_label()
@@ -1640,11 +1645,37 @@ pub fn profile_label(profile: &str) -> String {
     }
 }
 
-/// `MY MACHINE (<os>)` for the loopback row. Centralised so the sidebar
-/// header, the Servers panel row, the New Session form's profile field,
-/// and any "can't reach <x>" status messages all agree.
+/// Hostname-derived label for the loopback row. Centralised so the
+/// sidebar header, the Servers panel row, the New Session form's
+/// profile field, and any "can't reach <x>" status messages all
+/// agree. Falls back to "local" when the system `hostname` command
+/// is unavailable or returns an empty string. Cached behind a
+/// `OnceLock` so we don't fork a `hostname` subprocess every frame
+/// (the label is read inside the per-frame render path).
 pub fn local_machine_label() -> String {
-    format!("MY MACHINE ({})", std::env::consts::OS)
+    static CACHED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            // `hostname` is universally available on macOS and Linux
+            // (POSIX), so spawning it once at startup is the cheapest
+            // portable way to get the system hostname without pulling
+            // in a dedicated crate. The output ends with a newline,
+            // which we trim. Cut at the first `.` so a host that
+            // reports `omarchy.local` (mDNS) or `mateo-mac.lan`
+            // shortens to the base name — that's the part the user
+            // identifies with, the suffix is just for resolution.
+            let raw = std::process::Command::new("hostname")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            match raw {
+                Some(name) => name.split('.').next().unwrap_or(&name).to_ascii_lowercase(),
+                None => "local".to_string(),
+            }
+        })
+        .clone()
 }
 
 /// Friendly label for a workdir: the basename with `~` for the home

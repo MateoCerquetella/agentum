@@ -646,12 +646,14 @@ fn render_tree_row(
         Row::Group(gi) => {
             let g = &app.tree.groups[gi];
             let arrow = if g.expanded { "▾" } else { "▸" };
-            // Server header — top-level row. `MY MACHINE (<os>)` for the
-            // loopback (rendered in `fg_strong`) and `@vps` for named
-            // profiles (rendered in `accent_alt`) so the local row is
-            // visually distinct from the remote rows at a glance. The
-            // trailing count is the total number of sessions across
-            // every project on this server.
+            // Server header — top-level row. The loopback row reads as
+            // the host's own hostname (rendered in `fg_strong`) and
+            // named profiles read as `@<name>` (rendered in
+            // `accent_alt`). Same weight on both rows — the colour
+            // alone carries the "this one is local" signal so the
+            // sidebar doesn't shout at the user (an earlier iteration
+            // bolded `MY MACHINE (linux)` in caps and got flagged as
+            // aggressive).
             let label = super::app::profile_label(&g.profile);
             let count: usize = g.projects.iter().map(|pr| pr.sessions.len()).sum();
             let label_color = if g.profile.is_empty() {
@@ -661,12 +663,7 @@ fn render_tree_row(
             };
             let spans = vec![
                 Span::raw(format!(" {arrow} ")),
-                Span::styled(
-                    label,
-                    Style::default()
-                        .fg(label_color)
-                        .add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(label, Style::default().fg(label_color)),
                 Span::styled(format!("  ({count})"), Style::default().fg(p.muted)),
             ];
             ListItem::new(Line::from(spans)).style(row_style)

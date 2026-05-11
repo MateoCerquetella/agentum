@@ -4,6 +4,27 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.23] — 2026-05-11
+
+### Changed
+- **Loopback row reads as the host's hostname instead of
+  `MY MACHINE (<os>)`.** A user running the TUI directly on their
+  Linux box (Omarchy) got `MY MACHINE (linux)` and read it as
+  "weirdly aggressive shouting" — and worse, "MY MACHINE" sounded
+  Mac-specific to them so they couldn't tell why their VPS sessions
+  were appearing under it (answer: the TUI was running *on* the VPS,
+  so "the machine where the TUI is" was the VPS, but the label
+  didn't communicate that). Now the row reads as the system's
+  hostname (e.g., `omarchy`, `mateo-mac`), with mDNS / LAN suffixes
+  (`.local`, `.lan`, …) trimmed and the result lowercased. Cached
+  behind a `OnceLock` so we don't fork a `hostname` subprocess every
+  frame. Falls back to `local` when the system `hostname` command
+  is unavailable. Named profiles continue to read as `@<name>`.
+- **No more bold on the loopback's server header.** The colour
+  difference (`fg_strong` for the local row vs `accent_alt` for
+  remote rows) is enough — bolding the local row on top of that
+  amplified the "shouting" effect.
+
 ## [0.7.22] — 2026-05-11
 
 ### Changed
