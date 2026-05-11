@@ -4,6 +4,24 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.25] — 2026-05-11
+
+### Fixed
+- **New Session form's Profile field can now Tab-cycle to "this
+  machine" even when the active connection is a remote daemon.**
+  Before: launching `agentum terminal` with `default = "omarchy"` in
+  profiles.toml left `app.clients` populated only with the `omarchy`
+  entry. The form's Tab handler computed `wheel_size = 1` and
+  short-circuited to `next_field()` instead of cycling — so a Mac
+  user driving their Linux box couldn't spawn a session on the Mac
+  from inside the TUI. Now a non-interactive loopback probe runs
+  alongside the existing peer fanout at boot; if a local
+  `agentum serve` answers it's added to `app.clients` under the `""`
+  key as a peer (and its sessions are merged into the unified
+  sidebar). If nothing's listening on 127.0.0.1:8822 the entry
+  still shows up as Unreachable so the user sees "this machine"
+  exists as an option instead of having no idea why Tab won't cycle.
+
 ## [0.7.24] — 2026-05-11
 
 ### Fixed

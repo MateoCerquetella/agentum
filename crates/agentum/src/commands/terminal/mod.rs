@@ -125,7 +125,24 @@ pub async fn run(opts: Options) -> Result<()> {
         // user's fleet. The default profile (the one we just got a
         // live `client` for above) is already covered; the rest go
         // through `try_connect_profile`, which never prompts.
-        let extras = fanout_other_profiles(active_profile_name.as_deref().unwrap_or("")).await;
+        let mut extras = fanout_other_profiles(active_profile_name.as_deref().unwrap_or("")).await;
+        // Add the local loopback as a peer when the active connection
+        // isn't already loopback. Without this, a user whose default
+        // profile is a remote daemon (`omarchy`, a VPS, …) couldn't
+        // reach the "this machine" target from the New Session form's
+        // Profile field — Tab would short-circuit because the cycle
+        // wheel had only one entry. The loopback probe is non-
+        // interactive; an unreachable / login-needed result still
+        // shows up as a greyed row so the user sees it exists.
+        let active_is_loopback = active_profile_name
+            .as_deref()
+            .map(str::is_empty)
+            .unwrap_or(true);
+        let already_have_loopback = extras.iter().any(|(name, _)| name.is_empty());
+        if !active_is_loopback && !already_have_loopback {
+            let loopback = try_connect_loopback().await;
+            extras.push((String::new(), loopback));
+        }
         // Aggregate sessions: default profile's first, then every
         // reachable peer's. Two profiles pointing at the same daemon
         // share session ids; dedupe by id so the sidebar can't show
@@ -412,6 +429,83 @@ async fn probe_token(base: &Url, trust_setting: &TlsTrust, token: &str) -> bool 
 /// list of (profile_name, ProfileConnect) tuples in profile-order.
 /// All probes run in parallel via `join_all` so the boot path
 /// doesn't serialise on a slow / unresponsive remote server.
+/// Non-interactive probe of the local loopback daemon. Mirrors the
+/// HTTPS-then-HTTP discovery `resolve_base` does, but never blocks on
+/// user input — failures degrade into an `Unreachable` ProfileConnect
+/// so the sidebar's "this machine" row still appears (greyed out)
+/// when the user hasn't started `agentum serve` locally yet. Used by
+/// the boot fanout so the New Session form's Profile field can cycle
+/// to `""` (this machine) even when the active profile is remote.
+async fn try_connect_loopback() -> ProfileConnect {
+    let unreachable = |msg: String| ProfileConnect {
+        status: app::ServerStatus::Unreachable,
+        client: None,
+        sessions: Vec::new(),
+        last_error: Some(msg),
+        agent_availability: None,
+    };
+    for candidate in [DEFAULT_HTTPS, DEFAULT_HTTP] {
+        let Ok(base) = Url::parse(candidate) else {
+            continue;
+        };
+        let trust = if base.scheme() == "https" {
+            // Same loopback-friendly trust path resolve_base uses:
+            // a pinned fingerprint if known_hosts has one, accept-any
+            // otherwise (we're talking to our own machine).
+            let host_key = trust::host_key(&base).unwrap_or_default();
+            trust::KnownHosts::load()
+                .ok()
+                .and_then(|kh| kh.pin(&host_key).map(|s| s.to_string()))
+                .map(TlsTrust::Pinned)
+                .unwrap_or(TlsTrust::AcceptAny)
+        } else {
+            TlsTrust::Plain
+        };
+        if api::probe_health(&base, &trust, Duration::from_millis(750))
+            .await
+            .is_err()
+        {
+            continue;
+        }
+        let host_key = match trust::host_key(&base) {
+            Ok(k) => k,
+            Err(e) => return unreachable(format!("host key: {e}")),
+        };
+        let creds = match trust::Credentials::load() {
+            Ok(c) => c,
+            Err(e) => return unreachable(format!("creds: {e}")),
+        };
+        let Some(token) = creds.token(&host_key).map(str::to_string) else {
+            return ProfileConnect {
+                status: app::ServerStatus::LoginNeeded,
+                client: None,
+                sessions: Vec::new(),
+                last_error: Some("loopback daemon is up but you haven't signed in here".into()),
+                agent_availability: None,
+            };
+        };
+        let client = match api::Client::new(base.clone(), token, trust) {
+            Ok(c) => c,
+            Err(e) => return unreachable(format!("client: {e}")),
+        };
+        let sessions = client.list_sessions().await.unwrap_or_default();
+        let agent_availability = client.list_agents().await.ok().map(|list| {
+            list.into_iter()
+                .filter(|a| a.available)
+                .map(|a| a.name)
+                .collect::<std::collections::HashSet<_>>()
+        });
+        return ProfileConnect {
+            status: app::ServerStatus::Live,
+            client: Some(client),
+            sessions,
+            last_error: None,
+            agent_availability,
+        };
+    }
+    unreachable("no daemon listening on 127.0.0.1:8822".into())
+}
+
 async fn fanout_other_profiles(skip_name: &str) -> Vec<(String, ProfileConnect)> {
     let store = match profiles::Profiles::load() {
         Ok(s) => s,
