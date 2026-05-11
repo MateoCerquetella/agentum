@@ -4,6 +4,17 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.20] — 2026-05-11
+
+### Fixed
+- **CI clippy is green again.** Rust 1.95 added the
+  `collapsible_match` lint, which fired on two `KeyCode::*` match
+  arms in the TUI that wrapped their body in an `if`. Refactored
+  both into match guards (`KeyCode::Down if ... =>` and
+  `KeyCode::Backspace if filter.pop().is_some() =>`). Same
+  behaviour, just collapsed one level. Verified locally with
+  `cargo clippy --workspace --all-targets -- -D warnings`.
+
 ## [0.7.19] — 2026-05-11
 
 ### Changed

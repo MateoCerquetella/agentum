@@ -4020,10 +4020,8 @@ async fn handle_dir_picker_key(form: &mut NewSessionForm, key: KeyEvent, client:
         KeyCode::Up => {
             picker.cursor = picker.cursor.saturating_sub(1);
         }
-        KeyCode::Down => {
-            if picker.cursor + 1 < picker.entries.len() {
-                picker.cursor += 1;
-            }
+        KeyCode::Down if picker.cursor + 1 < picker.entries.len() => {
+            picker.cursor += 1;
         }
         // Right / Enter: descend into the highlighted entry.
         KeyCode::Right | KeyCode::Enter => {
@@ -5269,12 +5267,10 @@ fn handle_filter_input_key(app: &mut App, key: &KeyEvent, client: &Client) {
                 format!("filter: ⌕{filter}")
             });
         }
-        KeyCode::Backspace => {
-            if filter.pop().is_some() {
-                app.tree.set_filter(&filter);
-                app.status_msg = Some(format!("⌕ {filter}"));
-                changed = true;
-            }
+        KeyCode::Backspace if filter.pop().is_some() => {
+            app.tree.set_filter(&filter);
+            app.status_msg = Some(format!("⌕ {filter}"));
+            changed = true;
         }
         // Arrow keys move the tree cursor while the search box is open —
         // matches VS Code / browser Find UX so the user can navigate
