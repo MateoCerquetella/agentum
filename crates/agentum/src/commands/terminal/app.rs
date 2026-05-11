@@ -964,6 +964,17 @@ pub struct App {
     /// few hundred ms. Cleared by the `agent_tasks_rx` arm regardless
     /// of success or failure.
     pub agent_tasks_inflight: HashSet<Uuid>,
+    /// Per-session shadow of the terminal pane's current input line.
+    /// Each typed printable char is appended; Backspace pops; Enter
+    /// commits + clears; Esc / Ctrl-U / Ctrl-K / Ctrl-C clear. Used
+    /// exclusively to detect `/clear` (or `\clear`) so the right-side
+    /// plan/todo panel can mirror the agent's own context wipe without
+    /// the user having to also press Ctrl-T or reselect. Best-effort —
+    /// won't track in-line cursor moves (arrows, Home/End), but a
+    /// missed detection only means the panel stays out of sync until
+    /// the next real transcript event, which is the pre-feature
+    /// behaviour anyway.
+    pub term_input_lines: HashMap<Uuid, String>,
     /// Cwd we want lazygit to be in next. Set on every navigation and
     /// drained by `drive_pending_lazygit` from the tick loop. The
     /// indirection lets us debounce PTY respawns so a held-j burst
@@ -1171,6 +1182,7 @@ impl App {
             agent_tasks: HashMap::new(),
             agent_tasks_tx: None,
             agent_tasks_inflight: HashSet::new(),
+            term_input_lines: HashMap::new(),
             pending_lazygit_cwd: None,
             last_nav_at: None,
             term_selection: None,
@@ -1364,6 +1376,14 @@ impl App {
         if !self.checked.is_empty() {
             self.checked
                 .retain(|id| self.sessions.iter().any(|s| s.id == *id));
+        }
+        // Prune the `/clear`-detector line shadows for the same
+        // reason. New buffers are created on demand by
+        // `track_term_input_for_clear`, so this is purely a
+        // memory-hygiene measure on a long-running TUI session.
+        if !self.term_input_lines.is_empty() {
+            self.term_input_lines
+                .retain(|id, _| self.sessions.iter().any(|s| s.id == *id));
         }
     }
 
@@ -1581,14 +1601,24 @@ pub fn normalize_workdir(p: &str) -> String {
 }
 
 /// Display name for a server-level group. `""` (loopback) renders as
-/// `this machine`; named profiles get an `@` prefix so the sidebar
-/// reads `@vps` instead of just `vps`.
+/// `MY MACHINE (<os>)` where `<os>` is the host OS (`macos`, `linux`,
+/// `windows`, …) so the user sees which OS the TUI itself is running
+/// on — the local row is materially different from the remote rows
+/// and should read that way. Named profiles keep the `@` prefix so
+/// the sidebar reads `@vps` instead of just `vps`.
 pub fn profile_label(profile: &str) -> String {
     if profile.is_empty() {
-        "this machine".to_string()
+        local_machine_label()
     } else {
         format!("@{profile}")
     }
+}
+
+/// `MY MACHINE (<os>)` for the loopback row. Centralised so the sidebar
+/// header, the Servers panel row, the New Session form's profile field,
+/// and any "can't reach <x>" status messages all agree.
+pub fn local_machine_label() -> String {
+    format!("MY MACHINE ({})", std::env::consts::OS)
 }
 
 /// Friendly label for a workdir: the basename with `~` for the home
@@ -2787,8 +2817,10 @@ async fn handle_key(
                 // doesn't correspond to a persisted profile entry —
                 // there's nothing to remove.
                 if app.servers_cursor == 0 {
-                    app.status_msg =
-                        Some("can't remove this machine — it's the local loopback".into());
+                    app.status_msg = Some(format!(
+                        "can't remove {} — it's the local loopback",
+                        local_machine_label()
+                    ));
                 } else if let Some(entry) = app.profiles.get(app.servers_cursor - 1).cloned() {
                     if app.active_profile.as_deref() == Some(entry.name.as_str()) {
                         app.status_msg =
@@ -3140,9 +3172,12 @@ async fn handle_key(
         // Pick the input channel for whichever pane is focused — split
         // pane (Right) routes to its own slot, the legacy single pane
         // (Left) keeps using the flat `term_in`.
+        // Owned clones (the senders are cheap Arc-backed handles) so
+        // we don't hold an outstanding immutable borrow of `app` —
+        // we need `&mut app` further down for the `/clear` shadow.
         let tx_opt = match app.focus {
-            Focus::TermRight => app.split_right.as_ref().and_then(|s| s.term_in.as_ref()),
-            _ => app.term_in.as_ref(),
+            Focus::TermRight => app.split_right.as_ref().and_then(|s| s.term_in.clone()),
+            _ => app.term_in.clone(),
         };
         // Optimistically clear runtime activity state for whichever
         // session we're typing into. The user wouldn't be sending
@@ -3161,9 +3196,16 @@ async fn handle_key(
         if let Some(id) = typed_id {
             app.idle.remove(&id);
             app.awaiting_input.remove(&id);
+            // Shadow the line buffer so we can spot `/clear` (or
+            // `\clear`) and mirror the agent's context wipe in the
+            // plan/todo panel. Runs unconditionally — cheap, and we
+            // want to track even before the byte is sent so the local
+            // panel clear lands at the same beat as the remote
+            // command.
+            track_term_input_for_clear(app, id, &key, client);
         }
         let nbytes = bytes.len();
-        let send_result = tx_opt.map(|tx| tx.send(TermOut::Bytes(bytes)));
+        let send_result = tx_opt.as_ref().map(|tx| tx.send(TermOut::Bytes(bytes)));
         match send_result {
             Some(Ok(())) => {
                 app.io.record_out(nbytes);
@@ -5592,6 +5634,83 @@ async fn handle_event_msg(app: &mut App, msg: EventMsg, client: &Client) {
 /// gets cleared — the panel keeps showing the last good snapshot.
 /// No-op if the channel hasn't been wired yet (pre-`run_loop`
 /// contexts only).
+/// Shadow the user's current input line for one terminal pane so we
+/// can spot when they type `/clear` (or `\clear`) and submit it. When
+/// the line commits with that command, we both wipe the local plan/
+/// todo/task cache for the session and POST to the daemon's reset
+/// endpoint — the daemon also fast-forwards its transcript cursor so
+/// the next refresh doesn't repaint the cleared state from the
+/// already-on-disk log.
+///
+/// This is intentionally a simple appender. We don't model in-line
+/// cursor moves (arrows, Home/End) or paste operations. The worst
+/// case for a missed detection is the panel staying out of sync until
+/// the next real transcript event, which is exactly the pre-feature
+/// behaviour — so a false negative is harmless, while a false positive
+/// (clearing when the user didn't actually run /clear) would be
+/// annoying, which is why we only commit on Enter and only match the
+/// exact trimmed line.
+fn track_term_input_for_clear(app: &mut App, session_id: Uuid, key: &KeyEvent, client: &Client) {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let buf = app.term_input_lines.entry(session_id).or_default();
+    match key.code {
+        KeyCode::Char(c) if ctrl => {
+            // Most Ctrl-combos either kill the line outright (Ctrl-U,
+            // Ctrl-K, Ctrl-W, Ctrl-C) or are non-printing in agent
+            // CLIs. Reset the shadow rather than risk false positives.
+            let _ = c;
+            buf.clear();
+        }
+        KeyCode::Char(c) if alt => {
+            // Alt-prefixed keys send an escape + char to the agent;
+            // they don't extend the typed line in any agent CLI we
+            // target. Reset to be safe.
+            let _ = c;
+            buf.clear();
+        }
+        KeyCode::Char(c) => buf.push(c),
+        KeyCode::Backspace => {
+            buf.pop();
+        }
+        KeyCode::Enter => {
+            // Commit point. Trim so trailing whitespace / leading
+            // spaces don't defeat the match.
+            let line = std::mem::take(buf);
+            let trimmed = line.trim();
+            let is_clear =
+                trimmed.eq_ignore_ascii_case("/clear") || trimmed.eq_ignore_ascii_case("\\clear");
+            if is_clear {
+                // Local clear first so the right panel goes blank
+                // immediately, before the round-trip to the daemon.
+                if let Some(state) = app.agent_tasks.get_mut(&session_id) {
+                    *state = AgentTaskState::default();
+                }
+                // Server reset: detached so the keystroke send isn't
+                // blocked on it. Fire-and-forget; the next
+                // `agent_tasks.updated` event will reconfirm.
+                let owner = app
+                    .client_for_session(session_id)
+                    .cloned()
+                    .unwrap_or_else(|| client.clone());
+                tokio::spawn(async move {
+                    if let Err(e) = owner.reset_agent_tasks(session_id).await {
+                        tracing::debug!(session = %session_id, error = %e, "agent-tasks reset failed");
+                    }
+                });
+                app.status_msg = Some("plan / todos / tasks cleared".into());
+            }
+        }
+        KeyCode::Esc => buf.clear(),
+        KeyCode::Up | KeyCode::Down => {
+            // History recall — whatever the agent retrieves is opaque
+            // to us. Reset rather than misattribute the recalled line.
+            buf.clear();
+        }
+        _ => {}
+    }
+}
+
 fn spawn_agent_tasks_fetch(app: &mut App, client: &Client, id: Uuid) {
     let Some(tx) = app.agent_tasks_tx.clone() else {
         return;

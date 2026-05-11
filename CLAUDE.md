@@ -106,7 +106,7 @@ Per-tool spellings (canonical):
 | codex    | `--dangerously-bypass-approvals-and-sandbox`|
 | cursor   | `--force`                                   |
 | gemini   | `--yolo`                                    |
-| hermes   | (none)                                      |
+| hermes   | `--yolo`                                    |
 | opencode | (unverified — currently `None`)             |
 | aider    | (unverified — currently `None`)             |
 

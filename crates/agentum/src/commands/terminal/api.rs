@@ -318,6 +318,26 @@ impl Client {
         Ok(resp.json::<AgentTaskState>().await?)
     }
 
+    /// `POST /api/sessions/{id}/agent-tasks/reset` — wipe the cached
+    /// plan/todos/tasks for this session on the daemon and fast-forward
+    /// the transcript cursor past anything already on disk. Used by the
+    /// TUI when the user runs `/clear` (or `\clear`) inside the agent
+    /// pane so the right-side panel mirrors the agent's own context
+    /// wipe instead of leaving stale entries behind. 204 No Content on
+    /// success.
+    pub async fn reset_agent_tasks(&self, id: Uuid) -> Result<()> {
+        let url = self
+            .base
+            .join(&format!("/api/sessions/{id}/agent-tasks/reset"))?;
+        let resp = self.http.post(url).bearer_auth(&self.token).send().await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("{status} — {body}");
+        }
+        Ok(())
+    }
+
     /// `GET /api/fs/list` — enumerate directories under `path` (or `$HOME`
     /// if `path` is `None`). Mirrors the web `DirPicker`'s feed for the
     /// TUI's workdir picker overlay.

@@ -4,6 +4,27 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.21] — 2026-05-11
+
+### Added
+- **Plan / Todos / Tasks panel mirrors `/clear` in the agent.** Typing
+  `/clear` (or `\clear`) inside the terminal pane and pressing Enter
+  now wipes the right-side panel in lockstep with the agent's own
+  context wipe. Implemented in two pieces:
+  - The TUI shadows each session's current input line as a best-effort
+    line buffer (per-session, behind `app.term_input_lines`). On
+    Enter, a trimmed buffer that equals `/clear` triggers an immediate
+    local cache clear + a fire-and-forget POST to the daemon. The
+    shadow resets on Esc, Ctrl-anything, arrow keys, and after every
+    Enter so partial typing or history recall doesn't false-positive.
+  - New daemon endpoint `POST /api/sessions/{id}/agent-tasks/reset`
+    resets the `TranscriptStore` slot to `AgentTaskState::default()`
+    **and** fast-forwards the file cursor to the current end-of-file
+    so a subsequent FS-watcher refresh doesn't repaint the cleared
+    state from the already-written transcript. Broadcasts
+    `agent_tasks.updated` so other connected clients (dashboard, peer
+    TUIs) also see the wipe.
+
 ## [0.7.20] — 2026-05-11
 
 ### Fixed
