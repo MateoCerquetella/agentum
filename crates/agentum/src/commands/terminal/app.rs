@@ -1881,6 +1881,7 @@ pub async fn run_loop(
             app.right_panel_visible,
             app.lazygit_width,
             app.term_split_pct,
+            ui::should_show_reconnect_ui(&app),
         );
         // Cache for the next mouse event — handlers need to know which
         // pane the cursor is over, which only the layout knows.

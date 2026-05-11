@@ -26,6 +26,10 @@ use super::theme::Palette;
 #[derive(Clone, Copy)]
 pub struct Areas {
     pub title: Rect,
+    /// Sticky strip between title and body, shown when the events-bus
+    /// WS has failed to reconnect ≥ 2 times. Zero-sized when hidden so
+    /// the body claims the row back without a re-layout.
+    pub banner: Rect,
     pub tree: Rect,
     /// Primary (left) terminal pane. Always present.
     pub terminal: Rect,
@@ -75,6 +79,7 @@ pub fn compute_layout(
     right_panel_visible: bool,
     lazygit_width: u16,
     term_split_pct: u16,
+    show_banner: bool,
 ) -> Areas {
     // Right panel is suppressed in fullscreen and on terminals too
     // narrow to host it without crushing the terminal area. It stays
@@ -99,6 +104,7 @@ pub fn compute_layout(
         };
         return Areas {
             title: empty,
+            banner: empty,
             tree: empty,
             terminal: term_left,
             terminal_right: term_right,
@@ -108,10 +114,15 @@ pub fn compute_layout(
         };
     }
 
+    // Banner sits between title and body. Height 0 when hidden so the
+    // body reclaims the row instead of a re-layout flicker each time the
+    // ws bus flips state.
+    let banner_h: u16 = if show_banner { 1 } else { 0 };
     let v = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
+            Constraint::Length(banner_h),
             Constraint::Min(3),
             Constraint::Length(1),
         ])
@@ -124,7 +135,7 @@ pub fn compute_layout(
     let tw = if sidebar_hidden {
         0
     } else {
-        let max_tree = v[1].width.saturating_sub(20);
+        let max_tree = v[2].width.saturating_sub(20);
         tree_width.min(max_tree)
     };
 
@@ -142,7 +153,7 @@ pub fn compute_layout(
     // first (handled below in the `rw` calc) — keeping lazygit pinned
     // right is the explicit user preference.
     let lw = if lw_target == 0
-        || v[1].width.saturating_sub(tw).saturating_sub(lw_target) < 20
+        || v[2].width.saturating_sub(tw).saturating_sub(lw_target) < 20
     {
         // Not enough room for a dedicated column: signal the in-pane
         // split fallback by leaving lw at zero.
@@ -155,7 +166,7 @@ pub fn compute_layout(
     // would push the terminal pane below its 20-col floor — counting
     // both the lazygit outer column and the right panel together.
     let rw = if show_right
-        && v[1]
+        && v[2]
             .width
             .saturating_sub(tw)
             .saturating_sub(lw)
@@ -174,7 +185,7 @@ pub fn compute_layout(
             Constraint::Length(rw),
             Constraint::Length(lw),
         ])
-        .split(v[1]);
+        .split(v[2]);
 
     // When `lw > 0` the outer column owns the lazygit Rect; otherwise
     // we let `split_main` carve it out of the terminal area (the legacy
@@ -189,12 +200,13 @@ pub fn compute_layout(
 
     Areas {
         title: v[0],
+        banner: v[1],
         tree: body[0],
         terminal: term_left,
         terminal_right: term_right,
         lazygit: lazygit_rect,
         agent_tasks: agent_tasks_rect,
-        status: v[2],
+        status: v[3],
     }
 }
 
@@ -255,7 +267,24 @@ fn split_terminal(
     }
 }
 
+/// True when the connection has stayed bad long enough to be worth
+/// telling the user about — i.e. we've been connected before, then
+/// either disconnected, or the events-bus has failed at least its
+/// first retry. The 2-attempt floor debounces a typical sub-second
+/// blip so the banner doesn't flicker on every reconnect cycle.
+pub fn should_show_reconnect_ui(app: &App) -> bool {
+    if !app.was_connected {
+        return false;
+    }
+    match app.conn {
+        ConnState::Connected | ConnState::Connecting => false,
+        ConnState::Disconnected => true,
+        ConnState::Reconnecting { attempt, .. } => attempt >= 2,
+    }
+}
+
 pub fn draw(f: &mut Frame<'_>, app: &App) {
+    let show_reconnect = should_show_reconnect_ui(app);
     let areas = compute_layout(
         f.area(),
         app.lazygit_open(),
@@ -266,6 +295,7 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         app.right_panel_visible,
         app.lazygit_width,
         app.term_split_pct,
+        show_reconnect,
     );
     let p = &app.theme.palette;
 
@@ -276,6 +306,9 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
 
     if areas.title.height > 0 {
         draw_title(f, areas.title, app, p);
+    }
+    if areas.banner.height > 0 {
+        draw_reconnect_banner(f, areas.banner, app, p);
     }
     if areas.tree.width > 0 {
         draw_tree(f, areas.tree, app, p);
@@ -303,7 +336,6 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         draw_notifications(f, f.area(), app, p);
     }
 
-    let show_reconnect = app.was_connected && app.conn != ConnState::Connected;
     if show_reconnect {
         draw_reconnect_overlay(f, f.area(), app, p);
     }
@@ -2220,6 +2252,40 @@ fn draw_reconnect_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette)
         )),
     ];
     overlay_box(f, area, title, lines, 54, p);
+}
+
+/// Slim 1-row strip just under the title. Shown for as long as the
+/// events-bus WS hasn't reconnected (gated by `should_show_reconnect_ui`
+/// so a quick blip doesn't flicker the layout). Mirrors the modal
+/// overlay's wording so the user gets continuous reassurance without
+/// the modal taking over content.
+fn draw_reconnect_banner(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let dots = match app.tick_count % 4 {
+        0 => "   ",
+        1 => ".  ",
+        2 => ".. ",
+        _ => "...",
+    };
+    let label = match app.conn {
+        ConnState::Reconnecting { attempt, delay_ms } => {
+            let secs = delay_ms as f64 / 1000.0;
+            format!(" ⟳ reconnecting · attempt {attempt} · retrying in {secs:.1}s{dots}")
+        }
+        ConnState::Disconnected => format!(" ✗ disconnected · reconnecting{dots}"),
+        _ => return,
+    };
+    let para = Paragraph::new(Line::from(Span::styled(
+        label,
+        Style::default()
+            .fg(p.warning)
+            .bg(p.chrome_bg)
+            .add_modifier(Modifier::BOLD),
+    )))
+    .style(Style::default().bg(p.chrome_bg));
+    f.render_widget(para, area);
 }
 
 fn head(text: &str, p: &Palette) -> Line<'static> {

@@ -24,6 +24,21 @@ let nextToastId = 1;
 
 export const toasts: Writable<Toast[]> = writable([]);
 
+/**
+ * Live WS connection state, surfaced for the topbar offline banner.
+ * `idle` = haven't tried to connect yet (page just loaded);
+ * `connected` = socket open;
+ * `reconnecting` = socket closed, backoff in flight. `attempt` follows
+ *   the same counter as the WS handler so a `>= 2` test in the UI
+ *   debounces single-blip reconnects.
+ */
+export type ConnStatus =
+  | { state: 'idle' }
+  | { state: 'connected' }
+  | { state: 'reconnecting'; attempt: number; nextDelayMs: number };
+
+export const connStatus: Writable<ConnStatus> = writable({ state: 'idle' });
+
 function pushToast(t: Omit<Toast, 'id' | 'created_at'>) {
   const toast: Toast = { ...t, id: nextToastId++, created_at: Date.now() };
   toasts.update((xs) => [...xs, toast]);
@@ -82,6 +97,7 @@ function bind(socket: WebSocket) {
   socket.onopen = () => {
     reconnectAttempt = 0;
     connectedAt = Date.now();
+    connStatus.set({ state: 'connected' });
     // Drop any pending finished-toasts queued from before the
     // disconnect — the bus state is fresh now and replaying them
     // would lie about current activity.
@@ -100,9 +116,14 @@ function bind(socket: WebSocket) {
   };
   socket.onclose = () => {
     if (stopRequested) return;
-    // Linear backoff up to 8s.
+    // Exponential backoff up to 8s (matches the TUI's events-bus task).
     const delay = Math.min(1000 * 2 ** reconnectAttempt, 8000);
     reconnectAttempt += 1;
+    connStatus.set({
+      state: 'reconnecting',
+      attempt: reconnectAttempt,
+      nextDelayMs: delay,
+    });
     setTimeout(connect, delay);
   };
   socket.onerror = () => {
@@ -333,4 +354,7 @@ export function disconnect() {
   stopRequested = true;
   ws?.close();
   ws = null;
+  // Caller asked for shutdown; don't leave a stale "connected" status
+  // floating in the UI. Hide the banner by reverting to idle.
+  connStatus.set({ state: 'idle' });
 }

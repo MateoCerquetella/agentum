@@ -4,6 +4,17 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.9] — 2026-05-11
+
+### Added
+- **Offline / reconnecting banner across TUI and dashboard.** When the
+  events-bus WebSocket fails to reconnect after its first retry, both
+  surfaces now show a persistent indicator until the connection is
+  back. TUI gets a 1-row strip below the title bar; dashboard gets a
+  sticky strip below the topbar. Threshold is `attempt >= 2` so a
+  sub-second blip doesn't flicker the layout. Pre-existing TUI
+  reconnect overlay is gated on the same threshold for consistency.
+
 ## [0.7.8] — 2026-05-11
 
 ### Fixed

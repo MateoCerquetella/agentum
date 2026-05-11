@@ -3,6 +3,7 @@
   import '../app.css';
   import Sidebar from '$components/Sidebar.svelte';
   import Topbar from '$components/Topbar.svelte';
+  import ConnectionBanner from '$components/ConnectionBanner.svelte';
   import MobileNav from '$components/MobileNav.svelte';
   import TokenGate from '$components/TokenGate.svelte';
   import ToastStack from '$components/ToastStack.svelte';
@@ -130,6 +131,7 @@
         </button>
         <Topbar />
       {/if}
+      <ConnectionBanner />
       <div class="row">
         {#if !$fullscreen}<Sidebar />{/if}
         {#if drawerOpen && !$fullscreen}
