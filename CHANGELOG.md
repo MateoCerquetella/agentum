@@ -4,6 +4,27 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.14] — 2026-05-11
+
+### Fixed
+- **Workdir actually follows the Servers cycle now.** v0.7.13's
+  resolver kept a fallback that, when the user launched with
+  `--profile vps1` and Tab-cycled to "this machine" in the New
+  Session form, silently routed `/api/fs/list` through the active
+  vps1 client and returned vps1's `$HOME` — making it look like
+  the workdir wasn't moving with the cycle. The empty "" entry is
+  now only included in the cycle wheel when a real local-loopback
+  client is connected (`app.clients` has a `""` key); otherwise
+  Tab walks straight between configured peers. Successful refetches
+  clear any prior inline error; failed ones still surface the
+  reason and the workdir-stays-put outcome.
+- **`NewSessionForm::cycle_profile` takes a `has_local: bool` flag.**
+  Mechanical signature change to thread the loopback-availability
+  signal from the caller; the form's behaviour is otherwise the
+  same. Locked under five new unit tests
+  (`cycle_profile_tests::*`) covering the loopback / no-loopback /
+  multi-peer / unknown-starting-profile combinations.
+
 ## [0.7.13] — 2026-05-11
 
 ### Fixed

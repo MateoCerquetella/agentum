@@ -443,16 +443,25 @@ impl NewSessionForm {
         }
     }
 
-    /// Cycle the profile field through `available` plus the empty
-    /// string (which represents the current loopback / `--api`
-    /// connection). Wraps; preserves order. Used by Tab on the
+    /// Cycle the profile field through `available` plus optionally the
+    /// empty string (which represents the local loopback, rendered as
+    /// "this machine"). Wraps; preserves order. Used by Tab on the
     /// Profile field.
-    pub fn cycle_profile(&mut self, available: &[String]) {
-        // Build the wheel: empty string ("current") → every named
-        // profile in disk order. Empty string is always present so
-        // an ad-hoc connection without a named profile is still a
-        // selectable target.
-        let mut wheel: Vec<String> = vec![String::new()];
+    ///
+    /// `has_local` is `true` iff `app.clients` has a `""` key — i.e.
+    /// a real local-loopback connection is wired up. When `false`
+    /// (the user launched with `--profile vps1` and the local daemon
+    /// isn't connected), the empty entry is omitted so Tab doesn't
+    /// drop the form into a "this machine" state that has no client
+    /// behind it — that's the trap that made the workdir field look
+    /// like it wasn't following the cycle: target resolution would
+    /// silently fall back to the active server's `$HOME`, which is
+    /// the same path the field already had.
+    pub fn cycle_profile(&mut self, available: &[String], has_local: bool) {
+        let mut wheel: Vec<String> = Vec::new();
+        if has_local {
+            wheel.push(String::new());
+        }
         wheel.extend(available.iter().cloned());
         if wheel.len() <= 1 {
             return; // nothing to cycle through
@@ -3419,45 +3428,39 @@ async fn handle_new_session_key(
             NewSessionField::Profile => {
                 // Cycle through configured profiles plus an empty
                 // entry meaning the local loopback ("this machine").
-                // When only the empty entry exists (no profiles
-                // defined), advance to the next field so the user
-                // isn't trapped.
+                // The empty entry is only offered when a real local
+                // client is connected — otherwise cycling to "" would
+                // silently fall back to the active server's `$HOME`
+                // and the workdir field wouldn't appear to change.
                 let names: Vec<String> =
                     app.profiles.iter().map(|p| p.name.clone()).collect();
-                if names.is_empty() {
+                let has_local = app.clients.contains_key("");
+                if names.is_empty() && !has_local {
                     form.next_field();
                 } else {
                     let old_profile = form.profile.clone();
-                    form.cycle_profile(&names);
-                    // When the profile changes, fetch the default
-                    // workdir from the newly-selected server so the
-                    // user doesn't need to retype a path that may not
-                    // exist on the other machine.
-                    //
-                    // We resolve through `app.clients` first — the
-                    // empty-string key holds the actual local loopback
-                    // client when one is connected. Falling back to the
-                    // run-loop's `client` keeps things working when the
-                    // user launched with `--profile`: there's no
-                    // separate local entry in `app.clients`, but the
-                    // active client still lists *some* $HOME we can
-                    // pre-fill (rather than leaving the workdir stuck
-                    // on the previous server's path).
+                    form.cycle_profile(&names, has_local);
+                    // When the profile changes, fetch the new server's
+                    // `$HOME` and use it as the workdir. We resolve
+                    // strictly through `app.clients` now — no fallback
+                    // to the run-loop's client for the empty case,
+                    // because that fallback used to mask the
+                    // "no local connected" state by returning the
+                    // active server's `$HOME` (the bug the user hit).
                     if form.profile != old_profile {
                         let target_client = app
                             .clients
                             .get(form.profile.as_str())
-                            .and_then(|e| e.client.clone())
-                            .or_else(|| {
-                                if form.profile.is_empty() {
-                                    Some(client.clone())
-                                } else {
-                                    None
-                                }
-                            });
+                            .and_then(|e| e.client.clone());
                         if let Some(tc) = target_client {
                             match tc.list_dir(None).await {
-                                Ok(listing) => form.workdir = listing.path,
+                                Ok(listing) => {
+                                    form.workdir = listing.path;
+                                    // Clear any prior error: the new
+                                    // refetch succeeded, so the
+                                    // workdir field is authoritative.
+                                    form.error = None;
+                                }
                                 Err(e) => {
                                     // Surface the failure inline so the
                                     // user understands why the workdir
@@ -3474,8 +3477,12 @@ async fn handle_new_session_key(
                             }
                         } else {
                             form.error = Some(format!(
-                                "@{} isn't connected — try Ctrl-O to re-add",
-                                form.profile
+                                "{} isn't connected — try Ctrl-O to re-add",
+                                if form.profile.is_empty() {
+                                    "this machine".to_string()
+                                } else {
+                                    format!("@{}", form.profile)
+                                }
                             ));
                         }
                     }
@@ -5870,5 +5877,78 @@ mod merge_dedup_tests {
         assert_eq!(merged.len(), 2);
         assert_eq!(owners.get(&a).map(String::as_str), Some(""));
         assert_eq!(owners.get(&b).map(String::as_str), Some("macos"));
+    }
+}
+
+#[cfg(test)]
+mod cycle_profile_tests {
+    //! These tests lock the new contract: the empty "" entry only
+    //! appears in the cycle wheel when a real local-loopback client
+    //! is connected. Pre-fix, the wheel always included "" and
+    //! cycling to it would silently leave the workdir on the active
+    //! server's `$HOME` — which read as "workdir not following the
+    //! server switch."
+    use super::*;
+
+    fn new_form(profile: &str) -> NewSessionForm {
+        NewSessionForm::with_profile(profile.to_string(), String::new())
+    }
+
+    #[test]
+    fn cycle_with_local_includes_this_machine() {
+        // Loopback launch: one peer profile + a connected local
+        // client. Wheel = ["", "vps1"]. Tab from "" → "vps1" →
+        // back to "".
+        let mut form = new_form("");
+        form.cycle_profile(&["vps1".to_string()], true);
+        assert_eq!(form.profile, "vps1");
+        form.cycle_profile(&["vps1".to_string()], true);
+        assert_eq!(form.profile, "");
+    }
+
+    #[test]
+    fn cycle_without_local_skips_this_machine() {
+        // `--profile vps1` launch with no local loopback. Wheel is
+        // just ["vps1"]; cycling does nothing (form is trapped on
+        // the only reachable server, which is fine — there's no
+        // "this machine" to cycle to).
+        let mut form = new_form("vps1");
+        form.cycle_profile(&["vps1".to_string()], false);
+        assert_eq!(form.profile, "vps1");
+    }
+
+    #[test]
+    fn cycle_without_local_walks_multiple_peers() {
+        // `--profile vps1` launch with two peers and no local.
+        // Wheel = ["vps1", "vps2"]; Tab walks between them.
+        let mut form = new_form("vps1");
+        form.cycle_profile(&["vps1".to_string(), "vps2".to_string()], false);
+        assert_eq!(form.profile, "vps2");
+        form.cycle_profile(&["vps1".to_string(), "vps2".to_string()], false);
+        assert_eq!(form.profile, "vps1");
+    }
+
+    #[test]
+    fn cycle_with_local_walks_full_wheel() {
+        // Loopback + two peers. Wheel = ["", "vps1", "vps2"].
+        let mut form = new_form("");
+        let peers = vec!["vps1".to_string(), "vps2".to_string()];
+        form.cycle_profile(&peers, true);
+        assert_eq!(form.profile, "vps1");
+        form.cycle_profile(&peers, true);
+        assert_eq!(form.profile, "vps2");
+        form.cycle_profile(&peers, true);
+        assert_eq!(form.profile, "");
+    }
+
+    #[test]
+    fn cycle_with_unknown_starting_profile_lands_on_first() {
+        // Defensive: if the form's profile field somehow doesn't
+        // match anything in the wheel, treat that as index 0 so
+        // Tab still produces a sensible next step.
+        let mut form = new_form("ghost");
+        form.cycle_profile(&["vps1".to_string()], true);
+        // wheel = ["", "vps1"]; unknown → idx 0; (0+1) % 2 → "vps1"
+        assert_eq!(form.profile, "vps1");
     }
 }
