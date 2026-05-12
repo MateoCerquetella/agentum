@@ -168,10 +168,43 @@
     </a>
   </div>
 
-  <!-- Servers section: mirrors the TUI sidebar. Always shows the
-       full profile list — loopback included — so the user can see
-       "this machine" sitting alongside any configured peers without
-       having to open the topbar dropdown. -->
+  <!-- Sessions list (live updating, grouped by project). Sessions
+       come first now — they're what the user works in. Servers
+       sits beneath as the endpoint switcher / status strip. -->
+  <div class="sect sessions-sect">
+    <div class="sect-lbl">
+      <span>Sessions · {liveCount} live</span>
+      <button type="button" class="add" onclick={openNewSession} title="Spawn session" aria-label="Spawn session">+</button>
+    </div>
+    <div class="sessions-scroll">
+      {#each groups as g (g.project)}
+        <div class="group-head">
+          <span class="g-name">{g.project}</span>
+          <span class="g-count">{g.items.length}</span>
+        </div>
+        {#each g.items as s (s.id)}
+          <a
+            href={`/sessions/${s.id}`}
+            class="item"
+            class:active={s.id === activeSessionId}
+          >
+            <span class={`stat ${stateClass(s.status)}`}></span>
+            <span class="nm">{s.name}</span>
+            <span class="count">{s.tool}</span>
+          </a>
+        {/each}
+      {/each}
+      {#if $sessions.items.length === 0}
+        <div class="empty">No sessions yet.</div>
+      {/if}
+    </div>
+  </div>
+
+  <!-- Servers section: pinned to the bottom of the sidebar above
+       the footer. Always shows the full profile list — loopback
+       included — so the user can see "this machine" sitting
+       alongside any configured peers without having to open the
+       topbar dropdown. -->
   <div class="sect servers-sect">
     <div class="sect-lbl">
       <span>Servers</span>
@@ -200,36 +233,6 @@
         {/if}
       </button>
     {/each}
-  </div>
-
-  <!-- Sessions list (live updating, grouped by project) -->
-  <div class="sect sessions-sect">
-    <div class="sect-lbl">
-      <span>Sessions · {liveCount} live</span>
-      <button type="button" class="add" onclick={openNewSession} title="Spawn session" aria-label="Spawn session">+</button>
-    </div>
-    <div class="sessions-scroll">
-      {#each groups as g (g.project)}
-        <div class="group-head">
-          <span class="g-name">{g.project}</span>
-          <span class="g-count">{g.items.length}</span>
-        </div>
-        {#each g.items as s (s.id)}
-          <a
-            href={`/sessions/${s.id}`}
-            class="item"
-            class:active={s.id === activeSessionId}
-          >
-            <span class={`stat ${stateClass(s.status)}`}></span>
-            <span class="nm">{s.name}</span>
-            <span class="count">{s.tool}</span>
-          </a>
-        {/each}
-      {/each}
-      {#if $sessions.items.length === 0}
-        <div class="empty">No sessions yet.</div>
-      {/if}
-    </div>
   </div>
 
   <div class="footer">

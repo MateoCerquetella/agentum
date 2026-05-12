@@ -3873,7 +3873,16 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
 
     // Picker overlay: input goes there as long as it's open.
     if form.picker.is_some() {
-        handle_dir_picker_key(&mut form, key, client).await;
+        // Resolve the *target* profile's client so drill-in /
+        // pop-up queries hit the right daemon. Otherwise picking
+        // a peer server in the Servers field and then navigating
+        // the picker would walk the local laptop's tree instead.
+        let target_client = app
+            .clients
+            .get(form.profile.as_str())
+            .and_then(|e| e.client.clone());
+        let target_ref = target_client.as_ref().unwrap_or(client);
+        handle_dir_picker_key(&mut form, key, target_ref).await;
         app.overlay = Overlay::NewSession(form);
         return;
     }
@@ -3965,7 +3974,15 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
                 });
             }
             NewSessionField::Workdir => {
-                if !autocomplete_workdir(&mut form, client).await {
+                // Tab autocompletion has to resolve against the
+                // target server's filesystem too — same reason as
+                // the Enter→open_dir_picker path above.
+                let target_client = app
+                    .clients
+                    .get(form.profile.as_str())
+                    .and_then(|e| e.client.clone());
+                let target_ref = target_client.as_ref().unwrap_or(client);
+                if !autocomplete_workdir(&mut form, target_ref).await {
                     form.next_field();
                 }
             }
@@ -3996,7 +4013,22 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
             } else {
                 Some(form.workdir.trim().to_string())
             };
-            let picker = open_dir_picker(seed.as_deref(), client).await;
+            // Open the picker on the *target* server's filesystem —
+            // otherwise picking a peer profile in the Servers field
+            // and then pressing Enter on Workdir would browse the
+            // local laptop's tree and show no matching paths.
+            let target_client = app
+                .clients
+                .get(form.profile.as_str())
+                .and_then(|e| e.client.clone());
+            let target_ref = target_client.as_ref().unwrap_or(client);
+            let picker = open_dir_picker(seed.as_deref(), target_ref).await;
+            if target_client.is_none() && !form.profile.is_empty() {
+                form.error = Some(format!(
+                    "{} isn't connected — listing local fs",
+                    profile_label(&form.profile)
+                ));
+            }
             form.picker = Some(picker);
         }
         KeyCode::Enter if matches!(form.field, NewSessionField::UpAfter) => {
@@ -5062,7 +5094,16 @@ async fn handle_rename_key(app: &mut App, key: KeyEvent, client: &Client) {
                 return;
             }
             let id = state.id;
-            match client.rename_session(id, trimmed).await {
+            // Route the PATCH to the daemon that actually owns this
+            // session — multi-server aggregation means the highlighted
+            // row may belong to a peer profile, and hitting the default
+            // client would 404 because the session id doesn't exist
+            // there. Falls back to the default for untagged sessions.
+            let target = app
+                .client_for_session(id)
+                .cloned()
+                .unwrap_or_else(|| client.clone());
+            match target.rename_session(id, trimmed).await {
                 Ok(updated) => {
                     app.overlay = Overlay::None;
                     app.status_msg = Some(format!("renamed → {}", updated.name));
