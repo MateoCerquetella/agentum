@@ -58,3 +58,8 @@ sha2               = "0.10"
 # Workdir picker (`agentum new --pick`)
 which              = "7"
 tempfile           = "3"
+
+# Detach the auto-spawned `agentum serve` sidecar from the TUI's
+# controlling terminal so it survives the user closing the alt-screen.
+[target.'cfg(unix)'.dependencies]
+libc               = "0.2"

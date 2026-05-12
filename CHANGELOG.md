@@ -4,6 +4,37 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.27] — 2026-05-12
+
+### Added
+- **`agentum terminal` auto-spawns a local `agentum serve` sidecar
+  and auto-bootstraps an account on a fresh host.** You shouldn't
+  have to remember `agentum serve &` and a manual `agentum auth add`
+  before launching the TUI on your own machine — running on the host
+  you're already at should just work. Concretely:
+  - If the loopback (127.0.0.1:8822) doesn't answer at startup, the
+    TUI now forks `agentum serve` in the background under its own
+    process group (so it survives the alt-screen exit and gets
+    reused next launch) and waits up to 3 s for it to come up.
+    Daemon logs land in `$XDG_STATE_HOME/agentum/autoserve.log`.
+  - Once the daemon is reachable, if `auth/status` reports
+    `needs_setup = true` (zero users registered), the TUI calls
+    `POST /api/auth/register` with username `local` and a random
+    32-char password, caches the bearer token in
+    `credentials.toml`, and walks straight into the alt-screen
+    without a login prompt. The anonymous-register fast path is
+    strictly gated to 127.0.0.1 / localhost / ::1 — never fires
+    on a remote daemon (which would be a security footgun).
+  - Cached tokens from prior runs are still preferred, so
+    subsequent launches don't re-register or re-issue tokens.
+  - Auto-start is skipped when `--profile` / `--api` is explicit —
+    those callers know exactly which daemon they want.
+
+  Net effect: `agentum terminal` on a fresh Mac with nothing
+  pre-configured drops straight into the TUI driving the local
+  daemon, no `agentum serve &`, no "add a server" prompt, no
+  signup screen.
+
 ## [0.7.26] — 2026-05-12
 
 ### Changed

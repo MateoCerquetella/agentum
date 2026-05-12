@@ -190,6 +190,67 @@ pub async fn login(base: &Url, trust: &TlsTrust, username: &str, password: &str)
     Ok(r.token)
 }
 
+/// `GET /api/auth/status`. `needs_setup = true` means zero users
+/// exist on this daemon and `register` is open anonymously — the
+/// signal we use to decide whether to auto-bootstrap a local account
+/// instead of prompting the user for credentials.
+pub async fn auth_needs_setup(base: &Url, trust: &TlsTrust) -> Result<bool> {
+    let url = base.join("/api/auth/status")?;
+    let http = build_http(trust)?;
+    let resp = http
+        .get(url)
+        .send()
+        .await
+        .context("auth status request failed")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        bail!("{} — {}", status, body);
+    }
+    #[derive(serde::Deserialize)]
+    struct Resp {
+        needs_setup: bool,
+    }
+    let r: Resp = resp.json().await?;
+    Ok(r.needs_setup)
+}
+
+/// POST /api/auth/register. Same payload as login. Only succeeds
+/// when the daemon reports `needs_setup = true` (zero users yet);
+/// after that the route is closed for the rest of the daemon's
+/// lifetime. Returns the freshly-issued bearer token.
+pub async fn register(
+    base: &Url,
+    trust: &TlsTrust,
+    username: &str,
+    password: &str,
+) -> Result<String> {
+    let url = base.join("/api/auth/register")?;
+    let http = build_http(trust)?;
+    #[derive(Serialize)]
+    struct Body<'a> {
+        username: &'a str,
+        password: &'a str,
+    }
+    let resp = http
+        .post(url)
+        .json(&Body { username, password })
+        .send()
+        .await
+        .context("register request failed")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        bail!("{} — {}", status, body);
+    }
+    #[derive(serde::Deserialize)]
+    struct Resp {
+        token: String,
+    }
+    let r: Resp = resp.json().await?;
+    Ok(r.token)
+}
+
 impl Client {
     pub fn new(base: Url, token: String, trust: TlsTrust) -> Result<Self> {
         let http = build_http(&trust)?;

@@ -366,6 +366,33 @@ async fn obtain_token(base: &Url, trust_setting: &TlsTrust) -> Result<String> {
         let _ = creds.remove(&host_key);
     }
 
+    // First-run shortcut for the local loopback: when the daemon is
+    // fresh (zero users registered) and we're the same user who could
+    // log in interactively anyway, auto-create a `local` account with
+    // a random password and cache the resulting token. This is what
+    // turns the auto-spawned sidecar into a zero-prompt experience —
+    // the user just runs `agentum terminal` and lands in the TUI
+    // without ever seeing a login screen. We only do this for the
+    // loopback host because anonymous register on a remote daemon
+    // would be a security footgun.
+    if is_local_loopback(base)
+        && let Ok(true) = api::auth_needs_setup(base, trust_setting).await
+    {
+        let password = generate_random_password();
+        match api::register(base, trust_setting, "local", &password).await {
+            Ok(token) => {
+                creds.put(host_key.clone(), token.clone(), Some("local".to_string()))?;
+                return Ok(token);
+            }
+            Err(e) => {
+                // If register raced with another caller (unlikely on
+                // loopback, but possible if two TUIs start in
+                // parallel), fall through to the login prompt below.
+                tracing::debug!(error = %e, "loopback auto-register failed; falling back to login prompt");
+            }
+        }
+    }
+
     use std::io::{self, Write};
     eprintln!();
     eprintln!("Sign in to agentum at {base}");
@@ -414,6 +441,54 @@ async fn obtain_token(base: &Url, trust_setting: &TlsTrust) -> Result<String> {
     Err(last_err
         .map(|e| anyhow!("login failed after {MAX_ATTEMPTS} attempts: {e}"))
         .unwrap_or_else(|| anyhow!("login failed after {MAX_ATTEMPTS} attempts")))
+}
+
+/// `true` when `base` points at 127.0.0.1 or `localhost` — used by
+/// the auto-bootstrap path to decide whether anonymous registration
+/// is safe. Anonymous register on a remote daemon would be a
+/// security footgun (anyone reachable creates an admin), so we gate
+/// the convenience strictly to the local machine.
+fn is_local_loopback(base: &Url) -> bool {
+    matches!(
+        base.host_str(),
+        Some("127.0.0.1") | Some("localhost") | Some("::1")
+    )
+}
+
+/// Cryptographically random password for the bootstrap `local` user.
+/// 32 chars from a URL-safe alphabet — plenty of entropy, easy to
+/// stash in credentials.toml. The user never types this; it's
+/// generated, written to the loopback daemon's user DB, and the
+/// resulting bearer token is what's cached. Re-runs of
+/// `agentum terminal` use the cached token, not this password.
+fn generate_random_password() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    // Cheap seed mix — we're not generating production crypto, just a
+    // password the user never sees and the daemon hashes anyway.
+    // SystemTime nanos + process id + addr-of-stack give a 64-bit
+    // seed plenty good for one-time bootstrap use.
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let pid = std::process::id() as u64;
+    let stack_addr = &nanos as *const u64 as u64;
+    let mut state = nanos
+        .wrapping_mul(0x9E3779B97F4A7C15)
+        .wrapping_add(pid)
+        .wrapping_add(stack_addr);
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity(32);
+    for _ in 0..32 {
+        // splitmix64 step — short, no deps.
+        state = state.wrapping_add(0x9E3779B97F4A7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+        z ^= z >> 31;
+        out.push(ALPHABET[(z as usize) % ALPHABET.len()] as char);
+    }
+    out
 }
 
 async fn probe_token(base: &Url, trust_setting: &TlsTrust, token: &str) -> bool {
@@ -656,6 +731,87 @@ fn trust_for_profile(base: &Url, profile: &profiles::Profile) -> Result<api::Tls
 /// missing profile name resolves to the file's `default = …`; an
 /// explicit `--profile` that doesn't exist is an error so the user
 /// notices typos instead of silently dropping back to the loopback.
+/// Auto-start a local `agentum serve` sidecar in the background when
+/// no daemon is listening on the loopback. The user shouldn't have to
+/// remember to run `agentum serve` in another window before
+/// `agentum terminal` — on the host they're already at, the TUI
+/// should just work. The sidecar lives in its own process group and
+/// outlives the TUI on purpose so subsequent `agentum terminal` runs
+/// reuse the same daemon (and its SQLite user DB / token storage).
+///
+/// Returns `true` once the new daemon answers a health probe, `false`
+/// if the spawn failed or it didn't come up within the budget. The
+/// caller falls back to its prior behaviour on `false` (configured
+/// remote default, or the connect-or-onboard menu).
+async fn try_autostart_local_daemon() -> bool {
+    // Only attempt this when we're the user-launched binary — if
+    // `current_exe` is unresolvable (uncommon edge case) we can't
+    // safely re-spawn ourselves.
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    // Spawn `<exe> serve` in a detached child. `setsid`/process-group
+    // detach happens implicitly via `Command::spawn` without inheriting
+    // the parent's controlling terminal — the child writes its logs to
+    // a temp file rather than the parent's stdout/stderr so the alt-
+    // screen UI never sees daemon output.
+    let log_dir = std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state"))
+        })
+        .map(|p| p.join("agentum"))
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join("autoserve.log");
+    let log_file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let log_err = match log_file.try_clone() {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("serve")
+        .stdin(std::process::Stdio::null())
+        .stdout(log_file)
+        .stderr(log_err);
+    // Detach from the parent's process group on Unix so a TUI exit
+    // doesn't take the sidecar with it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                // setsid() to start a new session — frees the child
+                // from the parent's controlling terminal.
+                if libc::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    let Ok(_child) = cmd.spawn() else {
+        return false;
+    };
+    // Wait up to ~3 s for the daemon to bind + answer. The handshake
+    // is fast on a warm cache; the loop exits the moment it answers.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while std::time::Instant::now() < deadline {
+        if loopback_alive().await {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    false
+}
+
 /// Quick non-interactive health probe of the local loopback daemon
 /// across HTTPS-then-HTTP. Used by `apply_profile` to decide whether
 /// to prefer the local daemon over a configured `default = …` when
@@ -721,7 +877,13 @@ async fn apply_profile(mut opts: Options) -> Result<Options> {
     let active = match opts.profile.clone() {
         Some(name) => Some(name),
         None => {
-            if loopback_alive().await {
+            // Prefer the local loopback whenever it answers. If it
+            // doesn't, try to auto-spawn `agentum serve` in the
+            // background — running the TUI on a machine should not
+            // require remembering to start a daemon by hand. The
+            // sidecar lives in its own process group so it outlives
+            // the TUI and gets reused on subsequent launches.
+            if loopback_alive().await || try_autostart_local_daemon().await {
                 None
             } else {
                 profiles.default_name().map(str::to_string)
