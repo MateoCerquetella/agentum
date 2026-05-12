@@ -126,6 +126,9 @@ export interface Health {
   /// optional features supported" so we don't ship messages the server
   /// will misinterpret as keystrokes (e.g. PTY resize).
   capabilities?: string[];
+  /// Short hostname of the box this daemon runs on. Absent on older
+  /// daemons; clients fall back to the generic "this server" label.
+  hostname?: string;
 }
 
 import {

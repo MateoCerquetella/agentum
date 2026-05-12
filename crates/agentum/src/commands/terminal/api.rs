@@ -21,6 +21,7 @@ use rustls::ClientConfig;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::{Connector, connect_async_tls_with_config, tungstenite::Message as WsMsg};
 use url::Url;
 use uuid::Uuid;
@@ -595,6 +596,24 @@ impl Client {
                         s
                     }
                     Err(e) => {
+                        // Terminal-state HTTP responses: 404 means the daemon
+                        // we're asking has no record of this session (we're
+                        // pointing at the wrong daemon, or the session was
+                        // deleted). 401/403 means our token isn't valid for
+                        // this endpoint. Retrying any of these forever just
+                        // spams the errors overlay with the same line — bail
+                        // and let the user act (re-select, log back in,
+                        // restart). Other errors (TCP, TLS, transient
+                        // upgrade failures) keep the existing backoff loop.
+                        if let WsError::Http(ref resp) = e {
+                            let status = resp.status().as_u16();
+                            if matches!(status, 401 | 403 | 404) {
+                                let _ = tx.send(TerminalMsg::Error(format!(
+                                    "ws connect: HTTP {status} — session unavailable on this daemon (give up)"
+                                )));
+                                return;
+                            }
+                        }
                         attempt = attempt.saturating_add(1);
                         let delay = backoff_delay(attempt);
                         // Surface the underlying error once per backoff cycle so

@@ -11,6 +11,11 @@
     setActiveProfile,
     type Profile
   } from '$lib/profiles';
+  import {
+    fleet,
+    profileDisplayLabel,
+    profileHostHint
+  } from '$stores/fleet';
 
   /**
    * Map server-side Status onto the design's state vocabulary used for
@@ -80,14 +85,23 @@
   });
 
   // Mirror the TUI's SERVERS sidebar section: list every configured
-  // profile, label loopback (empty baseUrl) as "this machine", and
-  // make the active profile read at a glance. Clicking a server
-  // switches the dashboard's active endpoint via the same reload
-  // path the topbar EndpointSwitcher uses — keeps every store, WS,
-  // and cache coherent with the new origin without per-store
-  // re-init logic.
+  // profile with its real hostname (auto-discovered via the fleet
+  // store's `/api/health` probes), label loopback rows with the
+  // server's identity instead of a generic "this machine", and make
+  // the active profile read at a glance. Clicking a server switches
+  // the dashboard's active endpoint via the same reload path the
+  // topbar EndpointSwitcher uses — keeps every store, WS, and cache
+  // coherent with the new origin without per-store re-init logic.
   function serverLabel(p: Profile): string {
-    return p.baseUrl ? p.label : 'this machine';
+    return profileDisplayLabel(p, $fleet[p.id]);
+  }
+  function serverHostHint(p: Profile): string {
+    return profileHostHint(p);
+  }
+  function dotClass(p: Profile): string {
+    const e = $fleet[p.id];
+    if (!e) return 'unknown';
+    return e.status;
   }
   function pickServer(id: string) {
     if (id === $activeProfileId) return;
@@ -170,10 +184,19 @@
         onclick={() => pickServer(p.id)}
         title={p.baseUrl || 'current origin'}
       >
-        <span class="srv-dot" class:loopback={!p.baseUrl}></span>
-        <span class="srv-name">{serverLabel(p)}</span>
+        <span class={`srv-dot ${dotClass(p)}`} class:loopback={!p.baseUrl}></span>
+        <div class="srv-text">
+          <span class="srv-name">{serverLabel(p)}</span>
+          {#if serverHostHint(p)}
+            <span class="srv-host">{serverHostHint(p)}</span>
+          {/if}
+        </div>
         {#if p.id === $activeProfileId}
           <span class="srv-tag">active</span>
+        {:else if $fleet[p.id]?.status === 'unreachable'}
+          <span class="srv-tag bad">unreachable</span>
+        {:else if $fleet[p.id]?.status === 'login-needed'}
+          <span class="srv-tag warn">login</span>
         {/if}
       </button>
     {/each}
@@ -276,17 +299,35 @@
     width: 7px;
     height: 7px;
     border-radius: var(--radius-pill, 50%);
-    background: var(--cta);
+    background: var(--fg-3);
     flex: 0 0 auto;
   }
-  /* "this machine" / loopback gets a different glyph so the user
-     reads it as a special row even before checking the label. */
-  .srv-dot.loopback {
-    background: var(--green, #2ea043);
+  /* Fleet-status colours: green = reachable & authed, red = no daemon
+     answering, amber = answering but our token's no good. Unknown is
+     the boot state before the first probe lands. */
+  .srv-dot.live { background: var(--green, #2ea043); }
+  .srv-dot.unreachable { background: var(--crash, #ff4d4f); }
+  .srv-dot.login-needed { background: var(--warn, #d4a017); }
+  .srv-dot.unknown { background: var(--fg-3); }
+  /* Loopback row falls back to green when we have no status yet — the
+     local daemon is the most reliable target, so optimistic is fine. */
+  .srv-dot.loopback.unknown { background: var(--green, #2ea043); }
+  .srv-text {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
   }
   .srv-name {
-    flex: 1;
     font-size: 12.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .srv-host {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--fg-3);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -298,6 +339,8 @@
     letter-spacing: 0.06em;
     color: var(--cta);
   }
+  .srv-tag.bad { color: var(--crash, #ff4d4f); }
+  .srv-tag.warn { color: var(--warn, #d4a017); }
 
   .sessions-sect {
     flex: 1;

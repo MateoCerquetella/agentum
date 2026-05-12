@@ -19,6 +19,7 @@
   import { tweaks, applyTweaks } from '$stores/tweaks';
   import { startThemeBridge, pullPreferences } from '$stores/theme-bridge';
   import { get as getStore } from 'svelte/store';
+  import { refreshFleet } from '$stores/fleet';
   import {
     palette, togglePalette, closePalette,
     shortcuts, openShortcuts, closeShortcuts
@@ -91,6 +92,15 @@
     // idempotent and safe pre-auth; `pullPreferences` no-ops when the
     // request fails (older daemon, unauthenticated, offline).
     startThemeBridge();
+    // Kick off the per-profile health fanout immediately. Each entry's
+    // hostname/version/status drives the sidebar + topbar labels — the
+    // generic "this server" placeholder gets replaced with the real
+    // hostname as soon as the first probe lands. Doesn't depend on
+    // auth: /api/health is public.
+    void refreshFleet();
+    // Re-probe every 20s so a transient offline server clears on its
+    // own and the labels self-heal after a daemon restart.
+    const fleetTimer = setInterval(() => void refreshFleet(), 20_000);
     const unsub = authState.subscribe((s) => {
       if (s === 'ok') {
         // Auth just landed — sync from the server so the active theme
@@ -100,6 +110,9 @@
         startEventBridge();
         startHostMetrics();
         startAttentionBridge();
+        // Re-probe immediately after login so the chip refreshes the
+        // status of any profile whose token we just acquired.
+        void refreshFleet();
       } else {
         stopEventBridge();
         disconnectEvents();
@@ -107,6 +120,7 @@
     });
     return () => {
       window.removeEventListener('keydown', onKey, true);
+      clearInterval(fleetTimer);
       unsub();
     };
   });

@@ -17,6 +17,11 @@
     removeProfile,
     type Profile
   } from '$lib/profiles';
+  import {
+    fleet,
+    profileDisplayLabel,
+    profileHostHint
+  } from '$stores/fleet';
 
   let open = $state(false);
   let formOpen = $state(false);
@@ -29,14 +34,16 @@
     $profiles.find((p) => p.id === $activeProfileId) ?? $profiles[0]
   );
 
-  function shortBase(p: Profile): string {
-    if (!p.baseUrl) return 'this server';
-    try {
-      const u = new URL(p.baseUrl);
-      return u.host;
-    } catch {
-      return p.baseUrl;
-    }
+  function dotClass(p: Profile): string {
+    const e = $fleet[p.id];
+    if (!e) return 'unknown';
+    return e.status;
+  }
+  function rowHost(p: Profile): string {
+    const hint = profileHostHint(p);
+    if (hint) return hint;
+    const hostname = $fleet[p.id]?.hostname;
+    return hostname ? `${hostname} · this origin` : 'this origin';
   }
 
   function pick(id: string) {
@@ -103,8 +110,9 @@
     onclick={() => (open = !open)}
     title="Active agentum server — click to switch"
   >
-    <span class="dot"></span>
-    <span class="label">{active?.label ?? 'this server'}</span>
+    <span class="dot" class:unreachable={active && dotClass(active) === 'unreachable'}
+                       class:login={active && dotClass(active) === 'login-needed'}></span>
+    <span class="label">{active ? profileDisplayLabel(active, $fleet[active.id]) : 'this server'}</span>
     <span class="caret" aria-hidden="true">▾</span>
   </button>
 
@@ -118,8 +126,16 @@
             class="row-pick"
             onclick={() => pick(p.id)}
           >
-            <span class="r-label">{p.label}</span>
-            <span class="r-host">{shortBase(p)}</span>
+            <span class="r-label">
+              <span class="r-dot {dotClass(p)}"></span>
+              {profileDisplayLabel(p, $fleet[p.id])}
+              {#if $fleet[p.id]?.status === 'unreachable'}
+                <span class="r-bad">unreachable</span>
+              {:else if $fleet[p.id]?.status === 'login-needed'}
+                <span class="r-warn">login needed</span>
+              {/if}
+            </span>
+            <span class="r-host">{rowHost(p)}</span>
           </button>
           {#if $profiles.length > 1}
             <button
@@ -201,6 +217,37 @@
     height: 6px;
     border-radius: 50%;
     background: var(--green);
+  }
+  .dot.unreachable { background: var(--crash, #ff4d4f); }
+  .dot.login { background: var(--warn, #d4a017); }
+  .r-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--fg-3);
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+  .r-dot.live { background: var(--green); }
+  .r-dot.unreachable { background: var(--crash, #ff4d4f); }
+  .r-dot.login-needed { background: var(--warn, #d4a017); }
+  .r-dot.unknown { background: var(--fg-3); }
+  .r-bad {
+    margin-left: 6px;
+    color: var(--crash, #ff4d4f);
+    font-family: var(--mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .r-warn {
+    margin-left: 6px;
+    color: var(--warn, #d4a017);
+    font-family: var(--mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
   .label { letter-spacing: -0.005em; }
   .caret { color: var(--fg-3); font-size: 9px; }

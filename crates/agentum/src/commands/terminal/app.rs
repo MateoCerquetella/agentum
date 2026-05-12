@@ -2227,8 +2227,16 @@ pub async fn run_loop(
     // threading an extra `&mut Option<JoinHandle>` everywhere.
     if let Some(id) = app.selected {
         let (key_tx, key_rx) = mpsc::unbounded_channel::<TermOut>();
+        // Initial connect on startup: route through the owning server's
+        // client so a peer-owned initial selection (e.g. the user landed
+        // on a session that lives on the remote `@omarchy` daemon)
+        // doesn't 404 against the active daemon's WS endpoint. Falls
+        // back to the active client when the owner is unknown — the
+        // legacy path for sessions not yet tagged in `session_profile`.
+        let owner = app.client_for_session(id).cloned();
+        let stream_client = owner.unwrap_or_else(|| client.clone());
         // Initial connect on startup: no cached parser yet, no resume.
-        let h = client.open_terminal_stream(id, term_tx.clone(), key_rx, false);
+        let h = stream_client.open_terminal_stream(id, term_tx.clone(), key_rx, false);
         app.term_in = Some(key_tx);
         app.term_size = (0, 0); // force first resize once we know the pane size
         app.stream_handle_left = Some(h);
@@ -2427,34 +2435,52 @@ pub async fn run_loop(
                     // tooling stay coherent with the running TUI's
                     // sidebar without forcing a restart.
                     app.reload_profiles();
-                    match client.list_sessions().await {
-                        Ok(fresh) => {
-                            app.http_fail_count = 0;
-                            app.refresh_sessions(fresh);
-                            // Pre-warm the cache for any newly-discovered
-                            // sessions so the first nav to them is also a
-                            // pure cache hit. Existing ids skip via the
-                            // in-flight dedup or because the channel hasn't
-                            // delivered a stale fetch result yet.
-                            let new_ids: Vec<Uuid> = app
-                                .sessions
-                                .iter()
-                                .filter(|s| !app.agent_tasks.contains_key(&s.id))
-                                .map(|s| s.id)
-                                .collect();
-                            for id in new_ids {
-                                spawn_agent_tasks_fetch(&mut app, &client, id);
-                            }
-                        }
-                        Err(_) => {
-                            // Count consecutive periodic poll failures so
-                            // the reconnect banner can surface even when
-                            // the events-bus WS hasn't yet noticed the
-                            // daemon went away (TCP keepalive can lag the
-                            // HTTP layer by tens of seconds).
-                            app.http_fail_count =
-                                app.http_fail_count.saturating_add(1);
-                        }
+                    // Fan out to every live server in parallel. A single-
+                    // client poll here would wipe every peer-server
+                    // session within REFRESH_INTERVAL of boot — exactly
+                    // the "omarchy sessions disappeared from the sidebar"
+                    // bug. We still track the active client's status so
+                    // the reconnect banner surfaces even when the events
+                    // bus hasn't yet noticed the daemon went away (TCP
+                    // keepalive can lag the HTTP layer by tens of seconds).
+                    let active_key = app.active_profile.clone().unwrap_or_default();
+                    let probes: Vec<_> = app
+                        .live_clients()
+                        .map(|(name, c)| {
+                            let name = name.to_string();
+                            let c = c.clone();
+                            async move { (name, c.list_sessions().await) }
+                        })
+                        .collect();
+                    let results = futures_util::future::join_all(probes).await;
+                    let active_ok = results
+                        .iter()
+                        .any(|(n, r)| n == &active_key && r.is_ok());
+                    if active_ok {
+                        app.http_fail_count = 0;
+                    } else {
+                        app.http_fail_count = app.http_fail_count.saturating_add(1);
+                    }
+                    let per_profile: Vec<(String, Vec<Session>)> = results
+                        .into_iter()
+                        .map(|(n, r)| (n, r.unwrap_or_default()))
+                        .collect();
+                    let (merged, owners) = merge_sessions_dedup(per_profile, &active_key);
+                    app.refresh_sessions_with_owners(merged, owners);
+                    // Pre-warm the cache for any newly-discovered
+                    // sessions so the first nav to them is also a pure
+                    // cache hit. `spawn_agent_tasks_fetch` routes to the
+                    // owning server's client via `client_for_session`,
+                    // so peer-owned sessions warm against the right
+                    // daemon. Existing ids skip via the in-flight dedup.
+                    let new_ids: Vec<Uuid> = app
+                        .sessions
+                        .iter()
+                        .filter(|s| !app.agent_tasks.contains_key(&s.id))
+                        .map(|s| s.id)
+                        .collect();
+                    for id in new_ids {
+                        spawn_agent_tasks_fetch(&mut app, &client, id);
                     }
                     // Slow-path safety net for the agent-tasks panel:
                     // events do the heavy lifting, but this catch-up
@@ -5040,10 +5066,8 @@ async fn handle_rename_key(app: &mut App, key: KeyEvent, client: &Client) {
                 Ok(updated) => {
                     app.overlay = Overlay::None;
                     app.status_msg = Some(format!("renamed → {}", updated.name));
-                    if let Ok(fresh) = client.list_sessions().await {
-                        app.refresh_sessions(fresh);
-                        app.tree.select_session(id);
-                    }
+                    refresh_all(app).await;
+                    app.tree.select_session(id);
                 }
                 Err(e) => {
                     state.error = Some(format!("{e}"));
@@ -5146,10 +5170,8 @@ async fn run_palette_action(
         ActionKind::ToggleLazygit => toggle_lazygit(app, lg_tx).await,
         ActionKind::LazygitCheats => app.overlay = Overlay::LazygitCheats,
         ActionKind::Refresh => {
-            if let Ok(fresh) = client.list_sessions().await {
-                app.refresh_sessions(fresh);
-                app.status_msg = Some("refreshed".into());
-            }
+            refresh_all(app).await;
+            app.status_msg = Some("refreshed".into());
         }
         ActionKind::SpawnTerminal => {
             spawn_plain_terminal(app, client).await;
@@ -6112,17 +6134,13 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                 app.awaiting_input.remove(&id);
                 app.idle.remove(&id);
             }
-            if let Ok(fresh) = client.list_sessions().await {
-                app.refresh_sessions(fresh);
-            }
+            refresh_all(app).await;
         }
         "session.started" => {
             // Silent — matches the dashboard, which suppresses started
             // events because the initial bus replay would spam toasts on
             // every reconnect.
-            if let Ok(fresh) = client.list_sessions().await {
-                app.refresh_sessions(fresh);
-            }
+            refresh_all(app).await;
         }
         "session.stopped" => {
             push_notification(app, format!("{name} stopped"), None, NotifKind::Info);
@@ -6130,9 +6148,7 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                 app.awaiting_input.remove(&id);
                 app.idle.remove(&id);
             }
-            if let Ok(fresh) = client.list_sessions().await {
-                app.refresh_sessions(fresh);
-            }
+            refresh_all(app).await;
         }
         "watchdog.compact" => {
             push_notification(
@@ -6216,18 +6232,14 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
             }
         }
         "session.created" => {
-            if let Ok(fresh) = client.list_sessions().await {
-                app.refresh_sessions(fresh);
-            }
+            refresh_all(app).await;
         }
         "session.deleted" => {
             if let Some(id) = ev.session_id {
                 app.awaiting_input.remove(&id);
                 app.idle.remove(&id);
             }
-            if let Ok(fresh) = client.list_sessions().await {
-                app.refresh_sessions(fresh);
-            }
+            refresh_all(app).await;
         }
         "agent_tasks.updated" => {
             // Server tail-watcher saw new bytes in this session's
@@ -6250,21 +6262,17 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
         // the tree row label / tool chip update without manual refresh,
         // and we keep the cursor pinned to the affected session.
         "session.renamed" => {
-            if let Ok(fresh) = client.list_sessions().await {
-                app.refresh_sessions(fresh);
-                if let Some(id) = ev.session_id {
-                    app.tree.select_session(id);
-                }
+            refresh_all(app).await;
+            if let Some(id) = ev.session_id {
+                app.tree.select_session(id);
             }
             // No toast — the rename action itself already flashed a
             // status message. A second visible signal would be noise.
         }
         "session.tool_changed" => {
-            if let Ok(fresh) = client.list_sessions().await {
-                app.refresh_sessions(fresh);
-                if let Some(id) = ev.session_id {
-                    app.tree.select_session(id);
-                }
+            refresh_all(app).await;
+            if let Some(id) = ev.session_id {
+                app.tree.select_session(id);
             }
             // Surface the swap as an info toast so the user notices
             // without staring at the chip — the watchdog only fires
@@ -6373,15 +6381,13 @@ async fn spawn_plain_terminal(app: &mut App, client: &Client) {
             } else {
                 push_notification(app, format!("shell: {name}"), None, NotifKind::Info);
             }
-            if let Ok(fresh) = client.list_sessions().await {
-                app.refresh_sessions(fresh);
-                app.tree.select_session(id);
-                {
-                    let side = app.target_side();
-                    update_selection(app, client, side);
-                }
-                app.set_focus(Focus::Term);
+            refresh_all(app).await;
+            app.tree.select_session(id);
+            {
+                let side = app.target_side();
+                update_selection(app, client, side);
             }
+            app.set_focus(Focus::Term);
         }
         Err(e) => {
             app.push_error(format!("shell create failed: {e}"));
