@@ -217,15 +217,13 @@
     mask-image: radial-gradient(ellipse 90% 70% at 50% 35%, #000 30%, transparent 80%);
   }
   /* Interactive dot grid. The canvas+svg are injected by JS at
-     runtime; we lock the container under the hero content with the
-     same radial mask the old static grid used so the dots fade out
-     near the section edges. `pointer-events: none` keeps the buttons
-     above it clickable while the script still reads `mousemove` from
-     the window. */
+     runtime. No CSS mask — empirically `mask-image: radial-gradient`
+     made the whole layer render transparent in some Chrome/macOS
+     configs, leaving the hero looking like the background was
+     missing entirely. The canvas itself fades dots toward the
+     edges via its own gradient so we don't need a layer mask. */
   .hero .dot-field {
     position: absolute; inset: 0;
-    mask-image: radial-gradient(ellipse 80% 65% at 50% 35%, #000 30%, transparent 80%);
-    -webkit-mask-image: radial-gradient(ellipse 80% 65% at 50% 35%, #000 30%, transparent 80%);
     pointer-events: none;
     z-index: 1;
   }
@@ -238,14 +236,17 @@
   }
   .hero .dot-field svg { pointer-events: none; }
   @media (prefers-reduced-motion: reduce) {
-    /* Falls back to the original static grid texture — the JS bails
-       on init when reduced motion is requested, so we paint the
-       lattice in CSS instead. */
+    /* Static lattice fallback — the JS bails on init when reduced
+       motion is requested, so we paint the grid in CSS instead.
+       Alpha bumped up over the original 0.035 so the texture is
+       actually visible against the near-black bg. */
     .hero .dot-field {
       background-image:
-        linear-gradient(to right, rgba(255,255,255,0.035) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(255,255,255,0.035) 1px, transparent 1px);
+        linear-gradient(to right, rgba(255,255,255,0.08) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255,255,255,0.08) 1px, transparent 1px);
       background-size: 80px 80px;
+      mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 30%, transparent 75%);
+      -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 30%, transparent 75%);
     }
   }
   .hero .inner { position: relative; z-index: 2; }
@@ -1992,15 +1993,24 @@
     var bgColor   = readCssVar('--bg',   '#0b0b0b');
 
     var opts = {
-      dotRadius: 1.5,
-      dotSpacing: 14,
+      // Bumped from the React Bits defaults: at 1.5px / 0.35 alpha the
+      // dots read as "is the page even loading?" on a #0b0b0b bg. 2px
+      // dots with much higher alpha put the texture squarely in
+      // "visible at first glance" territory without crossing into
+      // chrome-loud.
+      // The component draws each dot at `dotRadius / 2` (so the prop is
+      // effectively a diameter). 3 ⇒ 1.5px painted radius — visible at
+      // a glance against #0b0b0b without crossing into "marketing-page
+      // chrome" territory.
+      dotRadius: 3,
+      dotSpacing: 18,
       cursorRadius: 500,
       bulgeStrength: 67,
       glowRadius: 160,
       sparkle: false,
       waveAmplitude: 0,
-      gradientFrom: withAlpha(ctaColor, 0.35),
-      gradientTo:   withAlpha(linkColor, 0.22),
+      gradientFrom: withAlpha(ctaColor, 0.65),
+      gradientTo:   withAlpha(linkColor, 0.45),
       glowColor:    bgColor
     };
 
