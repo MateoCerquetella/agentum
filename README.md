@@ -16,19 +16,19 @@
 
 ## The Story
 
-**Five agents. One closed laptop lid. Half a day of work, gone.**
+**Five `claude` agents. One closed MacBook lid. Half a day of work, gone.**
 
-I had Claude Code, Codex, and OpenCode running in parallel on my Mac, each working on a different part of the same project. I went to the supermarket. By the time I got back, the screen had slept and every one of them had died with it. Context, plans, and partial commits, vaporized.
+I had three `claude` sessions, a `codex` run, and an `opencode` review going in parallel on my Mac, each on a different part of the same project. I went to the supermarket. By the time I got back, the screen had slept and every one of them had died with it. The transcripts in `~/.claude/projects/` were still there. The state wasn't.
 
 I tried the obvious fixes. `caffeinate` works until you actually have to take the laptop somewhere. `tmux` survives the lid, but the agents themselves don't survive losing their TTY. They notice.
 
-So I dragged an old PC out of a closet, threw Arch Linux on it, tunnelled tmux through WireGuard, set up bidirectional folder sync so any change on my Mac mirrored to the box that kept my agents alive, and wrote shell scripts (`cc --remote`, `codex --remote`, `opencode --remote`) to spawn agents on that PC over SSH.
+So I dragged an old PC out of a closet, put Arch on it, tunnelled `tmux` through `wg` (WireGuard), set up bidirectional folder sync so any change on my Mac mirrored to the box that kept my agents alive, and wrote shell wrappers (`cc --remote`, `codex --remote`, `opencode --remote`) to spawn agents on that PC over SSH.
 
 It worked. My agents kept running with the MacBook in my backpack on the bus.
 
-But I'd traded one problem for another. Twenty terminal windows. One per agent. One for lazygit to review AI-generated diffs. Plus my editor, builds, and logs. I was spending more time switching tmux panes than reading what the agents had written. I'd built a remote server and turned myself into its sysadmin.
+But I'd traded one problem for another. Twenty tmux panes. One per agent. One `lazygit` pane per project to review AI-generated diffs. Plus my editor, builds, and logs. I was spending more time switching tmux panes than reading what the agents had written. I'd built a homelab and put myself in charge of operating it.
 
-**agentum is a weekend hack that ate a few weekends.** One Rust binary that turns tmux into a real control plane. Spawn, watch, kill, and message between parallel AI agents from a single dashboard. Two weekends of nights-and-weekends coding. An old PC as a server. No subscriptions, no cloud lock-in.
+**agentum is the weekend hack that ate a few weekends.** One Rust binary that wires `tmux` to a Svelte PWA. Spawn Claude, Codex, Gemini, Cursor, or any CLI on a host you control. Watch their terminals over WebSocket from your phone. Kill them when they wander off. Self-hosted TLS. No subscriptions, no cloud lock-in.
 
 Then I wanted to check on my agents from my phone. Claude Code has `/remote`. OpenCode doesn't. Codex doesn't. Cursor doesn't. So I built a PWA dashboard that streams live terminals over WebSocket, installable on iOS and Android, with self-hosted TLS and zero recurring costs.
 

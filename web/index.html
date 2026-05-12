@@ -612,20 +612,40 @@
     max-width: 680px;
     margin: 0 auto;
   }
-  .origin-label {
+  /* Small mono eyebrow above the title — matches the kicker treatment
+     used by every other section header on the page so the origin
+     story reads as part of the same hierarchy, not a one-off block. */
+  .origin-kicker {
+    display: inline-flex; align-items: center; gap: 10px;
     font-family: var(--mono);
-    font-size: clamp(22px, 3vw, 32px);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--link);
-    margin-bottom: 32px;
-    font-weight: 600;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--fg-3);
+    margin-bottom: 20px;
   }
+  .origin-kicker .num {
+    border: 1px solid var(--border-2);
+    background: var(--surface);
+    color: var(--fg);
+    padding: 2px 8px; border-radius: 4px;
+  }
+  /* Display-size title in the same family/weight as .h1 so the
+     hierarchy reads consistently. Coral accent on one word for a
+     bit of brand colour; the rest stays white. */
+  .origin-title {
+    font-size: clamp(34px, 5vw, 64px);
+    line-height: 1.05;
+    letter-spacing: -0.035em;
+    font-weight: 500;
+    color: var(--fg);
+    margin: 0 0 28px 0;
+  }
+  .origin-title .accent { color: var(--cta); }
   .origin-quote {
     font-size: clamp(17px, 1.5vw, 20px);
     line-height: 1.6;
     color: var(--fg-2);
     margin: 0;
+    text-align: left;
   }
   .origin-quote .break {
     display: block;
@@ -635,6 +655,29 @@
     font-style: normal;
     color: var(--fg);
   }
+  /* Inline code for the technical references (tmux, WireGuard, the
+     shell-wrapper names). Subtler than .install code so the prose
+     still reads as prose; just enough to flag "this is a real
+     command/file/tool". */
+  .origin-quote code {
+    font-family: var(--mono);
+    font-size: 0.92em;
+    color: var(--fg);
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.08);
+    padding: 1px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  /* Centered block, but the prose itself is left-aligned for
+     readability. Keep the title + kicker centered via the inner. */
+  .origin-inner > .origin-kicker,
+  .origin-inner > .origin-title {
+    text-align: center;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .origin-inner > .origin-kicker { display: inline-flex; }
   .origin-attr {
     margin-top: 24px;
     font-size: 14px;
@@ -1564,25 +1607,32 @@
 <section class="origin">
   <div class="wrap">
     <div class="origin-inner">
-      <div class="origin-label">Why I built this</div>
+      <div class="origin-kicker"><span class="num">00</span><span>Origin</span></div>
+      <h2 class="origin-title">Why I <span class="accent">built</span> this.</h2>
       <p class="origin-quote">
-        Five agents. One closed laptop lid. Half a day of work, gone.
+        Five <code>claude</code> agents. One closed MacBook lid. Half a day of work, gone.
         <span class="break">
-          I had Claude, Codex, and OpenCode all working on my Mac. I went to the supermarket.
-          By the time I got back, the screen had slept and every one of them had died with it.
+          I had three <code>claude</code> sessions, a <code>codex</code> run, and an
+          <code>opencode</code> review going on my Mac. I went to the supermarket. By the
+          time I got back, the screen had slept and every one of them had died with it.
+          The transcripts in <code>~/.claude/projects/</code> were still there. The state
+          wasn't.
         </span>
         <span class="break">
-          So I dragged an old PC out of a closet, threw Arch Linux on it, tunnelled tmux
-          through WireGuard, and wrote shell scripts to spawn agents from anywhere. My
-          agents survived closed lids. But I'd traded one problem for another. I was
-          juggling twenty tmux panes and slowly turning into the sysadmin of my own
-          home cluster.
+          So I dragged an old PC out of a closet, put Arch on it, tunnelled <code>tmux</code>
+          through <code>wg</code>, and wrote shell wrappers (<code>cc --remote</code>,
+          <code>codex --remote</code>, <code>opencode --remote</code>) so I could spawn
+          agents over SSH. My agents survived closed lids. But I'd traded one problem for
+          another. Twenty tmux panes, a <code>lazygit</code> pane per project, plus my
+          editor. I'd built a homelab and put myself in charge of operating it.
         </span>
         <span class="break">
-          <em>agentum is a weekend hack that ate a few weekends.</em>
-          One Rust binary that turns tmux into a real control plane. A dashboard I can
-          check from my phone. No subscriptions, no cloud lock-in. Just my agents, my
-          machine, still running when I get home.
+          <em>agentum is the weekend hack that ate a few weekends.</em>
+          One Rust binary that wires <code>tmux</code> to a Svelte PWA. Spawn Claude, Codex,
+          Gemini, Cursor, or any CLI on a host you control. Watch their terminals over
+          WebSocket from your phone. Kill them when they wander off. Self-hosted TLS. No
+          subscriptions, no cloud lock-in. Just my agents, my machine, still running when
+          I get home.
         </span>
       </p>
       <div class="origin-attr"><strong>Mateo</strong>, creator of agentum</div>
