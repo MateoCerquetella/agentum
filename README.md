@@ -16,17 +16,21 @@
 
 ## The Story
 
-I was running five AI coding agents on my Mac. Then I closed the lid to go to the supermarket, and they all died.
+**Five agents. One closed laptop lid. Half a day of work — gone.**
 
-So I grabbed an old PC, installed Arch Linux on it, and connected everything through tmux and WireGuard. I set up bidirectional folder sync so any change on my Mac instantly mirrored to the machine that would keep my agents running. Then I wrote shell scripts (`cc --remote`, `codex --remote`, `opencode --remote`) to spawn Claude Code, Codex, and OpenCode in tmux sessions on that old PC.
+I had Claude Code, Codex, and OpenCode running in parallel on my Mac, each working on a different part of the same project. I went to the supermarket. By the time I got back, the screen had slept and every one of them had died with it — context, plans, and partial commits, vaporized.
 
-It worked. My agents kept running even with the MacBook in my backpack.
+I tried the obvious fixes. `caffeinate` works until you actually have to take the laptop somewhere. `tmux` survives the lid, but the agents themselves don't survive losing their TTY. They notice.
 
-But now I had a new problem: twenty terminal windows. One per agent. One for lazygit to review AI-generated diffs. Plus my editor, builds, and logs. I was spending more time managing terminals than writing code.
+So I dragged an old PC out of a closet, threw Arch Linux on it, tunnelled tmux through WireGuard, set up bidirectional folder sync so any change on my Mac mirrored to the box that kept my agents alive, and wrote shell scripts (`cc --remote`, `codex --remote`, `opencode --remote`) to spawn agents on that PC over SSH.
 
-**agentum started as a weekend hack to get my life back.** One Rust binary that turns tmux into a real control plane. Spawn, watch, and message between parallel AI agents from a single dashboard. Two weekends of nights-and-weekends coding. An old PC as a server. No subscriptions, no cloud lock-in.
+It worked. My agents kept running with the MacBook in my backpack on the bus.
 
-Then I wanted to check my agents from my phone. Claude Code has `/remote`, but OpenCode doesn't. Codex doesn't. So I built a PWA dashboard that streams live terminals over WebSocket, installable on iOS and Android, self-hosted TLS, zero recurring costs. My agents, my machine, still running when I get home.
+But I'd traded one problem for another. Twenty terminal windows. One per agent. One for lazygit to review AI-generated diffs. Plus my editor, builds, and logs. I was spending more time switching tmux panes than reading what the agents had written. I'd built a remote server and turned myself into its sysadmin.
+
+**agentum is a weekend hack that ate a few weekends.** One Rust binary that turns tmux into a real control plane — spawn, watch, kill, and message between parallel AI agents from a single dashboard. Two weekends of nights-and-weekends coding. An old PC as a server. No subscriptions, no cloud lock-in.
+
+Then I wanted to check on my agents from my phone. Claude Code has `/remote`. OpenCode doesn't. Codex doesn't. Cursor doesn't. So I built a PWA dashboard that streams live terminals over WebSocket, installable on iOS and Android, with self-hosted TLS and zero recurring costs.
 
 **agentum is beta software, built by one developer who just wanted his AI agents to keep working when he closed his laptop.** If that resonates, you're exactly who this is for.
 
