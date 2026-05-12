@@ -4,6 +4,29 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.26] — 2026-05-12
+
+### Changed
+- **`agentum terminal` prefers the local loopback over a configured
+  remote `default` when both are reachable.** A user with
+  `default = "omarchy"` in profiles.toml who runs the TUI on their
+  Mac was getting omarchy as the active connection — so "this
+  machine" appeared in the Servers sidebar but was Unreachable /
+  LoginNeeded, and the New Session form's Profile cycle to local
+  bailed with `this machine isn't connected — try Ctrl-O to re-add`.
+  The most common reason to launch the TUI is to drive the machine
+  you're sitting at, so the resolution order is now:
+  1. Explicit `--profile <name>` always wins.
+  2. Otherwise, if `agentum serve` answers on 127.0.0.1:8822 (~500 ms
+     bounded probe), prefer it as the active connection.
+  3. Otherwise, fall back to `profiles.toml`'s `default = …`.
+  4. Otherwise, fall through to the connect-or-onboard loop.
+  The configured `default` still gets used when local isn't running
+  (so a laptop offline-mode falls back to your VPS cleanly), and
+  the configured profile is still added to the sidebar as a peer
+  via the existing fanout — you just don't get stuck *as* it when
+  your local box is live.
+
 ## [0.7.25] — 2026-05-11
 
 ### Fixed

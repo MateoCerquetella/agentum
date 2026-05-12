@@ -78,7 +78,7 @@ pub async fn run(opts: Options) -> Result<()> {
     // invocations (CI, scripts) fall through to the same bail! they
     // got before — the prompt would just hang.
     let initial_opts = opts.clone();
-    let mut current_opts = apply_profile(opts)?;
+    let mut current_opts = apply_profile(opts).await?;
     let (client, base, sessions) = loop {
         match connect_once(&current_opts).await {
             Ok(connected) => break connected,
@@ -100,7 +100,7 @@ pub async fn run(opts: Options) -> Result<()> {
                         next.api = None;
                         next.fingerprint = None;
                         next.profile = Some(new_profile);
-                        current_opts = apply_profile(next)?;
+                        current_opts = apply_profile(next).await?;
                     }
                     UnreachableAction::Retry => {
                         // No-op: just loop. Useful when the user just
@@ -179,7 +179,7 @@ pub async fn run(opts: Options) -> Result<()> {
                 next.api = None;
                 next.fingerprint = None;
                 next.profile = Some(name.clone());
-                current_opts = apply_profile(next)?;
+                current_opts = apply_profile(next).await?;
                 let connected = match connect_once(&current_opts).await {
                     Ok(c) => c,
                     Err(e) => {
@@ -205,7 +205,7 @@ pub async fn run(opts: Options) -> Result<()> {
                         // loop with whatever the user originally asked
                         // for. Anything still failing there will pop the
                         // same prompt as the cold start.
-                        current_opts = apply_profile(initial_opts.clone())?;
+                        current_opts = apply_profile(initial_opts.clone()).await?;
                         connect_once(&current_opts).await?
                     }
                 };
@@ -656,7 +656,38 @@ fn trust_for_profile(base: &Url, profile: &profiles::Profile) -> Result<api::Tls
 /// missing profile name resolves to the file's `default = …`; an
 /// explicit `--profile` that doesn't exist is an error so the user
 /// notices typos instead of silently dropping back to the loopback.
-fn apply_profile(mut opts: Options) -> Result<Options> {
+/// Quick non-interactive health probe of the local loopback daemon
+/// across HTTPS-then-HTTP. Used by `apply_profile` to decide whether
+/// to prefer the local daemon over a configured `default = …` when
+/// the user didn't pass `--profile`. Bounded to a short timeout so
+/// the boot path doesn't pay the full TCP handshake latency on a
+/// host that isn't running `agentum serve`.
+async fn loopback_alive() -> bool {
+    for candidate in [DEFAULT_HTTPS, DEFAULT_HTTP] {
+        let Ok(base) = Url::parse(candidate) else {
+            continue;
+        };
+        let trust = if base.scheme() == "https" {
+            let host_key = trust::host_key(&base).unwrap_or_default();
+            trust::KnownHosts::load()
+                .ok()
+                .and_then(|kh| kh.pin(&host_key).map(|s| s.to_string()))
+                .map(TlsTrust::Pinned)
+                .unwrap_or(TlsTrust::AcceptAny)
+        } else {
+            TlsTrust::Plain
+        };
+        if api::probe_health(&base, &trust, Duration::from_millis(500))
+            .await
+            .is_ok()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+async fn apply_profile(mut opts: Options) -> Result<Options> {
     let profiles = match profiles::Profiles::load() {
         Ok(p) => p,
         Err(e) => {
@@ -672,9 +703,30 @@ fn apply_profile(mut opts: Options) -> Result<Options> {
         }
     };
 
+    // Resolution rules when no `--profile` flag is present:
+    //   1. If the local loopback daemon answers, prefer it. Launching
+    //      `agentum terminal` on a host with a live local daemon
+    //      should drive that host — `default = "omarchy"` in
+    //      profiles.toml is a *fallback*, not an override, because the
+    //      most common reason to run the TUI is to drive the machine
+    //      you're sitting at. The user can still target the configured
+    //      default explicitly via `agentum terminal --profile <name>`.
+    //   2. Otherwise, fall back to the configured `default = …`.
+    //   3. Otherwise, fall through to the connect-or-onboard loop
+    //      (which itself does loopback discovery + the unreachable
+    //      menu).
+    //
+    // Explicit `--profile` always wins. The probe is bounded to
+    // 500 ms so the boot path stays snappy on offline machines.
     let active = match opts.profile.clone() {
         Some(name) => Some(name),
-        None => profiles.default_name().map(str::to_string),
+        None => {
+            if loopback_alive().await {
+                None
+            } else {
+                profiles.default_name().map(str::to_string)
+            }
+        }
     };
     let Some(name) = active else {
         return Ok(opts);
