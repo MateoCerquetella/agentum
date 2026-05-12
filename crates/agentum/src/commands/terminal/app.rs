@@ -3391,16 +3391,32 @@ async fn handle_key(
         return;
     }
 
-    // While the lazygit pane is focused, forward raw bytes to its PTY.
+    // While the lazygit pane is focused, forward raw bytes to its PTY —
+    // except for the four width-resize chars, which we let fall through
+    // to the match block below so the user can grow / shrink agentum's
+    // lazygit column with the same `+`/`-` they use on the sidebar
+    // tree. Lazygit's own `+` screen-mode toggle is sacrificed; the
+    // outer column width is what matters when lazygit is embedded.
     if app.focus == Focus::Lazygit {
-        if let Some(lg) = app.lazygit.as_ref()
-            && let Some(bytes) = key_to_bytes(&key)
-        {
-            if let Err(e) = lg.write(&bytes) {
-                app.push_error(format!("lazygit write: {e}"));
+        let is_resize_key = !key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT)
+            && matches!(
+                key.code,
+                KeyCode::Char('+')
+                    | KeyCode::Char('=')
+                    | KeyCode::Char('-')
+                    | KeyCode::Char('_')
+            );
+        if !is_resize_key {
+            if let Some(lg) = app.lazygit.as_ref()
+                && let Some(bytes) = key_to_bytes(&key)
+            {
+                if let Err(e) = lg.write(&bytes) {
+                    app.push_error(format!("lazygit write: {e}"));
+                }
             }
+            return;
         }
-        return;
     }
 
     // Stopped/crashed session in the focused term pane: there's no live
@@ -3591,20 +3607,43 @@ async fn handle_key(
             app.filter_input_active = true;
             app.status_msg = Some("⌃F search (Esc cancel · Enter keep · ↑↓ move)".into());
         }
-        // Resize the sidebar tree. 4-col steps, clamped 16..=80; the
-        // terminal pane keeps its 20-col floor at draw time. Works
-        // regardless of focus so it's reachable from any panel.
+        // Resize the focused side column. 4-col steps; clamps differ
+        // per target (tree 16..=80, lazygit per ui::LAZYGIT_*). Focus on
+        // the lazygit pane retargets the keys to its column so the user
+        // doesn't have to learn the Ctrl-K , / Ctrl-K . chord. Default
+        // path (tree or terminal focus) keeps the historical behaviour
+        // of resizing the sidebar tree.
         KeyCode::Char('+') | KeyCode::Char('=') => {
-            app.tree_width = app.tree_width.saturating_add(4).min(80);
-            app.prefs.tree_width = app.tree_width;
-            prefs::save(&app.prefs);
-            app.status_msg = Some(format!("tree width: {}", app.tree_width));
+            if app.focus == Focus::Lazygit && app.lazygit_open() {
+                app.lazygit_width = app
+                    .lazygit_width
+                    .saturating_add(4)
+                    .min(ui::LAZYGIT_MAX_WIDTH);
+                app.prefs.lazygit_width = app.lazygit_width;
+                prefs::save(&app.prefs);
+                app.status_msg = Some(format!("lazygit width: {}", app.lazygit_width));
+            } else {
+                app.tree_width = app.tree_width.saturating_add(4).min(80);
+                app.prefs.tree_width = app.tree_width;
+                prefs::save(&app.prefs);
+                app.status_msg = Some(format!("tree width: {}", app.tree_width));
+            }
         }
         KeyCode::Char('-') | KeyCode::Char('_') => {
-            app.tree_width = app.tree_width.saturating_sub(4).max(16);
-            app.prefs.tree_width = app.tree_width;
-            prefs::save(&app.prefs);
-            app.status_msg = Some(format!("tree width: {}", app.tree_width));
+            if app.focus == Focus::Lazygit && app.lazygit_open() {
+                app.lazygit_width = app
+                    .lazygit_width
+                    .saturating_sub(4)
+                    .max(ui::LAZYGIT_MIN_WIDTH);
+                app.prefs.lazygit_width = app.lazygit_width;
+                prefs::save(&app.prefs);
+                app.status_msg = Some(format!("lazygit width: {}", app.lazygit_width));
+            } else {
+                app.tree_width = app.tree_width.saturating_sub(4).max(16);
+                app.prefs.tree_width = app.tree_width;
+                prefs::save(&app.prefs);
+                app.status_msg = Some(format!("tree width: {}", app.tree_width));
+            }
         }
         // 1/2/3 jump straight to a panel (Tree/Term/Lazygit).
         KeyCode::Char('1') => app.focus = Focus::Tree,

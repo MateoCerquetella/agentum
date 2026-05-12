@@ -1322,7 +1322,10 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
             p,
         ),
         body("  Esc               exit fullscreen", p),
-        body("  + / -             widen / narrow sidebar tree", p),
+        body(
+            "  + / -             widen / narrow focused side column (tree, or lazygit when focused)",
+            p,
+        ),
         Line::from(""),
         body("  ?                 toggle this help", p),
         body("  Ctrl-Q            quit (works from any focus)", p),
