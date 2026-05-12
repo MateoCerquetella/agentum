@@ -818,6 +818,11 @@ pub struct App {
     /// "toggle primary side bar" — useful when you want screen real
     /// estate for the term pane but still want the breadcrumb/status.
     pub sidebar_hidden: bool,
+    /// Collapse the SERVERS section of the tree sidebar to a single-line
+    /// header. The full server list keeps living in memory — only the
+    /// rendered surface and the j/k traversal change. Toggled via the
+    /// `Ctrl-K V` chord ("view servers") or the command palette.
+    pub servers_collapsed: bool,
     /// Multi-key chord prefix awaiting a follow-up. `Some('K')` means we
     /// just consumed Ctrl-K and the next keystroke decides the action
     /// (VS Code parity: Ctrl-K Z = fullscreen, Ctrl-K B = sidebar, …).
@@ -1146,6 +1151,7 @@ impl App {
             tree_width: prefs.tree_width,
             fullscreen: false,
             sidebar_hidden: prefs.sidebar_hidden,
+            servers_collapsed: prefs.servers_collapsed,
             chord: None,
             filter_input_active: false,
             error_count: 0,
@@ -2837,6 +2843,25 @@ async fn handle_key(
                     "sidebar visible".into()
                 });
             }
+            // Ctrl-K V — collapse / expand the SERVERS section. The
+            // sidebar otherwise carries SERVERS at the bottom; folding
+            // it reclaims height for the sessions tree on a long
+            // multi-profile setup. If the cursor was parked on a
+            // server row, pull it back into the sessions section so
+            // collapsing doesn't strand the highlight.
+            Some('v') => {
+                app.servers_collapsed = !app.servers_collapsed;
+                if app.servers_collapsed && app.tree_section == TreeSection::Servers {
+                    app.tree_section = TreeSection::Sessions;
+                }
+                app.prefs.servers_collapsed = app.servers_collapsed;
+                prefs::save(&app.prefs);
+                app.status_msg = Some(if app.servers_collapsed {
+                    "servers section collapsed".into()
+                } else {
+                    "servers section expanded".into()
+                });
+            }
             // Lazygit width resize. `,` / `<` shrink, `.` / `>` grow.
             // Works from any focus (including the lazygit pane) because
             // the chord prefix runs ahead of pane key forwarding. Step
@@ -3604,45 +3629,58 @@ async fn handle_key(
             app.status_msg = Some("refreshed (all servers)".into());
         }
         KeyCode::Char('j') | KeyCode::Down => {
-            // Cursor moves through Servers first, then Sessions. At
-            // the bottom of Servers, a `j` flips the section to
-            // Sessions. Inside Sessions the original tree cursor
-            // drives selection.
+            // Sessions sits on top now and Servers underneath, so the
+            // cursor flows Sessions → (boundary) → Servers on `j`.
+            // Inside Sessions the tree cursor drives selection; inside
+            // Servers the `servers_cursor` indexes into
+            // [this-machine, profiles[0..N]].
             //
-            // The Servers section has `profiles.len() + 1` rows: row 0
-            // is the synthetic "this machine" entry, rows 1..=N map to
-            // configured peer profiles.
+            // When the Servers section is collapsed we treat the
+            // boundary as opaque — j at the last session is a no-op
+            // rather than silently moving the highlight into hidden
+            // rows the user can't see.
             match app.tree_section {
+                TreeSection::Sessions => {
+                    let at_last =
+                        !app.tree.rows().is_empty() && app.tree.cursor + 1 >= app.tree.rows().len();
+                    if at_last && !app.servers_collapsed {
+                        app.tree_section = TreeSection::Servers;
+                        app.servers_cursor = 0;
+                    } else {
+                        app.tree.move_cursor(1);
+                        let side = app.target_side();
+                        update_selection(app, client, side);
+                    }
+                }
                 TreeSection::Servers => {
                     let last = app.profiles.len(); // index of last row
                     if app.servers_cursor < last {
                         app.servers_cursor += 1;
-                    } else {
-                        app.tree_section = TreeSection::Sessions;
                     }
-                }
-                TreeSection::Sessions => {
-                    app.tree.move_cursor(1);
-                    let side = app.target_side();
-                    update_selection(app, client, side);
                 }
             }
         }
         KeyCode::Char('k') | KeyCode::Up => {
+            // Mirror of `j` after the order flip: `k` from the first
+            // server row jumps back into the bottom of the sessions
+            // list; `k` from the top of sessions is a no-op (already
+            // at the top of the sidebar — no Servers section above to
+            // cross into).
             match app.tree_section {
                 TreeSection::Servers => {
-                    app.servers_cursor = app.servers_cursor.saturating_sub(1);
+                    if app.servers_cursor == 0 {
+                        app.tree_section = TreeSection::Sessions;
+                        let last = app.tree.rows().len().saturating_sub(1);
+                        app.tree.cursor = last;
+                        app.tree.clamp_cursor();
+                        let side = app.target_side();
+                        update_selection(app, client, side);
+                    } else {
+                        app.servers_cursor -= 1;
+                    }
                 }
                 TreeSection::Sessions => {
-                    if app.tree.cursor == 0 {
-                        // At the top of the sessions list, flip focus
-                        // into the Servers header so a `k` from the
-                        // first session reaches the last server row
-                        // (always present now — at minimum the "this
-                        // machine" entry exists).
-                        app.tree_section = TreeSection::Servers;
-                        app.servers_cursor = app.profiles.len();
-                    } else {
+                    if app.tree.cursor > 0 {
                         app.tree.move_cursor(-1);
                         let side = app.target_side();
                         update_selection(app, client, side);
@@ -4586,6 +4624,7 @@ pub fn palette_catalog(app: &App) -> Catalog {
         right_panel_visible: app.right_panel_visible,
         fullscreen: app.fullscreen,
         split_open: app.split_open(),
+        servers_collapsed: app.servers_collapsed,
     };
     Catalog::build(
         app.lazygit_open(),
@@ -5253,6 +5292,21 @@ async fn run_palette_action(
                 "sidebar hidden".into()
             } else {
                 "sidebar visible".into()
+            });
+        }
+        ActionKind::ToggleServers => {
+            app.servers_collapsed = !app.servers_collapsed;
+            // Pull the cursor back into Sessions if it was sitting on
+            // a server row about to disappear.
+            if app.servers_collapsed && app.tree_section == TreeSection::Servers {
+                app.tree_section = TreeSection::Sessions;
+            }
+            app.prefs.servers_collapsed = app.servers_collapsed;
+            prefs::save(&app.prefs);
+            app.status_msg = Some(if app.servers_collapsed {
+                "servers section collapsed".into()
+            } else {
+                "servers section expanded".into()
             });
         }
         ActionKind::ToggleRightPanel => {

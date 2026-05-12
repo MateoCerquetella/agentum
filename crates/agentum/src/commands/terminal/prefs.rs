@@ -115,6 +115,12 @@ pub struct Prefs {
     pub term_split_pct: u16,
     pub sidebar_hidden: bool,
     pub right_panel_visible: bool,
+    /// Collapse the SERVERS section in the tree sidebar. The section
+    /// still renders a single-line header (so the user can find it),
+    /// but its rows are hidden and j/k skip it during navigation.
+    /// Persisted because the choice survives session restarts — most
+    /// users either want the section in their face or not at all.
+    pub servers_collapsed: bool,
 
     // ---- notifications -------------------------------------------------
     /// Master sound switch. When `false`, no notification sounds play
@@ -150,6 +156,7 @@ impl Default for Prefs {
             term_split_pct: 50,
             sidebar_hidden: false,
             right_panel_visible: true,
+            servers_collapsed: false,
 
             sound_master: true,
             sound_info: true,

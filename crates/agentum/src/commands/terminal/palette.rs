@@ -126,6 +126,9 @@ pub enum ActionKind {
     /// keybinding so the profile picker is reachable through palette
     /// filtering ("server" / "profile" / "switch").
     OpenProfiles,
+    /// Collapse / expand the SERVERS section of the sidebar. Mirrors
+    /// the `Ctrl-K V` chord. Persisted across runs via prefs.
+    ToggleServers,
 }
 
 pub struct Catalog {
@@ -142,6 +145,7 @@ pub struct ViewState {
     pub right_panel_visible: bool,
     pub fullscreen: bool,
     pub split_open: bool,
+    pub servers_collapsed: bool,
 }
 
 impl Catalog {
@@ -271,6 +275,15 @@ impl Catalog {
             hint: "Ctrl-\\".into(),
             group: "view",
             kind: ActionKind::ToggleSplit,
+        });
+        // Servers section visibility — when collapsed the sidebar
+        // shows only the section header; expanded shows every profile
+        // row. Independent of `Ctrl-B`, which hides the whole sidebar.
+        a.push(Action {
+            label: format!("View: servers section [{}]", onoff(!view.servers_collapsed)),
+            hint: "Ctrl-K V".into(),
+            group: "view",
+            kind: ActionKind::ToggleServers,
         });
 
         // Status-bar settings — one entry per chip. Renders the chip
