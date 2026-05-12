@@ -28,6 +28,12 @@ struct Health {
     /// before transmitting — older daemons forward unknown text frames
     /// as keystrokes, so silently downgrading is the only safe option.
     capabilities: &'static [&'static str],
+    /// Short hostname of the box this daemon runs on (e.g. `omarchy`,
+    /// `mateo-mac`). Used by clients to label the "this server" row
+    /// with something meaningful — dashboards, sidebars, and switchers
+    /// then read as `omarchy` instead of a generic placeholder. Cached
+    /// in `AppState::hostname` at server boot so the read is free.
+    hostname: String,
 }
 
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
@@ -44,5 +50,6 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         uptime_seconds: uptime,
         sessions_running: running,
         capabilities: CAPABILITIES,
+        hostname: state.hostname.clone(),
     })
 }

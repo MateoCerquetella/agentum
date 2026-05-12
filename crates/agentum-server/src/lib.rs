@@ -92,6 +92,12 @@ pub struct AppState {
     /// a full snapshot.
     pub stream_positions:
         Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, StreamCheckpoint>>>,
+    /// Short hostname of the box this daemon runs on. Cached once at
+    /// boot so the `/api/health` reads are zero-cost. Clients use it to
+    /// label the "this server" row with a meaningful identity (e.g.
+    /// `omarchy`, `mateo-mac`) instead of a generic placeholder. Cut
+    /// at the first `.` so `omarchy.local` reads as `omarchy`.
+    pub hostname: String,
 }
 
 impl AppState {
@@ -117,7 +123,29 @@ impl AppState {
             cert_fingerprint: Arc::new(cert_fingerprint),
             transcripts,
             stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            hostname: detect_short_hostname(),
         }
+    }
+}
+
+/// Resolve the system hostname once at boot, trimming the FQDN suffix
+/// so `omarchy.local` reads as `omarchy`. Falls back to `"local"` when
+/// the OS lookup fails — better than empty, which would re-trigger
+/// the generic placeholder on the client.
+fn detect_short_hostname() -> String {
+    let raw = std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    match raw {
+        Some(name) => name
+            .split('.')
+            .next()
+            .unwrap_or(&name)
+            .to_ascii_lowercase(),
+        None => "local".to_string(),
     }
 }
 
