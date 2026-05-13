@@ -3827,6 +3827,17 @@ async fn handle_key(
                     // "this machine" row → empty profile name, which the
                     // mod.rs SwitchProfile arm translates to `None` so
                     // apply_profile takes the loopback-detection path.
+                    //
+                    // Refuse while lazygit is open: the soft restart
+                    // drops the App, which drops the lazygit PTY, which
+                    // kills the child. The user sees the pane vanish
+                    // and reads it as a crash. Symmetric to Ctrl-\\
+                    // refusing to split while lazygit is open.
+                    if app.lazygit_open() {
+                        app.status_msg =
+                            Some("close lazygit (g) before switching servers".into());
+                        return;
+                    }
                     let target: String = if app.servers_cursor == 0 {
                         String::new()
                     } else {
@@ -4990,6 +5001,15 @@ fn handle_profiles_key(app: &mut App, key: KeyEvent) {
                 if app.active_profile.as_deref() == Some(entry.name.as_str()) {
                     // Already on this one — just close.
                     app.overlay = Overlay::None;
+                    return;
+                }
+                // Same lazygit guard as the sidebar's Enter-on-server
+                // switch: the soft restart drops the App and with it
+                // the lazygit PTY, which the user reads as a crash.
+                if app.lazygit_open() {
+                    state.error =
+                        Some("close lazygit (g) before switching servers".into());
+                    app.overlay = Overlay::Profiles(state);
                     return;
                 }
                 // Schedule a soft restart with the chosen profile.

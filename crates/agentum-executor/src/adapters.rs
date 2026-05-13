@@ -68,16 +68,35 @@ impl ToolAdapter for ClaudeAdapter {
         Some("esc to interrupt")
     }
 
-    // Permission prompts are rendered as a numbered options box. The
-    // wording varies slightly across versions but every variant we've
-    // seen carries one of these substrings on screen at the same time
-    // as the input field is suppressed.
+    // Two distinct families of "agent is blocked on the user" UI in
+    // Claude Code, both detected here:
+    //
+    //   1. Yes/no permission prompts ("Do you want to proceed?" etc.)
+    //      — the original signatures, kept for older Claude versions
+    //      where the wording is still on screen.
+    //
+    //   2. Interactive menus (plan mode, multi-choice subagent picks,
+    //      route-selection during reviews). Claude renders these with
+    //      a footer reading
+    //      `Enter to select · ↑/↓ to navigate · Esc to cancel`
+    //      and the input field suppressed. The yes/no signatures
+    //      don't match these because the first option isn't "Yes" —
+    //      it's whatever the agent's first proposal is. Match the
+    //      footer's `Enter to select` substring, which is unique to
+    //      these menus (the normal prompt doesn't render it).
+    //
+    // Without (2), running `agentum-check-linear`-style flows the
+    // watchdog stays in Idle, the TUI never gets `agent.awaiting_input`,
+    // no toast fires, and the sidebar dot stays green while the agent
+    // is actually blocked on the user.
     fn awaiting_input_signatures(&self) -> &'static [&'static str] {
         &[
             "Do you want to proceed?",
             "Do you want to make this edit",
             "Do you want to create",
             "❯ 1. Yes",
+            "Enter to select",
+            "↑/↓ to navigate",
         ]
     }
 }
