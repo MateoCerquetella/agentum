@@ -801,50 +801,81 @@
     .narrative .benefits { grid-template-columns: 1fr; }
   }
 
-  /* ---------- features grid ---------- */
+  /* ---------- features — redesigned (varied layouts, no repetitive squares) ---------- */
   .features {
     margin-top: clamp(48px, 6vw, 80px);
-    display: grid;
-    grid-template-columns: repeat(12, 1fr);
-    gap: 16px;
+    display: flex; flex-direction: column; gap: 12px;
   }
-  .card {
-    background: var(--surface);
-    border: 1px solid var(--border-2);
-    border-radius: 12px;
-    padding: 28px 28px 0;
-    overflow: hidden;
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    min-height: 360px;
-    transition: border-color 160ms ease, transform 200ms ease;
-  }
-  .card:hover { border-color: #4a4a4a; }
-  .card .tag {
-    font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
-    color: var(--fg-3);
-  }
-  .card h3 { margin-top: 16px; font-size: 24px; letter-spacing: -0.018em; line-height: 1.2; font-weight: 500; }
-  .card p { margin-top: 12px; color: var(--fg-2); font-size: 15px; line-height: 1.5; max-width: 38ch; }
-  .card .visual { margin-top: 28px; flex: 1; min-height: 160px; position: relative; }
 
-  /* feature spans */
-  .f-sessions { grid-column: span 7; }
-  .f-board { grid-column: span 5; }
-  .f-watchdog { grid-column: span 4; }
-  .f-channels { grid-column: span 4; }
-  .f-themes { grid-column: span 4; }
-  @media (max-width: 1100px) {
-    .f-sessions { grid-column: span 12; }
-    .f-board { grid-column: span 12; }
-    .f-watchdog { grid-column: span 6; }
-    .f-channels { grid-column: span 6; }
-    .f-themes { grid-column: span 12; }
+  /* ── Feature A: wide horizontal card with side visual ── */
+  .feat-hero {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+    border: 1px solid var(--border-2); border-radius: 16px; overflow: hidden;
+    background: #0d0d0d;
+    min-height: 380px;
+    transition: border-color 200ms ease;
   }
-  @media (max-width: 720px) {
-    .features > * { grid-column: span 12 !important; }
+  .feat-hero:hover { border-color: #4a4a4a; }
+  .feat-hero .fh-text {
+    padding: 40px 36px; display: flex; flex-direction: column; justify-content: center;
   }
+  .feat-hero .fh-tag {
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--fg-3); margin-bottom: 16px;
+  }
+  .feat-hero h3 { font-size: 28px; letter-spacing: -0.02em; line-height: 1.18; font-weight: 500; margin: 0; }
+  .feat-hero p { margin-top: 14px; color: var(--fg-2); font-size: 15px; line-height: 1.55; max-width: 44ch; }
+  .feat-hero .fh-visual {
+    background: #060606; display: flex; align-items: center; justify-content: center;
+    padding: 24px; position: relative; overflow: hidden;
+  }
+  .feat-hero .fh-visual::before {
+    content: ""; position: absolute; inset: 0;
+    background-image:
+      linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
+    background-size: 32px 32px; pointer-events: none;
+  }
+  .feat-hero .fh-visual > * { position: relative; z-index: 1; }
+  @media (max-width: 800px) { .feat-hero { grid-template-columns: 1fr; min-height: auto; } .feat-hero .fh-visual { min-height: 220px; } }
+
+  /* ── Feature B: split card (two related features side by side) ── */
+  .feat-split {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+  }
+  @media (max-width: 800px) { .feat-split { grid-template-columns: 1fr; } }
+  .feat-split .fs-card {
+    border: 1px solid var(--border-2); border-radius: 14px; padding: 28px 28px 24px;
+    background: var(--surface); transition: border-color 180ms ease;
+    display: flex; flex-direction: column;
+  }
+  .feat-split .fs-card:hover { border-color: #4a4a4a; }
+  .feat-split .fs-card .fs-icon {
+    width: 40px; height: 40px; border-radius: 10px; background: #000;
+    border: 1px solid var(--border-2); display: inline-grid; place-items: center;
+    color: var(--fg); margin-bottom: 16px;
+  }
+  .feat-split .fs-card .fs-icon svg { width: 22px; height: 22px; }
+  .feat-split .fs-card h3 { font-size: 20px; letter-spacing: -0.014em; line-height: 1.22; font-weight: 500; margin: 0; }
+  .feat-split .fs-card p { margin-top: 8px; color: var(--fg-2); font-size: 14px; line-height: 1.5; }
+  .feat-split .fs-card .fs-visual { margin-top: 20px; flex: 1; }
+
+  /* ── Feature C: compact trio (3 small cards in a row) ── */
+  .feat-trio {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+  }
+  @media (max-width: 800px) { .feat-trio { grid-template-columns: 1fr; } }
+  .feat-trio .ft-card {
+    border: 1px solid var(--border-2); border-radius: 12px; padding: 24px;
+    background: var(--surface); transition: border-color 160ms ease, transform 160ms ease;
+  }
+  .feat-trio .ft-card:hover { border-color: #4a4a4a; transform: translateY(-2px); }
+  .feat-trio .ft-card .ft-tag {
+    font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--fg-3); margin-bottom: 12px;
+  }
+  .feat-trio .ft-card h3 { font-size: 18px; letter-spacing: -0.012em; line-height: 1.25; font-weight: 500; margin: 0; }
+  .feat-trio .ft-card p { margin-top: 8px; color: var(--fg-2); font-size: 13.5px; line-height: 1.5; }
 
   /* ---- sessions visual ---- */
   .sess-visual { margin: 16px -28px 0; padding: 0 28px 24px; }
@@ -1701,130 +1732,81 @@
       </div>
     </div>
 
-    <div class="features" hidden>
-      <!-- Sessions -->
-      <article class="card f-sessions">
-        <div class="tag">01 — Sessions</div>
-        <h3 class="h3">Spawn agents in tmux. Stream them anywhere.</h3>
-        <p>Each session is a tmux pane managed by Rust + tokio. Bidirectional WebSocket
-          stream means xterm.js in the browser and ratatui in the TUI both round-trip
-          keystrokes — Ctrl-C, arrow keys, paste — into the running pty.</p>
-        <div class="visual sess-visual">
-          <div class="sess-row"><span class="stat"></span><span class="name">agentum — expire auth tokens after 30d</span><span class="tool">opus-4.7</span><span class="pill-mini live">streaming</span></div>
-          <div class="sess-row"><span class="stat"></span><span class="name">barik-enhanced — pomodoro menubar widget</span><span class="tool">gpt-5.5</span><span class="pill-mini live">streaming</span></div>
-          <div class="sess-row compact"><span class="stat"></span><span class="name">ricebarmac — SwiftUI theme hot reload</span><span class="tool">gemini-2.5</span><span class="pill-mini compact">/compact</span></div>
-          <div class="sess-row idle"><span class="stat"></span><span class="name">homelab-dietpi — docker-compose audit</span><span class="tool">sonnet-4.6</span><span class="pill-mini">idle 14m</span></div>
-          <div class="sess-row"><span class="stat"></span><span class="name">bunman — systemd unit-file generator</span><span class="tool">opus-4.7</span><span class="pill-mini live">streaming</span></div>
-        </div>
-      </article>
+    <div class="features">
 
-      <!-- Board -->
-      <article class="card f-board card-board">
-        <div class="tag">02 — Board</div>
-        <h3 class="h3">A kanban that agents can claim atomically.</h3>
-        <p>Drag-drop columns, optimistic local moves, <code class="mono" style="font-size:12px;color:var(--fg-2);background:#000;padding:1px 6px;border-radius:3px;border:1px solid var(--border-2)">409</code> on contention. Two agents can never claim the same card.</p>
-        <div class="visual board">
-          <div class="col">
-            <div class="col-h">Backlog · 4</div>
-            <div class="item"><div class="k">AG-128</div><div class="t">Wire fingerprint pin to remote terminal</div><div class="a">unclaimed</div></div>
-            <div class="item"><div class="k">AG-130</div><div class="t">Notarize macOS DMG via release.yml</div><div class="a">unclaimed</div></div>
-          </div>
-          <div class="col">
-            <div class="col-h">In progress · 3</div>
-            <div class="item claude"><div class="k">AG-122</div><div class="t">Token expiry + migration 0006</div><div class="a">opus-4.7 · agentum</div></div>
-            <div class="item codex"><div class="k">AG-126</div><div class="t">Pomodoro widget for menubar</div><div class="a">gpt-5.5 · barik-enhanced</div></div>
-            <div class="item gemini dragging"><div class="k">AG-129</div><div class="t">SwiftUI theme hot reload</div><div class="a">gemini-2.5 · ricebarmac</div></div>
-          </div>
-          <div class="col">
-            <div class="col-h">Done · 12</div>
-            <div class="item"><div class="k">AG-119</div><div class="t">Bidirectional WS stream</div><div class="a">opus-4.7 · agentum</div></div>
-            <div class="item"><div class="k">AG-121</div><div class="t">TOFU cert pin for VPS hosts</div><div class="a">sonnet-4.6 · agentum</div></div>
-          </div>
+      <!-- ── Feature A: Sessions + Board (horizontal hero card) ── -->
+      <article class="feat-hero">
+        <div class="fh-text">
+          <div class="fh-tag">01 — Sessions &amp; Board</div>
+          <h3>Spawn multiple agents. Track them on a live kanban.</h3>
+          <p>Every session is a tmux pane managed by Rust + tokio. Bidirectional WebSocket streaming so xterm.js in the browser and ratatui in the TUI both round-trip keystrokes. Agents claim board cards atomically — <code class="mono" style="font-size:12px;color:var(--fg-2);background:#000;padding:1px 6px;border-radius:3px;border:1px solid var(--border-2)">409</code> on contention means two agents never grab the same task.</p>
         </div>
-      </article>
-
-      <!-- Watchdog -->
-      <article class="card f-watchdog">
-        <div class="tag">03 — Watchdog</div>
-        <h3 class="h3">Auto-compacts on context low. Catches crashes loudly.</h3>
-        <p>A per-session reconciler ticks every 5 seconds. <code class="mono" style="font-size:11.5px;color:var(--fg-2);background:#000;padding:1px 6px;border-radius:3px;border:1px solid var(--border-2)">Context low &lt; 50%</code> → <code class="mono" style="font-size:11.5px;color:var(--cta);background:#000;padding:1px 6px;border-radius:3px;border:1px solid var(--border-2)">/compact</code>.</p>
-        <div class="visual">
-          <div class="wd-feed">
-            <div class="wd-row compact"><span class="ts">14:22:01</span><div class="ev"><span class="et">/compact</span><div class="msg">alpha · context low (47%) → issued</div></div></div>
-            <div class="wd-row ok"><span class="ts">14:22:14</span><div class="ev"><span class="et">restored</span><div class="msg">alpha · pane resumed at 84% utilization</div></div></div>
-            <div class="wd-row crash"><span class="ts">14:18:44</span><div class="ev"><span class="et">crashed</span><div class="msg">migrate · sigterm signature → tmux session killed</div></div></div>
-            <div class="wd-row ok"><span class="ts">14:11:09</span><div class="ev"><span class="et">tick</span><div class="msg">all 7 panes healthy · 0 errors</div></div></div>
-          </div>
-        </div>
-      </article>
-
-      <!-- Channels -->
-      <article class="card f-channels">
-        <div class="tag">04 — Channels</div>
-        <h3 class="h3">1:1 message pipes between sessions.</h3>
-        <p>One agent finishes a migration, posts the resulting schema diff into a
-          channel. Another agent — already running tests — reads it live over the
-          shared event bus and adapts.</p>
-        <div class="visual">
-          <div class="chat">
-            <div class="msg">
-              <div class="who"><span class="dot"></span> alpha → auth-fix · 14:21:48</div>
-              <p>migration <code>0006_auth_session_expiry.sql</code> applied. tests pass. unblocking your token-rotation branch.</p>
-            </div>
-            <div class="msg">
-              <div class="who"><span class="dot b"></span> auth-fix → alpha · 14:22:03</div>
-              <p>got it — re-running <code>cargo test --features tls</code> against the new schema.</p>
+        <div class="fh-visual">
+          <div style="width:100%;">
+            <div class="sess-row"><span class="stat"></span><span class="name">agentum — expire auth tokens after 30d</span><span class="tool">opus-4.7</span><span class="pill-mini live">streaming</span></div>
+            <div class="sess-row"><span class="stat"></span><span class="name">barik-enhanced — pomodoro widget</span><span class="tool">gpt-5.5</span><span class="pill-mini live">streaming</span></div>
+            <div class="sess-row compact"><span class="stat"></span><span class="name">ricebarmac — SwiftUI theme reload</span><span class="tool">gemini-2.5</span><span class="pill-mini compact">/compact</span></div>
+            <div class="sess-row idle"><span class="stat"></span><span class="name">homelab-dietpi — docker audit</span><span class="tool">sonnet-4.6</span><span class="pill-mini">idle 14m</span></div>
+            <div class="sess-row"><span class="stat"></span><span class="name">bunman — systemd unit generator</span><span class="tool">opus-4.7</span><span class="pill-mini live">streaming</span></div>
+            <div class="board" style="margin-top:16px;margin-left:0;margin-right:0;padding:0;grid-template-columns:repeat(3,1fr);">
+              <div class="col"><div class="col-h">Backlog · 4</div><div class="item"><div class="k">AG-128</div><div class="t">Wire fingerprint to remote</div></div></div>
+              <div class="col"><div class="col-h">In progress · 3</div><div class="item claude"><div class="k">AG-122</div><div class="t">Token expiry + migration</div><div class="a">opus-4.7</div></div></div>
+              <div class="col"><div class="col-h">Done · 12</div><div class="item"><div class="k">AG-119</div><div class="t">Bidirectional WS stream</div></div></div>
             </div>
           </div>
         </div>
       </article>
 
-      <!-- Surfaces / 05 -->
-      <article class="card f-themes card-surfaces">
-        <div class="tag">05 — Surfaces</div>
-        <h3 class="h3">One backend. Five places to drive it.</h3>
-        <p>The same SQLite-backed event bus powers every surface. Your tmux panes don't care which window you're in.</p>
-        <div class="visual">
-          <ul class="surfaces">
-            <li>
-              <span class="sf-ico" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m7 10 3 2-3 2M13 14h4"/></svg>
-              </span>
-              <div class="sf-body">
-                <div class="sf-h">ratatui TUI</div>
-                <div class="sf-d"><span class="mono">agentum tui</span> · zero-network, runs over SSH</div>
-              </div>
-            </li>
-            <li>
-              <span class="sf-ico" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="1.5"/><path d="M9 20h6M12 17v3"/></svg>
-              </span>
-              <div class="sf-body">
-                <div class="sf-h">Svelte SPA</div>
-                <div class="sf-d">desktop dashboard · hot xterm.js panes</div>
-              </div>
-            </li>
-            <li>
-              <span class="sf-ico" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 18h2"/></svg>
-              </span>
-              <div class="sf-body">
-                <div class="sf-h">iOS / Android PWA</div>
-                <div class="sf-d">trust-on-first-use cert pin · home-screen install</div>
-              </div>
-            </li>
-            <li>
-              <span class="sf-ico" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14M5 12h14M5 18h14"/><circle cx="8" cy="6" r="1.6" fill="currentColor"/><circle cx="15" cy="12" r="1.6" fill="currentColor"/><circle cx="10" cy="18" r="1.6" fill="currentColor"/></svg>
-              </span>
-              <div class="sf-body">
-                <div class="sf-h">REST + WebSocket API</div>
-                <div class="sf-d">9 endpoints · bearer token · docs at <span class="mono">/api/openapi.json</span></div>
-              </div>
-            </li>
-          </ul>
+      <!-- ── Feature B: Watchdog + Channels (split card) ── -->
+      <div class="feat-split">
+        <div class="fs-card">
+          <div class="fs-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+          </div>
+          <h3>Watchdog</h3>
+          <p>Auto-compacts context before it overflows. Detects agent crashes, idle states, and completion — all on a 5-second tick.</p>
+          <div class="fs-visual">
+            <div class="wd-feed">
+              <div class="wd-row compact"><span class="ts">14:22:01</span><div class="ev"><span class="et">/compact</span><div class="msg">alpha · context low (47%) → issued</div></div></div>
+              <div class="wd-row ok"><span class="ts">14:22:14</span><div class="ev"><span class="et">restored</span><div class="msg">alpha · pane resumed at 84% utilization</div></div></div>
+              <div class="wd-row crash"><span class="ts">14:18:44</span><div class="ev"><span class="et">crashed</span><div class="msg">migrate · sigterm → killed</div></div></div>
+            </div>
+          </div>
         </div>
-      </article>
+        <div class="fs-card">
+          <div class="fs-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          </div>
+          <h3>Channels</h3>
+          <p>1:1 message pipes between agents. One finishes a migration, posts the schema diff — another adapts in real time over the shared event bus.</p>
+          <div class="fs-visual">
+            <div class="chat">
+              <div class="msg"><div class="who"><span class="dot"></span> alpha → auth-fix · 14:21</div><p>migration <code>0006</code> applied. tests pass.</p></div>
+              <div class="msg"><div class="who"><span class="dot b"></span> auth-fix → alpha · 14:22</div><p>got it — re-running <code>cargo test --features tls</code>.</p></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Feature C: Compact trio (Surfaces + more) ── -->
+      <div class="feat-trio">
+        <div class="ft-card">
+          <div class="ft-tag">05 — Surfaces</div>
+          <h3>One backend. Every screen.</h3>
+          <p>The same SQLite-backed event bus powers the TUI, Svelte SPA, PWA, and REST API. Your tmux panes don't care which window you're in.</p>
+        </div>
+        <div class="ft-card">
+          <div class="ft-tag">06 — Themes</div>
+          <h3>Dark by default. Make it yours.</h3>
+          <p>Midnight, dusk, slate, paper, and mono themes. Every surface respects the active theme. Zero-config, instant switch.</p>
+        </div>
+        <div class="ft-card">
+          <div class="ft-tag">07 — API-first</div>
+          <h3>Script it. Extend it. Automate it.</h3>
+          <p>9 REST endpoints + WebSocket streaming. Bearer token auth. OpenAPI spec at <span class="mono" style="font-size:11px;color:var(--fg-2);">/api/openapi.json</span>. Build your own clients.</p>
+        </div>
+      </div>
+
     </div>
   </div>
 </section>
