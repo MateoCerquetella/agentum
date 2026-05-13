@@ -472,37 +472,11 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let mut items: Vec<ListItem> = Vec::new();
     use super::app::ServerStatus;
 
-    // Sessions section now leads — it's the primary work surface, and
-    // we want the cursor to start near the top of the sidebar on j/k
-    // muscle memory. Servers follows underneath as a status strip.
-    items.push(ListItem::new(Line::from(Span::styled(
-        " SESSIONS".to_string(),
-        Style::default().fg(p.muted).add_modifier(Modifier::BOLD),
-    ))));
-
-    let cursor = app.tree.cursor;
-    let in_sessions = app.tree_section == TreeSection::Sessions;
-    for (i, row) in app.tree.rows().iter().enumerate() {
-        let is_cursor = in_sessions && i == cursor;
-        items.push(render_tree_row(app, *row, is_cursor, focused, p));
-    }
-
-    if app.tree.rows().is_empty() {
-        let hint = if !filter.is_empty() {
-            format!("   (no matches for ⌕{filter})")
-        } else {
-            "   (no sessions — press n)".to_string()
-        };
-        items.push(ListItem::new(Line::from(Span::styled(
-            hint,
-            Style::default().fg(p.muted),
-        ))));
-    }
-
-    // Servers section: bottom of the sidebar. Header shows a `▶ N`
-    // chip when collapsed so the user always sees there's something
-    // folded away. Cursor 0 of `servers_cursor` is the implicit local
-    // loopback ("this machine"); cursors 1..=N map to `app.profiles`.
+    // Servers section leads the sidebar as a compact status strip.
+    // Header shows a `▶ N` chip when collapsed so the user always
+    // sees there's something folded away. Cursor 0 of
+    // `servers_cursor` is the implicit local loopback ("this
+    // machine"); cursors 1..=N map to `app.profiles`.
     let server_count = app.profiles.len() + 1; // +1 for the loopback row
     let header_label = if app.servers_collapsed {
         format!(" SERVERS  ▶ {server_count}  (Ctrl-K V)")
@@ -638,6 +612,33 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
             }
             items.push(ListItem::new(Line::from(spans)).style(row_style));
         }
+    }
+
+    // Sessions section sits at the bottom — it's the scrollable list
+    // that grows with the workload, anchored beneath the SERVERS
+    // status strip.
+    items.push(ListItem::new(Line::from(Span::styled(
+        " SESSIONS".to_string(),
+        Style::default().fg(p.muted).add_modifier(Modifier::BOLD),
+    ))));
+
+    let cursor = app.tree.cursor;
+    let in_sessions = app.tree_section == TreeSection::Sessions;
+    for (i, row) in app.tree.rows().iter().enumerate() {
+        let is_cursor = in_sessions && i == cursor;
+        items.push(render_tree_row(app, *row, is_cursor, focused, p));
+    }
+
+    if app.tree.rows().is_empty() {
+        let hint = if !filter.is_empty() {
+            format!("   (no matches for ⌕{filter})")
+        } else {
+            "   (no sessions — press n)".to_string()
+        };
+        items.push(ListItem::new(Line::from(Span::styled(
+            hint,
+            Style::default().fg(p.muted),
+        ))));
     }
 
     let list = List::new(items).block(block);

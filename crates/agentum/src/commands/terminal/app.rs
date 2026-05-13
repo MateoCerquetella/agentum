@@ -3668,58 +3668,42 @@ async fn handle_key(
             app.status_msg = Some("refreshed (all servers)".into());
         }
         KeyCode::Char('j') | KeyCode::Down => {
-            // Sessions sits on top now and Servers underneath, so the
-            // cursor flows Sessions → (boundary) → Servers on `j`.
-            // Inside Sessions the tree cursor drives selection; inside
-            // Servers the `servers_cursor` indexes into
-            // [this-machine, profiles[0..N]].
-            //
-            // When the Servers section is collapsed we treat the
-            // boundary as opaque — j at the last session is a no-op
-            // rather than silently moving the highlight into hidden
-            // rows the user can't see.
+            // Sidebar order is Servers (top, optional) → Sessions
+            // (bottom, scrollable). `j` flows out the bottom of the
+            // Servers list into the top of the sessions tree. When
+            // the Servers section is collapsed the user lives in
+            // Sessions only and `j` is just a normal tree move.
             match app.tree_section {
-                TreeSection::Sessions => {
-                    let at_last =
-                        !app.tree.rows().is_empty() && app.tree.cursor + 1 >= app.tree.rows().len();
-                    if at_last && !app.servers_collapsed {
-                        app.tree_section = TreeSection::Servers;
-                        app.servers_cursor = 0;
-                    } else {
-                        app.tree.move_cursor(1);
-                        let side = app.target_side();
-                        update_selection(app, client, side);
-                    }
-                }
                 TreeSection::Servers => {
                     let last = app.profiles.len(); // index of last row
                     if app.servers_cursor < last {
                         app.servers_cursor += 1;
+                    } else {
+                        app.tree_section = TreeSection::Sessions;
                     }
+                }
+                TreeSection::Sessions => {
+                    app.tree.move_cursor(1);
+                    let side = app.target_side();
+                    update_selection(app, client, side);
                 }
             }
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            // Mirror of `j` after the order flip: `k` from the first
-            // server row jumps back into the bottom of the sessions
-            // list; `k` from the top of sessions is a no-op (already
-            // at the top of the sidebar — no Servers section above to
-            // cross into).
+            // Mirror of `j`: `k` at the top of Sessions hops up into
+            // the last server row when Servers is expanded; collapsed
+            // → stay in Sessions and no-op at cursor 0.
             match app.tree_section {
                 TreeSection::Servers => {
-                    if app.servers_cursor == 0 {
-                        app.tree_section = TreeSection::Sessions;
-                        let last = app.tree.rows().len().saturating_sub(1);
-                        app.tree.cursor = last;
-                        app.tree.clamp_cursor();
-                        let side = app.target_side();
-                        update_selection(app, client, side);
-                    } else {
-                        app.servers_cursor -= 1;
-                    }
+                    app.servers_cursor = app.servers_cursor.saturating_sub(1);
                 }
                 TreeSection::Sessions => {
-                    if app.tree.cursor > 0 {
+                    if app.tree.cursor == 0 {
+                        if !app.servers_collapsed {
+                            app.tree_section = TreeSection::Servers;
+                            app.servers_cursor = app.profiles.len();
+                        }
+                    } else {
                         app.tree.move_cursor(-1);
                         let side = app.target_side();
                         update_selection(app, client, side);
