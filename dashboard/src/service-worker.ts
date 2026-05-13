@@ -27,6 +27,13 @@ self.addEventListener('activate', (e: ExtendableEvent) => {
       const keys = await caches.keys();
       await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
       await self.clients.claim();
+      // Tell every controlled tab to reload itself now that the new
+      // SW is in charge. Without this the page keeps running its
+      // pre-update JS until the user closes the tab — which is how
+      // a fresh `agentum serve` ends up serving a "stale" dashboard
+      // to anyone whose tab was open across the redeploy.
+      const tabs = await self.clients.matchAll({ type: 'window' });
+      for (const tab of tabs) tab.postMessage({ type: 'sw:updated', version });
     })()
   );
 });

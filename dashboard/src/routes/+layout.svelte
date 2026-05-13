@@ -81,6 +81,17 @@
     }
   }
 
+  // Service-worker bus: when a new SW activates after a daemon
+  // redeploy it posts `sw:updated` to every controlled tab. Auto-
+  // reload picks up the fresh bundle so the user doesn't have to
+  // close+reopen tabs (or hit DevTools → Unregister) to see the
+  // changes a `cargo build` just embedded.
+  function onSwMessage(e: MessageEvent) {
+    if (e.data && typeof e.data === 'object' && e.data.type === 'sw:updated') {
+      location.reload();
+    }
+  }
+
   onMount(() => {
     // Push the persisted accent + density onto :root before first paint.
     applyTweaks(getStore(tweaks));
@@ -88,6 +99,9 @@
     // when an embedded xterm.js pane has focus and would otherwise call
     // preventDefault on the keydown before it bubbles up.
     window.addEventListener('keydown', onKey, true);
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', onSwMessage);
+    }
     // Start the dashboard↔TUI theme bridge. `startThemeBridge` is
     // idempotent and safe pre-auth; `pullPreferences` no-ops when the
     // request fails (older daemon, unauthenticated, offline).
@@ -120,6 +134,9 @@
     });
     return () => {
       window.removeEventListener('keydown', onKey, true);
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', onSwMessage);
+      }
       clearInterval(fleetTimer);
       unsub();
     };

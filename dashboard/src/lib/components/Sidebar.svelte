@@ -108,12 +108,19 @@
   });
 
   /**
-   * Profile name in the `@<id>` form. User feedback: "I like the way
-   *  of the dot (@)" — the prefix makes peers read at a glance, and
-   *  using the same shape for local + remote keeps the visual
-   *  uniform so no profile reads as a "special case".
+   * Match the TUI's `profile_label()` exactly so the dashboard reads
+   * the same as `agentum terminal`:
+   *   - Loopback (no baseUrl) → real hostname from /api/health
+   *     ("omarchy", "mateo-mac"). Falls back to "local" if the probe
+   *     hasn't landed yet.
+   *   - Named profile → `@<id>` (`@vps`).
+   * Single source of truth lives server-side; we just mirror it.
    */
   function serverLabel(p: Profile): string {
+    if (!p.baseUrl) {
+      const host = $fleet[p.id]?.hostname?.trim();
+      return host || 'local';
+    }
     return `@${p.id}`;
   }
   function serverHostHint(p: Profile): string {
