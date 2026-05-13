@@ -134,6 +134,21 @@ pub enum ActionKind {
     /// Persisted across runs via prefs. Reachable from the command
     /// palette and the Ctrl-O profiles overlay's `s` key.
     ToggleShowAllServers,
+
+    // ── Session CRUD ──────────────────────────────────────────────
+    /// Open the New Session form. Mirrors the `n` keybinding in the
+    /// tree so users can spawn an agent from the palette without
+    /// switching focus first.
+    NewSession,
+    /// Open the inline rename prompt for the given session. Mirrors
+    /// `Ctrl-R` from tree focus.
+    RenameSession(Uuid),
+    /// Confirm-start a stopped/idle session. Mirrors `u` / `Shift-U`
+    /// from tree focus.
+    StartSession(Uuid),
+    /// Confirm-stop a running session. Mirrors `s` / `Shift-S` from
+    /// tree focus.
+    StopSession(Uuid),
 }
 
 pub struct Catalog {
@@ -160,9 +175,13 @@ impl Catalog {
     /// present, its kill entry is pinned to the very top so
     /// the most likely action ("get rid of *this* terminal") is one
     /// keystroke away with no typing.
+    ///
+    /// Each session tuple is `(id, name, workdir, is_running)` where
+    /// `is_running` is true for Running status — used to gate Start / Stop
+    /// entries so the palette only shows the applicable verb.
     pub fn build(
         lazygit_open: bool,
-        sessions: &[(Uuid, String, String)], // (id, name, workdir)
+        sessions: &[(Uuid, String, String, bool)], // (id, name, workdir, is_running)
         selected: Option<Uuid>,
         view: ViewState,
         prefs: &super::prefs::Prefs,
@@ -174,7 +193,7 @@ impl Catalog {
         // Resolve the name from `sessions` so a stale `selected` (id no
         // longer in the list) silently drops without crashing.
         if let Some(id) = selected
-            && let Some((_, name, _)) = sessions.iter().find(|(sid, _, _)| *sid == id)
+            && let Some((_, name, _, _)) = sessions.iter().find(|(sid, _, _, _)| *sid == id)
         {
             a.push(Action {
                 label: format!("Kill this terminal: {name}"),
@@ -213,6 +232,12 @@ impl Catalog {
             hint: "t".into(),
             group: "general",
             kind: ActionKind::SpawnTerminal,
+        });
+        a.push(Action {
+            label: "New session…  (create agent)".into(),
+            hint: "n".into(),
+            group: "sessions",
+            kind: ActionKind::NewSession,
         });
 
         // Focus shortcuts.
@@ -397,24 +422,44 @@ impl Catalog {
             kind: ActionKind::CycleTheme,
         });
 
-        // Sessions. Each session contributes two entries (select / kill)
-        // so the destructive action is discoverable from the palette
-        // without forcing the user to navigate the tree first. They
-        // share the `sessions` group so the `#` prefix surfaces all of
-        // them; the explicit "Kill: …" label keeps it distinguishable
-        // from "Session: …" via subsequence match.
+        // Sessions. Each session contributes entries for select, rename,
+        // start/stop (based on current status), and kill — full CRUD from
+        // the palette without forcing the user to navigate the tree first.
+        // They share the `sessions` group so the `#` prefix surfaces all
+        // of them.
         //
         // The currently-selected session's kill entry is already pinned
         // at the top (above), so we skip emitting it again here — keeps
         // the catalogue tidy and stops the active session's kill from
         // showing up twice.
-        for (id, name, workdir) in sessions {
+        for (id, name, workdir, is_running) in sessions {
             a.push(Action {
                 label: format!("Session: {name}"),
                 hint: workdir.clone(),
                 group: "sessions",
                 kind: ActionKind::SelectSession(*id),
             });
+            a.push(Action {
+                label: format!("Rename session: {name}"),
+                hint: "Ctrl-R".into(),
+                group: "sessions",
+                kind: ActionKind::RenameSession(*id),
+            });
+            if *is_running {
+                a.push(Action {
+                    label: format!("Stop session: {name}"),
+                    hint: "s · Shift-S".into(),
+                    group: "sessions",
+                    kind: ActionKind::StopSession(*id),
+                });
+            } else {
+                a.push(Action {
+                    label: format!("Start session: {name}"),
+                    hint: "u · Shift-U".into(),
+                    group: "sessions",
+                    kind: ActionKind::StartSession(*id),
+                });
+            }
             if Some(*id) == selected {
                 continue;
             }

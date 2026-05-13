@@ -1088,6 +1088,13 @@ pub struct App {
     /// string means "default / loopback / `--api`" — same key shape
     /// as `clients`.
     pub session_profile: HashMap<Uuid, String>,
+    /// Profiles currently mid-reconnect. Sidebar swaps the status dot
+    /// for a spinner glyph while a name is in this set. Cleared on
+    /// soft-restart (the new `App` starts with an empty set) so the
+    /// spinner stops as soon as `run_loop` re-enters with the new
+    /// client. Keyed the same way as `clients` — `""` for loopback,
+    /// named profiles otherwise.
+    pub reconnecting: HashSet<String>,
 }
 
 /// One slot in [`App::clients`]. Tracks whether the server is
@@ -1214,6 +1221,7 @@ impl App {
             servers_cursor: 0,
             clients: HashMap::new(),
             session_profile: HashMap::new(),
+            reconnecting: HashSet::new(),
         }
     }
 
@@ -3847,26 +3855,21 @@ async fn handle_key(
                         }
                     };
                     let active = app.active_profile.clone().unwrap_or_default();
-                    if active == target {
-                        // Already on this one — no-op, but bounce the
-                        // cursor into the matching group so the user
-                        // still gets useful feedback from Enter.
-                        if let Some(idx) =
-                            app.tree.groups.iter().position(|g| g.profile == target)
-                        {
-                            app.tree.groups[idx].expanded = true;
-                            if let Some(row_idx) = app.tree.row_index_of(Row::Group(idx)) {
-                                app.tree.cursor = row_idx;
-                            }
-                            app.tree_section = TreeSection::Sessions;
-                        } else {
-                            let label = profile_label(&target);
-                            app.status_msg = Some(format!("already on {label}"));
-                        }
-                        return;
-                    }
                     let label = profile_label(&target);
-                    app.status_msg = Some(format!("switching to {label}…"));
+                    // Same-profile Enter is a re-connect, not a no-op:
+                    // useful when the daemon went away (Unreachable /
+                    // LoginNeeded) and the user wants to retry without
+                    // first switching to another server.
+                    if active == target {
+                        app.status_msg = Some(format!("reconnecting to {label}…"));
+                    } else {
+                        app.status_msg = Some(format!("switching to {label}…"));
+                    }
+                    // Mark the target as in-flight so the sidebar swaps
+                    // its status dot for a spinner glyph until the soft
+                    // restart completes (or fails). The new App starts
+                    // with an empty set, so the spinner stops naturally.
+                    app.reconnecting.insert(target.clone());
                     app.pending_switch_profile = Some(target);
                     app.pending_after_switch = None;
                     app.should_quit = true;
@@ -4734,10 +4737,17 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
 
 /// Build the live action catalog from current app state.
 pub fn palette_catalog(app: &App) -> Catalog {
-    let sessions: Vec<(Uuid, String, String)> = app
+    let sessions: Vec<(Uuid, String, String, bool)> = app
         .sessions
         .iter()
-        .map(|s| (s.id, s.name.clone(), s.workdir.clone()))
+        .map(|s| {
+            (
+                s.id,
+                s.name.clone(),
+                s.workdir.clone(),
+                matches!(s.status, agentum_core::Status::Running),
+            )
+        })
         .collect();
     let view = ViewState {
         sidebar_hidden: app.sidebar_hidden,
@@ -5016,7 +5026,11 @@ fn handle_profiles_key(app: &mut App, key: KeyEvent) {
                 // run_loop reads `pending_switch_profile` on quit and
                 // `commands::terminal::run` re-enters with the new
                 // server. `pending_after_switch` stays None — the
-                // overlay path doesn't carry a follow-up.
+                // overlay path doesn't carry a follow-up. Mark the
+                // target reconnecting so the sidebar spinner is also
+                // shown during the brief alt-screen tear-down (the new
+                // App starts with an empty set, so it clears itself).
+                app.reconnecting.insert(entry.name.clone());
                 app.pending_switch_profile = Some(entry.name.clone());
                 app.pending_after_switch = None;
                 app.should_quit = true;
@@ -5588,6 +5602,46 @@ async fn run_palette_action(
             mirror_layout_from_prefs(app);
             prefs::save(&app.prefs);
             app.status_msg = Some("settings · reset to defaults".into());
+        }
+
+        // ── Session CRUD from palette ─────────────────────────────
+        ActionKind::NewSession => {
+            let (profile, workdir) = if let Some(s) = app.selected_session() {
+                let owning_profile = app.profile_for_session(s.id).to_string();
+                (owning_profile, s.workdir.clone())
+            } else {
+                let active = app.active_profile.clone().unwrap_or_default();
+                let home = match client.list_dir(None).await {
+                    Ok(listing) => listing.path,
+                    Err(_) => std::env::var("HOME").unwrap_or_default(),
+                };
+                (active, home)
+            };
+            app.overlay =
+                Overlay::NewSession(Box::new(NewSessionForm::with_profile(profile, workdir)));
+        }
+        ActionKind::RenameSession(id) => {
+            if let Some(s) = app.sessions.iter().find(|s| s.id == id) {
+                let name = s.name.clone();
+                app.overlay = Overlay::Rename(RenameState::new(id, &name));
+                app.status_msg = Some("rename (Enter save · Esc cancel)".into());
+            }
+        }
+        ActionKind::StartSession(id) => {
+            if let Some(s) = app.sessions.iter().find(|s| s.id == id) {
+                app.overlay = Overlay::Confirm(PendingAction::Start {
+                    id,
+                    name: s.name.clone(),
+                });
+            }
+        }
+        ActionKind::StopSession(id) => {
+            if let Some(s) = app.sessions.iter().find(|s| s.id == id) {
+                app.overlay = Overlay::Confirm(PendingAction::Stop {
+                    id,
+                    name: s.name.clone(),
+                });
+            }
         }
     }
 }
