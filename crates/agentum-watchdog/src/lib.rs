@@ -467,4 +467,26 @@ mod tests {
             ActivityState::Unknown,
         );
     }
+
+    #[test]
+    fn classify_activity_multichoice_menu() {
+        // Regression: Claude Code multi-choice menus (plan mode,
+        // subagent picks) show `Enter to select · ↑/↓ to navigate`
+        // instead of a "Do you want to proceed?" yes/no. The
+        // first option starts with arbitrary text, not "Yes", so the
+        // legacy signatures miss it and the watchdog stayed in Idle
+        // — no notification, no yellow attention dot.
+        let busy = Some("esc to interrupt");
+        let awaiting = [
+            "Do you want to proceed?",
+            "❯ 1. Yes",
+            "Enter to select",
+            "↑/↓ to navigate",
+        ];
+        let menu = "❯ 1. Re-apply both files\n  2. CSP-only fix\n\nEnter to select · ↑/↓ to navigate · Esc to cancel";
+        assert_eq!(
+            classify_activity(menu, busy, &awaiting),
+            ActivityState::AwaitingInput,
+        );
+    }
 }
