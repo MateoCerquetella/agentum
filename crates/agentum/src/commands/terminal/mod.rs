@@ -178,7 +178,16 @@ pub async fn run(opts: Options) -> Result<()> {
                 let mut next = initial_opts.clone();
                 next.api = None;
                 next.fingerprint = None;
-                next.profile = Some(name.clone());
+                // Empty name = the synthetic loopback row in the
+                // sidebar. Passing `Some("")` into `apply_profile`
+                // would trip the `profile `` not found` bail at
+                // mod.rs:897 — so clear it and let the resolution
+                // rules probe the loopback daemon instead.
+                next.profile = if name.is_empty() {
+                    None
+                } else {
+                    Some(name.clone())
+                };
                 current_opts = apply_profile(next).await?;
                 let connected = match connect_once(&current_opts).await {
                     Ok(c) => c,

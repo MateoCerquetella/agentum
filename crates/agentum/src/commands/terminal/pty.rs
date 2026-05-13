@@ -166,11 +166,16 @@ impl LocalPty {
         Ok(())
     }
 
-    /// Has the child exited (without blocking)?
-    pub fn finished(&self) -> bool {
+    /// Non-blocking poll for the child's exit status. Returns `None`
+    /// while the child is still alive (or the mutex was poisoned —
+    /// callers treat that as "unknown, keep polling"). Used by the
+    /// run-loop to surface lazygit's exit code when it dies shortly
+    /// after spawn (typical for missing /dev/tty, "not a git repo",
+    /// or other early failures the user can't see otherwise).
+    pub fn exit_status(&self) -> Option<portable_pty::ExitStatus> {
         match self.child.lock() {
-            Ok(mut c) => matches!(c.try_wait(), Ok(Some(_))),
-            Err(_) => true,
+            Ok(mut c) => c.try_wait().ok().flatten(),
+            Err(_) => None,
         }
     }
 }

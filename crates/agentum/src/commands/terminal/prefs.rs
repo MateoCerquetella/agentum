@@ -121,6 +121,16 @@ pub struct Prefs {
     /// Persisted because the choice survives session restarts — most
     /// users either want the section in their face or not at all.
     pub servers_collapsed: bool,
+    /// Show sessions from every reachable server in the sidebar tree
+    /// (default), versus scoping the tree to just the active server.
+    /// Default ON is the recommended setup: the TUI already fans out
+    /// to every configured profile at startup, and showing the whole
+    /// fleet in one tree is the feature multi-server users boot the
+    /// TUI for. Flipping it off when the fleet is noisy lets a user
+    /// concentrate on one server without losing access to the others
+    /// (the SERVERS section still lists every profile so Enter can
+    /// retarget).
+    pub show_all_servers: bool,
 
     // ---- notifications -------------------------------------------------
     /// Master sound switch. When `false`, no notification sounds play
@@ -157,6 +167,7 @@ impl Default for Prefs {
             sidebar_hidden: false,
             right_panel_visible: true,
             servers_collapsed: false,
+            show_all_servers: true,
 
             sound_master: true,
             sound_info: true,

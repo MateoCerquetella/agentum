@@ -823,6 +823,11 @@ pub struct App {
     /// rendered surface and the j/k traversal change. Toggled via the
     /// `Ctrl-K V` chord ("view servers") or the command palette.
     pub servers_collapsed: bool,
+    /// Show sessions from every reachable server in the tree, or scope
+    /// the tree to just the active server's sessions. Default is "show
+    /// all" — that's the multi-server view the fanout is built for.
+    /// Mirrors `prefs.show_all_servers`; rebuilds the tree on flip.
+    pub show_all_servers: bool,
     /// Multi-key chord prefix awaiting a follow-up. `Some('K')` means we
     /// just consumed Ctrl-K and the next keystroke decides the action
     /// (VS Code parity: Ctrl-K Z = fullscreen, Ctrl-K B = sidebar, …).
@@ -1152,6 +1157,7 @@ impl App {
             fullscreen: false,
             sidebar_hidden: prefs.sidebar_hidden,
             servers_collapsed: prefs.servers_collapsed,
+            show_all_servers: prefs.show_all_servers,
             chord: None,
             filter_input_active: false,
             error_count: 0,
@@ -1366,7 +1372,7 @@ impl App {
         // search shouldn't vanish just because the session list changed.
         let prev_filter = self.tree.filter_str().to_string();
         self.sessions = sessions;
-        self.tree = Tree::build_with_profiles(&self.sessions, &self.session_profile, &prev_state);
+        self.tree = self.build_scoped_tree(&prev_state);
         if !prev_filter.is_empty() {
             self.tree.set_filter(&prev_filter);
         }
@@ -1397,6 +1403,34 @@ impl App {
             self.term_input_lines
                 .retain(|id, _| self.sessions.iter().any(|s| s.id == *id));
         }
+    }
+
+    /// Build the sidebar tree honouring the current `show_all_servers`
+    /// scope. When the toggle is on (default) the tree spans every
+    /// reachable profile's sessions; when off, it's scoped to whichever
+    /// profile is currently active so a noisy fleet doesn't bury the
+    /// session the user is actually driving. The SERVERS section itself
+    /// keeps listing every profile in both modes — scoping only affects
+    /// which session leaves appear under SESSIONS.
+    pub fn build_scoped_tree(&self, prev: &HashMap<String, bool>) -> Tree {
+        if self.show_all_servers {
+            return Tree::build_with_profiles(&self.sessions, &self.session_profile, prev);
+        }
+        let active = self.active_profile.clone().unwrap_or_default();
+        let scoped: Vec<Session> = self
+            .sessions
+            .iter()
+            .filter(|s| {
+                let owner = self
+                    .session_profile
+                    .get(&s.id)
+                    .map(String::as_str)
+                    .unwrap_or("");
+                owner == active.as_str()
+            })
+            .cloned()
+            .collect();
+        Tree::build_with_profiles(&scoped, &self.session_profile, prev)
     }
 
     pub fn lazygit_open(&self) -> bool {
@@ -2140,7 +2174,7 @@ pub async fn run_loop(
     // session. `App::new` builds with an empty profile map, which
     // would put every session in the "default" group; rebuilding
     // here gives the correct (profile, workdir) grouping.
-    app.tree = Tree::build_with_profiles(&app.sessions, &app.session_profile, &HashMap::new());
+    app.tree = app.build_scoped_tree(&HashMap::new());
 
     // Default profile: the live `client` we got from `connect_once`.
     // Keyed under the active profile name (or "" for loopback) so
@@ -2338,15 +2372,40 @@ pub async fn run_loop(
         }
 
         // If lazygit exited on its own, drop it and revert focus.
+        //
+        // Drain any messages the reader thread queued before exit so
+        // the parser ingests lazygit's final frame BEFORE we move the
+        // pane out. Without this drain, finished() can fire between
+        // the reader thread enqueueing the fatal-error frame and the
+        // tokio::select loop processing it — the bytes get orphaned
+        // and the user sees a context-free "lazygit exited" toast.
+        // Most-frequent cause: lazygit opens, fails ("not a git
+        // repo", `/dev/tty` open error, etc.), prints to stderr,
+        // exits in tens of milliseconds, and the error is gone before
+        // any frame renders.
+        if app.lazygit.is_some() {
+            while let Ok(msg) = lg_rx.try_recv() {
+                handle_lazygit_msg(&mut app, msg);
+            }
+        }
         if let Some(lg) = app.lazygit.as_ref()
-            && lg.finished()
+            && let Some(exit) = lg.exit_status()
         {
+            let tail = capture_screen_tail(lg.screen(), 8);
             app.lazygit = None;
             app.lazygit_cwd = None;
             if app.focus == Focus::Lazygit {
                 app.focus = Focus::Tree;
             }
-            app.status_msg = Some("lazygit exited".into());
+            let trimmed = tail.trim_end_matches('\n').trim_end();
+            if trimmed.is_empty() {
+                app.status_msg = Some(format!("lazygit exited (code {})", exit.exit_code()));
+            } else {
+                app.push_error(format!(
+                    "lazygit exited (code {}):\n{trimmed}",
+                    exit.exit_code()
+                ));
+            }
         }
 
         tokio::select! {
@@ -2726,6 +2785,36 @@ fn extract_selection_text(app: &App, sel: TermSelection) -> String {
         }
     }
     out
+}
+
+/// Pull the last `max_lines` non-blank rows off a vt100 screen and
+/// return them joined with `\n`. Used by the lazygit-exit path to
+/// surface the child's final frame as an error message — most lazygit
+/// startup failures (no git repo, missing /dev/tty, version checks)
+/// print one or two lines to the controlling TTY and then exit before
+/// any UI renders, so the visible-screen tail is exactly the
+/// diagnostic the user needs.
+fn capture_screen_tail(screen: &vt100::Screen, max_lines: usize) -> String {
+    let (rows, cols) = screen.size();
+    let mut out: Vec<String> = Vec::new();
+    for r in 0..rows {
+        let mut line = String::new();
+        for c in 0..cols {
+            if let Some(cell) = screen.cell(r, c) {
+                line.push_str(&cell.contents());
+            }
+        }
+        let trimmed = line.trim_end().to_string();
+        if !trimmed.is_empty() {
+            out.push(trimmed);
+        }
+    }
+    // Keep only the trailing N lines; the head is usually blank
+    // screen-clear padding or stale buffer state.
+    if out.len() > max_lines {
+        out = out.split_off(out.len() - max_lines);
+    }
+    out.join("\n")
 }
 
 /// Copy text to the host terminal's clipboard via OSC 52.
@@ -3730,49 +3819,46 @@ async fn handle_key(
         KeyCode::Enter => {
             match app.tree_section {
                 TreeSection::Servers => {
-                    // Jump the cursor down into the Sessions tree's
-                    // group for this server. No soft-restart, no active-
-                    // profile switch — the whole fleet's sessions are
-                    // already rendered together in one tree, so the user's
-                    // intent here is navigation, not re-targeting. To
-                    // change which server new spawns default to, use
-                    // Ctrl-O (Profiles overlay) or the New Session form's
-                    // Profile field.
-                    //
-                    // Cursor 0 is the synthetic "this machine" row → "".
-                    // Cursors 1..=N map to `app.profiles[0..N]`.
-                    let target_profile: Option<String> = if app.servers_cursor == 0 {
-                        Some(String::new())
+                    // Switch the active profile to whichever server the
+                    // cursor sits on. Mirrors the Ctrl-O overlay's Enter
+                    // — schedules a soft restart via `pending_switch_profile`
+                    // so the run-loop tears down and reconnects against
+                    // the new target. Cursor 0 is the synthetic
+                    // "this machine" row → empty profile name, which the
+                    // mod.rs SwitchProfile arm translates to `None` so
+                    // apply_profile takes the loopback-detection path.
+                    let target: String = if app.servers_cursor == 0 {
+                        String::new()
                     } else {
-                        app.profiles
-                            .get(app.servers_cursor - 1)
-                            .map(|e| e.name.clone())
+                        match app.profiles.get(app.servers_cursor - 1) {
+                            Some(e) => e.name.clone(),
+                            None => return,
+                        }
                     };
-                    let Some(target) = target_profile else {
-                        return;
-                    };
-                    let gi = app.tree.groups.iter().position(|g| g.profile == target);
-                    match gi {
-                        Some(idx) => {
-                            // Expand the group so the user sees its
-                            // sessions; the cursor jump lands on the
-                            // group header itself (move-down with j to
-                            // dive into the leaves).
+                    let active = app.active_profile.clone().unwrap_or_default();
+                    if active == target {
+                        // Already on this one — no-op, but bounce the
+                        // cursor into the matching group so the user
+                        // still gets useful feedback from Enter.
+                        if let Some(idx) =
+                            app.tree.groups.iter().position(|g| g.profile == target)
+                        {
                             app.tree.groups[idx].expanded = true;
                             if let Some(row_idx) = app.tree.row_index_of(Row::Group(idx)) {
                                 app.tree.cursor = row_idx;
                             }
                             app.tree_section = TreeSection::Sessions;
-                        }
-                        None => {
-                            // No sessions for this server yet — stay on
-                            // the Servers section but tell the user why
-                            // the jump didn't go anywhere so it doesn't
-                            // look like Enter is silently broken.
+                        } else {
                             let label = profile_label(&target);
-                            app.status_msg = Some(format!("no sessions on {label} yet"));
+                            app.status_msg = Some(format!("already on {label}"));
                         }
+                        return;
                     }
+                    let label = profile_label(&target);
+                    app.status_msg = Some(format!("switching to {label}…"));
+                    app.pending_switch_profile = Some(target);
+                    app.pending_after_switch = None;
+                    app.should_quit = true;
                 }
                 TreeSection::Sessions => {
                     // Toggle the leaf under the cursor in the multi-select
@@ -4648,6 +4734,7 @@ pub fn palette_catalog(app: &App) -> Catalog {
         fullscreen: app.fullscreen,
         split_open: app.split_open(),
         servers_collapsed: app.servers_collapsed,
+        show_all_servers: app.show_all_servers,
     };
     Catalog::build(
         app.lazygit_open(),
@@ -4662,6 +4749,41 @@ pub fn palette_catalog(app: &App) -> Catalog {
 /// install it on `app`. Surfaces a friendly error in the overlay
 /// itself when the file is unreadable or empty rather than silently
 /// no-op'ing — the user just hit Ctrl-O for a reason.
+/// Flip `show_all_servers`, rebuild the tree against the new scope,
+/// persist to prefs, and surface a status toast describing the new
+/// state. Used by both the palette action and the Ctrl-O overlay's
+/// `s` key so the two surfaces stay in lockstep.
+pub fn toggle_show_all_servers(app: &mut App) {
+    app.show_all_servers = !app.show_all_servers;
+    app.prefs.show_all_servers = app.show_all_servers;
+    prefs::save(&app.prefs);
+    // Capture the user's fold state across the rebuild — same trick
+    // `refresh_sessions` uses so flipping the scope doesn't reset
+    // every collapsed group.
+    let mut prev_state: HashMap<String, bool> = HashMap::new();
+    for g in &app.tree.groups {
+        prev_state.insert(server_expand_key(&g.profile), g.expanded);
+        for p in &g.projects {
+            prev_state.insert(project_expand_key(&g.profile, &p.workdir), p.expanded);
+        }
+    }
+    let prev_filter = app.tree.filter_str().to_string();
+    app.tree = app.build_scoped_tree(&prev_state);
+    if !prev_filter.is_empty() {
+        app.tree.set_filter(&prev_filter);
+    }
+    app.tree.clamp_cursor();
+    if let Some(id) = app.selected {
+        app.tree.select_session(id);
+    }
+    app.status_msg = Some(if app.show_all_servers {
+        "showing sessions from all servers".into()
+    } else {
+        let label = profile_label(app.active_profile.as_deref().unwrap_or(""));
+        format!("showing sessions on {label} only")
+    });
+}
+
 pub fn open_profiles_overlay(app: &mut App) {
     let (entries, default_name, error) = match super::profiles::Profiles::load() {
         Ok(store) => {
@@ -4834,6 +4956,14 @@ fn handle_profiles_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Char('a') | KeyCode::Char('+') | KeyCode::Char('n') => {
             state.add_form = Some(AddProfileForm::new());
+            app.overlay = Overlay::Profiles(state);
+        }
+        KeyCode::Char('s') | KeyCode::Char('S') => {
+            // Toggle the tree's scope ("all servers" vs "active only")
+            // without leaving the overlay. The header line at the top
+            // of the overlay reflects the new state on the next draw
+            // so the user gets immediate feedback.
+            toggle_show_all_servers(app);
             app.overlay = Overlay::Profiles(state);
         }
         KeyCode::Char('d') | KeyCode::Char('D') => {
@@ -5332,6 +5462,9 @@ async fn run_palette_action(
                 "servers section expanded".into()
             });
         }
+        ActionKind::ToggleShowAllServers => {
+            toggle_show_all_servers(app);
+        }
         ActionKind::ToggleRightPanel => {
             app.right_panel_visible = !app.right_panel_visible;
             app.prefs.right_panel_visible = app.right_panel_visible;
@@ -5407,7 +5540,9 @@ async fn run_palette_action(
         }
         ActionKind::OpenProfiles => {
             open_profiles_overlay(app);
-            app.status_msg = Some("servers (Enter switch · a add · d remove · Esc close)".into());
+            app.status_msg = Some(
+                "servers (Enter switch · a add · d remove · s scope · Esc close)".into(),
+            );
         }
         ActionKind::ToggleSoundMaster => {
             let on = app.prefs.toggle_sound_master();

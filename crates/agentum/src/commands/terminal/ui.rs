@@ -358,7 +358,14 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         Overlay::Settings(state) => draw_settings_overlay(f, f.area(), state, &app.prefs, p),
         Overlay::Rename(state) => draw_rename_overlay(f, f.area(), state, p),
         Overlay::Profiles(state) => {
-            draw_profiles_overlay(f, f.area(), state, app.active_profile.as_deref(), p)
+            draw_profiles_overlay(
+                f,
+                f.area(),
+                state,
+                app.active_profile.as_deref(),
+                app.show_all_servers,
+                p,
+            )
         }
     }
 }
@@ -1698,6 +1705,7 @@ fn draw_profiles_overlay(
     area: Rect,
     state: &ProfilesOverlay,
     active: Option<&str>,
+    show_all_servers: bool,
     p: &Palette,
 ) {
     // Two visual modes: a list of profiles, or the inline add-form.
@@ -1709,6 +1717,18 @@ fn draw_profiles_overlay(
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(head("Servers", p));
+    // Tree-scope chip: surfaces the `show_all_servers` flag so users
+    // know which mode the sidebar is in before they flip with `s`.
+    // "all" is the recommended default; "active only" is the focus mode.
+    let scope_label = if show_all_servers {
+        "scope: all servers' sessions  (recommended)"
+    } else {
+        "scope: active server only"
+    };
+    lines.push(Line::from(Span::styled(
+        format!("  {scope_label}"),
+        Style::default().fg(p.muted),
+    )));
     lines.push(Line::from(""));
 
     if let Some(err) = state.error.as_ref() {
@@ -1778,7 +1798,7 @@ fn draw_profiles_overlay(
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  Enter switch · a add · d remove · Esc close".to_string(),
+        "  Enter switch · a add · d remove · s scope · Esc close".to_string(),
         Style::default().fg(p.muted),
     )));
 

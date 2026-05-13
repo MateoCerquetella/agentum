@@ -129,6 +129,11 @@ pub enum ActionKind {
     /// Collapse / expand the SERVERS section of the sidebar. Mirrors
     /// the `Ctrl-K V` chord. Persisted across runs via prefs.
     ToggleServers,
+    /// Toggle "show sessions from every reachable server" (default,
+    /// recommended) vs "scope the tree to the active server only".
+    /// Persisted across runs via prefs. Reachable from the command
+    /// palette and the Ctrl-O profiles overlay's `s` key.
+    ToggleShowAllServers,
 }
 
 pub struct Catalog {
@@ -146,6 +151,7 @@ pub struct ViewState {
     pub fullscreen: bool,
     pub split_open: bool,
     pub servers_collapsed: bool,
+    pub show_all_servers: bool,
 }
 
 impl Catalog {
@@ -284,6 +290,19 @@ impl Catalog {
             hint: "Ctrl-K V".into(),
             group: "view",
             kind: ActionKind::ToggleServers,
+        });
+        // Tree scope — show every reachable server's sessions
+        // (default, recommended) vs scope to just the active server.
+        // Calling out the recommendation in-label so a user browsing
+        // the palette knows which way to land.
+        a.push(Action {
+            label: format!(
+                "View: show all servers' sessions [{}] (recommended on)",
+                onoff(view.show_all_servers)
+            ),
+            hint: "Ctrl-O · s".into(),
+            group: "view",
+            kind: ActionKind::ToggleShowAllServers,
         });
 
         // Status-bar settings — one entry per chip. Renders the chip
