@@ -266,6 +266,17 @@ export async function fetchProfile(
   if (!headers.has('content-type') && init.body) {
     headers.set('content-type', 'application/json');
   }
-  if (profile.token) headers.set('authorization', `Bearer ${profile.token}`);
+  // Loopback profile (baseUrl === '') talks to page origin — same server
+  // as whatever the user is authenticated against. Falling back to the
+  // active profile's token here fixes the silent 401 that hid local
+  // sessions when the legacy migration didn't stamp the local row
+  // (e.g. user logged in *after* adding a remote profile, so only the
+  // active profile carries a token).
+  let token = profile.token;
+  if (!token && !profile.baseUrl) {
+    const active = getActiveProfile();
+    if (active.token) token = active.token;
+  }
+  if (token) headers.set('authorization', `Bearer ${token}`);
   return fetch(apiUrlForProfile(profileId, path), { ...init, headers });
 }

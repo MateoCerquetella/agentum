@@ -53,26 +53,6 @@
     return () => { cancelled = true; };
   });
 
-  // OS detection for the local row's "MY MACHINE (<os>)" label.
-  // The local profile points to the page origin, which is the daemon
-  // serving this dashboard. UA-CH `userAgentData.platform` is the
-  // modern signal; we fall back to `navigator.platform` (deprecated
-  // but still populated) so this works across browsers.
-  function detectOs(): string {
-    if (typeof navigator === 'undefined') return '';
-    interface UaData { platform?: string }
-    const ua = (navigator as Navigator & { userAgentData?: UaData }).userAgentData;
-    const raw = (ua?.platform || navigator.platform || '').toLowerCase();
-    if (!raw) return '';
-    if (raw.includes('mac')) return 'macos';
-    if (raw.includes('win')) return 'windows';
-    if (raw.includes('linux')) return 'linux';
-    if (raw.includes('android')) return 'android';
-    if (raw.includes('iphone') || raw.includes('ipad')) return 'ios';
-    return raw;
-  }
-  const localOs = $derived(detectOs());
-
   function projectOf(workdir: string | null | undefined): string {
     if (!workdir) return '—';
     const parts = workdir.replace(/\/+$/, '').split('/');
@@ -128,23 +108,12 @@
   });
 
   /**
-   * Display label per the user's TUI feedback:
-   *   - Local profile (no baseUrl) → `MY MACHINE (<os>)`. The OS tag
-   *     is detected client-side because `/api/health` doesn't expose
-   *     it; the dashboard is served from the same machine as its
-   *     daemon, so navigator OS ≈ daemon OS in practice.
-   *   - Named profiles → `@<id>`. User feedback: "I like the way of
-   *     the dot (@)" — the prefix makes peers read at a glance.
+   * Profile name in the `@<id>` form. User feedback: "I like the way
+   *  of the dot (@)" — the prefix makes peers read at a glance, and
+   *  using the same shape for local + remote keeps the visual
+   *  uniform so no profile reads as a "special case".
    */
   function serverLabel(p: Profile): string {
-    if (!p.baseUrl) {
-      const host = $fleet[p.id]?.hostname?.trim();
-      const os = localOs;
-      if (host && os) return `MY MACHINE · ${host} (${os})`;
-      if (os) return `MY MACHINE (${os})`;
-      if (host) return `MY MACHINE · ${host}`;
-      return 'MY MACHINE';
-    }
     return `@${p.id}`;
   }
   function serverHostHint(p: Profile): string {
