@@ -758,6 +758,18 @@ async fn stream_session(
                         break;
                     }
                     bytes_forwarded += len;
+                    // Keep the checkpoint live so a concurrent reconnect
+                    // can take the (cheap) delta path instead of the
+                    // (destructive) snapshot path. Without this, the
+                    // checkpoint only updates at disconnect — and the
+                    // disconnect write loses the race against any
+                    // reconnect that arrives in the same millisecond.
+                    save_checkpoint(
+                        &positions,
+                        id,
+                        tail_start_pos.saturating_add(bytes_forwarded),
+                        current_size,
+                    );
                 }
                 None => break, // tail task ended (file error / eof on dead pane)
             },
@@ -784,6 +796,16 @@ async fn stream_session(
                         // client actually left, not the size we captured
                         // in the early-input window.
                         current_size = Some((cols, rows));
+                        // Refresh the live checkpoint with the new size
+                        // so a concurrent reconnect's size-match gate
+                        // doesn't fall back to a fresh snapshot just
+                        // because the saved size is stale.
+                        save_checkpoint(
+                            &positions,
+                            id,
+                            tail_start_pos.saturating_add(bytes_forwarded),
+                            current_size,
+                        );
                         if let Err(e) = agentum_tmux::resize_window(&target, cols, rows).await
                             && socket
                                 .send(Message::Text(format!("[resize dropped: {e}]").into()))
@@ -807,23 +829,39 @@ async fn stream_session(
         }
     }
     tail_handle.abort();
-    // Save the log position + pane size the next reconnect should
-    // resume from. We started tailing at `tail_start_pos` and the outer
-    // loop forwarded `bytes_forwarded` bytes to the client, so the
-    // file position to pick up from is the sum. The size is whatever
-    // the client last asked for (defaulting to 0×0 if they never sent
-    // a resize, in which case the size-mismatch gate will force a
-    // fresh snapshot on next connect — the safe choice).
+    // Final save on disconnect — typically redundant now that we stamp
+    // the checkpoint live during the forward loop, but keeps the
+    // invariant that the last byte forwarded is reflected even if the
+    // very last `save_checkpoint` call lost a race with the abort.
+    save_checkpoint(
+        &positions,
+        id,
+        tail_start_pos.saturating_add(bytes_forwarded),
+        current_size,
+    );
+}
+
+/// Insert / overwrite the resume checkpoint for `id`. Called at two
+/// points: every successful byte-forward (so a concurrent reconnect's
+/// resume delta reflects the bytes the client actually received), and
+/// on disconnect (final safety net for the rare case where the loop
+/// exits between forwards). Stamping during the loop is what closes
+/// the original race — switching A→B→A in the TUI used to land the
+/// new connection before the old one wrote its only checkpoint, the
+/// new task read None, fell through to a fresh RIS + capture-pane
+/// snapshot, and wiped the TUI's restored cached parser. Sizes
+/// default to 0×0 when the client never sent a resize — the resume
+/// path's size-match gate then forces a fresh snapshot, which is the
+/// safe choice for legacy clients.
+fn save_checkpoint(
+    positions: &Arc<std::sync::Mutex<std::collections::HashMap<Uuid, StreamCheckpoint>>>,
+    id: Uuid,
+    pos: u64,
+    size: Option<(u16, u16)>,
+) {
     if let Ok(mut map) = positions.lock() {
-        let (cols, rows) = current_size.unwrap_or((0, 0));
-        map.insert(
-            id,
-            StreamCheckpoint {
-                pos: tail_start_pos.saturating_add(bytes_forwarded),
-                cols,
-                rows,
-            },
-        );
+        let (cols, rows) = size.unwrap_or((0, 0));
+        map.insert(id, StreamCheckpoint { pos, cols, rows });
     }
 }
 
