@@ -4,6 +4,29 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.41] — 2026-05-14
+
+### Fixed
+- **Installer order**: "Create admin account?" and "Start agentum now?"
+  now fire *before* the "Get started" reference card. Users were being
+  shown a list of steps and then asked questions — the order is
+  reversed so by the time they see the reference card, the setup
+  prompts are already behind them.
+- **Stale `’` literal**: the autostart prompt's "No — I'll start
+  it manually later" line was rendering as literal `’` because
+  POSIX `printf '...'` doesn't interpret unicode escapes. Switched to
+  a plain ASCII apostrophe inside double quotes.
+- **Reference card simplified**: dropped the "Start the server"
+  step (the autostart prompt already handles that), reformatted as
+  `Dashboard / Terminal / New agent / Health` keys instead of a
+  numbered checklist.
+
+### Changed
+- "Create admin account now?" prompt collapsed to one line. The
+  prior version had two grey help lines explaining you could also
+  register later — that's already covered by the binary's own help
+  and `agentum auth setup` is discoverable.
+
 ## [0.7.40] — 2026-05-14
 
 ### Fixed
