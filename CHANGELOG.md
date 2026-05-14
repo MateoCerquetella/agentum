@@ -4,6 +4,20 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.42] — 2026-05-14
+
+### Added
+- **`agentum uninstall`**: removes the binary plus everything the
+  daemon wrote to disk (SQLite DB, TLS material, daemon logs, pane
+  log cache). On Linux also stops + disables the systemd user unit
+  if one was registered by the installer. By default keeps user
+  data (profiles, credentials, pinned hosts) so a reinstall lands
+  you back on your remote servers — pass `--all` to wipe those too.
+  Flags: `-y/--yes` (skip confirmation), `--all` (include user
+  data), `--dry-run` (preview without removing). Best-effort
+  shutdown of any running `agentum serve` via `pkill` before file
+  removal.
+
 ## [0.7.41] — 2026-05-14
 
 ### Fixed

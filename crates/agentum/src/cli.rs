@@ -268,6 +268,28 @@ EXAMPLES:
         action: ProfilesCmd,
     },
 
+    /// Remove the agentum binary and everything it wrote to disk.
+    ///
+    /// Wipes the database, TLS material, daemon logs, and the binary
+    /// itself. By default keeps the user's profiles + credentials so
+    /// a reinstall lands you back at your remote servers; pass
+    /// `--all` to remove those too. On Linux also stops and disables
+    /// the systemd user unit if the installer registered one.
+    ///
+    /// Use `--dry-run` to preview, `--yes` to skip the confirmation
+    /// prompt (handy in scripts).
+    Uninstall {
+        /// Skip the y/N confirmation prompt.
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Also remove user data (profiles, credentials, pinned hosts).
+        #[arg(long)]
+        all: bool,
+        /// Print what would be removed without removing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Update agentum to the latest release (re-runs install.sh).
     ///
     /// Downloads `releases/latest/download/install.sh` and pipes it to `sh`,
@@ -438,6 +460,14 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         }
         Cmd::Hosts { action } => crate::commands::hosts::run(action).await,
         Cmd::Profiles { action } => crate::commands::profiles::run(action).await,
+        Cmd::Uninstall { yes, all, dry_run } => {
+            crate::commands::uninstall::run(crate::commands::uninstall::Options {
+                yes,
+                all,
+                dry_run,
+            })
+            .await
+        }
         Cmd::Update { mode, force } => {
             let mode = match mode.as_deref() {
                 Some("server") => Some(crate::commands::update::Mode::Server),
