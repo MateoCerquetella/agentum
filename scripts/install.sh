@@ -310,11 +310,8 @@ offer_auth_setup() {
     [ "$HAS_TTY" = true ]     || return 0
 
     printf '\n'
-    printf '  %s▸%s %sCreate admin account now?%s\n' "${C_A}" "${C_R}" "${C_B}" "${C_R}"
-    printf '  %sYou can also register on first dashboard visit or run%s\n' "${C_D}" "${C_R}"
-    printf '  %s%sagentum auth setup%s%s later.%s\n' "${C_D}" "${C_C}" "${C_R}" "${C_D}" "${C_R}"
-    printf '\n'
-    printf '  %s[Y/n]:%s ' "${C_D}" "${C_R}"
+    printf '  %s▸%s %sCreate admin account now?%s ' "${C_A}" "${C_R}" "${C_B}" "${C_R}"
+    printf '%s[Y/n]:%s ' "${C_D}" "${C_R}"
     choice=""; read_input choice; choice="${choice:-y}"
     case "$choice" in
         y|Y|yes|Yes|YES)
@@ -351,7 +348,7 @@ offer_auto_start() {
     printf '  %s▸%s %sStart agentum now?%s\n\n' "${C_A}" "${C_R}" "${C_B}" "${C_R}"
     printf '  %s🖥️   [1] %sYes — start in background (survives terminal close)%s\n' "${C_B}" "${C_G}" "${C_R}"
     printf '  %s📋  [2] %sYes — auto-start at login (systemd user unit)%s\n' "${C_B}" "${C_BL}" "${C_R}"
-    printf '  %s✖   [3] %sNo — I\u2019ll start it manually later%s\n' "${C_B}" "${C_D}" "${C_R}"
+    printf "  %s✖   [3] %sNo — I'll start it manually later%s\n" "${C_B}" "${C_D}" "${C_R}"
     while true; do
         printf '  %sChoice [1-3] (1):%s ' "${C_D}" "${C_R}"
         choice=""; read_input choice; choice="${choice:-1}"
@@ -487,24 +484,28 @@ multi_server_tip() {
 post_host() {
     lan_ip="$(detect_lan_ip)"
     dash_url="https://${lan_ip}:8822"
+
+    # Setup steps first — the user shouldn't have to scroll past a
+    # reference card to find the actions still required of them.
+    offer_auth_setup
+    offer_auto_start "$dash_url"
+    register_local_profile "$dash_url"
+
+    # Reference card last: by this point auth + autostart are done,
+    # so these commands are "what to run when you want them again",
+    # not "what to run next".
     printf '\n'
     div " Get started "
     printf '\n'
-    h "1. Start the server:    ${C_C}agentum serve${C_R}"
-    h "2. Open the dashboard:  ${C_C}${dash_url}${C_R}  ${C_D}(self-signed TLS)${C_R}"
-    h "3. Open the TUI:        ${C_C}agentum terminal${C_R}"
-    h "4. Create an agent:     ${C_C}agentum new alpha --tool claude --dir . --up${C_R}"
+    h "Dashboard:   ${C_C}${dash_url}${C_R}  ${C_D}(self-signed TLS)${C_R}"
+    h "Terminal:    ${C_C}agentum terminal${C_R}"
+    h "New agent:   ${C_C}agentum new alpha --tool claude --dir . --up${C_R}"
+    h "Health:      ${C_C}agentum doctor${C_R}"
     if [ "$lan_ip" = "127.0.0.1" ]; then
         printf '\n'
         w "could not detect a LAN IP — dashboard will only be reachable from this machine."
         h "Other devices: run 'agentum doctor' once the daemon is up to see the URL."
     fi
-    printf '\n'
-    h "Health check: ${C_C}agentum doctor${C_R}"
-    printf '\n'
-    offer_auth_setup
-    offer_auto_start "$dash_url"
-    register_local_profile "$dash_url"
     multi_server_tip
 }
 
