@@ -172,6 +172,12 @@ pub enum Cmd {
         /// $XDG_STATE_HOME/agentum/daemon.log (or ~/.local/state/agentum/daemon.log).
         #[arg(long, short = 'd')]
         detach: bool,
+
+        /// Disable authentication entirely. All API routes are accessible
+        /// without a bearer token. The dashboard will not show a login screen.
+        /// Use only on localhost or a fully trusted private network.
+        #[arg(long)]
+        no_auth: bool,
     },
 
     /// Manage API authentication.
@@ -393,10 +399,11 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             no_tls,
             no_resume,
             detach,
+            no_auth,
         } => {
             let addr: SocketAddr = format!("{host}:{port}").parse()?;
             let cert_addr: SocketAddr = format!("{host}:{cert_port}").parse()?;
-            crate::commands::serve::run(addr, cert_addr, !no_tls, no_resume, detach).await
+            crate::commands::serve::run(addr, cert_addr, !no_tls, no_resume, detach, no_auth).await
         }
         Cmd::Auth { action } => crate::commands::auth::run(action).await,
         Cmd::Config { action } => crate::commands::config::run(action).await,

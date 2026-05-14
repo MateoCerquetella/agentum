@@ -98,6 +98,9 @@ pub struct AppState {
     /// `omarchy`, `mateo-mac`) instead of a generic placeholder. Cut
     /// at the first `.` so `omarchy.local` reads as `omarchy`.
     pub hostname: String,
+    /// When `true`, the auth middleware is bypassed and all API routes are
+    /// accessible without a bearer token. Set via `agentum serve --no-auth`.
+    pub no_auth: bool,
 }
 
 impl AppState {
@@ -124,6 +127,7 @@ impl AppState {
             transcripts,
             stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             hostname: detect_short_hostname(),
+            no_auth: false,
         }
     }
 }
@@ -154,6 +158,8 @@ pub struct ServeOptions {
     pub addr: SocketAddr,
     pub cert_addr: SocketAddr,
     pub tls: bool,
+    /// When `true`, skip all bearer-token checks. Set via `agentum serve --no-auth`.
+    pub no_auth: bool,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -221,7 +227,8 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
         .unwrap_or_default();
 
     let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
-    let state = AppState::with_fingerprint(store, bus.clone(), cert_fingerprint);
+    let mut state = AppState::with_fingerprint(store, bus.clone(), cert_fingerprint);
+    state.no_auth = opts.no_auth;
 
     if state.store.count_users().await.unwrap_or(0) == 0 {
         tracing::warn!(

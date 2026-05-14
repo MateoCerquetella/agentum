@@ -10,13 +10,18 @@ pub async fn run(
     tls: bool,
     no_resume: bool,
     detach: bool,
+    no_auth: bool,
 ) -> Result<()> {
     if detach {
         daemonize()?;
     }
 
     let (store, db_path) = super::open_store().await?;
-    tracing::info!(?db_path, %addr, %cert_addr, tls, "store opened");
+    tracing::info!(?db_path, %addr, %cert_addr, tls, no_auth, "store opened");
+
+    if no_auth {
+        tracing::warn!("--no-auth: authentication disabled — do NOT expose this to untrusted networks");
+    }
 
     // Boot everything: resume stopped/idle sessions that have a known tool.
     if !no_resume {
@@ -28,6 +33,7 @@ pub async fn run(
             addr,
             cert_addr,
             tls,
+            no_auth,
         },
         store,
     )

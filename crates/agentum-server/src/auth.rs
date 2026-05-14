@@ -145,11 +145,17 @@ fn hex_val(b: u8) -> Option<u8> {
 /// axum middleware. Looks up the bearer token in `auth_sessions`. If the
 /// token resolves to a user, the request continues; otherwise 401.
 /// Sliding expiry: each touch extends the row's `expires_at` by `SESSION_TTL`.
+/// When `state.no_auth` is set (via `agentum serve --no-auth`), all requests
+/// are passed through without any token check.
 pub async fn require_token(
     axum::extract::State(state): axum::extract::State<AppState>,
     req: Request<Body>,
     next: Next,
 ) -> Response {
+    if state.no_auth {
+        return next.run(req).await;
+    }
+
     let path = req.uri().path();
     if !path.starts_with("/api/") || is_public(path) {
         return next.run(req).await;

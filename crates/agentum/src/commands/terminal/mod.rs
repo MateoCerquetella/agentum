@@ -364,6 +364,12 @@ fn warn_label() -> &'static str {
 /// because the user couldn't tell which characters were the password vs.
 /// echo noise.
 async fn obtain_token(base: &Url, trust_setting: &TlsTrust) -> Result<String> {
+    // Fast-path: server has auth disabled (--no-auth). Return a dummy token;
+    // the middleware accepts every request regardless of token value.
+    if let Ok(true) = api::auth_is_disabled(base, trust_setting).await {
+        return Ok("no-auth".to_string());
+    }
+
     let host_key = trust::host_key(base)?;
     let mut creds = trust::Credentials::load()?;
 
@@ -528,7 +534,8 @@ async fn try_connect_loopback() -> ProfileConnect {
         last_error: Some(msg),
         agent_availability: None,
     };
-    for candidate in [DEFAULT_HTTPS, DEFAULT_HTTP] {
+    // HTTP-first: --no-tls is the common local-dev setup.
+    for candidate in [DEFAULT_HTTP, DEFAULT_HTTPS] {
         let Ok(base) = Url::parse(candidate) else {
             continue;
         };
@@ -828,7 +835,8 @@ async fn try_autostart_local_daemon() -> bool {
 /// the boot path doesn't pay the full TCP handshake latency on a
 /// host that isn't running `agentum serve`.
 async fn loopback_alive() -> bool {
-    for candidate in [DEFAULT_HTTPS, DEFAULT_HTTP] {
+    // HTTP-first: --no-tls is the common local-dev setup.
+    for candidate in [DEFAULT_HTTP, DEFAULT_HTTPS] {
         let Ok(base) = Url::parse(candidate) else {
             continue;
         };
@@ -940,10 +948,37 @@ async fn apply_profile(mut opts: Options) -> Result<Options> {
 
 async fn resolve_base(override_url: Option<String>) -> Result<Url> {
     if let Some(s) = override_url {
-        return Url::parse(&s).with_context(|| format!("invalid --api URL: {s}"));
+        let parsed = Url::parse(&s).with_context(|| format!("invalid --api URL: {s}"))?;
+        // For an explicit HTTPS URL, probe it first. If the health probe
+        // fails (e.g. the server is running with --no-tls and speaks plain
+        // HTTP), automatically retry with the HTTP equivalent so users
+        // don't have to manually fix their URL or profile.
+        if parsed.scheme() == "https" {
+            let host_key = trust::host_key(&parsed).unwrap_or_default();
+            let probe_trust = trust::KnownHosts::load()
+                .ok()
+                .and_then(|kh| kh.pin(&host_key).map(|s| s.to_string()))
+                .map(TlsTrust::Pinned)
+                .unwrap_or(TlsTrust::AcceptAny);
+            if api::probe_health(&parsed, &probe_trust, Duration::from_millis(750))
+                .await
+                .is_err()
+            {
+                // HTTPS probe failed — try plain HTTP for --no-tls setups.
+                let mut http = parsed.clone();
+                let _ = http.set_scheme("http");
+                if api::probe_health(&http, &TlsTrust::Plain, Duration::from_millis(750))
+                    .await
+                    .is_ok()
+                {
+                    return Ok(http);
+                }
+            }
+        }
+        return Ok(parsed);
     }
-    // Loopback discovery only — we never silently autodial a remote.
-    for candidate in [DEFAULT_HTTPS, DEFAULT_HTTP] {
+    // Loopback discovery: HTTP-first since --no-tls is common for local dev.
+    for candidate in [DEFAULT_HTTP, DEFAULT_HTTPS] {
         let parsed = Url::parse(candidate).expect("static URL");
         let trust = if parsed.scheme() == "https" {
             // Loopback HTTPS means the user's own self-signed cert. Any
@@ -966,7 +1001,7 @@ async fn resolve_base(override_url: Option<String>) -> Result<Url> {
         }
     }
     Err(anyhow!(
-        "no agentum daemon found on local machine ({DEFAULT_HTTPS} or {DEFAULT_HTTP}). \
+        "no agentum daemon found on local machine ({DEFAULT_HTTP} or {DEFAULT_HTTPS}). \
          Start one with `agentum serve` or connect to a remote server. \
          Run `agentum profiles add <name> <url>` to save a remote endpoint, \
          then `agentum terminal --profile <name>`."

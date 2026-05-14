@@ -216,6 +216,29 @@ pub async fn auth_needs_setup(base: &Url, trust: &TlsTrust) -> Result<bool> {
     Ok(r.needs_setup)
 }
 
+/// Returns `true` when the server was started with `--no-auth`. The TUI
+/// uses this to skip the credential flow and send a dummy bearer token
+/// (the middleware accepts all requests regardless of token value).
+pub async fn auth_is_disabled(base: &Url, trust: &TlsTrust) -> Result<bool> {
+    let url = base.join("/api/auth/status")?;
+    let http = build_http(trust)?;
+    let resp = http
+        .get(url)
+        .send()
+        .await
+        .context("auth status request failed")?;
+    if !resp.status().is_success() {
+        return Ok(false);
+    }
+    #[derive(serde::Deserialize)]
+    struct Resp {
+        #[serde(default)]
+        no_auth: bool,
+    }
+    let r: Resp = resp.json().await?;
+    Ok(r.no_auth)
+}
+
 /// POST /api/auth/register. Same payload as login. Only succeeds
 /// when the daemon reports `needs_setup = true` (zero users yet);
 /// after that the route is closed for the rest of the daemon's
