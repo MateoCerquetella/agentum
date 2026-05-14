@@ -136,30 +136,39 @@ impl Target {
 
 fn gather_targets(include_user_data: bool) -> Result<Vec<Target>> {
     let mut t = Vec::new();
+    let mut seen = std::collections::HashSet::<PathBuf>::new();
+
+    let mut push = |target: Target| {
+        // On macOS the `directories` crate maps data_dir and state_dir
+        // to the same path.  Deduplicate by canonical path so we don't
+        // try to remove the same directory twice — the second attempt
+        // would fail with "No such file or directory".
+        if seen.insert(target.path.clone()) {
+            t.push(target);
+        }
+    };
 
     // Binary on disk. current_exe() points at the running binary —
     // that's *us*. We intentionally schedule it for removal too;
     // POSIX unlink-while-open works, and on macOS the kernel keeps
     // the file mapped until we exit.
     if let Ok(exe) = std::env::current_exe() {
-        t.push(Target::file(exe, Some("the agentum binary itself")));
+        push(Target::file(exe, Some("the agentum binary itself")));
     }
 
     // Data dir holds the SQLite DB, auth token, TLS cert/key.
     if let Ok(p) = agentum_store::paths::data_dir() {
-        t.push(Target::dir(p, Some("database, auth token, TLS material")));
+        push(Target::dir(p, Some("database, auth token, TLS material")));
     }
 
     // Cache dir — pane logs and other regenerable scratch.
     if let Ok(p) = agentum_store::paths::cache_dir() {
-        t.push(Target::dir(p, Some("pane logs and cached data")));
+        push(Target::dir(p, Some("pane logs and cached data")));
     }
 
-    // State dir — daemon log file lives here on Linux. On macOS the
-    // directories crate falls back to data_dir, so this may collide
-    // and that's fine: remove_dir_all is idempotent on a missing path.
+    // State dir — daemon log file lives here on Linux.
     if let Ok(p) = agentum_store::paths::state_dir() {
-        t.push(Target::dir(p, Some("daemon logs")));
+        push(Target::dir(p, Some("daemon logs")));
     }
 
     // Config dir contains the canonical profiles.toml. We treat it
@@ -167,19 +176,19 @@ fn gather_targets(include_user_data: bool) -> Result<Vec<Target>> {
     // reinstall picks up the user's remote profiles.
     if include_user_data {
         if let Ok(p) = agentum_store::paths::config_dir() {
-            t.push(Target::dir(p, Some("profiles + credentials (user data)")));
+            push(Target::dir(p, Some("profiles + credentials (user data)")));
         }
     }
 
     // OS-specific autostart artifacts.
     if cfg!(target_os = "linux") {
         if let Some(p) = dirs_systemd_unit() {
-            t.push(Target::file(p, Some("systemd user unit (autostart)")));
+            push(Target::file(p, Some("systemd user unit (autostart)")));
         }
     }
     if cfg!(target_os = "macos") {
         if let Some(p) = macos_launchagent_plist() {
-            t.push(Target::file(p, Some("launchd LaunchAgent (autostart)")));
+            push(Target::file(p, Some("launchd LaunchAgent (autostart)")));
         }
     }
 
