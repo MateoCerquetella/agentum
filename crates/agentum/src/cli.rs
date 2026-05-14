@@ -166,6 +166,12 @@ pub enum Cmd {
         /// Skip auto-resuming stopped sessions on startup.
         #[arg(long)]
         no_resume: bool,
+
+        /// Detach from the terminal and run as a background daemon.
+        /// The process survives terminal close; logs go to
+        /// $XDG_STATE_HOME/agentum/daemon.log (or ~/.local/state/agentum/daemon.log).
+        #[arg(long, short = 'd')]
+        detach: bool,
     },
 
     /// Manage API authentication.
@@ -386,10 +392,11 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             cert_port,
             no_tls,
             no_resume,
+            detach,
         } => {
             let addr: SocketAddr = format!("{host}:{port}").parse()?;
             let cert_addr: SocketAddr = format!("{host}:{cert_port}").parse()?;
-            crate::commands::serve::run(addr, cert_addr, !no_tls, no_resume).await
+            crate::commands::serve::run(addr, cert_addr, !no_tls, no_resume, detach).await
         }
         Cmd::Auth { action } => crate::commands::auth::run(action).await,
         Cmd::Config { action } => crate::commands::config::run(action).await,

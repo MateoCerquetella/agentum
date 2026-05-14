@@ -459,6 +459,43 @@ fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     f.render_widget(chip_para, cols[2]);
 }
 
+/// Braille spinner frames, indexed by `tick_count / 2` so the rotation
+/// runs at ~5 fps on top of the 100 ms tick. Used for the per-server
+/// status dot while a reconnect is in flight.
+const SPINNER_FRAMES: &[&str] = &[
+    "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+];
+
+fn spinner_glyph(tick: u64) -> &'static str {
+    SPINNER_FRAMES[((tick / 2) as usize) % SPINNER_FRAMES.len()]
+}
+
+/// Decide the (glyph, colour) pair for one server row's status dot.
+/// Centralised so the loopback row, the named-profile rows, and the
+/// detail panel agree on the encoding — including the reconnect
+/// spinner overlay.
+fn server_dot(
+    status: Option<super::app::ServerStatus>,
+    is_active: bool,
+    is_reconnecting: bool,
+    tick: u64,
+    p: &Palette,
+) -> (String, Color) {
+    use super::app::ServerStatus;
+    if is_reconnecting {
+        return (spinner_glyph(tick).to_string(), p.accent);
+    }
+    let (g, c) = match (status, is_active) {
+        (Some(ServerStatus::Live), true) => ("●", p.success),
+        (Some(ServerStatus::Live), false) => ("○", p.muted),
+        (Some(ServerStatus::Unreachable), _) => ("●", p.error),
+        (Some(ServerStatus::LoginNeeded), _) => ("●", p.warning),
+        (None, true) => ("●", p.success),
+        (None, false) => ("○", p.muted),
+    };
+    (g.to_string(), c)
+}
+
 fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Tree;
     // Title shows the active filter so the user always sees what's
@@ -478,6 +515,7 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
 
     let mut items: Vec<ListItem> = Vec::new();
     use super::app::ServerStatus;
+    let tick = app.tick_count;
 
     // Servers section leads the sidebar as a compact status strip.
     // Header shows a `▶ N` chip when collapsed so the user always
@@ -520,19 +558,14 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
             // Dot color encoding: green only when this row is the
             // *active* target. Live-but-inactive reads muted so the
             // user never has to decode filled-vs-hollow circles to
-            // tell which daemon they're talking to.
+            // tell which daemon they're talking to. A pending reconnect
+            // swaps the dot for a braille spinner via `server_dot`.
             let status = app.clients.get("").map(|e| e.status);
-            let (dot_glyph, dot_color) = match (status, is_active) {
-                (Some(ServerStatus::Live), true) => ("●", p.success),
-                (Some(ServerStatus::Live), false) => ("○", p.muted),
-                (Some(ServerStatus::Unreachable), _) => ("●", p.error),
-                (Some(ServerStatus::LoginNeeded), _) => ("●", p.warning),
-                (None, true) => ("●", p.success),
-                (None, false) => ("○", p.muted),
-            };
+            let reconnecting = app.reconnecting.contains("");
+            let (dot_glyph, dot_color) = server_dot(status, is_active, reconnecting, tick, p);
             let spans = vec![
                 Span::raw("   "),
-                Span::styled(dot_glyph.to_string(), Style::default().fg(dot_color)),
+                Span::styled(dot_glyph, Style::default().fg(dot_color)),
                 Span::raw(" "),
                 Span::styled(
                     super::app::local_machine_label(),
@@ -567,17 +600,11 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
             };
             let status = app.clients.get(entry.name.as_str()).map(|e| e.status);
             // Same active-only-green encoding as the loopback row.
-            let (dot_glyph, dot_color) = match (status, is_active) {
-                (Some(ServerStatus::Live), true) => ("●", p.success),
-                (Some(ServerStatus::Live), false) => ("○", p.muted),
-                (Some(ServerStatus::Unreachable), _) => ("●", p.error),
-                (Some(ServerStatus::LoginNeeded), _) => ("●", p.warning),
-                (None, true) => ("●", p.success),
-                (None, false) => ("○", p.muted),
-            };
+            let reconnecting = app.reconnecting.contains(entry.name.as_str());
+            let (dot_glyph, dot_color) = server_dot(status, is_active, reconnecting, tick, p);
             let mut spans = vec![
                 Span::raw("   "),
-                Span::styled(dot_glyph.to_string(), Style::default().fg(dot_color)),
+                Span::styled(dot_glyph, Style::default().fg(dot_color)),
                 Span::raw(" "),
                 Span::styled(
                     entry.name.clone(),
@@ -785,6 +812,15 @@ fn render_tree_row(
 }
 
 fn draw_terminal(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
+    // Servers section takes over the main pane: a session terminal is
+    // meaningless here and the user wants to see who they're connected
+    // to plus reconnect status. Mirrors how lazygit / split-right
+    // pre-empt this slot — the pane belongs to whichever surface owns
+    // the cursor.
+    if app.tree_section == TreeSection::Servers {
+        draw_servers_panel(f, area, app, p);
+        return;
+    }
     let focused = app.focus == Focus::Term;
     // When a split is open, brand the left pane explicitly so the user
     // knows which side keystrokes go to.
@@ -895,6 +931,178 @@ fn draw_terminal_right(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     f.render_widget(pseudo, inner);
     fill_default_bg(f, inner, p.panel_bg);
     overlay_term_selection(f, inner, app, Side::Right);
+}
+
+/// Detail card that replaces the terminal pane while the user's cursor
+/// is on the SERVERS section. Shows the cursor-selected server's URL,
+/// status, fingerprint, default/active markers, and last connection
+/// error — plus a hint row for the keybindings the Servers section
+/// owns. The status dot at the top mirrors the sidebar's dot (incl.
+/// the spinner overlay while a reconnect is in flight).
+fn draw_servers_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
+    use super::app::{ServerStatus, local_machine_label, profile_label};
+    let title = " servers · Enter (re)connect · a add · d remove ";
+    // The Tree pane is the one that owns the cursor here; reflect that
+    // in the focus styling so the user can see at a glance which
+    // sidebar section is active.
+    let focused = app.focus == Focus::Tree;
+    let block = panel_block(title, focused, p);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    // Resolve the cursor position to a (key, label, url, fingerprint,
+    // is_default) tuple. Cursor 0 is the synthetic loopback row —
+    // keyed by `""` in `app.clients`, no on-disk profile to read
+    // metadata from.
+    let cursor = app.servers_cursor;
+    let (key, label, url, fingerprint, is_default) = if cursor == 0 {
+        (
+            String::new(),
+            local_machine_label(),
+            "http://127.0.0.1:8822 (local daemon)".to_string(),
+            None,
+            false,
+        )
+    } else {
+        match app.profiles.get(cursor - 1) {
+            Some(e) => (
+                e.name.clone(),
+                profile_label(&e.name),
+                e.url.clone(),
+                e.fingerprint.clone(),
+                e.is_default,
+            ),
+            None => {
+                // Cursor outside the profiles list — render an empty
+                // hint so a transient state during reload doesn't
+                // crash the pane.
+                let hint = Paragraph::new("no server selected")
+                    .style(Style::default().fg(p.muted).bg(p.panel_bg));
+                f.render_widget(hint, inner);
+                return;
+            }
+        }
+    };
+
+    let entry = app.clients.get(key.as_str());
+    let status = entry.map(|e| e.status);
+    let last_error = entry.and_then(|e| e.last_error.clone());
+    let is_active = app
+        .active_profile
+        .as_deref()
+        .map(|n| n == key.as_str())
+        .unwrap_or_else(|| key.is_empty());
+    let is_reconnecting = app.reconnecting.contains(key.as_str());
+
+    let (dot, dot_color) = server_dot(status, is_active, is_reconnecting, app.tick_count, p);
+    let status_text = if is_reconnecting {
+        "connecting…"
+    } else {
+        match status {
+            Some(ServerStatus::Live) => "live",
+            Some(ServerStatus::Unreachable) => "unreachable",
+            Some(ServerStatus::LoginNeeded) => "login needed",
+            None => "not connected",
+        }
+    };
+    let status_color = if is_reconnecting {
+        p.accent
+    } else {
+        match status {
+            Some(ServerStatus::Live) => p.success,
+            Some(ServerStatus::Unreachable) => p.error,
+            Some(ServerStatus::LoginNeeded) => p.warning,
+            None => p.muted,
+        }
+    };
+
+    // Two-column field rows so the values line up nicely. Width 14
+    // keeps "fingerprint" + a 2-col pad fitting without truncation.
+    let label_w = 14usize;
+    let field = |k: &str, value: String, value_style: Style| -> Line<'static> {
+        let key = Span::styled(
+            format!(" {:<width$}", k, width = label_w),
+            Style::default().fg(p.muted),
+        );
+        Line::from(vec![key, Span::styled(value, value_style)])
+    };
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(""));
+    // Header row: spinner/dot + label + active chip.
+    let mut header: Vec<Span<'static>> = vec![
+        Span::raw(" "),
+        Span::styled(dot, Style::default().fg(dot_color)),
+        Span::raw("  "),
+        Span::styled(
+            label,
+            Style::default().fg(p.fg_strong).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    if is_active {
+        header.push(Span::raw("  "));
+        header.push(Span::styled(
+            "active".to_string(),
+            Style::default().fg(p.accent),
+        ));
+    }
+    if is_default {
+        header.push(Span::raw("  "));
+        header.push(Span::styled(
+            "default".to_string(),
+            Style::default().fg(p.accent),
+        ));
+    }
+    lines.push(Line::from(header));
+    lines.push(Line::from(""));
+
+    lines.push(field(
+        "status",
+        status_text.to_string(),
+        Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+    ));
+    lines.push(field("url", url, Style::default().fg(p.fg)));
+    if let Some(fp) = fingerprint {
+        lines.push(field("fingerprint", fp, Style::default().fg(p.fg)));
+    } else if !key.is_empty() {
+        lines.push(field(
+            "fingerprint",
+            "(none — TOFU)".to_string(),
+            Style::default().fg(p.muted),
+        ));
+    }
+    if let Some(err) = last_error {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            " last error",
+            Style::default().fg(p.muted),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("   {err}"),
+            Style::default().fg(p.error),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(""));
+    let total = app.profiles.len() + 1;
+    lines.push(Line::from(Span::styled(
+        format!(" {} server{} configured", total, if total == 1 { "" } else { "s" }),
+        Style::default().fg(p.muted),
+    )));
+    lines.push(Line::from(Span::styled(
+        " j/k move · Enter (re)connect · a add · Ctrl-D remove".to_string(),
+        Style::default().fg(p.muted),
+    )));
+    lines.push(Line::from(Span::styled(
+        " l / → jump to this server's sessions".to_string(),
+        Style::default().fg(p.muted),
+    )));
+
+    let para = Paragraph::new(lines)
+        .style(Style::default().bg(p.panel_bg).fg(p.fg))
+        .wrap(Wrap { trim: false });
+    f.render_widget(para, inner);
 }
 
 fn draw_lazygit(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {

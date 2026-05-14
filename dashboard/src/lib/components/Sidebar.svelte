@@ -5,6 +5,7 @@
   import { openPalette } from '$stores/palette';
   import { openNewSession } from '$stores/newSession';
   import { api, type Session, type Status } from '$lib/api';
+  import { connStatus } from '$stores/events';
   import {
     profiles,
     activeProfileId,
@@ -127,6 +128,15 @@
     return profileHostHint(p);
   }
   function dotClass(p: Profile): string {
+    // For the active profile, the events WebSocket is the authoritative
+    // real-time signal. The fleet health probe runs every 20 s and can
+    // be stale; the WS onclose fires immediately on disconnect, so a
+    // reconnecting WS means the server dot must show red *now*, not in
+    // up to 20 s when the next fleet probe lands.
+    if (p.id === $activeProfileId) {
+      if ($connStatus.state === 'connected') return 'live';
+      if ($connStatus.state === 'reconnecting') return 'unreachable';
+    }
     const e = $fleet[p.id];
     if (!e) return 'unknown';
     return e.status;
@@ -403,10 +413,7 @@
   .srv-dot.unreachable { background: var(--crash, #ff4d4f); }
   .srv-dot.login-needed { background: var(--warn, #d4a017); }
   .srv-dot.unknown { background: var(--fg-3); }
-  /* Loopback row falls back to green when we have no status yet —
-     the local daemon is the most reliable target, so optimistic
-     is fine. */
-  .srv-dot.loopback.unknown { background: var(--green, #2ea043); }
+  .srv-dot.loopback.unknown { background: var(--fg-3); }
   .srv-name {
     flex: 1;
     min-width: 0;

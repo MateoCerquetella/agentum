@@ -251,6 +251,119 @@ AGENTUM_BIN() { echo "$INSTALL_DIR/agentum"; }
 # ── Post-install onboarding ────────────────────────────────────
 # Keep it short. One ordered list per mode. No auto-running doctor
 # or --help dumps — those are one keystroke away if the user wants them.
+
+# Ask whether to auto-start agentum serve as a daemon (systemd user
+# unit when available, otherwise nohup background). Only offered for
+# server/both modes and only in interactive installs.
+offer_auto_start() {
+    if [ "$INTERACTIVE" != true ]; then
+        return 0
+    fi
+    printf '\n'
+    printf '  %s▸%s %sStart agentum now?%s\n\n' "${C_A}" "${C_R}" "${C_B}" "${C_R}"
+    printf '  %s🖥️   [1] %sYes — start in background (survives terminal close)%s\n' "${C_B}" "${C_G}" "${C_R}"
+    printf '  %s📋  [2] %sYes — systemd user unit (auto-starts at login)%s\n' "${C_B}" "${C_BL}" "${C_R}"
+    printf '  %s✖   [3] %sNo — I\u2019ll start it manually later%s\n' "${C_B}" "${C_D}" "${C_R}"
+    while true; do
+        printf '  %sChoice [1-3] (3):%s ' "${C_D}" "${C_R}"
+        choice=""; read_input choice; choice="${choice:-3}"
+        case "$choice" in
+            1)
+                printf '\n'
+                if [ -x "$INSTALL_DIR/agentum" ]; then
+                    # Start in background with nohup so it survives terminal close.
+                    # stdout/stderr go to $XDG_STATE_HOME/agentum/daemon.log
+                    LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/agentum"
+                    mkdir -p "$LOG_DIR"
+                    nohup "$INSTALL_DIR/agentum" serve </dev/null >"$LOG_DIR/daemon.log" 2>&1 &
+                    PID=$!
+                    sleep 1.5
+                    if kill -0 "$PID" 2>/dev/null; then
+                        o "agentum serve started" "pid ${PID}"
+                        h "Logs: ${LOG_DIR}/daemon.log"
+                        h "Dashboard: https://127.0.0.1:8822"
+                    else
+                        w "agentum serve may not have started — check logs: ${LOG_DIR}/daemon.log"
+                    fi
+                fi
+                break ;;
+            2)
+                printf '\n'
+                setup_systemd_user_unit
+                break ;;
+            3|q|quit|"")
+                h "Start manually with:  ${C_C}agentum serve${C_R}   or   ${C_C}agentum serve --detach${C_R}"
+                break ;;
+            *) printf '  %sEnter 1, 2 or 3.%s\n' "${C_RED}" "${C_R}" ;;
+        esac
+    done
+}
+
+# Install a systemd user unit so agentum serve starts at login and
+# restarts on crash. User units don't need root; they run as the
+# installing user. Compatible with Linux distributions that ship
+# systemd (>= 235 for user units).
+setup_systemd_user_unit() {
+    SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    UNIT_NAME="agentum.service"
+    UNIT_PATH="$SYSTEMD_USER_DIR/$UNIT_NAME"
+
+    if ! command -v systemctl >/dev/null 2>&1; then
+        w "systemctl not found — falling back to background start"
+        LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/agentum"
+        mkdir -p "$LOG_DIR"
+        nohup "$INSTALL_DIR/agentum" serve </dev/null >"$LOG_DIR/daemon.log" 2>&1 &
+        h "agentum started in background (pid $!)"
+        h "Dashboard: https://127.0.0.1:8822"
+        return 0
+    fi
+
+    mkdir -p "$SYSTEMD_USER_DIR"
+
+    # Write a simple user service that starts agentum serve, survives
+    # logout (lingering), and auto-restarts on crash.
+    cat >"$UNIT_PATH" <<UNITEOF
+[Unit]
+Description=agentum control plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=$INSTALL_DIR/agentum serve
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:$XDG_STATE_HOME/agentum/daemon.log
+StandardError=append:$XDG_STATE_HOME/agentum/daemon.log
+
+[Install]
+WantedBy=default.target
+UNITEOF
+
+    # Enable lingering so the user service survives logout.
+    if command -v loginctl >/dev/null 2>&1; then
+        loginctl enable-linger "$(whoami)" 2>/dev/null || true
+    fi
+
+    # Reload systemd user daemon
+    systemctl --user daemon-reload 2>/dev/null || true
+
+    # Enable and start the unit
+    if systemctl --user enable "$UNIT_NAME" 2>/dev/null; then
+        if systemctl --user start "$UNIT_NAME" 2>/dev/null; then
+            o "systemd user unit installed" "enabled + started"
+            h "Unit: $UNIT_PATH"
+            h "Dashboard: https://127.0.0.1:8822"
+            h "Manage: systemctl --user status|stop|restart agentum"
+        else
+            w "unit enabled but could not start — check: journalctl --user -u agentum"
+        fi
+    else
+        w "could not enable systemd unit — wrote $UNIT_PATH, but check permissions"
+    fi
+}
+
 post_server() {
     printf '\n'
     div " Get started "
@@ -262,6 +375,7 @@ post_server() {
     printf '\n'
     h "Health check: ${C_C}agentum doctor${C_R}    Phone trust: ${C_C}http://127.0.0.1:8823/api/cert${C_R}"
     printf '\n'
+    offer_auto_start
 }
 
 post_cli() {
@@ -292,6 +406,7 @@ post_both() {
     printf '\n'
     h "Health check: ${C_C}agentum doctor${C_R}"
     printf '\n'
+    offer_auto_start
 }
 
 # ── Main ───────────────────────────────────────────────────────

@@ -587,7 +587,7 @@ async fn try_connect_loopback() -> ProfileConnect {
             agent_availability,
         };
     }
-    unreachable("no daemon listening on 127.0.0.1:8822".into())
+    unreachable("no local daemon listening on 127.0.0.1:8822".into())
 }
 
 async fn fanout_other_profiles(skip_name: &str) -> Vec<(String, ProfileConnect)> {
@@ -966,7 +966,10 @@ async fn resolve_base(override_url: Option<String>) -> Result<Url> {
         }
     }
     Err(anyhow!(
-        "no agentum daemon found on loopback. Start one with `agentum serve` or pass --api https://<host>:<port>"
+        "no agentum daemon found on local machine ({DEFAULT_HTTPS} or {DEFAULT_HTTP}). \
+         Start one with `agentum serve` or connect to a remote server. \
+         Run `agentum profiles add <name> <url>` to save a remote endpoint, \
+         then `agentum terminal --profile <name>`."
     ))
 }
 
@@ -1010,13 +1013,22 @@ fn is_interactive_tty() -> bool {
 /// stdin. Loops on invalid input. The caller is expected to be on
 /// the controlling terminal — see `is_interactive_tty`.
 fn prompt_unreachable_menu(opts: &Options, err: &anyhow::Error) -> Result<UnreachableAction> {
-    let target = opts
-        .api
-        .clone()
-        .unwrap_or_else(|| "loopback (127.0.0.1:8822)".to_string());
+    let (target, hint) = if let Some(ref api) = opts.api {
+        (
+            api.clone(),
+            "Check the URL is correct and the daemon is running on that host.",
+        )
+    } else {
+        (
+            format!("local daemon ({DEFAULT_HTTPS})"),
+            "No remote server is configured. Start `agentum serve` locally, or add a remote endpoint.",
+        )
+    };
     eprintln!();
     eprintln!("  agentum couldn't reach a daemon at {target}.");
     eprintln!("  ↳ {err}");
+    eprintln!();
+    eprintln!("  {hint}");
     eprintln!();
     eprintln!("  What would you like to do?");
     eprintln!("    [1] Add a remote server");

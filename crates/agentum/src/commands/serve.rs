@@ -9,7 +9,12 @@ pub async fn run(
     cert_addr: SocketAddr,
     tls: bool,
     no_resume: bool,
+    detach: bool,
 ) -> Result<()> {
+    if detach {
+        daemonize()?;
+    }
+
     let (store, db_path) = super::open_store().await?;
     tracing::info!(?db_path, %addr, %cert_addr, tls, "store opened");
 
@@ -27,6 +32,66 @@ pub async fn run(
         store,
     )
     .await
+}
+
+/// Daemonize the current process: double-fork, detach from the
+/// controlling terminal, and redirect stdio to a log file so the
+/// daemon survives the parent shell exiting.
+///
+/// After this call returns successfully, the parent process has
+/// already exited. The remaining code runs in a fully detached
+/// child (grandchild of the original process).
+fn daemonize() -> Result<()> {
+    #[cfg(not(unix))]
+    {
+        anyhow::bail!("--detach is only supported on Unix (Linux/macOS)");
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        use std::process::Command;
+
+        // Resolve the log path: $XDG_STATE_HOME/agentum/daemon.log
+        // falling back to ~/.local/state/agentum/daemon.log
+        let log_dir = std::env::var_os("XDG_STATE_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|h| std::path::PathBuf::from(h).join(".local/state"))
+            })
+            .map(|p| p.join("agentum"))
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp/agentum"));
+        std::fs::create_dir_all(&log_dir)?;
+        let log_path = log_dir.join("daemon.log");
+
+        let log_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)?;
+
+        // Re-exec ourselves with the same arguments *minus* --detach.
+        // This avoids tricky in-process fork+setsid from within a
+        // Tokio runtime, which can deadlock or corrupt state.
+        let exe = std::env::current_exe()?;
+        let args: Vec<String> = std::env::args()
+            .filter(|a| a != "--detach" && a != "-d")
+            .collect();
+
+        let child = Command::new(&exe)
+            .args(&args[1..]) // skip argv[0] (the binary name)
+            .stdin(std::process::Stdio::null())
+            .stdout(log_file.try_clone()?)
+            .stderr(log_file)
+            .process_group(0) // new process group, detached from terminal
+            .spawn()?;
+
+        let pid = child.id();
+        eprintln!("Daemon started (pid {pid}). Logs: {}", log_path.display());
+        eprintln!("Dashboard: https://127.0.0.1:8822");
+        // Parent exits immediately; the child continues as the daemon.
+        std::process::exit(0);
+    }
 }
 
 /// Bring up any sessions that aren't currently running.
