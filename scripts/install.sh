@@ -252,6 +252,43 @@ AGENTUM_BIN() { echo "$INSTALL_DIR/agentum"; }
 # Keep it short. One ordered list per mode. No auto-running doctor
 # or --help dumps — those are one keystroke away if the user wants them.
 
+# Offer to create the first admin account right after a fresh install.
+# Skipped on updates (account already exists) and in non-interactive mode.
+# Runs `agentum auth setup` with stdin from /dev/tty so password prompts
+# reach the terminal even when the parent script has a redirected stdin.
+offer_auth_setup() {
+    [ "$INTERACTIVE" = true ] || return 0
+    [ "$IS_UPDATE" = false ]  || return 0
+    [ "$HAS_TTY" = true ]     || return 0
+
+    printf '\n'
+    printf '  %s▸%s %sCreate admin account now?%s\n' "${C_A}" "${C_R}" "${C_B}" "${C_R}"
+    printf '  %sYou can also register on first dashboard visit or run%s\n' "${C_D}" "${C_R}"
+    printf '  %s%sagentum auth setup%s%s later.%s\n' "${C_D}" "${C_C}" "${C_R}" "${C_D}" "${C_R}"
+    printf '\n'
+    printf '  %s[Y/n]:%s ' "${C_D}" "${C_R}"
+    choice=""; read_input choice; choice="${choice:-y}"
+    case "$choice" in
+        y|Y|yes|Yes|YES)
+            printf '\n'
+            if [ -x "$INSTALL_DIR/agentum" ]; then
+                if "$INSTALL_DIR/agentum" auth setup </dev/tty; then
+                    printf '\n'
+                    o "admin account ready"
+                else
+                    w "setup failed — run '${C_C}agentum auth setup${C_R}' manually before starting the server"
+                fi
+            else
+                w "binary not found at $INSTALL_DIR/agentum — cannot run setup"
+            fi
+            ;;
+        *)
+            h "Run '${C_C}agentum auth setup${C_R}' before starting the server"
+            h "or register via the dashboard on first load."
+            ;;
+    esac
+}
+
 # Ask whether to auto-start agentum serve as a daemon (systemd user
 # unit when available, otherwise nohup background). Only offered for
 # server/both modes and only in interactive installs.
@@ -370,11 +407,11 @@ post_server() {
     printf '\n'
     h "1. Start the server:    ${C_C}agentum serve${C_R}"
     h "2. Open the dashboard:  ${C_C}https://127.0.0.1:8822${C_R}  ${C_D}(self-signed TLS)${C_R}"
-    h "3. Get your token:      ${C_C}agentum auth show${C_R}"
-    h "4. Create an agent:     ${C_C}agentum new alpha --tool claude --dir . --up${C_R}"
+    h "3. Create an agent:     ${C_C}agentum new alpha --tool claude --dir . --up${C_R}"
     printf '\n'
     h "Health check: ${C_C}agentum doctor${C_R}    Phone trust: ${C_C}http://127.0.0.1:8823/api/cert${C_R}"
     printf '\n'
+    offer_auth_setup
     offer_auto_start
 }
 
@@ -402,10 +439,10 @@ post_both() {
     h "${C_B}From the dashboard${C_R}"
     h "  4. Start the server:      ${C_C}agentum serve${C_R}"
     h "  5. Open in browser:       ${C_C}https://127.0.0.1:8822${C_R}  ${C_D}(self-signed TLS)${C_R}"
-    h "  6. Get your token:        ${C_C}agentum auth show${C_R}"
     printf '\n'
     h "Health check: ${C_C}agentum doctor${C_R}"
     printf '\n'
+    offer_auth_setup
     offer_auto_start
 }
 

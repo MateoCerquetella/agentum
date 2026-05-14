@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::net::SocketAddr;
 
 use agentum_core::Status;
@@ -21,6 +22,28 @@ pub async fn run(
 
     if no_auth {
         tracing::warn!("--no-auth: authentication disabled — do NOT expose this to untrusted networks");
+    } else {
+        // On first boot with no users, offer/run the interactive setup wizard so
+        // the operator doesn't have to separately run `agentum auth setup`.
+        let count = store.count_users().await.unwrap_or(1); // default to 1 on error to skip
+        if count == 0 {
+            if std::io::stdin().is_terminal() {
+                tracing::info!("no users found — running first-time setup wizard");
+                if let Err(e) =
+                    crate::commands::auth::run_setup_wizard(&store, None, None).await
+                {
+                    eprintln!("setup wizard failed: {e}");
+                    eprintln!("Run `agentum auth setup` to create an admin account,");
+                    eprintln!("or visit the dashboard to register on first load.");
+                }
+            } else {
+                eprintln!();
+                eprintln!("  agentum: no users found.");
+                eprintln!("  Run `agentum auth setup` to create an admin account,");
+                eprintln!("  or visit the dashboard on first load to register.");
+                eprintln!();
+            }
+        }
     }
 
     // Boot everything: resume stopped/idle sessions that have a known tool.

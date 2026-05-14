@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { authState, refreshAuth, login } from '$stores/auth';
-  import OnboardingWizard from './OnboardingWizard.svelte';
+  import { authState, refreshAuth, login, register } from '$stores/auth';
   import {
     profiles,
     activeProfileId,
@@ -17,6 +16,12 @@
   let password = $state('');
   let submitting = $state(false);
   let error = $state<string | null>(null);
+
+  // Setup form (needs-setup state)
+  let setupUsername = $state('');
+  let setupPassword = $state('');
+  let setupConfirm = $state('');
+  let setupError = $state<string | null>(null);
 
   // Inline "add endpoint" form shown on the unreachable card so the
   // user can recover without leaving the page. Mirrors the TUI's
@@ -139,6 +144,27 @@
     if (typeof location !== 'undefined') location.reload();
   }
 
+
+  async function submitSetup(e: Event) {
+    e.preventDefault();
+    if (!setupUsername.trim() || !setupPassword) return;
+    if (setupPassword !== setupConfirm) {
+      setupError = 'passwords do not match';
+      return;
+    }
+    submitting = true;
+    setupError = null;
+    try {
+      await register(setupUsername.trim(), setupPassword);
+      setupUsername = '';
+      setupPassword = '';
+      setupConfirm = '';
+    } catch (e) {
+      setupError = e instanceof Error ? e.message : String(e);
+    } finally {
+      submitting = false;
+    }
+  }
 
   async function submitLogin(e: Event) {
     e.preventDefault();
@@ -267,7 +293,66 @@
     </div>
   </div>
 {:else if $authState === 'needs-setup'}
-  <OnboardingWizard />
+  <div class="full-screen">
+    <form class="card" onsubmit={submitSetup}>
+      <h2>create your admin account</h2>
+      <p class="muted">
+        No accounts exist yet. The first account becomes the admin.
+      </p>
+
+      <label>
+        <span>Username</span>
+        <!-- svelte-ignore a11y_autofocus -->
+        <input
+          type="text"
+          bind:value={setupUsername}
+          placeholder="admin"
+          autocomplete="username"
+          spellcheck="false"
+          required
+          autofocus
+        />
+      </label>
+
+      <label>
+        <span>Password</span>
+        <input
+          type="password"
+          bind:value={setupPassword}
+          placeholder="min 8 characters"
+          autocomplete="new-password"
+          required
+          minlength={8}
+        />
+      </label>
+
+      <label>
+        <span>Confirm password</span>
+        <input
+          type="password"
+          bind:value={setupConfirm}
+          placeholder="repeat password"
+          autocomplete="new-password"
+          required
+          minlength={8}
+        />
+      </label>
+
+      {#if setupError}<p class="err-msg">{setupError}</p>{/if}
+
+      <button
+        type="submit"
+        class="primary"
+        disabled={!setupUsername.trim() || !setupPassword || submitting}
+      >
+        {submitting ? 'creating…' : 'Create account'}
+      </button>
+
+      <p class="hint muted">
+        Add more users later: <code>agentum auth add &lt;username&gt;</code>
+      </p>
+    </form>
+  </div>
 {:else if $authState === 'needs-login'}
   <div class="full-screen">
     <form class="card" onsubmit={submitLogin}>

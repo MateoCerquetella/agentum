@@ -346,6 +346,18 @@ pub enum AuthCmd {
     Rm { username: String },
     /// Wipe ALL users + sessions. Next register on the dashboard re-bootstraps.
     Reset,
+    /// Run the first-time setup wizard to create the admin account.
+    ///
+    /// Works without a running server — writes directly to the database.
+    /// Pass --username and --password together for non-interactive (script/CI) use.
+    Setup {
+        /// Admin username. Prompted interactively if omitted.
+        #[arg(long)]
+        username: Option<String>,
+        /// Admin password. Prompted interactively if omitted.
+        #[arg(long)]
+        password: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
