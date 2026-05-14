@@ -346,42 +346,128 @@ offer_auto_start() {
     dash_url="${1:-https://127.0.0.1:8822}"
     printf '\n'
     printf '  %s▸%s %sStart agentum now?%s\n\n' "${C_A}" "${C_R}" "${C_B}" "${C_R}"
-    printf '  %s🖥️   [1] %sYes — start in background (survives terminal close)%s\n' "${C_B}" "${C_G}" "${C_R}"
-    printf '  %s📋  [2] %sYes — auto-start at login (systemd user unit)%s\n' "${C_B}" "${C_BL}" "${C_R}"
-    printf "  %s✖   [3] %sNo — I'll start it manually later%s\n" "${C_B}" "${C_D}" "${C_R}"
+    printf '  %s🖥️   [1] %sYes — start now and auto-start at login%s %s(recommended)%s\n' "${C_B}" "${C_G}" "${C_R}" "${C_D}" "${C_R}"
+    printf "  %s✖   [2] %sNot now — I'll start it manually later%s\n" "${C_B}" "${C_D}" "${C_R}"
     while true; do
-        printf '  %sChoice [1-3] (1):%s ' "${C_D}" "${C_R}"
+        printf '  %sChoice [1-2] (1):%s ' "${C_D}" "${C_R}"
         choice=""; read_input choice; choice="${choice:-1}"
         case "$choice" in
-            1)
+            1|y|Y|yes|Yes)
                 printf '\n'
-                if [ -x "$INSTALL_DIR/agentum" ]; then
-                    # Start in background with nohup so it survives terminal close.
-                    # stdout/stderr go to $XDG_STATE_HOME/agentum/daemon.log
-                    LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/agentum"
-                    mkdir -p "$LOG_DIR"
-                    nohup "$INSTALL_DIR/agentum" serve </dev/null >"$LOG_DIR/daemon.log" 2>&1 &
-                    PID=$!
-                    sleep 1.5
-                    if kill -0 "$PID" 2>/dev/null; then
-                        o "agentum serve started" "pid ${PID}"
-                        h "Logs: ${LOG_DIR}/daemon.log"
-                        h "Dashboard: ${dash_url}"
-                    else
-                        w "agentum serve may not have started — check logs: ${LOG_DIR}/daemon.log"
-                    fi
-                fi
+                setup_autostart "$dash_url"
                 break ;;
-            2)
-                printf '\n'
-                setup_systemd_user_unit "$dash_url"
-                break ;;
-            3|q|quit|"")
+            2|n|N|no|No|q|quit)
                 h "Start manually with:  ${C_C}agentum serve${C_R}   or   ${C_C}agentum serve --detach${C_R}"
                 break ;;
-            *) printf '  %sEnter 1, 2 or 3.%s\n' "${C_RED}" "${C_R}" ;;
+            *) printf '  %sEnter 1 or 2.%s\n' "${C_RED}" "${C_R}" ;;
         esac
     done
+}
+
+# Dispatch to the right OS-specific autostart installer. Each one
+# installs persistence (LaunchAgent or systemd user unit) AND starts
+# the daemon now, so the combined "Yes" answer always lands the user
+# with a running, surviving daemon.
+setup_autostart() {
+    dash_url="${1:-https://127.0.0.1:8822}"
+    case "$(uname -s)" in
+        Darwin) setup_launchd_user_agent "$dash_url" ;;
+        Linux)  setup_systemd_user_unit "$dash_url" ;;
+        *)      fallback_nohup_start "$dash_url" ;;
+    esac
+}
+
+# macOS: install a LaunchAgent plist in ~/Library/LaunchAgents that
+# survives logout (RunAtLoad + KeepAlive). launchctl bootstrap is
+# both "register persistence" and "start it now" — one call covers
+# both halves of the user's "yes" answer.
+setup_launchd_user_agent() {
+    dash_url="${1:-https://127.0.0.1:8822}"
+    LA_DIR="$HOME/Library/LaunchAgents"
+    LA_LABEL="dev.agentum.daemon"
+    LA_PATH="$LA_DIR/${LA_LABEL}.plist"
+    LOG_DIR="$HOME/Library/Logs/agentum"
+
+    mkdir -p "$LA_DIR" "$LOG_DIR"
+
+    # If a prior plist exists (reinstall), unload it first so the
+    # next bootstrap picks up the new binary path / arguments.
+    if [ -f "$LA_PATH" ]; then
+        launchctl unload "$LA_PATH" 2>/dev/null || true
+    fi
+
+    # Heredoc is the cleanest way to keep XML readable; we escape
+    # nothing because every interpolated value here is a path we
+    # control. ProgramArguments must be one entry per <string>.
+    cat >"$LA_PATH" <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${LA_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${INSTALL_DIR}/agentum</string>
+        <string>serve</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>${LOG_DIR}/daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>${LOG_DIR}/daemon.log</string>
+    <key>WorkingDirectory</key>
+    <string>${HOME}</string>
+</dict>
+</plist>
+PLISTEOF
+
+    # Load and start in one step. `bootstrap gui/<uid>` is the
+    # modern equivalent of `load -w` and works in user sessions.
+    if launchctl bootstrap "gui/$(id -u)" "$LA_PATH" 2>/dev/null; then
+        sleep 1
+        o "LaunchAgent installed" "starts now + at login"
+        h "Plist:     $LA_PATH"
+        h "Logs:      $LOG_DIR/daemon.log"
+        h "Dashboard: ${dash_url}"
+        h "Manage:    launchctl bootout gui/$(id -u) $LA_PATH   ${C_D}# disable${C_R}"
+    else
+        # `bootstrap` returns non-zero if the label is already
+        # loaded. Try the older `load` syntax as a fallback so
+        # reinstalls don't trip on stale state.
+        if launchctl load "$LA_PATH" 2>/dev/null; then
+            sleep 1
+            o "LaunchAgent loaded" "starts at login"
+            h "Plist:     $LA_PATH"
+            h "Dashboard: ${dash_url}"
+        else
+            w "could not register LaunchAgent — wrote $LA_PATH, falling back to background start"
+            fallback_nohup_start "$dash_url"
+        fi
+    fi
+}
+
+# Final fallback: just nohup the daemon. Used on unknown platforms
+# or when launchctl/systemctl fail. Persists across terminal close
+# but not across reboot.
+fallback_nohup_start() {
+    dash_url="${1:-https://127.0.0.1:8822}"
+    LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/agentum"
+    mkdir -p "$LOG_DIR"
+    nohup "$INSTALL_DIR/agentum" serve </dev/null >"$LOG_DIR/daemon.log" 2>&1 &
+    PID=$!
+    sleep 1.5
+    if kill -0 "$PID" 2>/dev/null; then
+        o "agentum serve started" "pid ${PID}"
+        h "Logs:      ${LOG_DIR}/daemon.log"
+        h "Dashboard: ${dash_url}"
+        h "(no auto-start at login configured — restart this command after a reboot.)"
+    else
+        w "agentum serve may not have started — check logs: ${LOG_DIR}/daemon.log"
+    fi
 }
 
 # Install a systemd user unit so agentum serve starts at login and
