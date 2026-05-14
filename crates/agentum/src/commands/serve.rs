@@ -21,7 +21,9 @@ pub async fn run(
     tracing::info!(?db_path, %addr, %cert_addr, tls, no_auth, "store opened");
 
     if no_auth {
-        tracing::warn!("--no-auth: authentication disabled — do NOT expose this to untrusted networks");
+        tracing::warn!(
+            "--no-auth: authentication disabled — do NOT expose this to untrusted networks"
+        );
     } else {
         // On first boot with no users, offer/run the interactive setup wizard so
         // the operator doesn't have to separately run `agentum auth setup`.
@@ -29,9 +31,7 @@ pub async fn run(
         if count == 0 {
             if std::io::stdin().is_terminal() {
                 tracing::info!("no users found — running first-time setup wizard");
-                if let Err(e) =
-                    crate::commands::auth::run_setup_wizard(&store, None, None).await
-                {
+                if let Err(e) = crate::commands::auth::run_setup_wizard(&store, None, None).await {
                     eprintln!("setup wizard failed: {e}");
                     eprintln!("Run `agentum auth setup` to create an admin account,");
                     eprintln!("or visit the dashboard to register on first load.");
@@ -86,8 +86,7 @@ fn daemonize() -> Result<()> {
         let log_dir = std::env::var_os("XDG_STATE_HOME")
             .map(std::path::PathBuf::from)
             .or_else(|| {
-                std::env::var_os("HOME")
-                    .map(|h| std::path::PathBuf::from(h).join(".local/state"))
+                std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state"))
             })
             .map(|p| p.join("agentum"))
             .unwrap_or_else(|| std::path::PathBuf::from("/tmp/agentum"));

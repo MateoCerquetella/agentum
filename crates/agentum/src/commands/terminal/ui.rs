@@ -357,16 +357,14 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         Overlay::Confirm(action) => draw_confirm_overlay(f, f.area(), action, p),
         Overlay::Settings(state) => draw_settings_overlay(f, f.area(), state, &app.prefs, p),
         Overlay::Rename(state) => draw_rename_overlay(f, f.area(), state, p),
-        Overlay::Profiles(state) => {
-            draw_profiles_overlay(
-                f,
-                f.area(),
-                state,
-                app.active_profile.as_deref(),
-                app.show_all_servers,
-                p,
-            )
-        }
+        Overlay::Profiles(state) => draw_profiles_overlay(
+            f,
+            f.area(),
+            state,
+            app.active_profile.as_deref(),
+            app.show_all_servers,
+            p,
+        ),
     }
 }
 
@@ -462,9 +460,7 @@ fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
 /// Braille spinner frames, indexed by `tick_count / 2` so the rotation
 /// runs at ~5 fps on top of the 100 ms tick. Used for the per-server
 /// status dot while a reconnect is in flight.
-const SPINNER_FRAMES: &[&str] = &[
-    "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
-];
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 fn spinner_glyph(tick: u64) -> &'static str {
     SPINNER_FRAMES[((tick / 2) as usize) % SPINNER_FRAMES.len()]
@@ -1036,7 +1032,9 @@ fn draw_servers_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         Span::raw("  "),
         Span::styled(
             label,
-            Style::default().fg(p.fg_strong).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(p.fg_strong)
+                .add_modifier(Modifier::BOLD),
         ),
     ];
     if is_active {
@@ -1059,7 +1057,9 @@ fn draw_servers_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     lines.push(field(
         "status",
         status_text.to_string(),
-        Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(status_color)
+            .add_modifier(Modifier::BOLD),
     ));
     lines.push(field("url", url, Style::default().fg(p.fg)));
     if let Some(fp) = fingerprint {
@@ -1087,7 +1087,11 @@ fn draw_servers_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     lines.push(Line::from(""));
     let total = app.profiles.len() + 1;
     lines.push(Line::from(Span::styled(
-        format!(" {} server{} configured", total, if total == 1 { "" } else { "s" }),
+        format!(
+            " {} server{} configured",
+            total,
+            if total == 1 { "" } else { "s" }
+        ),
         Style::default().fg(p.muted),
     )));
     lines.push(Line::from(Span::styled(

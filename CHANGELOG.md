@@ -4,6 +4,18 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.40] — 2026-05-14
+
+### Fixed
+- `scripts/install.sh` header comment pointed at a non-existent
+  `agentum.dev` domain. Canonical install URL has always been
+  `https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh`
+  (used by the README, landing page, and `agentum update`); the
+  stale comment is now corrected. Runtime behavior unchanged.
+- `cargo fmt` drift across `agentum-server::lib`, `agentum::commands::{auth,serve}`,
+  and `agentum::commands::terminal::{app,ui}` so the `ci` workflow
+  passes again. No logic changes — `cargo fmt --all`-only.
+
 ## [0.7.39] — 2026-05-14
 
 ### Changed

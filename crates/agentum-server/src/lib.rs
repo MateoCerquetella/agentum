@@ -144,11 +144,7 @@ fn detect_short_hostname() -> String {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
     match raw {
-        Some(name) => name
-            .split('.')
-            .next()
-            .unwrap_or(&name)
-            .to_ascii_lowercase(),
+        Some(name) => name.split('.').next().unwrap_or(&name).to_ascii_lowercase(),
         None => "local".to_string(),
     }
 }

@@ -3499,10 +3499,7 @@ async fn handle_key(
             && !key.modifiers.contains(KeyModifiers::ALT)
             && matches!(
                 key.code,
-                KeyCode::Char('+')
-                    | KeyCode::Char('=')
-                    | KeyCode::Char('-')
-                    | KeyCode::Char('_')
+                KeyCode::Char('+') | KeyCode::Char('=') | KeyCode::Char('-') | KeyCode::Char('_')
             );
         if !is_resize_key {
             if let Some(lg) = app.lazygit.as_ref()
@@ -3842,8 +3839,7 @@ async fn handle_key(
                     // and reads it as a crash. Symmetric to Ctrl-\\
                     // refusing to split while lazygit is open.
                     if app.lazygit_open() {
-                        app.status_msg =
-                            Some("close lazygit (g) before switching servers".into());
+                        app.status_msg = Some("close lazygit (g) before switching servers".into());
                         return;
                     }
                     let target: String = if app.servers_cursor == 0 {
@@ -5017,8 +5013,7 @@ fn handle_profiles_key(app: &mut App, key: KeyEvent) {
                 // switch: the soft restart drops the App and with it
                 // the lazygit PTY, which the user reads as a crash.
                 if app.lazygit_open() {
-                    state.error =
-                        Some("close lazygit (g) before switching servers".into());
+                    state.error = Some("close lazygit (g) before switching servers".into());
                     app.overlay = Overlay::Profiles(state);
                     return;
                 }
@@ -5574,9 +5569,8 @@ async fn run_palette_action(
         }
         ActionKind::OpenProfiles => {
             open_profiles_overlay(app);
-            app.status_msg = Some(
-                "servers (Enter switch · a add · d remove · s scope · Esc close)".into(),
-            );
+            app.status_msg =
+                Some("servers (Enter switch · a add · d remove · s scope · Esc close)".into());
         }
         ActionKind::ToggleSoundMaster => {
             let on = app.prefs.toggle_sound_master();

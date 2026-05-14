@@ -50,9 +50,7 @@ pub async fn run(action: AuthCmd) -> Result<()> {
             println!("auth reset — visit the dashboard to register again");
             Ok(())
         }
-        AuthCmd::Setup { username, password } => {
-            run_setup_wizard(&store, username, password).await
-        }
+        AuthCmd::Setup { username, password } => run_setup_wizard(&store, username, password).await,
     }
 }
 
@@ -114,7 +112,11 @@ pub(crate) async fn run_setup_wizard(
     io::stdin().read_line(&mut raw)?;
     let uname = {
         let t = raw.trim();
-        if t.is_empty() { "admin".to_string() } else { t.to_lowercase() }
+        if t.is_empty() {
+            "admin".to_string()
+        } else {
+            t.to_lowercase()
+        }
     };
     agentum_core::validate_username(&uname).map_err(|e| anyhow!("invalid username: {e}"))?;
 
