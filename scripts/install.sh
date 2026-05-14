@@ -336,14 +336,15 @@ offer_auth_setup() {
 
 # Ask whether to auto-start agentum serve as a daemon (systemd user
 # unit when available, otherwise nohup background). Only offered for
-# host mode in interactive installs. The dashboard URL passed in
-# carries the detected LAN IP so the success message is reachable
-# from other devices, not just localhost.
+# host mode in interactive installs. The dashboard URL passed in is
+# what we'll print on success; serve_args carries any extra flags
+# (e.g. --host 0.0.0.0 when the user opted into LAN exposure).
 offer_auto_start() {
     if [ "$INTERACTIVE" != true ]; then
         return 0
     fi
     dash_url="${1:-https://127.0.0.1:8822}"
+    serve_args="${2:-}"
     printf '\n'
     printf '  %s▸%s %sStart agentum now?%s\n\n' "${C_A}" "${C_R}" "${C_B}" "${C_R}"
     printf '  %s🖥️   [1] %sYes — start now and auto-start at login%s %s(recommended)%s\n' "${C_B}" "${C_G}" "${C_R}" "${C_D}" "${C_R}"
@@ -354,7 +355,7 @@ offer_auto_start() {
         case "$choice" in
             1|y|Y|yes|Yes)
                 printf '\n'
-                setup_autostart "$dash_url"
+                setup_autostart "$dash_url" "$serve_args"
                 break ;;
             2|n|N|no|No|q|quit)
                 h "Start manually with:  ${C_C}agentum serve${C_R}   or   ${C_C}agentum serve --detach${C_R}"
@@ -367,13 +368,16 @@ offer_auto_start() {
 # Dispatch to the right OS-specific autostart installer. Each one
 # installs persistence (LaunchAgent or systemd user unit) AND starts
 # the daemon now, so the combined "Yes" answer always lands the user
-# with a running, surviving daemon.
+# with a running, surviving daemon. serve_args, if non-empty, gets
+# baked into the unit's ExecStart / ProgramArguments so the daemon
+# always boots with the user-chosen bind address.
 setup_autostart() {
     dash_url="${1:-https://127.0.0.1:8822}"
+    serve_args="${2:-}"
     case "$(uname -s)" in
-        Darwin) setup_launchd_user_agent "$dash_url" ;;
-        Linux)  setup_systemd_user_unit "$dash_url" ;;
-        *)      fallback_nohup_start "$dash_url" ;;
+        Darwin) setup_launchd_user_agent "$dash_url" "$serve_args" ;;
+        Linux)  setup_systemd_user_unit   "$dash_url" "$serve_args" ;;
+        *)      fallback_nohup_start      "$dash_url" "$serve_args" ;;
     esac
 }
 
@@ -383,6 +387,7 @@ setup_autostart() {
 # both halves of the user's "yes" answer.
 setup_launchd_user_agent() {
     dash_url="${1:-https://127.0.0.1:8822}"
+    serve_args="${2:-}"
     LA_DIR="$HOME/Library/LaunchAgents"
     LA_LABEL="dev.agentum.daemon"
     LA_PATH="$LA_DIR/${LA_LABEL}.plist"
@@ -394,6 +399,19 @@ setup_launchd_user_agent() {
     # next bootstrap picks up the new binary path / arguments.
     if [ -f "$LA_PATH" ]; then
         launchctl unload "$LA_PATH" 2>/dev/null || true
+    fi
+
+    # Build the optional extra <string> arg entries for ProgramArguments.
+    # We split serve_args on whitespace so callers can pass e.g.
+    # "--host 0.0.0.0" without quoting gymnastics here.
+    extra_args_xml=""
+    if [ -n "$serve_args" ]; then
+        # shellcheck disable=SC2086
+        set -- $serve_args
+        for arg in "$@"; do
+            extra_args_xml="${extra_args_xml}
+        <string>${arg}</string>"
+        done
     fi
 
     # Heredoc is the cleanest way to keep XML readable; we escape
@@ -409,7 +427,7 @@ setup_launchd_user_agent() {
     <key>ProgramArguments</key>
     <array>
         <string>${INSTALL_DIR}/agentum</string>
-        <string>serve</string>
+        <string>serve</string>${extra_args_xml}
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -455,9 +473,11 @@ PLISTEOF
 # but not across reboot.
 fallback_nohup_start() {
     dash_url="${1:-https://127.0.0.1:8822}"
+    serve_args="${2:-}"
     LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/agentum"
     mkdir -p "$LOG_DIR"
-    nohup "$INSTALL_DIR/agentum" serve </dev/null >"$LOG_DIR/daemon.log" 2>&1 &
+    # shellcheck disable=SC2086  # deliberately unquoted to split args
+    nohup "$INSTALL_DIR/agentum" serve $serve_args </dev/null >"$LOG_DIR/daemon.log" 2>&1 &
     PID=$!
     sleep 1.5
     if kill -0 "$PID" 2>/dev/null; then
@@ -479,18 +499,25 @@ setup_systemd_user_unit() {
     UNIT_NAME="agentum.service"
     UNIT_PATH="$SYSTEMD_USER_DIR/$UNIT_NAME"
     dash_url="${1:-https://127.0.0.1:8822}"
+    serve_args="${2:-}"
 
     if ! command -v systemctl >/dev/null 2>&1; then
         w "systemctl not found — falling back to background start"
         LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/agentum"
         mkdir -p "$LOG_DIR"
-        nohup "$INSTALL_DIR/agentum" serve </dev/null >"$LOG_DIR/daemon.log" 2>&1 &
+        # shellcheck disable=SC2086
+        nohup "$INSTALL_DIR/agentum" serve $serve_args </dev/null >"$LOG_DIR/daemon.log" 2>&1 &
         h "agentum started in background (pid $!)"
         h "Dashboard: ${dash_url}"
         return 0
     fi
 
     mkdir -p "$SYSTEMD_USER_DIR"
+
+    # Append serve_args (e.g. "--host 0.0.0.0") to ExecStart when the
+    # user opted into LAN exposure; default is loopback-only.
+    exec_start="$INSTALL_DIR/agentum serve"
+    [ -n "$serve_args" ] && exec_start="$exec_start $serve_args"
 
     # Write a simple user service that starts agentum serve, survives
     # logout (lingering), and auto-restarts on crash.
@@ -502,7 +529,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=$INSTALL_DIR/agentum serve
+ExecStart=$exec_start
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5
@@ -538,14 +565,19 @@ UNITEOF
 
 # Register the local daemon as the default `local` profile so
 # `agentum terminal` Just Works the moment the daemon is up. We
-# upsert (saving over any prior `local` entry) and mark it default
+# always use 127.0.0.1: this profile is the *same-machine* shortcut,
+# and loopback is stable across networks (LAN IPs change when you
+# move between WiFi networks, VPNs, tethering, etc.) and works even
+# when the daemon is bound to loopback only. Other machines should
+# be added as named profiles via `agentum profiles add NAME URL`.
+#
+# We upsert (saving over any prior `local` entry) and mark it default
 # only when no other default exists — so users who already pointed
 # at a remote VPS don't have their preference overwritten by a
 # reinstall.
 register_local_profile() {
-    url="$1"
-    [ -n "$url" ] || return 0
     [ -x "$INSTALL_DIR/agentum" ] || return 0
+    url="https://127.0.0.1:8822"
     set_default_flag=""
     if ! "$INSTALL_DIR/agentum" profiles list 2>/dev/null | awk 'NR>1 {print $2}' | grep -q '^\*$'; then
         set_default_flag="--set-default"
@@ -553,6 +585,32 @@ register_local_profile() {
     if "$INSTALL_DIR/agentum" profiles add local "$url" --insecure $set_default_flag >/dev/null 2>&1; then
         o "profile saved" "local → ${url}"
     fi
+}
+
+# Ask whether the daemon should be reachable from other devices on
+# the LAN. Default is "no" (workstation mode: loopback-only), which
+# is the right call for a personal laptop. "Yes" is the shared-host
+# case: a VPS, a lab box, a desktop you want the rest of the house
+# to drive. Returns "lan" or "loopback" on stdout.
+ask_expose() {
+    if [ "$INTERACTIVE" != true ]; then
+        echo "loopback"
+        return 0
+    fi
+    printf '\n  %sShould this daemon be reachable from other devices?%s\n\n' "${C_Y}" "${C_R}" >&2
+    printf '  %s🔒  [1] %sNo — just me on this machine%s %s(recommended)%s\n' "${C_B}" "${C_G}" "${C_R}" "${C_D}" "${C_R}" >&2
+    printf '       %sDaemon binds 127.0.0.1 only. Other devices can'"'"'t connect.%s\n\n' "${C_D}" "${C_R}" >&2
+    printf '  %s🌐  [2] %sYes — share with other devices on my network%s\n' "${C_B}" "${C_BL}" "${C_R}" >&2
+    printf '       %sDaemon binds 0.0.0.0. Anyone with the token + LAN access can connect.%s\n\n' "${C_D}" "${C_R}" >&2
+    while true; do
+        printf '  %sChoice [1-2] (1):%s ' "${C_D}" "${C_R}" >&2
+        choice=""; read_input choice; choice="${choice:-1}"
+        case "$choice" in
+            1|n|N|no|No|local|loopback) echo "loopback"; return 0 ;;
+            2|y|Y|yes|Yes|lan|share|shared) echo "lan"; return 0 ;;
+            *) printf '  %sEnter 1 or 2.%s\n' "${C_RED}" "${C_R}" >&2 ;;
+        esac
+    done
 }
 
 # Final tip both paths share. Surfaces multi-machine control without
@@ -564,18 +622,35 @@ multi_server_tip() {
     printf '\n'
 }
 
-# Host mode: daemon lives on this machine. Auth setup + autostart
-# prompts run; LAN IP gets baked into the dashboard URL so other
-# devices on the network can reach it.
+# Host mode: daemon lives on this machine. Two sub-modes:
+#
+#   workstation (default): daemon binds 127.0.0.1 only. Dashboard URL
+#       is loopback. Right for a personal laptop where agentum is
+#       just for you, even if you also point at a remote VPS profile.
+#
+#   shared: daemon binds 0.0.0.0 with --host 0.0.0.0. Dashboard URL
+#       uses the detected LAN IP so other devices/users can connect.
+#       Right for a VPS, a home server, a shared dev box.
+#
+# Either way the `local` profile is loopback — it's the same-machine
+# shortcut and loopback is what works regardless of network.
 post_host() {
-    lan_ip="$(detect_lan_ip)"
-    dash_url="https://${lan_ip}:8822"
+    expose="$(ask_expose)"
+    serve_args=""
+    if [ "$expose" = "lan" ]; then
+        lan_ip="$(detect_lan_ip)"
+        dash_url="https://${lan_ip}:8822"
+        serve_args="--host 0.0.0.0"
+    else
+        lan_ip="127.0.0.1"
+        dash_url="https://127.0.0.1:8822"
+    fi
 
     # Setup steps first — the user shouldn't have to scroll past a
     # reference card to find the actions still required of them.
     offer_auth_setup
-    offer_auto_start "$dash_url"
-    register_local_profile "$dash_url"
+    offer_auto_start "$dash_url" "$serve_args"
+    register_local_profile
 
     # Reference card last: by this point auth + autostart are done,
     # so these commands are "what to run when you want them again",
@@ -587,10 +662,10 @@ post_host() {
     h "Terminal:    ${C_C}agentum terminal${C_R}"
     h "New agent:   ${C_C}agentum new alpha --tool claude --dir . --up${C_R}"
     h "Health:      ${C_C}agentum doctor${C_R}"
-    if [ "$lan_ip" = "127.0.0.1" ]; then
+    if [ "$expose" = "lan" ] && [ "$lan_ip" = "127.0.0.1" ]; then
         printf '\n'
-        w "could not detect a LAN IP — dashboard will only be reachable from this machine."
-        h "Other devices: run 'agentum doctor' once the daemon is up to see the URL."
+        w "could not detect a LAN IP — daemon is bound to 0.0.0.0 but the dashboard URL above is loopback."
+        h "Other devices: run 'agentum doctor' once the daemon is up to see a reachable URL."
     fi
     multi_server_tip
 }
