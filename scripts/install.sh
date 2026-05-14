@@ -1,7 +1,7 @@
 #!/bin/sh
 # agentum installer — one-question wizard.
 #
-# curl -fsSL https://agentum.dev/install.sh | sh
+# curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh | sh
 #
 # Options (passed after -- when piping):
 #   curl ... | sh -s -- --mode host          # this machine runs agents (daemon)
