@@ -4,6 +4,47 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.39] — 2026-05-14
+
+### Changed
+- **Installer: one question instead of three.** The wizard used to ask
+  `server | cli | both`, then autostart, then auth setup — three
+  decisions framed in vocabulary new users hadn't earned yet. The
+  prompt is now a single question: *"Will this machine run agents?"*.
+  Same binary either way; only the post-install flow forks.
+  - **Host mode** (default): existing auth + autostart prompts, plus
+    a `local` profile auto-registered against the detected LAN IP so
+    `agentum terminal` connects without any extra setup.
+  - **Client mode**: skips auth and autostart entirely, inline-prompts
+    for a remote daemon URL, and writes a `remote` profile pointing at
+    it with `--insecure --set-default`.
+  - Legacy `--mode server|cli|both` tokens are still accepted (they
+    fold into `host`/`client`) so existing automation keeps working.
+- **Dashboard URL uses LAN IP, not 127.0.0.1.** The installer now
+  probes for a routable LAN address (macOS via `ipconfig getifaddr`
+  + route fallback; Linux via `hostname -I` + `ip route` fallback)
+  and uses it in the success message + the `local` profile. Other
+  devices on the same network can hit the dashboard without an
+  extra round of "wait, what's my IP?". Falls back to `127.0.0.1`
+  with a warning when nothing routable is found.
+- Multi-server / bidirectional control is now a one-line tip at the
+  end of the wizard instead of a concept the first-run user has to
+  understand up front. Power-user territory stays one
+  `agentum profiles add` away.
+
+### Added
+- `agentum auth setup` — interactive wizard (or non-interactive
+  `--username` / `--password` for CI) that writes the first admin
+  account directly to the DB without needing a running server. Also
+  auto-runs from `agentum serve` when the daemon detects zero users
+  on boot and stdin is a terminal.
+
+### Notes
+- Bundles previously unreleased work from v0.7.37 / v0.7.38 (auth
+  wizard, HTTPS→HTTP loopback fallback, `--no-auth` flag) under the
+  bumped Cargo.toml version. Tags v0.7.37 and v0.7.38 were cut
+  without bumping the manifest; this release re-aligns the two.
+
 ## [0.7.27] — 2026-05-12
 
 ### Added
