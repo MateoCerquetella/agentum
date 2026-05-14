@@ -1,16 +1,20 @@
 #!/bin/sh
-# agentum installer — interactive CLI with mode selection
+# agentum installer — one-question wizard.
 #
 # curl -fsSL https://agentum.dev/install.sh | sh
 #
 # Options (passed after -- when piping):
-#   curl ... | sh -s -- --mode server        # Control Plane (full)
-#   curl ... | sh -s -- --mode cli           # Terminal CLI
-#   curl ... | sh -s -- --no-interactive     # Skip prompts
+#   curl ... | sh -s -- --mode host          # this machine runs agents (daemon)
+#   curl ... | sh -s -- --mode client        # this machine only connects to remote daemons
+#   curl ... | sh -s -- --no-interactive     # skip prompts, default to host mode
 #
 # Environment:
-#   INSTALL_MODE=server|cli     CI / non-interactive mode
+#   INSTALL_MODE=host|client    CI / non-interactive mode
 #   INSTALL_DIR=$HOME/.local/bin  Override install path
+#
+# Legacy mode tokens server/cli/both are still accepted: server→host,
+# cli→client, both→host. The binary is the same; mode only affects the
+# post-install wizard.
 #
 # SPDX-License-Identifier: MIT
 set -eu
@@ -50,7 +54,7 @@ while [ $# -gt 0 ]; do
         --mode) INSTALL_MODE="$2"; shift 2 ;;
         --mode=*) INSTALL_MODE="${1#*=}"; shift ;;
         --no-interactive) INTERACTIVE=false; shift ;;
-        -h|--help) printf 'Usage: install.sh [--mode server|cli] [--no-interactive]\nEnv: INSTALL_MODE=server|cli\n'; exit 0 ;;
+        -h|--help) printf 'Usage: install.sh [--mode host|client] [--no-interactive]\nEnv: INSTALL_MODE=host|client\n'; exit 0 ;;
         *) shift ;;
     esac
 done
@@ -84,39 +88,83 @@ banner() {
 }
 
 # ── Mode selection ─────────────────────────────────────────────
-# Both `server` and `cli` install the same binary — the only difference
-# is the post-install guidance shown afterwards. `both` shows both
-# guides so users who want to use the dashboard *and* the CLI quickly
-# get pointed at every entrypoint.
+# One binary, one question: will this machine run agents (host mode)
+# or just connect to a remote agentum (client mode)? Same artifact
+# either way — the answer only steers the post-install wizard.
+#
+# Legacy tokens server|both fold into host; cli folds into client.
 select_mode() {
-    case "${INSTALL_MODE}" in server|cli|both) return ;; esac
+    # Normalize legacy tokens up front so the rest of the script only
+    # ever sees host|client.
+    case "${INSTALL_MODE}" in
+        server|both) INSTALL_MODE="host" ;;
+        cli)         INSTALL_MODE="client" ;;
+    esac
+    case "${INSTALL_MODE}" in host|client) return ;; esac
+
     if [ "$INTERACTIVE" != true ]; then
-        INSTALL_MODE="both"
-        i "mode" "defaulting to ${C_B}both${C_R} (use --mode server|cli to narrow)"
+        INSTALL_MODE="host"
+        i "mode" "defaulting to ${C_B}host${C_R} (use --mode host|client to override)"
         return
     fi
-    printf '\n  %sChoose your install:%s\n\n' "${C_Y}" "${C_R}"
-    printf '  %s🖥️   [1] %sControl Plane%s\n'       "${C_B}" "${C_Y}" "${C_R}"
-    printf '       Server · Dashboard · TLS · tmux — full web UI\n'
-    printf '       %s›%s %sagentum serve%s on your LAN, dashboard from any device\n\n' "${C_D}" "${C_R}" "${C_C}" "${C_R}"
-    printf '  %s⌨️   [2] %sTerminal CLI%s\n'         "${C_B}" "${C_BL}" "${C_R}"
-    printf '       Fullscreen TUI + CLI session manager, no server/TLS\n'
-    printf '       %s›%s %sagentum terminal%s for the TUI, %sagentum new/ls/tail%s for scripts\n\n' "${C_D}" "${C_R}" "${C_C}" "${C_R}" "${C_C}" "${C_R}"
-    printf '  %s✨  [3] %sBoth%s %s(recommended)%s\n' "${C_B}" "${C_G}" "${C_R}" "${C_D}" "${C_R}"
-    printf '       Install once, get the dashboard %sand%s the terminal workflow.\n' "${C_C}" "${C_R}"
-    printf '       %s›%s same binary — %sagentum serve%s or %sagentum terminal%s whenever you like\n\n' "${C_D}" "${C_R}" "${C_C}" "${C_R}" "${C_C}" "${C_R}"
+
+    printf '\n  %sWill this machine run agents?%s\n\n' "${C_Y}" "${C_R}"
+    printf '  %s🖥️   [1] %sYes — run agents here%s %s(recommended)%s\n' "${C_B}" "${C_G}" "${C_R}" "${C_D}" "${C_R}"
+    printf '       %sStarts a local agentum daemon. Dashboard + TUI both work.%s\n\n' "${C_D}" "${C_R}"
+    printf '  %s📡  [2] %sNo — just connect to a remote agentum%s\n' "${C_B}" "${C_BL}" "${C_R}"
+    printf '       %sUse this machine as a client only. You’ll point it at%s\n' "${C_D}" "${C_R}"
+    printf '       %sanother machine (VPS, work laptop, etc.) running agentum.%s\n\n' "${C_D}" "${C_R}"
     while true; do
-        printf '  %sChoice [1-3] (3):%s ' "${C_D}" "${C_R}"
-        choice=""; read_input choice; choice="${choice:-3}"
+        printf '  %sChoice [1-2] (1):%s ' "${C_D}" "${C_R}"
+        choice=""; read_input choice; choice="${choice:-1}"
         case "$choice" in
-            1|server|Server) INSTALL_MODE="server"; break ;;
-            2|cli|CLI|client) INSTALL_MODE="cli"; break ;;
-            3|both|Both|all|All) INSTALL_MODE="both"; break ;;
+            1|host|Host|server|Server|both|Both) INSTALL_MODE="host";   break ;;
+            2|client|Client|cli|CLI|remote)      INSTALL_MODE="client"; break ;;
             q|quit) printf '\n  %sCancelled.%s\n\n' "${C_D}" "${C_R}"; exit 0 ;;
-            *) printf '  %sEnter 1, 2 or 3.%s\n' "${C_RED}" "${C_R}" ;;
+            *) printf '  %sEnter 1 or 2.%s\n' "${C_RED}" "${C_R}" ;;
         esac
     done
     printf '\n'
+}
+
+# ── LAN IP detection ───────────────────────────────────────────
+# Best-effort: returns the IPv4 address other devices on the same LAN
+# can reach the daemon at. Falls back to 127.0.0.1 if nothing is found,
+# in which case the caller should warn the user the dashboard is local-only.
+detect_lan_ip() {
+    ip=""
+    case "$(uname -s)" in
+        Darwin)
+            # Try common interface names in order; the first that returns
+            # an address wins. en0 is wifi on most Macs, en1 on older ones.
+            for iface in en0 en1 en2 en3 en4 en5; do
+                ip="$(ipconfig getifaddr "$iface" 2>/dev/null)"
+                [ -n "$ip" ] && break
+            done
+            # Last-ditch fallback: ask the routing table which iface
+            # would handle traffic to a public IP.
+            if [ -z "$ip" ]; then
+                route_iface="$(route -n get 1.1.1.1 2>/dev/null | awk '/interface:/ {print $2; exit}')"
+                [ -n "$route_iface" ] && ip="$(ipconfig getifaddr "$route_iface" 2>/dev/null)"
+            fi
+            ;;
+        Linux)
+            # `hostname -I` returns all addresses space-separated; first
+            # one is usually the primary LAN address. Some minimal
+            # busybox builds lack the -I flag, so we have a fallback.
+            ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+            if [ -z "$ip" ] && command -v ip >/dev/null 2>&1; then
+                ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+            fi
+            ;;
+    esac
+    # Strip anything that doesn't look like an IPv4 dotted quad — guards
+    # against locales or busybox builds that print extra noise.
+    case "$ip" in
+        *[!0-9.]*|"") ip="" ;;
+    esac
+    [ -z "$ip" ] && ip="127.0.0.1"
+    echo "$ip"
 }
 
 # ── Platform + version detection ───────────────────────────────
@@ -291,19 +339,22 @@ offer_auth_setup() {
 
 # Ask whether to auto-start agentum serve as a daemon (systemd user
 # unit when available, otherwise nohup background). Only offered for
-# server/both modes and only in interactive installs.
+# host mode in interactive installs. The dashboard URL passed in
+# carries the detected LAN IP so the success message is reachable
+# from other devices, not just localhost.
 offer_auto_start() {
     if [ "$INTERACTIVE" != true ]; then
         return 0
     fi
+    dash_url="${1:-https://127.0.0.1:8822}"
     printf '\n'
     printf '  %s▸%s %sStart agentum now?%s\n\n' "${C_A}" "${C_R}" "${C_B}" "${C_R}"
     printf '  %s🖥️   [1] %sYes — start in background (survives terminal close)%s\n' "${C_B}" "${C_G}" "${C_R}"
-    printf '  %s📋  [2] %sYes — systemd user unit (auto-starts at login)%s\n' "${C_B}" "${C_BL}" "${C_R}"
+    printf '  %s📋  [2] %sYes — auto-start at login (systemd user unit)%s\n' "${C_B}" "${C_BL}" "${C_R}"
     printf '  %s✖   [3] %sNo — I\u2019ll start it manually later%s\n' "${C_B}" "${C_D}" "${C_R}"
     while true; do
-        printf '  %sChoice [1-3] (3):%s ' "${C_D}" "${C_R}"
-        choice=""; read_input choice; choice="${choice:-3}"
+        printf '  %sChoice [1-3] (1):%s ' "${C_D}" "${C_R}"
+        choice=""; read_input choice; choice="${choice:-1}"
         case "$choice" in
             1)
                 printf '\n'
@@ -318,7 +369,7 @@ offer_auto_start() {
                     if kill -0 "$PID" 2>/dev/null; then
                         o "agentum serve started" "pid ${PID}"
                         h "Logs: ${LOG_DIR}/daemon.log"
-                        h "Dashboard: https://127.0.0.1:8822"
+                        h "Dashboard: ${dash_url}"
                     else
                         w "agentum serve may not have started — check logs: ${LOG_DIR}/daemon.log"
                     fi
@@ -326,7 +377,7 @@ offer_auto_start() {
                 break ;;
             2)
                 printf '\n'
-                setup_systemd_user_unit
+                setup_systemd_user_unit "$dash_url"
                 break ;;
             3|q|quit|"")
                 h "Start manually with:  ${C_C}agentum serve${C_R}   or   ${C_C}agentum serve --detach${C_R}"
@@ -344,6 +395,7 @@ setup_systemd_user_unit() {
     SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
     UNIT_NAME="agentum.service"
     UNIT_PATH="$SYSTEMD_USER_DIR/$UNIT_NAME"
+    dash_url="${1:-https://127.0.0.1:8822}"
 
     if ! command -v systemctl >/dev/null 2>&1; then
         w "systemctl not found — falling back to background start"
@@ -351,7 +403,7 @@ setup_systemd_user_unit() {
         mkdir -p "$LOG_DIR"
         nohup "$INSTALL_DIR/agentum" serve </dev/null >"$LOG_DIR/daemon.log" 2>&1 &
         h "agentum started in background (pid $!)"
-        h "Dashboard: https://127.0.0.1:8822"
+        h "Dashboard: ${dash_url}"
         return 0
     fi
 
@@ -391,7 +443,7 @@ UNITEOF
         if systemctl --user start "$UNIT_NAME" 2>/dev/null; then
             o "systemd user unit installed" "enabled + started"
             h "Unit: $UNIT_PATH"
-            h "Dashboard: https://127.0.0.1:8822"
+            h "Dashboard: ${dash_url}"
             h "Manage: systemctl --user status|stop|restart agentum"
         else
             w "unit enabled but could not start — check: journalctl --user -u agentum"
@@ -401,49 +453,101 @@ UNITEOF
     fi
 }
 
-post_server() {
+# Register the local daemon as the default `local` profile so
+# `agentum terminal` Just Works the moment the daemon is up. We
+# upsert (saving over any prior `local` entry) and mark it default
+# only when no other default exists — so users who already pointed
+# at a remote VPS don't have their preference overwritten by a
+# reinstall.
+register_local_profile() {
+    url="$1"
+    [ -n "$url" ] || return 0
+    [ -x "$INSTALL_DIR/agentum" ] || return 0
+    set_default_flag=""
+    if ! "$INSTALL_DIR/agentum" profiles list 2>/dev/null | awk 'NR>1 {print $2}' | grep -q '^\*$'; then
+        set_default_flag="--set-default"
+    fi
+    if "$INSTALL_DIR/agentum" profiles add local "$url" --insecure $set_default_flag >/dev/null 2>&1; then
+        o "profile saved" "local → ${url}"
+    fi
+}
+
+# Final tip both paths share. Surfaces multi-machine control without
+# making first-run users learn the concept up front.
+multi_server_tip() {
+    printf '\n'
+    h "Tip: agentum can connect to other machines too —"
+    h "     run ${C_C}agentum profiles add NAME URL${C_R} to switch between them."
+    printf '\n'
+}
+
+# Host mode: daemon lives on this machine. Auth setup + autostart
+# prompts run; LAN IP gets baked into the dashboard URL so other
+# devices on the network can reach it.
+post_host() {
+    lan_ip="$(detect_lan_ip)"
+    dash_url="https://${lan_ip}:8822"
     printf '\n'
     div " Get started "
     printf '\n'
     h "1. Start the server:    ${C_C}agentum serve${C_R}"
-    h "2. Open the dashboard:  ${C_C}https://127.0.0.1:8822${C_R}  ${C_D}(self-signed TLS)${C_R}"
-    h "3. Create an agent:     ${C_C}agentum new alpha --tool claude --dir . --up${C_R}"
-    printf '\n'
-    h "Health check: ${C_C}agentum doctor${C_R}    Phone trust: ${C_C}http://127.0.0.1:8823/api/cert${C_R}"
-    printf '\n'
-    offer_auth_setup
-    offer_auto_start
-}
-
-post_cli() {
-    printf '\n'
-    div " Get started "
-    printf '\n'
-    h "1. Open the terminal UI:  ${C_C}agentum terminal${C_R}   ${C_D}(fullscreen TUI)${C_R}"
-    h "2. Create an agent:       ${C_C}agentum new my-agent --tool claude --dir . --up${C_R}"
-    h "3. Watch / manage:        ${C_C}agentum tail my-agent${C_R} · ${C_C}ls${C_R} · ${C_C}ps${C_R} · ${C_C}open${C_R} · ${C_C}down${C_R}"
-    printf '\n'
-    h "Want a web dashboard later? Run ${C_C}agentum serve${C_R} anytime."
-    printf '\n'
-}
-
-post_both() {
-    printf '\n'
-    div " Get started "
-    printf '\n'
-    h "${C_B}From the terminal${C_R}"
-    h "  1. Open the terminal UI:  ${C_C}agentum terminal${C_R}   ${C_D}(fullscreen TUI)${C_R}"
-    h "  2. Create an agent:       ${C_C}agentum new my-agent --tool claude --dir . --up${C_R}"
-    h "  3. Watch / manage:        ${C_C}agentum tail my-agent${C_R} · ${C_C}ls${C_R} · ${C_C}ps${C_R} · ${C_C}open${C_R} · ${C_C}down${C_R}"
-    printf '\n'
-    h "${C_B}From the dashboard${C_R}"
-    h "  4. Start the server:      ${C_C}agentum serve${C_R}"
-    h "  5. Open in browser:       ${C_C}https://127.0.0.1:8822${C_R}  ${C_D}(self-signed TLS)${C_R}"
+    h "2. Open the dashboard:  ${C_C}${dash_url}${C_R}  ${C_D}(self-signed TLS)${C_R}"
+    h "3. Open the TUI:        ${C_C}agentum terminal${C_R}"
+    h "4. Create an agent:     ${C_C}agentum new alpha --tool claude --dir . --up${C_R}"
+    if [ "$lan_ip" = "127.0.0.1" ]; then
+        printf '\n'
+        w "could not detect a LAN IP — dashboard will only be reachable from this machine."
+        h "Other devices: run 'agentum doctor' once the daemon is up to see the URL."
+    fi
     printf '\n'
     h "Health check: ${C_C}agentum doctor${C_R}"
     printf '\n'
     offer_auth_setup
-    offer_auto_start
+    offer_auto_start "$dash_url"
+    register_local_profile "$dash_url"
+    multi_server_tip
+}
+
+# Client mode: this machine never runs the daemon. We skip auth setup
+# (no local server to auth against) and autostart, and offer to add a
+# remote profile so the next command they run is `agentum terminal`.
+post_client() {
+    printf '\n'
+    div " Get started "
+    printf '\n'
+    h "1. Add a remote agentum:  ${C_C}agentum profiles add NAME URL${C_R}"
+    h "2. Open the terminal UI:  ${C_C}agentum terminal${C_R}   ${C_D}(connects to the default profile)${C_R}"
+    h "3. Create an agent:       ${C_C}agentum new my-agent --tool claude --dir . --up${C_R}"
+    printf '\n'
+
+    # Offer to register a remote profile now so the user can go
+    # straight into `agentum terminal` without a second round trip.
+    if [ "$INTERACTIVE" = true ] && [ "$IS_UPDATE" = false ]; then
+        printf '  %s▸%s %sAdd a remote agentum now?%s ' "${C_A}" "${C_R}" "${C_B}" "${C_R}"
+        printf '%s(URL like https://my-vps:8822, blank to skip)%s\n' "${C_D}" "${C_R}"
+        printf '  %sURL:%s ' "${C_D}" "${C_R}"
+        remote_url=""; read_input remote_url
+        if [ -n "$remote_url" ]; then
+            if [ -x "$INSTALL_DIR/agentum" ]; then
+                # --insecure is the safe default here: most fresh
+                # daemons issue self-signed certs and we don't have
+                # the fingerprint yet. Users can lock it down later
+                # via `agentum profiles add --fingerprint`.
+                if "$INSTALL_DIR/agentum" profiles add remote "$remote_url" --insecure --set-default >/dev/null 2>&1; then
+                    o "profile saved" "remote → ${remote_url} (default)"
+                    h "Connect: ${C_C}agentum terminal${C_R}"
+                else
+                    w "could not save profile — try manually: ${C_C}agentum profiles add remote ${remote_url}${C_R}"
+                fi
+            fi
+        else
+            h "Skipped. Run ${C_C}agentum profiles add NAME URL${C_R} when you have a daemon to point at."
+        fi
+    fi
+
+    printf '\n'
+    h "Tip: this machine can also run agents — ${C_C}agentum serve${C_R} anytime."
+    multi_server_tip
 }
 
 # ── Main ───────────────────────────────────────────────────────
@@ -469,7 +573,7 @@ if [ -n "$EXISTING_BIN" ]; then
     IS_UPDATE=true
     # Updates re-use the existing install — skip the mode prompt unless the
     # user explicitly asked for a different mode. Same binary either way.
-    [ -z "$INSTALL_MODE" ] && INSTALL_MODE="both"
+    [ -z "$INSTALL_MODE" ] && INSTALL_MODE="host"
 fi
 
 select_mode
@@ -478,9 +582,8 @@ if [ "$IS_UPDATE" = true ]; then
     s "Updating" "${C_D}v${EXISTING_VERSION#v} → ${VERSION}${C_R}"
 else
     case "$INSTALL_MODE" in
-        server) s "Installing" "${C_Y}Control Plane${C_R} — server + dashboard + TLS + tmux" ;;
-        cli)    s "Installing" "${C_BL}Terminal CLI${C_R} — lightweight tmux session manager" ;;
-        both)   s "Installing" "${C_G}Both${C_R} — Control Plane + Terminal CLI (same binary)" ;;
+        host)   s "Installing" "${C_G}agentum${C_R} — this machine will run agents" ;;
+        client) s "Installing" "${C_BL}agentum${C_R} — this machine will connect to a remote daemon" ;;
     esac
 fi
 
@@ -495,9 +598,8 @@ if [ "$IS_UPDATE" = true ]; then
     printf '\n  %s%s✨  Updated to %s%s\n\n' "${C_Y}" "${C_B}" "${VERSION}" "${C_R}"
 else
     case "$INSTALL_MODE" in
-        server) post_server ;;
-        cli)    post_cli ;;
-        both)   post_both ;;
+        host)   post_host ;;
+        client) post_client ;;
     esac
     printf '  %s%s✨  agentum is ready!%s\n\n' "${C_Y}" "${C_B}" "${C_R}"
 fi
