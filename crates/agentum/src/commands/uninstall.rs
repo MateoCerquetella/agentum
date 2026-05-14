@@ -252,28 +252,47 @@ fn stop_running_daemon() {
     }
 
     // macOS: unload the LaunchAgent so launchd stops respawning the
-    // daemon. We use `bootout` (modern syntax) and fall back to the
-    // legacy `unload` for older macOS where bootout isn't available.
+    // daemon. We try `bootout` (modern syntax) first and only fall
+    // back to legacy `unload` if bootout actually fails — running
+    // both unconditionally caused `unload` to error out with
+    // "Input/output error" whenever bootout had already succeeded.
+    //
+    // Either way we suppress stderr: this is best-effort cleanup,
+    // and a stale message about an already-stopped service is just
+    // noise that makes the uninstall look broken.
     #[cfg(target_os = "macos")]
     if let Some(plist) = macos_launchagent_plist() {
         if plist.exists() {
             let uid = unsafe { libc::getuid() };
-            let _ = std::process::Command::new("launchctl")
+            let booted_out = std::process::Command::new("launchctl")
                 .args([
                     "bootout",
                     &format!("gui/{uid}"),
                     &plist.display().to_string(),
                 ])
-                .status();
-            let _ = std::process::Command::new("launchctl")
-                .args(["unload", &plist.display().to_string()])
-                .status();
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+
+            if !booted_out {
+                let _ = std::process::Command::new("launchctl")
+                    .args(["unload", &plist.display().to_string()])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+            }
         }
     }
 
-    // Cross-platform: pkill any `agentum serve` we own.
+    // Cross-platform: pkill any `agentum serve` we own. Suppress its
+    // output too — exit code 1 ("no processes matched") is normal
+    // when the daemon was already stopped via launchctl above.
     let _ = std::process::Command::new("pkill")
         .args(["-f", "agentum serve"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status();
 }
 
