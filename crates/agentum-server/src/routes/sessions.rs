@@ -233,9 +233,16 @@ async fn start(
         return Ok(Json(session));
     }
     if already {
-        return Err(ApiError::BadRequest(format!(
-            "tmux session {target} already exists outside agentum; refuse to clobber"
-        )));
+        // Orphaned tmux session — kill it and respawn fresh instead of
+        // erroring. Happens when agentum is killed/restarted while
+        // sessions are still in tmux.
+        tracing::warn!(
+            target = %target,
+            "orphaned tmux session found; killing before respawn"
+        );
+        agentum_tmux::kill_session(&target)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
 
     let workdir = PathBuf::from(&session.workdir);
