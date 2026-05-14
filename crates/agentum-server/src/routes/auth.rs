@@ -38,14 +38,26 @@ struct StatusResp {
     /// True when register can be hit anonymously. Equal to `needs_setup`
     /// in current shape; kept as a separate field for forward compat.
     register_open: bool,
+    /// True when the server was started with `--no-auth`. Clients use this
+    /// to skip the login flow entirely and send a dummy bearer token.
+    #[serde(default)]
+    no_auth: bool,
 }
 
 async fn status(State(state): State<AppState>) -> Result<Json<StatusResp>, ApiError> {
+    if state.no_auth {
+        return Ok(Json(StatusResp {
+            needs_setup: false,
+            register_open: false,
+            no_auth: true,
+        }));
+    }
     let n = state.store.count_users().await?;
     let needs_setup = n == 0;
     Ok(Json(StatusResp {
         needs_setup,
         register_open: needs_setup,
+        no_auth: false,
     }))
 }
 
@@ -177,6 +189,11 @@ async fn me(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> Result<Json<MeResp>, ApiError> {
+    if state.no_auth {
+        return Ok(Json(MeResp {
+            username: "no-auth".to_string(),
+        }));
+    }
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
