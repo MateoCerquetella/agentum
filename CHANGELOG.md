@@ -4,6 +4,35 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.43] — 2026-05-14
+
+### Fixed
+- **Admin account wizard rendered on a single line** when launched
+  from the installer. The username, password, and confirm prompts
+  each used `eprint!` to stderr while the surrounding boxes used
+  `println!` to stdout — different buffering, and under some
+  terminal modes the three prompts collapsed into one line so the
+  password step looked like it had been skipped (and silently
+  failed when the user hit Enter without realising they were still
+  in the wizard). All prompts now go through stdout with explicit
+  flushes, and the wizard retries on short/mismatched passwords
+  instead of bailing out so the install can't end without an admin.
+
+### Changed
+- **Autostart prompt is now two options instead of three.**
+  `[1] Start now and auto-start at login (recommended)` /
+  `[2] Not now`. The "background only" middle ground is gone — if
+  you want it to run, you almost always want it to come back after
+  reboot too, and the prior split made that the second choice.
+- **macOS gets a real LaunchAgent** instead of falling back to
+  `nohup`. The installer now writes
+  `~/Library/LaunchAgents/dev.agentum.daemon.plist` with
+  `RunAtLoad` + `KeepAlive`, registers it with
+  `launchctl bootstrap gui/<uid>`, and writes logs to
+  `~/Library/Logs/agentum/daemon.log`. So "auto-start at login"
+  works on Macs now, not just Linux. `agentum uninstall` removes
+  the plist and `launchctl bootout`s it before wiping files.
+
 ## [0.7.42] — 2026-05-14
 
 ### Added

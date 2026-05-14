@@ -97,16 +97,25 @@ pub(crate) async fn run_setup_wizard(
         return Ok(());
     }
 
-    // Interactive wizard
+    // Interactive wizard.
+    //
+    // All output goes to stdout (not stderr) so prompts and the
+    // surrounding boxes share a single, line-buffered stream — the
+    // prior split caused prompts to collide on one line under some
+    // terminal modes (`curl | sh` + `</dev/tty`), which made the
+    // password step look like it had been skipped.
     println!();
     println!("  ┌─────────────────────────────────────────┐");
-    println!("  │  First Time Setup                       │");
-    println!("  │  Create your admin account:             │");
+    println!("  │  Create your admin account              │");
+    println!("  │  (used for the dashboard and TUI)       │");
     println!("  └─────────────────────────────────────────┘");
     println!();
+    println!("  Press Enter at any prompt to accept the default.");
+    println!("  Passwords are hidden as you type.");
+    println!();
 
-    // Username (default: "admin")
-    eprint!("  Username [admin]: ");
+    // Username
+    print!("  Username [admin]: ");
     io::stdout().flush().ok();
     let mut raw = String::new();
     io::stdin().read_line(&mut raw)?;
@@ -120,33 +129,36 @@ pub(crate) async fn run_setup_wizard(
     };
     agentum_core::validate_username(&uname).map_err(|e| anyhow!("invalid username: {e}"))?;
 
-    // Password (hidden via rpassword)
-    let pw = read_password_hidden("  Password: ")?;
-    if pw.len() < 8 {
-        return Err(anyhow!("password must be at least 8 characters"));
-    }
-
-    let confirm = read_password_hidden("  Confirm:  ")?;
-    if pw != confirm {
-        return Err(anyhow!("passwords do not match"));
-    }
+    // Loop until we get a valid (≥8 char) password that matches its
+    // confirmation. Reprompting beats bailing out — the user already
+    // committed to running the wizard, and a fresh install with no
+    // admin account is a worse failure mode than a few retries.
+    let pw = loop {
+        let p = read_password_hidden("  Password (min 8 chars): ")?;
+        if p.len() < 8 {
+            println!("  ✖ Password must be at least 8 characters. Try again.");
+            continue;
+        }
+        let c = read_password_hidden("  Confirm password:        ")?;
+        if p != c {
+            println!("  ✖ Passwords don't match. Try again.");
+            continue;
+        }
+        break p;
+    };
 
     println!();
+    println!("  Creating account...");
 
     let hash = agentum_server::auth::hash_password(pw)
         .await
         .map_err(|e| anyhow!("hash failed: {e}"))?;
     let user = store.create_user(&uname, &hash).await?;
 
-    println!("  ┌─────────────────────────────────────────┐");
-    println!("  │  ✓ Admin account created!               │");
-    println!("  │                                         │");
-    let name_line = format!("  │  Username: {:<30}│", user.username);
-    println!("{name_line}");
-    println!("  │                                         │");
-    println!("  │  Save your password — you will need     │");
-    println!("  │  it for the dashboard and TUI.          │");
-    println!("  └─────────────────────────────────────────┘");
+    println!();
+    println!("  ✓ Admin account created.");
+    println!("    Username: {}", user.username);
+    println!("    Save your password — you'll need it for the dashboard and TUI.");
     println!();
 
     Ok(())
@@ -164,12 +176,15 @@ fn prompt_password(label: &str) -> Result<String> {
 }
 
 fn read_password_hidden(prompt: &str) -> Result<String> {
-    eprint!("{prompt}");
-    io::stderr().flush().ok();
+    // Print to stdout (not stderr) so it stays in order with the
+    // wizard's other output and gets flushed before rpassword
+    // takes control of the terminal.
+    print!("{prompt}");
+    io::stdout().flush().ok();
     match rpassword::read_password() {
         Ok(pw) => Ok(pw),
         Err(_) => {
-            // Fallback for non-TTY environments (pipes, CI)
+            // Fallback for non-TTY environments (pipes, CI).
             let mut buf = String::new();
             io::stdin().read_line(&mut buf)?;
             Ok(buf.trim_end_matches(['\n', '\r']).to_string())

@@ -171,15 +171,30 @@ fn gather_targets(include_user_data: bool) -> Result<Vec<Target>> {
         }
     }
 
-    // systemd user unit, if the installer wrote one.
+    // OS-specific autostart artifacts.
     if cfg!(target_os = "linux") {
-        let unit = dirs_systemd_unit();
-        if let Some(p) = unit {
+        if let Some(p) = dirs_systemd_unit() {
             t.push(Target::file(p, Some("systemd user unit (autostart)")));
+        }
+    }
+    if cfg!(target_os = "macos") {
+        if let Some(p) = macos_launchagent_plist() {
+            t.push(Target::file(p, Some("launchd LaunchAgent (autostart)")));
         }
     }
 
     Ok(t)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_launchagent_plist() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(PathBuf::from(home).join("Library/LaunchAgents/dev.agentum.daemon.plist"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_launchagent_plist() -> Option<PathBuf> {
+    None
 }
 
 #[cfg(target_os = "linux")]
@@ -225,6 +240,26 @@ fn stop_running_daemon() {
         let _ = std::process::Command::new("systemctl")
             .args(["--user", "disable", "agentum.service"])
             .status();
+    }
+
+    // macOS: unload the LaunchAgent so launchd stops respawning the
+    // daemon. We use `bootout` (modern syntax) and fall back to the
+    // legacy `unload` for older macOS where bootout isn't available.
+    #[cfg(target_os = "macos")]
+    if let Some(plist) = macos_launchagent_plist() {
+        if plist.exists() {
+            let uid = unsafe { libc::getuid() };
+            let _ = std::process::Command::new("launchctl")
+                .args([
+                    "bootout",
+                    &format!("gui/{uid}"),
+                    &plist.display().to_string(),
+                ])
+                .status();
+            let _ = std::process::Command::new("launchctl")
+                .args(["unload", &plist.display().to_string()])
+                .status();
+        }
     }
 
     // Cross-platform: pkill any `agentum serve` we own.
