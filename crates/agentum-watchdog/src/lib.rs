@@ -328,7 +328,17 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
         // session needs the visual state to match reality, but doesn't
         // want a flurry of "X finished" toasts for events that already
         // happened before they tuned in.
-        let next = classify_activity(&viewport, busy_sig, awaiting_sigs);
+        // Classify against the BOTTOM of the visible viewport only.
+        // Claude's spinner footer and prompt UI are always anchored
+        // to the bottom of the pane; chat output scrolls up. Matching
+        // the whole viewport meant generic chat content (an answer
+        // that quotes "esc to interrupt" or "Enter to select · ↑/↓
+        // to navigate" in code/comments) faked a Working or
+        // AwaitingInput state. Trim to the last ~20 lines, which
+        // comfortably covers Claude's multi-line menu plus the
+        // spinner/input footer without picking up scrolled-by chat.
+        let bottom = bottom_lines(&viewport, 20);
+        let next = classify_activity(&bottom, busy_sig, awaiting_sigs);
         if next != activity {
             match (activity, next) {
                 (ActivityState::Working, ActivityState::Idle) => {
@@ -446,6 +456,31 @@ enum ActivityState {
     AwaitingInput,
 }
 
+/// Return the last `n` newline-delimited lines of `text` as a single
+/// borrowed slice. Used by `watch_session` to scope the busy/awaiting
+/// classifier to the bottom of Claude's pane, so chat content that
+/// happens to quote the signature strings can't fake a state.
+fn bottom_lines(text: &str, n: usize) -> &str {
+    if n == 0 {
+        return "";
+    }
+    let mut count = 0;
+    // Walk back from the end looking for the n-th newline before EOF.
+    // bytes() is sufficient — we only key on `\n` and return a
+    // byte-offset slice, which is always valid UTF-8 since `\n` is a
+    // single-byte ASCII boundary.
+    for (i, b) in text.bytes().enumerate().rev() {
+        if b == b'\n' {
+            count += 1;
+            if count == n {
+                return &text[i + 1..];
+            }
+        }
+    }
+    // Fewer than n lines total — return the whole thing.
+    text
+}
+
 /// Classify a pane snapshot into an [`ActivityState`]. Permission-prompt
 /// signatures take precedence over the busy/idle distinction — Claude
 /// keeps "esc to interrupt" on screen while a permission box is open,
@@ -527,7 +562,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn classify_activity_multichoice_menu() {
         // Regression: Claude Code multi-choice menus (plan mode,
         // subagent picks) show `Enter to select · ↑/↓ to navigate`
@@ -536,16 +571,92 @@ mod tests {
         // legacy signatures miss it and the watchdog stayed in Idle
         // — no notification, no yellow attention dot.
         let busy = Some("esc to interrupt");
-        let awaiting = [
-            "Do you want to proceed?",
-            "❯ 1. Yes",
-            "Enter to select",
-            "↑/↓ to navigate",
-        ];
+        let awaiting = ["Do you want to proceed?", "Enter to select · ↑/↓ to navigate"];
         let menu = "❯ 1. Re-apply both files\n  2. CSP-only fix\n\nEnter to select · ↑/↓ to navigate · Esc to cancel";
         assert_eq!(
             classify_activity(menu, busy, &awaiting),
             ActivityState::AwaitingInput,
+        );
+    }
+
+    #[test]
+    fn classify_activity_ignores_prose_mentioning_menu_phrases() {
+        // Pre-v0.7.52 Claude awaiting signatures matched the bare
+        // strings "Enter to select" and "↑/↓ to navigate"
+        // individually, which triggered a false AwaitingInput
+        // whenever a code comment, source file, or chat reply
+        // mentioned either phrase. The watchdog's own pane caught
+        // this — its viewport contained a doc comment quoting
+        // "Enter to select · ↑/↓ to navigate" while no actual
+        // prompt was open, and the dashboard dot went yellow.
+        // Tightening to the structural middle-dot pair stops
+        // generic prose from masquerading as a real prompt.
+        let busy = Some("esc to interrupt");
+        let awaiting = ["Do you want to proceed?", "Enter to select · ↑/↓ to navigate"];
+        // Working pane that QUOTES the menu phrases in prose,
+        // not as the footer of an actual menu — spinner is still
+        // up, so the right answer is Working.
+        let prose = "...working hard (esc to interrupt)\n// see the docs: Enter to select and ↑/↓ to navigate";
+        assert_eq!(
+            classify_activity(prose, busy, &awaiting),
+            ActivityState::Working,
+        );
+    }
+
+    #[test]
+    fn bottom_lines_returns_last_n() {
+        let s = "a\nb\nc\nd\ne\n";
+        assert_eq!(bottom_lines(s, 2), "e\n");
+        assert_eq!(bottom_lines(s, 3), "d\ne\n");
+        assert_eq!(bottom_lines(s, 10), s); // fewer than n → all
+        assert_eq!(bottom_lines("", 5), "");
+        assert_eq!(bottom_lines("only one line, no newline", 3), "only one line, no newline");
+    }
+
+    #[test]
+    fn bottom_lines_scopes_classifier_to_footer() {
+        // The watchdog's own viewport often contains chat output
+        // that mentions the signature strings (a doc comment about
+        // "Enter to select · ↑/↓ to navigate", an explanation
+        // quoting "esc to interrupt"). Those quotations live in
+        // the scrolled-up chat region, not the bottom-anchored
+        // Claude UI footer. Trimming the classifier's input to
+        // the last 20 lines pins matches to the actual prompt
+        // surface and lets prose roll past freely.
+        let busy = Some("esc to interrupt");
+        let awaiting = ["Do you want to proceed?", "Enter to select · ↑/↓ to navigate"];
+
+        // Realistic shape: chat output near the top quotes the
+        // signatures, then a long run of unrelated chat scrolls
+        // past, and at the bottom sits Claude's quiet input UI
+        // (no spinner, no menu). The trimmed bottom-20 view never
+        // touches the signature-quoting chat, so the right answer
+        // is Idle.
+        let mut pane = String::new();
+        pane.push_str(
+            "chat about the watchdog: writing about \"esc to interrupt\" and Enter to select · ↑/↓ to navigate\n"
+        );
+        for i in 0..40 {
+            pane.push_str(&format!("plain chat line {i}\n"));
+        }
+        // Quiet footer at the bottom — no signatures.
+        pane.push_str("──────\n❯ \n──────\n  ⏵⏵ bypass permissions on\n");
+
+        let bottom = bottom_lines(&pane, 20);
+        assert_eq!(
+            classify_activity(bottom, busy, &awaiting),
+            ActivityState::Idle,
+            "bottom-20 of a pane whose chat quotes the signatures must classify as Idle, not Working/Awaiting"
+        );
+
+        // Same pane but with the spinner actually live at the
+        // bottom — should switch to Working.
+        let mut working_pane = pane.clone();
+        working_pane.push_str("  ⏵⏵ bypass permissions on · esc to interrupt\n");
+        let bottom = bottom_lines(&working_pane, 20);
+        assert_eq!(
+            classify_activity(bottom, busy, &awaiting),
+            ActivityState::Working,
         );
     }
 }
