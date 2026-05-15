@@ -118,20 +118,13 @@ impl ToolAdapter for ClaudeAdapter {
     // no toast fires, and the sidebar dot stays green while the agent
     // is actually blocked on the user.
     fn awaiting_input_signatures(&self) -> &'static [&'static str] {
-        // Substrings unique to Claude Code's actual prompt UI. The
-        // multi-choice menu's footer reads
-        // `Enter to select · ↑/↓ to navigate · Esc to cancel` as a
-        // single line — match the structural pair so generic prose
-        // (a code comment quoting "Enter to select", a help page
-        // mentioning ↑/↓ navigation) can't masquerade as a real
-        // pending prompt. Yes/no permission prompts keep their
-        // sentence-form signatures.
         &[
             "Do you want to proceed?",
             "Do you want to make this edit",
             "Do you want to create",
             "❯ 1. Yes",
-            "Enter to select · ↑/↓ to navigate",
+            "Enter to select",
+            "↑/↓ to navigate",
         ]
     }
 }
