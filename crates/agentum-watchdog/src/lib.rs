@@ -365,6 +365,21 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
                         .with_payload(serde_json::json!({"initial": true}));
                     let _ = emit(&bus, &store, ev).await;
                 }
+                // First observation lands the session as already
+                // working. Without this emit the session-snapshot
+                // replay served to new WS clients falls back to
+                // the most recent agent.* row in the events log —
+                // which could be a stale `agent.awaiting_input` /
+                // `agent.finished` from a previous daemon — and
+                // the dashboard's dot shows the wrong colour until
+                // the next transition. `initial: true` keeps the
+                // toast suppressed.
+                (ActivityState::Unknown, ActivityState::Working) => {
+                    let ev = Event::new("agent.working")
+                        .with_session(sess.id, &sess.name)
+                        .with_payload(serde_json::json!({"initial": true}));
+                    let _ = emit(&bus, &store, ev).await;
+                }
                 // Idle → Working: the agent picked up a new turn after
                 // sitting at the prompt. Without this event the TUI keeps
                 // the session pinned in its idle set and the sidebar dot
