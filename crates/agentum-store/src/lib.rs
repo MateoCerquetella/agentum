@@ -639,6 +639,29 @@ impl Store {
         rows.into_iter().map(Event::try_from).collect()
     }
 
+    /// One row per session: the most-recent `agent.*` event for each.
+    /// Used by the `/api/events` WS handler to bootstrap a fresh client
+    /// with the current activity overlay (idle / awaiting input /
+    /// working) before live events start streaming. Without this a
+    /// dashboard tab opened mid-flight has no way to tell that a
+    /// `running` session's agent has already finished its turn —
+    /// `agent.finished` only fires once per transition and isn't
+    /// replayed on the bus.
+    pub async fn latest_agent_event_per_session(&self) -> Result<Vec<Event>> {
+        let rows: Vec<EventRow> = sqlx::query_as::<_, EventRow>(
+            "SELECT e.session_id, e.kind, e.payload, e.ts FROM events e
+             INNER JOIN (
+                 SELECT session_id, MAX(id) AS max_id FROM events
+                 WHERE session_id IS NOT NULL AND kind LIKE 'agent.%'
+                 GROUP BY session_id
+             ) latest ON latest.max_id = e.id
+             ORDER BY e.ts ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(Event::try_from).collect()
+    }
+
     /// Persist an event row. Best-effort (failures should not break callers).
     pub async fn insert_event(&self, ev: &Event) -> Result<()> {
         let payload = serde_json::to_string(&ev.payload)?;
