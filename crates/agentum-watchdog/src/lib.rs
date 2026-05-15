@@ -148,6 +148,15 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
     //   Working → Idle             → emit `agent.finished`
     //   (Working|Idle) → Awaiting  → emit `agent.awaiting_input`
     let mut activity = ActivityState::Unknown;
+    // One-tick debounce for the Working → Idle edge. A single Idle
+    // snapshot mid-turn can be a terminal-redraw artifact (e.g. the
+    // user backspacing in Claude's queued-input line momentarily
+    // clears the "esc to interrupt" footer from the pane capture),
+    // and emitting `agent.finished` then fires a "Claude finished"
+    // toast that lies. We only commit Working → Idle when the *next*
+    // classification is *also* Idle. Every other transition still
+    // commits immediately — the debounce only patches the noisy edge.
+    let mut working_idle_pending = false;
     // Track the tool we last persisted so we don't spam UPDATE for every
     // tick. Seeded from the session record. The candidate slot debounces
     // brief shell-outs (git, ls) so they don't get latched as the
@@ -289,7 +298,8 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
         // `Unknown` forever and never emit. We never emit on the Unknown→*
         // edge so a user spawning agentum onto an already-finished session
         // doesn't get a spurious "finished" toast.
-        let next = classify_activity(&pane, busy_sig, awaiting_sigs);
+        let raw = classify_activity(&pane, busy_sig, awaiting_sigs);
+        let next = debounce_working_to_idle(activity, raw, &mut working_idle_pending);
         if next != activity {
             match (activity, next) {
                 (ActivityState::Working, ActivityState::Idle) => {
@@ -387,6 +397,40 @@ enum ActivityState {
     AwaitingInput,
 }
 
+/// Apply a one-tick debounce on the Working → Idle edge. A single Idle
+/// snapshot mid-turn can be a redraw artifact (e.g. Claude's "esc to
+/// interrupt" footer briefly missing because the user backspaced in
+/// the queued-input line and the pane capture caught the redraw mid-
+/// flight). Without this, every such flicker fires a "Claude
+/// finished" toast that lies. Behaviour:
+///
+///   - `Working → Idle`, candidate not yet armed → stay Working, arm.
+///   - `Working → Idle`, candidate armed (i.e. second consecutive Idle
+///     observation) → commit Idle, disarm.
+///   - `Working → Working` (or any other transition) → disarm; pass
+///     `raw` through unchanged.
+///
+/// Every transition that doesn't involve leaving Working passes
+/// through immediately — the debounce only patches the noisy edge.
+fn debounce_working_to_idle(
+    activity: ActivityState,
+    raw: ActivityState,
+    pending: &mut bool,
+) -> ActivityState {
+    if activity == ActivityState::Working && raw == ActivityState::Idle {
+        if *pending {
+            *pending = false;
+            ActivityState::Idle
+        } else {
+            *pending = true;
+            ActivityState::Working
+        }
+    } else {
+        *pending = false;
+        raw
+    }
+}
+
 /// Classify a pane snapshot into an [`ActivityState`]. Permission-prompt
 /// signatures take precedence over the busy/idle distinction — Claude
 /// keeps "esc to interrupt" on screen while a permission box is open,
@@ -466,6 +510,68 @@ mod tests {
             classify_activity("anything goes here", None, &[]),
             ActivityState::Unknown,
         );
+    }
+
+    #[test]
+    fn working_to_idle_flicker_does_not_fire() {
+        // Repro for the v0.7.46 false-positive: while Claude was
+        // working, deleting characters in its queued-input line
+        // produced a pane snapshot without "esc to interrupt" for
+        // one tick — enough to fire `agent.finished` with a toast
+        // saying the turn was over when it wasn't. The debounce
+        // requires two consecutive Idle observations before
+        // committing the transition.
+        let mut pending = false;
+        // Flicker: single Idle observation while in Working keeps the
+        // state at Working and arms the candidate.
+        assert_eq!(
+            debounce_working_to_idle(ActivityState::Working, ActivityState::Idle, &mut pending),
+            ActivityState::Working,
+        );
+        assert!(pending);
+        // Next tick the spinner is back — candidate cleared, no
+        // event ever fires.
+        assert_eq!(
+            debounce_working_to_idle(
+                ActivityState::Working,
+                ActivityState::Working,
+                &mut pending,
+            ),
+            ActivityState::Working,
+        );
+        assert!(!pending);
+    }
+
+    #[test]
+    fn working_to_idle_commits_on_second_consecutive_observation() {
+        // Real end-of-turn: two consecutive Idle observations. First
+        // arms, second commits — `agent.finished` fires exactly once.
+        let mut pending = false;
+        let r1 =
+            debounce_working_to_idle(ActivityState::Working, ActivityState::Idle, &mut pending);
+        assert_eq!(r1, ActivityState::Working);
+        assert!(pending);
+        let r2 =
+            debounce_working_to_idle(ActivityState::Working, ActivityState::Idle, &mut pending);
+        assert_eq!(r2, ActivityState::Idle);
+        assert!(!pending);
+    }
+
+    #[test]
+    fn working_to_awaiting_input_bypasses_debounce() {
+        // Permission prompts and other non-Idle transitions out of
+        // Working must commit immediately — the debounce only patches
+        // the noisy Working → Idle edge, not Working → AwaitingInput
+        // which is what fires the attention dot / notification when
+        // the agent asks the user to confirm.
+        let mut pending = false;
+        let r = debounce_working_to_idle(
+            ActivityState::Working,
+            ActivityState::AwaitingInput,
+            &mut pending,
+        );
+        assert_eq!(r, ActivityState::AwaitingInput);
+        assert!(!pending);
     }
 
     #[test]

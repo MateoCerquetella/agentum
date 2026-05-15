@@ -15,8 +15,8 @@ use agentum_core::transcript::{AgentTaskState, TaskStatus, TodoStatus};
 use super::app::{
     AddProfileField, AddProfileForm, App, ConnState, DirPickerState, ErrorEntry, Focus,
     NewSessionField, NewSessionForm, NotifKind, Notification, Overlay, PendingAction,
-    ProfilesOverlay, RenameState, Row, SettingsRow, SettingsState, Side, TreeSection,
-    palette_catalog, status_dot,
+    ProfilesOverlay, RenameState, Row, SettingsRow, SettingsState, Side, ToolPickerState,
+    TreeSection, palette_catalog, status_dot,
 };
 use super::extensions::{self, Extension, LAZYGIT};
 use super::iometer::{fmt_bytes, fmt_rate};
@@ -2202,6 +2202,12 @@ fn draw_new_session_overlay(
         draw_dir_picker_overlay(f, area, picker, p);
         return;
     }
+    // Tool picker is a sibling modal — same precedence rules as the
+    // dir picker (whichever is open eats input until dismissed).
+    if let Some(picker) = &form.tool_picker {
+        draw_tool_picker_overlay(f, area, picker, p);
+        return;
+    }
 
     let mut lines: Vec<Line<'_>> = Vec::new();
     // Title used to be duplicated — once as the overlay-box border title
@@ -2266,7 +2272,7 @@ fn draw_new_session_overlay(
             &form.tool,
             form.field == NewSessionField::Tool,
             "claude",
-            Some("Tab cycles claude → codex → cursor → opencode → aider"),
+            Some("Tab cycles · Enter opens the agent picker"),
             p,
         );
     }
@@ -2453,6 +2459,78 @@ fn push_toggle_field(
         ));
     }
     lines.push(Line::from(spans));
+}
+
+/// Modal picker for the New-Session form's Tool field. Mirrors
+/// `draw_dir_picker_overlay`'s shape (cursor row, hint footer) so
+/// muscle memory transfers between the two pickers.
+fn draw_tool_picker_overlay(
+    f: &mut Frame<'_>,
+    area: Rect,
+    picker: &ToolPickerState,
+    p: &Palette,
+) {
+    let mut lines: Vec<Line<'_>> = Vec::new();
+    lines.push(head("Pick an agent", p));
+    lines.push(Line::from(""));
+
+    if picker.entries.is_empty() {
+        // Cold-state safeguard: TOOL_SUGGESTIONS is non-empty in this
+        // build, but reflecting `entries.is_empty()` keeps the overlay
+        // useful if a future filter knocks every entry out.
+        lines.push(Line::from(Span::styled(
+            "  (no agents available)",
+            Style::default().fg(p.muted),
+        )));
+    } else {
+        // Show the full list — TOOL_SUGGESTIONS is bounded and short,
+        // so we don't need the dir picker's 14-entry window.
+        let name_width = picker
+            .entries
+            .iter()
+            .map(|e| e.name.len())
+            .max()
+            .unwrap_or(0)
+            .max(8);
+        for (i, entry) in picker.entries.iter().enumerate() {
+            let is_cursor = i == picker.cursor;
+            let prefix = if is_cursor { "  > " } else { "    " };
+            // Suffix mirrors the dashboard tile-dim: an uninstalled
+            // probed agent is greyed out and tagged so the picker
+            // reads at a glance.
+            let avail_tag = if entry.available {
+                ""
+            } else {
+                "  (not installed)"
+            };
+            let line_style = if is_cursor {
+                Style::default().fg(p.cursor_fg).bg(p.cursor_bg)
+            } else if entry.available {
+                Style::default().fg(p.fg)
+            } else {
+                Style::default().fg(p.muted)
+            };
+            let text = format!(
+                "{prefix}{name:<width$}  {desc}{tag}",
+                name = entry.name,
+                width = name_width,
+                desc = entry.description,
+                tag = avail_tag,
+            );
+            lines.push(Line::from(Span::styled(text, line_style)));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  ↑/↓", Style::default().fg(p.accent)),
+        Span::styled(" move   ", Style::default().fg(p.muted)),
+        Span::styled("Enter", Style::default().fg(p.accent)),
+        Span::styled(" select   ", Style::default().fg(p.muted)),
+        Span::styled("Esc", Style::default().fg(p.accent)),
+        Span::styled(" back", Style::default().fg(p.muted)),
+    ]));
+    overlay_box(f, area, " Agent picker ", lines, 70, p);
 }
 
 fn draw_dir_picker_overlay(f: &mut Frame<'_>, area: Rect, picker: &DirPickerState, p: &Palette) {

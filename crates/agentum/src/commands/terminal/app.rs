@@ -298,8 +298,15 @@ pub struct ErrorEntry {
 }
 
 /// Suggested tool names. Mirrors the web's datalist on the New Session
-/// dialog. Pressing Tab on the `Tool` field cycles through these.
-pub const TOOL_SUGGESTIONS: &[&str] = &["claude", "codex", "cursor", "opencode", "aider", "bash"];
+/// dialog. Pressing Tab on the `Tool` field cycles through these; Enter
+/// opens the tool picker modal (`ToolPickerState`) which lists the same
+/// entries with availability gating. Order is what the picker renders
+/// top-to-bottom — match the user's mental priority (first-class
+/// agents first, gemini/hermes/copilot after, free-form shells last).
+pub const TOOL_SUGGESTIONS: &[&str] = &[
+    "claude", "codex", "cursor", "gemini", "hermes", "copilot", "opencode", "aider", "terminal",
+    "bash",
+];
 
 /// Returns `true` when the daemon's `/api/agents` reports availability
 /// for this tool name. Mirrors `agentum_executor::probed_tools()` so
@@ -359,6 +366,57 @@ pub struct NewSessionForm {
     /// When `Some`, the directory-picker overlay is up. Field state persists
     /// inside the form so closing the picker restores the rest of the form.
     pub picker: Option<DirPickerState>,
+    /// When `Some`, the tool-picker overlay is up (modal list of every
+    /// entry in `TOOL_SUGGESTIONS` with availability gating, mirroring
+    /// the dashboard's tile grid). Mutually exclusive with `picker` in
+    /// practice — only one overlay can be focused at a time.
+    pub tool_picker: Option<ToolPickerState>,
+}
+
+/// Static state for the tool-picker modal. Entries are derived from
+/// `TOOL_SUGGESTIONS` at open time and snapshotted with their
+/// per-entry availability — that way navigation keys don't need to
+/// re-query `app.agent_availability` on every keystroke and the
+/// rendered list stays stable for the lifetime of the overlay.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ToolPickerState {
+    pub entries: Vec<ToolPickerEntry>,
+    pub cursor: usize,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct ToolPickerEntry {
+    pub name: &'static str,
+    /// `false` only for probed first-class agents whose binary isn't
+    /// installed on the target daemon (e.g. cursor without
+    /// `cursor-agent`). Free-form names like `terminal` / `bash` /
+    /// `copilot` always report `true` — the executor either has a
+    /// hand-rolled adapter (terminal) or trusts PATH (bash, copilot).
+    pub available: bool,
+    /// Short human-readable description shown next to the name in the
+    /// picker list so the user knows what they're choosing without
+    /// having to remember each id.
+    pub description: &'static str,
+}
+
+/// Human-readable description for a tool id. Used by the picker's
+/// list rendering so each entry has a single-line gloss next to its
+/// name (mirrors the dashboard tile subtitles). Falls back to a
+/// generic "passthrough binary" line for anything not in the table.
+pub fn tool_description(tool: &str) -> &'static str {
+    match tool {
+        "claude" => "Anthropic Claude Code",
+        "codex" => "OpenAI Codex CLI",
+        "cursor" => "Cursor agent",
+        "gemini" => "Google Gemini CLI",
+        "hermes" => "Hermes agent",
+        "copilot" => "GitHub Copilot CLI",
+        "opencode" => "Open-source Claude-Code-style agent",
+        "aider" => "Aider pair-programmer",
+        "terminal" => "Plain shell (uses $SHELL)",
+        "bash" => "Plain bash shell",
+        _ => "passthrough binary",
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -398,6 +456,7 @@ impl NewSessionForm {
             error: None,
             submitting: false,
             picker: None,
+            tool_picker: None,
         }
     }
 
@@ -872,6 +931,14 @@ pub struct App {
     pub checked: HashSet<Uuid>,
     pub tick_count: u64,
     pub status_msg: Option<String>,
+    /// OSC-52 byte sequence queued by `handle_mouse` when a selection
+    /// drag ends with non-empty text. Flushed once per loop iteration
+    /// AFTER `terminal.draw()` and immediately followed by
+    /// `terminal.clear()` so the next frame is a full repaint —
+    /// inline writes during the event handler corrupted text on
+    /// terminals that don't intercept OSC 52 (the regression that
+    /// originally disabled `write_osc52` in v0.6.33).
+    pub pending_clipboard_seq: Option<Vec<u8>>,
     /// Drained by the run-loop tick: when `Some`, the daemon's shared
     /// preferences blob is updated so the dashboard picks up the
     /// change. Set whenever the user picks a new theme from the
@@ -1177,6 +1244,7 @@ impl App {
             checked: HashSet::new(),
             tick_count: 0,
             status_msg: None,
+            pending_clipboard_seq: None,
             pending_pref_push: None,
             should_quit: false,
             overlay: Overlay::None,
@@ -2368,6 +2436,21 @@ pub async fn run_loop(
         }
 
         terminal.draw(|f| ui::draw(f, &app))?;
+        // Flush any pending OSC-52 clipboard write *after* the draw so
+        // the bytes don't intercept ratatui's diff renderer
+        // mid-frame. The follow-up `clear()` forces the next frame to
+        // be a full repaint, which masks the brief literal-char flash
+        // on terminals that don't support OSC 52 (or tmux without
+        // `allow-passthrough on`). On capable terminals the OSC is
+        // invisible and the clear is just a one-frame full repaint.
+        if let Some(seq) = app.pending_clipboard_seq.take() {
+            use std::io::Write;
+            let mut stdout = std::io::stdout().lock();
+            let _ = stdout.write_all(&seq);
+            let _ = stdout.flush();
+            drop(stdout);
+            let _ = terminal.clear();
+        }
         if app.should_quit {
             // Honor a pending profile switch over a plain quit so the
             // wrapper in `commands::terminal::run` can reconnect to
@@ -2669,7 +2752,13 @@ fn handle_mouse(app: &mut App, ev: crossterm::event::MouseEvent) {
                 if !snapshot.is_empty() {
                     let text = extract_selection_text(app, snapshot);
                     if !text.is_empty() {
-                        write_osc52(&text);
+                        // Queue the OSC-52 bytes — the run-loop flushes
+                        // them after `terminal.draw()` and follows up
+                        // with `terminal.clear()` so any literal-echo
+                        // damage (terminals without OSC-52 support,
+                        // tmux without `allow-passthrough on`) gets
+                        // overpainted instead of staying on screen.
+                        app.pending_clipboard_seq = Some(build_osc52_sequence(&text));
                         app.status_msg = Some(format!("copied {} chars", text.chars().count()));
                     }
                 }
@@ -2825,27 +2914,39 @@ fn capture_screen_tail(screen: &vt100::Screen, max_lines: usize) -> String {
     out.join("\n")
 }
 
-/// Copy text to the host terminal's clipboard via OSC 52.
+/// Build an OSC-52 byte sequence that pushes `text` to the host
+/// terminal's clipboard. Returns the raw bytes ready for `stdout` —
+/// the caller (`run_loop`) flushes them between frames and follows
+/// up with `terminal.clear()` so any non-OSC-52-capable terminal
+/// gets a clean repaint instead of literal escape chars on screen.
+/// That two-step is the fix for v0.6.33's regression where writing
+/// inline from the mouse handler corrupted the visible buffer.
 ///
-/// DISABLED in v0.6.33+ pending a proper deferred-emission rewrite.
-/// The previous implementation wrote the OSC 52 sequence directly to
-/// stdout from within the input handler, *mid-frame*, while ratatui
-/// owned the screen. Two compounding failure modes followed:
-///
-///   1. Inside tmux (TERM=tmux-256color or $TMUX set), OSC 52 must be
-///      wrapped in DCS passthrough (`\x1bPtmux;\x1b…\x1b\\`) or tmux
-///      will swallow / partially echo the sequence as literal text.
-///   2. Even on tmux-free terminals, the raw write bypasses ratatui's
-///      diff renderer — the next `terminal.draw()` call only patches
-///      cells ratatui *thinks* are dirty, so anything the OSC payload
-///      disturbed in the actual terminal stays disturbed.
-///
-/// Net effect: visible text corruption every time a selection drag
-/// ends in a pane. Until we plumb the OSC sequence through a
-/// between-frames flush queue, we just drop it on the floor — the
-/// in-buffer selection highlight still renders correctly, the user
-/// just doesn't get the host-clipboard copy.
-fn write_osc52(_text: &str) {}
+/// Tmux passthrough: when `$TMUX` is set we're inside an outer
+/// tmux instance that, by default, will swallow or partially echo
+/// the OSC. The DCS-passthrough wrapper (`\x1bPtmux;…\x1b\\`) tells
+/// tmux to forward the inner OSC to the outer terminal verbatim.
+/// The user's outer tmux still needs `set -g allow-passthrough on`
+/// for this to actually escape — but that's a one-line tmux config,
+/// not something agentum can paper over from the inside.
+fn build_osc52_sequence(text: &str) -> Vec<u8> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let encoded = STANDARD.encode(text.as_bytes());
+    let in_tmux = std::env::var_os("TMUX").is_some();
+    let inner = format!("\x1b]52;c;{encoded}\x07");
+    let seq = if in_tmux {
+        // Each `\x1b` inside the passthrough must be doubled per
+        // tmux's DCS protocol so the outer tmux strips one layer
+        // and the inner ESC reaches the host terminal intact.
+        format!(
+            "\x1bPtmux;{}\x1b\\",
+            inner.replace('\x1b', "\x1b\x1b")
+        )
+    } else {
+        inner
+    };
+    seq.into_bytes()
+}
 
 /// Encode a crossterm mouse event as an xterm SGR sequence (DECSET 1006
 /// / `\x1b[<…M|m`). xterm SGR is what every modern alt-screen TUI
@@ -4044,6 +4145,14 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
         return;
     }
 
+    // Tool-picker overlay (mirrors the dir-picker modal but lists
+    // every entry in `TOOL_SUGGESTIONS`). Owns input while open.
+    if form.tool_picker.is_some() {
+        handle_tool_picker_key(&mut form, key);
+        app.overlay = Overlay::NewSession(form);
+        return;
+    }
+
     match key.code {
         KeyCode::Esc => {
             // Drop overlay, dropping the form.
@@ -4190,6 +4299,14 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
         }
         KeyCode::Enter if matches!(form.field, NewSessionField::UpAfter) => {
             form.up_after = !form.up_after;
+        }
+        // Enter on the Tool field opens the modal picker — same UX as
+        // Enter-on-Workdir opening the dir-tree picker. Tab still
+        // cycles for muscle-memory parity with older versions and the
+        // dashboard's keyboard nav.
+        KeyCode::Enter if matches!(form.field, NewSessionField::Tool) => {
+            let avail = app.agent_availability.clone();
+            form.tool_picker = Some(open_tool_picker(&form.tool, avail.as_ref()));
         }
 
         KeyCode::Backspace => {
@@ -4505,6 +4622,90 @@ fn parent_path_string(p: &str) -> Option<String> {
         None
     } else {
         Some(s.into_owned())
+    }
+}
+
+/// Build a `ToolPickerState` snapshotted against the current
+/// availability probe. Cursor starts on whichever entry matches
+/// `current` (the form's existing Tool value); if `current` isn't in
+/// the suggestion list we anchor on the first entry so the user can
+/// see the catalog from the top.
+fn open_tool_picker(
+    current: &str,
+    availability: Option<&std::collections::HashSet<String>>,
+) -> ToolPickerState {
+    let trimmed = current.trim();
+    let entries: Vec<ToolPickerEntry> = TOOL_SUGGESTIONS
+        .iter()
+        .map(|&name| {
+            // Mirrors `App::tool_available`. Free-form names (terminal,
+            // bash, copilot — anything outside the probed-tools list)
+            // are always available because the daemon either has a
+            // built-in adapter or routes them through PassthroughAdapter,
+            // which trusts PATH.
+            let available = if !is_probed_tool(name) {
+                true
+            } else {
+                match availability {
+                    Some(set) => set.contains(name),
+                    None => true,
+                }
+            };
+            ToolPickerEntry {
+                name,
+                available,
+                description: tool_description(name),
+            }
+        })
+        .collect();
+    let cursor = entries
+        .iter()
+        .position(|e| e.name == trimmed)
+        .unwrap_or(0);
+    ToolPickerState { entries, cursor }
+}
+
+/// Tool-picker keymap. Mirrors `handle_dir_picker_key` so muscle
+/// memory transfers: ↑/↓ move, Enter accepts, Esc cancels. Unlike the
+/// dir picker there's no concept of "descend into" or "use this dir"
+/// — every entry is a leaf, so Enter and `a` both commit. Entries
+/// marked unavailable (uninstalled probed binaries) are still
+/// selectable but populate `form.error` so the user gets a hint
+/// before submission rather than after.
+fn handle_tool_picker_key(form: &mut NewSessionForm, key: KeyEvent) {
+    let Some(picker) = form.tool_picker.as_mut() else {
+        return;
+    };
+    match key.code {
+        KeyCode::Esc => {
+            form.tool_picker = None;
+        }
+        KeyCode::Up => {
+            picker.cursor = picker.cursor.saturating_sub(1);
+        }
+        KeyCode::Down if picker.cursor + 1 < picker.entries.len() => {
+            picker.cursor += 1;
+        }
+        KeyCode::Enter | KeyCode::Char('a') | KeyCode::Char('s') => {
+            if let Some(entry) = picker.entries.get(picker.cursor).cloned() {
+                form.tool = entry.name.to_string();
+                // Mirror the dashboard tile-dim semantics: choosing an
+                // uninstalled probed agent shows the hint inline so
+                // the user doesn't have to submit to learn the binary
+                // isn't on the daemon's PATH.
+                form.error = if entry.available {
+                    None
+                } else {
+                    let bin = match entry.name {
+                        "cursor" => "cursor-agent",
+                        other => other,
+                    };
+                    Some(format!("{bin} not installed on the daemon"))
+                };
+            }
+            form.tool_picker = None;
+        }
+        _ => {}
     }
 }
 
@@ -6876,5 +7077,173 @@ mod cycle_profile_tests {
         form.cycle_profile(&["vps1".to_string()], true);
         // wheel = ["", "vps1"]; unknown → idx 0; (0+1) % 2 → "vps1"
         assert_eq!(form.profile, "vps1");
+    }
+}
+
+#[cfg(test)]
+mod tool_picker_tests {
+    //! v0.7.46 surfaces the New-Session Tool field as a modal picker
+    //! (mirroring the dir-picker). These tests pin the contract:
+    //! catalog ordering, availability snapshotting, cursor anchoring,
+    //! and the keymap's accept/cancel paths.
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::collections::HashSet;
+
+    fn ev(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn new_form() -> NewSessionForm {
+        NewSessionForm::with_profile(String::new(), String::new())
+    }
+
+    #[test]
+    fn catalog_includes_copilot_and_terminal() {
+        // New entries the user explicitly asked for. Order is the
+        // contract — TOOL_SUGGESTIONS is what the picker renders
+        // top-to-bottom and what Tab-cycle walks.
+        assert!(TOOL_SUGGESTIONS.contains(&"copilot"));
+        assert!(TOOL_SUGGESTIONS.contains(&"terminal"));
+        // Sanity: the existing entries weren't dropped.
+        for legacy in ["claude", "codex", "cursor", "opencode", "aider", "bash"] {
+            assert!(
+                TOOL_SUGGESTIONS.contains(&legacy),
+                "regression: TOOL_SUGGESTIONS dropped {legacy}"
+            );
+        }
+    }
+
+    #[test]
+    fn picker_anchors_cursor_on_current_tool() {
+        let picker = open_tool_picker("cursor", None);
+        let cursor_entry = &picker.entries[picker.cursor];
+        assert_eq!(cursor_entry.name, "cursor");
+    }
+
+    #[test]
+    fn picker_falls_back_to_first_entry_for_unknown_current() {
+        // Free-form tool name the user typed (e.g. a hypothetical
+        // "myagent") — picker shouldn't error, just anchor on top.
+        let picker = open_tool_picker("zzz-unknown", None);
+        assert_eq!(picker.cursor, 0);
+    }
+
+    #[test]
+    fn free_form_names_always_available() {
+        // `terminal`, `bash`, `copilot` aren't in the probed set, so
+        // they're always available regardless of the daemon's probe.
+        let empty: HashSet<String> = HashSet::new();
+        let picker = open_tool_picker("terminal", Some(&empty));
+        let terminal = picker
+            .entries
+            .iter()
+            .find(|e| e.name == "terminal")
+            .unwrap();
+        assert!(terminal.available);
+        let copilot = picker
+            .entries
+            .iter()
+            .find(|e| e.name == "copilot")
+            .unwrap();
+        assert!(copilot.available);
+    }
+
+    #[test]
+    fn probed_agents_are_dimmed_when_uninstalled() {
+        // Daemon reports zero installed first-class agents — every
+        // probed entry in the picker should mark `available = false`.
+        let empty: HashSet<String> = HashSet::new();
+        let picker = open_tool_picker("claude", Some(&empty));
+        let claude = picker.entries.iter().find(|e| e.name == "claude").unwrap();
+        assert!(!claude.available);
+    }
+
+    #[test]
+    fn enter_commits_selection() {
+        let mut form = new_form();
+        form.tool = "claude".into();
+        form.tool_picker = Some(open_tool_picker("claude", None));
+        // Move down once and accept.
+        handle_tool_picker_key(&mut form, ev(KeyCode::Down));
+        handle_tool_picker_key(&mut form, ev(KeyCode::Enter));
+        assert!(form.tool_picker.is_none());
+        // Second entry in TOOL_SUGGESTIONS is `codex`.
+        assert_eq!(form.tool, "codex");
+    }
+
+    #[test]
+    fn esc_cancels_without_changing_tool() {
+        let mut form = new_form();
+        form.tool = "claude".into();
+        form.tool_picker = Some(open_tool_picker("claude", None));
+        handle_tool_picker_key(&mut form, ev(KeyCode::Down));
+        handle_tool_picker_key(&mut form, ev(KeyCode::Esc));
+        assert!(form.tool_picker.is_none());
+        assert_eq!(form.tool, "claude");
+    }
+}
+
+#[cfg(test)]
+mod osc52_tests {
+    //! OSC-52 clipboard write — pin the wire format. Mid-frame writes
+    //! that confused ratatui's diff renderer plus tmux swallowing the
+    //! sequence broke v0.6.31's first attempt at this; the rewrite
+    //! defers the write to between frames and DCS-wraps the payload
+    //! when running inside tmux. These tests cover the wire format
+    //! only — the deferred-flush + clear() dance is covered by the
+    //! integration path (manual repro: drag-select inside a pane).
+    use super::*;
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    /// Save/restore the `$TMUX` env var around a single test body.
+    /// Tests assert by inspecting bytes, so a stray parallel test
+    /// flipping the env wouldn't *corrupt* the buffer — it'd just
+    /// build the other branch's bytes. Cheap to be conservative.
+    fn with_tmux_env<R>(value: Option<&str>, body: impl FnOnce() -> R) -> R {
+        let saved = std::env::var_os("TMUX");
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var("TMUX", v),
+                None => std::env::remove_var("TMUX"),
+            }
+        }
+        let out = body();
+        unsafe {
+            match saved {
+                Some(v) => std::env::set_var("TMUX", v),
+                None => std::env::remove_var("TMUX"),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn plain_terminal_uses_bare_osc52() {
+        with_tmux_env(None, || {
+            let seq = build_osc52_sequence("hello");
+            let s = std::str::from_utf8(&seq).unwrap();
+            let payload = STANDARD.encode(b"hello");
+            assert_eq!(s, format!("\x1b]52;c;{payload}\x07"));
+        });
+    }
+
+    #[test]
+    fn inside_tmux_uses_dcs_passthrough() {
+        // Each inner ESC must be doubled per tmux's DCS protocol so
+        // the outer tmux strips one layer and the host terminal sees
+        // the OSC-52 intact. Failure mode if we get this wrong: tmux
+        // echoes parts of the sequence as visible chars in the pane.
+        with_tmux_env(Some("/tmp/tmux-fake,1234,0"), || {
+            let seq = build_osc52_sequence("hi");
+            let s = std::str::from_utf8(&seq).unwrap();
+            let payload = STANDARD.encode(b"hi");
+            let inner = format!("\x1b]52;c;{payload}\x07");
+            let expected = format!(
+                "\x1bPtmux;{}\x1b\\",
+                inner.replace('\x1b', "\x1b\x1b")
+            );
+            assert_eq!(s, expected);
+        });
     }
 }
