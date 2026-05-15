@@ -295,15 +295,41 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
         // Activity-state transitions → agent.finished / agent.awaiting_input
         // / agent.input_resolved. Only fires for adapters that declared a
         // busy_signature or any awaiting_input_signatures — others stay in
-        // `Unknown` forever and never emit. We never emit on the Unknown→*
-        // edge so a user spawning agentum onto an already-finished session
-        // doesn't get a spurious "finished" toast.
+        // `Unknown` forever and never emit.
+        //
+        // Unknown→Idle / Unknown→AwaitingInput fire with `initial: true`
+        // in the payload so clients can update the sidebar dot (idle /
+        // attention) without firing a toast — a user who restarts the
+        // daemon (or reconnects the dashboard) onto an already-finished
+        // session needs the visual state to match reality, but doesn't
+        // want a flurry of "X finished" toasts for events that already
+        // happened before they tuned in.
         let raw = classify_activity(&pane, busy_sig, awaiting_sigs);
         let next = debounce_working_to_idle(activity, raw, &mut working_idle_pending);
         if next != activity {
             match (activity, next) {
                 (ActivityState::Working, ActivityState::Idle) => {
                     let ev = Event::new("agent.finished").with_session(sess.id, &sess.name);
+                    let _ = emit(&bus, &store, ev).await;
+                }
+                // First observation lands the session as idle. Silent
+                // toast (clients gate on `initial`) but the dot still
+                // updates because the event itself fires.
+                (ActivityState::Unknown, ActivityState::Idle) => {
+                    let ev = Event::new("agent.finished")
+                        .with_session(sess.id, &sess.name)
+                        .with_payload(serde_json::json!({"initial": true}));
+                    let _ = emit(&bus, &store, ev).await;
+                }
+                // First observation lands the session as already
+                // blocked on a prompt — flip the attention dot without
+                // a "needs input" toast (the agent has been waiting
+                // since before the user tuned in; toasting now would
+                // be misleadingly stale).
+                (ActivityState::Unknown, ActivityState::AwaitingInput) => {
+                    let ev = Event::new("agent.awaiting_input")
+                        .with_session(sess.id, &sess.name)
+                        .with_payload(serde_json::json!({"initial": true}));
                     let _ = emit(&bus, &store, ev).await;
                 }
                 // Idle → Working: the agent picked up a new turn after

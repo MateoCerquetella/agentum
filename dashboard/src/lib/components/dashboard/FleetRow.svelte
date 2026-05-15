@@ -2,6 +2,7 @@
   import { goto } from '$app/navigation';
   import { api, type Session } from '$lib/api';
   import { loadSessions } from '$stores/sessions';
+  import { awaitingInput, idleSessions } from '$stores/attention';
   import {
     deriveState, ctxOf, ctxColor, fmtTokens, fmtCost, fmtRel, fmtUptime,
     toolShort, toolColor, projectOf, lastLogLine
@@ -47,12 +48,24 @@
     }
   }
 
-  const lifecycle = $derived(deriveState(s));
   const ctx = $derived(ctxOf(s));
+  // Lifecycle reflects the live agent-activity overlay: a `running`
+  // session whose agent is sitting at the prompt downgrades from
+  // `live` to `idle` so the dot mutes instead of staying a misleading
+  // pulsing green. An open permission prompt promotes to `attention`.
+  // Mirrors the Sidebar's stateClass priority chain.
+  const lifecycle = $derived.by(() => {
+    const base = deriveState(s);
+    if (base === 'crash') return base;
+    if ($awaitingInput.has(s.id)) return 'attention';
+    if ($idleSessions.has(s.id) && base === 'live') return 'idle';
+    return base;
+  });
   const stateColor = $derived(
     lifecycle === 'live' ? 'var(--green)' :
     lifecycle === 'compact' ? 'var(--cta)' :
-    lifecycle === 'crash' ? 'var(--crash)' : 'var(--fg-3)'
+    lifecycle === 'crash' ? 'var(--crash)' :
+    lifecycle === 'attention' ? 'var(--amber, #ffb454)' : 'var(--fg-3)'
   );
   const cColor = $derived(ctxColor(ctx));
   const tColor = $derived(toolColor(s.tool));

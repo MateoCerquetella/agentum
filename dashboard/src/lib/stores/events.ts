@@ -278,6 +278,12 @@ function handle(ev: BusEvent) {
     }
     case 'agent.finished': {
       if (inQuiet || !get(tweaks).notifyFinished) break;
+      // `initial: true` events fire the first time the watchdog
+      // observes a session as idle (daemon restart, first connect).
+      // The attention store still picks them up so the dot mutes —
+      // but a toast would be stale because the turn ended before the
+      // user tuned in.
+      if ((ev.payload as { initial?: boolean } | undefined)?.initial) break;
       // Defer the user-facing notification by FINISHED_DEBOUNCE_MS —
       // any `agent.working` event for the same session within that
       // window cancels it, swallowing transient Working→Idle→Working
@@ -289,15 +295,17 @@ function handle(ev: BusEvent) {
       clearPendingFinished(sid);
       const t = setTimeout(() => {
         pendingFinished.delete(sid);
-        // Re-check viewer state at fire time, not enqueue time —
-        // the user may have navigated to the session in the gap.
-        if (!isViewingSession(sid) && !isOnTerminalsCanvas()) {
-          pushToast({
-            kind: 'info',
-            title: `${name} finished`,
-            ttl_ms: 6000
-          });
-        }
+        // Always toast — matches the TUI's behaviour. A long agent
+        // run that finishes silently under a focused-but-not-staring
+        // user is exactly the case people are tabbed away from their
+        // browser tab for; the pre-v0.7.48 viewing-session
+        // suppression meant they saw nothing at all and missed the
+        // turn ending.
+        pushToast({
+          kind: 'info',
+          title: `${name} finished`,
+          ttl_ms: 6000
+        });
         maybeNotify({
           title: `${name} finished`,
           body: 'agent is back at idle — output ready to review',
@@ -310,6 +318,11 @@ function handle(ev: BusEvent) {
     }
     case 'agent.awaiting_input': {
       if (inQuiet || !get(tweaks).notifyAwaitingInput) break;
+      // `initial: true` means the watchdog tuned in on an
+      // already-blocked agent — the attention store still flips
+      // the dot, but skip the toast because there's nothing new
+      // that demands an immediate user response.
+      if ((ev.payload as { initial?: boolean } | undefined)?.initial) break;
       // An open prompt supersedes any pending "finished" for this
       // session — the agent isn't done, it's waiting on you.
       if (ev.session_id) clearPendingFinished(ev.session_id);
@@ -363,23 +376,6 @@ function maybeNotify(opts: {
         }
       : undefined
   });
-}
-
-/** Best-effort "is the user looking at this session right now?" check.
- *  Matches the route `/sessions/{id}` against the current pathname.
- *  Used to suppress redundant `agent.finished` toasts. */
-function isViewingSession(id: string | null): boolean {
-  if (!id) return false;
-  if (typeof location === 'undefined') return false;
-  return location.pathname.startsWith(`/sessions/${id}`);
-}
-
-/** True when the user is on the multi-pane terminals canvas. Every
- *  running session is rendered there, so per-session "X finished"
- *  toasts are redundant — the pane already shows the new state. */
-function isOnTerminalsCanvas(): boolean {
-  if (typeof location === 'undefined') return false;
-  return location.pathname.startsWith('/terminals');
 }
 
 export function connect() {

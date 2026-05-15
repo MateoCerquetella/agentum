@@ -6687,7 +6687,20 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
             // or another tmux window. The pane-visible suppression we
             // used to do here meant a long agent run could finish under
             // your nose with zero alert.
-            push_notification(app, format!("{name} finished"), None, NotifKind::Info);
+            //
+            // `initial: true` events fire the first time the watchdog
+            // observes a session as idle after spawning (daemon restart,
+            // first connect). The dot still needs to update, but a
+            // toast then would be stale — the turn ended before the
+            // user reconnected. Skip the toast on those.
+            let initial = ev
+                .payload
+                .get("initial")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if !initial {
+                push_notification(app, format!("{name} finished"), None, NotifKind::Info);
+            }
             // Working→Idle: the agent is now sleeping at the prompt.
             // Mirror the watchdog's ActivityState::Idle so the sidebar
             // dot shows a muted `◌` instead of a misleading green `●`.
@@ -6703,12 +6716,23 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
             // Awaiting input is a "you have to do something" event, so we
             // toast even when the session is selected — the user might be
             // tabbed away to lazygit / errors / palette and miss it.
-            push_notification(
-                app,
-                format!("{name} needs input"),
-                Some("agent is waiting on a permission prompt".to_string()),
-                NotifKind::Warn,
-            );
+            //
+            // `initial: true` means the agent was already blocked before
+            // the watchdog tuned in — flip the attention dot but skip
+            // the toast (no fresh "needs input" demand to surface).
+            let initial = ev
+                .payload
+                .get("initial")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if !initial {
+                push_notification(
+                    app,
+                    format!("{name} needs input"),
+                    Some("agent is waiting on a permission prompt".to_string()),
+                    NotifKind::Warn,
+                );
+            }
             if let Some(id) = ev.session_id {
                 app.awaiting_input.insert(id);
                 // An awaiting agent isn't sleeping — drop any stale idle

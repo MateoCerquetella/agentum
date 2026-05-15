@@ -13,15 +13,27 @@
     type Profile
   } from '$lib/profiles';
   import { fleet, profileHostHint } from '$stores/fleet';
+  import { awaitingInput, idleSessions } from '$stores/attention';
 
   /**
    * Map server-side Status onto the design's state vocabulary used for
-   * the dot color in the sessions list. `compact` is derived from the
-   * server when ctx data lands; until then `running` maps to `live`.
+   * the dot color in the sessions list. Priority (highest first):
+   *   crashed → `crash`
+   *   awaiting input → `attention`
+   *   idle at prompt (agent finished turn) → `idle`
+   *   running → `live`
+   *   else → `idle`
+   *
+   * Server status stays `running` between turns, so without the
+   * awaiting/idle overlays a finished agent reads as a misleading
+   * "live" pulsing dot indefinitely. Mirrors the TUI's dot priority
+   * (see crates/agentum/src/commands/terminal/ui.rs draw_sessions).
    */
-  function stateClass(status: Status): string {
-    if (status === 'running') return 'live';
-    if (status === 'crashed') return 'crash';
+  function stateClass(s: Session, awaiting: Set<string>, idle: Set<string>): string {
+    if (s.status === 'crashed') return 'crash';
+    if (awaiting.has(s.id)) return 'attention';
+    if (idle.has(s.id)) return 'idle';
+    if (s.status === 'running') return 'live';
     return 'idle';
   }
 
@@ -276,7 +288,7 @@
                   class="leaf"
                   class:active={s.id === activeSessionId}
                 >
-                  <span class={`stat ${stateClass(s.status)}`}></span>
+                  <span class={`stat ${stateClass(s, $awaitingInput, $idleSessions)}`}></span>
                   <span class="leaf-nm">{s.name}</span>
                   <span class="leaf-tool">{s.tool}</span>
                 </a>
@@ -514,6 +526,12 @@
   .leaf .stat.compact { background: var(--cta); }
   .leaf .stat.crash   { background: var(--crash); }
   .leaf .stat.live    { background: var(--green, #2ea043); animation: pulse 1.6s infinite; }
+  /* Yellow ring for "agent needs you" — distinct from green (live)
+     and gray (idle/stopped) so the attention cue reads at a glance. */
+  .leaf .stat.attention {
+    background: var(--amber, #ffb454);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber, #ffb454) 30%, transparent);
+  }
 
   .empty {
     padding: 6px 8px 6px 28px;

@@ -243,7 +243,7 @@
       <div class="row">
         <div class="lbl">
           <span class="lbl-h">Agent finished</span>
-          <span class="lbl-d"><code>agent.finished</code> — busy spinner cleared. Suppressed automatically when you're already viewing the session.</span>
+          <span class="lbl-d"><code>agent.finished</code> — busy spinner cleared. Fires every time so a finished agent can't slip past you while you're tabbed away.</span>
         </div>
         <div class="opts">
           <label class="switch">
