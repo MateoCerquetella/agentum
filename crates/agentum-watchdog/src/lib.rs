@@ -527,7 +527,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn classify_activity_multichoice_menu() {
         // Regression: Claude Code multi-choice menus (plan mode,
         // subagent picks) show `Enter to select · ↑/↓ to navigate`
@@ -536,16 +536,35 @@ mod tests {
         // legacy signatures miss it and the watchdog stayed in Idle
         // — no notification, no yellow attention dot.
         let busy = Some("esc to interrupt");
-        let awaiting = [
-            "Do you want to proceed?",
-            "❯ 1. Yes",
-            "Enter to select",
-            "↑/↓ to navigate",
-        ];
+        let awaiting = ["Do you want to proceed?", "Enter to select · ↑/↓ to navigate"];
         let menu = "❯ 1. Re-apply both files\n  2. CSP-only fix\n\nEnter to select · ↑/↓ to navigate · Esc to cancel";
         assert_eq!(
             classify_activity(menu, busy, &awaiting),
             ActivityState::AwaitingInput,
+        );
+    }
+
+    #[test]
+    fn classify_activity_ignores_prose_mentioning_menu_phrases() {
+        // Pre-v0.7.52 Claude awaiting signatures matched the bare
+        // strings "Enter to select" and "↑/↓ to navigate"
+        // individually, which triggered a false AwaitingInput
+        // whenever a code comment, source file, or chat reply
+        // mentioned either phrase. The watchdog's own pane caught
+        // this — its viewport contained a doc comment quoting
+        // "Enter to select · ↑/↓ to navigate" while no actual
+        // prompt was open, and the dashboard dot went yellow.
+        // Tightening to the structural middle-dot pair stops
+        // generic prose from masquerading as a real prompt.
+        let busy = Some("esc to interrupt");
+        let awaiting = ["Do you want to proceed?", "Enter to select · ↑/↓ to navigate"];
+        // Working pane that QUOTES the menu phrases in prose,
+        // not as the footer of an actual menu — spinner is still
+        // up, so the right answer is Working.
+        let prose = "...working hard (esc to interrupt)\n// see the docs: Enter to select and ↑/↓ to navigate";
+        assert_eq!(
+            classify_activity(prose, busy, &awaiting),
+            ActivityState::Working,
         );
     }
 }
