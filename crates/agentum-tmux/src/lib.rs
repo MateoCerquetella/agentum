@@ -113,6 +113,23 @@ pub async fn capture_pane(target: &str, lines: usize) -> Result<String> {
     Ok(String::from_utf8(out.stdout)?)
 }
 
+/// Capture only the currently-visible viewport (no scrollback) as plain
+/// text. Critical for the watchdog's activity classification: Claude's
+/// "esc to interrupt" footer lingers in scrollback after a turn ends,
+/// so a scrollback-inclusive capture matches the busy signature forever
+/// and the dot stays a misleading "live" green long after the agent
+/// went idle. `-S 0` pins the start to the top of the visible pane so
+/// only what's currently on-screen counts.
+pub async fn capture_pane_visible(target: &str) -> Result<String> {
+    let out = Command::new("tmux")
+        .args(["capture-pane", "-p", "-S", "0", "-t"])
+        .arg(target)
+        .output()
+        .await?;
+    check(&out)?;
+    Ok(String::from_utf8(out.stdout)?)
+}
+
 /// Capture the current visible pane state with ANSI escapes (`-e`) so a
 /// faithful redraw can be replayed into a vt100 parser. Lines are joined
 /// into LF-terminated rows with `\r\n` so the bytes are valid for a raw
