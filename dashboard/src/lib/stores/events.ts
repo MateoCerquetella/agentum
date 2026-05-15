@@ -278,12 +278,15 @@ function handle(ev: BusEvent) {
     }
     case 'agent.finished': {
       if (inQuiet || !get(tweaks).notifyFinished) break;
-      // `initial: true` events fire the first time the watchdog
-      // observes a session as idle (daemon restart, first connect).
-      // The attention store still picks them up so the dot mutes —
-      // but a toast would be stale because the turn ended before the
-      // user tuned in.
-      if ((ev.payload as { initial?: boolean } | undefined)?.initial) break;
+      const p = ev.payload as { initial?: boolean; replay?: boolean } | undefined;
+      // `replay: true` events come from the daemon's connect-time
+      // snapshot of the current activity overlay. The attention
+      // store still picks them up so the dot mutes — but a toast
+      // would be stale because the event itself fired pre-connect.
+      // `initial: true` is the same idea on the watchdog side: the
+      // first observation after the watchdog spawns onto an
+      // already-finished session.
+      if (p?.replay || p?.initial) break;
       // Defer the user-facing notification by FINISHED_DEBOUNCE_MS —
       // any `agent.working` event for the same session within that
       // window cancels it, swallowing transient Working→Idle→Working
@@ -318,11 +321,12 @@ function handle(ev: BusEvent) {
     }
     case 'agent.awaiting_input': {
       if (inQuiet || !get(tweaks).notifyAwaitingInput) break;
-      // `initial: true` means the watchdog tuned in on an
-      // already-blocked agent — the attention store still flips
-      // the dot, but skip the toast because there's nothing new
-      // that demands an immediate user response.
-      if ((ev.payload as { initial?: boolean } | undefined)?.initial) break;
+      const p = ev.payload as { initial?: boolean; replay?: boolean } | undefined;
+      // `initial`/`replay` mean the agent was already blocked
+      // before the watchdog/client tuned in — flip the dot via
+      // the attention store but skip the toast (nothing new
+      // demands an immediate user response).
+      if (p?.initial || p?.replay) break;
       // An open prompt supersedes any pending "finished" for this
       // session — the agent isn't done, it's waiting on you.
       if (ev.session_id) clearPendingFinished(ev.session_id);

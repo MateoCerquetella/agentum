@@ -6688,17 +6688,25 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
             // used to do here meant a long agent run could finish under
             // your nose with zero alert.
             //
-            // `initial: true` events fire the first time the watchdog
-            // observes a session as idle after spawning (daemon restart,
-            // first connect). The dot still needs to update, but a
-            // toast then would be stale — the turn ended before the
-            // user reconnected. Skip the toast on those.
-            let initial = ev
+            // Skip the toast when the event is a bootstrap signal
+            // rather than a fresh transition:
+            //   `initial: true` — watchdog's first observation after
+            //   spawning onto an already-finished session.
+            //   `replay: true` — daemon resent the current state
+            //   when this client connected to /api/events.
+            // The dot still needs to update because the agent IS
+            // idle; only the toast/chime is stale.
+            let bootstrap = ev
                 .payload
                 .get("initial")
                 .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            if !initial {
+                .unwrap_or(false)
+                || ev
+                    .payload
+                    .get("replay")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+            if !bootstrap {
                 push_notification(app, format!("{name} finished"), None, NotifKind::Info);
             }
             // Working→Idle: the agent is now sleeping at the prompt.
@@ -6717,15 +6725,20 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
             // toast even when the session is selected — the user might be
             // tabbed away to lazygit / errors / palette and miss it.
             //
-            // `initial: true` means the agent was already blocked before
-            // the watchdog tuned in — flip the attention dot but skip
-            // the toast (no fresh "needs input" demand to surface).
-            let initial = ev
+            // `initial`/`replay` mean the agent was already blocked
+            // before the watchdog/client tuned in — flip the dot but
+            // skip the toast (no fresh demand to surface).
+            let bootstrap = ev
                 .payload
                 .get("initial")
                 .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            if !initial {
+                .unwrap_or(false)
+                || ev
+                    .payload
+                    .get("replay")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+            if !bootstrap {
                 push_notification(
                     app,
                     format!("{name} needs input"),
