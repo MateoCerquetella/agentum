@@ -1,6 +1,8 @@
 //! Built-in [`ToolAdapter`](super::ToolAdapter) implementations.
 
-use agentum_core::Session;
+use std::path::Path;
+
+use agentum_core::{Session, transcript};
 
 use crate::{LaunchCommand, ToolAdapter, translate_yolo_marker};
 
@@ -18,6 +20,20 @@ fn push_model(argv: &mut Vec<String>, session: &Session) {
 /// correct flag for whichever binary the adapter actually launches.
 fn push_user_flags(argv: &mut Vec<String>, session: &Session, yolo_flag: Option<&str>) {
     argv.extend(translate_yolo_marker(&session.flags, yolo_flag));
+}
+
+/// Does Claude already have a transcript on disk for this session in
+/// its workdir? Used by `ClaudeAdapter::launch` to pick between
+/// `--session-id` (first launch — claim the id) and `--resume`
+/// (restart — continue the existing conversation). Defensive against
+/// the path-resolution helper returning `None` (missing `$HOME` or
+/// non-absolute workdir): in that case we conservatively report
+/// "doesn't exist" so we keep the original `--session-id` behaviour.
+fn claude_transcript_exists(session: &Session) -> bool {
+    transcript::transcript_path_for(Path::new(&session.workdir), session.id)
+        .as_deref()
+        .map(Path::exists)
+        .unwrap_or(false)
 }
 
 // ---------- claude ----------
@@ -39,7 +55,19 @@ impl ToolAdapter for ClaudeAdapter {
         // and the watcher (which used to pick the most-recently-mtimed
         // .jsonl) cross-pollinated todos. See
         // crates/agentum-server/src/transcript_store.rs.
-        argv.push("--session-id".to_string());
+        //
+        // On *restart* the transcript already exists; `--session-id`
+        // would then crash with `Error: Session ID <X> is already in
+        // use`. Detect that case and switch to `--resume <id>`, which
+        // continues the same transcript instead of trying to claim the
+        // ID fresh. Stop/start cycles, orphan-tmux respawns, and
+        // daemon restarts all funnel through `start()` with the same
+        // agentum UUID, so without this every re-launch crashed.
+        if claude_transcript_exists(session) {
+            argv.push("--resume".to_string());
+        } else {
+            argv.push("--session-id".to_string());
+        }
         argv.push(session.id.to_string());
         push_user_flags(&mut argv, session, self.yolo_flag());
         LaunchCommand::argv_only(argv)
@@ -299,6 +327,71 @@ mod tests {
             ]
         );
         assert_eq!(ClaudeAdapter.compact_trigger(), Some("/compact"));
+    }
+
+    #[test]
+    fn claude_restart_uses_resume_when_transcript_exists() {
+        // Repro for the v0.7.45 crash where every restart of a Claude
+        // session died with `Error: Session ID <X> is already in use`.
+        // Stop/start, orphan-tmux respawn, and daemon-restart respawn
+        // all funnel through `start()` with the same agentum UUID, so
+        // pinning `--session-id <X>` a second time was guaranteed to
+        // hit Claude's collision check. The fix: when the transcript
+        // already lives at the deterministic project-dir path, switch
+        // to `--resume <X>` (continue the conversation) instead of
+        // `--session-id <X>` (claim a fresh id).
+        //
+        // Filesystem-touching: lays down a sentinel transcript under a
+        // tempdir-rooted HOME, runs the adapter, then restores HOME.
+        use std::path::PathBuf;
+        let unique = format!(
+            "agentum-executor-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        );
+        let fake_home = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&fake_home).unwrap();
+
+        let saved = std::env::var_os("HOME");
+        // SAFETY: this crate's tests don't otherwise mutate HOME, so no
+        // intra-binary race. Restored on the happy path below; a panic
+        // here will leave HOME pointing at a missing tempdir, which is
+        // acceptable for a test failure (the assertion message is what
+        // we care about, not subsequent test isolation).
+        unsafe {
+            std::env::set_var("HOME", &fake_home);
+        }
+
+        let workdir = "/tmp/work";
+        let session = fixture("claude", None, &[]);
+        let session = Session {
+            workdir: workdir.into(),
+            ..session
+        };
+        let enc = workdir.replace('/', "-");
+        let project_dir: PathBuf = fake_home.join(".claude").join("projects").join(enc);
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let transcript_path = project_dir.join(format!("{}.jsonl", session.id));
+        std::fs::write(&transcript_path, b"{}\n").unwrap();
+
+        let argv = ClaudeAdapter.launch(&session).argv;
+
+        unsafe {
+            match saved {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&fake_home);
+
+        assert!(
+            argv.iter().any(|s| s == "--resume"),
+            "expected --resume in argv when transcript exists: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|s| s == "--session-id"),
+            "did not expect --session-id (Claude rejects it on a known id): {argv:?}"
+        );
     }
 
     #[test]
