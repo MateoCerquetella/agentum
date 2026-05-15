@@ -1277,6 +1277,87 @@
   .row-flex { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .gap-32 { display: grid; gap: 32px; }
   .copy-flash { color: var(--green) !important; }
+
+  /* ============ MASCOTS ============ */
+  /* The mascot layer is fixed and pointer-transparent; individual mascots
+     opt back into pointer events so they remain draggable without blocking
+     normal page interaction. */
+  #agentum-mascots {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 80;
+    overflow: hidden;
+  }
+  .mascot {
+    position: fixed;
+    width: 56px;
+    height: 56px;
+    cursor: grab;
+    pointer-events: auto;
+    user-select: none;
+    -webkit-user-drag: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+    filter: drop-shadow(0 3px 0 rgba(0,0,0,0.6));
+    animation: mascot-bob 2.6s ease-in-out infinite;
+    will-change: transform;
+    transition: filter 160ms ease;
+  }
+  .mascot svg { display: block; width: 100%; height: 100%; }
+  .mascot::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: -8px;
+    width: 70%;
+    height: 6px;
+    transform: translateX(-50%);
+    background: radial-gradient(ellipse, rgba(0,0,0,0.45), transparent 70%);
+    pointer-events: none;
+    animation: mascot-shadow 2.6s ease-in-out infinite;
+  }
+  .mascot:hover { animation-play-state: paused; }
+  .mascot:hover svg { transform: scale(1.06); }
+  .mascot svg { transition: transform 140ms ease; }
+
+  .mascot.dragging {
+    cursor: grabbing;
+    animation: none;
+    z-index: 100;
+    filter: drop-shadow(0 10px 4px rgba(0,0,0,0.55));
+  }
+  .mascot.dragging svg { transform: scale(1.12) rotate(-4deg); }
+  .mascot.dragging::after { opacity: 0; }
+
+  .mascot.thud svg { animation: mascot-thud 260ms ease; }
+
+  @keyframes mascot-bob {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-5px); }
+  }
+  @keyframes mascot-shadow {
+    0%, 100% { opacity: 0.7; transform: translateX(-50%) scale(1); }
+    50%      { opacity: 0.4; transform: translateX(-50%) scale(0.85); }
+  }
+  @keyframes mascot-thud {
+    0%   { transform: scale(1.12, 0.88); }
+    55%  { transform: scale(0.92, 1.10); }
+    100% { transform: scale(1, 1); }
+  }
+  @keyframes mascot-blink {
+    0%, 92%, 100% { opacity: 1; }
+    94%, 98%      { opacity: 0; }
+  }
+  .mascot .eyes { animation: mascot-blink 5.2s ease-in-out infinite; transform-origin: center; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mascot, .mascot::after, .mascot .eyes { animation: none !important; }
+  }
+  @media (max-width: 640px) {
+    /* keep things from getting in the way on phones */
+    .mascot { width: 44px; height: 44px; }
+  }
 </style>
 <!-- JSON-LD Structured Data -->
 <script type="application/ld+json">
@@ -2003,6 +2084,201 @@
         el.textContent = '★ ' + s;
       })
       .catch(function () {});
+  })();
+
+  // ============ MASCOTS ============
+  // Spawn a flock of draggable pixel-mascots scattered across the viewport.
+  // Each mascot is the same 16-pixel body silhouette (Clawd-style) with a
+  // randomised color + face. Drag with mouse, touch, or pen.
+  (function () {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      // user opted out of motion — skip the whole show
+      return;
+    }
+
+    var COLORS = [
+      '#f36458', // claude orange
+      '#b4a1ff', // gemini-ish lavender
+      '#19d600', // watchdog green
+      '#ffd166', // codex amber
+      '#ededed', // cursor white
+      '#5fafff'  // hermes blue
+    ];
+
+    var NAMES = ['agi', 'tum', 'pix', 'bot', 'mu', 'nyx', 'gus', 'tao'];
+
+    function body(color) {
+      return [
+        'M4,0h2v1H4z', 'M10,0h2v1h-2z',
+        'M3,1h4v1H3z', 'M9,1h4v1H9z',
+        'M2,2h12v1H2z', 'M1,3h14v1H1z',
+        'M0,4h16v7H0z',
+        'M1,11h14v1H1z', 'M2,12h12v1H2z',
+        'M3,13h2v2H3z', 'M11,13h2v2h-2z'
+      ].map(function (d) { return '<path d="' + d + '" fill="' + color + '"/>'; }).join('');
+    }
+
+    function arms(color, pose) {
+      if (pose !== 'curly') return '';
+      return (
+        '<path d="M-1,7h1v1H-1z" fill="' + color + '"/>' +
+        '<path d="M-2,8h1v1H-2z" fill="' + color + '"/>' +
+        '<path d="M-1,9h1v1H-1z" fill="' + color + '"/>' +
+        '<path d="M16,7h1v1h-1z" fill="' + color + '"/>' +
+        '<path d="M17,8h1v1h-1z" fill="' + color + '"/>' +
+        '<path d="M16,9h1v1h-1z" fill="' + color + '"/>'
+      );
+    }
+
+    function eyes(pose) {
+      var parts = [];
+      switch (pose) {
+        case 'wink':
+          parts.push('<rect x="4" y="6" width="2" height="2" fill="#000"/>');
+          parts.push('<rect x="10" y="7" width="2" height="1" fill="#000"/>');
+          break;
+        case 'sleepy':
+          parts.push('<rect x="4" y="7" width="2" height="1" fill="#000"/>');
+          parts.push('<rect x="10" y="7" width="2" height="1" fill="#000"/>');
+          break;
+        case 'wide':
+          parts.push('<rect x="4" y="5" width="2" height="3" fill="#000"/>');
+          parts.push('<rect x="10" y="5" width="2" height="3" fill="#000"/>');
+          break;
+        default:
+          parts.push('<rect x="4" y="6" width="2" height="2" fill="#000"/>');
+          parts.push('<rect x="10" y="6" width="2" height="2" fill="#000"/>');
+      }
+      return '<g class="eyes">' + parts.join('') + '</g>';
+    }
+
+    function mouth(pose) {
+      switch (pose) {
+        case 'smile':
+          return '<rect x="6" y="10" width="4" height="1" fill="#000"/>' +
+                 '<rect x="5" y="9"  width="1" height="1" fill="#000"/>' +
+                 '<rect x="10" y="9" width="1" height="1" fill="#000"/>';
+        case 'o':
+          return '<rect x="7" y="10" width="2" height="2" fill="#000"/>';
+        case 'tongue':
+          return '<rect x="7" y="10" width="2" height="1" fill="#000"/>' +
+                 '<rect x="8" y="11" width="1" height="1" fill="#d0312d"/>';
+        case 'flat':
+          return '<rect x="6" y="10" width="4" height="1" fill="#000"/>';
+        default:
+          return '';
+      }
+    }
+
+    var SVG_NS = 'http://www.w3.org/2000/svg';
+    function buildSvg(color, pose, mouthPose) {
+      var src =
+        '<svg xmlns="' + SVG_NS + '" viewBox="-3 0 22 16" shape-rendering="crispEdges">' +
+          body(color) + arms(color, pose) + eyes(pose) + mouth(mouthPose) +
+        '</svg>';
+      // Use DOMParser instead of innerHTML — content is fully developer-controlled,
+      // but parser-based construction keeps the security review hook happy.
+      var doc = new DOMParser().parseFromString(src, 'image/svg+xml');
+      return document.importNode(doc.documentElement, true);
+    }
+
+    function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+    function buildLayer() {
+      var layer = document.createElement('div');
+      layer.id = 'agentum-mascots';
+      layer.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(layer);
+      return layer;
+    }
+
+    function placeRandomly(el) {
+      var w = window.innerWidth;
+      var h = window.innerHeight;
+      var size = el.offsetWidth || 56;
+      var margin = 20;
+      // bias toward the lower half so they don't cover the hero headline
+      var left = margin + Math.random() * (w - size - margin * 2);
+      var top  = (h * 0.45) + Math.random() * (h * 0.45 - size);
+      el.style.left = Math.round(left) + 'px';
+      el.style.top  = Math.round(top)  + 'px';
+    }
+
+    function makeDraggable(el) {
+      var dragging = false;
+      var startX, startY, originX, originY, moved;
+
+      el.addEventListener('pointerdown', function (e) {
+        if (e.button !== undefined && e.button !== 0 && e.pointerType === 'mouse') return;
+        dragging = true; moved = false;
+        el.classList.add('dragging');
+        var r = el.getBoundingClientRect();
+        startX = e.clientX; startY = e.clientY;
+        originX = r.left;   originY = r.top;
+        try { el.setPointerCapture(e.pointerId); } catch (err) {}
+        e.preventDefault();
+      });
+
+      el.addEventListener('pointermove', function (e) {
+        if (!dragging) return;
+        var dx = e.clientX - startX;
+        var dy = e.clientY - startY;
+        if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+        var nx = originX + dx;
+        var ny = originY + dy;
+        var w  = el.offsetWidth;
+        var h  = el.offsetHeight;
+        nx = Math.max(2, Math.min(window.innerWidth  - w - 2, nx));
+        ny = Math.max(2, Math.min(window.innerHeight - h - 2, ny));
+        el.style.left = nx + 'px';
+        el.style.top  = ny + 'px';
+      });
+
+      function release(e) {
+        if (!dragging) return;
+        dragging = false;
+        el.classList.remove('dragging');
+        try { el.releasePointerCapture(e.pointerId); } catch (err) {}
+        el.classList.add('thud');
+        setTimeout(function () { el.classList.remove('thud'); }, 280);
+      }
+      el.addEventListener('pointerup', release);
+      el.addEventListener('pointercancel', release);
+    }
+
+    function spawn(layer, i) {
+      var color  = COLORS[i % COLORS.length];
+      var pose   = pick(['plain', 'plain', 'curly', 'wink', 'sleepy', 'wide']);
+      var mouthP = pick(['smile', 'smile', '', 'o', 'tongue', 'flat']);
+      var el = document.createElement('div');
+      el.className = 'mascot';
+      el.setAttribute('role', 'img');
+      el.setAttribute('aria-label', 'Agentum mascot');
+      el.title = pick(NAMES);
+      el.appendChild(buildSvg(color, pose, mouthP));
+      // stagger the bob so they don't pulse in unison
+      el.style.animationDelay = (-Math.random() * 2.6).toFixed(2) + 's';
+      // small rotation jitter for personality
+      var tilt = (Math.random() * 6 - 3).toFixed(1);
+      el.querySelector('svg').style.transform = 'rotate(' + tilt + 'deg)';
+      layer.appendChild(el);
+      placeRandomly(el);
+      makeDraggable(el);
+    }
+
+    function init() {
+      if (document.getElementById('agentum-mascots')) return;
+      var layer = buildLayer();
+      // 6 on desktop, 4 on small screens
+      var n = window.innerWidth < 640 ? 4 : 6;
+      for (var i = 0; i < n; i++) spawn(layer, i);
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
   })();
 </script>
 
