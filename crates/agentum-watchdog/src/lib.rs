@@ -197,10 +197,30 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
             }
         }
 
+        // Two captures per tick:
+        //   `pane`      — 100 lines incl. scrollback; for crash + context-low
+        //                 matches that can scroll slightly off-screen and
+        //                 still need to fire.
+        //   `viewport`  — currently-visible cells only; for activity
+        //                 classification, where stale "esc to interrupt"
+        //                 text in scrollback would otherwise pin the
+        //                 session as Working forever after a turn ended.
+        //                 That was the v0.7.47-and-earlier bug where the
+        //                 sidebar dot stayed green long after Claude
+        //                 finished — the scrollback retained the spinner
+        //                 footer from the prior turn, so `pane.contains
+        //                 ("esc to interrupt")` kept matching.
         let pane = match agentum_tmux::capture_pane(&target, 100).await {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(target = %target, error = ?e, "capture_pane failed");
+                continue;
+            }
+        };
+        let viewport = match agentum_tmux::capture_pane_visible(&target).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(target = %target, error = ?e, "capture_pane_visible failed");
                 continue;
             }
         };
@@ -304,7 +324,7 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
         // session needs the visual state to match reality, but doesn't
         // want a flurry of "X finished" toasts for events that already
         // happened before they tuned in.
-        let raw = classify_activity(&pane, busy_sig, awaiting_sigs);
+        let raw = classify_activity(&viewport, busy_sig, awaiting_sigs);
         let next = debounce_working_to_idle(activity, raw, &mut working_idle_pending);
         if next != activity {
             match (activity, next) {
