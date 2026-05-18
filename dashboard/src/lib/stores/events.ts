@@ -1,6 +1,7 @@
 import { writable, type Writable, get } from 'svelte/store';
 import { tweaks } from './tweaks';
-import { notify } from './notify';
+import { notify, requestPermission, notifyPermission } from './notify';
+import { playChime } from './chime';
 import { applyServerPrefs } from './theme-bridge';
 
 export interface BusEvent {
@@ -112,7 +113,12 @@ const RECONNECT_QUIET_MS = 3000;
  * agent immediately retries — gets cancelled by the follow-up
  * `agent.working` event instead of toasting "X finished" mid-turn.
  */
-const FINISHED_DEBOUNCE_MS = 2500;
+// Short safety net for Working→Idle→Working flickers. Was 2500 ms; a
+// long wait felt like "no notification" to users staring at the dot.
+// The watchdog is its own debounce-free signal source as of v0.7.51,
+// so this only needs to cover the rare tool-error + retry burst, not
+// the watchdog's classification window.
+const FINISHED_DEBOUNCE_MS = 800;
 const pendingFinished = new Map<string, ReturnType<typeof setTimeout>>();
 function clearPendingFinished(sid: string) {
   const t = pendingFinished.get(sid);
@@ -309,6 +315,11 @@ function handle(ev: BusEvent) {
           title: `${name} finished`,
           ttl_ms: 6000
         });
+        // In-page chime — works without browser-notification
+        // permission, so the user gets an audible cue even on a
+        // first-visit dashboard where they haven't approved OS
+        // notifications yet. The OS banner below is additive.
+        playChime('finished');
         maybeNotify({
           title: `${name} finished`,
           body: 'agent is back at idle — output ready to review',
@@ -342,6 +353,7 @@ function handle(ev: BusEvent) {
         body: 'agent is waiting on a permission prompt',
         ttl_ms: 8000
       });
+      playChime('attention');
       maybeNotify({
         title: `${name} needs input`,
         body: 'agent is waiting on a permission prompt',
@@ -364,6 +376,19 @@ function maybeNotify(opts: {
   urgent?: boolean;
 }) {
   if (!get(tweaks).notifyBrowser) return;
+  // Permission is `default` until the user clicks the prompt. Most
+  // users never visit Settings → Notifications, so a silent no-op
+  // here would mean they never see OS banners. Kick off the prompt
+  // lazily — once per session — so the first finished/awaiting event
+  // upgrades them into `granted` for the rest of the tab's lifetime.
+  // requestPermission() is no-op on unsupported platforms.
+  if (get(notifyPermission) === 'default') {
+    void requestPermission();
+    // Don't try to fire this notification — Notification() before
+    // permission is granted throws. Future events will reach
+    // notify() once the user clicks Allow.
+    return;
+  }
   notify({
     title: opts.title,
     body: opts.body,

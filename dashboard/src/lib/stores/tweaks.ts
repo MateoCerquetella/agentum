@@ -68,9 +68,13 @@ const DEFAULT: Tweaks = {
   notifyFinished: true,
   notifyCrashed: true,
   notifyCompact: true,
-  // Off by default — flipping it on prompts for OS permission, which
-  // we don't want firing unsolicited on first visit.
-  notifyBrowser: false,
+  // On by default — the chime + in-page toast already cover users
+  // who deny OS permission, and leaving it off meant the first event
+  // never even kicked the permission flow. Permission is requested
+  // lazily on the first real event arrival in `events.ts::maybeNotify`,
+  // so a passive user who never visits Settings still gets banners
+  // once they click Allow on that prompt.
+  notifyBrowser: true,
   hideHostStrip: false,
   stuckMinutes: 5
 };

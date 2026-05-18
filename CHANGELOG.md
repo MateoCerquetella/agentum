@@ -4,6 +4,31 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.60] — 2026-05-18
+
+### Fixed
+- **Dashboard `agent.finished` had no audible cue out of the box.**
+  v0.7.59 unmuted the OS-banner chime, but the browser-notification
+  toggle (`tweaks.notifyBrowser`) defaulted to `false` *and* the OS
+  permission was never requested, so the user had to dig through
+  Settings to get anything to ring. Now: a 250 ms in-page Web Audio
+  chime fires alongside the toast (works without any permission), the
+  OS-banner toggle defaults `true`, and the first event lazily kicks
+  the browser permission prompt so opt-in is one click instead of
+  three menu screens. `agent.awaiting_input` rings with a higher tone.
+- **Finished toast/chime felt sluggish.** The Working→Idle→Working
+  debounce was 2500 ms — enough that users staring at the sidebar dot
+  thought no notification was coming. Watchdog now does its own
+  classification debouncing (v0.7.51); the dashboard's safety net is
+  down to 800 ms.
+- **TUI sidebar dot was hollow gray (`○`) for any peer server that
+  wasn't the active target**, even when that peer was reachable. A
+  user with 3+ servers couldn't tell at a glance which were up. The
+  dot now encodes reachability via color only — solid green for every
+  Live server, red for unreachable, yellow for login-needed — and
+  active vs inactive is conveyed by the bold label + cursor highlight
+  the row already had.
+
 ## [0.7.59] — 2026-05-18
 
 ### Fixed

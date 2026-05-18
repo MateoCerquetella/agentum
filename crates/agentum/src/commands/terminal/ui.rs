@@ -481,13 +481,20 @@ fn server_dot(
     if is_reconnecting {
         return (spinner_glyph(tick).to_string(), p.accent);
     }
-    let (g, c) = match (status, is_active) {
-        (Some(ServerStatus::Live), true) => ("●", p.success),
-        (Some(ServerStatus::Live), false) => ("○", p.muted),
-        (Some(ServerStatus::Unreachable), _) => ("●", p.error),
-        (Some(ServerStatus::LoginNeeded), _) => ("●", p.warning),
-        (None, true) => ("●", p.success),
-        (None, false) => ("○", p.muted),
+    // Encode reachability via *color*, never glyph fill: a connected
+    // peer reads as a solid green dot whether or not it's the active
+    // target, so a user with 3+ servers can scan the sidebar and see
+    // "all live" at a glance. Active vs inactive is already conveyed
+    // by the bold label + cursor highlight in the row above us; the
+    // dot's job is health, not focus.
+    let (g, c) = match status {
+        Some(ServerStatus::Live) => ("●", p.success),
+        Some(ServerStatus::Unreachable) => ("●", p.error),
+        Some(ServerStatus::LoginNeeded) => ("●", p.warning),
+        // Unprobed: gray dot for inactive (we genuinely don't know),
+        // green for active (we wouldn't be talking to it otherwise).
+        None if is_active => ("●", p.success),
+        None => ("●", p.muted),
     };
     (g.to_string(), c)
 }
