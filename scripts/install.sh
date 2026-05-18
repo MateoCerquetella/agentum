@@ -7,9 +7,14 @@
 #   curl ... | sh -s -- --mode host          # this machine runs agents (daemon)
 #   curl ... | sh -s -- --mode client        # this machine only connects to remote daemons
 #   curl ... | sh -s -- --no-interactive     # skip prompts, default to host mode
+#   curl ... | sh -s -- --expose lan         # bind daemon to 0.0.0.0 (VPS / shared box)
+#   curl ... | sh -s -- --expose loopback    # bind daemon to 127.0.0.1 (default; laptops)
 #
 # Environment:
 #   INSTALL_MODE=host|client    CI / non-interactive mode
+#   AGENTUM_EXPOSE=lan|loopback CI / non-interactive bind selection (host mode only).
+#                               When unset and not interactive, defaults to loopback.
+#                               Pick "lan" on a VPS so the dashboard is reachable.
 #   INSTALL_DIR=$HOME/.local/bin  Override install path
 #
 # Legacy mode tokens server/cli/both are still accepted: server→host,
@@ -25,6 +30,7 @@ GH_API="https://api.github.com/repos/${REPO}/releases/latest"
 GH_DL="https://github.com/${REPO}/releases/download"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 PLATFORM=""; VERSION=""; INSTALL_MODE="${INSTALL_MODE:-}"; INTERACTIVE=false; HAS_TTY=false
+EXPOSE="${AGENTUM_EXPOSE:-}"
 IS_UPDATE=false
 
 # ── Colors (agentum: dark bg + gold/amber accents) ────────────
@@ -54,7 +60,9 @@ while [ $# -gt 0 ]; do
         --mode) INSTALL_MODE="$2"; shift 2 ;;
         --mode=*) INSTALL_MODE="${1#*=}"; shift ;;
         --no-interactive) INTERACTIVE=false; shift ;;
-        -h|--help) printf 'Usage: install.sh [--mode host|client] [--no-interactive]\nEnv: INSTALL_MODE=host|client\n'; exit 0 ;;
+        --expose) EXPOSE="$2"; shift 2 ;;
+        --expose=*) EXPOSE="${1#*=}"; shift ;;
+        -h|--help) printf 'Usage: install.sh [--mode host|client] [--expose lan|loopback] [--no-interactive]\nEnv: INSTALL_MODE=host|client, AGENTUM_EXPOSE=lan|loopback\n'; exit 0 ;;
         *) shift ;;
     esac
 done
@@ -593,6 +601,16 @@ register_local_profile() {
 # case: a VPS, a lab box, a desktop you want the rest of the house
 # to drive. Returns "lan" or "loopback" on stdout.
 ask_expose() {
+    # Pre-answered via --expose / AGENTUM_EXPOSE — skip the prompt.
+    # Honored in both interactive and non-interactive runs so the
+    # value is the authoritative choice when the caller has one.
+    if [ -n "$EXPOSE" ]; then
+        case "$EXPOSE" in
+            lan|share|shared|0.0.0.0)     echo "lan"; return 0 ;;
+            loopback|local|127.0.0.1|lo)  echo "loopback"; return 0 ;;
+            *) w "ignoring unknown --expose value" "$EXPOSE (use lan|loopback)" ;;
+        esac
+    fi
     if [ "$INTERACTIVE" != true ]; then
         echo "loopback"
         return 0

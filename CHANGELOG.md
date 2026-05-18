@@ -4,6 +4,26 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.58] — 2026-05-18
+
+### Fixed
+- **Non-interactive `--mode host` installs silently picked loopback bind**,
+  so `curl … | INSTALL_MODE=host sh` on a VPS would install a daemon
+  that was unreachable from the tailnet/LAN: `agentum profiles add` from
+  another machine got "connection refused" on `:8822`, and the dashboard
+  fingerprint check never completed. `ask_expose` returned `"loopback"`
+  whenever `INTERACTIVE=false` regardless of operator intent.
+
+### Added
+- **`--expose lan|loopback` flag and `AGENTUM_EXPOSE` env var** on
+  `install.sh` so non-interactive runs can opt into LAN bind without a
+  TTY prompt. VPS one-liner is now:
+  ```sh
+  curl -fsSL https://.../install.sh | INSTALL_MODE=host AGENTUM_EXPOSE=lan sh
+  ```
+  Interactive runs are unchanged. Default is still `loopback` so laptop
+  installs stay safe.
+
 ## [0.7.43] — 2026-05-14
 
 ### Fixed
