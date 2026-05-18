@@ -74,6 +74,7 @@
     { id: 'claude',   label: 'Claude',   desc: 'Anthropic',    dot: 'var(--tool-claude)',  yoloable: true,  firstClass: true  },
     { id: 'codex',    label: 'Codex',    desc: 'OpenAI',       dot: 'var(--tool-codex)',   yoloable: true,  firstClass: true  },
     { id: 'cursor',   label: 'Cursor',   desc: 'cursor-agent', dot: 'var(--tool-cursor, var(--cta))', yoloable: true,  firstClass: true  },
+    { id: 'agent',    label: 'Agent',    desc: 'Cursor agent', dot: 'var(--tool-cursor, var(--cta))', yoloable: true,  firstClass: true  },
     { id: 'gemini',   label: 'Gemini',   desc: 'Google',       dot: 'var(--tool-gemini)',  yoloable: true,  firstClass: true  },
     { id: 'opencode', label: 'opencode', desc: 'open-source',  dot: 'var(--amber)',        yoloable: false, firstClass: true  },
     { id: 'aider',    label: 'aider',    desc: 'aider.chat',   dot: 'var(--magenta)',      yoloable: false, firstClass: true  },

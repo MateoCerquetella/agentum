@@ -26,7 +26,7 @@ pub enum Cmd {
         /// Session name (used in tmux target and URLs).
         name: String,
 
-        /// Tool binary to run inside the session (claude, codex, opencode, aider, terminal…). Required.
+        /// Tool binary to run inside the session (claude, codex, cursor, agent, opencode, aider, terminal…). Required.
         ///
         /// Use `terminal` (or `bash`) for a plain interactive shell session.
         #[arg(long)]
@@ -57,9 +57,9 @@ pub enum Cmd {
 
         /// Skip permission prompts for the underlying agent. The flag's
         /// spelling differs per tool (claude: --dangerously-skip-permissions,
-        /// codex: --dangerously-bypass-approvals-and-sandbox, gemini:
-        /// --yolo) — the executor adapter picks the right one. Silently
-        /// ignored for tools without a known YOLO flag.
+        /// codex: --dangerously-bypass-approvals-and-sandbox, cursor/agent:
+        /// --force, gemini: --yolo) — the executor adapter picks the right
+        /// one. Silently ignored for tools without a known YOLO flag.
         #[arg(long)]
         yolo: bool,
     },

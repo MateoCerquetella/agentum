@@ -304,8 +304,8 @@ pub struct ErrorEntry {
 /// top-to-bottom — match the user's mental priority (first-class
 /// agents first, gemini/hermes/copilot after, free-form shells last).
 pub const TOOL_SUGGESTIONS: &[&str] = &[
-    "claude", "codex", "cursor", "gemini", "hermes", "copilot", "opencode", "aider", "terminal",
-    "bash",
+    "claude", "codex", "cursor", "agent", "gemini", "hermes", "copilot", "opencode", "aider",
+    "terminal", "bash",
 ];
 
 /// Returns `true` when the daemon's `/api/agents` reports availability
@@ -316,7 +316,7 @@ pub const TOOL_SUGGESTIONS: &[&str] = &[
 pub fn is_probed_tool(tool: &str) -> bool {
     matches!(
         tool,
-        "claude" | "codex" | "cursor" | "gemini" | "hermes" | "opencode" | "aider"
+        "claude" | "codex" | "cursor" | "agent" | "gemini" | "hermes" | "opencode" | "aider"
     )
 }
 
@@ -329,7 +329,7 @@ pub fn is_probed_tool(tool: &str) -> bool {
 /// their adapter declares the correct per-tool flag. Cursor's adapter
 /// translates the YOLO marker to its own `--force` switch, so it's
 /// safe to include here.
-pub const YOLO_TOOLS: &[&str] = &["claude", "codex", "cursor", "gemini"];
+pub const YOLO_TOOLS: &[&str] = &["claude", "codex", "cursor", "agent", "gemini"];
 
 /// Wire-format YOLO marker. Both surfaces push this exact string into
 /// `Session::flags` when the YOLO toggle is on, regardless of tool.
@@ -407,7 +407,8 @@ pub fn tool_description(tool: &str) -> &'static str {
     match tool {
         "claude" => "Anthropic Claude Code",
         "codex" => "OpenAI Codex CLI",
-        "cursor" => "Cursor agent",
+        "cursor" => "Cursor agent (cursor-agent binary)",
+        "agent" => "Cursor agent (agent binary, Jan 2026+)",
         "gemini" => "Google Gemini CLI",
         "hermes" => "Hermes agent",
         "copilot" => "GitHub Copilot CLI",
@@ -7137,7 +7138,9 @@ mod tool_picker_tests {
         assert!(TOOL_SUGGESTIONS.contains(&"copilot"));
         assert!(TOOL_SUGGESTIONS.contains(&"terminal"));
         // Sanity: the existing entries weren't dropped.
-        for legacy in ["claude", "codex", "cursor", "opencode", "aider", "bash"] {
+        for legacy in [
+            "claude", "codex", "cursor", "agent", "opencode", "aider", "bash",
+        ] {
             assert!(
                 TOOL_SUGGESTIONS.contains(&legacy),
                 "regression: TOOL_SUGGESTIONS dropped {legacy}"

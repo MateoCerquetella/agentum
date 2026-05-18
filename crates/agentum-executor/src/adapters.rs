@@ -189,6 +189,35 @@ impl ToolAdapter for CursorAdapter {
     }
 }
 
+// ---------- agent ----------
+
+/// Cursor's renamed CLI as of the Jan 2026 release: the binary is `agent`
+/// and it ships agent-mode + plan-mode + cloud handoff in one entry point.
+/// Same product as `CursorAdapter` (the older `cursor-agent` binary stays
+/// around as a back-compat alias) — kept as a distinct adapter so the
+/// picker can probe the new binary independently and users who only have
+/// the new spelling installed still get a first-class entry.
+pub struct AgentAdapter;
+
+impl ToolAdapter for AgentAdapter {
+    fn name(&self) -> &'static str {
+        "agent"
+    }
+
+    fn launch(&self, session: &Session) -> LaunchCommand {
+        let mut argv = vec!["agent".to_string()];
+        push_model(&mut argv, session);
+        push_user_flags(&mut argv, session, self.yolo_flag());
+        LaunchCommand::argv_only(argv)
+    }
+
+    // Same skip-confirmations spelling as cursor-agent — the underlying
+    // product is identical, only the entry-point name changed.
+    fn yolo_flag(&self) -> Option<&'static str> {
+        Some("--force")
+    }
+}
+
 // ---------- gemini ----------
 
 pub struct GeminiAdapter;
@@ -480,12 +509,29 @@ mod tests {
 
     #[test]
     fn registry_routes_first_class() {
-        for &t in &["claude", "codex", "cursor", "gemini", "hermes"] {
+        for &t in &["claude", "codex", "cursor", "agent", "gemini", "hermes"] {
             let a = adapter_for(t);
             assert_eq!(a.name(), t);
         }
         let a = adapter_for("totally-custom");
         assert_eq!(a.name(), "passthrough");
+    }
+
+    #[test]
+    fn agent_argv_uses_agent_binary() {
+        let s = fixture("agent", Some("auto"), &[]);
+        let cmd = AgentAdapter.launch(&s);
+        assert_eq!(cmd.argv, vec!["agent", "--model=auto"]);
+    }
+
+    #[test]
+    fn agent_translates_yolo_marker_to_force() {
+        // Cursor renamed the binary to `agent` in Jan 2026 but kept the
+        // same `--force` skip-confirmations flag. Both surfaces still
+        // wire YOLO as the Claude marker; the adapter must translate.
+        let s = fixture("agent", None, &["--dangerously-skip-permissions"]);
+        let cmd = AgentAdapter.launch(&s);
+        assert_eq!(cmd.argv, vec!["agent", "--force"]);
     }
 
     #[test]
