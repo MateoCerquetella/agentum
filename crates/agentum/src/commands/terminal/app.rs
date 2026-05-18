@@ -2618,6 +2618,31 @@ pub async fn run_loop(
                     } else {
                         app.http_fail_count = app.http_fail_count.saturating_add(1);
                     }
+                    // Reflect per-profile reachability in the ClientEntry
+                    // status so the sidebar dot for each peer server
+                    // turns red the moment its periodic probe fails —
+                    // without this the dots stayed a misleading "live"
+                    // green for any peer that had silently dropped off
+                    // the network (TCP keepalive can lag by tens of
+                    // seconds). LoginNeeded peers keep their flag — a
+                    // successful HTTP probe means the daemon answered,
+                    // not that the bearer token resolved on its own.
+                    for (name, res) in results.iter() {
+                        if let Some(entry) = app.clients.get_mut(name) {
+                            match res {
+                                Ok(_) => {
+                                    if entry.status != ServerStatus::LoginNeeded {
+                                        entry.status = ServerStatus::Live;
+                                    }
+                                    entry.last_error = None;
+                                }
+                                Err(e) => {
+                                    entry.status = ServerStatus::Unreachable;
+                                    entry.last_error = Some(e.to_string());
+                                }
+                            }
+                        }
+                    }
                     let per_profile: Vec<(String, Vec<Session>)> = results
                         .into_iter()
                         .map(|(n, r)| (n, r.unwrap_or_default()))

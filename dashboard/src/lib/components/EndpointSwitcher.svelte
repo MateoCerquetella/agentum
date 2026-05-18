@@ -22,6 +22,7 @@
     profileDisplayLabel,
     profileHostHint
   } from '$stores/fleet';
+  import { connStatus } from '$stores/events';
 
   let open = $state(false);
   let formOpen = $state(false);
@@ -35,6 +36,15 @@
   );
 
   function dotClass(p: Profile): string {
+    // For the active profile the live WS connection is the
+    // authoritative signal — the fleet probe polls every 20 s and can
+    // lag a TCP keepalive timeout by tens of seconds. Mirrors
+    // Sidebar.svelte::dotClass so the topbar chip and the sidebar
+    // header tell the same story.
+    if (p.id === $activeProfileId) {
+      if ($connStatus.state === 'connected') return 'live';
+      if ($connStatus.state === 'reconnecting') return 'unreachable';
+    }
     const e = $fleet[p.id];
     if (!e) return 'unknown';
     return e.status;
@@ -110,8 +120,7 @@
     onclick={() => (open = !open)}
     title="Active agentum server — click to switch"
   >
-    <span class="dot" class:unreachable={active && dotClass(active) === 'unreachable'}
-                       class:login={active && dotClass(active) === 'login-needed'}></span>
+    <span class="dot {active ? dotClass(active) : 'unknown'}"></span>
     <span class="label">{active ? profileDisplayLabel(active, $fleet[active.id]) : 'this server'}</span>
     <span class="caret" aria-hidden="true">▾</span>
   </button>
@@ -212,14 +221,20 @@
   .chip:hover { color: var(--fg); border-color: var(--fg-3); }
   .open .chip { border-color: var(--cta); color: var(--fg); }
 
+  /* Status dot for the active profile: green only when the probe
+   * (or live WS) confirmed reachability. Default `unknown` reads as
+   * gray so a brand-new profile or a pre-probe state doesn't pretend
+   * the server is up. */
   .dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--green);
+    background: var(--fg-3);
   }
+  .dot.live { background: var(--green); }
   .dot.unreachable { background: var(--crash, #ff4d4f); }
-  .dot.login { background: var(--warn, #d4a017); }
+  .dot.login-needed { background: var(--warn, #d4a017); }
+  .dot.unknown { background: var(--fg-3); }
   .r-dot {
     display: inline-block;
     width: 6px;

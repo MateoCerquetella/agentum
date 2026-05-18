@@ -102,11 +102,14 @@ export function notify(opts: NotifyOpts): boolean {
     const n = new Notification(opts.title, {
       body: opts.body,
       tag: opts.tag,
-      // Suppress the OS chime for non-urgent kinds — the in-app toast
-      // already plays its own sound when audible toasts are enabled.
-      // Urgent (awaiting_input, crashed) keeps the chime since those
-      // are exactly the moments where the user wants to be poked.
-      silent: !opts.urgent,
+      // Always let the OS chime. The dashboard has no in-app audio
+      // stack, so suppressing the OS sound for non-urgent kinds
+      // (`agent.finished`, `watchdog.compact`) left the user with no
+      // audible cue at all — which is exactly the moment they're
+      // tabbed away and want to be poked. Urgent kinds
+      // (`awaiting_input`, `crashed`) still get treated specially via
+      // `urgent` (fire-when-foreground); audibility is separate.
+      silent: false,
       // Use the favicon as the notification icon — modern browsers
       // auto-pick this when no `icon` is set; setting it explicitly
       // avoids a one-frame fallback to the browser default.

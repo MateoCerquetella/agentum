@@ -4,6 +4,27 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.59] — 2026-05-18
+
+### Fixed
+- **`agent.finished` browser notifications were silent**, so a long
+  Claude run could complete with the dashboard tab in the background
+  and the user got zero audible cue — the OS banner appeared muted
+  while there is no in-app audio stack to compensate. OS notifications
+  for every kind now ring; `urgent` still controls whether they fire
+  with the tab foregrounded, audibility is decoupled.
+- **Topbar server chip defaulted to green for `unknown` status**, so
+  newly-added profiles looked reachable before the first `/api/health`
+  probe even completed. The chip now reads from the same dotClass
+  used in the sidebar (active profile → live WS state, peers → fleet
+  probe) and shows gray when the probe hasn't returned yet.
+- **TUI sidebar dots stayed green for peer servers that had gone
+  unreachable mid-session.** The periodic refresh probes every peer's
+  `list_sessions` endpoint but only updated `http_fail_count` for the
+  active profile; per-peer `ClientEntry.status` now flips to
+  `Unreachable` on probe failure (and back to `Live` on recovery) so
+  the sidebar tells the truth at a glance.
+
 ## [0.7.58] — 2026-05-18
 
 ### Fixed
