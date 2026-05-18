@@ -20,7 +20,8 @@
   import {
     fleet,
     profileDisplayLabel,
-    profileHostHint
+    profileHostHint,
+    versionDrift
   } from '$stores/fleet';
   import { connStatus } from '$stores/events';
 
@@ -55,6 +56,16 @@
     const hostname = $fleet[p.id]?.hostname;
     return hostname ? `${hostname} · this origin` : 'this origin';
   }
+  function rowVersion(p: Profile): string {
+    const v = $fleet[p.id]?.version?.trim();
+    return v ? `v${v}` : '';
+  }
+  // The active profile is the reference point — its daemon hosts the
+  // dashboard we're looking at, so other peers being "drifted" means
+  // those peers are out of sync with this dashboard, not the other
+  // way round. Falls back to undefined when there's no active profile
+  // (first-run state) which makes every chip read as 'unknown'.
+  const activeEntry = $derived(active ? $fleet[active.id] : undefined);
 
   function pick(id: string) {
     if (id === $activeProfileId) {
@@ -138,6 +149,9 @@
             <span class="r-label">
               <span class="r-dot {dotClass(p)}"></span>
               {profileDisplayLabel(p, $fleet[p.id])}
+              {#if rowVersion(p)}
+                <span class="r-ver {versionDrift($fleet[p.id], activeEntry)}">{rowVersion(p)}</span>
+              {/if}
               {#if $fleet[p.id]?.status === 'unreachable'}
                 <span class="r-bad">unreachable</span>
               {:else if $fleet[p.id]?.status === 'login-needed'}
@@ -248,6 +262,17 @@
   .r-dot.unreachable { background: var(--crash, #ff4d4f); }
   .r-dot.login-needed { background: var(--warn, #d4a017); }
   .r-dot.unknown { background: var(--fg-3); }
+  .r-ver {
+    margin-left: 6px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.02em;
+  }
+  /* Drift: peer's version != active dashboard's version. Warning
+   * color so the user spots out-of-sync fleet members at a glance. */
+  .r-ver.match   { color: var(--fg-3); }
+  .r-ver.drift   { color: var(--warn, #d4a017); }
+  .r-ver.unknown { color: var(--fg-3); opacity: 0.6; }
   .r-bad {
     margin-left: 6px;
     color: var(--crash, #ff4d4f);

@@ -93,6 +93,28 @@ export function profileDisplayLabel(p: Profile, entry?: FleetEntry): string {
 }
 
 /**
+ * Compare a peer's daemon version to the active profile's version
+ * (the dashboard SPA is built into and served by that daemon, so its
+ * version is the local truth). Returns:
+ *   - `'match'`   — version matches active; render dim/informational
+ *   - `'drift'`   — version differs; render warning so the user sees
+ *                   the fleet isn't on the same release
+ *   - `'unknown'` — version not probed yet or daemon too old to expose
+ *
+ * Centralised so EndpointSwitcher and Sidebar tell the same story.
+ */
+export function versionDrift(
+  entry: FleetEntry | undefined,
+  active: FleetEntry | undefined
+): 'match' | 'drift' | 'unknown' {
+  const v = entry?.version?.trim();
+  if (!v) return 'unknown';
+  const reference = active?.version?.trim();
+  if (!reference) return 'unknown';
+  return v === reference ? 'match' : 'drift';
+}
+
+/**
  * Short host fragment (without scheme/path) for display under the
  * primary label. `''` when the profile uses the page origin — that
  * case carries no extra signal.

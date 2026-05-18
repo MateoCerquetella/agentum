@@ -12,7 +12,7 @@
     setActiveProfile,
     type Profile
   } from '$lib/profiles';
-  import { fleet, profileHostHint } from '$stores/fleet';
+  import { fleet, profileHostHint, versionDrift } from '$stores/fleet';
   import { awaitingInput, idleSessions } from '$stores/attention';
 
   /**
@@ -243,6 +243,8 @@
         {@const isActive = p.id === $activeProfileId}
         {@const isCollapsed = collapsed[p.id] === true}
         {@const status = $fleet[p.id]?.status}
+        {@const version = $fleet[p.id]?.version?.trim()}
+        {@const activeEntry = $fleet[$activeProfileId ?? '']}
         <div class="server-block" class:active={isActive}>
           <div class="server-row">
             <button
@@ -264,6 +266,9 @@
               <span class="srv-name">{serverLabel(p)}</span>
               {#if serverHostHint(p)}
                 <span class="srv-host">{serverHostHint(p)}</span>
+              {/if}
+              {#if version}
+                <span class="srv-ver {versionDrift($fleet[p.id], activeEntry)}">v{version}</span>
               {/if}
               <span class="srv-count">{node.total}</span>
               {#if isActive}
@@ -447,6 +452,18 @@
     white-space: nowrap;
     max-width: 80px;
   }
+  /* Version chip sits between hostname and session count — dim when
+   * the peer matches the active dashboard's daemon, warning-color
+   * on drift so the user can spot fleet members lagging behind a
+   * release. */
+  .srv-ver {
+    font-family: var(--mono);
+    font-size: 10px;
+    margin-left: 6px;
+  }
+  .srv-ver.match   { color: var(--fg-3); }
+  .srv-ver.drift   { color: var(--warn, #d4a017); }
+  .srv-ver.unknown { color: var(--fg-3); opacity: 0.6; }
   .srv-count {
     font-family: var(--mono);
     font-size: 10px;

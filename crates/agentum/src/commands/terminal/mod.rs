@@ -533,6 +533,7 @@ async fn try_connect_loopback() -> ProfileConnect {
         sessions: Vec::new(),
         last_error: Some(msg),
         agent_availability: None,
+        version: None,
     };
     // HTTP-first: --no-tls is the common local-dev setup.
     for candidate in [DEFAULT_HTTP, DEFAULT_HTTPS] {
@@ -573,12 +574,23 @@ async fn try_connect_loopback() -> ProfileConnect {
                 sessions: Vec::new(),
                 last_error: Some("loopback daemon is up but you haven't signed in here".into()),
                 agent_availability: None,
+                version: None,
             };
         };
         let client = match api::Client::new(base.clone(), token, trust) {
             Ok(c) => c,
             Err(e) => return unreachable(format!("client: {e}")),
         };
+        // Re-call health here on the authenticated client so we can
+        // capture the daemon's version. probe_health above was an
+        // unauthenticated reachability check that only returns a
+        // bool — the version comes back in the JSON body.
+        let version = client
+            .health()
+            .await
+            .ok()
+            .map(|h| h.version)
+            .filter(|v| !v.is_empty());
         let sessions = client.list_sessions().await.unwrap_or_default();
         let agent_availability = client.list_agents().await.ok().map(|list| {
             list.into_iter()
@@ -592,6 +604,7 @@ async fn try_connect_loopback() -> ProfileConnect {
             sessions,
             last_error: None,
             agent_availability,
+            version,
         };
     }
     unreachable("no local daemon listening on 127.0.0.1:8822".into())
@@ -636,6 +649,11 @@ pub struct ProfileConnect {
     pub sessions: Vec<agentum_core::Session>,
     pub last_error: Option<String>,
     pub agent_availability: Option<std::collections::HashSet<String>>,
+    /// Daemon version reported by `/api/health` (e.g. `"0.7.61"`).
+    /// `None` for unreachable/never-probed/older daemons that didn't
+    /// expose the field. The sidebar uses this to surface fleet
+    /// version drift so the user can spot peers behind the local CLI.
+    pub version: Option<String>,
 }
 
 /// Best-effort connect for a single profile. Never prompts — that's
@@ -649,6 +667,7 @@ async fn try_connect_profile(profile: &profiles::Profile) -> ProfileConnect {
         sessions: Vec::new(),
         last_error: Some(msg),
         agent_availability: None,
+        version: None,
     };
 
     let base = match Url::parse(&profile.url) {
@@ -677,15 +696,21 @@ async fn try_connect_profile(profile: &profiles::Profile) -> ProfileConnect {
             sessions: Vec::new(),
             last_error: Some(format!("no cached token for {host_key}")),
             agent_availability: None,
+            version: None,
         };
     };
     let client = match api::Client::new(base, token, trust) {
         Ok(c) => c,
         Err(e) => return unreachable(format!("build client: {e}")),
     };
-    if client.health().await.is_err() {
-        return unreachable(format!("health probe failed at {}", profile.url));
-    }
+    let health = match client.health().await {
+        Ok(h) => Some(h),
+        Err(_) => return unreachable(format!("health probe failed at {}", profile.url)),
+    };
+    let version = health
+        .as_ref()
+        .map(|h| h.version.clone())
+        .filter(|v| !v.is_empty());
     // Health passed but token rejected ⇒ login-needed. We can't
     // prompt here; the user has to log in on this server via the
     // overlay before its sessions appear.
@@ -696,6 +721,7 @@ async fn try_connect_profile(profile: &profiles::Profile) -> ProfileConnect {
             sessions: Vec::new(),
             last_error: Some("token rejected".to_string()),
             agent_availability: None,
+            version,
         };
     }
     let sessions = client.list_sessions().await.unwrap_or_default();
@@ -714,6 +740,7 @@ async fn try_connect_profile(profile: &profiles::Profile) -> ProfileConnect {
         sessions,
         last_error: None,
         agent_availability,
+        version,
     }
 }
 

@@ -43,6 +43,20 @@ pub struct DirEntry {
     pub path: String,
 }
 
+/// Mirrors the server's `/api/health` response, trimmed to the fields
+/// the TUI actually consumes. `#[serde(default)]` on the optional
+/// fields lets older daemons (pre-v0.6.x) parse cleanly with empty
+/// values rather than failing the probe outright.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct Health {
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub hostname: String,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+
 /// Mirrors `agentum_server::routes::agents::AgentInfo`. Returned by
 /// `/api/agents`; the TUI gates the New Session form's tool picker on
 /// `available` so users can't pick an agent whose CLI isn't installed.
@@ -286,14 +300,17 @@ impl Client {
         })
     }
 
-    pub async fn health(&self) -> Result<()> {
+    pub async fn health(&self) -> Result<Health> {
         let url = self.base.join("/api/health")?;
         let resp = self.http.get(url).send().await?;
-        if resp.status().is_success() {
-            Ok(())
-        } else {
+        if !resp.status().is_success() {
             bail!("health returned {}", resp.status())
         }
+        // Older daemons may omit optional fields; serde defaults handle
+        // that path. A malformed body bubbles up as an error and the
+        // caller falls back to "version unknown" rather than crashing.
+        let body: Health = resp.json().await?;
+        Ok(body)
     }
 
     /// `GET /api/agents` — runtime probe of which first-class agent

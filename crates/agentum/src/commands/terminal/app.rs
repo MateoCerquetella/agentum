@@ -1178,6 +1178,12 @@ pub struct ClientEntry {
     /// `PATH`. `None` means the probe is pending or the server
     /// pre-dates the route.
     pub agent_availability: Option<HashSet<String>>,
+    /// Daemon version reported by `/api/health` (e.g. `"0.7.61"`).
+    /// `None` if the probe hasn't returned yet, the daemon is too
+    /// old to surface the field, or the probe failed. Rendered by
+    /// the sidebar so the user can spot a server lagging behind
+    /// the local CLI before they get bit by a missing capability.
+    pub version: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2264,6 +2270,16 @@ pub async fn run_loop(
     // Keyed under the active profile name (or "" for loopback) so
     // `client_for_session` finds it via the same lookup as peers.
     let default_key = active_profile.clone().unwrap_or_default();
+    // Capture the active daemon's version up-front so the sidebar can
+    // render it on the first frame instead of waiting for the next
+    // periodic refresh tick. Best-effort: a failure here only means
+    // the row reads "v?" until the refresh loop fills it in.
+    let active_version = client
+        .health()
+        .await
+        .ok()
+        .map(|h| h.version)
+        .filter(|v| !v.is_empty());
     app.clients.insert(
         default_key.clone(),
         ClientEntry {
@@ -2271,6 +2287,7 @@ pub async fn run_loop(
             status: ServerStatus::Live,
             last_error: None,
             agent_availability: None, // populated below by the same probe path
+            version: active_version,
         },
     );
     // Peer profiles: each one carries its own ClientEntry from the
@@ -2285,6 +2302,7 @@ pub async fn run_loop(
                 status: conn.status,
                 last_error: conn.last_error,
                 agent_availability: conn.agent_availability,
+                version: conn.version,
             },
         );
     }

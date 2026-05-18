@@ -470,6 +470,22 @@ fn spinner_glyph(tick: u64) -> &'static str {
 /// Centralised so the loopback row, the named-profile rows, and the
 /// detail panel agree on the encoding — including the reconnect
 /// spinner overlay.
+/// Format a `v0.7.61`-style chip + pick a color based on whether the
+/// daemon's version matches the local CLI. Matching versions read as
+/// muted/informational; a mismatch flips to the warning color so the
+/// user can spot fleet drift at a glance. `None` returns an empty
+/// Option so the caller can skip rendering when the probe hasn't
+/// landed yet.
+fn server_version_chip(version: Option<&str>, p: &Palette) -> Option<(String, Color)> {
+    let v = version?;
+    if v.is_empty() {
+        return None;
+    }
+    let local = env!("CARGO_PKG_VERSION");
+    let color = if v == local { p.muted } else { p.warning };
+    Some((format!("v{v}"), color))
+}
+
 fn server_dot(
     status: Option<super::app::ServerStatus>,
     is_active: bool,
@@ -563,10 +579,12 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
             // user never has to decode filled-vs-hollow circles to
             // tell which daemon they're talking to. A pending reconnect
             // swaps the dot for a braille spinner via `server_dot`.
-            let status = app.clients.get("").map(|e| e.status);
+            let entry_ref = app.clients.get("");
+            let status = entry_ref.map(|e| e.status);
+            let version = entry_ref.and_then(|e| e.version.as_deref());
             let reconnecting = app.reconnecting.contains("");
             let (dot_glyph, dot_color) = server_dot(status, is_active, reconnecting, tick, p);
-            let spans = vec![
+            let mut spans = vec![
                 Span::raw("   "),
                 Span::styled(dot_glyph, Style::default().fg(dot_color)),
                 Span::raw(" "),
@@ -587,6 +605,10 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
                         }),
                 ),
             ];
+            if let Some((label, color)) = server_version_chip(version, p) {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(label, Style::default().fg(color)));
+            }
             items.push(ListItem::new(Line::from(spans)).style(row_style));
         }
         for (i, entry) in app.profiles.iter().enumerate() {
@@ -601,7 +623,9 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
             } else {
                 Style::default().bg(p.panel_bg).fg(p.fg)
             };
-            let status = app.clients.get(entry.name.as_str()).map(|e| e.status);
+            let entry_ref = app.clients.get(entry.name.as_str());
+            let status = entry_ref.map(|e| e.status);
+            let version = entry_ref.and_then(|e| e.version.as_deref());
             // Same active-only-green encoding as the loopback row.
             let reconnecting = app.reconnecting.contains(entry.name.as_str());
             let (dot_glyph, dot_color) = server_dot(status, is_active, reconnecting, tick, p);
@@ -626,6 +650,10 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
                         }),
                 ),
             ];
+            if let Some((label, color)) = server_version_chip(version, p) {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(label, Style::default().fg(color)));
+            }
             if entry.is_default {
                 spans.push(Span::styled(
                     "  default".to_string(),

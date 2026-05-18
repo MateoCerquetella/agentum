@@ -4,6 +4,22 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.62] — 2026-05-18
+
+### Added
+- **Per-server version chip in the TUI sidebar and the dashboard
+  EndpointSwitcher + sidebar.** Every server row now renders a
+  `v0.7.62`-style label next to its name. Matching the local CLI's
+  version reads as muted/informational; a mismatch flips to the
+  warning color so fleet drift is visible at a glance — handy when
+  the user runs `agentum update` on one machine and forgets to
+  refresh the daemon on the others.
+- **`Client::health()` returns the parsed `/api/health` body**
+  instead of a bare unit result, surfacing `version`, `hostname`,
+  and `capabilities` to callers. `try_connect_profile` and the
+  active-profile boot path both capture the version into
+  `ClientEntry.version` so the sidebar render is a pure local read.
+
 ## [0.7.61] — 2026-05-18
 
 ### Fixed
