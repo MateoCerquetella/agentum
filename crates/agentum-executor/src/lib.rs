@@ -13,8 +13,8 @@ use agentum_core::Session;
 mod adapters;
 
 pub use adapters::{
-    ClaudeAdapter, CodexAdapter, CursorAdapter, GeminiAdapter, HermesAdapter, PassthroughAdapter,
-    TerminalAdapter,
+    AgentAdapter, ClaudeAdapter, CodexAdapter, CursorAdapter, GeminiAdapter, HermesAdapter,
+    PassthroughAdapter, TerminalAdapter,
 };
 
 /// What tmux actually launches: argv plus per-session environment overrides.
@@ -121,6 +121,7 @@ pub fn adapter_for(tool: &str) -> Box<dyn ToolAdapter> {
         "claude" => Box::new(ClaudeAdapter),
         "codex" => Box::new(CodexAdapter),
         "cursor" => Box::new(CursorAdapter),
+        "agent" => Box::new(AgentAdapter),
         "gemini" => Box::new(GeminiAdapter),
         "hermes" => Box::new(HermesAdapter),
         "terminal" => Box::new(TerminalAdapter),
@@ -131,7 +132,7 @@ pub fn adapter_for(tool: &str) -> Box<dyn ToolAdapter> {
 /// Names of the first-class executors agentum ships with built-in support for.
 /// Each entry has a matching adapter in [`adapter_for`] with hand-tuned
 /// argv, YOLO flag, and watchdog signatures.
-pub const FIRST_CLASS: &[&str] = &["claude", "codex", "cursor", "gemini", "hermes"];
+pub const FIRST_CLASS: &[&str] = &["claude", "codex", "cursor", "agent", "gemini", "hermes"];
 
 /// Names that the dashboard / TUI agent picker shows but that route
 /// through [`PassthroughAdapter`] instead of a hand-tuned adapter.
