@@ -4,6 +4,18 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.63] — 2026-05-18
+
+### Fixed
+- **Dashboard terminal stayed stuck on the previous session after
+  navigating to a new one.** SvelteKit reuses the `+page.svelte`
+  instance across route param changes (`/sessions/A → /sessions/B`),
+  and `Terminal.svelte`'s `onMount` only fires once — so the xterm
+  + WebSocket stayed bound to session A while the user was looking
+  at B's URL. The terminal pane is now keyed by session id, so
+  every navigation tears down the old xterm + WS and mounts a
+  fresh pair against the new session's stream.
+
 ## [0.7.62] — 2026-05-18
 
 ### Added

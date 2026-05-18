@@ -216,7 +216,16 @@
 
       <div class="term-shell">
         {#if session}
-          <Terminal sessionId={session.id} />
+          <!-- Force a fresh Terminal instance per session id. Without
+               the {#key}, SvelteKit reuses the page across
+               `/sessions/A → /sessions/B` and Terminal.svelte's
+               onMount only fires once — its WS stays bound to A
+               while the user is supposedly looking at B. Keying on
+               id tears the old xterm + WS down and mounts a fresh
+               pair, which is the only honest answer here. -->
+          {#key session.id}
+            <Terminal sessionId={session.id} />
+          {/key}
         {:else if !error}
           <div class="muted">connecting…</div>
         {/if}
