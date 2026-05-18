@@ -21,11 +21,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Pin to ubuntu-22.04 (glibc 2.35) so the resulting binary
+          # runs on Debian 12, Ubuntu 22.04, and similarly aged
+          # distros. ubuntu-latest is 24.04 (glibc 2.39), which made
+          # older systems refuse to load the executable.
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
             cross: false
           - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
             cross: true
           - target: x86_64-apple-darwin
             runner: macos-14
