@@ -2938,10 +2938,7 @@ fn build_osc52_sequence(text: &str) -> Vec<u8> {
         // Each `\x1b` inside the passthrough must be doubled per
         // tmux's DCS protocol so the outer tmux strips one layer
         // and the inner ESC reaches the host terminal intact.
-        format!(
-            "\x1bPtmux;{}\x1b\\",
-            inner.replace('\x1b', "\x1b\x1b")
-        )
+        format!("\x1bPtmux;{}\x1b\\", inner.replace('\x1b', "\x1b\x1b"))
     } else {
         inner
     };
@@ -4658,10 +4655,7 @@ fn open_tool_picker(
             }
         })
         .collect();
-    let cursor = entries
-        .iter()
-        .position(|e| e.name == trimmed)
-        .unwrap_or(0);
+    let cursor = entries.iter().position(|e| e.name == trimmed).unwrap_or(0);
     ToolPickerState { entries, cursor }
 }
 
@@ -7178,11 +7172,7 @@ mod tool_picker_tests {
             .find(|e| e.name == "terminal")
             .unwrap();
         assert!(terminal.available);
-        let copilot = picker
-            .entries
-            .iter()
-            .find(|e| e.name == "copilot")
-            .unwrap();
+        let copilot = picker.entries.iter().find(|e| e.name == "copilot").unwrap();
         assert!(copilot.available);
     }
 
@@ -7276,10 +7266,7 @@ mod osc52_tests {
             let s = std::str::from_utf8(&seq).unwrap();
             let payload = STANDARD.encode(b"hi");
             let inner = format!("\x1b]52;c;{payload}\x07");
-            let expected = format!(
-                "\x1bPtmux;{}\x1b\\",
-                inner.replace('\x1b', "\x1b\x1b")
-            );
+            let expected = format!("\x1bPtmux;{}\x1b\\", inner.replace('\x1b', "\x1b\x1b"));
             assert_eq!(s, expected);
         });
     }

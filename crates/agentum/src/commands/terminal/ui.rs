@@ -2464,12 +2464,7 @@ fn push_toggle_field(
 /// Modal picker for the New-Session form's Tool field. Mirrors
 /// `draw_dir_picker_overlay`'s shape (cursor row, hint footer) so
 /// muscle memory transfers between the two pickers.
-fn draw_tool_picker_overlay(
-    f: &mut Frame<'_>,
-    area: Rect,
-    picker: &ToolPickerState,
-    p: &Palette,
-) {
+fn draw_tool_picker_overlay(f: &mut Frame<'_>, area: Rect, picker: &ToolPickerState, p: &Palette) {
     let mut lines: Vec<Line<'_>> = Vec::new();
     lines.push(head("Pick an agent", p));
     lines.push(Line::from(""));

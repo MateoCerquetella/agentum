@@ -338,7 +338,7 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
         // comfortably covers Claude's multi-line menu plus the
         // spinner/input footer without picking up scrolled-by chat.
         let bottom = bottom_lines(&viewport, 20);
-        let next = classify_activity(&bottom, busy_sig, awaiting_sigs);
+        let next = classify_activity(bottom, busy_sig, awaiting_sigs);
         if next != activity {
             match (activity, next) {
                 (ActivityState::Working, ActivityState::Idle) => {
@@ -586,7 +586,10 @@ mod tests {
         // legacy signatures miss it and the watchdog stayed in Idle
         // — no notification, no yellow attention dot.
         let busy = Some("esc to interrupt");
-        let awaiting = ["Do you want to proceed?", "Enter to select · ↑/↓ to navigate"];
+        let awaiting = [
+            "Do you want to proceed?",
+            "Enter to select · ↑/↓ to navigate",
+        ];
         let menu = "❯ 1. Re-apply both files\n  2. CSP-only fix\n\nEnter to select · ↑/↓ to navigate · Esc to cancel";
         assert_eq!(
             classify_activity(menu, busy, &awaiting),
@@ -607,7 +610,10 @@ mod tests {
         // Tightening to the structural middle-dot pair stops
         // generic prose from masquerading as a real prompt.
         let busy = Some("esc to interrupt");
-        let awaiting = ["Do you want to proceed?", "Enter to select · ↑/↓ to navigate"];
+        let awaiting = [
+            "Do you want to proceed?",
+            "Enter to select · ↑/↓ to navigate",
+        ];
         // Working pane that QUOTES the menu phrases in prose,
         // not as the footer of an actual menu — spinner is still
         // up, so the right answer is Working.
@@ -625,7 +631,10 @@ mod tests {
         assert_eq!(bottom_lines(s, 3), "d\ne\n");
         assert_eq!(bottom_lines(s, 10), s); // fewer than n → all
         assert_eq!(bottom_lines("", 5), "");
-        assert_eq!(bottom_lines("only one line, no newline", 3), "only one line, no newline");
+        assert_eq!(
+            bottom_lines("only one line, no newline", 3),
+            "only one line, no newline"
+        );
     }
 
     #[test]
@@ -639,7 +648,10 @@ mod tests {
         // the last 20 lines pins matches to the actual prompt
         // surface and lets prose roll past freely.
         let busy = Some("esc to interrupt");
-        let awaiting = ["Do you want to proceed?", "Enter to select · ↑/↓ to navigate"];
+        let awaiting = [
+            "Do you want to proceed?",
+            "Enter to select · ↑/↓ to navigate",
+        ];
 
         // Realistic shape: chat output near the top quotes the
         // signatures, then a long run of unrelated chat scrolls
