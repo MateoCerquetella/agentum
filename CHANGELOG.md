@@ -4,6 +4,20 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.61] — 2026-05-18
+
+### Fixed
+- **TUI sidebar started hidden every launch** if it had ever been
+  toggled off (Ctrl-B), the user toggled it via the settings overlay,
+  or a synced `tui_prefs.toml` carried `sidebar_hidden = true` over
+  from another machine. The sidebar is the primary navigation
+  surface; users entering the TUI to a blank tree column reasonably
+  read it as the app being broken. The hidden flag is now
+  session-local: every fresh launch shows the sidebar; Ctrl-B during
+  a session folds it; next launch comes back visible. Mid-session
+  prefs writes still take effect, so the Settings-overlay toggle
+  isn't useless — it just doesn't survive a restart.
+
 ## [0.7.60] — 2026-05-18
 
 ### Fixed

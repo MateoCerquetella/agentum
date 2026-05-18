@@ -1230,7 +1230,14 @@ impl App {
             focus: Focus::Tree,
             tree_width: prefs.tree_width,
             fullscreen: false,
-            sidebar_hidden: prefs.sidebar_hidden,
+            // Deliberately ignore `prefs.sidebar_hidden` on launch — the
+            // sidebar is the primary navigation surface and a user who
+            // accidentally hit Ctrl-B last session (or whose tui_prefs.toml
+            // got synced across machines) would re-enter the TUI to a
+            // blank tree column and reasonably conclude the app was
+            // broken. Hide is session-local; press Ctrl-B during a
+            // session to fold it, and it comes back on next launch.
+            sidebar_hidden: false,
             servers_collapsed: prefs.servers_collapsed,
             show_all_servers: prefs.show_all_servers,
             chord: None,
