@@ -18,11 +18,33 @@
     /** Optional `@profile` chip rendered when the parent passes a
      *  source label. Only set on multi-profile setups. */
     sourceLabel?: string | null;
+    /** Comment count from a parent-level lookup so the card can render
+     *  a 💬N chip without each card refetching. 0 hides the chip. */
+    commentCount?: number;
+    /** True when the parent's drag is hovering this card and the drop
+     *  would land *above* it. The component renders a thin insertion
+     *  line at the top edge. */
+    dropAbove?: boolean;
     onDragStart?: (e: DragEvent) => void;
     onDragEnd?: () => void;
+    onDragOver?: (e: DragEvent) => void;
+    onDragLeave?: (e: DragEvent) => void;
+    onDrop?: (e: DragEvent) => void;
     onClick?: () => void;
   }
-  let { tk, dragging = false, sourceLabel = null, onDragStart, onDragEnd, onClick }: Props = $props();
+  let {
+    tk,
+    dragging = false,
+    sourceLabel = null,
+    commentCount = 0,
+    dropAbove = false,
+    onDragStart,
+    onDragEnd,
+    onDragOver,
+    onDragLeave,
+    onDrop,
+    onClick
+  }: Props = $props();
 
   const lblText = $derived(tk.lbl ?? 'task');
   const toolClass = $derived(tk.tool ?? '');
@@ -35,9 +57,13 @@
   class="ticket {toolClass} {lblText}"
   class:dragging
   class:unclaimed={tk.claimed_by == null}
+  class:drop-above={dropAbove}
   draggable="true"
   ondragstart={onDragStart}
   ondragend={onDragEnd}
+  ondragover={onDragOver}
+  ondragleave={onDragLeave}
+  ondrop={onDrop}
   onclick={onClick}
   onkeydown={(e) => { if (onClick && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onClick(); } }}
   role="button"
@@ -52,6 +78,11 @@
     <span class="tk-spacer"></span>
     {#if sourceLabel}
       <span class="src" title={sourceLabel}>@{sourceLabel}</span>
+    {/if}
+    {#if commentCount > 0}
+      <span class="cmt" title={`${commentCount} comment${commentCount === 1 ? '' : 's'}`}>
+        💬 {commentCount}
+      </span>
     {/if}
     {#if tk.session_id}
       <!-- stopPropagation so the arrow jumps to the session page
@@ -75,6 +106,7 @@
     padding: 8px 10px;
     gap: 4px;
     transition: border-color var(--t-hover), transform var(--t-hover), box-shadow var(--t-hover);
+    position: relative;
   }
   :global(.lane .ticket:hover) {
     transform: translateY(-1px);
@@ -82,6 +114,19 @@
   }
   :global(.lane .ticket.unclaimed) {
     border-style: dashed;
+  }
+  /* Insertion line — drawn at the top edge when a drag is hovering
+     above this card and intends to drop above it. */
+  :global(.lane .ticket.drop-above::before) {
+    content: '';
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    top: -3px;
+    height: 2px;
+    background: var(--cta);
+    border-radius: 2px;
+    pointer-events: none;
   }
 
   .tk-head {
@@ -122,6 +167,14 @@
   .src {
     font-size: 9.5px;
     color: var(--fg-3);
+  }
+  /* Comment count chip — only renders when commentCount > 0. */
+  .cmt {
+    font-size: 9.5px;
+    color: var(--fg-3);
+    padding: 0 4px;
+    border-left: 1px solid var(--border-2);
+    margin-left: 2px;
   }
   .jump {
     color: var(--cta);

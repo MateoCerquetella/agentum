@@ -68,11 +68,25 @@ const LEGACY_TOKEN_KEY = 'agentum_token';
 const LEGACY_MIGRATED_KEY = 'agentum_profiles_migrated';
 
 const SYNTHETIC_ID = 'same-origin';
-const SYNTHETIC_LABEL = 'this server';
+
+/**
+ * Default label for the synthetic profile. We prefer the page's
+ * actual host (e.g. `localhost:8822`, `my-vps:8822`) so the picker
+ * surfaces a concrete identity instead of the placeholder
+ * "this server" — which leaks through `{p.label}` reads that
+ * bypass `profileDisplayLabel`. Falls back to `'this machine'` only
+ * during SSR / Node, where `location` doesn't exist.
+ */
+function defaultSyntheticLabel(): string {
+  if (typeof location !== 'undefined' && location.host) {
+    return location.host;
+  }
+  return 'this machine';
+}
 
 const SYNTHETIC_BASE: Profile = {
   id: SYNTHETIC_ID,
-  label: SYNTHETIC_LABEL,
+  label: 'this machine',
   baseUrl: '',
   token: ''
 };
@@ -126,6 +140,44 @@ function loadActiveIdRaw(): string {
 function saveActiveIdRaw(id: string): void {
   const ls = safeStorage();
   ls?.setItem(ACTIVE_KEY, id);
+}
+
+/**
+ * Resolve a stored active id against the merged list. Handles two
+ * carry-overs from pre-API storage:
+ *
+ *   - Legacy synthetic id `'local'` (baseUrl='') gets rewritten to
+ *     the new `'same-origin'` id, AND its bearer token slot
+ *     (`tokens['local']`) is copied to `tokens['same-origin']` —
+ *     otherwise `setActiveToken` would write to the wrong slot and
+ *     subsequent `/api/profiles` fetches would 401 silently.
+ *   - Any id that doesn't match a known profile falls back to the
+ *     synthetic so the active pointer always references something
+ *     real.
+ *
+ * Returns the reconciled id and persists it.
+ */
+function reconcileActiveId(stored: string, list: Profile[]): string {
+  if (list.some((p) => p.id === stored)) return stored;
+
+  if (stored === 'local') {
+    const tokens = loadTokens();
+    const labels = loadLabels();
+    if (tokens['local'] && !tokens[SYNTHETIC_ID]) {
+      tokens[SYNTHETIC_ID] = tokens['local'];
+      writeJSON(TOKENS_KEY, tokens);
+    }
+    if (labels['local'] && !labels[SYNTHETIC_ID]) {
+      labels[SYNTHETIC_ID] = labels['local'];
+      writeJSON(LABELS_KEY, labels);
+    }
+    saveActiveIdRaw(SYNTHETIC_ID);
+    return SYNTHETIC_ID;
+  }
+
+  const fallback = list[0]?.id ?? SYNTHETIC_ID;
+  saveActiveIdRaw(fallback);
+  return fallback;
 }
 
 // ---------- legacy migration ----------
@@ -204,7 +256,7 @@ function syntheticProfile(): Profile {
   const labels = loadLabels();
   return {
     ...SYNTHETIC_BASE,
-    label: labels[SYNTHETIC_ID] ?? SYNTHETIC_LABEL,
+    label: labels[SYNTHETIC_ID] ?? defaultSyntheticLabel(),
     token: tokens[SYNTHETIC_ID] ?? ''
   };
 }
@@ -314,8 +366,11 @@ async function deleteServerProfile(name: string): Promise<boolean> {
 
 // ---------- live stores ----------
 
-export const profiles = writable<Profile[]>(mergeFromCache());
-export const activeProfileId = writable<string>(loadActiveIdRaw());
+const initialList = mergeFromCache();
+export const profiles = writable<Profile[]>(initialList);
+export const activeProfileId = writable<string>(
+  reconcileActiveId(loadActiveIdRaw(), initialList)
+);
 
 activeProfileId.subscribe(saveActiveIdRaw);
 
@@ -331,10 +386,16 @@ export async function refreshProfiles(): Promise<void> {
   if (!file) return;
   // Cache for fast first paint next reload.
   writeJSON(CACHE_KEY, file.profiles);
-  profiles.set([
+  const list = [
     syntheticProfile(),
     ...Object.entries(file.profiles).map(([n, p]) => serverEntryToProfile(n, p))
-  ]);
+  ];
+  profiles.set(list);
+
+  // Reconcile in case the active id was waiting on a profile that has
+  // now arrived (or, conversely, on one that the daemon has deleted).
+  const reconciled = reconcileActiveId(get(activeProfileId), list);
+  if (reconciled !== get(activeProfileId)) activeProfileId.set(reconciled);
 }
 
 /**

@@ -27,13 +27,16 @@ interface FleetState {
   items: FleetItem[];
   /** Union of `column_order` across every profile; preserves first-seen order. */
   columnOrder: string[];
+  /** Per-ticket comment count keyed by `${profile_id}:${id}`. */
+  commentCounts: Record<string, number>;
 }
 
 const initial: FleetState = {
   loading: false,
   errors: {},
   items: [],
-  columnOrder: ['todo', 'doing', 'done']
+  columnOrder: ['todo', 'doing', 'done'],
+  commentCounts: {}
 };
 
 export const fleetBoard = writable<FleetState>(initial);
@@ -66,6 +69,7 @@ export async function loadFleetBoard(): Promise<void> {
   const errors: Record<string, string> = {};
   const orderSeen = new Set<string>();
   const columnOrder: string[] = [];
+  const commentCounts: Record<string, number> = {};
 
   for (let i = 0; i < settled.length; i++) {
     const r = settled[i];
@@ -82,6 +86,13 @@ export async function loadFleetBoard(): Promise<void> {
           items.push({ ...row, status: col, profile_id: r.value.profile_id });
         }
       }
+      // Splice per-profile comment counts into the global map. Key is
+      // `${profile_id}:${id}` to match the dashboard's tagging scheme.
+      if (r.value.data.comment_counts) {
+        for (const [idStr, n] of Object.entries(r.value.data.comment_counts)) {
+          commentCounts[`${r.value.profile_id}:${idStr}`] = n;
+        }
+      }
     } else {
       errors[p.id] =
         r.reason instanceof Error ? r.reason.message : String(r.reason);
@@ -95,7 +106,7 @@ export async function loadFleetBoard(): Promise<void> {
   }
 
   lastLoadedAt = Date.now();
-  fleetBoard.set({ loading: false, errors, items, columnOrder });
+  fleetBoard.set({ loading: false, errors, items, columnOrder, commentCounts });
 }
 
 /**
@@ -148,10 +159,26 @@ export function applyItem(profileId: string, item: BoardItem): void {
 }
 
 export function removeItem(profileId: string, id: number): void {
-  fleetBoard.update((s) => ({
-    ...s,
-    items: s.items.filter((it) => !(it.profile_id === profileId && it.id === id))
-  }));
+  fleetBoard.update((s) => {
+    const key = `${profileId}:${id}`;
+    const { [key]: _dropped, ...remaining } = s.commentCounts;
+    return {
+      ...s,
+      items: s.items.filter((it) => !(it.profile_id === profileId && it.id === id)),
+      commentCounts: remaining
+    };
+  });
+}
+
+/// Bump the local comment-count cache by `delta` for a given ticket.
+/// Used by the dialog after a successful POST so the card's chip
+/// updates immediately, ahead of the next loadFleetBoard refresh.
+export function bumpCommentCount(profileId: string, id: number, delta: number): void {
+  fleetBoard.update((s) => {
+    const key = `${profileId}:${id}`;
+    const next = Math.max(0, (s.commentCounts[key] ?? 0) + delta);
+    return { ...s, commentCounts: { ...s.commentCounts, [key]: next } };
+  });
 }
 
 /**

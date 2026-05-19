@@ -37,9 +37,18 @@
   /// lanes on screen at once, a single col name isn't enough to
   /// identify which specific column got the hover.
   let dropTargetKey = $state<string | null>(null);
+  /// When the drag is hovering above a specific ticket (within-column
+  /// reorder), this is `${profile_id}:${id}` of that ticket. Renders
+  /// an insertion line at the top of the target card.
+  let dropAboveTicket = $state<string | null>(null);
   /// Collapsed lanes keyed by `${profile_id}:${project}`. Empty lanes
   /// stay expanded by default; the user can fold a noisy one.
   let collapsedLanes = $state<Set<string>>(new Set());
+  /// Per-ticket comment count keyed by `${profile_id}:${id}`. Pulled
+  /// from the fleet store, which fans out `/api/board` per profile —
+  /// the response already includes `comment_counts` so the 💬N chip
+  /// stays current without each card refetching.
+  const commentCounts = $derived($fleetBoard.commentCounts);
 
   // Dialog state. One component handles both create + edit; mode and
   // the bound item discriminate. Edits remember which profile owns the
@@ -123,6 +132,7 @@
     draggingProfileId = null;
     draggingId = null;
     dropTargetKey = null;
+    dropAboveTicket = null;
   }
   function onColDragOver(key: string, foreignProfile: boolean) {
     return (e: DragEvent) => {
@@ -140,6 +150,101 @@
   }
   function onColDragLeave(key: string) {
     return () => { if (dropTargetKey === key) dropTargetKey = null; };
+  }
+
+  /// Card-level dragover: paints an insertion line above the hovered
+  /// target card so the user can see where the drop will land. The
+  /// column-level handler still runs (Svelte event bubbling) so
+  /// dropTargetKey stays in sync for the column highlight.
+  function onTicketDragOver(item: FleetItem, foreignProfile: boolean) {
+    return (e: DragEvent) => {
+      if (draggingId == null) return;
+      if (foreignProfile) return;
+      // Don't paint a line above the card being dragged itself.
+      if (draggingProfileId === item.profile_id && draggingId === item.id) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      dropAboveTicket = `${item.profile_id}:${item.id}`;
+    };
+  }
+  function onTicketDragLeave(item: FleetItem) {
+    return () => {
+      const key = `${item.profile_id}:${item.id}`;
+      if (dropAboveTicket === key) dropAboveTicket = null;
+    };
+  }
+
+  /// Card-level drop: insert the dragged ticket above the target,
+  /// recompute priorities for the affected column, and send one batch.
+  function onTicketDrop(lane: Lane, colKey: string, target: FleetItem) {
+    return async (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const raw = e.dataTransfer?.getData('application/json') ?? '';
+      let payload: { profile_id: string; id: number } | null = null;
+      try { payload = JSON.parse(raw); } catch { payload = null; }
+      dropTargetKey = null;
+      dropAboveTicket = null;
+      draggingProfileId = null;
+      draggingId = null;
+      if (!payload || payload.profile_id !== lane.profile_id) return;
+
+      const item = findItem(payload.profile_id, payload.id);
+      if (!item) return;
+
+      // Same-column reorder: rewrite priorities so the dragged item
+      // lands above `target`. The store renumbers all rows in one tx.
+      const currentColItems = (lane.byStatus[colKey] ?? [])
+        .filter((it) => it.id !== item.id);
+      const targetIdx = currentColItems.findIndex((it) => it.id === target.id);
+      const insertAt = targetIdx < 0 ? currentColItems.length : targetIdx;
+      const reordered = [
+        ...currentColItems.slice(0, insertAt),
+        { ...item, status: colKey, workdir: lane.workdir ?? item.workdir },
+        ...currentColItems.slice(insertAt)
+      ];
+
+      // Optimistic local apply of the new order (status + workdir +
+      // priority). Priorities are 10-spaced so subsequent inserts
+      // between two rows don't immediately need a renumber.
+      const entries = reordered.map((it, i) => ({ id: it.id, priority: i * 10 }));
+      for (const it of reordered) applyItemLocal(it as FleetItem);
+
+      const fromActive = isActiveColumn(item.status);
+      const toActive = isActiveColumn(colKey);
+      const me = actorId();
+      try {
+        if (!fromActive && toActive && item.claimed_by == null) {
+          try { await api.claimBoardItemOn(payload.profile_id, item.id, me); } catch (err) {
+            console.warn('auto-claim conflict during reorder:', err);
+          }
+        }
+        if (fromActive && !toActive && item.claimed_by === me) {
+          try { await api.releaseBoardItemOn(payload.profile_id, item.id, me); } catch (err) {
+            console.warn('auto-release failed during reorder:', err);
+          }
+        }
+        // Cross-column moves still need the status + workdir patch;
+        // priorities get rewritten by the batch below.
+        if (item.status !== colKey || (lane.workdir != null && item.workdir !== lane.workdir)) {
+          await api.patchBoardItemOn(payload.profile_id, item.id, {
+            status: colKey,
+            ...(lane.workdir != null && item.workdir !== lane.workdir
+              ? { workdir: lane.workdir }
+              : {})
+          });
+        }
+        await api.reorderBoardOn(payload.profile_id, entries);
+      } catch (err) {
+        console.error('reorder failed', err);
+        await loadFleetBoard();
+      }
+    };
+  }
+
+  function applyItemLocal(it: FleetItem) {
+    applyItem(it.profile_id, it);
   }
   /// "Active" columns (someone is/should-be working on it) vs "idle"
   /// (sitting in a queue). Used to drive auto-claim on drag.
@@ -379,12 +484,19 @@
                       </div>
                       <div class="col-b">
                         {#each (lane.byStatus[col.key] ?? []) as tk (`${tk.profile_id}:${tk.id}`)}
+                          {@const tkKey = `${tk.profile_id}:${tk.id}`}
+                          {@const tkForeign = draggingProfileId != null && draggingProfileId !== tk.profile_id}
                           <Ticket
                             {tk}
                             sourceLabel={showServerChip ? profileLabelFor(tk.profile_id) : null}
+                            commentCount={commentCounts[tkKey] ?? 0}
+                            dropAbove={dropAboveTicket === tkKey}
                             dragging={draggingProfileId === tk.profile_id && draggingId === tk.id}
                             onDragStart={onTicketDragStart(tk)}
                             onDragEnd={onTicketDragEnd}
+                            onDragOver={onTicketDragOver(tk, tkForeign)}
+                            onDragLeave={onTicketDragLeave(tk)}
+                            onDrop={onTicketDrop(lane, col.key, tk)}
                             onClick={() => openTicket(tk)}
                           />
                         {/each}

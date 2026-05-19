@@ -132,7 +132,13 @@
     title="Active agentum server — click to switch"
   >
     <span class="dot {active ? dotClass(active) : 'unknown'}"></span>
-    <span class="label">{active ? profileDisplayLabel(active, $fleet[active.id]) : 'this server'}</span>
+    <span class="label"
+      >{active
+        ? profileDisplayLabel(active, $fleet[active.id])
+        : typeof location !== 'undefined'
+          ? location.host
+          : 'this machine'}</span
+    >
     <span class="caret" aria-hidden="true">▾</span>
   </button>
 

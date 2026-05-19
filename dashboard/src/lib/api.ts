@@ -301,6 +301,9 @@ export interface BoardItem {
   /* Session linkage (migration 0011): when the user spawns a session
      from a ticket, the resulting session id is stamped here. */
   session_id?: string | null;
+  /* Manual ordering within a column (migration 0012). Lower priority
+     floats to the top; secondary sort is created_at ASC. */
+  priority?: number;
 }
 
 export interface NewBoardItem {
@@ -312,6 +315,7 @@ export interface NewBoardItem {
   workdir?: string | null;
   model?: string | null;
   session_id?: string | null;
+  priority?: number | null;
 }
 
 export interface BoardPatch {
@@ -323,6 +327,27 @@ export interface BoardPatch {
   workdir?: string | null;
   model?: string | null;
   session_id?: string | null;
+  priority?: number;
+}
+
+/** Threaded comment on a board item (migration 0013). */
+export interface BoardComment {
+  id: number;
+  board_id: number;
+  author: string;
+  body: string;
+  created_at: string;
+}
+
+export interface NewBoardComment {
+  author: string;
+  body: string;
+}
+
+/** One entry in the bulk reorder payload — id + new priority. */
+export interface ReorderEntry {
+  id: number;
+  priority: number;
 }
 
 /* ------------------------------------------------------------------- */
@@ -347,6 +372,8 @@ export interface WatchdogEvent {
 export interface GroupedBoard {
   columns: Record<string, BoardItem[]>;
   column_order: string[];
+  /** Per-ticket comment count keyed by board id. Missing keys mean zero. */
+  comment_counts?: Record<number, number>;
 }
 
 export interface Note {
@@ -539,6 +566,19 @@ export const api = {
     requestOn<BoardItem>(profileId, `/api/board/${id}/release`, {
       method: 'POST',
       body: JSON.stringify({ claimed_by })
+    }),
+  /* ---- comments + reorder (migrations 0012 + 0013) ---- */
+  listBoardCommentsOn: (profileId: string, id: number) =>
+    requestOn<BoardComment[]>(profileId, `/api/board/${id}/comments`),
+  createBoardCommentOn: (profileId: string, id: number, body: NewBoardComment) =>
+    requestOn<BoardComment>(profileId, `/api/board/${id}/comments`, {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  reorderBoardOn: (profileId: string, entries: ReorderEntry[]) =>
+    requestOn<void>(profileId, '/api/board/reorder', {
+      method: 'POST',
+      body: JSON.stringify({ entries })
     }),
   claimBoardItem: (id: number, claimed_by: string) =>
     request<BoardItem>(`/api/board/${id}/claim`, {

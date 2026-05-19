@@ -211,7 +211,9 @@
                   title="Switch to {p.label}"
                 >
                   <span class="endpoint-label">{p.label}</span>
-                  <span class="endpoint-url mono">{p.baseUrl || 'this server'}</span>
+                  <span class="endpoint-url mono"
+                    >{p.baseUrl || (typeof location !== 'undefined' ? location.origin : '')}</span
+                  >
                 </button>
                 <button
                   type="button"

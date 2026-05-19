@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, type AgentInfo, type BoardItem, type BoardPatch, type NewBoardItem, type TicketLbl, type Tool } from '$lib/api';
+  import { api, type AgentInfo, type BoardComment, type BoardItem, type BoardPatch, type NewBoardItem, type TicketLbl, type Tool } from '$lib/api';
   import { actorId } from '$stores/actor';
   import { profiles, activeProfileId, type Profile } from '$lib/profiles';
   import DirPicker from './DirPicker.svelte';
@@ -419,6 +419,107 @@
     }
   }
 
+  /* -- comments thread --------------------------------------------- */
+
+  let comments = $state<BoardComment[]>([]);
+  let commentDraft = $state('');
+  let commentLoading = $state(false);
+  let postingComment = $state(false);
+  let commentError = $state<string | null>(null);
+
+  /// Last (item.id, profile) we fetched for. Guards against repeated
+  /// fetches on every re-render — only refetch when the dialog opens
+  /// onto a different ticket.
+  let lastCommentsFor = $state<string>('');
+
+  async function refreshComments() {
+    if (mode !== 'edit' || !item) return;
+    const key = `${targetProfileId}:${item.id}`;
+    if (key === lastCommentsFor) return;
+    lastCommentsFor = key;
+    commentLoading = true;
+    commentError = null;
+    try {
+      const list = await api.listBoardCommentsOn(targetProfileId, item.id);
+      // Only adopt if the dialog is still on the same ticket — otherwise
+      // a slow request would clobber the user's current view.
+      if (lastCommentsFor === key) comments = list;
+    } catch (e) {
+      if (lastCommentsFor === key) {
+        commentError = e instanceof Error ? e.message : String(e);
+      }
+    } finally {
+      if (lastCommentsFor === key) commentLoading = false;
+    }
+  }
+
+  $effect(() => {
+    if (open && mode === 'edit' && item) {
+      void refreshComments();
+    } else if (!open) {
+      // Reset on close so the next open shows a clean state.
+      comments = [];
+      commentDraft = '';
+      commentError = null;
+      lastCommentsFor = '';
+    }
+  });
+
+  /// Subscribe to the WS event bus so peer-posted comments (and our
+  /// own — convenient when the POST flies before the optimistic
+  /// applyComment lands) appear in the thread live.
+  $effect(() => {
+    if (!open || mode !== 'edit' || !item) return;
+    let cancelled = false;
+    let unsub: (() => void) | null = null;
+    void import('$stores/events').then(({ onEvent }) => {
+      if (cancelled) return;
+      unsub = onEvent((ev) => {
+        if (ev.kind !== 'board.commented') return;
+        const targetId = (ev.payload?.board_id as number | undefined) ?? -1;
+        if (!item || targetId !== item.id) return;
+        // Force a refetch — payload doesn't carry the body. Cheap:
+        // the route just SELECTs from a small per-ticket index.
+        lastCommentsFor = '';
+        void refreshComments();
+      });
+    });
+    return () => { cancelled = true; unsub?.(); };
+  });
+
+  function fmtCommentTime(iso: string): string {
+    try {
+      return new Date(iso).toLocaleString();
+    } catch {
+      return iso;
+    }
+  }
+
+  async function postComment(e: SubmitEvent) {
+    e.preventDefault();
+    if (!item || postingComment) return;
+    const body = commentDraft.trim();
+    if (!body) return;
+    postingComment = true;
+    commentError = null;
+    try {
+      const created = await api.createBoardCommentOn(targetProfileId, item.id, {
+        author: actorId(),
+        body
+      });
+      // Optimistic apply — the WS event will refresh too but this
+      // makes the textarea-to-thread roundtrip feel instant.
+      comments = [...comments, created];
+      const { bumpCommentCount } = await import('$stores/fleet-board');
+      bumpCommentCount(targetProfileId, item.id, 1);
+      commentDraft = '';
+    } catch (err) {
+      commentError = err instanceof Error ? err.message : String(err);
+    } finally {
+      postingComment = false;
+    }
+  }
+
   const claimedByMe = $derived(
     item?.claimed_by != null && item.claimed_by === actorId()
   );
@@ -644,6 +745,50 @@
             </button>
           {/if}
         </section>
+
+        <section class="comments">
+          <span class="eyebrow">Comments {#if comments.length > 0}<span class="count-chip">{comments.length}</span>{/if}</span>
+          {#if commentLoading && comments.length === 0}
+            <div class="cmt-empty mono">loading…</div>
+          {:else if comments.length === 0}
+            <div class="cmt-empty mono">no comments yet — be the first.</div>
+          {:else}
+            <ol class="cmt-list">
+              {#each comments as c (c.id)}
+                <li class="cmt-item">
+                  <div class="cmt-head">
+                    <span class="cmt-author">{c.author}</span>
+                    <span class="cmt-time" title={c.created_at}>{fmtCommentTime(c.created_at)}</span>
+                  </div>
+                  <div class="cmt-body">{c.body}</div>
+                </li>
+              {/each}
+            </ol>
+          {/if}
+          {#if commentError}
+            <div class="error" style="margin-top: 6px;">{commentError}</div>
+          {/if}
+          <form class="cmt-form" onsubmit={postComment}>
+            <textarea
+              bind:value={commentDraft}
+              rows="2"
+              placeholder="Add a comment…"
+              spellcheck="false"
+              disabled={postingComment}
+            ></textarea>
+            <button
+              type="submit"
+              class="primary"
+              disabled={postingComment || commentDraft.trim().length === 0}
+            >
+              {#if postingComment}
+                <span class="spin"></span> posting…
+              {:else}
+                Post
+              {/if}
+            </button>
+          </form>
+        </section>
       {/if}
 
       {#if error}
@@ -855,6 +1000,106 @@
     border: 1px solid var(--border-2);
     border-radius: var(--radius-md);
   }
+
+  /* Comments thread + reply form. Sits inside the dialog as a tall
+     scrollable section so long threads don't blow out the modal. */
+  .comments {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .count-chip {
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: var(--radius-pill);
+    background: var(--bg-2);
+    border: 1px solid var(--border-2);
+    color: var(--fg-3);
+    font-size: 9.5px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .cmt-empty {
+    padding: 10px 12px;
+    color: var(--fg-3);
+    font-size: 11.5px;
+    text-align: center;
+    border: 1px dashed var(--border-2);
+    border-radius: var(--radius-md);
+  }
+  .cmt-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 240px;
+    overflow-y: auto;
+  }
+  .cmt-item {
+    padding: 8px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--radius-md);
+  }
+  .cmt-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+  .cmt-author {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--cta);
+  }
+  .cmt-time {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    color: var(--fg-3);
+  }
+  .cmt-body {
+    font-size: 12.5px;
+    color: var(--fg);
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .cmt-form {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+  }
+  .cmt-form textarea {
+    flex: 1;
+    padding: 8px 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-2);
+    border-radius: var(--radius-md);
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 12.5px;
+    resize: vertical;
+    min-height: 48px;
+  }
+  .cmt-form textarea:focus { outline: none; border-color: var(--cta); }
+  .cmt-form button.primary {
+    padding: 8px 14px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--cta);
+    background: var(--cta);
+    color: #fff;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: filter var(--t-hover);
+  }
+  .cmt-form button.primary:hover:not(:disabled) { filter: brightness(1.05); }
+  .cmt-form button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
   .claim-meta { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
   .claim-text {
     display: inline-flex;
