@@ -30,6 +30,9 @@
     /** When set, pre-selects the Servers tile. Edit mode supplies the
      *  ticket's home profile so the PATCH routes back to the same one. */
     defaultProfileId?: string | null;
+    /** Seed for the Workdir field on create. Per-lane "+ Ticket" passes
+     *  the lane's workdir so the new ticket inherits the project. */
+    defaultWorkdir?: string | null;
     columns?: string[];
     onClose: () => void;
     onCreated?: (profileId: string, it: BoardItem) => void;
@@ -42,6 +45,7 @@
     item = null,
     defaultStatus = null,
     defaultProfileId = null,
+    defaultWorkdir = null,
     columns = [],
     onClose,
     onCreated,
@@ -151,6 +155,34 @@
     (TOOLS.find((t) => t.id === tool)?.modelHint) ?? 'default'
   );
 
+  /// Preference order for the auto-assign fallback. First entry that
+  /// shows up as `available` on the target daemon wins.
+  const AUTO_PREF: Tool[] = ['claude', 'codex', 'cursor', 'gemini', 'opencode', 'aider'];
+
+  /// What we'd auto-pick *right now* given the current target profile's
+  /// availability map. Returns null when the probe hasn't landed yet
+  /// (so the UI can show "auto-assigning…" instead of guessing).
+  function autoAssignCandidate(profileId: string): Tool | null {
+    const map = availabilityFor(profileId);
+    if (!map) return null;
+    for (const id of AUTO_PREF) {
+      const info = map[id];
+      if (info?.available) return id;
+    }
+    // Fall back to any available entry in case the user has only an
+    // exotic agent installed.
+    const any = Object.values(map).find((a) => a.available);
+    return (any?.name as Tool) ?? null;
+  }
+
+  /// Hint string for the "Agent" eyebrow row when nothing is picked.
+  const autoHint = $derived.by(() => {
+    if (tool !== '') return '';
+    const pick = autoAssignCandidate(targetProfileId);
+    if (!pick) return 'agent will be auto-assigned at submit';
+    return `auto-assigns to ${pick} (first installed)`;
+  });
+
   /// Seed local state whenever the dialog re-opens or the bound item
   /// changes. Without this guard, typing into a field would get clobbered
   /// every time the parent re-renders.
@@ -162,7 +194,7 @@
     }
     const key = mode === 'edit' && item
       ? `edit:${item.id}:${item.updated_at}`
-      : `create:${defaultStatus ?? ''}:${defaultProfileId ?? ''}`;
+      : `create:${defaultStatus ?? ''}:${defaultProfileId ?? ''}:${defaultWorkdir ?? ''}`;
     if (key === lastSeeded) return;
     lastSeeded = key;
     error = null;
@@ -182,7 +214,7 @@
       status  = defaultStatus || 'todo';
       lbl     = '';
       tool    = '';
-      workdir = '';
+      workdir = defaultWorkdir ?? '';
       model   = '';
       targetProfileId = defaultProfileId || $activeProfileId;
     }
@@ -227,12 +259,24 @@
       const cleanWorkdir = workdir.trim().replace(/\/+$/, '') || '';
       const cleanModel   = model.trim();
       if (mode === 'create') {
+        // Auto-assign if the user left the agent unpicked. The probe
+        // is normally cached from dialog open; if it raced and isn't
+        // ready, fetch it synchronously here so submit never lands an
+        // unassigned ticket.
+        let effectiveTool: Tool | '' = tool;
+        if (effectiveTool === '') {
+          if (!availabilityFor(targetProfileId)) {
+            await refreshAvailability(targetProfileId);
+          }
+          const pick = autoAssignCandidate(targetProfileId);
+          if (pick) effectiveTool = pick;
+        }
         const payload: NewBoardItem = {
           title: t,
           body: body.trim() ? body : null,
           status: status || null,
           lbl: lbl || null,
-          tool: tool || null,
+          tool: (effectiveTool || null) as string | null,
           workdir: cleanWorkdir || null,
           model:   cleanModel || null
         };
@@ -482,7 +526,10 @@
       </section>
 
       <section>
-        <span class="eyebrow">Agent</span>
+        <span class="eyebrow">
+          Agent
+          {#if autoHint}<span class="opt" style="text-transform:none; letter-spacing:0;">— {autoHint}</span>{/if}
+        </span>
         <div class="agents">
           <button
             type="button"

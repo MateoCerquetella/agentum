@@ -2,16 +2,21 @@
   import type { BoardItem } from '$lib/api';
 
   /**
-   * Kanban card. The whole card is the drag handle. Tool dot color
-   * comes from the optional `tool` discriminator (claude/codex/gemini/
-   * hermes); label pill from `lbl`. When `workdir` is set, surface a
-   * short trail so the board reads as folder + agent + lbl per card.
+   * Dense kanban card. Optimised for stacked swimlanes where the
+   * lane header already names the project — so the card drops the
+   * workdir trail and keeps everything to a tight two-line layout:
+   *
+   *   • key + tool dot + claim pill + (server) + (session ↗) + lbl
+   *   • title (clamped to 2 lines)
+   *
+   * Whole card is the drag handle; the session arrow stops propagation
+   * so click→jump doesn't also fire the parent's edit-dialog handler.
    */
   interface Props {
     tk: BoardItem;
     dragging?: boolean;
-    /** When set, render a small `@profile` chip in the foot to surface the
-     *  ticket's source server. Hidden on single-profile setups. */
+    /** Optional `@profile` chip rendered when the parent passes a
+     *  source label. Only set on multi-profile setups. */
     sourceLabel?: string | null;
     onDragStart?: (e: DragEvent) => void;
     onDragEnd?: () => void;
@@ -21,32 +26,15 @@
 
   const lblText = $derived(tk.lbl ?? 'task');
   const toolClass = $derived(tk.tool ?? '');
-
-  /// Compress a workdir path so the card stays one-line. Keep at most
-  /// the final two path segments and a leading `~` or `/` so the trail
-  /// reads like "~/foo/bar" instead of the full absolute path.
-  function compressPath(p: string | null | undefined): string {
-    if (!p) return '';
-    const home = '/home/'; // good-enough heuristic; collapses /home/<user>/ to ~/
-    let s = p;
-    const homeIdx = s.indexOf(home);
-    if (homeIdx === 0) {
-      const tail = s.slice(home.length);
-      const slash = tail.indexOf('/');
-      s = slash < 0 ? '~' : `~/${tail.slice(slash + 1)}`;
-    }
-    const segs = s.split('/').filter(Boolean);
-    if (segs.length <= 2) return s;
-    const prefix = s.startsWith('~') ? '~/' : '/';
-    return `${prefix}…/${segs.slice(-2).join('/')}`;
-  }
-
-  const trail = $derived(compressPath(tk.workdir));
+  const claimShort = $derived(
+    tk.claimed_by ? tk.claimed_by.replace(/^web-/, '').slice(0, 6) : null
+  );
 </script>
 
 <div
   class="ticket {toolClass} {lblText}"
   class:dragging
+  class:unclaimed={tk.claimed_by == null}
   draggable="true"
   ondragstart={onDragStart}
   ondragend={onDragEnd}
@@ -55,19 +43,18 @@
   role="button"
   tabindex="0"
 >
-  <div class="tk-k">{tk.key}</div>
-  <div class="tk-t">{tk.title}</div>
-  {#if trail}
-    <div class="tk-trail" title={tk.workdir ?? ''}>{trail}</div>
-  {/if}
-  <div class="tk-foot">
-    <span class="dot"></span>
-    <span>{tk.claimed_by ?? 'unclaimed'}</span>
+  <div class="tk-head">
+    <span class="dot" aria-hidden="true"></span>
+    <span class="tk-k">{tk.key}</span>
+    {#if claimShort}
+      <span class="claim-pill" title={tk.claimed_by ?? ''}>{claimShort}</span>
+    {/if}
+    <span class="tk-spacer"></span>
     {#if sourceLabel}
-      <span class="src">@{sourceLabel}</span>
+      <span class="src" title={sourceLabel}>@{sourceLabel}</span>
     {/if}
     {#if tk.session_id}
-      <!-- stopPropagation so the arrow lands on the session page
+      <!-- stopPropagation so the arrow jumps to the session page
            without ALSO opening the edit dialog underneath. -->
       <a
         class="jump"
@@ -76,40 +63,100 @@
         onclick={(e) => e.stopPropagation()}
       >↗</a>
     {/if}
-    <span class="lbls">
-      <span class="lbl {tk.lbl ?? ''}">{lblText}</span>
-    </span>
+    <span class="lbl {tk.lbl ?? ''}">{lblText}</span>
   </div>
+  <div class="tk-t" title={tk.title}>{tk.title}</div>
 </div>
 
 <style>
-  .tk-trail {
-    margin: 4px 0 2px;
+  /* Cards are tighter — relies on global .ticket base from _design.css
+     for the box/border, then overrides typography + spacing here. */
+  :global(.lane .ticket) {
+    padding: 8px 10px;
+    gap: 4px;
+    transition: border-color var(--t-hover), transform var(--t-hover), box-shadow var(--t-hover);
+  }
+  :global(.lane .ticket:hover) {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  }
+  :global(.lane .ticket.unclaimed) {
+    border-style: dashed;
+  }
+
+  .tk-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     font-family: var(--mono);
     font-size: 10.5px;
     color: var(--fg-3);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    line-height: 1;
   }
-  /* Source-server chip in the foot — only rendered on multi-profile
-     setups. Inherits the foot's existing mono font; muted by default. */
+  .tk-head .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: var(--radius-pill);
+    flex-shrink: 0;
+    background: var(--fg-3);
+  }
+  :global(.ticket.claude) .tk-head .dot { background: var(--tool-claude); }
+  :global(.ticket.codex)  .tk-head .dot { background: var(--tool-codex); }
+  :global(.ticket.cursor) .tk-head .dot { background: var(--tool-cursor, var(--cta)); }
+  :global(.ticket.gemini) .tk-head .dot { background: var(--tool-gemini); }
+  :global(.ticket.hermes) .tk-head .dot { background: var(--tool-hermes); }
+
+  .tk-k { color: var(--fg-2); letter-spacing: 0.02em; }
+  .tk-spacer { flex: 1; }
+
+  .claim-pill {
+    padding: 1px 6px;
+    border-radius: var(--radius-pill);
+    background: color-mix(in srgb, var(--cta) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cta) 40%, var(--border-2));
+    color: var(--fg);
+    font-size: 9.5px;
+    line-height: 1.2;
+  }
+
   .src {
-    font-family: var(--mono);
-    font-size: 10px;
+    font-size: 9.5px;
     color: var(--fg-3);
-    padding: 0 4px;
-    border-left: 1px solid var(--border-2);
-    margin-left: 2px;
   }
-  /* Session jump-arrow. Renders only when tk.session_id is set; click
-     escapes the card-level dialog handler via stopPropagation. */
   .jump {
     color: var(--cta);
-    font-size: 12px;
+    font-size: 11.5px;
     text-decoration: none;
-    padding: 0 4px;
     line-height: 1;
   }
   .jump:hover { color: var(--fg); }
+
+  .lbl {
+    padding: 1px 6px;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--border-2);
+    background: var(--surface);
+    color: var(--fg-3);
+    font-size: 9.5px;
+    line-height: 1.2;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .lbl.bug   { color: var(--crash); border-color: rgba(221,0,0,0.4); }
+  .lbl.feat  { color: var(--green); border-color: rgba(25,214,0,0.4); }
+  .lbl.chore { color: var(--blu);   border-color: rgba(85,190,255,0.4); }
+  .lbl.spike { color: var(--amber); border-color: rgba(255,180,84,0.4); }
+
+  /* Title is line-clamped so long titles don't break lane height. */
+  .tk-t {
+    color: var(--fg);
+    font-size: 12.5px;
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+  }
 </style>

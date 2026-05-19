@@ -3,11 +3,13 @@
   import {
     fleetBoard,
     fleetColumns,
+    fleetLanes,
     loadFleetBoard,
     moveLocalAcross,
     applyItem,
     removeItem,
-    type FleetItem
+    type FleetItem,
+    type Lane
   } from '$stores/fleet-board';
   import { sessions, loadSessions } from '$stores/sessions';
   import { watchdog, loadWatchdog } from '$stores/watchdog';
@@ -31,16 +33,34 @@
   // than a compound string to avoid churn in equality checks.
   let draggingProfileId = $state<string | null>(null);
   let draggingId = $state<number | null>(null);
-  let dropTargetCol = $state<string | null>(null);
+  /// Drop target key = `${profile_id}:${project}:${col}`. With multiple
+  /// lanes on screen at once, a single col name isn't enough to
+  /// identify which specific column got the hover.
+  let dropTargetKey = $state<string | null>(null);
+  /// Collapsed lanes keyed by `${profile_id}:${project}`. Empty lanes
+  /// stay expanded by default; the user can fold a noisy one.
+  let collapsedLanes = $state<Set<string>>(new Set());
 
   // Dialog state. One component handles both create + edit; mode and
   // the bound item discriminate. Edits remember which profile owns the
-  // ticket so the PATCH routes back to the same daemon.
+  // ticket so the PATCH routes back to the same daemon. A per-lane
+  // quick-add seeds defaultWorkdir so the new ticket lands in the
+  // lane the user clicked + on.
   let dialogOpen = $state(false);
   let dialogMode = $state<'create' | 'edit'>('create');
   let dialogItem = $state<FleetItem | null>(null);
   let dialogDefaultStatus = $state<string | null>(null);
   let dialogProfileId = $state<string | null>(null);
+  let dialogDefaultWorkdir = $state<string | null>(null);
+
+  function laneKey(profileId: string, project: string): string {
+    return `${profileId}::${project}`;
+  }
+  function toggleLane(key: string) {
+    const next = new Set(collapsedLanes);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    collapsedLanes = next;
+  }
 
   function refresh() {
     void loadFleetBoard();
@@ -102,18 +122,24 @@
   function onTicketDragEnd() {
     draggingProfileId = null;
     draggingId = null;
-    dropTargetCol = null;
+    dropTargetKey = null;
   }
-  function onColDragOver(colKey: string) {
+  function onColDragOver(key: string, foreignProfile: boolean) {
     return (e: DragEvent) => {
       if (draggingId == null) return;
+      // Cross-profile drops aren't supported (would require copy+delete
+      // across daemons). Refuse the drag so the cursor reads "no-drop".
+      if (foreignProfile) {
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+        return;
+      }
       e.preventDefault();
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-      dropTargetCol = colKey;
+      dropTargetKey = key;
     };
   }
-  function onColDragLeave(colKey: string) {
-    return () => { if (dropTargetCol === colKey) dropTargetCol = null; };
+  function onColDragLeave(key: string) {
+    return () => { if (dropTargetKey === key) dropTargetKey = null; };
   }
   /// "Active" columns (someone is/should-be working on it) vs "idle"
   /// (sitting in a queue). Used to drive auto-claim on drag.
@@ -130,7 +156,10 @@
     );
   }
 
-  function onColDrop(colKey: string) {
+  /// Drop into a (lane, column). When the drop lane's workdir differs
+  /// from the item's current workdir, the PATCH bundles both fields so
+  /// drag-to-organize works as a single op.
+  function onColDrop(lane: Lane, colKey: string) {
     return async (e: DragEvent) => {
       e.preventDefault();
       const raw = e.dataTransfer?.getData('application/json') ?? '';
@@ -138,8 +167,17 @@
       try { payload = JSON.parse(raw) as DragPayload; } catch { payload = null; }
       draggingProfileId = null;
       draggingId = null;
-      dropTargetCol = null;
+      dropTargetKey = null;
       if (!payload || !Number.isFinite(payload.id)) return;
+
+      // Cross-profile drops aren't supported — they'd require copy +
+      // delete across daemons. Drag-out within the same server is the
+      // only path; users can still re-create on a different server via
+      // the dialog's Servers tile.
+      if (payload.profile_id !== lane.profile_id) {
+        console.warn('cross-profile drop ignored');
+        return;
+      }
 
       const item = findItem(payload.profile_id, payload.id);
       const fromActive = item ? isActiveColumn(item.status) : false;
@@ -152,21 +190,15 @@
       try {
         // Auto-claim when entering an active column from idle, if the
         // row is currently unclaimed. The user explicitly asked for
-        // claim-on-status-change; this matches the "dragging into
-        // doing implies I am taking it" intuition.
+        // claim-on-status-change.
         if (item && !fromActive && toActive && item.claimed_by == null) {
           try {
             await api.claimBoardItemOn(payload.profile_id, item.id, me);
           } catch (claimErr) {
-            // Claim conflict (someone else took it in the meantime)
-            // shouldn't block the status move — log + carry on.
             console.warn('auto-claim conflict, continuing with status change:', claimErr);
           }
         }
 
-        // Auto-release when dropping back into an idle column, but
-        // only when *we* hold the claim. Foreign holders' claims are
-        // left alone so a drag-by-someone-else doesn't release them.
         if (item && fromActive && !toActive && item.claimed_by === me) {
           try {
             await api.releaseBoardItemOn(payload.profile_id, item.id, me);
@@ -175,13 +207,24 @@
           }
         }
 
-        await api.patchBoardItemOn(payload.profile_id, payload.id, { status: colKey });
+        // Cross-lane drop: also re-home the ticket to the target lane's
+        // workdir so dragging is a drag-to-organize op, not just a
+        // status-only move.
+        const patch: BoardPatchLite = { status: colKey };
+        if (item && lane.workdir != null && item.workdir !== lane.workdir) {
+          patch.workdir = lane.workdir;
+        }
+        await api.patchBoardItemOn(payload.profile_id, payload.id, patch);
       } catch (err) {
         console.error('move failed', err);
         await loadFleetBoard();
       }
     };
   }
+
+  /// Local alias so the lane-aware drop handler can declare a partial
+  /// BoardPatch without a wider import surface.
+  type BoardPatchLite = { status?: string; workdir?: string | null };
 
   function openTicket(tk: FleetItem) {
     dialogMode = 'edit';
@@ -191,12 +234,18 @@
     dialogOpen = true;
   }
 
-  function openCreate(status: string | null = null) {
+  function openCreate(
+    status: string | null = null,
+    profileId: string | null = null,
+    workdir: string | null = null
+  ) {
     dialogMode = 'create';
     dialogItem = null;
     dialogDefaultStatus = status;
-    // Default the new ticket to the active profile; user can re-pick.
-    dialogProfileId = null;
+    // Per-lane quick-add seeds both profile + workdir so the new
+    // ticket lands in the lane the user clicked +.
+    dialogProfileId = profileId;
+    dialogDefaultWorkdir = workdir;
     dialogOpen = true;
   }
 
@@ -204,6 +253,7 @@
     dialogOpen = false;
     dialogItem = null;
     dialogProfileId = null;
+    dialogDefaultWorkdir = null;
   }
 
   /// Server-confirmed create/update fires this callback synchronously
@@ -243,37 +293,12 @@
   <!-- Toolbar -->
   <div class="toolbar">
     <div class="tabs">
-      <a class="tab" href="/sessions">Sessions <span class="badge">{$sessions.items.length}</span></a>
       <button type="button" class="tab active">Board <span class="badge">{totalCount}</span></button>
+      <a class="tab" href="/sessions">Sessions <span class="badge">{$sessions.items.length}</span></a>
     </div>
     <span class="spacer"></span>
-    <span class="pill"><span style="color: var(--fg-3);">group:</span>&nbsp;status</span>
-    <span class="pill"><span style="color: var(--fg-3);">assignee:</span>&nbsp;all agents</span>
-    <button type="button" class="tb-btn">Filter</button>
+    <span class="pill"><span style="color: var(--fg-3);">group:</span>&nbsp;server · project</span>
     <button type="button" class="tb-btn primary" onclick={() => openCreate(null)}>+ Ticket</button>
-  </div>
-
-  <!-- Session strip -->
-  <div class="strip">
-    {#each $sessions.items.slice(0, 12) as s (s.id)}
-      <a class="chip" href={`/sessions/${s.id}`}>
-        <span
-          class="dot"
-          style:background={
-            deriveState(s) === 'live' ? 'var(--green)' :
-            deriveState(s) === 'compact' ? 'var(--cta)' :
-            deriveState(s) === 'crash' ? 'var(--crash)' : 'var(--fg-3)'
-          }
-        ></span>
-        <span class="nm">{s.name}</span>
-        {#if s.tokens != null}
-          <span class="meta">· {fmtTokens(s.tokens)}</span>
-        {/if}
-      </a>
-    {/each}
-    {#if $sessions.items.length === 0}
-      <span class="empty">No sessions running.</span>
-    {/if}
   </div>
 
   <!-- Per-profile error banner — surfaces offline / unauth profiles so
@@ -292,49 +317,86 @@
     <div class="board-wrap">
       {#if $fleetBoard.loading && totalCount === 0 && profileErrors.length === 0}
         <div class="empty mono">Loading board…</div>
-      {:else if cols.length === 0}
-        <div class="empty mono">Board has no columns yet.</div>
+      {:else if $fleetLanes.length === 0}
+        <div class="empty mono">
+          <p>No tickets yet. Press <kbd>+ Ticket</kbd> to seed the board.</p>
+        </div>
       {:else}
-        <div class="board" style:grid-template-columns={`repeat(${Math.min(cols.length, 4)}, minmax(0, 1fr))`}>
-          {#each cols as col (col.key)}
-            <div
-              class="col"
-              class:drop-target={dropTargetCol === col.key}
-              ondragover={onColDragOver(col.key)}
-              ondragleave={onColDragLeave(col.key)}
-              ondrop={onColDrop(col.key)}
-              role="region"
-              aria-label={col.label}
-            >
-              <div class="col-h">
-                {#if col.tone === 'live'}<span style="color: var(--green);">●</span>
-                {:else if col.tone === 'warn'}<span style="color: var(--amber);">●</span>
-                {:else if col.tone === 'done'}<span style="color: var(--fg-3);">●</span>{/if}
-                <span>{col.label}</span>
-                <span class="count">{col.items.length}</span>
+        <div class="lanes">
+          {#each $fleetLanes as lane (laneKey(lane.profile_id, lane.project))}
+            {@const lkey = laneKey(lane.profile_id, lane.project)}
+            {@const collapsed = collapsedLanes.has(lkey)}
+            <section class="lane" class:collapsed>
+              <header class="lane-h">
                 <button
                   type="button"
-                  class="add"
-                  aria-label={`Add to ${col.label}`}
-                  onclick={() => openCreate(col.key)}
-                >+</button>
-              </div>
-              <div class="col-b">
-                {#each col.items as tk (`${tk.profile_id}:${tk.id}`)}
-                  <Ticket
-                    {tk}
-                    sourceLabel={showServerChip ? profileLabelFor(tk.profile_id) : null}
-                    dragging={draggingProfileId === tk.profile_id && draggingId === tk.id}
-                    onDragStart={onTicketDragStart(tk)}
-                    onDragEnd={onTicketDragEnd}
-                    onClick={() => openTicket(tk)}
-                  />
-                {/each}
-                {#if col.items.length === 0}
-                  <div class="col-empty mono">empty</div>
-                {/if}
-              </div>
-            </div>
+                  class="lane-toggle"
+                  aria-expanded={!collapsed}
+                  onclick={() => toggleLane(lkey)}
+                  title={collapsed ? 'Expand lane' : 'Collapse lane'}
+                >
+                  <span class="caret">{collapsed ? '▸' : '▾'}</span>
+                </button>
+                <span class="lane-server" title={lane.profile_id}>@{lane.profile_label}</span>
+                <span class="lane-sep">/</span>
+                <span class="lane-project" title={lane.workdir ?? '(no workdir)'}>{lane.project}</span>
+                <span class="lane-count">{lane.total}</span>
+                <span class="lane-spacer"></span>
+                <button
+                  type="button"
+                  class="lane-add"
+                  onclick={() => openCreate(null, lane.profile_id, lane.workdir)}
+                  title="Add a ticket to this project"
+                >+ Ticket</button>
+              </header>
+              {#if !collapsed}
+                <div class="board" style:grid-template-columns={`repeat(${Math.min(cols.length, 4)}, minmax(0, 1fr))`}>
+                  {#each cols as col (col.key)}
+                    {@const dk = `${lkey}:${col.key}`}
+                    {@const foreign = draggingProfileId != null && draggingProfileId !== lane.profile_id}
+                    <div
+                      class="col"
+                      class:drop-target={dropTargetKey === dk}
+                      class:foreign={foreign && draggingId != null}
+                      ondragover={onColDragOver(dk, foreign)}
+                      ondragleave={onColDragLeave(dk)}
+                      ondrop={onColDrop(lane, col.key)}
+                      role="region"
+                      aria-label={`${col.label} — ${lane.project}`}
+                    >
+                      <div class="col-h">
+                        {#if col.tone === 'live'}<span style="color: var(--green);">●</span>
+                        {:else if col.tone === 'warn'}<span style="color: var(--amber);">●</span>
+                        {:else if col.tone === 'done'}<span style="color: var(--fg-3);">●</span>{/if}
+                        <span>{col.label}</span>
+                        <span class="count">{(lane.byStatus[col.key] ?? []).length}</span>
+                        <button
+                          type="button"
+                          class="add"
+                          aria-label={`Add ${col.label} to ${lane.project}`}
+                          onclick={() => openCreate(col.key, lane.profile_id, lane.workdir)}
+                        >+</button>
+                      </div>
+                      <div class="col-b">
+                        {#each (lane.byStatus[col.key] ?? []) as tk (`${tk.profile_id}:${tk.id}`)}
+                          <Ticket
+                            {tk}
+                            sourceLabel={showServerChip ? profileLabelFor(tk.profile_id) : null}
+                            dragging={draggingProfileId === tk.profile_id && draggingId === tk.id}
+                            onDragStart={onTicketDragStart(tk)}
+                            onDragEnd={onTicketDragEnd}
+                            onClick={() => openTicket(tk)}
+                          />
+                        {/each}
+                        {#if (lane.byStatus[col.key] ?? []).length === 0}
+                          <div class="col-empty mono">empty</div>
+                        {/if}
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </section>
           {/each}
         </div>
       {/if}
@@ -381,6 +443,7 @@
   item={dialogItem}
   defaultStatus={dialogDefaultStatus}
   defaultProfileId={dialogProfileId}
+  defaultWorkdir={dialogDefaultWorkdir}
   columns={cols.map((c) => c.key)}
   onClose={closeDialog}
   onCreated={onItemCreated}
@@ -410,45 +473,6 @@
   }
 
   /* Session strip — compact horizontal scroll above the board */
-  .strip {
-    display: flex;
-    gap: 8px;
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--border);
-    background: #0d0d0d;
-    overflow-x: auto;
-    flex-shrink: 0;
-  }
-  .strip .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 5px 10px;
-    border-radius: var(--radius-pill);
-    background: var(--bg-2);
-    border: 1px solid var(--border-2);
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--fg-2);
-    white-space: nowrap;
-    text-decoration: none;
-    transition: border-color var(--t-hover);
-  }
-  .strip .chip:hover { border-color: var(--fg-3); }
-  .strip .chip .dot {
-    width: 6px;
-    height: 6px;
-    border-radius: var(--radius-pill);
-  }
-  .strip .chip .nm { color: var(--fg); }
-  .strip .chip .meta { color: var(--fg-3); }
-  .strip .empty {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--fg-3);
-    padding: 5px 0;
-  }
-
   .col-empty {
     padding: 8px 4px;
     color: var(--fg-3);
@@ -457,6 +481,85 @@
     border: 1px dashed var(--border-2);
     border-radius: var(--radius);
   }
+
+  /* Stacked swimlanes — one per (server, project). Each lane is a
+     mini-board so the user can scan everything at once but visually
+     separate concerns. */
+  .lanes {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 14px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .lane {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    overflow: hidden;
+  }
+  .lane-h {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: color-mix(in srgb, var(--bg-2) 75%, transparent);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--fg-2);
+  }
+  .lane.collapsed .lane-h { border-bottom: 0; }
+  .lane-toggle {
+    background: none;
+    border: 0;
+    padding: 0 2px;
+    color: var(--fg-3);
+    cursor: pointer;
+    line-height: 1;
+    transition: color var(--t-hover);
+  }
+  .lane-toggle:hover { color: var(--fg); }
+  .lane-toggle .caret { font-size: 10px; }
+  .lane-server {
+    color: var(--cta);
+    letter-spacing: -0.005em;
+  }
+  .lane-sep { color: var(--fg-3); }
+  .lane-project {
+    color: var(--fg);
+    font-weight: 500;
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .lane-count {
+    padding: 1px 7px;
+    border-radius: var(--radius-pill);
+    background: var(--bg-2);
+    border: 1px solid var(--border-2);
+    color: var(--fg-3);
+    font-size: 10.5px;
+  }
+  .lane-spacer { flex: 1; }
+  .lane-add {
+    padding: 4px 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-2);
+    background: transparent;
+    color: var(--fg-2);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    cursor: pointer;
+    transition: border-color var(--t-hover), color var(--t-hover), background var(--t-hover);
+  }
+  .lane-add:hover { border-color: var(--cta); color: var(--fg); background: color-mix(in srgb, var(--cta) 8%, transparent); }
+
+  /* Cross-profile drag visibly refuses — drop targets dim when the
+     source profile differs. */
+  :global(.lane .col.foreign) { opacity: 0.45; }
 
   /* Per-profile failure pills — one per offline / unauth profile.
      Sits above the board so the rest of the fleet still renders. */
@@ -547,13 +650,5 @@
       max-height: 320px;
     }
 
-    .strip {
-      padding: 8px 12px;
-      gap: 6px;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: none;
-    }
-    .strip::-webkit-scrollbar { display: none; }
-    .strip .chip { padding: 7px 12px; font-size: 12px; }
   }
 </style>

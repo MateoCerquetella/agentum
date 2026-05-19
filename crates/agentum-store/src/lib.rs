@@ -1235,7 +1235,6 @@ mod tests {
                 workdir: "/tmp".into(),
                 tool: "claude".into(),
                 model: None,
-                session_id: None,
                 flags: vec!["--foo".into()],
             })
             .await
@@ -1407,6 +1406,7 @@ mod tests {
                 tool: Some("claude".into()),
                 workdir: Some("/home/me/projects/foo".into()),
                 model: Some("claude-opus-4-7".into()),
+                session_id: None,
             })
             .await
             .unwrap();
@@ -1555,7 +1555,6 @@ mod tests {
                 workdir: "/tmp".into(),
                 tool: "claude".into(),
                 model: None,
-                session_id: None,
                 flags: vec![],
             })
             .await

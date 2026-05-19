@@ -11,7 +11,8 @@
  */
 import { writable, get, derived } from 'svelte/store';
 import { api, type BoardItem } from '$lib/api';
-import { profiles } from '$lib/profiles';
+import { profiles, activeProfileId } from '$lib/profiles';
+import { projectOf } from '$lib/dashboard';
 
 export interface FleetItem extends BoardItem {
   /** Dashboard-side tag — names the paired daemon that owns this row. */
@@ -171,3 +172,90 @@ export const fleetColumns = derived(fleetBoard, ($s) => {
     items: byStatus.get(key) ?? []
   }));
 });
+
+/// Swimlane shape: one row per (server, project) pair. Within each
+/// lane the items are bucketed by status so the page renders a 3-column
+/// strip beneath each lane header. The user picked "server first, then
+/// directory" as the grouping order, so we sort accordingly.
+export interface Lane {
+  profile_id: string;
+  profile_label: string;
+  project: string;
+  workdir: string | null;
+  total: number;
+  byStatus: Record<string, FleetItem[]>;
+}
+
+const NO_PROJECT = '(no workdir)';
+
+/// Lane derivation. Active profile floats to the top, then alphabetical
+/// by label. Within a profile, projects are alphabetical with the
+/// no-workdir bucket pinned last so it doesn't dominate the visual top.
+export const fleetLanes = derived(
+  [fleetBoard, profiles, activeProfileId],
+  ([$s, $profiles, $active]): Lane[] => {
+    const byProfileProj = new Map<string, Lane>();
+    const labelFor = (id: string): string => {
+      const p = $profiles.find((x) => x.id === id);
+      if (!p) return id;
+      return p.baseUrl ? p.label : 'local';
+    };
+    for (const it of $s.items) {
+      const proj = it.workdir ? projectOf(it.workdir) : NO_PROJECT;
+      const key = `${it.profile_id}::${proj}`;
+      let lane = byProfileProj.get(key);
+      if (!lane) {
+        const byStatus: Record<string, FleetItem[]> = {};
+        for (const c of $s.columnOrder) byStatus[c] = [];
+        lane = {
+          profile_id: it.profile_id,
+          profile_label: labelFor(it.profile_id),
+          project: proj,
+          workdir: it.workdir ?? null,
+          total: 0,
+          byStatus
+        };
+        byProfileProj.set(key, lane);
+      }
+      // The status column may be a non-default one introduced after we
+      // initialised the lane; create the bucket on the fly.
+      if (!lane.byStatus[it.status]) lane.byStatus[it.status] = [];
+      lane.byStatus[it.status].push(it);
+      lane.total += 1;
+    }
+
+    // Synthesize an empty lane per profile so adding the very first
+    // ticket on a fresh server doesn't make the lane appear out of
+    // nowhere — the user sees a placeholder + "(no workdir)" lane.
+    for (const p of $profiles) {
+      const placeholderKey = `${p.id}::${NO_PROJECT}`;
+      if (!byProfileProj.has(placeholderKey)) {
+        const byStatus: Record<string, FleetItem[]> = {};
+        for (const c of $s.columnOrder) byStatus[c] = [];
+        byProfileProj.set(placeholderKey, {
+          profile_id: p.id,
+          profile_label: p.baseUrl ? p.label : 'local',
+          project: NO_PROJECT,
+          workdir: null,
+          total: 0,
+          byStatus
+        });
+      }
+    }
+
+    const profileRank = (id: string): number => {
+      if (id === $active) return 0;
+      const idx = $profiles.findIndex((p) => p.id === id);
+      return idx < 0 ? 1000 : idx + 1;
+    };
+    return Array.from(byProfileProj.values()).sort((a, b) => {
+      const pa = profileRank(a.profile_id);
+      const pb = profileRank(b.profile_id);
+      if (pa !== pb) return pa - pb;
+      // Pin the "(no workdir)" bucket below real projects within a profile.
+      if (a.project === NO_PROJECT && b.project !== NO_PROJECT) return 1;
+      if (b.project === NO_PROJECT && a.project !== NO_PROJECT) return -1;
+      return a.project.localeCompare(b.project);
+    });
+  }
+);
