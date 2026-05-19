@@ -301,6 +301,12 @@ pub struct BoardItem {
     /// without an active session can still render the Start affordance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Manual ordering within a column. Lower priority floats to the top
+    /// of the column; drag-to-reorder rewrites this on the affected
+    /// column. Default 0 — fresh rows append at the bottom because the
+    /// secondary sort is `created_at ASC`.
+    #[serde(default)]
+    pub priority: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -320,6 +326,8 @@ pub struct NewBoardItem {
     pub model: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub priority: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -340,6 +348,8 @@ pub struct BoardPatch {
     pub model: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_optional_field")]
     pub session_id: Option<Option<String>>,
+    #[serde(default)]
+    pub priority: Option<i64>,
 }
 
 /// Distinguishes "field omitted" from "field set to null" so a PATCH can
@@ -356,6 +366,35 @@ where
 pub struct ClaimRequest {
     /// Free-form actor identifier. Server stores it in `claimed_by` as-is.
     pub claimed_by: String,
+}
+
+/// Threaded comment on a board item. `author` is free-form so both
+/// human actors (`web-…`) and agent ids can post without a separate
+/// users table. Comments are render-only — no edit/delete endpoints
+/// yet; that's a future ask if the audit-trail vibe takes off.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoardComment {
+    pub id: i64,
+    pub board_id: i64,
+    pub author: String,
+    pub body: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewBoardComment {
+    pub author: String,
+    pub body: String,
+}
+
+/// Batch reorder payload. The dashboard sends one of these per drag-
+/// to-reorder drop; the server writes them in a single transaction so
+/// the column is always consistent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReorderEntry {
+    pub id: i64,
+    pub priority: i64,
 }
 
 // ---------- notes ----------

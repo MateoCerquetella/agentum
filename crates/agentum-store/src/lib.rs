@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use agentum_core::{
-    BoardItem, BoardPatch, Channel, Event, Message, NewBoardItem, NewChannel, NewMessage, NewNote,
-    NewSession, Note, NotePatch, Session, Status, User,
+    BoardComment, BoardItem, BoardPatch, Channel, Event, Message, NewBoardComment, NewBoardItem,
+    NewChannel, NewMessage, NewNote, NewSession, Note, NotePatch, ReorderEntry, Session, Status,
+    User,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{FromRow, SqlitePool};
@@ -309,11 +310,16 @@ impl Store {
         let now = OffsetDateTime::now_utc();
         let now_s = now.format(&Rfc3339)?;
         let status = new.status.unwrap_or_else(|| "todo".to_string());
+        // Fresh tickets append to the bottom of their column by default.
+        // The secondary sort key `created_at ASC` puts the newer row
+        // below older rows with priority 0; callers that want a row at
+        // the top can pass a negative priority explicitly.
+        let priority = new.priority.unwrap_or(0);
 
         let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
-            "INSERT INTO board_items (key, title, body, status, lbl, tool, workdir, model, session_id, created_at, updated_at)
-             VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO board_items (key, title, body, status, lbl, tool, workdir, model, session_id, priority, created_at, updated_at)
+             VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&new.title)
         .bind(&new.body)
@@ -323,6 +329,7 @@ impl Store {
         .bind(&new.workdir)
         .bind(&new.model)
         .bind(&new.session_id)
+        .bind(priority)
         .bind(&now_s)
         .bind(&now_s)
         .execute(&mut *tx)
@@ -350,14 +357,19 @@ impl Store {
             workdir: new.workdir,
             model: new.model,
             session_id: new.session_id,
+            priority,
         })
     }
 
     pub async fn list_board_items(&self) -> Result<Vec<BoardItem>> {
-        let rows: Vec<BoardItemRow> =
-            sqlx::query_as::<_, BoardItemRow>("SELECT * FROM board_items ORDER BY created_at ASC")
-                .fetch_all(&self.pool)
-                .await?;
+        // Stable per-column ordering: priority is the primary key
+        // (drag-to-reorder writes it), created_at the tiebreaker so
+        // fresh rows sit below older rows at the same priority.
+        let rows: Vec<BoardItemRow> = sqlx::query_as::<_, BoardItemRow>(
+            "SELECT * FROM board_items ORDER BY status ASC, priority ASC, created_at ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
         rows.into_iter().map(BoardItem::try_from).collect()
     }
 
@@ -387,6 +399,7 @@ impl Store {
             "UPDATE board_items SET
                 title      = COALESCE(?, title),
                 status     = COALESCE(?, status),
+                priority   = COALESCE(?, priority),
                 body       = CASE WHEN ? = 1 THEN ? ELSE body       END,
                 lbl        = CASE WHEN ? = 1 THEN ? ELSE lbl        END,
                 tool       = CASE WHEN ? = 1 THEN ? ELSE tool       END,
@@ -398,6 +411,7 @@ impl Store {
         )
         .bind(&patch.title)
         .bind(&patch.status)
+        .bind(patch.priority)
         .bind(if body_set { 1i32 } else { 0i32 })
         .bind(&body_value)
         .bind(if lbl_set { 1i32 } else { 0i32 })
@@ -493,6 +507,91 @@ impl Store {
             return Ok(None);
         }
         self.get_board_item(id).await
+    }
+
+    /// List comments for a board item, oldest first so the thread
+    /// reads top-to-bottom in the dialog.
+    pub async fn list_board_comments(&self, board_id: i64) -> Result<Vec<BoardComment>> {
+        let rows: Vec<BoardCommentRow> = sqlx::query_as::<_, BoardCommentRow>(
+            "SELECT id, board_id, author, body, created_at FROM board_comments
+             WHERE board_id = ? ORDER BY created_at ASC",
+        )
+        .bind(board_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(BoardComment::try_from).collect()
+    }
+
+    /// Append a comment to a ticket. Caller is responsible for any
+    /// authorization (the route gates on the bearer token); the store
+    /// validates the parent row exists so we don't end up with orphans
+    /// even though the FK constraint would catch it later.
+    pub async fn create_board_comment(
+        &self,
+        board_id: i64,
+        new: NewBoardComment,
+    ) -> Result<BoardComment> {
+        if new.author.trim().is_empty() {
+            return Err(StoreError::NotFound(format!(
+                "board item {board_id}: empty author"
+            )));
+        }
+        if self.get_board_item(board_id).await?.is_none() {
+            return Err(StoreError::NotFound(board_id.to_string()));
+        }
+        let now = OffsetDateTime::now_utc();
+        let now_s = now.format(&Rfc3339)?;
+        let result = sqlx::query(
+            "INSERT INTO board_comments (board_id, author, body, created_at)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(board_id)
+        .bind(&new.author)
+        .bind(&new.body)
+        .bind(&now_s)
+        .execute(&self.pool)
+        .await?;
+        let id = result.last_insert_rowid();
+        Ok(BoardComment {
+            id,
+            board_id,
+            author: new.author,
+            body: new.body,
+            created_at: now,
+        })
+    }
+
+    /// Count comments per board id in bulk so the card-foot 💬N chip
+    /// stays cheap regardless of ticket count. Returns a map keyed by
+    /// board_id; missing ids implicitly have zero comments.
+    pub async fn count_board_comments(&self) -> Result<std::collections::HashMap<i64, i64>> {
+        let rows: Vec<(i64, i64)> =
+            sqlx::query_as("SELECT board_id, COUNT(*) FROM board_comments GROUP BY board_id")
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows.into_iter().collect())
+    }
+
+    /// Bulk-rewrite priorities for one or more rows in a single
+    /// transaction. Used by drag-to-reorder so the affected column
+    /// commits atomically — no in-between state where two rows share
+    /// a priority value mid-flight.
+    pub async fn reorder_board_items(&self, entries: &[ReorderEntry]) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let mut tx = self.pool.begin().await?;
+        for e in entries {
+            sqlx::query("UPDATE board_items SET priority = ?, updated_at = ? WHERE id = ?")
+                .bind(e.priority)
+                .bind(&now_s)
+                .bind(e.id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     // ---------- notes ----------
@@ -1148,6 +1247,8 @@ struct BoardItemRow {
     model: Option<String>,
     /* ---- session linkage (migration 0011) ---- */
     session_id: Option<String>,
+    /* ---- manual ordering (migration 0012) ---- */
+    priority: i64,
 }
 
 impl TryFrom<BoardItemRow> for BoardItem {
@@ -1167,6 +1268,29 @@ impl TryFrom<BoardItemRow> for BoardItem {
             workdir: r.workdir,
             model: r.model,
             session_id: r.session_id,
+            priority: r.priority,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct BoardCommentRow {
+    id: i64,
+    board_id: i64,
+    author: String,
+    body: String,
+    created_at: String,
+}
+
+impl TryFrom<BoardCommentRow> for BoardComment {
+    type Error = StoreError;
+    fn try_from(r: BoardCommentRow) -> Result<Self> {
+        Ok(BoardComment {
+            id: r.id,
+            board_id: r.board_id,
+            author: r.author,
+            body: r.body,
+            created_at: OffsetDateTime::parse(&r.created_at, &Rfc3339)?,
         })
     }
 }
@@ -1275,6 +1399,7 @@ mod tests {
                 workdir: None,
                 model: None,
                 session_id: None,
+                priority: None,
             })
             .await
             .unwrap();
@@ -1313,6 +1438,7 @@ mod tests {
                 workdir: None,
                 model: None,
                 session_id: None,
+                priority: None,
             })
             .await
             .unwrap();
@@ -1362,6 +1488,7 @@ mod tests {
                 workdir: None,
                 model: None,
                 session_id: None,
+                priority: None,
             })
             .await
             .unwrap();
@@ -1395,6 +1522,153 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn board_priority_orders_within_column() {
+        let s = tmp_store().await;
+        // Three rows in todo, created in this order.
+        let a = s
+            .create_board_item(NewBoardItem {
+                title: "a".into(),
+                body: None,
+                status: None,
+                lbl: None,
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: Some(10),
+            })
+            .await
+            .unwrap();
+        let b = s
+            .create_board_item(NewBoardItem {
+                title: "b".into(),
+                body: None,
+                status: None,
+                lbl: None,
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: Some(0),
+            })
+            .await
+            .unwrap();
+        let c = s
+            .create_board_item(NewBoardItem {
+                title: "c".into(),
+                body: None,
+                status: None,
+                lbl: None,
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: Some(5),
+            })
+            .await
+            .unwrap();
+
+        // listed sort: priority ASC within the same status.
+        let all = s.list_board_items().await.unwrap();
+        let titles: Vec<_> = all.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, vec!["b", "c", "a"]);
+
+        // reorder rewrites priorities in one transaction.
+        s.reorder_board_items(&[
+            ReorderEntry {
+                id: a.id,
+                priority: 1,
+            },
+            ReorderEntry {
+                id: b.id,
+                priority: 2,
+            },
+            ReorderEntry {
+                id: c.id,
+                priority: 3,
+            },
+        ])
+        .await
+        .unwrap();
+        let after = s.list_board_items().await.unwrap();
+        let titles: Vec<_> = after.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, vec!["a", "b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn board_comments_roundtrip() {
+        let s = tmp_store().await;
+        let item = s
+            .create_board_item(NewBoardItem {
+                title: "with comments".into(),
+                body: None,
+                status: None,
+                lbl: None,
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+            })
+            .await
+            .unwrap();
+
+        let c1 = s
+            .create_board_comment(
+                item.id,
+                NewBoardComment {
+                    author: "actor-A".into(),
+                    body: "first".into(),
+                },
+            )
+            .await
+            .unwrap();
+        // small sleep to guarantee a distinct created_at ordering.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let c2 = s
+            .create_board_comment(
+                item.id,
+                NewBoardComment {
+                    author: "actor-B".into(),
+                    body: "second".into(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let list = s.list_board_comments(item.id).await.unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].id, c1.id);
+        assert_eq!(list[1].id, c2.id);
+        assert_eq!(list[1].author, "actor-B");
+
+        let counts = s.count_board_comments().await.unwrap();
+        assert_eq!(counts.get(&item.id).copied(), Some(2));
+
+        // Empty author rejected; missing parent rejected.
+        let bad = s
+            .create_board_comment(
+                item.id,
+                NewBoardComment {
+                    author: "".into(),
+                    body: "x".into(),
+                },
+            )
+            .await;
+        assert!(bad.is_err());
+        let orphan = s
+            .create_board_comment(
+                99_999,
+                NewBoardComment {
+                    author: "actor-Z".into(),
+                    body: "x".into(),
+                },
+            )
+            .await;
+        assert!(orphan.is_err());
+    }
+
+    #[tokio::test]
     async fn board_workdir_and_model_roundtrip() {
         let s = tmp_store().await;
         let item = s
@@ -1407,6 +1681,7 @@ mod tests {
                 workdir: Some("/home/me/projects/foo".into()),
                 model: Some("claude-opus-4-7".into()),
                 session_id: None,
+                priority: None,
             })
             .await
             .unwrap();
