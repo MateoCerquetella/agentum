@@ -312,14 +312,17 @@ impl Store {
 
         let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
-            "INSERT INTO board_items (key, title, body, status, lbl, tool, created_at, updated_at)
-             VALUES ('', ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO board_items (key, title, body, status, lbl, tool, workdir, model, session_id, created_at, updated_at)
+             VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&new.title)
         .bind(&new.body)
         .bind(&status)
         .bind(&new.lbl)
         .bind(&new.tool)
+        .bind(&new.workdir)
+        .bind(&new.model)
+        .bind(&new.session_id)
         .bind(&now_s)
         .bind(&now_s)
         .execute(&mut *tx)
@@ -344,6 +347,9 @@ impl Store {
             updated_at: now,
             lbl: new.lbl,
             tool: new.tool,
+            workdir: new.workdir,
+            model: new.model,
+            session_id: new.session_id,
         })
     }
 
@@ -371,13 +377,22 @@ impl Store {
         let lbl_value = patch.lbl.unwrap_or(None);
         let tool_set = patch.tool.is_some();
         let tool_value = patch.tool.unwrap_or(None);
+        let workdir_set = patch.workdir.is_some();
+        let workdir_value = patch.workdir.unwrap_or(None);
+        let model_set = patch.model.is_some();
+        let model_value = patch.model.unwrap_or(None);
+        let session_id_set = patch.session_id.is_some();
+        let session_id_value = patch.session_id.unwrap_or(None);
         let affected = sqlx::query(
             "UPDATE board_items SET
-                title  = COALESCE(?, title),
-                status = COALESCE(?, status),
-                body   = CASE WHEN ? = 1 THEN ? ELSE body END,
-                lbl    = CASE WHEN ? = 1 THEN ? ELSE lbl  END,
-                tool   = CASE WHEN ? = 1 THEN ? ELSE tool END,
+                title      = COALESCE(?, title),
+                status     = COALESCE(?, status),
+                body       = CASE WHEN ? = 1 THEN ? ELSE body       END,
+                lbl        = CASE WHEN ? = 1 THEN ? ELSE lbl        END,
+                tool       = CASE WHEN ? = 1 THEN ? ELSE tool       END,
+                workdir    = CASE WHEN ? = 1 THEN ? ELSE workdir    END,
+                model      = CASE WHEN ? = 1 THEN ? ELSE model      END,
+                session_id = CASE WHEN ? = 1 THEN ? ELSE session_id END,
                 updated_at = ?
              WHERE id = ?",
         )
@@ -389,6 +404,12 @@ impl Store {
         .bind(&lbl_value)
         .bind(if tool_set { 1i32 } else { 0i32 })
         .bind(&tool_value)
+        .bind(if workdir_set { 1i32 } else { 0i32 })
+        .bind(&workdir_value)
+        .bind(if model_set { 1i32 } else { 0i32 })
+        .bind(&model_value)
+        .bind(if session_id_set { 1i32 } else { 0i32 })
+        .bind(&session_id_value)
         .bind(&now_s)
         .bind(id)
         .execute(&self.pool)
@@ -428,6 +449,46 @@ impl Store {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get_board_item(id).await
+    }
+
+    /// Release a held claim. CAS-style: succeeds only when the current
+    /// `claimed_by` matches `actor`, or `actor` is empty (admin
+    /// override). Returns `Ok(Some(item))` on success, `Ok(None)` when
+    /// the row is held by a different actor (409), and `NotFound` if
+    /// the row doesn't exist.
+    pub async fn release_board_item(&self, id: i64, actor: &str) -> Result<Option<BoardItem>> {
+        let existing = self
+            .get_board_item(id)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
+        if existing.claimed_by.is_none() {
+            return Ok(Some(existing));
+        }
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let result = if actor.is_empty() {
+            sqlx::query(
+                "UPDATE board_items SET claimed_by = NULL, updated_at = ?
+                 WHERE id = ?",
+            )
+            .bind(&now_s)
+            .bind(id)
+            .execute(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                "UPDATE board_items SET claimed_by = NULL, updated_at = ?
+                 WHERE id = ? AND claimed_by = ?",
+            )
+            .bind(&now_s)
+            .bind(id)
+            .bind(actor)
+            .execute(&self.pool)
+            .await?
+        };
         if result.rows_affected() == 0 {
             return Ok(None);
         }
@@ -1082,6 +1143,11 @@ struct BoardItemRow {
     /* ---- redesign discriminators (migration 0008) ---- */
     lbl: Option<String>,
     tool: Option<String>,
+    /* ---- execution context (migration 0010) ---- */
+    workdir: Option<String>,
+    model: Option<String>,
+    /* ---- session linkage (migration 0011) ---- */
+    session_id: Option<String>,
 }
 
 impl TryFrom<BoardItemRow> for BoardItem {
@@ -1098,6 +1164,9 @@ impl TryFrom<BoardItemRow> for BoardItem {
             updated_at: OffsetDateTime::parse(&r.updated_at, &Rfc3339)?,
             lbl: r.lbl,
             tool: r.tool,
+            workdir: r.workdir,
+            model: r.model,
+            session_id: r.session_id,
         })
     }
 }
@@ -1166,6 +1235,7 @@ mod tests {
                 workdir: "/tmp".into(),
                 tool: "claude".into(),
                 model: None,
+                session_id: None,
                 flags: vec!["--foo".into()],
             })
             .await
@@ -1203,6 +1273,9 @@ mod tests {
                 status: None,
                 lbl: None,
                 tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
             })
             .await
             .unwrap();
@@ -1229,6 +1302,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn board_release_is_cas_safe() {
+        let s = tmp_store().await;
+        let item = s
+            .create_board_item(NewBoardItem {
+                title: "release me".into(),
+                body: None,
+                status: None,
+                lbl: None,
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+            })
+            .await
+            .unwrap();
+
+        // Release on an unclaimed row is a no-op success — the user
+        // pressed "unclaim" on something nobody held, no point 4xx-ing.
+        let noop = s
+            .release_board_item(item.id, "actor-A")
+            .await
+            .unwrap()
+            .expect("unclaimed release should succeed");
+        assert!(noop.claimed_by.is_none());
+
+        // Claim, then a foreign actor's release should fail.
+        s.claim_board_item(item.id, "actor-A").await.unwrap();
+        let denied = s.release_board_item(item.id, "actor-B").await.unwrap();
+        assert!(denied.is_none(), "foreign release must be rejected");
+
+        // The holder can release.
+        let released = s
+            .release_board_item(item.id, "actor-A")
+            .await
+            .unwrap()
+            .expect("holder release should succeed");
+        assert!(released.claimed_by.is_none());
+
+        // Admin override (empty actor) clears any claim.
+        s.claim_board_item(item.id, "actor-C").await.unwrap();
+        let admin = s
+            .release_board_item(item.id, "")
+            .await
+            .unwrap()
+            .expect("admin override should succeed");
+        assert!(admin.claimed_by.is_none());
+    }
+
+    #[tokio::test]
     async fn board_patch_and_clear_body() {
         let s = tmp_store().await;
         let item = s
@@ -1238,6 +1360,9 @@ mod tests {
                 status: None,
                 lbl: None,
                 tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
             })
             .await
             .unwrap();
@@ -1268,6 +1393,46 @@ mod tests {
             .await
             .unwrap();
         assert!(cleared.body.is_none());
+    }
+
+    #[tokio::test]
+    async fn board_workdir_and_model_roundtrip() {
+        let s = tmp_store().await;
+        let item = s
+            .create_board_item(NewBoardItem {
+                title: "wire kanban".into(),
+                body: None,
+                status: None,
+                lbl: None,
+                tool: Some("claude".into()),
+                workdir: Some("/home/me/projects/foo".into()),
+                model: Some("claude-opus-4-7".into()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(item.workdir.as_deref(), Some("/home/me/projects/foo"));
+        assert_eq!(item.model.as_deref(), Some("claude-opus-4-7"));
+
+        // Re-listing carries them through the BoardItemRow → BoardItem
+        // conversion — guards against a forgotten field mapping.
+        let all = s.list_board_items().await.unwrap();
+        assert_eq!(all[0].workdir.as_deref(), Some("/home/me/projects/foo"));
+        assert_eq!(all[0].model.as_deref(), Some("claude-opus-4-7"));
+
+        // Patch can swap workdir and clear model.
+        let patched = s
+            .patch_board_item(
+                item.id,
+                BoardPatch {
+                    workdir: Some(Some("/home/me/projects/bar".into())),
+                    model: Some(None),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(patched.workdir.as_deref(), Some("/home/me/projects/bar"));
+        assert!(patched.model.is_none());
     }
 
     #[tokio::test]
@@ -1390,6 +1555,7 @@ mod tests {
                 workdir: "/tmp".into(),
                 tool: "claude".into(),
                 model: None,
+                session_id: None,
                 flags: vec![],
             })
             .await

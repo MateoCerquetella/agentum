@@ -19,6 +19,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/board", get(list).post(create))
         .route("/api/board/{id}", get(get_one).patch(patch).delete(delete))
         .route("/api/board/{id}/claim", post(claim))
+        .route("/api/board/{id}/release", post(release))
 }
 
 #[derive(Serialize)]
@@ -126,6 +127,28 @@ async fn claim(
         }
         None => Err(ApiError::Conflict(format!(
             "board item {id} is already claimed"
+        ))),
+    }
+}
+
+/// Symmetric to /claim. Empty `claimed_by` is admin-override (anyone can
+/// release); a non-empty value enforces the same actor that holds the
+/// claim — anyone else gets 409.
+async fn release(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(req): Json<ClaimRequest>,
+) -> Result<Json<BoardItem>, ApiError> {
+    let actor = req.claimed_by.trim();
+    match state.store.release_board_item(id, actor).await? {
+        Some(item) => {
+            let _ = state.bus.send(
+                Event::new("board.released").with_payload(json!({"id": item.id, "key": item.key})),
+            );
+            Ok(Json(item))
+        }
+        None => Err(ApiError::Conflict(format!(
+            "board item {id} is held by a different actor"
         ))),
     }
 }

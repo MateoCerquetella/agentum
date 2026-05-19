@@ -9,6 +9,7 @@ use std::str::FromStr;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+pub mod profiles;
 pub mod transcript;
 
 #[derive(Debug, thiserror::Error)]
@@ -285,6 +286,21 @@ pub struct BoardItem {
     /// others fall back to neutral grey.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
+    /// Working directory the agent should run in. Carried so a ticket
+    /// can be spawned into a session without re-asking the user where
+    /// the work lives. Free-form absolute path; the server doesn't
+    /// validate that it exists (the agent itself will surface that).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workdir: Option<String>,
+    /// Optional model hint (e.g. `claude-opus-4-7`, `gpt-5`). Passes
+    /// through to the spawned session's `--model` flag when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// agentum session id that this ticket is being worked in. Set when
+    /// the user spawns a session from the ticket; nullable so cards
+    /// without an active session can still render the Start affordance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -298,6 +314,12 @@ pub struct NewBoardItem {
     pub lbl: Option<String>,
     #[serde(default)]
     pub tool: Option<String>,
+    #[serde(default)]
+    pub workdir: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -312,6 +334,12 @@ pub struct BoardPatch {
     pub lbl: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_optional_field")]
     pub tool: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    pub workdir: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    pub model: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    pub session_id: Option<Option<String>>,
 }
 
 /// Distinguishes "field omitted" from "field set to null" so a PATCH can
