@@ -1,0 +1,921 @@
+<script lang="ts">
+  import { api, type AgentInfo, type BoardItem, type BoardPatch, type NewBoardItem, type TicketLbl, type Tool } from '$lib/api';
+  import { actorId } from '$stores/actor';
+  import { profiles, activeProfileId, type Profile } from '$lib/profiles';
+  import DirPicker from './DirPicker.svelte';
+
+  /**
+   * Create + edit dialog for board items. Visual language follows
+   * NewSessionDialog so the chrome is consistent across the dashboard.
+   * Each ticket carries enough execution context (workdir, agent,
+   * optional model) that turning it into a session is a one-button
+   * action — no re-asking for the same answers.
+   *
+   *   mode === 'create' — POSTs a fresh ticket against the selected
+   *     paired daemon. `defaultStatus` pre-fills the column the user
+   *     clicked `+` on; `defaultProfileId` seeds the Servers picker.
+   *     `onCreated(profileId, item)` fires with the server-assigned
+   *     row so the parent can avoid waiting on the WS refetch.
+   *   mode === 'edit'   — PATCHes the existing `item` on whichever
+   *     profile originally owned it. Profile is fixed (visible but not
+   *     reassignable — moving a ticket between servers is a copy/
+   *     migrate flow, not an inline edit). Exposes claim / unclaim /
+   *     delete via `onUpdated` / `onDeleted`.
+   */
+  type Props = {
+    open: boolean;
+    mode: 'create' | 'edit';
+    item?: BoardItem | null;
+    defaultStatus?: string | null;
+    /** When set, pre-selects the Servers tile. Edit mode supplies the
+     *  ticket's home profile so the PATCH routes back to the same one. */
+    defaultProfileId?: string | null;
+    columns?: string[];
+    onClose: () => void;
+    onCreated?: (profileId: string, it: BoardItem) => void;
+    onUpdated?: (profileId: string, it: BoardItem) => void;
+    onDeleted?: (profileId: string, id: number) => void;
+  };
+  let {
+    open,
+    mode,
+    item = null,
+    defaultStatus = null,
+    defaultProfileId = null,
+    columns = [],
+    onClose,
+    onCreated,
+    onUpdated,
+    onDeleted
+  }: Props = $props();
+
+  const LBLS: { id: TicketLbl; label: string }[] = [
+    { id: 'feat',  label: 'feat'  },
+    { id: 'bug',   label: 'bug'   },
+    { id: 'chore', label: 'chore' },
+    { id: 'spike', label: 'spike' }
+  ];
+
+  /// Same palette as NewSessionDialog so the agent picker on a ticket
+  /// reads identically to the agent picker on a fresh session. Keep
+  /// the two in sync when adding a new adapter.
+  type ToolTile = {
+    id: Tool;
+    label: string;
+    desc: string;
+    dot: string;
+    /// First-class tools appear in /api/agents and get gated on whether
+    /// the binary resolves on the daemon's PATH. Non-first-class entries
+    /// are always shown.
+    firstClass: boolean;
+    /// Suggested model string — surfaces as the Model field placeholder
+    /// when this tool is picked.
+    modelHint: string;
+  };
+  const TOOLS: ToolTile[] = [
+    { id: 'claude', label: 'Claude', desc: 'Anthropic',    dot: 'var(--tool-claude)', firstClass: true,  modelHint: 'claude-opus-4-7' },
+    { id: 'codex',  label: 'Codex',  desc: 'OpenAI',       dot: 'var(--tool-codex)',  firstClass: true,  modelHint: 'gpt-5'           },
+    { id: 'cursor', label: 'Cursor', desc: 'cursor-agent', dot: 'var(--tool-cursor, var(--cta))', firstClass: true, modelHint: 'default' },
+    { id: 'gemini', label: 'Gemini', desc: 'Google',       dot: 'var(--tool-gemini)', firstClass: true,  modelHint: 'default' },
+    { id: 'hermes', label: 'Hermes', desc: 'hermes-cli',   dot: 'var(--tool-hermes)', firstClass: false, modelHint: 'default' }
+  ];
+
+  let title   = $state('');
+  let body    = $state('');
+  let status  = $state('todo');
+  let lbl     = $state<TicketLbl | ''>('');
+  let tool    = $state<Tool | ''>('');
+  let workdir = $state('');
+  let model   = $state('');
+  /// Target daemon for the ticket. In create mode the user can pick;
+  /// in edit mode it's locked to the row's home profile.
+  let targetProfileId = $state<string>('');
+
+  let submitting = $state(false);
+  let deleting   = $state(false);
+  let confirmDelete = $state(false);
+  let error = $state<string | null>(null);
+
+  /// Agent installation gating against the *target* daemon. Keyed by
+  /// profile id so flipping the Servers tile re-uses already-fetched
+  /// data instead of re-probing every time.
+  let availabilityByProfile = $state<Record<string, Record<string, AgentInfo>>>({});
+
+  function availabilityFor(profileId: string): Record<string, AgentInfo> | null {
+    return availabilityByProfile[profileId] ?? null;
+  }
+
+  async function refreshAvailability(profileId: string) {
+    if (availabilityByProfile[profileId]) return; // cached
+    try {
+      const list = await api.listAgentsOn(profileId);
+      const map: Record<string, AgentInfo> = {};
+      for (const a of list) map[a.name] = a;
+      availabilityByProfile = { ...availabilityByProfile, [profileId]: map };
+    } catch {
+      availabilityByProfile = { ...availabilityByProfile, [profileId]: {} };
+    }
+  }
+
+  /// Servers tiles — every configured profile gets a tile so the user
+  /// can pin the ticket to whichever daemon owns the work. Mirrors the
+  /// `Servers` block in NewSessionDialog. Empty `baseUrl` ⇒ "this
+  /// machine" (loopback profile), same convention.
+  function serverLabel(p: Profile): string {
+    return p.baseUrl ? p.label : 'this machine';
+  }
+  function serverHost(p: Profile): string {
+    if (!p.baseUrl) return 'local loopback';
+    try { return new URL(p.baseUrl).host; } catch { return p.baseUrl; }
+  }
+
+  function toolAvailable(t: ToolTile): boolean {
+    if (!t.firstClass) return true;
+    const map = availabilityFor(targetProfileId);
+    if (!map) return true;            // probe pending — fail open
+    const info = map[t.id];
+    if (!info) return true;           // unknown id — fail open
+    return info.available;
+  }
+
+  function toolUnavailableReason(t: ToolTile): string | null {
+    if (!t.firstClass) return null;
+    const map = availabilityFor(targetProfileId);
+    if (!map) return null;
+    const info = map[t.id];
+    if (!info || info.available) return null;
+    return `${info.binary} not found on the daemon's PATH`;
+  }
+
+  const currentToolHint = $derived(
+    (TOOLS.find((t) => t.id === tool)?.modelHint) ?? 'default'
+  );
+
+  /// Seed local state whenever the dialog re-opens or the bound item
+  /// changes. Without this guard, typing into a field would get clobbered
+  /// every time the parent re-renders.
+  let lastSeeded = $state<string>('');
+  $effect(() => {
+    if (!open) {
+      lastSeeded = '';
+      return;
+    }
+    const key = mode === 'edit' && item
+      ? `edit:${item.id}:${item.updated_at}`
+      : `create:${defaultStatus ?? ''}:${defaultProfileId ?? ''}`;
+    if (key === lastSeeded) return;
+    lastSeeded = key;
+    error = null;
+    confirmDelete = false;
+    if (mode === 'edit' && item) {
+      title   = item.title;
+      body    = item.body ?? '';
+      status  = item.status;
+      lbl     = (item.lbl ?? '') as TicketLbl | '';
+      tool    = (item.tool ?? '') as Tool | '';
+      workdir = item.workdir ?? '';
+      model   = item.model ?? '';
+      targetProfileId = defaultProfileId || $activeProfileId;
+    } else {
+      title   = '';
+      body    = '';
+      status  = defaultStatus || 'todo';
+      lbl     = '';
+      tool    = '';
+      workdir = '';
+      model   = '';
+      targetProfileId = defaultProfileId || $activeProfileId;
+    }
+    // Probe agent availability for the target profile. Subsequent
+    // server tile clicks re-trigger via pickServer().
+    void refreshAvailability(targetProfileId);
+  });
+
+  /// Switching the Servers tile re-probes /api/agents on the chosen
+  /// daemon. Cached results in `availabilityByProfile` make repeats
+  /// instant; first-time probes are a single fetch.
+  async function pickServer(id: string) {
+    if (mode === 'edit') return; // profile is locked in edit mode
+    if (id === targetProfileId) return;
+    targetProfileId = id;
+    await refreshAvailability(id);
+  }
+
+  function close() {
+    if (submitting || deleting) return;
+    onClose();
+  }
+
+  function onBackdrop(e: MouseEvent) {
+    if (e.target === e.currentTarget) close();
+  }
+
+  function onKey(e: KeyboardEvent) {
+    if (e.key === 'Escape') close();
+  }
+
+  async function submit(e: SubmitEvent) {
+    e.preventDefault();
+    const t = title.trim();
+    if (!t) {
+      error = 'title is required';
+      return;
+    }
+    submitting = true;
+    error = null;
+    try {
+      const cleanWorkdir = workdir.trim().replace(/\/+$/, '') || '';
+      const cleanModel   = model.trim();
+      if (mode === 'create') {
+        const payload: NewBoardItem = {
+          title: t,
+          body: body.trim() ? body : null,
+          status: status || null,
+          lbl: lbl || null,
+          tool: tool || null,
+          workdir: cleanWorkdir || null,
+          model:   cleanModel || null
+        };
+        const created = await api.createBoardItemOn(targetProfileId, payload);
+        onCreated?.(targetProfileId, created);
+        onClose();
+      } else if (item) {
+        const patch: BoardPatch = {};
+        if (t !== item.title) patch.title = t;
+        const nextBody = body.trim() ? body : null;
+        if (nextBody !== (item.body ?? null)) patch.body = nextBody;
+        if (status !== item.status) patch.status = status;
+        const nextLbl = lbl || null;
+        if (nextLbl !== (item.lbl ?? null)) patch.lbl = nextLbl;
+        const nextTool = tool || null;
+        if (nextTool !== (item.tool ?? null)) patch.tool = nextTool;
+        const nextWorkdir = cleanWorkdir || null;
+        if (nextWorkdir !== (item.workdir ?? null)) patch.workdir = nextWorkdir;
+        const nextModel = cleanModel || null;
+        if (nextModel !== (item.model ?? null)) patch.model = nextModel;
+        // Server returns the row even when the patch is empty, so no
+        // need to short-circuit here — keeps the UX simple.
+        const updated = await api.patchBoardItemOn(targetProfileId, item.id, patch);
+        onUpdated?.(targetProfileId, updated);
+        onClose();
+      }
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      submitting = false;
+    }
+  }
+
+  async function claim() {
+    if (!item || submitting) return;
+    submitting = true;
+    error = null;
+    try {
+      const updated = await api.claimBoardItemOn(targetProfileId, item.id, actorId());
+      onUpdated?.(targetProfileId, updated);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      submitting = false;
+    }
+  }
+
+  async function unclaim() {
+    if (!item || submitting) return;
+    submitting = true;
+    error = null;
+    try {
+      const updated = await api.releaseBoardItemOn(targetProfileId, item.id, actorId());
+      onUpdated?.(targetProfileId, updated);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      submitting = false;
+    }
+  }
+
+  async function destroy() {
+    if (!item || deleting) return;
+    if (!confirmDelete) {
+      confirmDelete = true;
+      return;
+    }
+    deleting = true;
+    error = null;
+    try {
+      await api.deleteBoardItemOn(targetProfileId, item.id);
+      onDeleted?.(targetProfileId, item.id);
+      onClose();
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+      deleting = false;
+    }
+  }
+
+  /// Spawn an agentum session from the ticket. Reuses the fields the
+  /// user already provided (workdir / tool / model) so this is a single
+  /// click rather than re-asking. The ticket gets stamped with the new
+  /// session id so subsequent visits jump straight in.
+  let spawning = $state(false);
+  async function startSession() {
+    if (!item || spawning) return;
+    if (!workdir.trim()) {
+      error = 'workdir is required to start a session';
+      return;
+    }
+    const toolId = (tool || 'claude').toString();
+    spawning = true;
+    error = null;
+    try {
+      // Deterministic name = ticket key, so re-spawning the same row
+      // collides against the per-daemon UNIQUE constraint and the
+      // server returns its error — which is what we want, not a second
+      // pane for the same ticket.
+      const name = item.key.toLowerCase();
+      const created = await api.createSessionOn(targetProfileId, {
+        name,
+        workdir: workdir.trim().replace(/\/+$/, ''),
+        tool: toolId,
+        model: model.trim() || null,
+        flags: []
+      });
+      try { await api.startSessionOn(targetProfileId, created.id); } catch (e) {
+        // Started-but-couldn't-attach is rare; surface it but still
+        // stamp the session id since the row exists.
+        console.warn('start failed, session still created:', e);
+      }
+      const updated = await api.patchBoardItemOn(targetProfileId, item.id, {
+        session_id: created.id
+      });
+      onUpdated?.(targetProfileId, updated);
+      // Jump into the new pane. The /sessions/{id} page reads against
+      // the *active* profile, so flip first when targeting a remote
+      // server.
+      if (targetProfileId !== $activeProfileId) {
+        const { setActiveProfile } = await import('$lib/profiles');
+        setActiveProfile(targetProfileId);
+      }
+      if (typeof location !== 'undefined') {
+        location.href = `/sessions/${created.id}`;
+      }
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+      spawning = false;
+    }
+  }
+
+  async function openSession() {
+    if (!item?.session_id) return;
+    if (targetProfileId !== $activeProfileId) {
+      const { setActiveProfile } = await import('$lib/profiles');
+      setActiveProfile(targetProfileId);
+    }
+    if (typeof location !== 'undefined') {
+      location.href = `/sessions/${item.session_id}`;
+    }
+  }
+
+  const claimedByMe = $derived(
+    item?.claimed_by != null && item.claimed_by === actorId()
+  );
+
+  /// Distinct status names we know about — backend's defaults + any
+  /// custom column the parent is currently rendering. Falls back to the
+  /// canonical three when the parent didn't pass anything.
+  const statusOptions = $derived.by(() => {
+    const set = new Set<string>(['todo', 'doing', 'done']);
+    for (const c of columns) set.add(c);
+    if (status) set.add(status);
+    return Array.from(set);
+  });
+</script>
+
+<svelte:window onkeydown={open ? onKey : undefined} />
+
+{#if open}
+  <div class="backdrop" onmousedown={onBackdrop} role="presentation">
+    <form class="dialog" onsubmit={submit}>
+      <header>
+        <div class="hd">
+          {#if mode === 'edit' && item}
+            <span class="key">{item.key}</span>
+          {/if}
+          <h3>{mode === 'create' ? 'New ticket' : 'Edit ticket'}</h3>
+          <p class="sub">
+            {mode === 'create'
+              ? 'A board item — title required, everything else optional.'
+              : 'Update the ticket. Changes save when you submit.'}
+          </p>
+        </div>
+        <button type="button" class="x" onclick={close} aria-label="close">×</button>
+      </header>
+
+      <label class="field">
+        <span class="lbl">Title</span>
+        <!-- svelte-ignore a11y_autofocus -->
+        <input
+          type="text"
+          bind:value={title}
+          placeholder="Wire the dashboard kanban"
+          autocomplete="off"
+          spellcheck="false"
+          required
+          autofocus={mode === 'create'}
+        />
+      </label>
+
+      <label class="field">
+        <span class="lbl">Body <span class="opt">optional</span></span>
+        <textarea
+          bind:value={body}
+          rows="4"
+          placeholder="Notes, links, acceptance criteria…"
+          spellcheck="false"
+        ></textarea>
+      </label>
+
+      <section>
+        <span class="eyebrow">
+          Server
+          {#if mode === 'edit'}<span class="opt" style="text-transform:none; letter-spacing:0;">— locked once created</span>{/if}
+        </span>
+        <div class="agents">
+          {#each $profiles as p (p.id)}
+            <button
+              type="button"
+              class="agent"
+              class:on={targetProfileId === p.id}
+              class:off={mode === 'edit' && targetProfileId !== p.id}
+              disabled={mode === 'edit' && targetProfileId !== p.id}
+              onclick={() => pickServer(p.id)}
+              title={p.baseUrl || 'http://current-origin'}
+            >
+              <span
+                class="dot"
+                style:background={p.baseUrl ? 'var(--cta)' : 'var(--green, #2ea043)'}
+              ></span>
+              <span class="a-name">{serverLabel(p)}</span>
+              <span class="a-desc">{serverHost(p)}</span>
+            </button>
+          {/each}
+        </div>
+      </section>
+
+      <section class="grid">
+        <label class="field">
+          <span class="lbl">Column</span>
+          <select bind:value={status}>
+            {#each statusOptions as s (s)}
+              <option value={s}>{s}</option>
+            {/each}
+          </select>
+        </label>
+        <label class="field">
+          <span class="lbl">Label <span class="opt">optional</span></span>
+          <select bind:value={lbl}>
+            <option value="">—</option>
+            {#each LBLS as l (l.id)}
+              <option value={l.id}>{l.label}</option>
+            {/each}
+          </select>
+        </label>
+      </section>
+
+      <section>
+        <span class="eyebrow">Agent</span>
+        <div class="agents">
+          <button
+            type="button"
+            class="agent"
+            class:on={tool === ''}
+            onclick={() => (tool = '')}
+            title="No specific agent assignment"
+          >
+            <span class="dot" style:background="var(--fg-3)"></span>
+            <span class="a-name">unassigned</span>
+            <span class="a-desc">no agent</span>
+          </button>
+          {#each TOOLS as t (t.id)}
+            {@const avail = toolAvailable(t)}
+            {@const reason = toolUnavailableReason(t)}
+            <button
+              type="button"
+              class="agent"
+              class:on={tool === t.id}
+              class:off={!avail}
+              disabled={!avail}
+              title={reason ?? ''}
+              onclick={() => avail && (tool = t.id)}
+            >
+              <span class="dot" style:background={t.dot}></span>
+              <span class="a-name">{t.label}</span>
+              <span class="a-desc">{avail ? t.desc : 'not installed'}</span>
+            </button>
+          {/each}
+        </div>
+      </section>
+
+      <section class="grid">
+        <label class="field">
+          <span class="lbl">Working directory <span class="opt">optional</span></span>
+          <DirPicker
+            bind:value={workdir}
+            onChange={(v) => (workdir = v)}
+            placeholder="~/projects/foo"
+          />
+        </label>
+        <label class="field">
+          <span class="lbl">Model <span class="opt">optional</span></span>
+          <input
+            type="text"
+            bind:value={model}
+            placeholder={currentToolHint}
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </label>
+      </section>
+
+      {#if mode === 'edit' && item}
+        <section class="claim-row">
+          <div class="claim-meta">
+            <span class="lbl">Claim</span>
+            <span class="claim-text">
+              {#if item.claimed_by}
+                <span class="actor" class:me={claimedByMe}>{item.claimed_by}</span>
+                {#if claimedByMe}<span class="sub-tag">— you</span>{/if}
+              {:else}
+                <span class="actor unclaimed">unclaimed</span>
+              {/if}
+            </span>
+          </div>
+          {#if item.claimed_by}
+            <button
+              type="button"
+              class="ghost"
+              onclick={unclaim}
+              disabled={submitting || !claimedByMe}
+              title={!claimedByMe ? 'only the current holder can release' : ''}
+            >Unclaim</button>
+          {:else}
+            <button type="button" class="ghost" onclick={claim} disabled={submitting}>Claim</button>
+          {/if}
+        </section>
+
+        <section class="claim-row">
+          <div class="claim-meta">
+            <span class="lbl">Session</span>
+            <span class="claim-text">
+              {#if item.session_id}
+                <span class="actor">{item.session_id.slice(0, 8)}…</span>
+              {:else}
+                <span class="actor unclaimed">none yet</span>
+              {/if}
+            </span>
+          </div>
+          {#if item.session_id}
+            <button
+              type="button"
+              class="ghost"
+              onclick={openSession}
+              disabled={submitting || spawning}
+              title="Jump into the pane"
+            >Open session ↗</button>
+          {:else}
+            <button
+              type="button"
+              class="ghost"
+              onclick={startSession}
+              disabled={submitting || spawning || !workdir.trim()}
+              title={!workdir.trim() ? 'set a working directory first' : 'Spawn a session for this ticket'}
+            >
+              {#if spawning}
+                <span class="spin"></span> starting…
+              {:else}
+                Start session
+              {/if}
+            </button>
+          {/if}
+        </section>
+      {/if}
+
+      {#if error}
+        <div class="error">{error}</div>
+      {/if}
+
+      <footer>
+        {#if mode === 'edit'}
+          <button
+            type="button"
+            class="danger"
+            onclick={destroy}
+            disabled={deleting || submitting}
+          >
+            {#if deleting}
+              <span class="spin"></span> deleting…
+            {:else if confirmDelete}
+              Confirm delete
+            {:else}
+              Delete
+            {/if}
+          </button>
+        {/if}
+        <span class="spacer"></span>
+        <button type="button" class="ghost" onclick={close} disabled={submitting || deleting}>Cancel</button>
+        <button type="submit" class="primary" disabled={submitting || deleting}>
+          {#if submitting}
+            <span class="spin"></span>
+            {mode === 'create' ? 'creating…' : 'saving…'}
+          {:else}
+            {mode === 'create' ? 'Create ticket' : 'Save changes'}
+          {/if}
+        </button>
+      </footer>
+    </form>
+  </div>
+{/if}
+
+<style>
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.62);
+    z-index: 80;
+    display: grid;
+    place-items: center;
+    padding: 1rem;
+    backdrop-filter: blur(3px);
+  }
+  .dialog {
+    background: var(--bg);
+    border: 1px solid var(--border-2);
+    border-radius: var(--radius-lg);
+    padding: 22px 22px 16px;
+    width: min(580px, 100%);
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.02) inset,
+      0 24px 64px rgba(0, 0, 0, 0.55);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .hd { display: flex; flex-direction: column; gap: 4px; }
+  .key {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg-3);
+  }
+  h3 {
+    margin: 0;
+    font-family: var(--display);
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    color: var(--fg);
+  }
+  .sub {
+    margin: 2px 0 0;
+    color: var(--fg-3);
+    font-size: 12.5px;
+  }
+  .x {
+    background: none;
+    border: 0;
+    color: var(--fg-3);
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 6px;
+    transition: color var(--t-hover);
+  }
+  .x:hover { color: var(--fg); }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .lbl {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg-3);
+  }
+  .opt { color: var(--fg-3); text-transform: none; letter-spacing: 0; font-size: 10px; }
+
+  input[type='text'],
+  textarea,
+  select {
+    padding: 8px 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-2);
+    border-radius: var(--radius-md);
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 12.5px;
+    transition: border-color var(--t-hover);
+  }
+  textarea {
+    resize: vertical;
+    min-height: 76px;
+    line-height: 1.45;
+  }
+  input[type='text']:focus,
+  textarea:focus,
+  select:focus {
+    outline: none;
+    border-color: var(--cta);
+  }
+  input[type='text']::placeholder,
+  textarea::placeholder { color: var(--fg-3); }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg-3);
+  }
+
+  .agents {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+  .agent {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    padding: 9px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--radius-md);
+    color: var(--fg-2);
+    cursor: pointer;
+    transition: border-color var(--t-hover), background var(--t-hover), color var(--t-hover);
+    text-align: left;
+  }
+  .agent:hover:not(:disabled) { border-color: var(--fg-3); color: var(--fg); }
+  .agent.on {
+    border-color: var(--cta);
+    background: color-mix(in srgb, var(--cta) 10%, var(--surface));
+    color: var(--fg);
+  }
+  .agent.off {
+    opacity: 0.45;
+    cursor: not-allowed;
+    filter: grayscale(0.6);
+  }
+  .agent.off .a-desc { color: var(--crash); }
+  .agent .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-pill);
+  }
+  .agent .a-name {
+    font-size: 13px;
+    letter-spacing: -0.01em;
+    color: inherit;
+  }
+  .agent .a-desc {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--fg-3);
+  }
+
+  .claim-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--radius-md);
+  }
+  .claim-meta { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+  .claim-text {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .actor { color: var(--fg); }
+  .actor.me { color: var(--cta); }
+  .actor.unclaimed { color: var(--fg-3); }
+  .sub-tag { color: var(--fg-3); font-size: 10.5px; }
+
+  .error {
+    padding: 8px 10px;
+    border: 1px solid var(--crash);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--crash) 10%, transparent);
+    color: var(--crash);
+    font-size: 12px;
+    font-family: var(--mono);
+    word-break: break-word;
+  }
+
+  footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  footer .spacer { flex: 1; }
+  footer button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-2);
+    background: var(--surface);
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    cursor: pointer;
+    transition: border-color var(--t-hover), background var(--t-hover), color var(--t-hover);
+  }
+  footer .ghost:hover:not(:disabled) { border-color: var(--fg-3); }
+  footer .primary {
+    background: var(--cta);
+    color: #fff;
+    border-color: var(--cta);
+  }
+  footer .primary:hover:not(:disabled) { filter: brightness(1.05); }
+  footer .danger {
+    color: var(--crash);
+    border-color: color-mix(in srgb, var(--crash) 50%, var(--border-2));
+  }
+  footer .danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--crash) 12%, var(--surface));
+    border-color: var(--crash);
+  }
+  footer button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+  .spin {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(255,255,255,0.45);
+    border-top-color: #fff;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  @media (max-width: 720px) {
+    .backdrop { align-items: flex-end; padding: 0; }
+    .dialog {
+      width: 100%;
+      max-width: 100%;
+      max-height: 92dvh;
+      border-radius: 18px 18px 0 0;
+      padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px));
+      animation: sheet-in 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+    @keyframes sheet-in {
+      from { transform: translateY(100%); }
+      to   { transform: translateY(0); }
+    }
+    input[type='text'],
+    textarea,
+    select {
+      padding: 12px;
+      font-size: 16px !important;
+      border-radius: 10px;
+    }
+    .agents { grid-template-columns: repeat(2, 1fr); }
+    footer {
+      flex-wrap: wrap;
+      padding-top: 14px;
+    }
+    footer button {
+      padding: 12px 16px;
+      font-size: 13px;
+      border-radius: 10px;
+      min-height: 44px;
+    }
+  }
+  @media (max-width: 540px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>

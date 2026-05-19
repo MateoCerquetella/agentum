@@ -1,6 +1,7 @@
 import { onEvent, type BusEvent } from './events';
 import { loadSessions } from './sessions';
 import { loadBoard } from './board';
+import { loadFleetBoard } from './fleet-board';
 import { pushWatchdogEvent } from './watchdog';
 import type { WatchdogEvent, WatchdogKind } from '$lib/api';
 
@@ -27,7 +28,13 @@ function debouncedSessions() {
 
 function debouncedBoard() {
   if (boardRefreshTimer) clearTimeout(boardRefreshTimer);
-  boardRefreshTimer = setTimeout(() => loadBoard(), 250);
+  // Refresh both stores: the single-profile board (used by legacy code
+  // paths that may still subscribe) and the fleet aggregator that
+  // backs the /board page. Each is a single GET so the cost is cheap.
+  boardRefreshTimer = setTimeout(() => {
+    void loadBoard();
+    void loadFleetBoard();
+  }, 250);
 }
 
 function project(ev: BusEvent): WatchdogEvent | null {

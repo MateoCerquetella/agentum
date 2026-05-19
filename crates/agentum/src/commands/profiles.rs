@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 
 use crate::cli::ProfilesCmd;
-use crate::commands::terminal::profiles::{Profile, Profiles};
+use crate::commands::terminal::profiles::{self, Profile};
 
 pub async fn run(action: ProfilesCmd) -> Result<()> {
     match action {
@@ -24,7 +24,7 @@ pub async fn run(action: ProfilesCmd) -> Result<()> {
 }
 
 async fn list() -> Result<()> {
-    let profiles = Profiles::load().context("load profiles.toml")?;
+    let profiles = profiles::load().context("load profiles.toml")?;
     let entries = profiles.list();
     if entries.is_empty() {
         eprintln!("no profiles defined ({})", profiles.path().display());
@@ -73,7 +73,7 @@ async fn add(
     // instead of much later when the TUI tries to connect.
     url::Url::parse(&url).with_context(|| format!("invalid URL: {url}"))?;
 
-    let mut profiles = Profiles::load().context("load profiles.toml")?;
+    let mut profiles = profiles::load().context("load profiles.toml")?;
     profiles
         .upsert(
             name.clone(),
@@ -103,7 +103,7 @@ async fn add(
 }
 
 async fn remove(name: String) -> Result<()> {
-    let mut profiles = Profiles::load().context("load profiles.toml")?;
+    let mut profiles = profiles::load().context("load profiles.toml")?;
     if profiles.remove(&name)? {
         println!("removed profile `{name}`");
     } else {
@@ -113,7 +113,7 @@ async fn remove(name: String) -> Result<()> {
 }
 
 async fn use_(name: Option<String>, clear: bool) -> Result<()> {
-    let mut profiles = Profiles::load().context("load profiles.toml")?;
+    let mut profiles = profiles::load().context("load profiles.toml")?;
     if clear {
         profiles.set_default(None)?;
         println!("cleared default profile");

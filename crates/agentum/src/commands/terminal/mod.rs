@@ -611,7 +611,7 @@ async fn try_connect_loopback() -> ProfileConnect {
 }
 
 async fn fanout_other_profiles(skip_name: &str) -> Vec<(String, ProfileConnect)> {
-    let store = match profiles::Profiles::load() {
+    let store = match profiles::load() {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
@@ -888,7 +888,7 @@ async fn loopback_alive() -> bool {
 }
 
 async fn apply_profile(mut opts: Options) -> Result<Options> {
-    let profiles = match profiles::Profiles::load() {
+    let profiles = match profiles::load() {
         Ok(p) => p,
         Err(e) => {
             // A broken / missing profiles file should never block the
@@ -1145,7 +1145,7 @@ fn interactive_add_profile() -> Result<String> {
     let make_default_raw = read_line("    set as default? [y/N]: ")?;
     let set_default = matches!(make_default_raw.trim(), "y" | "Y" | "yes");
 
-    let mut store = profiles::Profiles::load().context("load profiles.toml")?;
+    let mut store = profiles::load().context("load profiles.toml")?;
     store
         .upsert(
             name.trim().to_string(),

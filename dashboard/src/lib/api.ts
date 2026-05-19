@@ -293,6 +293,14 @@ export interface BoardItem {
   /* Optional design fields; backend lands them in the redesign branch. */
   lbl?: TicketLbl | null;
   tool?: Tool | null;
+  /* Execution context (migration 0010): where the agent should run +
+     optional model override. Carried so a ticket can be spawned into a
+     session without re-asking. */
+  workdir?: string | null;
+  model?: string | null;
+  /* Session linkage (migration 0011): when the user spawns a session
+     from a ticket, the resulting session id is stamped here. */
+  session_id?: string | null;
 }
 
 export interface NewBoardItem {
@@ -301,6 +309,9 @@ export interface NewBoardItem {
   status?: string | null;
   lbl?: TicketLbl | null;
   tool?: Tool | null;
+  workdir?: string | null;
+  model?: string | null;
+  session_id?: string | null;
 }
 
 export interface BoardPatch {
@@ -309,6 +320,9 @@ export interface BoardPatch {
   status?: string;
   lbl?: TicketLbl | null;
   tool?: Tool | null;
+  workdir?: string | null;
+  model?: string | null;
+  session_id?: string | null;
 }
 
 /* ------------------------------------------------------------------- */
@@ -496,6 +510,36 @@ export const api = {
     request<BoardItem>(`/api/board/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteBoardItem: (id: number) =>
     request<void>(`/api/board/${id}`, { method: 'DELETE' }),
+  releaseBoardItem: (id: number, claimed_by: string) =>
+    request<BoardItem>(`/api/board/${id}/release`, {
+      method: 'POST',
+      body: JSON.stringify({ claimed_by })
+    }),
+  /* ---- profile-pinned variants for the multi-server fleet board ---- */
+  listBoardOn: (profileId: string) =>
+    requestOn<GroupedBoard>(profileId, '/api/board'),
+  createBoardItemOn: (profileId: string, body: NewBoardItem) =>
+    requestOn<BoardItem>(profileId, '/api/board', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  patchBoardItemOn: (profileId: string, id: number, body: BoardPatch) =>
+    requestOn<BoardItem>(profileId, `/api/board/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body)
+    }),
+  deleteBoardItemOn: (profileId: string, id: number) =>
+    requestOn<void>(profileId, `/api/board/${id}`, { method: 'DELETE' }),
+  claimBoardItemOn: (profileId: string, id: number, claimed_by: string) =>
+    requestOn<BoardItem>(profileId, `/api/board/${id}/claim`, {
+      method: 'POST',
+      body: JSON.stringify({ claimed_by })
+    }),
+  releaseBoardItemOn: (profileId: string, id: number, claimed_by: string) =>
+    requestOn<BoardItem>(profileId, `/api/board/${id}/release`, {
+      method: 'POST',
+      body: JSON.stringify({ claimed_by })
+    }),
   claimBoardItem: (id: number, claimed_by: string) =>
     request<BoardItem>(`/api/board/${id}/claim`, {
       method: 'POST',

@@ -1353,7 +1353,7 @@ impl App {
     /// non-fatal — they leave `profiles` empty and the sidebar
     /// renders an "no servers" hint.
     pub fn reload_profiles(&mut self) {
-        self.profiles = match super::profiles::Profiles::load() {
+        self.profiles = match super::profiles::load() {
             Ok(store) => store
                 .list()
                 .into_iter()
@@ -4840,7 +4840,7 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
     // and the app's in-memory profile list without a daemon round trip.
     if let PendingAction::RemoveServer { name } = &action {
         let label = format!("removed server `{name}`");
-        match super::profiles::Profiles::load() {
+        match super::profiles::load() {
             Ok(mut store) => {
                 let _ = store.remove(name);
                 app.reload_profiles();
@@ -5048,7 +5048,7 @@ pub fn toggle_show_all_servers(app: &mut App) {
 }
 
 pub fn open_profiles_overlay(app: &mut App) {
-    let (entries, default_name, error) = match super::profiles::Profiles::load() {
+    let (entries, default_name, error) = match super::profiles::load() {
         Ok(store) => {
             let default_name = store.default_name().map(str::to_string);
             let mut rows: Vec<ProfileEntry> = store
@@ -5158,7 +5158,7 @@ fn handle_profiles_key(app: &mut App, key: KeyEvent) {
                         }
                     }
                 };
-                match super::profiles::Profiles::load() {
+                match super::profiles::load() {
                     Ok(mut store) => {
                         if let Err(e) = store.upsert(
                             name.clone(),
@@ -5240,7 +5240,7 @@ fn handle_profiles_key(app: &mut App, key: KeyEvent) {
                     return;
                 }
                 let name = entry.name.clone();
-                if let Ok(mut store) = super::profiles::Profiles::load() {
+                if let Ok(mut store) = super::profiles::load() {
                     let _ = store.remove(&name);
                 }
                 open_profiles_overlay(app);

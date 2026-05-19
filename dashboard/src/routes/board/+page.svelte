@@ -1,58 +1,106 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { board, loadBoard, moveLocal } from '$stores/board';
+  import {
+    fleetBoard,
+    fleetColumns,
+    loadFleetBoard,
+    moveLocalAcross,
+    applyItem,
+    removeItem,
+    type FleetItem
+  } from '$stores/fleet-board';
   import { sessions, loadSessions } from '$stores/sessions';
   import { watchdog, loadWatchdog } from '$stores/watchdog';
+  import { profiles } from '$lib/profiles';
+  import { actorId } from '$stores/actor';
   import { api, type BoardItem } from '$lib/api';
   import { deriveState, fmtTokens, fmtCost } from '$lib/dashboard';
   import Ticket from '$components/dashboard/Ticket.svelte';
   import Watchdog from '$components/dashboard/Watchdog.svelte';
+  import BoardItemDialog from '$components/BoardItemDialog.svelte';
 
+  // Safety-net refresh interval. The WS event bridge keeps the board
+  // fresh on every board.* / session.* event; this only catches the
+  // rare case where the socket is in long-running reconnect or a
+  // non-active profile's bus has nothing to broadcast our way yet.
+  const SAFETY_REFRESH_MS = 30_000;
   let pollId: ReturnType<typeof setInterval> | null = null;
+
+  // Drag state is (profile_id, id) — IDs collide across servers, so a
+  // simple number isn't enough. Keep them as separate fields rather
+  // than a compound string to avoid churn in equality checks.
+  let draggingProfileId = $state<string | null>(null);
   let draggingId = $state<number | null>(null);
   let dropTargetCol = $state<string | null>(null);
 
+  // Dialog state. One component handles both create + edit; mode and
+  // the bound item discriminate. Edits remember which profile owns the
+  // ticket so the PATCH routes back to the same daemon.
+  let dialogOpen = $state(false);
+  let dialogMode = $state<'create' | 'edit'>('create');
+  let dialogItem = $state<FleetItem | null>(null);
+  let dialogDefaultStatus = $state<string | null>(null);
+  let dialogProfileId = $state<string | null>(null);
+
   function refresh() {
-    loadBoard();
-    loadSessions();
-    loadWatchdog(30);
+    void loadFleetBoard();
+    void loadSessions();
+    void loadWatchdog(30);
   }
 
   onMount(() => {
     refresh();
-    pollId = setInterval(refresh, 5000);
+    pollId = setInterval(refresh, SAFETY_REFRESH_MS);
   });
   onDestroy(() => { if (pollId) clearInterval(pollId); });
 
-  const cols = $derived.by(() => {
-    const data = $board.data;
-    if (!data) return [] as Array<{ key: string; label: string; items: BoardItem[]; tone: 'default' | 'live' | 'warn' | 'done' }>;
-    return data.column_order.map(key => {
-      const items = data.columns[key] ?? [];
-      const k = key.toLowerCase();
-      let tone: 'default' | 'live' | 'warn' | 'done' = 'default';
+  // Show the per-card server chip only when more than one paired
+  // profile exists. Single-server setups keep the original chrome.
+  const showServerChip = $derived($profiles.length > 1);
+
+  type ColView = {
+    key: string;
+    label: string;
+    items: FleetItem[];
+    tone: 'default' | 'live' | 'warn' | 'done';
+  };
+  const cols = $derived.by<ColView[]>(() =>
+    $fleetColumns.map((c) => {
+      const k = c.key.toLowerCase();
+      let tone: ColView['tone'] = 'default';
       if (/claimed|progress/.test(k)) tone = 'live';
       else if (/review|pr/.test(k)) tone = 'warn';
       else if (/done|shipped|merged/.test(k)) tone = 'done';
-      return { key, label: prettify(key), items, tone };
-    });
-  });
+      return { key: c.key, label: prettify(c.key), items: c.items, tone };
+    })
+  );
 
   function prettify(key: string): string {
-    return key.replace(/[_-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    return key.replace(/[_-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  function profileLabelFor(id: string): string {
+    const p = $profiles.find((x) => x.id === id);
+    if (!p) return id;
+    return p.baseUrl ? p.label : 'local';
   }
 
   /* -- drag and drop ------------------------------------------------- */
-  function onTicketDragStart(item: BoardItem) {
+  type DragPayload = { profile_id: string; id: number };
+
+  function onTicketDragStart(item: FleetItem) {
     return (e: DragEvent) => {
+      draggingProfileId = item.profile_id;
       draggingId = item.id;
       if (e.dataTransfer) {
         e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', String(item.id));
+        const payload: DragPayload = { profile_id: item.profile_id, id: item.id };
+        e.dataTransfer.setData('application/json', JSON.stringify(payload));
       }
     };
   }
   function onTicketDragEnd() {
+    draggingProfileId = null;
     draggingId = null;
     dropTargetCol = null;
   }
@@ -67,57 +115,128 @@
   function onColDragLeave(colKey: string) {
     return () => { if (dropTargetCol === colKey) dropTargetCol = null; };
   }
+  /// "Active" columns (someone is/should-be working on it) vs "idle"
+  /// (sitting in a queue). Used to drive auto-claim on drag.
+  function isActiveColumn(key: string): boolean {
+    const k = key.toLowerCase();
+    if (/todo|backlog|inbox/.test(k)) return false;
+    if (/done|shipped|merged|cancel/.test(k)) return false;
+    return true; // doing / progress / review / etc.
+  }
+
+  function findItem(profileId: string, id: number): FleetItem | undefined {
+    return $fleetBoard.items.find(
+      (it) => it.profile_id === profileId && it.id === id
+    );
+  }
+
   function onColDrop(colKey: string) {
     return async (e: DragEvent) => {
       e.preventDefault();
-      const idStr = e.dataTransfer?.getData('text/plain') ?? '';
-      const id = parseInt(idStr, 10);
-      const wasDraggingId = draggingId;
+      const raw = e.dataTransfer?.getData('application/json') ?? '';
+      let payload: DragPayload | null = null;
+      try { payload = JSON.parse(raw) as DragPayload; } catch { payload = null; }
+      draggingProfileId = null;
       draggingId = null;
       dropTargetCol = null;
-      if (!Number.isFinite(id)) return;
-      // Optimistic local update first; reconcile on next loadBoard().
-      moveLocal(id, colKey);
+      if (!payload || !Number.isFinite(payload.id)) return;
+
+      const item = findItem(payload.profile_id, payload.id);
+      const fromActive = item ? isActiveColumn(item.status) : false;
+      const toActive   = isActiveColumn(colKey);
+      const me = actorId();
+
+      // Optimistic local update first; reconcile on next fleet refresh.
+      moveLocalAcross(payload.profile_id, payload.id, colKey);
+
       try {
-        await api.patchBoardItem(id, { status: colKey });
-      } catch (e) {
-        console.error('move failed', e);
-        await loadBoard();
+        // Auto-claim when entering an active column from idle, if the
+        // row is currently unclaimed. The user explicitly asked for
+        // claim-on-status-change; this matches the "dragging into
+        // doing implies I am taking it" intuition.
+        if (item && !fromActive && toActive && item.claimed_by == null) {
+          try {
+            await api.claimBoardItemOn(payload.profile_id, item.id, me);
+          } catch (claimErr) {
+            // Claim conflict (someone else took it in the meantime)
+            // shouldn't block the status move — log + carry on.
+            console.warn('auto-claim conflict, continuing with status change:', claimErr);
+          }
+        }
+
+        // Auto-release when dropping back into an idle column, but
+        // only when *we* hold the claim. Foreign holders' claims are
+        // left alone so a drag-by-someone-else doesn't release them.
+        if (item && fromActive && !toActive && item.claimed_by === me) {
+          try {
+            await api.releaseBoardItemOn(payload.profile_id, item.id, me);
+          } catch (releaseErr) {
+            console.warn('auto-release failed, continuing:', releaseErr);
+          }
+        }
+
+        await api.patchBoardItemOn(payload.profile_id, payload.id, { status: colKey });
+      } catch (err) {
+        console.error('move failed', err);
+        await loadFleetBoard();
       }
     };
   }
 
-  function openTicket(_tk: BoardItem) {
-    // No detail screen yet — clicks are no-ops. Drag remains the
-    // primary affordance.
+  function openTicket(tk: FleetItem) {
+    dialogMode = 'edit';
+    dialogItem = tk;
+    dialogDefaultStatus = null;
+    dialogProfileId = tk.profile_id;
+    dialogOpen = true;
+  }
+
+  function openCreate(status: string | null = null) {
+    dialogMode = 'create';
+    dialogItem = null;
+    dialogDefaultStatus = status;
+    // Default the new ticket to the active profile; user can re-pick.
+    dialogProfileId = null;
+    dialogOpen = true;
+  }
+
+  function closeDialog() {
+    dialogOpen = false;
+    dialogItem = null;
+    dialogProfileId = null;
+  }
+
+  /// Server-confirmed create/update fires this callback synchronously
+  /// (well before the WS-refetch lands). Splicing locally avoids the
+  /// ~250 ms gap where the column would otherwise look stale.
+  function onItemCreated(profileId: string, it: BoardItem) {
+    applyItem(profileId, it);
+  }
+  function onItemUpdated(profileId: string, it: BoardItem) {
+    applyItem(profileId, it);
+  }
+  function onItemDeleted(profileId: string, id: number) {
+    removeItem(profileId, id);
   }
 
   /* -- right-rail metrics ------------------------------------------- */
-  const live = $derived($sessions.items.filter(s => deriveState(s) === 'live'));
-  const claimedCount = $derived.by(() => {
-    const data = $board.data;
-    if (!data) return 0;
-    return Object.entries(data.columns)
-      .filter(([k]) => /claimed|progress|review/i.test(k))
-      .reduce((a, [, v]) => a + v.length, 0);
-  });
-  const reviewCount = $derived.by(() => {
-    const data = $board.data;
-    if (!data) return 0;
-    return Object.entries(data.columns)
-      .filter(([k]) => /review|pr/i.test(k))
-      .reduce((a, [, v]) => a + v.length, 0);
-  });
-  const doneCount = $derived.by(() => {
-    const data = $board.data;
-    if (!data) return 0;
-    return Object.entries(data.columns)
-      .filter(([k]) => /done|shipped|merged/i.test(k))
-      .reduce((a, [, v]) => a + v.length, 0);
-  });
-  const totalCount = $derived(cols.reduce((a, c) => a + c.items.length, 0));
+  const live = $derived($sessions.items.filter((s) => deriveState(s) === 'live'));
+  const claimedCount = $derived(
+    $fleetBoard.items.filter((it) => /claimed|progress|review/i.test(it.status)).length
+  );
+  const reviewCount = $derived(
+    $fleetBoard.items.filter((it) => /review|pr/i.test(it.status)).length
+  );
+  const doneCount = $derived(
+    $fleetBoard.items.filter((it) => /done|shipped|merged/i.test(it.status)).length
+  );
+  const totalCount = $derived($fleetBoard.items.length);
   const tokens24 = $derived($sessions.items.reduce((a, s) => a + (s.tokens ?? 0), 0));
   const spend24  = $derived($sessions.items.reduce((a, s) => a + (s.cost ?? 0), 0));
+
+  // Surfacing per-profile failures in the empty state so a single bad
+  // endpoint (offline VPS, expired token) doesn't get silently swallowed.
+  const profileErrors = $derived(Object.entries($fleetBoard.errors));
 </script>
 
 <div class="page">
@@ -131,7 +250,7 @@
     <span class="pill"><span style="color: var(--fg-3);">group:</span>&nbsp;status</span>
     <span class="pill"><span style="color: var(--fg-3);">assignee:</span>&nbsp;all agents</span>
     <button type="button" class="tb-btn">Filter</button>
-    <button type="button" class="tb-btn primary">+ Ticket</button>
+    <button type="button" class="tb-btn primary" onclick={() => openCreate(null)}>+ Ticket</button>
   </div>
 
   <!-- Session strip -->
@@ -157,13 +276,22 @@
     {/if}
   </div>
 
+  <!-- Per-profile error banner — surfaces offline / unauth profiles so
+       a partial fleet failure isn't silently hidden. Each profile gets
+       its own pill so the user can see which endpoint is unhappy. -->
+  {#if profileErrors.length > 0}
+    <div class="fleet-errs">
+      {#each profileErrors as [pid, msg] (pid)}
+        <span class="err-pill" title={msg}>{profileLabelFor(pid)}: {msg}</span>
+      {/each}
+    </div>
+  {/if}
+
   <!-- Board + rail -->
   <div class="row">
     <div class="board-wrap">
-      {#if $board.loading && !$board.data}
+      {#if $fleetBoard.loading && totalCount === 0 && profileErrors.length === 0}
         <div class="empty mono">Loading board…</div>
-      {:else if $board.error}
-        <div class="empty mono err">Failed to load board: {$board.error}</div>
       {:else if cols.length === 0}
         <div class="empty mono">Board has no columns yet.</div>
       {:else}
@@ -184,13 +312,19 @@
                 {:else if col.tone === 'done'}<span style="color: var(--fg-3);">●</span>{/if}
                 <span>{col.label}</span>
                 <span class="count">{col.items.length}</span>
-                <button type="button" class="add" aria-label={`Add to ${col.label}`}>+</button>
+                <button
+                  type="button"
+                  class="add"
+                  aria-label={`Add to ${col.label}`}
+                  onclick={() => openCreate(col.key)}
+                >+</button>
               </div>
               <div class="col-b">
-                {#each col.items as tk (tk.id)}
+                {#each col.items as tk (`${tk.profile_id}:${tk.id}`)}
                   <Ticket
                     {tk}
-                    dragging={draggingId === tk.id}
+                    sourceLabel={showServerChip ? profileLabelFor(tk.profile_id) : null}
+                    dragging={draggingProfileId === tk.profile_id && draggingId === tk.id}
                     onDragStart={onTicketDragStart(tk)}
                     onDragEnd={onTicketDragEnd}
                     onClick={() => openTicket(tk)}
@@ -240,6 +374,19 @@
     </aside>
   </div>
 </div>
+
+<BoardItemDialog
+  open={dialogOpen}
+  mode={dialogMode}
+  item={dialogItem}
+  defaultStatus={dialogDefaultStatus}
+  defaultProfileId={dialogProfileId}
+  columns={cols.map((c) => c.key)}
+  onClose={closeDialog}
+  onCreated={onItemCreated}
+  onUpdated={onItemUpdated}
+  onDeleted={onItemDeleted}
+/>
 
 <style>
   .page {
@@ -311,13 +458,38 @@
     border-radius: var(--radius);
   }
 
+  /* Per-profile failure pills — one per offline / unauth profile.
+     Sits above the board so the rest of the fleet still renders. */
+  .fleet-errs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--crash) 6%, var(--bg));
+  }
+  .err-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: var(--radius-pill);
+    border: 1px solid color-mix(in srgb, var(--crash) 35%, var(--border-2));
+    background: color-mix(in srgb, var(--crash) 10%, transparent);
+    color: var(--crash);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    max-width: 360px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .empty {
     padding: 32px 16px;
     color: var(--fg-3);
     font-size: 12px;
     text-align: center;
   }
-  .empty.err { color: var(--crash); }
 
   /* Stack rail beneath the board on tablets — keep it accessible
      without crushing the columns. */

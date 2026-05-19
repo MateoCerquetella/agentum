@@ -282,6 +282,61 @@ function handle(ev: BusEvent) {
       });
       break;
     }
+    case 'board.created': {
+      if (inQuiet) break;
+      const key = (ev.payload?.key as string) ?? 'ticket';
+      const title = (ev.payload?.title as string) ?? '';
+      pushToast({
+        kind: 'info',
+        title: `${key} created`,
+        body: title,
+        ttl_ms: 3500
+      });
+      break;
+    }
+    case 'board.updated': {
+      if (inQuiet) break;
+      const key = (ev.payload?.key as string) ?? 'ticket';
+      const status = (ev.payload?.status as string) ?? '';
+      pushToast({
+        kind: 'info',
+        title: `${key} → ${status}`,
+        ttl_ms: 2800
+      });
+      break;
+    }
+    case 'board.claimed': {
+      if (inQuiet) break;
+      const key = (ev.payload?.key as string) ?? 'ticket';
+      const by = (ev.payload?.claimed_by as string) ?? 'someone';
+      pushToast({
+        kind: 'info',
+        title: `${key} claimed`,
+        body: `by ${by}`,
+        ttl_ms: 3000
+      });
+      break;
+    }
+    case 'board.released': {
+      if (inQuiet) break;
+      const key = (ev.payload?.key as string) ?? 'ticket';
+      pushToast({
+        kind: 'info',
+        title: `${key} released`,
+        ttl_ms: 2500
+      });
+      break;
+    }
+    case 'board.deleted': {
+      if (inQuiet) break;
+      const id = ev.payload?.id ?? '?';
+      pushToast({
+        kind: 'info',
+        title: `ticket ${id} deleted`,
+        ttl_ms: 2500
+      });
+      break;
+    }
     case 'agent.finished': {
       if (inQuiet || !get(tweaks).notifyFinished) break;
       const p = ev.payload as { initial?: boolean; replay?: boolean } | undefined;
