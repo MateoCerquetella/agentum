@@ -36,7 +36,9 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -251,6 +253,13 @@ async fn run_tui_session(
     // breaks; users hold Shift to bypass app-mode capture, which is the
     // standard convention every modern terminal emulator honours.
     execute!(stdout, EnableMouseCapture).context("enable mouse capture")?;
+    // Bracketed paste collapses a multi-line paste into a single
+    // `CtEvent::Paste(String)` instead of N synthetic key events. Without
+    // it, a long paste flooded `handle_key`, triggered N ratatui redraws
+    // (one per char), and locked the UI long enough that Ctrl-Q couldn't
+    // get a slot to abort. Best-effort: terminals that don't understand
+    // `\x1b[?2004h` ignore it and we fall back to key-by-key paste.
+    let _ = execute!(stdout, EnableBracketedPaste);
     let _restore = TerminalGuard;
 
     let backend = CrosstermBackend::new(stdout);
@@ -276,6 +285,7 @@ impl Drop for TerminalGuard {
         // Reverse order of setup: disable mouse capture first (otherwise
         // the host terminal stays in app-mode tracking after agentum
         // exits and ordinary clicks emit garbage in the parent shell).
+        let _ = execute!(io::stdout(), DisableBracketedPaste);
         let _ = execute!(io::stdout(), DisableMouseCapture);
         let _ = execute!(io::stdout(), LeaveAlternateScreen);
         let _ = disable_raw_mode();

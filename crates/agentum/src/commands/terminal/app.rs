@@ -10,7 +10,7 @@ use anyhow::Result;
 use crossterm::event::{
     Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
@@ -2670,6 +2670,24 @@ pub async fn run_loop(
                 if let Some(Ok(ev)) = maybe_input {
                     handle_crossterm(&mut app, ev, &client, &lg_tx).await;
                 }
+                // Drain any input events already queued before we
+                // redraw. Defense-in-depth for terminals that don't
+                // honor `EnableBracketedPaste`: without this, a key-
+                // by-key paste still triggers one redraw per char and
+                // can lock the UI long enough that Ctrl-Q can't get a
+                // slot to abort. Bounded loop so a stuck source can't
+                // monopolise the tick — 1024 events between redraws
+                // covers any realistic burst at terminal speed.
+                let mut drained = 0;
+                while drained < 1024 {
+                    match crossterm_events.next().now_or_never() {
+                        Some(Some(Ok(ev))) => {
+                            handle_crossterm(&mut app, ev, &client, &lg_tx).await;
+                            drained += 1;
+                        }
+                        _ => break,
+                    }
+                }
             }
 
             Some(msg) = term_rx.recv() => {
@@ -2882,9 +2900,363 @@ async fn handle_crossterm(
             handle_key(app, key, client, lg_tx).await;
         }
         CtEvent::Mouse(me) => handle_mouse(app, me),
+        CtEvent::Paste(text) => handle_paste(app, text),
         CtEvent::Resize(_, _) => {}
         _ => {}
     }
+}
+
+/// Bracketed-paste dispatcher. Runs ONCE per paste regardless of
+/// length, so a 50 KB blob no longer causes 50 000 redraws. Decides
+/// between three routes:
+///
+/// 1. **Image-attachment paste** — content sniffs as an image (PNG /
+///    JPEG / GIF / WebP magic bytes, or a `data:image/...;base64,`
+///    URI, or a single line that's an existing file path with an
+///    image extension). We write the bytes to a temp file and push
+///    the file path into the focused pane the way Claude Code
+///    accepts image attachments (path on its own line).
+///
+/// 2. **Pane paste** — focused on a terminal pane → send the bytes
+///    in ONE `TermOut::Bytes` over the WS. The inner program decides
+///    how to interpret newlines etc.
+///
+/// 3. **Discard** — focused on the tree / overlay / lazygit. Pastes
+///    into the tree filter prompt are intentionally ignored for now
+///    (single-line search box, multi-line paste would be confusing).
+fn handle_paste(app: &mut App, text: String) {
+    if text.is_empty() {
+        return;
+    }
+    if !matches!(app.focus, Focus::Term | Focus::TermRight) {
+        // Surface the silent drop with a hint instead of pretending
+        // the paste went somewhere useful.
+        app.status_msg = Some("paste ignored — focus a terminal pane first".into());
+        return;
+    }
+    let bytes = match classify_paste(&text) {
+        PasteKind::ImageBytes { mime, data } => match write_paste_image(&data, mime) {
+            Ok(path) => {
+                app.status_msg = Some(format!(
+                    "pasted image ({} bytes) → {}",
+                    data.len(),
+                    path.display()
+                ));
+                // Trailing newline so the agent's prompt commits the
+                // path. Claude Code accepts `path\n` as an attachment.
+                format!("{}\n", path.display()).into_bytes()
+            }
+            Err(e) => {
+                app.push_error(format!("paste-image temp file: {e}"));
+                return;
+            }
+        },
+        PasteKind::ImagePath(path) => {
+            app.status_msg = Some(format!("pasted image path → {}", path.display()));
+            format!("{}\n", path.display()).into_bytes()
+        }
+        PasteKind::Text => text.into_bytes(),
+    };
+    send_paste_bytes(app, bytes);
+}
+
+/// What the bracketed-paste content looks like once sniffed. Drives
+/// the three routes in `handle_paste`.
+enum PasteKind {
+    /// Plain text — forward as bytes to the focused pane.
+    Text,
+    /// Decoded image bytes plus the detected MIME type. Caller writes
+    /// the bytes to a temp file and pastes the path.
+    ImageBytes { mime: &'static str, data: Vec<u8> },
+    /// Single-line file path that already exists on this host AND has
+    /// an image extension. Skip the temp-file round-trip and paste
+    /// the path verbatim — this is the iTerm2 / kitty default when a
+    /// user drag-drops a local image file into the terminal.
+    ImagePath(PathBuf),
+}
+
+fn classify_paste(text: &str) -> PasteKind {
+    // 1. `data:image/png;base64,…` URI — what the web Clipboard API
+    //    produces for `image/*` MIME entries when copied as a string.
+    //    Raw binary image bytes through bracketed paste *would* sniff
+    //    as an image, but crossterm lossy-decodes the buffer to UTF-8
+    //    before we see it (see `parse_csi_bracketed_paste`), so the
+    //    magic bytes are already U+FFFD-replaced by this point. The
+    //    realistic image paths are the data URI here and the file
+    //    path below; binary reads need a different transport (OSC 52
+    //    read or a daemon HTTP upload route, both follow-ups).
+    if let Some((mime, b64)) = strip_data_uri(text) {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        // Strip embedded whitespace — long base64 blobs often arrive
+        // line-wrapped from the source.
+        let cleaned: String = b64.chars().filter(|c| !c.is_whitespace()).collect();
+        if let Ok(data) = STANDARD.decode(cleaned.as_bytes()) {
+            return PasteKind::ImageBytes { mime, data };
+        }
+    }
+    // 2. Existing path with an image extension. Don't fs::canonicalize
+    //    (resolves symlinks unnecessarily); a metadata check is enough.
+    let trimmed = text.trim();
+    if !trimmed.is_empty() && !trimmed.contains('\n') {
+        let candidate = Path::new(trimmed);
+        let looks_like_image = candidate
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|ext| {
+                matches!(
+                    ext.to_ascii_lowercase().as_str(),
+                    "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg"
+                )
+            })
+            .unwrap_or(false);
+        if looks_like_image && candidate.is_file() {
+            return PasteKind::ImagePath(candidate.to_path_buf());
+        }
+    }
+    PasteKind::Text
+}
+
+/// Recognise the most common raster image formats by header bytes.
+/// Returns the canonical MIME string used both for the temp-file
+/// extension picker and the eventual daemon upload route.
+fn sniff_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else if bytes.starts_with(b"BM") {
+        Some("image/bmp")
+    } else {
+        None
+    }
+}
+
+/// Split a `data:image/<sub>;base64,<payload>` URI into `(mime,
+/// payload)`. Returns `None` for non-image data URIs and for
+/// non-base64 forms — we don't try to decode `;charset=…` text data
+/// URIs because the pane already accepts text natively.
+fn strip_data_uri(text: &str) -> Option<(&'static str, &str)> {
+    let rest = text.strip_prefix("data:")?;
+    let (header, payload) = rest.split_once(',')?;
+    if !header.ends_with(";base64") {
+        return None;
+    }
+    let mime_str = header.trim_end_matches(";base64");
+    let mime: &'static str = match mime_str {
+        "image/png" => "image/png",
+        "image/jpeg" | "image/jpg" => "image/jpeg",
+        "image/gif" => "image/gif",
+        "image/webp" => "image/webp",
+        "image/bmp" => "image/bmp",
+        _ => return None,
+    };
+    Some((mime, payload))
+}
+
+/// Best-effort fetch of the system clipboard via the OS helper
+/// (`wl-paste`, `pbpaste`, or `xclip`). Tries image MIME types first
+/// — `wl-paste -t image/png` and `xclip -selection clipboard -t
+/// image/png -o` both succeed cleanly when an image is on the
+/// clipboard and fail without consuming it when it's text — and
+/// falls back to plain text otherwise. Runs the helper *on whatever
+/// host the TUI is running on*: on a remote `agentum terminal`
+/// over SSH that means the SSH host, which is almost never useful;
+/// the status message names the helper that ran so users can tell
+/// they didn't get the local clipboard they expected.
+fn paste_from_system_clipboard(app: &mut App) {
+    if !matches!(app.focus, Focus::Term | Focus::TermRight) {
+        app.status_msg = Some("focus a terminal pane first".into());
+        return;
+    }
+    let helper = match detect_clipboard_helper() {
+        Some(h) => h,
+        None => {
+            app.push_error(
+                "no clipboard helper found — install wl-paste (Wayland), \
+                 pbpaste (macOS), or xclip (X11) on the host running the TUI",
+            );
+            return;
+        }
+    };
+    // Image first — failure means "no image on the clipboard", at
+    // which point we fall through to text. Don't surface the image
+    // failure: text is the common case and showing a transient error
+    // every plain-text paste would be noise.
+    if let Some((mime, bytes)) = try_clipboard_image(helper) {
+        let bytes_to_send = match write_paste_image(&bytes, mime) {
+            Ok(path) => {
+                app.status_msg = Some(format!(
+                    "pasted clipboard image via {} ({} bytes) → {}",
+                    helper.name(),
+                    bytes.len(),
+                    path.display()
+                ));
+                format!("{}\n", path.display()).into_bytes()
+            }
+            Err(e) => {
+                app.push_error(format!("paste-image temp file: {e}"));
+                return;
+            }
+        };
+        send_paste_bytes(app, bytes_to_send);
+        return;
+    }
+    match try_clipboard_text(helper) {
+        Some(text) if !text.is_empty() => {
+            app.status_msg = Some(format!(
+                "pasted clipboard text via {} ({} chars)",
+                helper.name(),
+                text.chars().count()
+            ));
+            send_paste_bytes(app, text.into_bytes());
+        }
+        _ => {
+            app.status_msg = Some(format!("{} returned empty clipboard", helper.name()));
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ClipboardHelper {
+    WlPaste,
+    PbPaste,
+    Xclip,
+}
+
+impl ClipboardHelper {
+    fn name(self) -> &'static str {
+        match self {
+            ClipboardHelper::WlPaste => "wl-paste",
+            ClipboardHelper::PbPaste => "pbpaste",
+            ClipboardHelper::Xclip => "xclip",
+        }
+    }
+}
+
+fn detect_clipboard_helper() -> Option<ClipboardHelper> {
+    // Preference order matches the most common setups: Wayland
+    // first (modern desktops), pbpaste on macOS, xclip as the X11
+    // fallback. `which`-style probe: try invoking with `--version`
+    // / a no-op arg and check the exit status. We use a cheap PATH
+    // walk instead of spawning to keep the hotkey snappy.
+    fn on_path(bin: &str) -> bool {
+        std::env::var_os("PATH")
+            .map(|paths| {
+                std::env::split_paths(&paths).any(|dir| {
+                    let p = dir.join(bin);
+                    p.is_file()
+                })
+            })
+            .unwrap_or(false)
+    }
+    if on_path("wl-paste") {
+        Some(ClipboardHelper::WlPaste)
+    } else if on_path("pbpaste") {
+        Some(ClipboardHelper::PbPaste)
+    } else if on_path("xclip") {
+        Some(ClipboardHelper::Xclip)
+    } else {
+        None
+    }
+}
+
+fn try_clipboard_image(helper: ClipboardHelper) -> Option<(&'static str, Vec<u8>)> {
+    use std::process::{Command, Stdio};
+    // Try PNG, then JPEG — that covers screenshots from every major
+    // OS. JPEG is a worthwhile second try because macOS screencapture
+    // and some Linux screenshot tools default to it.
+    for mime in &["image/png", "image/jpeg"] {
+        let output = match helper {
+            ClipboardHelper::WlPaste => Command::new("wl-paste")
+                .args(["--no-newline", "-t", mime])
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output(),
+            ClipboardHelper::PbPaste => {
+                // pbpaste only does text by default; skip silently
+                // and let the caller fall through to the text branch.
+                return None;
+            }
+            ClipboardHelper::Xclip => Command::new("xclip")
+                .args(["-selection", "clipboard", "-t", mime, "-o"])
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output(),
+        };
+        if let Ok(out) = output
+            && out.status.success()
+            && !out.stdout.is_empty()
+            && sniff_image_mime(&out.stdout).is_some()
+        {
+            let detected = sniff_image_mime(&out.stdout).unwrap_or(mime);
+            return Some((detected, out.stdout));
+        }
+    }
+    None
+}
+
+fn try_clipboard_text(helper: ClipboardHelper) -> Option<String> {
+    use std::process::{Command, Stdio};
+    let output = match helper {
+        ClipboardHelper::WlPaste => Command::new("wl-paste")
+            .arg("--no-newline")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output(),
+        ClipboardHelper::PbPaste => Command::new("pbpaste")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output(),
+        ClipboardHelper::Xclip => Command::new("xclip")
+            .args(["-selection", "clipboard", "-o"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output(),
+    };
+    output
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+}
+
+/// Send paste bytes into whichever pane is focused. Shared by the
+/// bracketed-paste handler and the explicit `Ctrl-K I` route so
+/// "stream closed" and IO accounting stay in one place.
+fn send_paste_bytes(app: &mut App, bytes: Vec<u8>) {
+    let tx_opt = match app.focus {
+        Focus::TermRight => app.split_right.as_ref().and_then(|s| s.term_in.clone()),
+        _ => app.term_in.clone(),
+    };
+    let nbytes = bytes.len();
+    match tx_opt.as_ref().map(|tx| tx.send(TermOut::Bytes(bytes))) {
+        Some(Ok(())) => app.io.record_out(nbytes),
+        Some(Err(_)) => app.push_error("terminal stream closed — Ctrl-E tree · Ctrl-Q quit"),
+        None => app.status_msg = Some("no terminal stream (no session selected?)".into()),
+    }
+}
+
+/// Write decoded image bytes to a uniquely-named file in the system
+/// temp directory and return the path. Filename: `agentum-paste-
+/// <uuid>.<ext>` — short, sortable, collision-proof. The temp file
+/// outlives the paste so the agent can read it before any cleanup;
+/// OS temp dirs are reaped on reboot which is fine for this use case.
+fn write_paste_image(bytes: &[u8], mime: &str) -> std::io::Result<PathBuf> {
+    let ext = match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
+        _ => "bin",
+    };
+    let mut path = std::env::temp_dir();
+    path.push(format!("agentum-paste-{}.{}", Uuid::new_v4(), ext));
+    std::fs::write(&path, bytes)?;
+    Ok(path)
 }
 
 /// Route mouse events. Three-layer dispatch (most specific wins):
@@ -3288,6 +3660,18 @@ async fn handle_key(
                 prefs::save(&app.prefs);
                 app.status_msg = Some(format!("lazygit width: {}", app.lazygit_width));
             }
+            // Ctrl-K I — paste clipboard contents into the focused
+            // pane via the OS clipboard helper (wl-paste / pbpaste /
+            // xclip). Detects image bytes and routes them through the
+            // temp-file path the same way bracketed paste does. This
+            // is the deliberate "fetch from system clipboard" path
+            // for cases where bracketed paste either isn't enabled in
+            // the terminal or the user is on a binary-clipboard
+            // workflow. Over SSH the helper would run on the *remote*
+            // host, which is rarely what's wanted — the status
+            // message explains the local-only constraint when no
+            // helper is on PATH.
+            Some('i') => paste_from_system_clipboard(app),
             _ => {
                 app.status_msg = Some("(chord cancelled)".into());
             }
@@ -3316,8 +3700,10 @@ async fn handle_key(
     // sticks. Currently bound: K-Z fullscreen, K-B sidebar.
     if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('k')) {
         app.chord = Some('K');
-        app.status_msg =
-            Some("Ctrl-K · waiting (Z fullscreen · B sidebar · , / . lazygit width)".into());
+        app.status_msg = Some(
+            "Ctrl-K · waiting (Z fullscreen · B sidebar · I image paste · , / . lazygit width)"
+                .into(),
+        );
         return;
     }
 
@@ -7698,5 +8084,104 @@ mod osc52_tests {
             let expected = format!("\x1bPtmux;{}\x1b\\", inner.replace('\x1b', "\x1b\x1b"));
             assert_eq!(s, expected);
         });
+    }
+}
+
+#[cfg(test)]
+mod paste_tests {
+    //! Bracketed-paste routing. The unit tests pin the *classifier* —
+    //! whether a given paste payload is text, raw image bytes, a
+    //! data URI, or an existing image file path. The forwarding
+    //! plumbing (`handle_paste` itself) is covered by manual repro
+    //! since it needs a live app + WS stream to exercise end-to-end.
+    use super::*;
+
+    #[test]
+    fn raw_binary_paste_falls_through_to_text() {
+        // Crossterm lossy-decodes bracketed-paste payloads to UTF-8
+        // before the TUI sees them. So a "binary" paste (e.g. PNG
+        // bytes from a terminal that forwards binary clipboards
+        // verbatim) arrives with U+FFFD in place of the magic bytes
+        // and can't be detected as an image at this layer. This test
+        // pins that behaviour so we don't accidentally route mangled
+        // binary content through the image branch later.
+        let lossy = String::from_utf8_lossy(b"\x89PNG\r\n\x1a\ndata");
+        assert!(matches!(classify_paste(&lossy), PasteKind::Text));
+    }
+
+    #[test]
+    fn data_uri_with_image_mime_decodes() {
+        // 1x1 transparent PNG, base64-encoded. The classifier must
+        // strip the `data:` prefix, decode the payload, and report
+        // the MIME so `write_paste_image` picks the right extension.
+        let b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+        let uri = format!("data:image/png;base64,{b64}");
+        match classify_paste(&uri) {
+            PasteKind::ImageBytes { mime, data } => {
+                assert_eq!(mime, "image/png");
+                assert!(data.starts_with(b"\x89PNG"));
+            }
+            other => panic!(
+                "expected ImageBytes, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn data_uri_for_text_falls_through_to_text() {
+        // `data:text/plain;base64,…` is a string the user might paste
+        // intentionally — don't try to be clever and decode it.
+        let uri = "data:text/plain;base64,aGVsbG8=";
+        assert!(matches!(classify_paste(uri), PasteKind::Text));
+    }
+
+    #[test]
+    fn plain_string_is_text() {
+        assert!(matches!(
+            classify_paste("hello, world\nsecond line"),
+            PasteKind::Text
+        ));
+    }
+
+    #[test]
+    fn nonexistent_image_path_stays_text() {
+        // The classifier checks `is_file()` — a bare string that
+        // *looks* like a path but doesn't exist must not be treated
+        // as an attachment (otherwise pasting "screenshot.png" as
+        // plain prose would silently misroute).
+        assert!(matches!(
+            classify_paste("/definitely/not/a/real/path.png"),
+            PasteKind::Text
+        ));
+    }
+
+    #[test]
+    fn existing_image_path_classifies_as_image_path() {
+        // Write a real tiny PNG and verify the path branch fires.
+        let tmp = std::env::temp_dir().join(format!("agentum-test-{}.png", Uuid::new_v4()));
+        std::fs::write(&tmp, b"\x89PNG\r\n\x1a\n").unwrap();
+        let tmp_str = tmp.to_string_lossy().to_string();
+        match classify_paste(&tmp_str) {
+            PasteKind::ImagePath(p) => assert_eq!(p, tmp),
+            _ => {
+                let _ = std::fs::remove_file(&tmp);
+                panic!("expected ImagePath");
+            }
+        }
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn sniff_recognises_common_formats() {
+        assert_eq!(sniff_image_mime(b"\x89PNG\r\n\x1a\nxx"), Some("image/png"));
+        assert_eq!(sniff_image_mime(b"\xff\xd8\xff\xe0xxx"), Some("image/jpeg"));
+        assert_eq!(sniff_image_mime(b"GIF89a..."), Some("image/gif"));
+        assert_eq!(
+            sniff_image_mime(b"RIFF\x00\x00\x00\x00WEBPmore"),
+            Some("image/webp")
+        );
+        assert_eq!(sniff_image_mime(b"BMjunk"), Some("image/bmp"));
+        assert_eq!(sniff_image_mime(b"plain text"), None);
     }
 }
