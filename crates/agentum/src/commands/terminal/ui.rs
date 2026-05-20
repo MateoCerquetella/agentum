@@ -828,8 +828,8 @@ fn render_tree_row(
                 Span::raw("    ")
             };
             // Per-agent icon sits BEFORE the name so the user scans
-            // tool identity vertically down the sidebar — orange `✦`
-            // rows are Claude, green `◉` rows are Codex, etc. Two
+            // tool identity vertically down the sidebar — yellow `✻`
+            // rows are Claude, green `❋` rows are Codex, etc. Two
             // leading spaces (instead of the original five) make room
             // for `icon + space` while keeping the visual indent of
             // a leaf at roughly the same column it was before.

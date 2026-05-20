@@ -2257,13 +2257,7 @@ pub fn pick_initial_selection(
     let active = active_profile.unwrap_or("");
     sessions
         .iter()
-        .find(|s| {
-            session_profile
-                .get(&s.id)
-                .map(String::as_str)
-                .unwrap_or("")
-                == active
-        })
+        .find(|s| session_profile.get(&s.id).map(String::as_str).unwrap_or("") == active)
         .map(|s| s.id)
         .or_else(|| sessions.first().map(|s| s.id))
 }
@@ -2666,18 +2660,29 @@ pub async fn run_loop(
                     // bus hasn't yet noticed the daemon went away (TCP
                     // keepalive can lag the HTTP layer by tens of seconds).
                     let active_key = app.active_profile.clone().unwrap_or_default();
+                    // Probe both endpoints per client so the periodic
+                    // tick keeps the sidebar version chip honest after a
+                    // remote daemon is upgraded + restarted. Without the
+                    // health() leg, entry.version stayed pinned to the
+                    // value captured at boot — `agentum update` on a
+                    // peer would leave the chip showing the old version
+                    // until the TUI itself was restarted.
                     let probes: Vec<_> = app
                         .live_clients()
                         .map(|(name, c)| {
                             let name = name.to_string();
                             let c = c.clone();
-                            async move { (name, c.list_sessions().await) }
+                            async move {
+                                let (sessions, health) =
+                                    futures_util::future::join(c.list_sessions(), c.health()).await;
+                                (name, sessions, health)
+                            }
                         })
                         .collect();
                     let results = futures_util::future::join_all(probes).await;
                     let active_ok = results
                         .iter()
-                        .any(|(n, r)| n == &active_key && r.is_ok());
+                        .any(|(n, r, _)| n == &active_key && r.is_ok());
                     if active_ok {
                         app.http_fail_count = 0;
                     } else {
@@ -2692,7 +2697,7 @@ pub async fn run_loop(
                     // seconds). LoginNeeded peers keep their flag — a
                     // successful HTTP probe means the daemon answered,
                     // not that the bearer token resolved on its own.
-                    for (name, res) in results.iter() {
+                    for (name, res, health_res) in results.iter() {
                         if let Some(entry) = app.clients.get_mut(name) {
                             match res {
                                 Ok(_) => {
@@ -2706,11 +2711,20 @@ pub async fn run_loop(
                                     entry.last_error = Some(e.to_string());
                                 }
                             }
+                            // Keep the version chip current. A failed
+                            // probe doesn't wipe the cached value — the
+                            // peer may be momentarily unreachable but
+                            // not actually downgraded.
+                            if let Ok(h) = health_res {
+                                if !h.version.is_empty() {
+                                    entry.version = Some(h.version.clone());
+                                }
+                            }
                         }
                     }
                     let per_profile: Vec<(String, Vec<Session>)> = results
                         .into_iter()
-                        .map(|(n, r)| (n, r.unwrap_or_default()))
+                        .map(|(n, r, _)| (n, r.unwrap_or_default()))
                         .collect();
                     let (merged, owners) = merge_sessions_dedup(per_profile, &active_key);
                     app.refresh_sessions_with_owners(merged, owners);
@@ -7086,22 +7100,26 @@ pub fn status_dot(s: Status) -> (&'static str, ratatui::style::Color) {
 pub fn tool_icon(tool: &str) -> (&'static str, ratatui::style::Color) {
     use ratatui::style::Color;
     match tool {
-        // Anthropic's sparkle. Yellow = closest ANSI base color to the
-        // Claude brand orange (#d97757) without hardcoding RGB and
-        // breaking high-contrast themes.
-        "claude" => ("✦", Color::Yellow),
-        // OpenAI green-ish; the fisheye reads as the chat "o" without
-        // looking like the idle status glyph.
-        "codex" => ("◉", Color::Green),
-        // Cursor's mark is a forward chevron; magenta picks it out
-        // from claude/codex on a busy sidebar.
-        "cursor" => ("❯", Color::Magenta),
+        // Anthropic's six-pointed asterisk — the exact mark Claude
+        // Code prints in its own TUI. Yellow = closest ANSI base color
+        // to the Claude brand orange (#d97757) without hardcoding RGB
+        // and breaking high-contrast themes.
+        "claude" => ("✻", Color::Yellow),
+        // OpenAI's six-petal florette mimics the ChatGPT/OpenAI knot
+        // in a single cell; green keeps Codex visually distinct from
+        // Claude's yellow asterisk on a busy sidebar.
+        "codex" => ("❋", Color::Green),
+        // Cursor's brand mark is a filled circle with a stylized
+        // sparkle inside — the fisheye is the closest single-cell
+        // glyph. Magenta picks it out from claude/codex.
+        "cursor" => ("◉", Color::Magenta),
         // Generic "agent" passthrough — diamond reads as "some agent"
         // without claiming a specific vendor.
         "agent" => ("◆", Color::Cyan),
-        // Gemini's brand is a small four-point star; cyan picks it up
-        // from Claude's yellow sparkle.
-        "gemini" => ("✧", Color::Cyan),
+        // Google's Gemini brand is a four-pointed asymmetric sparkle;
+        // the solid version pairs with cyan to separate it from
+        // Claude's yellow asterisk.
+        "gemini" => ("✦", Color::Cyan),
         // Hermes (xAI / Nous tooling) — hexagon-ish ring is distinct
         // from the other star/diamond glyphs.
         "hermes" => ("⌬", Color::LightMagenta),
@@ -7193,6 +7211,50 @@ mod merge_dedup_tests {
         assert_eq!(merged.len(), 2);
         assert_eq!(owners.get(&a).map(String::as_str), Some(""));
         assert_eq!(owners.get(&b).map(String::as_str), Some("macos"));
+    }
+
+    // The bug we're guarding: a Ctrl-O switch from loopback to a remote
+    // server used to leave the terminal pane on whichever session sorted
+    // first in the merged list — which is loopback because the empty
+    // profile key sorts ahead of named profiles. The active profile chip
+    // would update, but the pane content would not, so the user read the
+    // switch as a no-op.
+    #[test]
+    fn pick_initial_prefers_active_profile_session() {
+        let local = Uuid::new_v4();
+        let remote = Uuid::new_v4();
+        // Loopback session sorts first in the merged list.
+        let sessions = vec![sess(local, "alpha"), sess(remote, "beta")];
+        let mut owners = HashMap::new();
+        owners.insert(local, String::new());
+        owners.insert(remote, "vps".to_string());
+        // Active = vps → must pick the remote session, NOT the
+        // first-in-list loopback session.
+        assert_eq!(
+            pick_initial_selection(&sessions, &owners, Some("vps")),
+            Some(remote)
+        );
+    }
+
+    #[test]
+    fn pick_initial_falls_back_when_active_has_no_sessions() {
+        let local = Uuid::new_v4();
+        let sessions = vec![sess(local, "alpha")];
+        let mut owners = HashMap::new();
+        owners.insert(local, String::new());
+        // Active = a brand-new server with zero sessions yet. Fall back
+        // to *something* so the pane isn't empty on switch.
+        assert_eq!(
+            pick_initial_selection(&sessions, &owners, Some("vps")),
+            Some(local)
+        );
+    }
+
+    #[test]
+    fn pick_initial_none_when_no_sessions_anywhere() {
+        let owners = HashMap::new();
+        assert_eq!(pick_initial_selection(&[], &owners, Some("vps")), None);
+        assert_eq!(pick_initial_selection(&[], &owners, None), None);
     }
 }
 
@@ -7368,6 +7430,37 @@ mod tool_picker_tests {
         handle_tool_picker_key(&mut form, ev(KeyCode::Esc));
         assert!(form.tool_picker.is_none());
         assert_eq!(form.tool, "claude");
+    }
+}
+
+#[cfg(test)]
+mod tool_icon_tests {
+    //! Pin the per-agent sidebar icon contract: every entry in
+    //! `TOOL_SUGGESTIONS` must resolve to a real glyph (not the unknown
+    //! fallback), and unknown tools must fall back gracefully so a new
+    //! agent on the daemon side doesn't render a blank cell.
+    use super::*;
+
+    #[test]
+    fn every_known_tool_has_an_icon() {
+        let (fallback_glyph, _) = tool_icon("__unknown_tool__");
+        for &t in TOOL_SUGGESTIONS {
+            let (glyph, _) = tool_icon(t);
+            assert_ne!(
+                glyph, fallback_glyph,
+                "tool `{t}` falls through to the unknown-tool icon — add a branch in tool_icon",
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_tool_returns_fallback_not_panic() {
+        // Defensive: a daemon could surface a tool name the TUI doesn't
+        // know about (newer daemon, third-party adapter). The render
+        // path must still produce something visible rather than panic
+        // or render an empty cell.
+        let (glyph, _) = tool_icon("not-a-real-tool");
+        assert!(!glyph.is_empty());
     }
 }
 
