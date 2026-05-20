@@ -9,8 +9,11 @@ use std::str::FromStr;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+pub mod board_schema;
 pub mod profiles;
 pub mod transcript;
+
+pub use board_schema::{RequiredField, TransitionCtx, required_fields_for, validate_transition};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
