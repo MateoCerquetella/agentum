@@ -11,7 +11,6 @@ use axum::Json;
 use axum::Router;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -83,26 +82,25 @@ async fn list(State(state): State<AppState>) -> Result<Json<GroupedBoard>, ApiEr
 /// `done` transition is the only case that needs the comments-existence
 /// check — we skip it for every other target so non-`done` patches never
 /// touch `board_comments`.
+///
+/// Returns `ApiError::Custom(400, {missing, status})` on failure rather
+/// than `ApiError::BadRequest(String)` because the spec (Decision 5) pins
+/// the failure body to `{"missing": [...], "status": "..."}`, not the
+/// default `{"error": "..."}` envelope. The `Custom` variant exists for
+/// exactly this case — see `crate::error` for the rationale.
 async fn enforce_transition(
     store: &Store,
     bus: &broadcast::Sender<Event>,
     id: Option<i64>,
     target_status: &str,
     ctx: &mut TransitionCtx<'_>,
-) -> Result<(), Response> {
+) -> Result<(), ApiError> {
     if target_status == "done" {
         // Resolve the OR-clause: either `session_id` is set (the agent
         // session that produced this), or the parent row has at least
         // one comment (the manual-close path).
         if let Some(real_id) = id {
-            match store.has_board_comments(real_id).await {
-                Ok(b) => ctx.has_comment = b,
-                Err(e) => {
-                    // Treat store failure as an internal error rather
-                    // than silently letting the gate through.
-                    return Err(ApiError::from(e).into_response());
-                }
-            }
+            ctx.has_comment = store.has_board_comments(real_id).await?;
         }
     }
 
@@ -123,11 +121,10 @@ async fn enforce_transition(
                 "target_status": target_status,
                 "missing": missing,
             })));
-            Err((
+            Err(ApiError::Custom(
                 StatusCode::BAD_REQUEST,
-                Json(json!({ "missing": missing, "status": target_status })),
-            )
-                .into_response())
+                json!({ "missing": missing, "status": target_status }),
+            ))
         }
     }
 }
@@ -135,7 +132,7 @@ async fn enforce_transition(
 async fn create(
     State(state): State<AppState>,
     Json(payload): Json<NewBoardItem>,
-) -> Result<(StatusCode, Json<BoardItem>), Response> {
+) -> Result<(StatusCode, Json<BoardItem>), ApiError> {
     // Validate the target status before any work happens. POST has no
     // row yet, so the ctx is built straight from the payload. Per the
     // store, an absent status defaults to `"todo"` (see
@@ -157,11 +154,7 @@ async fn create(
     };
     enforce_transition(&state.store, &state.bus, None, target_status, &mut ctx).await?;
 
-    let item = state
-        .store
-        .create_board_item(payload)
-        .await
-        .map_err(|e| ApiError::from(e).into_response())?;
+    let item = state.store.create_board_item(payload).await?;
     let _ = state.bus.send(
         Event::new("board.created")
             .with_payload(json!({"id": item.id, "key": item.key, "title": item.title})),
@@ -185,7 +178,7 @@ async fn patch(
     State(state): State<AppState>,
     Path(id): Path<i64>,
     Json(patch): Json<BoardPatch>,
-) -> Result<Json<BoardItem>, Response> {
+) -> Result<Json<BoardItem>, ApiError> {
     // Validation gate runs FIRST — before any mutation — and only when
     // the PATCH actually changes the status. PATCHes that omit `status`
     // or set it to the same value the row already holds skip the gate
@@ -195,9 +188,8 @@ async fn patch(
     let current = state
         .store
         .get_board_item(id)
-        .await
-        .map_err(|e| ApiError::from(e).into_response())?
-        .ok_or_else(|| ApiError::NotFound(format!("board item {id}")).into_response())?;
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("board item {id}")))?;
 
     let status_changing = match patch.status.as_deref() {
         Some(target) => target != current.status,
@@ -256,11 +248,7 @@ async fn patch(
         .await?;
     }
 
-    let item = state
-        .store
-        .patch_board_item(id, patch)
-        .await
-        .map_err(|e| ApiError::from(e).into_response())?;
+    let item = state.store.patch_board_item(id, patch).await?;
     let _ = state.bus.send(
         Event::new("board.updated")
             .with_payload(json!({"id": item.id, "key": item.key, "status": item.status})),
@@ -393,6 +381,7 @@ mod tests {
     use super::*;
     use agentum_store::Store;
     use axum::body::to_bytes;
+    use axum::response::IntoResponse;
     use std::sync::Arc;
     use tokio::sync::broadcast;
 
@@ -419,11 +408,14 @@ mod tests {
         }
     }
 
-    /// Drain the response into the JSON body it carries — convenient
-    /// for asserting on the gate's 400 shape.
-    async fn body_json(resp: Response) -> serde_json::Value {
+    /// Render the `ApiError` through its `IntoResponse` impl and drain the
+    /// body — convenient for asserting on the gate's 400 status + payload
+    /// shape from a single helper.
+    async fn err_status_and_body(err: ApiError) -> (StatusCode, serde_json::Value) {
+        let resp = err.into_response();
+        let status = resp.status();
         let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
-        serde_json::from_slice(&bytes).unwrap()
+        (status, serde_json::from_slice(&bytes).unwrap())
     }
 
     fn doing_pass_payload() -> NewBoardItem {
@@ -493,9 +485,10 @@ mod tests {
         )
         .await
         .expect_err("gate should reject doing without workdir/tool/claimed_by");
-        // The status code is on the response — drain it.
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        let body = body_json(err).await;
+        // Convert the typed ApiError to its response form to assert on the
+        // wire shape the spec pins down.
+        let (status, body) = err_status_and_body(err).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["status"], "doing");
         assert_eq!(
             body["missing"],
@@ -525,8 +518,8 @@ mod tests {
         )
         .await
         .expect_err("default `todo` target still demands lbl");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        let body = body_json(err).await;
+        let (status, body) = err_status_and_body(err).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["status"], "todo");
         assert_eq!(body["missing"], serde_json::json!(["lbl"]));
     }
@@ -564,8 +557,8 @@ mod tests {
         )
         .await
         .expect_err("doing transition without workdir/tool/claimed_by must fail");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        let body = body_json(err).await;
+        let (status, body) = err_status_and_body(err).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["status"], "doing");
         assert_eq!(
             body["missing"],
@@ -834,10 +827,183 @@ mod tests {
         )
         .await
         .expect_err("done without session or comment must fail");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-        let body = body_json(err).await;
+        let (status, body) = err_status_and_body(err).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["status"], "done");
         assert_eq!(body["missing"], serde_json::json!(["session_id_or_comment"]));
+    }
+
+    #[tokio::test]
+    async fn patch_done_to_doing_skips_gate_when_done_lacks_anchor() {
+        // Grandfathered/inconsistent state: a row sitting in `done` with
+        // neither `session_id` nor any comments (technically possible if
+        // the row predates the gate, or if comments were deleted). PATCH
+        // it `done -> doing` providing all the `doing`-required fields.
+        // The gate must run for the *target* status (`doing`), not the
+        // source — so it doesn't matter that the row's `done` state would
+        // fail validation today. The transition is allowed because the
+        // merged ctx satisfies `doing`'s rules.
+        let state = fresh_state().await;
+        let seed = state
+            .store
+            .create_board_item(NewBoardItem {
+                title: "stranded done".into(),
+                body: None,
+                status: Some("todo".into()),
+                lbl: Some("feat".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+            })
+            .await
+            .unwrap();
+        // Back-door into `done` via the store, leaving session_id null and
+        // adding no comments — the row is now in a state the current gate
+        // would reject if `done` were the *target*. We're testing that the
+        // gate runs against the target (`doing`), not the source.
+        let _ = state
+            .store
+            .patch_board_item(
+                seed.id,
+                BoardPatch {
+                    status: Some("done".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        // Claim it so the doing-gate's `claimed_by` requirement is met.
+        let _ = state
+            .store
+            .claim_board_item(seed.id, "actor-A")
+            .await
+            .unwrap();
+
+        let out = patch(
+            State(state.clone()),
+            Path(seed.id),
+            Json(BoardPatch {
+                status: Some("doing".into()),
+                tool: Some(Some("claude".into())),
+                workdir: Some(Some("/home/me/foo".into())),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("done -> doing with full target ctx must pass — gate runs on target, not source");
+        assert_eq!(out.0.status, "doing");
+    }
+
+    #[tokio::test]
+    async fn patch_done_to_todo_skips_gate() {
+        // Symmetric to the above: `done -> todo` with the row in the same
+        // anchorless `done` state. The todo-gate only needs title + lbl,
+        // which the merged ctx provides. Proves the source-state `done`
+        // never re-runs as a "from" gate even though it'd fail today.
+        let state = fresh_state().await;
+        let seed = state
+            .store
+            .create_board_item(NewBoardItem {
+                title: "stranded done".into(),
+                body: None,
+                status: Some("todo".into()),
+                lbl: Some("feat".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+            })
+            .await
+            .unwrap();
+        let _ = state
+            .store
+            .patch_board_item(
+                seed.id,
+                BoardPatch {
+                    status: Some("done".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let out = patch(
+            State(state.clone()),
+            Path(seed.id),
+            Json(BoardPatch {
+                status: Some("todo".into()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("done -> todo must always pass — source gate never re-runs");
+        assert_eq!(out.0.status, "todo");
+    }
+
+    #[tokio::test]
+    async fn done_via_session_only_passes() {
+        // The `done` OR-clause via the session arm: `session_id IS NOT
+        // NULL` is enough on its own; zero comments. This complements
+        // `done_via_comment_path_passes` (comment arm) and
+        // `done_without_session_or_comment_fails` (negative). The handler
+        // calls `has_board_comments` regardless, but the validator's OR
+        // short-circuits on `session_id`.
+        let state = fresh_state().await;
+        let seed = state
+            .store
+            .create_board_item(NewBoardItem {
+                title: "agent ran it".into(),
+                body: None,
+                status: Some("todo".into()),
+                lbl: Some("feat".into()),
+                tool: Some("claude".into()),
+                workdir: Some("/home/me/foo".into()),
+                model: None,
+                // Session id is the anchor we're proving works alone.
+                session_id: Some("11111111-1111-1111-1111-111111111111".into()),
+                priority: None,
+            })
+            .await
+            .unwrap();
+        // Move through `doing` first so the doing-gate has claimed_by.
+        let _ = state
+            .store
+            .claim_board_item(seed.id, "actor-A")
+            .await
+            .unwrap();
+        let _ = state
+            .store
+            .patch_board_item(
+                seed.id,
+                BoardPatch {
+                    status: Some("doing".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let out = patch(
+            State(state.clone()),
+            Path(seed.id),
+            Json(BoardPatch {
+                status: Some("done".into()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("done via session-only path must pass");
+        assert_eq!(out.0.status, "done");
+        // Sanity: no comments were created — the session arm was the only
+        // thing satisfying the OR.
+        let comments = state.store.list_board_comments(seed.id).await.unwrap();
+        assert!(
+            comments.is_empty(),
+            "session-only path must not require comments"
+        );
     }
 
     #[tokio::test]

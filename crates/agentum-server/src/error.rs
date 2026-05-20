@@ -20,10 +20,26 @@ pub enum ApiError {
     TooManyRequests(String),
     #[error("internal: {0}")]
     Internal(String),
+    /// Escape hatch for handlers that need a custom JSON body shape rather
+    /// than the default `{"error": msg}` envelope. Used when a wire contract
+    /// pins down a specific payload (e.g. validation gates returning
+    /// `{"missing": [...], "status": "doing"}`) and adding a single-purpose
+    /// variant per such gate would balloon this enum. Keep the structured
+    /// variants above for the common path — reach for `Custom` only when
+    /// the body shape is genuinely non-default.
+    #[error("custom {0}: {1}")]
+    Custom(StatusCode, serde_json::Value),
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        // Custom carries its own body shape — short-circuit before the
+        // common `{"error": msg}` envelope path. Every other variant
+        // produces a single string message wrapped in the standard
+        // envelope.
+        if let ApiError::Custom(status, body) = self {
+            return (status, Json(body)).into_response();
+        }
         let (status, msg) = match &self {
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, m.clone()),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
@@ -32,6 +48,7 @@ impl IntoResponse for ApiError {
             ApiError::Forbidden(m) => (StatusCode::FORBIDDEN, m.clone()),
             ApiError::TooManyRequests(m) => (StatusCode::TOO_MANY_REQUESTS, m.clone()),
             ApiError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m.clone()),
+            ApiError::Custom(..) => unreachable!("handled above"),
         };
         (status, Json(json!({ "error": msg }))).into_response()
     }
