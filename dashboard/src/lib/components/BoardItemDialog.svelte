@@ -495,8 +495,8 @@
     }
   }
 
-  async function postComment(e: SubmitEvent) {
-    e.preventDefault();
+  async function postComment(e?: Event) {
+    e?.preventDefault();
     if (!item || postingComment) return;
     const body = commentDraft.trim();
     if (!body) return;
@@ -768,18 +768,29 @@
           {#if commentError}
             <div class="error" style="margin-top: 6px;">{commentError}</div>
           {/if}
-          <form class="cmt-form" onsubmit={postComment}>
+          <!-- Nested <form> inside the dialog's outer form is invalid
+               HTML, so use a div + button click + Cmd/Ctrl+Enter
+               shortcut. The textarea explicitly stops `keydown` from
+               reaching the outer form's accidental Enter-submit. -->
+          <div class="cmt-form">
             <textarea
               bind:value={commentDraft}
               rows="2"
-              placeholder="Add a comment…"
+              placeholder="Add a comment… (⌘/Ctrl+Enter to post)"
               spellcheck="false"
               disabled={postingComment}
+              onkeydown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  void postComment();
+                }
+              }}
             ></textarea>
             <button
-              type="submit"
+              type="button"
               class="primary"
               disabled={postingComment || commentDraft.trim().length === 0}
+              onclick={() => void postComment()}
             >
               {#if postingComment}
                 <span class="spin"></span> posting…
@@ -787,7 +798,7 @@
                 Post
               {/if}
             </button>
-          </form>
+          </div>
         </section>
       {/if}
 
