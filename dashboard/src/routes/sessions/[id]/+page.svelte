@@ -3,7 +3,6 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { api, type Session } from '$lib/api';
-  import { watchdog, loadWatchdog } from '$stores/watchdog';
   import Terminal from '$components/Terminal.svelte';
   import SessionRail from '$components/dashboard/SessionRail.svelte';
   import { ctxOf, fmtUptime } from '$lib/dashboard';
@@ -52,8 +51,7 @@
       return;
     }
     reload();
-    loadWatchdog(50);
-    pollId = setInterval(() => { reload(); loadWatchdog(50); }, 5000);
+    pollId = setInterval(reload, 5000);
   });
 
   onDestroy(() => {
@@ -176,9 +174,6 @@
     {#if isYolo}
       <span class="pill" style="color: var(--amber); border-color: rgba(255,180,84,0.35);">⚡ yolo</span>
     {/if}
-    <button type="button" class="tb-btn" onclick={() => window.open(`/sessions/${session?.id}`, '_blank')} disabled={!session}>
-      Pop out
-    </button>
     <button
       type="button"
       class="tb-btn primary"
@@ -258,7 +253,7 @@
     </div>
 
     {#if session}
-      <SessionRail s={session} feed={$watchdog.items} />
+      <SessionRail s={session} />
     {/if}
   </div>
 
@@ -441,8 +436,8 @@
   }
 
   @media (max-width: 720px) {
-    /* Sticky route header so the Pop out / /compact actions stay
-       reachable while the user scrolls the terminal. */
+    /* Sticky route header so the /compact action stays reachable
+       while the user scrolls the terminal. */
     :global(.toolbar) {
       position: sticky;
       top: 0;
@@ -451,15 +446,16 @@
       backdrop-filter: blur(10px);
       -webkit-backdrop-filter: blur(10px);
     }
-    /* Pop out only opens a new tab — useless on phones. */
+    /* Keep only the primary action visible on phone; secondary
+       buttons are noise on a narrow viewport. */
     :global(.toolbar .tb-btn:not(.primary)) { display: none; }
     :global(.tabs .tab[disabled]) { display: none; }
 
     /* Hide the rail entirely on phone so the terminal can fill almost
        the full viewport — only the toolbar and input row stay. The
-       rail's data (plan/todos/KV) is still reachable via "Pop out"
-       on tablet, or by rotating to landscape where the tablet rules
-       (max-width: 1100px) keep it visible. */
+       rail's data (plan/todos/KV) is still reachable by rotating to
+       landscape where the tablet rules (max-width: 1100px) keep
+       it visible. */
     .row :global(.rail) { display: none; }
 
     /* Input row redesign: prompt + input own the full width on the

@@ -16,7 +16,7 @@ use super::app::{
     AddProfileField, AddProfileForm, App, ConnState, DirPickerState, ErrorEntry, Focus,
     NewSessionField, NewSessionForm, NotifKind, Notification, Overlay, PendingAction,
     ProfilesOverlay, RenameState, Row, SettingsRow, SettingsState, Side, ToolPickerState,
-    TreeSection, palette_catalog, status_dot,
+    TreeSection, palette_catalog, status_dot, tool_icon,
 };
 use super::extensions::{self, Extension, LAZYGIT};
 use super::iometer::{fmt_bytes, fmt_rate};
@@ -775,7 +775,7 @@ fn render_tree_row(
             let id = app.tree.groups[group].projects[project].sessions[leaf];
             let checked = app.checked.contains(&id);
             let session = app.sessions.iter().find(|s| s.id == id);
-            let (name, dot, dot_color, tool_label) = match session {
+            let (name, dot, dot_color, icon_glyph, icon_color, tool_label) = match session {
                 Some(s) => {
                     // Priority: Crashed > Awaiting > Idle > underlying
                     // status. A dead pane should never look like it's
@@ -800,13 +800,17 @@ fn render_tree_row(
                     } else {
                         status_dot(s.status)
                     };
-                    let tool = match s.model.as_deref() {
-                        Some(m) => format!("{}/{}", s.tool, m),
-                        None => s.tool.clone(),
-                    };
-                    (s.name.clone(), dot, color, tool)
+                    let (icon, icon_c) = tool_icon(&s.tool);
+                    // Trailing label is just the model now — the agent
+                    // identity moved to the leading colored icon, so
+                    // repeating `claude/` ahead of the model is noise.
+                    // Sessions with no model (raw shells, agents that
+                    // didn't surface one) get an empty label so the
+                    // trailing space doesn't read as a hanging artifact.
+                    let trailing = s.model.clone().unwrap_or_default();
+                    (s.name.clone(), dot, color, icon, icon_c, trailing)
                 }
-                None => ("?".into(), "?", p.error, "".into()),
+                None => ("?".into(), "?", p.error, "▣", p.muted, String::new()),
             };
             // Reserve a 4-cell prefix so checked/unchecked rows align.
             // `[x] ` (4 cells) when in the multi-select set; same width
@@ -823,8 +827,16 @@ fn render_tree_row(
             } else {
                 Span::raw("    ")
             };
+            // Per-agent icon sits BEFORE the name so the user scans
+            // tool identity vertically down the sidebar — orange `✦`
+            // rows are Claude, green `◉` rows are Codex, etc. Two
+            // leading spaces (instead of the original five) make room
+            // for `icon + space` while keeping the visual indent of
+            // a leaf at roughly the same column it was before.
             let mut spans = vec![
-                Span::raw("     "),
+                Span::raw("   "),
+                Span::styled(icon_glyph, Style::default().fg(icon_color)),
+                Span::raw(" "),
                 check_span,
                 Span::raw(format!("{:<14}", truncate(&name, 14))),
                 Span::raw(" "),
@@ -833,9 +845,10 @@ fn render_tree_row(
                 Span::styled(tool_label, Style::default().fg(p.muted)),
             ];
             if is_cursor {
-                // index 2 = the name span — bold it so the cursor row's
-                // identity reads.
-                spans[2].style = Style::default().add_modifier(Modifier::BOLD);
+                // index 4 = the name span — bold it so the cursor row's
+                // identity reads. (Shifted from 2 to 4 by the new
+                // leading icon + space spans.)
+                spans[4].style = Style::default().add_modifier(Modifier::BOLD);
             }
             ListItem::new(Line::from(spans)).style(row_style)
         }

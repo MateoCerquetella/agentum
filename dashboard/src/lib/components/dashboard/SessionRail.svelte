@@ -1,7 +1,6 @@
 <script lang="ts">
-  import type { Session, WatchdogEvent } from '$lib/api';
+  import type { Session } from '$lib/api';
   import { deriveState, ctxOf, fmtTokens, fmtCost, fmtUptime, toolShort } from '$lib/dashboard';
-  import Watchdog from './Watchdog.svelte';
   import DiffBlock from './DiffBlock.svelte';
   import type { DiffHunk } from './types';
 
@@ -10,18 +9,15 @@
    *   - task summary
    *   - optional diff preview
    *   - KV metadata (tool, model, branch, cwd, tmux, elapsed, tokens, cost, ctx)
-   *   - watchdog excerpt scoped to this session
    */
   interface Props {
     s: Session;
-    feed?: WatchdogEvent[];
     /** Optional diff hunks; rail shows only if provided. */
     diff?: DiffHunk;
   }
-  let { s, feed = [], diff }: Props = $props();
+  let { s, diff }: Props = $props();
 
   const state = $derived(deriveState(s));
-  const scopedFeed = $derived(feed.filter(ev => !ev.ses || ev.ses === s.id || ev.ses === s.name));
 </script>
 
 <aside class="rail">
@@ -63,12 +59,6 @@
       </div>
     </div>
 
-    {#if scopedFeed.length > 0}
-      <div class="group">
-        <div class="gh"><span>Watchdog · last {Math.min(scopedFeed.length, 4)}</span></div>
-        <Watchdog feed={scopedFeed} limit={4} />
-      </div>
-    {/if}
   </div>
 </aside>
 

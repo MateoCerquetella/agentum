@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::Stdout;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use agentum_core::{Event, Session, Status, transcript::AgentTaskState};
@@ -2242,6 +2242,32 @@ fn first_visible_session(tree: &Tree, sessions: &[Session]) -> Option<Uuid> {
     sessions.first().map(|s| s.id)
 }
 
+/// Initial selection after a cold start or profile switch. Prefers a
+/// session owned by `active_profile` so the terminal pane reads as the
+/// user's *current* server, not whichever session sorted first across
+/// the merged fleet. Falls back to the first session in the merged list
+/// when the active server has nothing of its own yet (e.g. just added
+/// a vps that has zero sessions — show *something* rather than an empty
+/// pane).
+pub fn pick_initial_selection(
+    sessions: &[Session],
+    session_profile: &HashMap<Uuid, String>,
+    active_profile: Option<&str>,
+) -> Option<Uuid> {
+    let active = active_profile.unwrap_or("");
+    sessions
+        .iter()
+        .find(|s| {
+            session_profile
+                .get(&s.id)
+                .map(String::as_str)
+                .unwrap_or("")
+                == active
+        })
+        .map(|s| s.id)
+        .or_else(|| sessions.first().map(|s| s.id))
+}
+
 // ---------- Event loop ----------
 
 #[allow(clippy::too_many_arguments)]
@@ -2265,6 +2291,20 @@ pub async fn run_loop(
     // would put every session in the "default" group; rebuilding
     // here gives the correct (profile, workdir) grouping.
     app.tree = app.build_scoped_tree(&HashMap::new());
+    // Re-derive the initial selection now that we know which profile is
+    // active. `App::new` picked whichever session sorted first across
+    // the merged fleet (loopback wins because the empty profile key
+    // sorts first) — after a Ctrl-O switch from loopback to a remote
+    // server that left the terminal pane stuck on a loopback session
+    // while the title bar read `@vps`, which the user reads as "the
+    // switch didn't happen." Prefer a session owned by the active
+    // profile; only fall back to the first visible leaf when the new
+    // server has no sessions yet.
+    app.selected = pick_initial_selection(
+        &app.sessions,
+        &app.session_profile,
+        app.active_profile.as_deref(),
+    );
 
     // Default profile: the live `client` we got from `connect_once`.
     // Keyed under the active profile name (or "" for loopback) so
@@ -5915,6 +5955,24 @@ fn prev_focus(current: Focus, lazygit_open: bool, split_open: bool) -> Focus {
     }
 }
 
+/// Walk up from `start` looking for a `.git` entry (a directory or a
+/// gitlink file in a worktree). Returns the first repo root found, or
+/// `None` if we hit the filesystem root without seeing one. Used by
+/// `toggle_lazygit` so the remote-workdir fallback opens in a real
+/// repo instead of dumping the user into lazygit's "empty repo"
+/// screen on their `$HOME`.
+fn nearest_git_repo(start: &Path) -> Option<PathBuf> {
+    let mut cur = start.to_path_buf();
+    loop {
+        if cur.join(".git").exists() {
+            return Some(cur);
+        }
+        if !cur.pop() {
+            return None;
+        }
+    }
+}
+
 /// Toggle the lazygit side pane.
 ///
 /// On open: confirm the binary is on PATH (else show the install overlay),
@@ -5956,10 +6014,16 @@ async fn toggle_lazygit(app: &mut App, lg_tx: &mpsc::UnboundedSender<PtyMsg>) {
             if p.is_dir() {
                 (p, false)
             } else {
-                (local_cwd.clone(), true)
+                (
+                    nearest_git_repo(&local_cwd).unwrap_or_else(|| local_cwd.clone()),
+                    true,
+                )
             }
         }
-        None => (local_cwd.clone(), false),
+        None => (
+            nearest_git_repo(&local_cwd).unwrap_or_else(|| local_cwd.clone()),
+            false,
+        ),
     };
     let args = extensions::resolve_args(&LAZYGIT, &cwd);
 
@@ -7009,6 +7073,49 @@ pub fn status_dot(s: Status) -> (&'static str, ratatui::style::Color) {
         // at a glance. A stopped terminal is dormant, not blocked on you.
         Status::Stopped => ("◐", Color::DarkGray),
         Status::Crashed => ("✗", Color::Red),
+    }
+}
+
+/// Per-tool icon glyph + accent color. Mirrors the sidebar's session
+/// status_dot pattern: tiny single-cell glyphs, colored by tool brand
+/// so the user can scan "which agents am I running" without reading
+/// the trailing `tool/model` label. Coverage tracks `TOOL_SUGGESTIONS`
+/// plus the passthrough shells; unknown tools fall back to a neutral
+/// square so a new tool added on the daemon side still renders
+/// something rather than blanking.
+pub fn tool_icon(tool: &str) -> (&'static str, ratatui::style::Color) {
+    use ratatui::style::Color;
+    match tool {
+        // Anthropic's sparkle. Yellow = closest ANSI base color to the
+        // Claude brand orange (#d97757) without hardcoding RGB and
+        // breaking high-contrast themes.
+        "claude" => ("✦", Color::Yellow),
+        // OpenAI green-ish; the fisheye reads as the chat "o" without
+        // looking like the idle status glyph.
+        "codex" => ("◉", Color::Green),
+        // Cursor's mark is a forward chevron; magenta picks it out
+        // from claude/codex on a busy sidebar.
+        "cursor" => ("❯", Color::Magenta),
+        // Generic "agent" passthrough — diamond reads as "some agent"
+        // without claiming a specific vendor.
+        "agent" => ("◆", Color::Cyan),
+        // Gemini's brand is a small four-point star; cyan picks it up
+        // from Claude's yellow sparkle.
+        "gemini" => ("✧", Color::Cyan),
+        // Hermes (xAI / Nous tooling) — hexagon-ish ring is distinct
+        // from the other star/diamond glyphs.
+        "hermes" => ("⌬", Color::LightMagenta),
+        // Copilot — paper-plane-ish glyph; blue ties to GitHub's
+        // visual identity.
+        "copilot" => ("❖", Color::Blue),
+        // Open-source coding agents share the warning/amber band so
+        // they group visually distinct from the vendor agents above.
+        "opencode" => ("◇", Color::LightYellow),
+        "aider" => ("✚", Color::LightGreen),
+        // Plain shells — `$` is the universal prompt glyph; muted so
+        // they don't compete with agent rows for attention.
+        "terminal" | "bash" => ("$", Color::DarkGray),
+        _ => ("▣", Color::DarkGray),
     }
 }
 

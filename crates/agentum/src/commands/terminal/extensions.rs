@@ -21,13 +21,17 @@ pub struct Extension {
     pub homepage: &'static str,
 }
 
-/// The lazygit extension definition. Args use `-p <cwd>` so lazygit opens
-/// scoped to the active session's workdir.
+/// The lazygit extension definition. The PTY's `cwd` already pins
+/// lazygit to the right directory; an explicit `-p {cwd}` flag is
+/// redundant and used to surface a confusing "directory does not
+/// exist" startup error when the caller's resolved path drifted out
+/// of sync with the spawn cwd (e.g. trailing-slash normalisation,
+/// symlink follow). Letting lazygit pick the cwd itself sidesteps that.
 pub const LAZYGIT: Extension = Extension {
     id: "lazygit",
     display_name: "lazygit",
     binary: "lazygit",
-    args: &["-p", "{cwd}"],
+    args: &[],
     blurb: "Fast, keyboard-first git UI. Stages, commits, branches, rebases, cherry-picks.",
     cheatsheet: &[
         ("switch panel", "1 2 3 4 5"),

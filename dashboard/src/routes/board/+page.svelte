@@ -12,13 +12,11 @@
     type Lane
   } from '$stores/fleet-board';
   import { sessions, loadSessions } from '$stores/sessions';
-  import { watchdog, loadWatchdog } from '$stores/watchdog';
   import { profiles } from '$lib/profiles';
   import { actorId } from '$stores/actor';
   import { api, type BoardItem } from '$lib/api';
   import { deriveState, fmtTokens, fmtCost } from '$lib/dashboard';
   import Ticket from '$components/dashboard/Ticket.svelte';
-  import Watchdog from '$components/dashboard/Watchdog.svelte';
   import BoardItemDialog from '$components/BoardItemDialog.svelte';
 
   // Safety-net refresh interval. The WS event bridge keeps the board
@@ -74,7 +72,6 @@
   function refresh() {
     void loadFleetBoard();
     void loadSessions();
-    void loadWatchdog(30);
   }
 
   onMount(() => {
@@ -516,25 +513,14 @@
 
     <aside class="rail" style="width: 300px;">
       <div class="rh">
-        <span>watchdog</span>
+        <span>burn-down</span>
         <span class="spacer"></span>
-        <span class="pill live" style="font-size: 10px;">live</span>
+        <span style={doneCount >= claimedCount ? 'color: var(--green);' : 'color: var(--amber);'}>
+          {doneCount >= claimedCount ? 'on track' : 'behind'}
+        </span>
       </div>
       <div class="rb">
         <div class="group">
-          <div class="gh">
-            <span>Last 30 min</span>
-            <span style="color: var(--fg-2);">{$watchdog.items.length} event{$watchdog.items.length === 1 ? '' : 's'}</span>
-          </div>
-          <Watchdog feed={$watchdog.items} limit={20} />
-        </div>
-        <div class="group">
-          <div class="gh">
-            <span>Burn-down</span>
-            <span style={doneCount >= claimedCount ? 'color: var(--green);' : 'color: var(--amber);'}>
-              {doneCount >= claimedCount ? 'on track' : 'behind'}
-            </span>
-          </div>
           <div class="kv">
             <span class="k">claimed</span>   <span class="v">{claimedCount} / {totalCount}</span>
             <span class="k">in review</span> <span class="v">{reviewCount}</span>
