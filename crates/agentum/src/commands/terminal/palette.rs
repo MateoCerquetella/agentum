@@ -122,7 +122,7 @@ pub enum ActionKind {
     /// `ResetStatusBar` — drops layout sizes, sounds, and TTLs back to
     /// the ship-with values.
     ResetAllPrefs,
-    /// Open the server switcher overlay. Mirrors the Ctrl-O
+    /// Open the server switcher overlay. Mirrors the Ctrl-S
     /// keybinding so the profile picker is reachable through palette
     /// filtering ("server" / "profile" / "switch").
     OpenProfiles,
@@ -132,7 +132,7 @@ pub enum ActionKind {
     /// Toggle "show sessions from every reachable server" (default,
     /// recommended) vs "scope the tree to the active server only".
     /// Persisted across runs via prefs. Reachable from the command
-    /// palette and the Ctrl-O profiles overlay's `s` key.
+    /// palette and the Ctrl-S profiles overlay's `s` key.
     ToggleShowAllServers,
 
     // ── Session CRUD ──────────────────────────────────────────────
@@ -325,7 +325,7 @@ impl Catalog {
                 "View: show all servers' sessions [{}] (recommended on)",
                 onoff(view.show_all_servers)
             ),
-            hint: "Ctrl-O · s".into(),
+            hint: "Ctrl-S · s".into(),
             group: "view",
             kind: ActionKind::ToggleShowAllServers,
         });
@@ -358,11 +358,11 @@ impl Catalog {
             group: "settings",
             kind: ActionKind::OpenSettings,
         });
-        // Server switcher — palette parity with Ctrl-O so users
+        // Server switcher — palette parity with Ctrl-S so users
         // typing "server" / "profile" / "switch server" find it.
         a.push(Action {
             label: "Switch server…  (agentum daemon)".into(),
-            hint: "Ctrl-O".into(),
+            hint: "Ctrl-S".into(),
             group: "general",
             kind: ActionKind::OpenProfiles,
         });

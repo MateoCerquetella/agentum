@@ -240,7 +240,7 @@ pub enum Cmd {
     ///
     /// A *profile* is a named (URL, optional fingerprint) pair so you
     /// can switch between several agentum servers without retyping
-    /// `--api …` every time. The TUI's Ctrl-O overlay and the
+    /// `--api …` every time. The TUI's Ctrl-S overlay and the
     /// dashboard's endpoint chip drive the same store.
     ///
     /// Examples:

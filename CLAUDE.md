@@ -149,7 +149,7 @@ without retyping the URL. Two layers:
   `crates/agentum/src/commands/profiles.rs`.
 - **TUI flag**: `agentum terminal --profile NAME` resolves to the
   profile's URL+fingerprint before the loopback probe runs.
-- **TUI overlay**: `Ctrl-O` opens `Overlay::Profiles`. Pick + Enter
+- **TUI overlay**: `Ctrl-S` opens `Overlay::Profiles`. Pick + Enter
   triggers a *soft restart* of the run-loop:
   `app::RunOutcome::SwitchProfile(name)` bubbles up to
   `commands::terminal::run`, which tears down the alt-screen,
@@ -184,11 +184,11 @@ without retyping the URL. Two layers:
 
 | Feature                        | TUI                       | Dashboard               |
 | ------------------------------ | ------------------------- | ----------------------- |
-| Profile add/list/remove        | `agentum profiles …` + Ctrl-O overlay | EndpointSwitcher in topbar |
+| Profile add/list/remove        | `agentum profiles …` + Ctrl-S overlay | EndpointSwitcher in topbar |
 | Active profile indicator       | title bar `· @name`       | chip in topbar          |
 | Empty-daemon onboarding        | numbered prompt before alt-screen | inline form on TokenGate's unreachable card |
 | Agent installation gating      | "(not installed)" hint on Tool field | tile dimmed + tooltip |
-| Switch profile mid-session     | Ctrl-O → soft restart of run-loop | switch chip → page reload |
+| Switch profile mid-session     | Ctrl-S → soft restart of run-loop | switch chip → page reload |
 
 ---
 

@@ -393,7 +393,7 @@ fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     // surfacing "something failed — press !" in the user's eye-line.
     // Server suffix surfaces the active profile so users juggling
     // multiple agentum servers (local + VPS) can see which one drives
-    // the current pane without opening Ctrl-O. Hidden when no profile
+    // the current pane without opening Ctrl-S. Hidden when no profile
     // is active (loopback, ad-hoc `--api`) to keep the bar tidy.
     let server_suffix = match app.active_profile.as_deref() {
         Some(name) => format!(" · @{name}"),
@@ -653,12 +653,6 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
             if let Some((label, color)) = server_version_chip(version, p) {
                 spans.push(Span::raw("  "));
                 spans.push(Span::styled(label, Style::default().fg(color)));
-            }
-            if entry.is_default {
-                spans.push(Span::styled(
-                    "  default".to_string(),
-                    Style::default().fg(p.accent),
-                ));
             }
             match status {
                 Some(ServerStatus::Unreachable) => {
@@ -994,18 +988,16 @@ fn draw_servers_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Resolve the cursor position to a (key, label, url, fingerprint,
-    // is_default) tuple. Cursor 0 is the synthetic loopback row —
-    // keyed by `""` in `app.clients`, no on-disk profile to read
-    // metadata from.
+    // Resolve the cursor position to a (key, label, url, fingerprint)
+    // tuple. Cursor 0 is the synthetic loopback row — keyed by `""` in
+    // `app.clients`, no on-disk profile to read metadata from.
     let cursor = app.servers_cursor;
-    let (key, label, url, fingerprint, is_default) = if cursor == 0 {
+    let (key, label, url, fingerprint) = if cursor == 0 {
         (
             String::new(),
             local_machine_label(),
             "http://127.0.0.1:8822 (local daemon)".to_string(),
             None,
-            false,
         )
     } else {
         match app.profiles.get(cursor - 1) {
@@ -1014,7 +1006,6 @@ fn draw_servers_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
                 profile_label(&e.name),
                 e.url.clone(),
                 e.fingerprint.clone(),
-                e.is_default,
             ),
             None => {
                 // Cursor outside the profiles list — render an empty
@@ -1089,13 +1080,6 @@ fn draw_servers_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         header.push(Span::raw("  "));
         header.push(Span::styled(
             "active".to_string(),
-            Style::default().fg(p.accent),
-        ));
-    }
-    if is_default {
-        header.push(Span::raw("  "));
-        header.push(Span::styled(
-            "default".to_string(),
             Style::default().fg(p.accent),
         ));
     }
@@ -1487,6 +1471,7 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         Line::from(""),
         head("  Universal (work even inside the terminal pane)", p),
         body("  Ctrl-P / Ctrl-Shift-P  command palette", p),
+        body("  Ctrl-S            open the servers switcher overlay", p),
         body("  Ctrl-E            toggle focus: tree ↔ terminal", p),
         body("  Ctrl-G            toggle lazygit side pane", p),
         body("  Ctrl-Tab          flip back to last session", p),
@@ -2036,12 +2021,6 @@ fn draw_profiles_overlay(
                         .add_modifier(Modifier::BOLD),
                 ),
             ];
-            if entry.is_default {
-                row_spans.push(Span::styled(
-                    "  · default".to_string(),
-                    Style::default().fg(p.accent),
-                ));
-            }
             if entry.fingerprint.is_some() {
                 row_spans.push(Span::styled(
                     "  · pinned".to_string(),
@@ -2058,7 +2037,7 @@ fn draw_profiles_overlay(
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  Enter switch · a add · d remove · s scope · Esc close".to_string(),
+        "  Enter switch · a add · e edit · d remove · s scope · Esc close".to_string(),
         Style::default().fg(p.muted),
     )));
 
@@ -2066,8 +2045,14 @@ fn draw_profiles_overlay(
 }
 
 fn draw_profiles_add_form(f: &mut Frame<'_>, area: Rect, form: &AddProfileForm, p: &Palette) {
+    let editing = form.editing.is_some();
+    let (heading, frame_title) = if editing {
+        ("Edit server", " edit server ")
+    } else {
+        ("Add server", " add server ")
+    };
     let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(head("Add server", p));
+    lines.push(head(heading, p));
     lines.push(Line::from(""));
     push_form_field(
         &mut lines,
@@ -2094,13 +2079,6 @@ fn draw_profiles_add_form(f: &mut Frame<'_>, area: Rect, form: &AddProfileForm, 
         Some("(optional — leave blank to prompt on first connect)"),
         p,
     );
-    push_toggle_field(
-        &mut lines,
-        "Set as default",
-        form.set_default,
-        form.field == AddProfileField::SetDefault,
-        p,
-    );
     if let Some(err) = form.error.as_ref() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
@@ -2110,10 +2088,10 @@ fn draw_profiles_add_form(f: &mut Frame<'_>, area: Rect, form: &AddProfileForm, 
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  Tab next · Space toggle · Enter save · Esc back".to_string(),
+        "  Tab next · Enter save · Esc back".to_string(),
         Style::default().fg(p.muted),
     )));
-    overlay_box(f, area, " add server ", lines, 80, p);
+    overlay_box(f, area, frame_title, lines, 80, p);
 }
 
 fn draw_errors_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {

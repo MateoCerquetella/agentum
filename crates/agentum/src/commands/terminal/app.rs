@@ -193,10 +193,9 @@ pub enum Overlay {
 pub struct ProfilesOverlay {
     pub entries: Vec<ProfileEntry>,
     pub cursor: usize,
-    pub default_name: Option<String>,
     pub error: Option<String>,
-    /// `Some` when the user is editing the inline "add server" form
-    /// instead of the list. Mirrors the dashboard's ServerSwitcher.
+    /// `Some` when the user is editing the inline add/edit form instead
+    /// of the list. Mirrors the dashboard's ServerSwitcher.
     pub add_form: Option<AddProfileForm>,
 }
 
@@ -208,7 +207,6 @@ pub struct ProfileEntry {
     pub name: String,
     pub url: String,
     pub fingerprint: Option<String>,
-    pub is_default: bool,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -217,8 +215,12 @@ pub struct AddProfileForm {
     pub name: String,
     pub url: String,
     pub fingerprint: String,
-    pub set_default: bool,
     pub error: Option<String>,
+    /// When `Some(original_name)` the form is editing an existing
+    /// profile rather than inserting a new one. On save, a rename
+    /// (`original_name != name`) removes the old entry and writes the
+    /// new one; matching names just upsert in place.
+    pub editing: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -226,7 +228,6 @@ pub enum AddProfileField {
     Name,
     Url,
     Fingerprint,
-    SetDefault,
 }
 
 impl AddProfileForm {
@@ -236,8 +237,21 @@ impl AddProfileForm {
             name: String::new(),
             url: String::new(),
             fingerprint: String::new(),
-            set_default: false,
             error: None,
+            editing: None,
+        }
+    }
+
+    /// Pre-fill the form from an existing entry. The form keeps the
+    /// original name in `editing` so a rename can be detected on save.
+    pub fn edit(entry: &ProfileEntry) -> Self {
+        Self {
+            field: AddProfileField::Name,
+            name: entry.name.clone(),
+            url: entry.url.clone(),
+            fingerprint: entry.fingerprint.clone().unwrap_or_default(),
+            error: None,
+            editing: Some(entry.name.clone()),
         }
     }
 
@@ -245,17 +259,15 @@ impl AddProfileForm {
         self.field = match self.field {
             AddProfileField::Name => AddProfileField::Url,
             AddProfileField::Url => AddProfileField::Fingerprint,
-            AddProfileField::Fingerprint => AddProfileField::SetDefault,
-            AddProfileField::SetDefault => AddProfileField::Name,
+            AddProfileField::Fingerprint => AddProfileField::Name,
         };
     }
 
     pub fn prev_field(&mut self) {
         self.field = match self.field {
-            AddProfileField::Name => AddProfileField::SetDefault,
+            AddProfileField::Name => AddProfileField::Fingerprint,
             AddProfileField::Url => AddProfileField::Name,
             AddProfileField::Fingerprint => AddProfileField::Url,
-            AddProfileField::SetDefault => AddProfileField::Fingerprint,
         };
     }
 
@@ -264,7 +276,6 @@ impl AddProfileForm {
             AddProfileField::Name => Some(&mut self.name),
             AddProfileField::Url => Some(&mut self.url),
             AddProfileField::Fingerprint => Some(&mut self.fingerprint),
-            AddProfileField::SetDefault => None,
         }
     }
 }
@@ -1357,11 +1368,10 @@ impl App {
             Ok(store) => store
                 .list()
                 .into_iter()
-                .map(|(name, p, is_default)| ProfileEntry {
+                .map(|(name, p, _is_default)| ProfileEntry {
                     name,
                     url: p.url,
                     fingerprint: p.fingerprint,
-                    is_default,
                 })
                 .collect(),
             Err(_) => Vec::new(),
@@ -2288,7 +2298,7 @@ pub async fn run_loop(
     // Re-derive the initial selection now that we know which profile is
     // active. `App::new` picked whichever session sorted first across
     // the merged fleet (loopback wins because the empty profile key
-    // sorts first) — after a Ctrl-O switch from loopback to a remote
+    // sorts first) — after a Ctrl-S switch from loopback to a remote
     // server that left the terminal pane stuck on a loopback session
     // while the title bar read `@vps`, which the user reads as "the
     // switch didn't happen." Prefer a session owned by the active
@@ -3486,12 +3496,13 @@ async fn handle_key(
         return;
     }
 
-    // Ctrl-O — open the server switcher overlay from any focus.
-    // Mnemonic: "open server". Mirrors the dashboard's
-    // ServerSwitcher chip in the topbar. Available from anywhere so
-    // a user driving multiple agentum servers can hop without
-    // releasing focus; also surfaced in the command palette.
-    if ctrl && matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O')) {
+    // Ctrl-S — open the server switcher overlay from any focus.
+    // Mnemonic: "S = Servers". Mirrors the dashboard's ServerSwitcher
+    // chip in the topbar. Available from anywhere so a user driving
+    // multiple agentum servers can hop without releasing focus; also
+    // surfaced in the command palette. Plain Shift+S still acts on the
+    // tree cursor (stop session) — the modifier disambiguates.
+    if ctrl && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S')) {
         open_profiles_overlay(app);
         return;
     }
@@ -4028,7 +4039,7 @@ async fn handle_key(
             match app.tree_section {
                 TreeSection::Servers => {
                     // Switch the active profile to whichever server the
-                    // cursor sits on. Mirrors the Ctrl-O overlay's Enter
+                    // cursor sits on. Mirrors the Ctrl-S overlay's Enter
                     // — schedules a soft restart via `pending_switch_profile`
                     // so the run-loop tears down and reconnects against
                     // the new target. Cursor 0 is the synthetic
@@ -4104,7 +4115,7 @@ async fn handle_key(
         // Sessions tree's existing `d` (delete-session) keybind, if
         // any, doesn't get hijacked.
         KeyCode::Char('a') if app.tree_section == TreeSection::Servers => {
-            // Reuse the same overlay the Ctrl-O switcher uses; the
+            // Reuse the same overlay the Ctrl-S switcher uses; the
             // overlay's add-form handles validation + persistence.
             open_profiles_overlay(app);
             if let Overlay::Profiles(ref mut state) = app.overlay {
@@ -4321,7 +4332,7 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
                             }
                         } else {
                             form.error = Some(format!(
-                                "{} isn't connected — try Ctrl-O to re-add",
+                                "{} isn't connected — try Ctrl-S to re-add",
                                 profile_label(&form.profile)
                             ));
                         }
@@ -5065,10 +5076,10 @@ pub fn palette_catalog(app: &App) -> Catalog {
 /// Build a [`ProfilesOverlay`] from the on-disk profiles file and
 /// install it on `app`. Surfaces a friendly error in the overlay
 /// itself when the file is unreadable or empty rather than silently
-/// no-op'ing — the user just hit Ctrl-O for a reason.
+/// no-op'ing — the user just hit Ctrl-S for a reason.
 /// Flip `show_all_servers`, rebuild the tree against the new scope,
 /// persist to prefs, and surface a status toast describing the new
-/// state. Used by both the palette action and the Ctrl-O overlay's
+/// state. Used by both the palette action and the Ctrl-S overlay's
 /// `s` key so the two surfaces stay in lockstep.
 pub fn toggle_show_all_servers(app: &mut App) {
     app.show_all_servers = !app.show_all_servers;
@@ -5102,31 +5113,29 @@ pub fn toggle_show_all_servers(app: &mut App) {
 }
 
 pub fn open_profiles_overlay(app: &mut App) {
-    let (entries, default_name, error) = match super::profiles::load() {
+    let (entries, error) = match super::profiles::load() {
         Ok(store) => {
-            let default_name = store.default_name().map(str::to_string);
             let mut rows: Vec<ProfileEntry> = store
                 .list()
                 .into_iter()
-                .map(|(name, p, is_default)| ProfileEntry {
+                .map(|(name, p, _is_default)| ProfileEntry {
                     name,
                     url: p.url,
                     fingerprint: p.fingerprint,
-                    is_default,
                 })
                 .collect();
-            // Surface the active profile at the top of the picker
-            // when it isn't the default — saves a step on the most
-            // common task ("which one am I on right now?").
+            // Surface the active profile at the top of the picker so
+            // the most common task ("which one am I on right now?") is
+            // already under the cursor.
             if let Some(active) = &app.active_profile {
                 if let Some(idx) = rows.iter().position(|r| &r.name == active) {
                     let row = rows.remove(idx);
                     rows.insert(0, row);
                 }
             }
-            (rows, default_name, None)
+            (rows, None)
         }
-        Err(e) => (Vec::new(), None, Some(format!("load profiles.toml: {e}"))),
+        Err(e) => (Vec::new(), Some(format!("load profiles.toml: {e}"))),
     };
     let cursor = entries
         .iter()
@@ -5135,7 +5144,6 @@ pub fn open_profiles_overlay(app: &mut App) {
     app.overlay = Overlay::Profiles(ProfilesOverlay {
         entries,
         cursor,
-        default_name,
         error,
         add_form: None,
     });
@@ -5155,7 +5163,7 @@ fn handle_profiles_key(app: &mut App, key: KeyEvent) {
     };
 
     if let Some(mut form) = state.add_form.take() {
-        // ----- add-form mode -----
+        // ----- add/edit form mode -----
         match key.code {
             KeyCode::Esc => {
                 // Drop the form, return to the list.
@@ -5164,9 +5172,6 @@ fn handle_profiles_key(app: &mut App, key: KeyEvent) {
             }
             KeyCode::Tab | KeyCode::Down => form.next_field(),
             KeyCode::BackTab | KeyCode::Up => form.prev_field(),
-            KeyCode::Char(' ') if form.field == AddProfileField::SetDefault => {
-                form.set_default = !form.set_default;
-            }
             KeyCode::Backspace => {
                 if let Some(v) = form.field_value_mut() {
                     v.pop();
@@ -5214,6 +5219,17 @@ fn handle_profiles_key(app: &mut App, key: KeyEvent) {
                 };
                 match super::profiles::load() {
                     Ok(mut store) => {
+                        // Edit-with-rename: drop the old entry first so
+                        // we never end up with both the original and
+                        // the renamed copy on disk if the upsert below
+                        // fails partway. The active-profile guard in
+                        // list-mode already prevents renaming the row
+                        // the user is connected to.
+                        if let Some(original) = form.editing.as_deref() {
+                            if original != name {
+                                let _ = store.remove(original);
+                            }
+                        }
                         if let Err(e) = store.upsert(
                             name.clone(),
                             super::profiles::Profile {
@@ -5227,12 +5243,9 @@ fn handle_profiles_key(app: &mut App, key: KeyEvent) {
                             app.overlay = Overlay::Profiles(state);
                             return;
                         }
-                        if form.set_default {
-                            let _ = store.set_default(Some(name.clone()));
-                        }
                         // Reload the list and snap the cursor onto the
-                        // freshly added profile so Enter switches to
-                        // it immediately.
+                        // freshly added/edited profile so Enter switches
+                        // to it immediately.
                         open_profiles_overlay(app);
                         if let Overlay::Profiles(ref mut s) = app.overlay {
                             if let Some(idx) = s.entries.iter().position(|e| e.name == name) {
@@ -5273,6 +5286,21 @@ fn handle_profiles_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Char('a') | KeyCode::Char('+') | KeyCode::Char('n') => {
             state.add_form = Some(AddProfileForm::new());
+            app.overlay = Overlay::Profiles(state);
+        }
+        KeyCode::Char('e') | KeyCode::Char('E') => {
+            // Edit the highlighted profile. Refuse to edit the active
+            // profile: a rename or URL flip mid-session would race the
+            // live client against a moving target. They can switch off
+            // first, then edit.
+            if let Some(entry) = state.entries.get(state.cursor) {
+                if app.active_profile.as_deref() == Some(entry.name.as_str()) {
+                    state.error = Some("can't edit the active profile — switch first".into());
+                    app.overlay = Overlay::Profiles(state);
+                    return;
+                }
+                state.add_form = Some(AddProfileForm::edit(entry));
+            }
             app.overlay = Overlay::Profiles(state);
         }
         KeyCode::Char('s') | KeyCode::Char('S') => {
@@ -7213,7 +7241,7 @@ mod merge_dedup_tests {
         assert_eq!(owners.get(&b).map(String::as_str), Some("macos"));
     }
 
-    // The bug we're guarding: a Ctrl-O switch from loopback to a remote
+    // The bug we're guarding: a Ctrl-S switch from loopback to a remote
     // server used to leave the terminal pane on whichever session sorted
     // first in the merged list — which is loopback because the empty
     // profile key sorts ahead of named profiles. The active profile chip
