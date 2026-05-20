@@ -538,10 +538,13 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
 
     // Servers section leads the sidebar as a compact status strip.
     // Header shows a `▶ N` chip when collapsed so the user always
-    // sees there's something folded away. Cursor 0 of
-    // `servers_cursor` is the implicit local loopback ("this
-    // machine"); cursors 1..=N map to `app.profiles`.
-    let server_count = app.profiles.len() + 1; // +1 for the loopback row
+    // sees there's something folded away. When the synthetic loopback
+    // row is rendered, cursor 0 is "this machine" and cursors
+    // 1..=N map to `app.profiles`; when it isn't, cursors 0..N-1 map
+    // directly to `app.profiles`. `synthetic_loopback_visible()`
+    // encapsulates both checks.
+    let synthetic_loopback = app.synthetic_loopback_visible();
+    let server_count = app.servers_row_count();
     let header_label = if app.servers_collapsed {
         format!(" SERVERS  ▶ {server_count}  (Ctrl-K V)")
     } else {
@@ -553,9 +556,12 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     ))));
 
     if !app.servers_collapsed {
-        // Row 0 — "this machine". Active when the active profile is None
+        // Row 0 — "this machine". Only rendered when the loopback was
+        // actually probed (`clients[""]` populated) and no named
+        // profile already points at it; otherwise the row would be a
+        // phantom duplicate. Active when the active profile is None
         // (loopback launch) or maps to the empty profile-name key.
-        {
+        if synthetic_loopback {
             let is_active = app
                 .active_profile
                 .as_deref()
@@ -611,11 +617,15 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
             }
             items.push(ListItem::new(Line::from(spans)).style(row_style));
         }
+        let profile_row_offset = usize::from(synthetic_loopback);
         for (i, entry) in app.profiles.iter().enumerate() {
             let is_active = app.active_profile.as_deref() == Some(entry.name.as_str());
-            // +1 to account for the synthetic "this machine" row above.
-            let is_cursor =
-                app.tree_section == TreeSection::Servers && (i + 1) == app.servers_cursor;
+            // Add an offset when the synthetic "this machine" row is
+            // painted above — its presence shifts every profile row by
+            // one. When the synthetic row is hidden, profile `i` sits
+            // at cursor `i` directly.
+            let is_cursor = app.tree_section == TreeSection::Servers
+                && (i + profile_row_offset) == app.servers_cursor;
             let row_style = if is_cursor {
                 Style::default()
                     .bg(p.cursor_bg)
@@ -989,10 +999,13 @@ fn draw_servers_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     f.render_widget(block, area);
 
     // Resolve the cursor position to a (key, label, url, fingerprint)
-    // tuple. Cursor 0 is the synthetic loopback row — keyed by `""` in
-    // `app.clients`, no on-disk profile to read metadata from.
+    // tuple. When the synthetic loopback row is visible, cursor 0 is
+    // it (keyed by `""` in `app.clients`, no on-disk profile to read
+    // metadata from); otherwise cursors 0..N map straight to
+    // `app.profiles`.
+    let synthetic_loopback = app.synthetic_loopback_visible();
     let cursor = app.servers_cursor;
-    let (key, label, url, fingerprint) = if cursor == 0 {
+    let (key, label, url, fingerprint) = if synthetic_loopback && cursor == 0 {
         (
             String::new(),
             local_machine_label(),
@@ -1000,7 +1013,8 @@ fn draw_servers_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
             None,
         )
     } else {
-        match app.profiles.get(cursor - 1) {
+        let idx = cursor.saturating_sub(usize::from(synthetic_loopback));
+        match app.profiles.get(idx) {
             Some(e) => (
                 e.name.clone(),
                 profile_label(&e.name),

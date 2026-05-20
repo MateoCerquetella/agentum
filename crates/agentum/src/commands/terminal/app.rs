@@ -1357,6 +1357,48 @@ impl App {
             .filter_map(|(name, entry)| entry.client.as_ref().map(|c| (name.as_str(), c)))
     }
 
+    /// Whether the SERVERS section renders the synthetic "this machine"
+    /// row at cursor 0. The row only carries useful data when the user
+    /// launched without `--profile` (in which case the loopback was
+    /// probed and stored under the `""` key in `app.clients`); a
+    /// `--profile` launch never populates that key, so painting the row
+    /// anyway leaves a phantom entry above the named profiles. The
+    /// predicate also collapses the row when the user has registered a
+    /// real profile pointing at the local daemon, since the named row
+    /// already represents it.
+    pub fn synthetic_loopback_visible(&self) -> bool {
+        if !self.clients.contains_key("") {
+            return false;
+        }
+        // If a named profile points at the loopback, the synthetic row
+        // is just a duplicate of that named row — collapse it. We match
+        // on URL host so a profile recorded as `http://127.0.0.1:8822`
+        // or `https://localhost:8822` both win.
+        !self
+            .profiles
+            .iter()
+            .any(|p| profile_targets_loopback(&p.url))
+    }
+
+    /// Total rows in the visible SERVERS section, counting the
+    /// synthetic loopback row only when it's actually being painted.
+    pub fn servers_row_count(&self) -> usize {
+        self.profiles.len() + usize::from(self.synthetic_loopback_visible())
+    }
+
+    /// Resolve a SERVERS-section cursor to the profile it points at.
+    /// Returns `None` when the cursor sits on the synthetic loopback
+    /// row (only possible while `synthetic_loopback_visible()`).
+    pub fn cursor_profile(&self) -> Option<&ProfileEntry> {
+        let synth = self.synthetic_loopback_visible();
+        if synth && self.servers_cursor == 0 {
+            return None;
+        }
+        let offset = usize::from(synth);
+        self.profiles
+            .get(self.servers_cursor.saturating_sub(offset))
+    }
+
     /// Load the on-disk profiles into `app.profiles`. Called once at
     /// run-loop start and again any time the user adds/removes a
     /// profile via the sidebar or overlay so the sidebar stays in
@@ -1376,9 +1418,12 @@ impl App {
                 .collect(),
             Err(_) => Vec::new(),
         };
-        // Bring the cursor back into range when the list shrank under it.
-        if self.servers_cursor >= self.profiles.len() {
-            self.servers_cursor = self.profiles.len().saturating_sub(1);
+        // Clamp the cursor against the new row count. `servers_row_count`
+        // already accounts for the synthetic loopback row appearing or
+        // disappearing (e.g. when the user added a 127.0.0.1 profile).
+        let max = self.servers_row_count().saturating_sub(1);
+        if self.servers_cursor > max {
+            self.servers_cursor = max;
         }
     }
 
@@ -1783,6 +1828,21 @@ pub fn profile_label(profile: &str) -> String {
     } else {
         format!("@{profile}")
     }
+}
+
+/// Returns `true` when `url`'s host points at the local loopback so
+/// the sidebar can collapse the synthetic "this machine" row into a
+/// named profile that already represents it. Accepts IPv4 / IPv6
+/// loopback literals and `localhost`. Anything unparseable returns
+/// `false` — the synthetic row stays as a safety net.
+pub fn profile_targets_loopback(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    matches!(
+        parsed.host_str(),
+        Some("127.0.0.1") | Some("::1") | Some("[::1]") | Some("localhost")
+    )
 }
 
 /// Hostname-derived label for the loopback row. Centralised so the
@@ -2349,6 +2409,40 @@ pub async fn run_loop(
                 version: conn.version,
             },
         );
+    }
+
+    // One-shot drift toast for the active daemon. When the user
+    // upgrades the CLI with `agentum update` (or
+    // `install -m 755 target/release/agentum ~/.local/bin/agentum`),
+    // the on-disk binary is replaced but the running daemon process
+    // still holds the old inode in memory — `/api/health` keeps
+    // returning the pre-upgrade version until the daemon is
+    // restarted. The version chip already paints in the warning color
+    // when drift is detected, but users have read past that — surface
+    // an explicit notification on first connect so they know what to
+    // do.
+    {
+        let local = env!("CARGO_PKG_VERSION");
+        let server_version = app
+            .clients
+            .get(default_key.as_str())
+            .and_then(|e| e.version.clone())
+            .filter(|v| v != local);
+        if let Some(server) = server_version {
+            let label = if default_key.is_empty() {
+                local_machine_label()
+            } else {
+                profile_label(&default_key)
+            };
+            push_notification(
+                &mut app,
+                format!("{label} is running v{server}"),
+                Some(format!(
+                    "your CLI is v{local} — restart `agentum serve` on the host to upgrade"
+                )),
+                NotifKind::Warn,
+            );
+        }
     }
 
     // Apply a follow-up action queued by the previous run-loop's
@@ -3417,22 +3511,24 @@ async fn handle_key(
     {
         match app.tree_section {
             TreeSection::Servers => {
-                // Cursor 0 is the synthetic "this machine" row, which
-                // doesn't correspond to a persisted profile entry —
-                // there's nothing to remove.
-                if app.servers_cursor == 0 {
-                    app.status_msg = Some(format!(
-                        "can't remove {} — it's the local loopback",
-                        local_machine_label()
-                    ));
-                } else if let Some(entry) = app.profiles.get(app.servers_cursor - 1).cloned() {
-                    if app.active_profile.as_deref() == Some(entry.name.as_str()) {
-                        app.status_msg =
-                            Some("can't remove the active server — switch first".into());
-                    } else {
-                        app.overlay = Overlay::Confirm(PendingAction::RemoveServer {
-                            name: entry.name.clone(),
-                        });
+                // The synthetic "this machine" row doesn't correspond to
+                // a persisted profile entry — there's nothing to remove.
+                match app.cursor_profile().cloned() {
+                    None => {
+                        app.status_msg = Some(format!(
+                            "can't remove {} — it's the local loopback",
+                            local_machine_label()
+                        ));
+                    }
+                    Some(entry) => {
+                        if app.active_profile.as_deref() == Some(entry.name.as_str()) {
+                            app.status_msg =
+                                Some("can't remove the active server — switch first".into());
+                        } else {
+                            app.overlay = Overlay::Confirm(PendingAction::RemoveServer {
+                                name: entry.name.clone(),
+                            });
+                        }
                     }
                 }
                 return;
@@ -3983,7 +4079,11 @@ async fn handle_key(
             // Sessions only and `j` is just a normal tree move.
             match app.tree_section {
                 TreeSection::Servers => {
-                    let last = app.profiles.len(); // index of last row
+                    // `servers_row_count` already accounts for the
+                    // optional synthetic loopback row, so `last` is the
+                    // index of the *last visible row* regardless of
+                    // whether the synthetic row is being painted.
+                    let last = app.servers_row_count().saturating_sub(1);
                     if app.servers_cursor < last {
                         app.servers_cursor += 1;
                     } else {
@@ -4009,7 +4109,10 @@ async fn handle_key(
                     if app.tree.cursor == 0 {
                         if !app.servers_collapsed {
                             app.tree_section = TreeSection::Servers;
-                            app.servers_cursor = app.profiles.len();
+                            // Snap to the *last* visible servers row,
+                            // accounting for the optional synthetic
+                            // loopback above the profile list.
+                            app.servers_cursor = app.servers_row_count().saturating_sub(1);
                         }
                     } else {
                         app.tree.move_cursor(-1);
@@ -4056,13 +4159,10 @@ async fn handle_key(
                         app.status_msg = Some("close lazygit (g) before switching servers".into());
                         return;
                     }
-                    let target: String = if app.servers_cursor == 0 {
-                        String::new()
-                    } else {
-                        match app.profiles.get(app.servers_cursor - 1) {
-                            Some(e) => e.name.clone(),
-                            None => return,
-                        }
+                    let target: String = match app.cursor_profile() {
+                        Some(e) => e.name.clone(),
+                        None if app.synthetic_loopback_visible() => String::new(),
+                        None => return,
                     };
                     let active = app.active_profile.clone().unwrap_or_default();
                     let label = profile_label(&target);
@@ -4127,18 +4227,23 @@ async fn handle_key(
             // so an accidental keypress doesn't silently nuke the
             // profile. The previous direct-`store.remove` path was the
             // muscle-memory landmine the user kept hitting.
-            if app.servers_cursor == 0 {
-                app.status_msg = Some(format!(
-                    "can't remove {} — it's the local loopback",
-                    local_machine_label()
-                ));
-            } else if let Some(entry) = app.profiles.get(app.servers_cursor - 1).cloned() {
-                if app.active_profile.as_deref() == Some(entry.name.as_str()) {
-                    app.status_msg = Some("can't remove the active server — switch first".into());
-                } else {
-                    app.overlay = Overlay::Confirm(PendingAction::RemoveServer {
-                        name: entry.name.clone(),
-                    });
+            match app.cursor_profile().cloned() {
+                None => {
+                    // Synthetic loopback row — nothing on disk to remove.
+                    app.status_msg = Some(format!(
+                        "can't remove {} — it's the local loopback",
+                        local_machine_label()
+                    ));
+                }
+                Some(entry) => {
+                    if app.active_profile.as_deref() == Some(entry.name.as_str()) {
+                        app.status_msg =
+                            Some("can't remove the active server — switch first".into());
+                    } else {
+                        app.overlay = Overlay::Confirm(PendingAction::RemoveServer {
+                            name: entry.name.clone(),
+                        });
+                    }
                 }
             }
         }
@@ -7162,6 +7267,49 @@ pub fn tool_icon(tool: &str) -> (&'static str, ratatui::style::Color) {
         // they don't compete with agent rows for attention.
         "terminal" | "bash" => ("$", Color::DarkGray),
         _ => ("▣", Color::DarkGray),
+    }
+}
+
+#[cfg(test)]
+mod profile_targets_loopback_tests {
+    //! Pin the URL-host classifier the sidebar uses to decide whether
+    //! a registered profile already represents the local daemon — and
+    //! therefore the synthetic "MY MACHINE" row above it is redundant.
+    //! Misclassifying a remote host as loopback would *hide* the
+    //! synthetic row and leave the user without a way to navigate
+    //! back to their local daemon, so the cases below are the safety
+    //! net.
+    use super::*;
+
+    #[test]
+    fn loopback_literals_are_recognised() {
+        assert!(profile_targets_loopback("http://127.0.0.1:8822"));
+        assert!(profile_targets_loopback("https://127.0.0.1:8822"));
+        assert!(profile_targets_loopback("http://localhost:8822"));
+        assert!(profile_targets_loopback("https://localhost"));
+        assert!(profile_targets_loopback("http://[::1]:8822"));
+    }
+
+    #[test]
+    fn remote_hosts_are_not_loopback() {
+        assert!(!profile_targets_loopback("https://my-vps.example.com:8822"));
+        assert!(!profile_targets_loopback("https://100.64.0.1:8822"));
+        assert!(!profile_targets_loopback(
+            "https://mateos-macbook-pro.tail-scale.ts.net:8822"
+        ));
+        // Looks like a loopback substring but isn't:
+        assert!(!profile_targets_loopback(
+            "https://localhost.evil.example:8822"
+        ));
+    }
+
+    #[test]
+    fn unparseable_url_falls_back_to_safe_default() {
+        // An unparseable URL must NOT classify as loopback — that would
+        // hide the synthetic row and confuse the user.
+        assert!(!profile_targets_loopback(""));
+        assert!(!profile_targets_loopback("not a url"));
+        assert!(!profile_targets_loopback("127.0.0.1:8822")); // missing scheme
     }
 }
 
