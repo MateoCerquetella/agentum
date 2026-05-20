@@ -1,7 +1,14 @@
 <script lang="ts">
-  import { api, type AgentInfo, type BoardComment, type BoardItem, type BoardPatch, type NewBoardItem, type TicketLbl, type Tool } from '$lib/api';
+  import { api, ApiError, type AgentInfo, type BoardComment, type BoardItem, type BoardPatch, type NewBoardItem, type TicketLbl, type Tool } from '$lib/api';
   import { actorId } from '$stores/actor';
   import { profiles, activeProfileId, type Profile } from '$lib/profiles';
+  import {
+    parseGateRejection,
+    requiredFieldLabel,
+    requiredFieldsFor,
+    validateTransition,
+    type RequiredField
+  } from '$lib/board-schema';
   import DirPicker from './DirPicker.svelte';
 
   /**
@@ -33,6 +40,10 @@
     /** Seed for the Workdir field on create. Per-lane "+ Ticket" passes
      *  the lane's workdir so the new ticket inherits the project. */
     defaultWorkdir?: string | null;
+    /** Server-rejected fields to highlight on open — used when the page
+     *  reopens the dialog after a drag-drop snap-back so the user sees
+     *  the red borders without having to re-submit first. */
+    initialMissing?: RequiredField[];
     columns?: string[];
     onClose: () => void;
     onCreated?: (profileId: string, it: BoardItem) => void;
@@ -46,6 +57,7 @@
     defaultStatus = null,
     defaultProfileId = null,
     defaultWorkdir = null,
+    initialMissing = [],
     columns = [],
     onClose,
     onCreated,
@@ -99,6 +111,17 @@
   let deleting   = $state(false);
   let confirmDelete = $state(false);
   let error = $state<string | null>(null);
+
+  /// Server-rejected fields highlighted from the last 400 response.
+  /// Seeded either by the page (drag-drop snap-back via `initialMissing`)
+  /// or by this dialog's own submit handler. Cleared on the next user-
+  /// driven status change so the red borders don't linger after the
+  /// user fixes the problem.
+  let rejectedFields = $state<Set<RequiredField>>(new Set());
+  /// Tracks the last status the dialog rendered so the clear-on-status-
+  /// change effect can distinguish a user-driven column change from the
+  /// initial seed (where status flips from '' to its real value).
+  let priorStatus = $state<string>('');
 
   /// Agent installation gating against the *target* daemon. Keyed by
   /// profile id so flipping the Servers tile re-uses already-fetched
@@ -218,6 +241,12 @@
       model   = '';
       targetProfileId = defaultProfileId || $activeProfileId;
     }
+    // Seed server-rejection highlights from the parent (drag-drop
+    // snap-back path). Setting `priorStatus = status` before the
+    // clear-on-status-change effect runs prevents it from wiping out
+    // the seed on the same tick.
+    priorStatus = status;
+    rejectedFields = new Set(initialMissing);
     // Probe agent availability for the target profile. Subsequent
     // server tile clicks re-trigger via pickServer().
     void refreshAvailability(targetProfileId);
@@ -304,9 +333,39 @@
         onClose();
       }
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      // Server gate rejection? The payload carries {missing, status}.
+      // Map it onto rejectedFields so the inputs render red borders,
+      // and rewrite the error message to the friendly hint.
+      if (err instanceof ApiError && err.status === 400) {
+        const parsed = parseRejectionFromMessage(err.message);
+        if (parsed) {
+          rejectedFields = new Set(parsed.missing);
+          const labels = parsed.missing.map(requiredFieldLabel).join(', ');
+          error = `move to ${parsed.status} needs: ${labels}`;
+        } else {
+          error = err.message;
+        }
+      } else {
+        error = err instanceof Error ? err.message : String(err);
+      }
     } finally {
       submitting = false;
+    }
+  }
+
+  /// `api.ts::request` throws `ApiError(status, message)` where the
+  /// message is the raw response body. For 400 gate rejections that
+  /// body is JSON `{missing, status}` — parse defensively and fall
+  /// back to the generic error path on shape mismatch.
+  function parseRejectionFromMessage(message: string): ReturnType<typeof parseGateRejection> {
+    // The `ApiError` constructor prefixes with `HTTP 400: ` — strip
+    // before parsing.
+    const idx = message.indexOf('{');
+    if (idx < 0) return null;
+    try {
+      return parseGateRejection(JSON.parse(message.slice(idx)));
+    } catch {
+      return null;
     }
   }
 
@@ -533,6 +592,67 @@
     if (status) set.add(status);
     return Array.from(set);
   });
+
+  /* -- per-status validation gate ---------------------------------- */
+
+  /// Required fields for the currently-selected target status. Empty
+  /// when the column is custom (no rule) — keeps the matrix mirroring
+  /// the Rust source.
+  const requiredFields = $derived(requiredFieldsFor(status));
+
+  /// What's *currently* missing given the in-flight form state. The
+  /// dialog uses this to disable submit and paint inline hints. The
+  /// `session_id_or_comment` check here is client-side best-effort —
+  /// the server is authoritative for the OR-clause's comment fallback.
+  const missingFields = $derived(
+    validateTransition(status, {
+      title: title.trim(),
+      lbl: lbl || null,
+      workdir: workdir.trim(),
+      tool: tool || null,
+      // claimed_by: edit mode reads from the row; create mode never
+      // sets it (the dedicated /claim endpoint owns this column).
+      claimed_by: mode === 'edit' ? (item?.claimed_by ?? null) : null,
+      session_id: mode === 'edit' ? (item?.session_id ?? null) : null
+    })
+  );
+
+  /// True iff every required field is satisfied client-side. The
+  /// `session_id_or_comment` case is special: defensively, we let
+  /// submit go through even when only `session_id` is missing —
+  /// the server might still pass via the comments fallback that
+  /// the client can't see.
+  const clientGatePasses = $derived.by(() => {
+    if (missingFields.length === 0) return true;
+    // Allow submit when the only thing missing is the OR-clause —
+    // server will resolve it via the comments check.
+    return (
+      missingFields.length === 1 &&
+      missingFields[0] === 'session_id_or_comment'
+    );
+  });
+
+  function isFieldMissing(field: RequiredField): boolean {
+    return missingFields.includes(field) || rejectedFields.has(field);
+  }
+
+  function isFieldRejected(field: RequiredField): boolean {
+    return rejectedFields.has(field);
+  }
+
+  /// Reset rejection highlights when the user changes status — moving
+  /// the card to a new column starts a fresh gate evaluation. The
+  /// `priorStatus` guard prevents this from wiping the seed during the
+  /// initial render (where `status` flips from '' to its real value as
+  /// part of the seed effect). `priorStatus` is declared above so the
+  /// seed effect can preset it before this clears any seeded rejection.
+  $effect(() => {
+    if (status === priorStatus) return;
+    if (priorStatus !== '' && rejectedFields.size > 0) {
+      rejectedFields = new Set();
+    }
+    priorStatus = status;
+  });
 </script>
 
 <svelte:window onkeydown={open ? onKey : undefined} />
@@ -616,8 +736,15 @@
           </select>
         </label>
         <label class="field">
-          <span class="lbl">Label <span class="opt">optional</span></span>
-          <select bind:value={lbl}>
+          <span class="lbl">
+            Label
+            {#if isFieldMissing('lbl')}
+              <span class="req">required for {status}</span>
+            {:else}
+              <span class="opt">optional</span>
+            {/if}
+          </span>
+          <select bind:value={lbl} class:bad={isFieldRejected('lbl')}>
             <option value="">—</option>
             {#each LBLS as l (l.id)}
               <option value={l.id}>{l.label}</option>
@@ -625,6 +752,15 @@
           </select>
         </label>
       </section>
+
+      {#if requiredFields.length > 0 && missingFields.length > 0}
+        <div class="gate-hint">
+          <span class="gate-pill">required for <em>{status}</em>:</span>
+          {#each missingFields as f (f)}
+            <span class="gate-key">{requiredFieldLabel(f)}</span>
+          {/each}
+        </div>
+      {/if}
 
       <section>
         <span class="eyebrow">
@@ -664,8 +800,15 @@
       </section>
 
       <section class="grid">
-        <label class="field">
-          <span class="lbl">Working directory <span class="opt">optional</span></span>
+        <label class="field" class:bad={isFieldRejected('workdir')}>
+          <span class="lbl">
+            Working directory
+            {#if isFieldMissing('workdir')}
+              <span class="req">required for {status}</span>
+            {:else}
+              <span class="opt">optional</span>
+            {/if}
+          </span>
           <DirPicker
             bind:value={workdir}
             onChange={(v) => (workdir = v)}
@@ -825,7 +968,12 @@
         {/if}
         <span class="spacer"></span>
         <button type="button" class="ghost" onclick={close} disabled={submitting || deleting}>Cancel</button>
-        <button type="submit" class="primary" disabled={submitting || deleting}>
+        <button
+          type="submit"
+          class="primary"
+          disabled={submitting || deleting || !clientGatePasses}
+          title={clientGatePasses ? '' : `move to ${status} needs: ${missingFields.map(requiredFieldLabel).join(', ')}`}
+        >
           {#if submitting}
             <span class="spin"></span>
             {mode === 'create' ? 'creating…' : 'saving…'}
@@ -918,6 +1066,56 @@
     color: var(--fg-3);
   }
   .opt { color: var(--fg-3); text-transform: none; letter-spacing: 0; font-size: 10px; }
+  /* Per-status required-field hint. Renders next to a field's label
+     when the validator's missing[] includes it. Same shape as .opt
+     so the row stays balanced when the badge swaps mid-edit. */
+  .req {
+    color: var(--cta);
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 10px;
+  }
+  /* Highlight a field the server flagged in the most recent 400's
+     `missing[]`. The CSS variable `--crash` is the same red the .error
+     box uses, so the dialog's failure language reads consistently.
+     `.field.bad` applies to the workdir picker (a custom component, so
+     we colour the wrapping label's children); `select.bad` covers the
+     lbl picker which gets the class directly. */
+  .field.bad :global(input),
+  .field.bad :global(button),
+  select.bad {
+    border-color: var(--crash);
+  }
+  /* "Required for *<status>*" summary strip beneath the column picker —
+     gives the user a single glance of what's missing before they try
+     to submit. Suppressed when the form already satisfies the gate. */
+  .gate-hint {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: color-mix(in srgb, var(--cta) 8%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--cta) 40%, var(--border-2));
+    border-radius: var(--radius-md);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--fg-2);
+  }
+  .gate-pill {
+    color: var(--fg-3);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 9.5px;
+  }
+  .gate-pill em { color: var(--cta); font-style: normal; }
+  .gate-key {
+    padding: 1px 6px;
+    border-radius: var(--radius-pill);
+    background: var(--bg-2);
+    border: 1px solid var(--border-2);
+    color: var(--fg);
+  }
 
   input[type='text'],
   textarea,

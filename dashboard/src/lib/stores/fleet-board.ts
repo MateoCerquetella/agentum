@@ -10,9 +10,11 @@
  * (drag, claim, edit, delete) back to the originating server.
  */
 import { writable, get, derived } from 'svelte/store';
-import { api, type BoardItem } from '$lib/api';
+import { api, ApiError, type BoardItem, type BoardPatch } from '$lib/api';
 import { profiles, activeProfileId } from '$lib/profiles';
 import { projectOf } from '$lib/dashboard';
+import { parseGateRejection, requiredFieldLabel, type RequiredField } from '$lib/board-schema';
+import { showToast } from './events';
 
 export interface FleetItem extends BoardItem {
   /** Dashboard-side tag — names the paired daemon that owns this row. */
@@ -107,6 +109,81 @@ export async function loadFleetBoard(): Promise<void> {
 
   lastLoadedAt = Date.now();
   fleetBoard.set({ loading: false, errors, items, columnOrder, commentCounts });
+}
+
+/// Outcome of a server-side gate rejection that the fleet snap-back
+/// helper surfaces back to the caller — `+page.svelte` uses it to
+/// open the edit dialog pre-focused on the first missing field. Kept
+/// local rather than re-imported from `board.ts` so the fleet store
+/// stays standalone.
+export interface MoveRejection {
+  /** `{missing, status}` from the server's 400 response. */
+  missing: RequiredField[];
+  /** Status the user attempted to move into. */
+  target: string;
+  /** Item id that was rejected. */
+  id: number;
+  /** Profile that owns the rejected ticket. */
+  profile_id: string;
+}
+
+/// Fleet drag-drop snap-back. Mirrors `board.ts::patchStatusWithSnapBack`
+/// but routes through the profile-scoped API and reverts via
+/// `moveLocalAcross`. The optional `extraPatchFields` is what the page
+/// folds into the PATCH body alongside `status` — currently used to
+/// rehome the workdir when the drop lands in a different lane.
+///
+/// Returns the parsed `{missing, status}` on a 400 gate rejection so
+/// the caller can reopen the edit dialog with the missing fields
+/// pre-highlighted. Returns `null` on success. Re-throws on non-gate
+/// failures (5xx, network, …) after reverting the optimistic move so
+/// the card doesn't get stuck in the wrong column.
+export async function patchStatusWithSnapBackOn(
+  profileId: string,
+  id: number,
+  origin: string,
+  target: string,
+  extraPatchFields?: Partial<BoardPatch>
+): Promise<MoveRejection | null> {
+  const patch: BoardPatch = { status: target, ...(extraPatchFields ?? {}) };
+  try {
+    await api.patchBoardItemOn(profileId, id, patch);
+    return null;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 400) {
+      const parsed = parseRejectionFromMessage(err.message);
+      if (parsed) {
+        // Revert before surfacing the rejection so the card snaps back
+        // to its origin column without waiting for the safety-net
+        // loadFleetBoard() refresh.
+        moveLocalAcross(profileId, id, origin);
+        const labels = parsed.missing.map(requiredFieldLabel).join(', ');
+        showToast({
+          kind: 'warn',
+          title: `Move to ${parsed.status} needs:`,
+          body: labels,
+          ttl_ms: 6000
+        });
+        return { missing: parsed.missing, target: parsed.status, id, profile_id: profileId };
+      }
+    }
+    // Non-gate failure — still revert so the UI doesn't get stuck.
+    moveLocalAcross(profileId, id, origin);
+    throw err;
+  }
+}
+
+/// `ApiError.message` carries the raw response body. For 400 gate
+/// rejections the body is `{missing, status}` JSON — strip the
+/// `HTTP 400: ` prefix and parse defensively.
+function parseRejectionFromMessage(message: string): ReturnType<typeof parseGateRejection> {
+  const idx = message.indexOf('{');
+  if (idx < 0) return null;
+  try {
+    return parseGateRejection(JSON.parse(message.slice(idx)));
+  } catch {
+    return null;
+  }
 }
 
 /**

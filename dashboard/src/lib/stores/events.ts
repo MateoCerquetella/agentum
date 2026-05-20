@@ -87,6 +87,14 @@ function pushToast(t: Omit<Toast, 'id' | 'created_at'>) {
   }, t.ttl_ms);
 }
 
+/// Programmatic toast — used by callers outside the WS event loop
+/// (e.g. drag-drop snap-back in `stores/board.ts`). Same semantics as
+/// the internal `pushToast`; renamed to keep the call-site reading
+/// like a public API.
+export function showToast(t: Omit<Toast, 'id' | 'created_at'>): void {
+  pushToast(t);
+}
+
 export function dismissToast(id: number) {
   toasts.update((xs) => xs.filter((x) => x.id !== id));
 }

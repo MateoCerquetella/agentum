@@ -6,11 +6,13 @@
     fleetLanes,
     loadFleetBoard,
     moveLocalAcross,
+    patchStatusWithSnapBackOn,
     applyItem,
     removeItem,
     type FleetItem,
     type Lane
   } from '$stores/fleet-board';
+  import type { RequiredField } from '$lib/board-schema';
   import { sessions, loadSessions } from '$stores/sessions';
   import { profiles } from '$lib/profiles';
   import { actorId } from '$stores/actor';
@@ -59,6 +61,12 @@
   let dialogDefaultStatus = $state<string | null>(null);
   let dialogProfileId = $state<string | null>(null);
   let dialogDefaultWorkdir = $state<string | null>(null);
+  /// Server-rejected fields from the last drag-drop snap-back. Seeded
+  /// into the dialog on `openDialogForRejection` so the user sees the
+  /// red borders on the inputs that need to be filled before the move
+  /// will be accepted. Cleared by `closeDialog` and by any non-rejection
+  /// open.
+  let dialogInitialMissing = $state<RequiredField[]>([]);
 
   function laneKey(profileId: string, project: string): string {
     return `${profileId}::${project}`;
@@ -190,6 +198,13 @@
       const item = findItem(payload.profile_id, payload.id);
       if (!item) return;
 
+      // Capture origin column BEFORE the optimistic local apply below so
+      // the snap-back helper has a real starting status to revert to. If
+      // we read item.status after the applyItemLocal loop, origin ===
+      // target and snap-back becomes a no-op — the same bug shape we
+      // had to fix in onColDrop.
+      const originStatus = item.status;
+
       // Same-column reorder: rewrite priorities so the dragged item
       // lands above `target`. The store renumbers all rows in one tx.
       const currentColItems = (lane.byStatus[colKey] ?? [])
@@ -208,7 +223,7 @@
       const entries = reordered.map((it, i) => ({ id: it.id, priority: i * 10 }));
       for (const it of reordered) applyItemLocal(it as FleetItem);
 
-      const fromActive = isActiveColumn(item.status);
+      const fromActive = isActiveColumn(originStatus);
       const toActive = isActiveColumn(colKey);
       const me = actorId();
       try {
@@ -222,15 +237,32 @@
             console.warn('auto-release failed during reorder:', err);
           }
         }
-        // Cross-column moves still need the status + workdir patch;
-        // priorities get rewritten by the batch below.
-        if (item.status !== colKey || (lane.workdir != null && item.workdir !== lane.workdir)) {
-          await api.patchBoardItemOn(payload.profile_id, item.id, {
-            status: colKey,
-            ...(lane.workdir != null && item.workdir !== lane.workdir
+        // Cross-column moves still need the status + workdir patch.
+        // Route through patchStatusWithSnapBackOn (the same helper
+        // onColDrop uses) so a 400 gate rejection reverts the optimistic
+        // move and reopens the dialog pre-highlighted on the missing
+        // fields. Same-column drops skip this branch entirely; the
+        // reorder follow-up is filed separately.
+        if (originStatus !== colKey || (lane.workdir != null && item.workdir !== lane.workdir)) {
+          const workdirPatch: BoardPatchLite =
+            lane.workdir != null && item.workdir !== lane.workdir
               ? { workdir: lane.workdir }
-              : {})
-          });
+              : {};
+          const rejection = await patchStatusWithSnapBackOn(
+            payload.profile_id,
+            item.id,
+            originStatus,
+            colKey,
+            workdirPatch
+          );
+          if (rejection) {
+            // Snap-back already reverted the dragged item's status
+            // locally; skip the reorder batch since the card isn't
+            // landing in this column. The dialog gives the user a
+            // path to fill in the missing fields and try again.
+            openDialogForRejection(item, rejection.missing);
+            return;
+          }
         }
         await api.reorderBoardOn(payload.profile_id, entries);
       } catch (err) {
@@ -282,6 +314,11 @@
       }
 
       const item = findItem(payload.profile_id, payload.id);
+      // Capture the origin column BEFORE the optimistic move so the
+      // snap-back helper has a real starting status to revert to. If
+      // we read item.status after moveLocalAcross, origin === target
+      // and snap-back becomes a no-op — the most common bug shape.
+      const originStatus = item?.status ?? null;
       const fromActive = item ? isActiveColumn(item.status) : false;
       const toActive   = isActiveColumn(colKey);
       const me = actorId();
@@ -292,7 +329,9 @@
       try {
         // Auto-claim when entering an active column from idle, if the
         // row is currently unclaimed. The user explicitly asked for
-        // claim-on-status-change.
+        // claim-on-status-change. Claim doesn't change status, so a
+        // claimed-but-snapped-back card is fine — no undo needed when
+        // the subsequent PATCH gets rejected.
         if (item && !fromActive && toActive && item.claimed_by == null) {
           try {
             await api.claimBoardItemOn(payload.profile_id, item.id, me);
@@ -311,17 +350,48 @@
 
         // Cross-lane drop: also re-home the ticket to the target lane's
         // workdir so dragging is a drag-to-organize op, not just a
-        // status-only move.
-        const patch: BoardPatchLite = { status: colKey };
-        if (item && lane.workdir != null && item.workdir !== lane.workdir) {
-          patch.workdir = lane.workdir;
+        // status-only move. The snap-back helper folds these extra
+        // fields into the same PATCH body.
+        const workdirPatch: BoardPatchLite =
+          item && lane.workdir != null && item.workdir !== lane.workdir
+            ? { workdir: lane.workdir }
+            : {};
+
+        // Route through the snap-back helper. On a 400 gate rejection
+        // it reverts moveLocalAcross() and returns the missing fields
+        // so we can reopen the edit dialog pre-highlighted. Origin
+        // fallback to the current dragging status if findItem missed
+        // (shouldn't happen, but defensive).
+        const rejection = originStatus != null
+          ? await patchStatusWithSnapBackOn(
+              payload.profile_id,
+              payload.id,
+              originStatus,
+              colKey,
+              workdirPatch
+            )
+          : null;
+        if (rejection && item) {
+          openDialogForRejection(item, rejection.missing);
         }
-        await api.patchBoardItemOn(payload.profile_id, payload.id, patch);
       } catch (err) {
         console.error('move failed', err);
         await loadFleetBoard();
       }
     };
+  }
+
+  /// Reopen the edit dialog for a ticket whose drag-drop status change
+  /// was rejected by the server's gate. The dialog seeds `rejectedFields`
+  /// from `missing` so the inputs render with the red borders the user
+  /// needs to address before retrying the move.
+  function openDialogForRejection(item: FleetItem, missing: RequiredField[]) {
+    dialogMode = 'edit';
+    dialogItem = item;
+    dialogDefaultStatus = null;
+    dialogProfileId = item.profile_id;
+    dialogInitialMissing = missing;
+    dialogOpen = true;
   }
 
   /// Local alias so the lane-aware drop handler can declare a partial
@@ -333,6 +403,7 @@
     dialogItem = tk;
     dialogDefaultStatus = null;
     dialogProfileId = tk.profile_id;
+    dialogInitialMissing = [];
     dialogOpen = true;
   }
 
@@ -348,6 +419,7 @@
     // ticket lands in the lane the user clicked +.
     dialogProfileId = profileId;
     dialogDefaultWorkdir = workdir;
+    dialogInitialMissing = [];
     dialogOpen = true;
   }
 
@@ -356,6 +428,7 @@
     dialogItem = null;
     dialogProfileId = null;
     dialogDefaultWorkdir = null;
+    dialogInitialMissing = [];
   }
 
   /// Server-confirmed create/update fires this callback synchronously
@@ -542,6 +615,7 @@
   defaultStatus={dialogDefaultStatus}
   defaultProfileId={dialogProfileId}
   defaultWorkdir={dialogDefaultWorkdir}
+  initialMissing={dialogInitialMissing}
   columns={cols.map((c) => c.key)}
   onClose={closeDialog}
   onCreated={onItemCreated}

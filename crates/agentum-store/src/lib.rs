@@ -561,6 +561,20 @@ impl Store {
         })
     }
 
+    /// True iff at least one row in `board_comments` references this id.
+    /// Cheaper than `count_board_comments` for the single-id check the
+    /// `done` transition gate needs — `LIMIT 1` short-circuits as soon
+    /// as the index hits a matching row.
+    pub async fn has_board_comments(&self, board_id: i64) -> Result<bool> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM board_comments WHERE board_id = ? LIMIT 1",
+        )
+        .bind(board_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.is_some())
+    }
+
     /// Count comments per board id in bulk so the card-foot 💬N chip
     /// stays cheap regardless of ticket count. Returns a map keyed by
     /// board_id; missing ids implicitly have zero comments.
@@ -1666,6 +1680,59 @@ mod tests {
             )
             .await;
         assert!(orphan.is_err());
+    }
+
+    #[tokio::test]
+    async fn has_board_comments_smoke() {
+        let s = tmp_store().await;
+        let item = s
+            .create_board_item(NewBoardItem {
+                title: "gate sentinel".into(),
+                body: None,
+                status: None,
+                lbl: None,
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+            })
+            .await
+            .unwrap();
+
+        // Empty thread => false.
+        assert!(!s.has_board_comments(item.id).await.unwrap());
+
+        // After a single insert => true. `LIMIT 1` should short-circuit
+        // before scanning the whole index.
+        s.create_board_comment(
+            item.id,
+            NewBoardComment {
+                author: "actor-A".into(),
+                body: "explains why we're closing this".into(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(s.has_board_comments(item.id).await.unwrap());
+
+        // Sibling row's comments don't bleed across — id-scoping is
+        // what the `done` gate relies on.
+        let other = s
+            .create_board_item(NewBoardItem {
+                title: "other".into(),
+                body: None,
+                status: None,
+                lbl: None,
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+            })
+            .await
+            .unwrap();
+        assert!(!s.has_board_comments(other.id).await.unwrap());
     }
 
     #[tokio::test]
