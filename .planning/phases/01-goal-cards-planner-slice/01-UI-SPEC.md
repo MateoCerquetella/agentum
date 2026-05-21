@@ -66,14 +66,17 @@ Declared values (must be multiples of 4):
 | Role | Size | Weight | Line Height | Used For |
 |------|------|--------|-------------|----------|
 | **Body** | 14px (sans `--display`) | 400 | 1.5 | Composer placeholder + typed text; composer empty-state body. |
-| **Label / Mono micro** | 11px (mono `--mono`) | 500 | 1 | Composer "Plan it" button label; eyebrow over the composer when empty; column filter pill text; parent-cue chip `AG-42` text; `lbl="goal"` chip text. |
+| **Label / Mono micro** | 11px (mono `--mono`) | 500 | 1 | Composer "Plan it" button label; eyebrow over the composer when empty; column filter pill text; `lbl="goal"` chip text in toolbar/header contexts. |
 | **Heading** | 18px (sans `--display`, weight 600, line-height 1.2) | 600 | 1.2 | Composer empty-state heading ("Drop a goal in.") — uses `.display-2`-style tracking via inline rule, no new class. |
+| **lbl chip (inherited)** | 9px (mono `--mono`) | 500 | 1 | `.lbl.goal`, `.lbl.feat`, `.lbl.bug` chips in the `.tk-foot` row. **Inherited from existing `.lbl` primitive — not a new declaration.** Listed here so the executor has all sizes in one place. |
+| **Parent-cue chip (inherited)** | 10px (mono `--mono`) | 500 | 1 | `↳ AG-{id}` chip on child card footers. **Inherited from existing `.tk-foot` chip primitive — not a new declaration.** Listed here so the executor has all sizes in one place. |
 | **Display** | not used | — | — | Phase 1 does not introduce a hero / display row. |
 
 **Constraints:**
 - Composer typed text **must** be ≥16px on viewports ≤720px (existing `@media` rule in `app.css` lines 41–48 inflates inputs ≤720px to 16px to suppress iOS focus zoom). Do NOT override.
 - Mono is reserved for: composer button label, parent-cue chip, filter pill, lbl chips. Body / placeholder / heading use sans.
-- 2 weights total in this phase: **400 (regular)** for body + placeholder, **500 (medium)** for the composer button, eyebrow, chips, and pill. **No 600 except the empty-state heading.**
+- 2 weights total in this phase: **400 (regular)** for body + placeholder, **500 (medium)** for the composer button, eyebrow, chips, and pill.
+- **Third-weight allowance (deliberate, documented):** the empty-state heading uses weight **600** via inheritance from the existing `.display-2` class in `_design.css`. **This is not a new weight introduction** — it's an inherited primitive that already ships in the dashboard. The executor MUST inherit from `.display-2` (or apply its tracking inline) rather than declaring a new 600-weight style.
 
 ---
 
@@ -120,12 +123,12 @@ Declared values (must be multiples of 4):
 | Element | Copy |
 |---------|------|
 | **Primary CTA (dashboard composer button)** | `Plan it` (always two words, lowercase i; coral background; mono 11px uppercase). On submit-in-flight: `Planning…` (one word + ellipsis, button disabled, no spinner glyph). |
-| **Primary CTA (TUI overlay)** | Footer hint: `Enter to plan · Esc to cancel`. No button — the overlay is keyboard-only. |
+| **Primary CTA (TUI overlay)** | Footer hint: `Enter newline · Ctrl-Enter to plan · Esc cancel`. No button — the overlay is keyboard-only. (Matches the Interaction Contract — TUI multiline editing means `Enter` inserts a newline; submit requires `Ctrl-Enter`.) |
 | **Composer placeholder (dashboard, textarea empty)** | `Drop a goal in. The planner will turn it into 3–7 cards.` |
 | **Composer placeholder (TUI overlay, multiline empty)** | `Drop a goal in. The planner will turn it into 3–7 cards.` — must match dashboard verbatim. |
 | **Composer eyebrow** | `GOAL` (mono 11px uppercase, sits above the placeholder when the textarea is empty AND no goals exist yet). |
 | **Empty state heading (dashboard, no goals on the board yet)** | `Drop a goal in.` |
-| **Empty state body (dashboard, no goals on the board yet)** | `The planner spawns a tmux session and writes 3–7 cards within ~2 min. Cards land in todo, ready to claim.` |
+| **Empty state body (dashboard, no goals on the board yet)** | `The planner spawns a tmux session and writes 3–7 cards within ~2 min. Cards land in todo, ready to claim.` **Dashboard and TUI render identical copy verbatim** — when the TUI board panel is empty, the same body string appears in the panel's empty-state slot (no localization, no rewording). |
 | **Error state (composer, 400 — column rule rejected `title + lbl`)** | `Your todo column needs: {missing-fields-joined-with-comma}. Add them in Settings → Column rules.` Example: `Your todo column needs: body. Add them in Settings → Column rules.` — `{missing-fields-joined-with-comma}` is the human label from `requiredFieldLabel()` (existing helper). |
 | **Error state (composer, 5xx / network)** | `Couldn't reach the planner. Check the daemon and try again.` |
 | **Error state (composer, planner tool not installed)** | `{tool} isn't installed on this server. Configure planner.tool in $XDG_CONFIG_HOME/agentum/planner.toml or install {tool}.` Surfaced only when the server returns a 400 with the executor's "tool not available" body shape. |
