@@ -55,3 +55,44 @@ pub fn pane_log(session_id: &str) -> Result<PathBuf, PathError> {
         .join("sessions")
         .join(format!("{session_id}.log")))
 }
+
+/// Path to the per-server planner config: `$XDG_CONFIG_HOME/agentum/planner.toml`.
+/// Sibling to `profiles.toml` and `credentials.toml` — all operator config
+/// lives under `config_dir()`, not `data_dir()`.
+pub fn planner_config_path() -> Result<PathBuf, PathError> {
+    Ok(config_dir()?.join("planner.toml"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // Serialise all tests that mutate XDG_CONFIG_HOME so they don't
+    // race on the process-wide env variable.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn planner_config_path_under_config_dir() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        // SAFETY: serialised by TEST_LOCK — only one thread mutates env at a time.
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", dir.path());
+        }
+        let p = planner_config_path().expect("planner_config_path should succeed");
+        let cfg = config_dir().expect("config_dir should succeed");
+        assert!(
+            p.ends_with("planner.toml"),
+            "expected path to end with planner.toml, got {p:?}"
+        );
+        // The path returned must be a direct child of config_dir().
+        // We compare without canonicalize because the directory may not
+        // exist on disk yet — only the computed path matters here.
+        assert_eq!(
+            p.parent().unwrap(),
+            cfg.as_path(),
+            "planner_config_path must be a direct child of config_dir()"
+        );
+    }
+}
