@@ -23,6 +23,8 @@ pub enum CoreError {
     InvalidStatus(String),
     #[error("invalid session name: {0}")]
     InvalidName(String),
+    #[error("invalid link kind: {0}")]
+    ParseLinkKind(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +113,11 @@ pub struct Session {
     /// migration 0009.
     #[serde(default)]
     pub pinned: bool,
+    /// Board card this session is bound to. Set when the planner spawns
+    /// a session for a goal card (session.card_id = goal.id); NULL for
+    /// all other sessions. Added in migration 0015.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card_id: Option<i64>,
 }
 
 /// Lifecycle state surfaced on the dashboard. Mirrors the TypeScript
@@ -158,6 +165,11 @@ pub struct NewSession {
     pub model: Option<String>,
     #[serde(default)]
     pub flags: Vec<String>,
+    /// Board card to bind this session to. Used by the planner spawn
+    /// path (POST /api/board/goals) to record which goal card spawned
+    /// this planning session. NULL for all other sessions.
+    #[serde(default)]
+    pub card_id: Option<i64>,
 }
 
 /// Event published on the broadcast bus and persisted to the `events` table.
@@ -312,6 +324,11 @@ pub struct BoardItem {
     /// secondary sort is `created_at ASC`.
     #[serde(default)]
     pub priority: i64,
+    /// Goal card this item is a child of. Set when the planner creates a
+    /// child card under a goal (lbl="goal") card; NULL for standalone
+    /// cards and for the goal card itself. Added in migration 0015.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_goal_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -333,6 +350,11 @@ pub struct NewBoardItem {
     pub session_id: Option<String>,
     #[serde(default)]
     pub priority: Option<i64>,
+    /// Goal card this child item belongs to. Set by the planner when
+    /// creating child cards under a goal. NULL for standalone items and
+    /// the goal card itself.
+    #[serde(default)]
+    pub parent_goal_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -355,6 +377,13 @@ pub struct BoardPatch {
     pub session_id: Option<Option<String>>,
     #[serde(default)]
     pub priority: Option<i64>,
+    /// Double-Option per the existing pattern: `None` = field omitted
+    /// (no-op), `Some(None)` = detach from goal (set NULL), `Some(Some(id))`
+    /// = attach or re-attach to a different goal. This is critical for
+    /// letting the planner watchdog detach a child from its goal when the
+    /// goal is completed or the child is promoted.
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    pub parent_goal_id: Option<Option<i64>>,
 }
 
 /// Distinguishes "field omitted" from "field set to null" so a PATCH can
@@ -400,6 +429,60 @@ pub struct NewBoardComment {
 pub struct ReorderEntry {
     pub id: i64,
     pub priority: i64,
+}
+
+// ---------- board links ----------
+
+/// Kind of directed edge between two board items. Stored as a TEXT
+/// column in `board_links` via `as_str()` / `FromStr`.
+///
+/// `ParentOf` records the planner-created parent→child relationship
+/// (the parent goal "owns" the child card). `Blocks` records a
+/// dependency edge: the `from_card_id` card must complete before the
+/// `to_card_id` card can start (Phase 3 gate enforces this on PATCH).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkKind {
+    ParentOf,
+    Blocks,
+}
+
+impl LinkKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LinkKind::ParentOf => "parent_of",
+            LinkKind::Blocks => "blocks",
+        }
+    }
+}
+
+impl fmt::Display for LinkKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for LinkKind {
+    type Err = CoreError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "parent_of" => Ok(LinkKind::ParentOf),
+            "blocks" => Ok(LinkKind::Blocks),
+            other => Err(CoreError::ParseLinkKind(other.to_string())),
+        }
+    }
+}
+
+/// A directed edge between two board items persisted in `board_links`.
+/// `from_card_id → to_card_id` with a `kind` discriminator. The
+/// `created_at` is immutable — links are insert-or-delete only.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoardLink {
+    pub from_card_id: i64,
+    pub to_card_id: i64,
+    pub kind: LinkKind,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
 }
 
 // ---------- notes ----------
@@ -523,5 +606,141 @@ mod tests {
         assert!(validate_name("").is_err());
         assert!(validate_name("has space").is_err());
         assert!(validate_name("dot.dot").is_err());
+    }
+
+    /// Confirms that `BoardItem.parent_goal_id` round-trips through
+    /// serde_json correctly for the three cases:
+    ///   1. `Some(42)` — present and serialises as `"parent_goal_id": 42`.
+    ///   2. `None` — absent (skip_serializing_if omits the key).
+    ///   3. Missing from input — deserialises to `None` via `#[serde(default)]`.
+    #[test]
+    fn parent_goal_id_round_trips_via_serde() {
+        // Case 1: Some(42) — round-trips through the JSON wire.
+        let json_with = r#"{"id":1,"key":"AG-1","title":"t","status":"todo","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z","parent_goal_id":42}"#;
+        let item: BoardItem = serde_json::from_str(json_with).unwrap();
+        assert_eq!(item.parent_goal_id, Some(42));
+        let reserialized = serde_json::to_string(&item).unwrap();
+        assert!(
+            reserialized.contains("\"parent_goal_id\":42"),
+            "expected parent_goal_id in output: {reserialized}"
+        );
+
+        // Case 2: None — skip_serializing_if omits the key entirely.
+        let json_without = r#"{"id":2,"key":"AG-2","title":"t","status":"todo","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
+        let item2: BoardItem = serde_json::from_str(json_without).unwrap();
+        assert_eq!(item2.parent_goal_id, None);
+        let reserialized2 = serde_json::to_string(&item2).unwrap();
+        assert!(
+            !reserialized2.contains("parent_goal_id"),
+            "expected parent_goal_id absent from output: {reserialized2}"
+        );
+    }
+
+    /// Confirms that `Session.card_id` round-trips analogously to
+    /// `BoardItem.parent_goal_id` (same serde attribute pattern).
+    ///
+    /// Uses `serde_json::to_value` + field surgery rather than a
+    /// hand-written JSON string because `Session` has required RFC3339
+    /// timestamp fields (`last_activity_at` etc.) that would make the
+    /// fixture brittle. Instead we construct a canonical `Session` and
+    /// verify the field presence/absence in the serialised output.
+    #[test]
+    fn card_id_round_trips_via_serde() {
+        let base = Session {
+            id: uuid::Uuid::nil(),
+            name: "s".into(),
+            workdir: "/".into(),
+            tool: "claude".into(),
+            model: None,
+            flags: vec![],
+            status: Status::Idle,
+            tmux_target: None,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            last_activity_at: None,
+            tokens: None,
+            cost_usd: None,
+            ctx: None,
+            last_log: None,
+            uptime_seconds: None,
+            state: None,
+            pinned: false,
+            card_id: None,
+        };
+
+        // card_id = None → absent from wire.
+        let re = serde_json::to_string(&base).unwrap();
+        assert!(
+            !re.contains("card_id"),
+            "expected card_id absent from output: {re}"
+        );
+
+        // card_id = Some(7) → present on wire.
+        let with_card = Session {
+            card_id: Some(7),
+            ..base.clone()
+        };
+        let re2 = serde_json::to_string(&with_card).unwrap();
+        assert!(
+            re2.contains("\"card_id\":7"),
+            "expected card_id in output: {re2}"
+        );
+
+        // Round-trip through JSON: decode back and compare.
+        let decoded: Session = serde_json::from_str(&re2).unwrap();
+        assert_eq!(decoded.card_id, Some(7));
+    }
+
+    /// Exercises the three distinct serde states of
+    /// `BoardPatch.parent_goal_id`:
+    ///   - Field absent → `None` (no-op, leave column alone).
+    ///   - Field = `null` → `Some(None)` (detach child from goal).
+    ///   - Field = number → `Some(Some(id))` (set or change goal).
+    #[test]
+    fn board_patch_parent_goal_id_distinguishes_omitted_explicit_null_and_value() {
+        // Omitted → None (the store should ignore the field).
+        let omitted: BoardPatch = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(
+            omitted.parent_goal_id.is_none(),
+            "omitted field must be None"
+        );
+
+        // Explicit null → Some(None) (the store should clear the column).
+        let explicit_null: BoardPatch =
+            serde_json::from_str(r#"{"parent_goal_id": null}"#).unwrap();
+        assert_eq!(
+            explicit_null.parent_goal_id,
+            Some(None),
+            "explicit null must be Some(None)"
+        );
+
+        // Number → Some(Some(42)) (the store should write 42).
+        let with_value: BoardPatch =
+            serde_json::from_str(r#"{"parent_goal_id": 42}"#).unwrap();
+        assert_eq!(
+            with_value.parent_goal_id,
+            Some(Some(42)),
+            "value must be Some(Some(42))"
+        );
+    }
+
+    /// Verifies `LinkKind` as_str / FromStr / unknown-string error path.
+    #[test]
+    fn link_kind_round_trips() {
+        assert_eq!(LinkKind::ParentOf.as_str(), "parent_of");
+        assert_eq!(LinkKind::Blocks.as_str(), "blocks");
+
+        assert_eq!(
+            "parent_of".parse::<LinkKind>().unwrap(),
+            LinkKind::ParentOf
+        );
+        assert_eq!("blocks".parse::<LinkKind>().unwrap(), LinkKind::Blocks);
+
+        let err = "nope".parse::<LinkKind>();
+        assert!(
+            err.is_err(),
+            "unknown string should produce ParseLinkKind error"
+        );
+        assert!(matches!(err.unwrap_err(), CoreError::ParseLinkKind(_)));
     }
 }
