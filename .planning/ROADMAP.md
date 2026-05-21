@@ -46,10 +46,10 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 01-04-PLAN.md — Watchdog goal-status reconciler (subscribes to bus, recomputes max(child statuses), bypasses enforce_transition, planner auto-stop on first child)
-- [ ] 01-05-PLAN.md — CLI shim (agentum board add-goal / add-card, credentials.toml-based auth, --key/--blocks symbolic resolution, no-token-in-argv)
-- [ ] 01-06-PLAN.md — Dashboard surface (GoalComposer.svelte + submitGoal store action + parent-cue chip + filter pill + .lbl.goal CSS + SPA rebake)
-- [ ] 01-07-PLAN.md — TUI surface (Overlay::Goal + G keybinding + Ctrl-Enter submit + parent-cue line + GOAL chip + o-to-jump-parent)
+- [x] 01-04-PLAN.md — Watchdog goal-status reconciler (subscribes to bus, recomputes max(child statuses), bypasses enforce_transition, planner auto-stop on first child)
+- [x] 01-05-PLAN.md — CLI shim (agentum board add-goal / add-card, credentials.toml-based auth, --key/--blocks symbolic resolution, no-token-in-argv)
+- [x] 01-06-PLAN.md — Dashboard surface (GoalComposer.svelte + submitGoal store action + parent-cue chip + filter pill + .lbl.goal CSS + SPA rebake)
+- [x] 01-07-PLAN.md — TUI surface (Overlay::Goal + G keybinding + Ctrl-Enter submit + parent-cue line + GOAL chip + o-to-jump-parent)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -94,6 +94,6 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Goal → Cards (planner slice) | 3/8 | In Progress|  |
+| 1. Goal → Cards (planner slice) | 7/8 | In Progress|  |
 | 2. Card ↔ Session binding | 0/TBD | Not started | - |
 | 3. Dependency gate + dispatch polish | 0/TBD | Not started | - |
