@@ -715,8 +715,7 @@ mod tests {
         );
 
         // Number → Some(Some(42)) (the store should write 42).
-        let with_value: BoardPatch =
-            serde_json::from_str(r#"{"parent_goal_id": 42}"#).unwrap();
+        let with_value: BoardPatch = serde_json::from_str(r#"{"parent_goal_id": 42}"#).unwrap();
         assert_eq!(
             with_value.parent_goal_id,
             Some(Some(42)),
@@ -730,10 +729,7 @@ mod tests {
         assert_eq!(LinkKind::ParentOf.as_str(), "parent_of");
         assert_eq!(LinkKind::Blocks.as_str(), "blocks");
 
-        assert_eq!(
-            "parent_of".parse::<LinkKind>().unwrap(),
-            LinkKind::ParentOf
-        );
+        assert_eq!("parent_of".parse::<LinkKind>().unwrap(), LinkKind::ParentOf);
         assert_eq!("blocks".parse::<LinkKind>().unwrap(), LinkKind::Blocks);
 
         let err = "nope".parse::<LinkKind>();

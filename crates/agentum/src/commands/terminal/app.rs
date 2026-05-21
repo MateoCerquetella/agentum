@@ -7758,6 +7758,7 @@ mod merge_dedup_tests {
             uptime_seconds: None,
             state: None,
             pinned: false,
+            card_id: None,
         }
     }
 

@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use agentum_core::{
-    BoardComment, BoardItem, BoardPatch, Channel, Event, Message, NewBoardComment, NewBoardItem,
-    NewChannel, NewMessage, NewNote, NewSession, Note, NotePatch, ReorderEntry, RequiredField,
-    Session, Status, User,
+    BoardComment, BoardItem, BoardLink, BoardPatch, Channel, Event, LinkKind, Message,
+    NewBoardComment, NewBoardItem, NewChannel, NewMessage, NewNote, NewSession, Note, NotePatch,
+    ReorderEntry, RequiredField, Session, Status, User,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{FromRow, SqlitePool};
@@ -96,8 +96,8 @@ impl Store {
         let res = sqlx::query(
             r#"
             INSERT INTO sessions
-                (id, name, workdir, tool, model, flags, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, name, workdir, tool, model, flags, status, created_at, updated_at, card_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(id.to_string())
@@ -109,6 +109,7 @@ impl Store {
         .bind(status.as_str())
         .bind(&now_s)
         .bind(&now_s)
+        .bind(new.card_id)
         .execute(&self.pool)
         .await;
 
@@ -138,6 +139,7 @@ impl Store {
             uptime_seconds: None,
             state: None,
             pinned: false,
+            card_id: new.card_id,
         })
     }
 
@@ -318,8 +320,10 @@ impl Store {
 
         let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
-            "INSERT INTO board_items (key, title, body, status, lbl, tool, workdir, model, session_id, priority, created_at, updated_at)
-             VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            r#"INSERT INTO board_items
+                (key, title, body, status, lbl, tool, workdir, model, session_id, priority,
+                 created_at, updated_at, parent_goal_id)
+               VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(&new.title)
         .bind(&new.body)
@@ -332,6 +336,7 @@ impl Store {
         .bind(priority)
         .bind(&now_s)
         .bind(&now_s)
+        .bind(new.parent_goal_id)
         .execute(&mut *tx)
         .await?;
         let id = result.last_insert_rowid();
@@ -358,6 +363,7 @@ impl Store {
             model: new.model,
             session_id: new.session_id,
             priority,
+            parent_goal_id: new.parent_goal_id,
         })
     }
 
@@ -395,19 +401,23 @@ impl Store {
         let model_value = patch.model.unwrap_or(None);
         let session_id_set = patch.session_id.is_some();
         let session_id_value = patch.session_id.unwrap_or(None);
+        // Double-Option: Some(None) → clear, Some(Some(v)) → set, None → leave alone.
+        let parent_goal_id_set = patch.parent_goal_id.is_some();
+        let parent_goal_id_value: Option<i64> = patch.parent_goal_id.unwrap_or(None);
         let affected = sqlx::query(
-            "UPDATE board_items SET
-                title      = COALESCE(?, title),
-                status     = COALESCE(?, status),
-                priority   = COALESCE(?, priority),
-                body       = CASE WHEN ? = 1 THEN ? ELSE body       END,
-                lbl        = CASE WHEN ? = 1 THEN ? ELSE lbl        END,
-                tool       = CASE WHEN ? = 1 THEN ? ELSE tool       END,
-                workdir    = CASE WHEN ? = 1 THEN ? ELSE workdir    END,
-                model      = CASE WHEN ? = 1 THEN ? ELSE model      END,
-                session_id = CASE WHEN ? = 1 THEN ? ELSE session_id END,
-                updated_at = ?
-             WHERE id = ?",
+            r#"UPDATE board_items SET
+                title          = COALESCE(?, title),
+                status         = COALESCE(?, status),
+                priority       = COALESCE(?, priority),
+                body           = CASE WHEN ? = 1 THEN ? ELSE body           END,
+                lbl            = CASE WHEN ? = 1 THEN ? ELSE lbl            END,
+                tool           = CASE WHEN ? = 1 THEN ? ELSE tool           END,
+                workdir        = CASE WHEN ? = 1 THEN ? ELSE workdir        END,
+                model          = CASE WHEN ? = 1 THEN ? ELSE model          END,
+                session_id     = CASE WHEN ? = 1 THEN ? ELSE session_id     END,
+                parent_goal_id = CASE WHEN ? = 1 THEN ? ELSE parent_goal_id END,
+                updated_at     = ?
+             WHERE id = ?"#,
         )
         .bind(&patch.title)
         .bind(&patch.status)
@@ -424,6 +434,8 @@ impl Store {
         .bind(&model_value)
         .bind(if session_id_set { 1i32 } else { 0i32 })
         .bind(&session_id_value)
+        .bind(if parent_goal_id_set { 1i32 } else { 0i32 })
+        .bind(parent_goal_id_value)
         .bind(&now_s)
         .bind(id)
         .execute(&self.pool)
@@ -688,6 +700,133 @@ impl Store {
             .await?
             .rows_affected();
         Ok(affected > 0)
+    }
+
+    // ---------- board links ----------
+
+    /// Create a directed edge between two board items. The primary key
+    /// `(from_card_id, to_card_id, kind)` prevents duplicate edges.
+    /// Returns `StoreError::AlreadyExists` on a unique-key collision so
+    /// callers can map to 409 rather than 500.
+    pub async fn add_board_link(
+        &self,
+        from_card_id: i64,
+        to_card_id: i64,
+        kind: LinkKind,
+    ) -> Result<BoardLink> {
+        let now = OffsetDateTime::now_utc();
+        let now_s = now.format(&Rfc3339)?;
+        let res = sqlx::query(
+            "INSERT INTO board_links (from_card_id, to_card_id, kind, created_at)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(from_card_id)
+        .bind(to_card_id)
+        .bind(kind.as_str())
+        .bind(&now_s)
+        .execute(&self.pool)
+        .await;
+        if let Err(sqlx::Error::Database(db)) = &res {
+            if db.is_unique_violation() {
+                return Err(StoreError::AlreadyExists(format!(
+                    "board_link {from_card_id} -{kind:?}-> {to_card_id}"
+                )));
+            }
+        }
+        res?;
+        Ok(BoardLink {
+            from_card_id,
+            to_card_id,
+            kind,
+            created_at: now,
+        })
+    }
+
+    /// All board items whose `parent_goal_id = goal_id`. The partial index
+    /// `idx_board_items_parent_goal_id` makes this O(children) not O(table).
+    pub async fn list_children_of_goal(&self, goal_id: i64) -> Result<Vec<BoardItem>> {
+        let rows: Vec<BoardItemRow> = sqlx::query_as::<_, BoardItemRow>(
+            "SELECT * FROM board_items WHERE parent_goal_id = ?
+             ORDER BY priority ASC, created_at ASC",
+        )
+        .bind(goal_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(BoardItem::try_from).collect()
+    }
+
+    /// All `board_links` rows where `from_card_id = goal_id`. Used by the
+    /// Phase 3 dependency gate to enumerate what a goal's card directly
+    /// blocks or parents. The `idx_board_links_to` index covers the
+    /// `to_card_id` direction; `from_card_id` uses the PK b-tree prefix.
+    pub async fn list_board_links_for_goal(&self, goal_id: i64) -> Result<Vec<BoardLink>> {
+        let rows: Vec<(i64, i64, String, String)> = sqlx::query_as(
+            "SELECT from_card_id, to_card_id, kind, created_at
+             FROM board_links WHERE from_card_id = ?
+             ORDER BY created_at ASC",
+        )
+        .bind(goal_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|(from_card_id, to_card_id, kind_str, created_at_str)| {
+                Ok(BoardLink {
+                    from_card_id,
+                    to_card_id,
+                    kind: kind_str.parse()?,
+                    created_at: OffsetDateTime::parse(&created_at_str, &Rfc3339)?,
+                })
+            })
+            .collect()
+    }
+
+    /// Remove a single edge. Returns `true` if a row was deleted, `false`
+    /// if the edge did not exist (idempotent — callers choose whether to
+    /// surface that as 204 or 404).
+    pub async fn delete_board_link(
+        &self,
+        from_card_id: i64,
+        to_card_id: i64,
+        kind: LinkKind,
+    ) -> Result<bool> {
+        let affected = sqlx::query(
+            "DELETE FROM board_links
+             WHERE from_card_id = ? AND to_card_id = ? AND kind = ?",
+        )
+        .bind(from_card_id)
+        .bind(to_card_id)
+        .bind(kind.as_str())
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(affected > 0)
+    }
+
+    /// The highest status rank among all children of `goal_id`, or `None`
+    /// when the goal has no children. Used by the watchdog goal-status
+    /// recomputer to decide whether to advance the goal's own status.
+    ///
+    /// Status rank follows the natural progression: todo=0, doing=1, done=2.
+    /// Any unrecognised status string is treated as rank 0 (defensive).
+    pub async fn max_child_status_rank(&self, goal_id: i64) -> Result<Option<i32>> {
+        // Rank mapping inline in SQL so it's a single round-trip regardless
+        // of child count. CASE WHEN is evaluated by SQLite per-row; no UDF.
+        // MAX() over an empty set returns NULL in one row, not zero rows.
+        // Use Option<i64> in the tuple to distinguish "no children" (NULL)
+        // from "all children are todo" (0).
+        let row: (Option<i64>,) = sqlx::query_as(
+            "SELECT MAX(CASE status
+                          WHEN 'todo'  THEN 0
+                          WHEN 'doing' THEN 1
+                          WHEN 'done'  THEN 2
+                          ELSE 0
+                        END)
+             FROM board_items WHERE parent_goal_id = ?",
+        )
+        .bind(goal_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.0.map(|v| v as i32))
     }
 
     // ---------- notes ----------
@@ -1233,6 +1372,9 @@ struct SessionRow {
     /* ---- migration 0009 ---- */
     #[sqlx(default)]
     pinned: i64,
+    /* ---- orchestrator binding (migration 0015) ---- */
+    #[sqlx(default)]
+    card_id: Option<i64>,
 }
 
 #[derive(Debug, FromRow)]
@@ -1345,6 +1487,9 @@ struct BoardItemRow {
     session_id: Option<String>,
     /* ---- manual ordering (migration 0012) ---- */
     priority: i64,
+    /* ---- orchestrator goal binding (migration 0015) ---- */
+    #[sqlx(default)]
+    parent_goal_id: Option<i64>,
 }
 
 impl TryFrom<BoardItemRow> for BoardItem {
@@ -1365,6 +1510,7 @@ impl TryFrom<BoardItemRow> for BoardItem {
             model: r.model,
             session_id: r.session_id,
             priority: r.priority,
+            parent_goal_id: r.parent_goal_id,
         })
     }
 }
@@ -1422,6 +1568,7 @@ impl TryFrom<SessionRow> for Session {
             uptime_seconds: r.uptime_seconds,
             state,
             pinned: r.pinned != 0,
+            card_id: r.card_id,
         })
     }
 }
@@ -1477,6 +1624,7 @@ mod tests {
                 tool: "claude".into(),
                 model: None,
                 flags: vec!["--foo".into()],
+                card_id: None,
             })
             .await
             .unwrap();
@@ -1497,6 +1645,7 @@ mod tests {
             tool: "claude".into(),
             model: None,
             flags: vec![],
+            card_id: None,
         };
         s.create_session(new.clone()).await.unwrap();
         let err = s.create_session(new).await.unwrap_err();
@@ -1517,6 +1666,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -1556,6 +1706,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -1606,6 +1757,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -1653,6 +1805,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: Some(10),
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -1667,6 +1820,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: Some(0),
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -1681,6 +1835,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: Some(5),
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -1726,6 +1881,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -1799,6 +1955,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -1832,6 +1989,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -1852,6 +2010,7 @@ mod tests {
                 model: Some("claude-opus-4-7".into()),
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -2000,6 +2159,7 @@ mod tests {
             tool: "bash".into(),
             model: None,
             flags: vec![],
+            card_id: None,
         })
         .await
         .unwrap()
@@ -2082,11 +2242,161 @@ mod tests {
                 tool: "claude".into(),
                 model: None,
                 flags: vec![],
+                card_id: None,
             })
             .await
             .unwrap();
         s.update_status(sess.id, Status::Running).await.unwrap();
         let got = s.get_session_by_id(sess.id).await.unwrap().unwrap();
         assert_eq!(got.status, Status::Running);
+    }
+
+    /// End-to-end smoke for the Phase 1 orchestrator schema additions:
+    /// - parent_goal_id column on board_items
+    /// - board_links table with FK + ON DELETE CASCADE
+    /// - add_board_link / list_children_of_goal / list_board_links_for_goal
+    ///   / delete_board_link / max_child_status_rank
+    #[tokio::test]
+    async fn links_and_parent_round_trip() {
+        let s = tmp_store().await;
+
+        // 1. Create a goal card.
+        let goal = s
+            .create_board_item(NewBoardItem {
+                title: "Goal: ship planner".into(),
+                body: None,
+                status: Some("todo".into()),
+                lbl: Some("goal".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+                parent_goal_id: None,
+            })
+            .await
+            .unwrap();
+        assert!(goal.parent_goal_id.is_none());
+
+        // 2. Create two child cards referencing the goal.
+        let child1 = s
+            .create_board_item(NewBoardItem {
+                title: "Child 1".into(),
+                body: None,
+                status: None,
+                lbl: None,
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+                parent_goal_id: Some(goal.id),
+            })
+            .await
+            .unwrap();
+        assert_eq!(child1.parent_goal_id, Some(goal.id));
+
+        let child2 = s
+            .create_board_item(NewBoardItem {
+                title: "Child 2".into(),
+                body: None,
+                status: None,
+                lbl: None,
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+                parent_goal_id: Some(goal.id),
+            })
+            .await
+            .unwrap();
+
+        // 3. Add a ParentOf link from goal → child1.
+        let link_a = s
+            .add_board_link(goal.id, child1.id, LinkKind::ParentOf)
+            .await
+            .unwrap();
+        assert_eq!(link_a.from_card_id, goal.id);
+        assert_eq!(link_a.to_card_id, child1.id);
+        assert_eq!(link_a.kind, LinkKind::ParentOf);
+
+        // 4. Add a Blocks link from child1 → child2.
+        s.add_board_link(child1.id, child2.id, LinkKind::Blocks)
+            .await
+            .unwrap();
+
+        // 5. Duplicate add_board_link returns AlreadyExists.
+        let dup = s
+            .add_board_link(goal.id, child1.id, LinkKind::ParentOf)
+            .await;
+        assert!(
+            matches!(dup, Err(StoreError::AlreadyExists(_))),
+            "duplicate edge must be rejected"
+        );
+
+        // 6. list_children_of_goal returns both children.
+        let children = s.list_children_of_goal(goal.id).await.unwrap();
+        assert_eq!(children.len(), 2);
+        let child_ids: std::collections::HashSet<_> = children.iter().map(|c| c.id).collect();
+        assert!(child_ids.contains(&child1.id));
+        assert!(child_ids.contains(&child2.id));
+
+        // 7. list_board_links_for_goal returns only goal → child1
+        //    (child1 → child2 is a different from_card_id).
+        let links = s.list_board_links_for_goal(goal.id).await.unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].to_card_id, child1.id);
+        assert_eq!(links[0].kind, LinkKind::ParentOf);
+
+        // 8. All children are still todo → max_child_status_rank == Some(0).
+        let rank_before = s.max_child_status_rank(goal.id).await.unwrap();
+        assert_eq!(rank_before, Some(0));
+
+        // 9. Patch child1 to "doing"; max rank should advance to 1.
+        s.patch_board_item(
+            child1.id,
+            BoardPatch {
+                status: Some("doing".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let rank_after = s.max_child_status_rank(goal.id).await.unwrap();
+        assert_eq!(rank_after, Some(1));
+
+        // 10. Detach child1 from goal via double-Option None.
+        let detached = s
+            .patch_board_item(
+                child1.id,
+                BoardPatch {
+                    parent_goal_id: Some(None),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            detached.parent_goal_id.is_none(),
+            "detaching should clear parent_goal_id"
+        );
+
+        // After detach, only child2 remains as a child of goal.
+        let children_after = s.list_children_of_goal(goal.id).await.unwrap();
+        assert_eq!(children_after.len(), 1);
+        assert_eq!(children_after[0].id, child2.id);
+
+        // 11. delete_board_link: first call returns true, second false.
+        let deleted = s
+            .delete_board_link(goal.id, child1.id, LinkKind::ParentOf)
+            .await
+            .unwrap();
+        assert!(deleted, "first delete should report row removed");
+        let again = s
+            .delete_board_link(goal.id, child1.id, LinkKind::ParentOf)
+            .await
+            .unwrap();
+        assert!(!again, "second delete should report no-op");
     }
 }

@@ -42,6 +42,7 @@ pub async fn run(
             tool: tool.clone(),
             model,
             flags,
+            card_id: None,
         })
         .await?;
 
