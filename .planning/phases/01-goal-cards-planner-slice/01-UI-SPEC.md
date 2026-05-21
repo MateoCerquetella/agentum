@@ -1,10 +1,11 @@
 ---
 phase: 1
 slug: goal-cards-planner-slice
-status: draft
+status: approved
 shadcn_initialized: false
 preset: none
 created: 2026-05-20
+reviewed_at: 2026-05-20
 ---
 
 # Phase 1 — UI Design Contract
