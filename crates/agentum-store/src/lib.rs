@@ -7,8 +7,8 @@ use std::str::FromStr;
 
 use agentum_core::{
     BoardComment, BoardItem, BoardPatch, Channel, Event, Message, NewBoardComment, NewBoardItem,
-    NewChannel, NewMessage, NewNote, NewSession, Note, NotePatch, ReorderEntry, Session, Status,
-    User,
+    NewChannel, NewMessage, NewNote, NewSession, Note, NotePatch, ReorderEntry, RequiredField,
+    Session, Status, User,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{FromRow, SqlitePool};
@@ -566,12 +566,11 @@ impl Store {
     /// `done` transition gate needs — `LIMIT 1` short-circuits as soon
     /// as the index hits a matching row.
     pub async fn has_board_comments(&self, board_id: i64) -> Result<bool> {
-        let row: Option<(i64,)> = sqlx::query_as(
-            "SELECT 1 FROM board_comments WHERE board_id = ? LIMIT 1",
-        )
-        .bind(board_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM board_comments WHERE board_id = ? LIMIT 1")
+                .bind(board_id)
+                .fetch_optional(&self.pool)
+                .await?;
         Ok(row.is_some())
     }
 
@@ -606,6 +605,89 @@ impl Store {
         }
         tx.commit().await?;
         Ok(())
+    }
+
+    // ---------- board column rules ----------
+
+    /// Single-column lookup. `None` means no override row exists — the
+    /// caller (the gate) falls back to the slice-1 const matrix.
+    ///
+    /// Per-element deserialisation via `RequiredField::from_missing_key`
+    /// rather than serde's all-or-nothing array decode: unknown strings
+    /// in the DB (e.g. a variant that was removed in a later version)
+    /// are skipped with a warning instead of failing the whole row.
+    /// This is the cheap version of JSON-shape versioning the spec
+    /// deferred — keep the server up at the cost of dropping fields
+    /// from one rule.
+    pub async fn get_board_column_rule(&self, column: &str) -> Result<Option<Vec<RequiredField>>> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT required_fields FROM board_column_rules WHERE column_name = ?")
+                .bind(column)
+                .fetch_optional(&self.pool)
+                .await?;
+        match row {
+            Some((json,)) => Ok(Some(parse_rule_json(column, &json)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// All overrides as a map. Empty map when the table is empty. The
+    /// merge with the const matrix lives one layer up
+    /// (`agentum-server::rules::merged_rule_matrix`) — the store stays
+    /// agnostic about which columns are "default".
+    pub async fn list_board_column_rules(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, Vec<RequiredField>>> {
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT column_name, required_fields FROM board_column_rules")
+                .fetch_all(&self.pool)
+                .await?;
+        let mut out = std::collections::BTreeMap::new();
+        for (col, json) in rows {
+            let parsed = parse_rule_json(&col, &json)?;
+            out.insert(col, parsed);
+        }
+        Ok(out)
+    }
+
+    /// Upsert by primary key. The caller has already validated the field
+    /// list against the wire vocabulary (the route handler parses
+    /// `Vec<String>` through `RequiredField::from_missing_key` and rejects
+    /// unknown names with 400 before reaching here).
+    pub async fn upsert_board_column_rule(
+        &self,
+        column: &str,
+        fields: &[RequiredField],
+    ) -> Result<()> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        // Serialise as `[wire-string, …]` so the on-disk shape matches
+        // what `RequiredField::from_missing_key` reads back.
+        let wire: Vec<&'static str> = fields.iter().map(|f| f.as_missing_key()).collect();
+        let json = serde_json::to_string(&wire)?;
+        sqlx::query(
+            "INSERT INTO board_column_rules (column_name, required_fields, updated_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT(column_name) DO UPDATE SET
+                required_fields = excluded.required_fields,
+                updated_at = excluded.updated_at",
+        )
+        .bind(column)
+        .bind(&json)
+        .bind(&now_s)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Returns `Ok(true)` iff a row was actually deleted. The handler
+    /// uses the bool to choose 200 vs 404 — REST shape, no extra cost.
+    pub async fn delete_board_column_rule(&self, column: &str) -> Result<bool> {
+        let affected = sqlx::query("DELETE FROM board_column_rules WHERE column_name = ?")
+            .bind(column)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        Ok(affected > 0)
     }
 
     // ---------- notes ----------
@@ -1351,6 +1433,27 @@ pub async fn open_default() -> Result<(Store, PathBuf)> {
     Ok((store, p))
 }
 
+/// Decode a `board_column_rules.required_fields` JSON blob to typed
+/// variants. Unknown strings are skipped with a warning rather than
+/// failing the whole row — see `get_board_column_rule` for why.
+fn parse_rule_json(column: &str, json: &str) -> Result<Vec<RequiredField>> {
+    let raw: Vec<String> = serde_json::from_str(json)?;
+    let mut out = Vec::with_capacity(raw.len());
+    for name in raw {
+        match RequiredField::from_missing_key(&name) {
+            Some(f) => out.push(f),
+            None => {
+                tracing::warn!(
+                    column = column,
+                    field = %name,
+                    "unknown required-field in board_column_rules; skipping (forward-compat policy)",
+                );
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1775,6 +1878,87 @@ mod tests {
             .unwrap();
         assert_eq!(patched.workdir.as_deref(), Some("/home/me/projects/bar"));
         assert!(patched.model.is_none());
+    }
+
+    #[tokio::test]
+    async fn board_column_rule_crud_smoke() {
+        let s = tmp_store().await;
+
+        // Empty DB: lookup returns None, list returns empty map.
+        assert!(s.get_board_column_rule("doing").await.unwrap().is_none());
+        assert!(s.list_board_column_rules().await.unwrap().is_empty());
+
+        // Upsert a row, then read it back through both single + list.
+        s.upsert_board_column_rule("doing", &[RequiredField::Title, RequiredField::Lbl])
+            .await
+            .unwrap();
+        let one = s.get_board_column_rule("doing").await.unwrap().unwrap();
+        assert_eq!(one, vec![RequiredField::Title, RequiredField::Lbl]);
+        let map = s.list_board_column_rules().await.unwrap();
+        assert_eq!(map.len(), 1);
+        assert_eq!(
+            map.get("doing"),
+            Some(&vec![RequiredField::Title, RequiredField::Lbl])
+        );
+
+        // Re-upsert overrides the previous value (PRIMARY KEY conflict).
+        s.upsert_board_column_rule(
+            "doing",
+            &[
+                RequiredField::Title,
+                RequiredField::Lbl,
+                RequiredField::Workdir,
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            s.get_board_column_rule("doing").await.unwrap().unwrap(),
+            vec![
+                RequiredField::Title,
+                RequiredField::Lbl,
+                RequiredField::Workdir
+            ]
+        );
+
+        // Delete returns true once, false on the second call.
+        assert!(s.delete_board_column_rule("doing").await.unwrap());
+        assert!(!s.delete_board_column_rule("doing").await.unwrap());
+        assert!(s.get_board_column_rule("doing").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn board_column_rule_unknown_field_is_skipped() {
+        // Forward-compat: an unknown wire string in the JSON column
+        // gets skipped with a warning rather than failing the row.
+        // Insert raw JSON via the pool to simulate a row written by a
+        // future version that introduced a new variant we don't know.
+        let s = tmp_store().await;
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339).unwrap();
+        sqlx::query(
+            "INSERT INTO board_column_rules (column_name, required_fields, updated_at)
+             VALUES (?, ?, ?)",
+        )
+        .bind("review")
+        .bind(r#"["title","totally_new_variant","lbl"]"#)
+        .bind(&now_s)
+        .execute(s.pool())
+        .await
+        .unwrap();
+
+        let parsed = s.get_board_column_rule("review").await.unwrap().unwrap();
+        assert_eq!(parsed, vec![RequiredField::Title, RequiredField::Lbl]);
+    }
+
+    #[tokio::test]
+    async fn board_column_rule_empty_array_persists() {
+        // Empty required_fields is a valid configuration (spec decision 3
+        // — synonym for "no gate"). The row exists with `[]` and a
+        // subsequent lookup returns Some(empty Vec), not None.
+        let s = tmp_store().await;
+        s.upsert_board_column_rule("doing", &[]).await.unwrap();
+        let v = s.get_board_column_rule("doing").await.unwrap().unwrap();
+        assert!(v.is_empty());
     }
 
     #[tokio::test]

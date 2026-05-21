@@ -27,6 +27,7 @@ mod headers;
 mod logging;
 pub mod ratelimit;
 mod routes;
+mod rules;
 pub mod tls;
 mod transcript_store;
 
@@ -169,6 +170,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::agents::router())
         .merge(routes::agent_tasks::router())
         .merge(routes::board::router())
+        .merge(routes::board_rules::router())
         .merge(routes::notes::router())
         .merge(routes::preferences::router())
         .merge(routes::profiles::router())

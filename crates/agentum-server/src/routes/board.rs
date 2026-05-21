@@ -95,6 +95,11 @@ async fn enforce_transition(
     target_status: &str,
     ctx: &mut TransitionCtx<'_>,
 ) -> Result<(), ApiError> {
+    // Resolve required-fields once per gate evaluation. Slice 2: DB
+    // override (if any) replaces the const matrix completely; otherwise
+    // we get the slice-1 default. Cow keeps the const path alloc-free.
+    let required = crate::rules::resolve_required_fields(store, target_status).await?;
+
     if target_status == "done" {
         // Resolve the OR-clause: either `session_id` is set (the agent
         // session that produced this), or the parent row has at least
@@ -104,7 +109,7 @@ async fn enforce_transition(
         }
     }
 
-    match agentum_core::validate_transition(target_status, ctx) {
+    match agentum_core::validate_against(&required, ctx) {
         Ok(()) => Ok(()),
         Err(missing) => {
             // Single source of truth for the event payload — emit before
@@ -238,14 +243,7 @@ async fn patch(
             session_id: merged_session_id,
             has_comment: false,
         };
-        enforce_transition(
-            &state.store,
-            &state.bus,
-            Some(id),
-            target_status,
-            &mut ctx,
-        )
-        .await?;
+        enforce_transition(&state.store, &state.bus, Some(id), target_status, &mut ctx).await?;
     }
 
     let item = state.store.patch_board_item(id, patch).await?;
@@ -369,6 +367,28 @@ async fn create_comment(
             "author": comment.author,
         })));
     Ok((StatusCode::CREATED, Json(comment)))
+}
+
+/// Test-only re-export of `create` so sibling test modules
+/// (`routes::board_rules::tests`) can exercise the full POST handler —
+/// including the gate — without duplicating the handler boilerplate.
+/// `pub(crate)` so it stays private to the server crate.
+#[cfg(test)]
+pub(crate) async fn tests_helpers_create(
+    state: AppState,
+    payload: NewBoardItem,
+) -> Result<(StatusCode, Json<BoardItem>), ApiError> {
+    create(State(state), Json(payload)).await
+}
+
+/// Test-only re-export of `patch` — see `tests_helpers_create`.
+#[cfg(test)]
+pub(crate) async fn tests_helpers_patch(
+    state: AppState,
+    id: i64,
+    patch_body: BoardPatch,
+) -> Result<Json<BoardItem>, ApiError> {
+    patch(State(state), Path(id), Json(patch_body)).await
 }
 
 #[cfg(test)]
@@ -830,7 +850,10 @@ mod tests {
         let (status, body) = err_status_and_body(err).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["status"], "done");
-        assert_eq!(body["missing"], serde_json::json!(["session_id_or_comment"]));
+        assert_eq!(
+            body["missing"],
+            serde_json::json!(["session_id_or_comment"])
+        );
     }
 
     #[tokio::test]
