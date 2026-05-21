@@ -566,12 +566,11 @@ impl Store {
     /// `done` transition gate needs — `LIMIT 1` short-circuits as soon
     /// as the index hits a matching row.
     pub async fn has_board_comments(&self, board_id: i64) -> Result<bool> {
-        let row: Option<(i64,)> = sqlx::query_as(
-            "SELECT 1 FROM board_comments WHERE board_id = ? LIMIT 1",
-        )
-        .bind(board_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM board_comments WHERE board_id = ? LIMIT 1")
+                .bind(board_id)
+                .fetch_optional(&self.pool)
+                .await?;
         Ok(row.is_some())
     }
 
