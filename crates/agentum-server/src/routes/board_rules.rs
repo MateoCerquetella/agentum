@@ -288,6 +288,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             },
         )
         .await;
@@ -397,6 +398,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             },
         )
         .await;
@@ -419,6 +421,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             },
         )
         .await
@@ -461,6 +464,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             })
             .await
             .unwrap();
