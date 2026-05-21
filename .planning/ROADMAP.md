@@ -13,7 +13,7 @@ This milestone turns the existing kanban board into the orchestrator: a user dro
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Goal → Cards (planner slice)** - User types a goal, a planner tmux session decomposes it into 3–7 linked child cards on the board.
+- [x] **Phase 1: Goal → Cards (planner slice)** - User types a goal, a planner tmux session decomposes it into 3–7 linked child cards on the board. (completed 2026-05-21)
 - [ ] **Phase 2: Card ↔ Session binding** - Claiming a card auto-spawns the right tool with a context-loaded prompt; watchdog events stream back onto the card's comment thread.
 - [ ] **Phase 3: Dependency gate + dispatch polish** - `blocked_by` edges enforce column transitions sub-10ms, opening prompts are previewable/editable, and agent activity surfaces inline as card comments.
 
@@ -53,7 +53,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 01-08-PLAN.md — End-to-end integration test + human-verify checkpoint (full happy-path through in-process daemon + ROADMAP success criteria 1-5 visual verification)
+- [x] 01-08-PLAN.md — End-to-end integration test + human-verify checkpoint (full happy-path through in-process daemon + ROADMAP success criteria 1-5 visual verification)
 
 **UI hint**: yes
 
@@ -94,6 +94,6 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Goal → Cards (planner slice) | 7/8 | In Progress|  |
+| 1. Goal → Cards (planner slice) | 8/8 | Complete   | 2026-05-21 |
 | 2. Card ↔ Session binding | 0/TBD | Not started | - |
 | 3. Dependency gate + dispatch polish | 0/TBD | Not started | - |
