@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Phase 1 UI-SPEC approved
-last_updated: "2026-05-21T13:02:41.344Z"
+status: ready_to_plan
+stopped_at: Phase 01 complete (8/8) — ready to discuss Phase 2
+last_updated: 2026-05-21T16:25:27.277Z
 last_activity: 2026-05-21 -- Phase 01 execution started
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 8
-  completed_plans: 0
+  completed_plans: 8
   percent: 0
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-20)
 
 **Core value:** One terminal — and one orchestrator — to manage all your AI coding agents across all your projects. The kanban *is* the orchestrator: a goal in, executing cards out.
-**Current focus:** Phase 01 — goal-cards-planner-slice
+**Current focus:** Phase 2 — card ↔ session binding
 
 ## Current Position
 
-Phase: 01 (goal-cards-planner-slice) — EXECUTING
-Plan: 1 of 8
-Status: Executing Phase 01
-Last activity: 2026-05-21 -- Phase 01 execution started
+Phase: 2
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-05-21
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -36,7 +36,7 @@ Progress: [░░░░░░░░░░] 0%
 
 **Velocity:**
 
-- Total plans completed: 0
+- Total plans completed: 8
 - Average duration: —
 - Total execution time: —
 
@@ -44,7 +44,7 @@ Progress: [░░░░░░░░░░] 0%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 01 | 8 | - | - |
 
 **Recent Trend:**
 
