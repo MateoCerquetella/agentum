@@ -165,14 +165,14 @@ async fn create(
     let item = state.store.create_board_item(payload).await?;
     // Include parent_goal_id so the watchdog goal-status recomputer (plan 01-04)
     // can identify which goal to update when a child is created.
-    let _ = state.bus.send(
-        Event::new("board.created").with_payload(json!({
+    let _ = state
+        .bus
+        .send(Event::new("board.created").with_payload(json!({
             "id": item.id,
             "key": item.key,
             "title": item.title,
             "parent_goal_id": item.parent_goal_id,
-        })),
-    );
+        })));
     Ok((StatusCode::CREATED, Json(item)))
 }
 
@@ -258,14 +258,14 @@ async fn patch(
     let item = state.store.patch_board_item(id, patch).await?;
     // Include parent_goal_id so the watchdog goal-status recomputer (plan 01-04)
     // can recompute the parent's status when a child's status changes.
-    let _ = state.bus.send(
-        Event::new("board.updated").with_payload(json!({
+    let _ = state
+        .bus
+        .send(Event::new("board.updated").with_payload(json!({
             "id": item.id,
             "key": item.key,
             "status": item.status,
             "parent_goal_id": item.parent_goal_id,
-        })),
-    );
+        })));
     Ok(Json(item))
 }
 
@@ -288,12 +288,12 @@ async fn delete(
         .and_then(|item| item.parent_goal_id);
 
     state.store.delete_board_item(id).await?;
-    let _ = state.bus.send(
-        Event::new("board.deleted").with_payload(json!({
+    let _ = state
+        .bus
+        .send(Event::new("board.deleted").with_payload(json!({
             "id": id,
             "parent_goal_id": parent_goal_id,
-        })),
-    );
+        })));
     Ok(StatusCode::NO_CONTENT)
 }
 
