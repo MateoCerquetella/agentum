@@ -88,7 +88,10 @@ async fn list(State(state): State<AppState>) -> Result<Json<GroupedBoard>, ApiEr
 /// the failure body to `{"missing": [...], "status": "..."}`, not the
 /// default `{"error": "..."}` envelope. The `Custom` variant exists for
 /// exactly this case — see `crate::error` for the rationale.
-async fn enforce_transition(
+///
+/// `pub(crate)` so `routes::board_goals` can call the same gate without
+/// duplicating the ctx-build / event-emit boilerplate.
+pub(crate) async fn enforce_transition(
     store: &Store,
     bus: &broadcast::Sender<Event>,
     id: Option<i64>,
@@ -160,9 +163,15 @@ async fn create(
     enforce_transition(&state.store, &state.bus, None, target_status, &mut ctx).await?;
 
     let item = state.store.create_board_item(payload).await?;
+    // Include parent_goal_id so the watchdog goal-status recomputer (plan 01-04)
+    // can identify which goal to update when a child is created.
     let _ = state.bus.send(
-        Event::new("board.created")
-            .with_payload(json!({"id": item.id, "key": item.key, "title": item.title})),
+        Event::new("board.created").with_payload(json!({
+            "id": item.id,
+            "key": item.key,
+            "title": item.title,
+            "parent_goal_id": item.parent_goal_id,
+        })),
     );
     Ok((StatusCode::CREATED, Json(item)))
 }
@@ -247,9 +256,15 @@ async fn patch(
     }
 
     let item = state.store.patch_board_item(id, patch).await?;
+    // Include parent_goal_id so the watchdog goal-status recomputer (plan 01-04)
+    // can recompute the parent's status when a child's status changes.
     let _ = state.bus.send(
-        Event::new("board.updated")
-            .with_payload(json!({"id": item.id, "key": item.key, "status": item.status})),
+        Event::new("board.updated").with_payload(json!({
+            "id": item.id,
+            "key": item.key,
+            "status": item.status,
+            "parent_goal_id": item.parent_goal_id,
+        })),
     );
     Ok(Json(item))
 }
@@ -258,10 +273,27 @@ async fn delete(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
+    // Fetch parent_goal_id before deleting so the watchdog goal-status
+    // recomputer (plan 01-04) can identify which goal to recompute when
+    // a child is removed (D-03: max-of-empty drops the goal to todo).
+    // Best-effort: if the fetch races with another delete, we still
+    // proceed and emit the event without parent_goal_id (recomputer
+    // treats absent field as "not a child event" and no-ops).
+    let parent_goal_id = state
+        .store
+        .get_board_item(id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|item| item.parent_goal_id);
+
     state.store.delete_board_item(id).await?;
-    let _ = state
-        .bus
-        .send(Event::new("board.deleted").with_payload(json!({"id": id})));
+    let _ = state.bus.send(
+        Event::new("board.deleted").with_payload(json!({
+            "id": id,
+            "parent_goal_id": parent_goal_id,
+        })),
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1040,6 +1072,216 @@ mod tests {
             comments.is_empty(),
             "session-only path must not require comments"
         );
+    }
+
+    #[tokio::test]
+    async fn create_board_item_persists_parent_goal_id() {
+        // POST /api/board with parent_goal_id set — the value round-trips
+        // through the store and comes back on the returned item.
+        let state = fresh_state().await;
+        // Create a "parent" goal first so the FK is satisfiable.
+        let goal = state
+            .store
+            .create_board_item(NewBoardItem {
+                title: "parent goal".into(),
+                body: None,
+                status: Some("todo".into()),
+                lbl: Some("goal".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+                parent_goal_id: None,
+            })
+            .await
+            .unwrap();
+
+        let (code, child) = create(
+            State(state.clone()),
+            Json(NewBoardItem {
+                title: "child feat".into(),
+                body: None,
+                status: Some("todo".into()),
+                lbl: Some("feat".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+                parent_goal_id: Some(goal.id),
+            }),
+        )
+        .await
+        .expect("create with parent_goal_id must pass");
+        assert_eq!(code, StatusCode::CREATED);
+        assert_eq!(child.0.parent_goal_id, Some(goal.id));
+    }
+
+    #[tokio::test]
+    async fn patch_board_item_detaches_when_parent_goal_id_is_explicit_null() {
+        // PATCH with `parent_goal_id: null` detaches; without the field
+        // the value is left alone (double-Option distinction).
+        let state = fresh_state().await;
+        let goal = state
+            .store
+            .create_board_item(NewBoardItem {
+                title: "goal".into(),
+                body: None,
+                status: Some("todo".into()),
+                lbl: Some("goal".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+                parent_goal_id: None,
+            })
+            .await
+            .unwrap();
+        let child = state
+            .store
+            .create_board_item(NewBoardItem {
+                title: "child".into(),
+                body: None,
+                status: Some("todo".into()),
+                lbl: Some("feat".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+                parent_goal_id: Some(goal.id),
+            })
+            .await
+            .unwrap();
+        assert_eq!(child.parent_goal_id, Some(goal.id));
+
+        // PATCH without parent_goal_id field — leaves it unchanged.
+        let unchanged = patch(
+            State(state.clone()),
+            Path(child.id),
+            Json(BoardPatch {
+                title: Some("renamed".into()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("omitting parent_goal_id must not change it");
+        assert_eq!(unchanged.0.parent_goal_id, Some(goal.id));
+
+        // PATCH with explicit null — detaches.
+        let detached = patch(
+            State(state.clone()),
+            Path(child.id),
+            Json(BoardPatch {
+                parent_goal_id: Some(None),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("explicit null must detach");
+        assert_eq!(detached.0.parent_goal_id, None);
+    }
+
+    #[tokio::test]
+    async fn board_created_event_carries_parent_goal_id() {
+        // board.created payload must include parent_goal_id so the
+        // goal-status recomputer (plan 01-04) can identify the parent.
+        let state = fresh_state().await;
+        let mut rx = state.bus.subscribe();
+
+        let goal = state
+            .store
+            .create_board_item(NewBoardItem {
+                title: "goal".into(),
+                body: None,
+                status: Some("todo".into()),
+                lbl: Some("goal".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+                parent_goal_id: None,
+            })
+            .await
+            .unwrap();
+        // Drain the store-level create event (no bus emit from store).
+        // The route's create emits on POST — call it now.
+        let (_, child) = create(
+            State(state.clone()),
+            Json(NewBoardItem {
+                title: "child".into(),
+                body: None,
+                status: Some("todo".into()),
+                lbl: Some("feat".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+                parent_goal_id: Some(goal.id),
+            }),
+        )
+        .await
+        .expect("create child");
+
+        let ev = rx.recv().await.expect("board.created event must fire");
+        assert_eq!(ev.kind, "board.created");
+        assert_eq!(ev.payload["parent_goal_id"], goal.id);
+        assert_eq!(ev.payload["id"], child.0.id);
+    }
+
+    #[tokio::test]
+    async fn board_deleted_event_carries_parent_goal_id() {
+        // board.deleted payload must include parent_goal_id so the
+        // goal-status recomputer can recompute when a child is removed
+        // (D-03: max-of-empty drops the goal back to todo).
+        let state = fresh_state().await;
+
+        let goal = state
+            .store
+            .create_board_item(NewBoardItem {
+                title: "goal".into(),
+                body: None,
+                status: Some("todo".into()),
+                lbl: Some("goal".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+                parent_goal_id: None,
+            })
+            .await
+            .unwrap();
+        let child = state
+            .store
+            .create_board_item(NewBoardItem {
+                title: "child".into(),
+                body: None,
+                status: Some("todo".into()),
+                lbl: Some("feat".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+                parent_goal_id: Some(goal.id),
+            })
+            .await
+            .unwrap();
+
+        let mut rx = state.bus.subscribe();
+        delete(State(state.clone()), Path(child.id))
+            .await
+            .expect("delete child");
+
+        let ev = rx.recv().await.expect("board.deleted event must fire");
+        assert_eq!(ev.kind, "board.deleted");
+        assert_eq!(ev.payload["id"], child.id);
+        assert_eq!(ev.payload["parent_goal_id"], goal.id);
     }
 
     #[tokio::test]
