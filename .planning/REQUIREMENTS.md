@@ -81,21 +81,38 @@ Explicitly excluded from this milestone. Documented to prevent scope creep.
 
 ## Traceability
 
-Empty initially — the roadmapper populates this during phase creation.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SCHEMA-01 … SCHEMA-05 | TBD | Pending |
-| ORCH-01 … ORCH-06 | TBD | Pending |
-| BIND-01 … BIND-06 | TBD | Pending |
-| GATE-01 … GATE-04 | TBD | Pending |
-| UX-01 … UX-03 | TBD | Pending |
+| SCHEMA-01 | Phase 1 | Pending |
+| SCHEMA-02 | Phase 1 | Pending |
+| SCHEMA-03 | Phase 1 | Pending |
+| SCHEMA-04 | Phase 1 | Pending |
+| SCHEMA-05 | Phase 1 | Pending |
+| ORCH-01 | Phase 1 | Pending |
+| ORCH-02 | Phase 1 | Pending |
+| ORCH-03 | Phase 1 | Pending |
+| ORCH-04 | Phase 1 | Pending |
+| ORCH-05 | Phase 1 | Pending |
+| ORCH-06 | Phase 1 | Pending |
+| BIND-01 | Phase 2 | Pending |
+| BIND-02 | Phase 2 | Pending |
+| BIND-03 | Phase 2 | Pending |
+| BIND-04 | Phase 2 | Pending |
+| BIND-05 | Phase 2 | Pending |
+| BIND-06 | Phase 2 | Pending |
+| GATE-01 | Phase 3 | Pending |
+| GATE-02 | Phase 3 | Pending |
+| GATE-03 | Phase 3 | Pending |
+| GATE-04 | Phase 3 | Pending |
+| UX-01 | Phase 3 | Pending |
+| UX-02 | Phase 3 | Pending |
+| UX-03 | Phase 3 | Pending |
 
 **Coverage:**
 - v1 requirements: 24 total
-- Mapped to phases: 0 (filled by roadmapper)
-- Unmapped: 24 — pending roadmap
+- Mapped to phases: 24 (100%)
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-05-20*
-*Last updated: 2026-05-20 after initialization*
+*Last updated: 2026-05-20 after roadmap creation*
