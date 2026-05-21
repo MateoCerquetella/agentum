@@ -203,6 +203,18 @@ impl Store {
         row.map(Session::try_from).transpose()
     }
 
+    /// Look up the planner session bound to a goal card via `session.card_id`.
+    /// Returns `Some(Session)` when exactly one session references `card_id`,
+    /// `None` when none do. Used by the goal-status reconciler (plan 01-04)
+    /// to find the planner session to auto-stop on first child arrival (D-07).
+    pub async fn get_session_by_card_id(&self, card_id: i64) -> Result<Option<Session>> {
+        let row = sqlx::query_as::<_, SessionRow>("SELECT * FROM sessions WHERE card_id = ?")
+            .bind(card_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(Session::try_from).transpose()
+    }
+
     pub async fn update_status(&self, id: Uuid, status: Status) -> Result<()> {
         let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
         let affected = sqlx::query("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?")
@@ -2398,5 +2410,49 @@ mod tests {
             .await
             .unwrap();
         assert!(!again, "second delete should report no-op");
+    }
+
+    #[tokio::test]
+    async fn get_session_by_card_id_returns_some_then_none() {
+        let s = tmp_store().await;
+
+        // Create a goal board item to use as the card_id target.
+        let goal = s
+            .create_board_item(NewBoardItem {
+                title: "goal: build auth".into(),
+                body: None,
+                status: None,
+                lbl: Some("goal".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+                parent_goal_id: None,
+            })
+            .await
+            .unwrap();
+
+        // Create a session bound to that goal card.
+        let sess = s
+            .create_session(NewSession {
+                name: "planner-auth".into(),
+                workdir: "/tmp".into(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: Some(goal.id),
+            })
+            .await
+            .unwrap();
+
+        // get_session_by_card_id must find the session by its card_id.
+        let found = s.get_session_by_card_id(goal.id).await.unwrap();
+        assert!(found.is_some(), "expected to find session by card_id");
+        assert_eq!(found.unwrap().id, sess.id);
+
+        // A card_id that no session references returns None, not an error.
+        let missing = s.get_session_by_card_id(9999).await.unwrap();
+        assert!(missing.is_none(), "unknown card_id must return None");
     }
 }

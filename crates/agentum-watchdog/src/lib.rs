@@ -569,6 +569,34 @@ fn hash_str(s: &str) -> u64 {
     h.finish()
 }
 
+/// Rank ordering used by D-03's invariant: goal.status = max(child statuses).
+/// Returns -1 for any status string not in the canonical set; the caller
+/// must treat negative ranks as "unknown / skip recompute" rather than
+/// silently treating them as todo.
+// Used by run_goal_reconciler; #[allow] removed in Task 2 when caller exists.
+#[allow(dead_code)]
+pub(crate) fn status_rank(s: &str) -> i32 {
+    match s {
+        "todo" => 0,
+        "doing" => 1,
+        "done" => 2,
+        _ => -1,
+    }
+}
+
+/// Inverse of [`status_rank`]. Returns `None` for ranks outside [0, 2].
+/// Available to tests and to any future consumer that needs to convert
+/// a DB-origin i32 rank back to the canonical status string.
+#[allow(dead_code)]
+pub(crate) fn rank_to_status(r: i32) -> Option<&'static str> {
+    match r {
+        0 => Some("todo"),
+        1 => Some("doing"),
+        2 => Some("done"),
+        _ => None,
+    }
+}
+
 /// Broadcast + persist. Failures on either are logged but don't break the loop.
 async fn emit(bus: &broadcast::Sender<Event>, store: &Store, ev: Event) -> Result<(), ()> {
     if let Err(e) = store.insert_event(&ev).await {
@@ -583,6 +611,25 @@ async fn emit(bus: &broadcast::Sender<Event>, store: &Store, ev: Event) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_rank_orders_todo_doing_done() {
+        assert_eq!(status_rank("todo"), 0);
+        assert_eq!(status_rank("doing"), 1);
+        assert_eq!(status_rank("done"), 2);
+        assert_eq!(status_rank("unknown_future_status"), -1);
+        assert_eq!(status_rank(""), -1);
+    }
+
+    #[test]
+    fn rank_to_status_round_trip() {
+        assert_eq!(rank_to_status(0), Some("todo"));
+        assert_eq!(rank_to_status(1), Some("doing"));
+        assert_eq!(rank_to_status(2), Some("done"));
+        assert_eq!(rank_to_status(-1), None);
+        assert_eq!(rank_to_status(3), None);
+        assert_eq!(rank_to_status(99), None);
+    }
 
     #[test]
     fn context_low_regex() {
