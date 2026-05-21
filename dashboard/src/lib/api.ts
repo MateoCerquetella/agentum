@@ -304,6 +304,10 @@ export interface BoardItem {
   /* Manual ordering within a column (migration 0012). Lower priority
      floats to the top; secondary sort is created_at ASC. */
   priority?: number;
+  /* Goal linkage (migration 0015): child cards carry the parent goal id
+     set by the planner when it decomposes a goal into tasks. Absent on
+     goal cards themselves and on cards not part of any goal. */
+  parent_goal_id?: number | null;
 }
 
 export interface NewBoardItem {
@@ -584,6 +588,30 @@ export const api = {
     request<BoardItem>(`/api/board/${id}/claim`, {
       method: 'POST',
       body: JSON.stringify({ claimed_by })
+    }),
+
+  /**
+   * POST /api/board/goals — atomically creates a goal card and spawns the
+   * planner session. Returns the new goal BoardItem + the planner session
+   * id (empty string when spawn failed — per D-07, the goal card is still
+   * created and the daemon emits goal.planner.spawn_failed on the bus).
+   *
+   * The caller (GoalComposer) does NOT optimistically insert a card: the
+   * WS event bridge delivers goal.created / board.created within ~1s, which
+   * is the source of truth. Racing a placeholder would cause a visible
+   * flicker when the server-assigned id/key differ from any synthetic id.
+   */
+  createGoal: (
+    text: string,
+    opts?: { body?: string; workdir?: string }
+  ): Promise<{ goal: BoardItem; planner_session_id: string }> =>
+    request('/api/board/goals', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: text,
+        ...(opts?.body ? { body: opts.body } : {}),
+        ...(opts?.workdir ? { workdir: opts.workdir } : {})
+      })
     }),
 
   // ---------- watchdog ----------

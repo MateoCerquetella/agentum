@@ -110,6 +110,20 @@ export async function patchStatusWithSnapBack(
   }
 }
 
+/// Submit a goal to POST /api/board/goals. On success this is a no-op
+/// from the store's perspective — the new goal card arrives via the
+/// /api/events WS within ~1s, so the event bridge updates board state
+/// without a manual store write here. On failure the error is re-thrown
+/// so the calling component (GoalComposer) can render the inline error
+/// per UI-SPEC §Interaction Contract — GoalComposer. We deliberately do
+/// NOT flash a toast on success: the landing goal card IS the feedback.
+export async function submitGoal(
+  text: string,
+  opts?: { body?: string; workdir?: string }
+): Promise<void> {
+  await api.createGoal(text, opts);
+}
+
 /// `ApiError` carries the raw response body in its `.message`. For 400
 /// gate rejections the body is `{missing, status}` JSON — strip the
 /// `HTTP 400: ` prefix and parse defensively.
