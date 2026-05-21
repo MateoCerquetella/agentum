@@ -85,6 +85,22 @@ pub trait ToolAdapter: Send + Sync {
     fn yolo_flag(&self) -> Option<&'static str> {
         None
     }
+
+    /// Whether this adapter represents an interactive coding-agent CLI
+    /// (Claude, Codex, Cursor, Gemini, …) as opposed to a plain shell
+    /// or an unknown passthrough binary. The watchdog uses this to
+    /// decide whether to apply change-based activity detection (idle =
+    /// no pane output for ~3 s) when [`busy_signature`] is `None`.
+    /// Without this fallback, every agent except Claude stayed pinned
+    /// at `ActivityState::Unknown` forever and the sidebar `●` never
+    /// flipped to the muted `◌` idle dot — see the v0.7.68 fix.
+    ///
+    /// Shells and passthroughs deliberately return `false`: an idle
+    /// `bash` prompt isn't an "agent finished its turn" event and
+    /// shouldn't fire a toast.
+    fn is_agent(&self) -> bool {
+        false
+    }
 }
 
 /// The canonical "user wants YOLO" marker as it travels through
