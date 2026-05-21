@@ -449,6 +449,7 @@ mod tests {
             model: None,
             session_id: None,
             priority: None,
+            parent_goal_id: None,
         }
     }
 
@@ -474,6 +475,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             }),
         )
         .await
@@ -501,6 +503,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             }),
         )
         .await
@@ -534,6 +537,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             }),
         )
         .await
@@ -563,6 +567,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -651,6 +656,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -702,6 +708,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -751,6 +758,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -788,6 +796,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -833,6 +842,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -879,6 +889,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -938,6 +949,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -988,6 +1000,7 @@ mod tests {
                 // Session id is the anchor we're proving works alone.
                 session_id: Some("11111111-1111-1111-1111-111111111111".into()),
                 priority: None,
+                parent_goal_id: None,
             })
             .await
             .unwrap();
@@ -1048,6 +1061,7 @@ mod tests {
                 model: None,
                 session_id: None,
                 priority: None,
+                parent_goal_id: None,
             }),
         )
         .await
