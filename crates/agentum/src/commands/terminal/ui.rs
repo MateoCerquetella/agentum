@@ -13,7 +13,7 @@ use agentum_core::Status as SessionStatus;
 use agentum_core::transcript::{AgentTaskState, TaskStatus, TodoStatus};
 
 use super::app::{
-    AddProfileField, AddProfileForm, App, ConnState, DirPickerState, ErrorEntry, Focus,
+    AddProfileField, AddProfileForm, App, ConnState, DirPickerState, ErrorEntry, Focus, GoalForm,
     NewSessionField, NewSessionForm, NotifKind, Notification, Overlay, PendingAction,
     ProfilesOverlay, RenameState, Row, SettingsRow, SettingsState, Side, ToolPickerState,
     TreeSection, palette_catalog, status_dot, tool_icon,
@@ -365,6 +365,7 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
             app.show_all_servers,
             p,
         ),
+        Overlay::Goal(form) => draw_overlay_goal(f, f.area(), form, p),
     }
 }
 
@@ -1304,6 +1305,18 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         ));
     }
 
+    // "GOAL · planning…" chip: shown left-aligned while a goal is being
+    // submitted to the planner. UI-SPEC: accent_alt (--cta) color so it
+    // reads as an active CTA, not a passive informational label.
+    if let Overlay::Goal(ref form) = app.overlay {
+        if form.submitting {
+            left.push(Span::styled(
+                " GOAL \u{00b7} planning\u{2026} ",
+                Style::default().fg(p.accent_alt).bg(p.chrome_bg),
+            ));
+        }
+    }
+
     if app.prefs.get(StatusChip::Io) {
         // Live throughput chip — `↓ rate · ↑ rate`. Treated as one chip
         // visually so it doesn't compete with workdir/tool for width.
@@ -1572,9 +1585,19 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
             p,
         ),
         Line::from(""),
+        head("  Board", p),
+        body(
+            "  G                 open goal composer (from tree focus)",
+            p,
+        ),
+        body(
+            "    Enter             add newline · Ctrl-Enter submit · Esc cancel",
+            p,
+        ),
+        Line::from(""),
         head("  Extensions & appearance", p),
         body("  g                 toggle lazygit side pane", p),
-        body("  G                 lazygit cheat sheet", p),
+        body("  G (lazygit open)  lazygit cheat sheet", p),
         body("  T                 cycle theme", p),
         body(
             "  Ctrl-P then ~     status bar settings (toggle each chip individually)",
@@ -3057,3 +3080,127 @@ fn build_tasks_lines(
     }
     out
 }
+
+// ── Goal overlay ──────────────────────────────────────────────────────────────
+
+/// Draw the Goal composer overlay.
+///
+/// Layout (top-to-bottom inside the overlay box):
+/// - Empty line
+/// - Placeholder text (muted) when the form is empty, else the typed text
+///   with each line rendered separately so multi-line goals read naturally
+/// - Empty line
+/// - Footer: error in `palette.error` when present, else hint in `palette.muted`
+///
+/// The overlay width is 60 columns; height grows with the text, capped at
+/// half the terminal height.
+///
+/// Colors follow the UI-SPEC palette mapping:
+///   `--cta`     → `palette.accent_alt`   (GOAL chip, footer "Ctrl-Enter")
+///   `--link`    → `palette.accent`       (footer key hints)
+///   `--crash`   → `palette.error`        (error line)
+///   `--fg-3`    → `palette.muted`        (placeholder, hint labels)
+fn draw_overlay_goal(f: &mut Frame<'_>, area: Rect, form: &GoalForm, p: &Palette) {
+    const OVERLAY_WIDTH: u16 = 60;
+    const PLACEHOLDER: &str = "Drop a goal in. The planner will turn it into 3\u{2013}7 cards.";
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Empty spacer above the text area.
+    lines.push(Line::from(""));
+
+    if form.text.is_empty() {
+        // Placeholder rendered in muted so it reads as a hint not real text.
+        lines.push(Line::from(Span::styled(
+            format!("  {PLACEHOLDER}"),
+            Style::default().fg(p.muted),
+        )));
+    } else {
+        // Render each line of the multi-line text separately. Trim a trailing
+        // lone newline that the user may have added by accident — but preserve
+        // internal newlines so intentional multi-paragraph goals show as typed.
+        let text_to_show = form.text.trim_end_matches('\n');
+        for raw_line in text_to_show.lines() {
+            lines.push(Line::from(Span::styled(
+                format!("  {raw_line}"),
+                Style::default().fg(p.fg),
+            )));
+        }
+    }
+
+    // Spacer before footer.
+    lines.push(Line::from(""));
+
+    // Footer: error or keyboard hint.
+    if let Some(err) = &form.error {
+        lines.push(Line::from(Span::styled(
+            format!("  {err}"),
+            Style::default().fg(p.error),
+        )));
+    } else if form.submitting {
+        lines.push(Line::from(Span::styled(
+            "  planning\u{2026}",
+            Style::default().fg(p.muted),
+        )));
+    } else {
+        // Keyboard hint: "Enter newline · Ctrl-Enter to plan · Esc cancel"
+        lines.push(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled("Enter", Style::default().fg(p.accent)),
+            Span::styled(" newline \u{00b7} ", Style::default().fg(p.muted)),
+            Span::styled("Ctrl-Enter", Style::default().fg(p.accent_alt)),
+            Span::styled(" to plan \u{00b7} ", Style::default().fg(p.muted)),
+            Span::styled("Esc", Style::default().fg(p.accent)),
+            Span::styled(" cancel", Style::default().fg(p.muted)),
+        ]));
+    }
+
+    // Title chip: " GOAL " styled in accent_alt to match the --cta mapping.
+    let title = " GOAL ";
+
+    // Use the standard overlay_box helper so focus-border, surface-bg, and
+    // centering are consistent with every other overlay in the TUI.
+    overlay_box_with_title_style(f, area, title, lines, OVERLAY_WIDTH, p.accent_alt, p);
+}
+
+/// Variant of `overlay_box` that takes an explicit title color so the Goal
+/// overlay's GOAL chip can use `accent_alt` (--cta) while other overlays
+/// keep the default `accent` title color.
+fn overlay_box_with_title_style(
+    f: &mut Frame<'_>,
+    area: Rect,
+    title: &str,
+    lines: Vec<Line<'_>>,
+    width: u16,
+    title_color: Color,
+    p: &Palette,
+) {
+    let h = (lines.len() as u16).saturating_add(2);
+    let w = width.min(area.width);
+    let h = h.min(area.height);
+    let x = area.x + area.width.saturating_sub(w) / 2;
+    let y = area.y + area.height.saturating_sub(h) / 2;
+    let r = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+    let block = Block::default()
+        .title(Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(title_color)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(p.focus_border))
+        .style(Style::default().bg(p.surface_bg).fg(p.fg));
+    let para = Paragraph::new(lines)
+        .block(block)
+        .style(Style::default().bg(p.surface_bg).fg(p.fg));
+    f.render_widget(Clear, r);
+    f.render_widget(para, r);
+}
+
+// ── end Goal overlay ──────────────────────────────────────────────────────────

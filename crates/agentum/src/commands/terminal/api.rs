@@ -57,6 +57,20 @@ pub struct Health {
     pub capabilities: Vec<String>,
 }
 
+/// Response from `POST /api/board/goals`. The server returns the newly
+/// created board item; the TUI currently only needs the `id` so the
+/// planner can be told which goal to expand — extra fields are captured
+/// for forward-compat and future "jump to card" flows.
+#[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
+pub struct SubmitGoalResponse {
+    pub id: i64,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
 /// Mirrors `agentum_server::routes::agents::AgentInfo`. Returned by
 /// `/api/agents`; the TUI gates the New Session form's tool picker on
 /// `available` so users can't pick an agent whose CLI isn't installed.
@@ -497,6 +511,28 @@ impl Client {
             bail!("{status} — {body}");
         }
         Ok(resp.json::<Session>().await?)
+    }
+
+    /// `POST /api/board/goals` — submit a goal to the planner.
+    ///
+    /// The server creates a new board item of type `goal` and hands it to
+    /// the autonomous planner, which creates 3–7 child cards. Returns the
+    /// newly created goal item.
+    pub async fn submit_goal(&self, text: &str) -> Result<SubmitGoalResponse> {
+        let url = self.base.join("/api/board/goals")?;
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .json(&serde_json::json!({ "title": text }))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("{status} — {body}");
+        }
+        Ok(resp.json::<SubmitGoalResponse>().await?)
     }
 
     /// `PATCH /api/sessions/{id}` with `{name: ...}`. Server validates

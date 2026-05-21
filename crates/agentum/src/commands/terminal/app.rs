@@ -186,6 +186,10 @@ pub enum Overlay {
     /// the run-loop so every store / WS / cache rebuilds against the
     /// new daemon.
     Profiles(ProfilesOverlay),
+    /// Goal composer. Opened with `G` from Tree focus. Multi-line text
+    /// area; Enter appends a newline, Ctrl-Enter submits the goal to
+    /// `POST /api/board/goals`, Esc discards. UI-SPEC §Goal Composer.
+    Goal(Box<GoalForm>),
 }
 
 /// In-memory state for the [`Overlay::Profiles`] switcher.
@@ -197,6 +201,37 @@ pub struct ProfilesOverlay {
     /// `Some` when the user is editing the inline add/edit form instead
     /// of the list. Mirrors the dashboard's ServerSwitcher.
     pub add_form: Option<AddProfileForm>,
+}
+
+/// Form state for [`Overlay::Goal`]. Holds the multi-line text the user
+/// is composing, submission status, and any server-returned error.
+///
+/// Enter appends a newline (multi-line goal text is valid).
+/// Ctrl-Enter submits via `POST /api/board/goals`.
+/// Esc discards without submitting.
+#[derive(Clone, PartialEq, Eq)]
+pub struct GoalForm {
+    /// The goal text being composed. May contain newlines.
+    pub text: String,
+    /// True while the network request is in flight.
+    pub submitting: bool,
+    /// Error message from the last failed submit attempt.
+    pub error: Option<String>,
+    /// The active server profile — used to route the request to the
+    /// right daemon when multiple endpoints are configured.
+    pub profile: String,
+}
+
+impl GoalForm {
+    /// Construct an empty form pre-filled with the active profile name.
+    pub fn default_for_profile(profile: String) -> Self {
+        Self {
+            text: String::new(),
+            submitting: false,
+            error: None,
+            profile,
+        }
+    }
 }
 
 /// One row in the profile picker. Mirrors the on-disk profile but is
@@ -4134,6 +4169,10 @@ async fn handle_key(
             handle_profiles_key(app, key);
             return;
         }
+        Overlay::Goal(_) => {
+            handle_goal_key(app, key, client).await;
+            return;
+        }
         Overlay::None => {}
         // Help / cheatsheet / install: any of these dismiss it.
         _ => {
@@ -4383,7 +4422,21 @@ async fn handle_key(
             app.overlay = Overlay::Errors;
         }
         KeyCode::Char('g') => toggle_lazygit(app, lg_tx).await,
-        KeyCode::Char('G') => app.overlay = Overlay::LazygitCheats,
+        KeyCode::Char('G') => {
+            // UI-SPEC §Interaction Contract: G from Tree focus opens the
+            // Goal composer; from any other focus (e.g. lazygit pane open)
+            // fall through to the LazygitCheats sheet so that binding is
+            // not silently eaten. The Goal compositor is only useful from
+            // the tree where the board is visible.
+            if matches!(app.overlay, Overlay::None) && app.focus == Focus::Tree {
+                app.overlay = Overlay::Goal(Box::new(GoalForm::default_for_profile(
+                    app.active_profile.clone().unwrap_or_default(),
+                )));
+                tracing::info!("opened Overlay::Goal");
+            } else {
+                app.overlay = Overlay::LazygitCheats;
+            }
+        }
         KeyCode::Char('T') => app.cycle_theme(),
         // Shift-F toggles fullscreen (hides title/tree/status). Esc exits
         // when active. Mirrors the web dashboard's Shift+F shortcut so
@@ -5080,6 +5133,123 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
     }
     app.overlay = Overlay::NewSession(form);
 }
+
+// ── Goal overlay helpers ──────────────────────────────────────────────────────
+
+/// Append a newline to the form's text. Called when the user presses Enter
+/// inside the Goal overlay (plain Enter = newline, Ctrl-Enter = submit).
+pub fn goal_overlay_handle_enter(form: &mut GoalForm) {
+    form.text.push('\n');
+}
+
+/// Return `true` if the form has non-whitespace text and is not already
+/// submitting. Used to gate Ctrl-Enter so empty goals are never sent.
+pub fn goal_overlay_should_submit(form: &GoalForm) -> bool {
+    !form.submitting && !form.text.trim().is_empty()
+}
+
+/// Translate a raw server error string into a human-readable message.
+///
+/// When the server returns a column-rule validation envelope such as
+/// `400 — {"missing":["body"],"status":"todo"}` we surface
+/// `"Your <status> column needs: <fields>"`. All other strings are
+/// returned unchanged so the UI can display them verbatim.
+pub fn format_goal_error(raw: &str) -> String {
+    // The server prepends the HTTP status, e.g. "400 — {…}".
+    // Find the first `{` to isolate the JSON body.
+    if let Some(json_start) = raw.find('{') {
+        let json_slice = &raw[json_start..];
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_slice) {
+            // Column-rule envelope has shape `{"missing":[…],"status":"<col>"}`.
+            if let (Some(missing_arr), Some(status_str)) = (
+                v.get("missing").and_then(|m| m.as_array()),
+                v.get("status").and_then(|s| s.as_str()),
+            ) {
+                let fields: Vec<&str> = missing_arr.iter().filter_map(|f| f.as_str()).collect();
+                if !fields.is_empty() {
+                    return format!("Your {status_str} column needs: {}", fields.join(", "));
+                }
+            }
+        }
+    }
+    raw.to_string()
+}
+
+/// Key handler for [`Overlay::Goal`].
+///
+/// - **Esc**: close the overlay and discard the form.
+/// - **Enter** (no modifier): append a newline to the text field.
+/// - **Ctrl-Enter**: submit the goal via `POST /api/board/goals`.
+/// - **Backspace**: delete the last character.
+/// - **Printable chars**: append to `form.text`.
+async fn handle_goal_key(app: &mut App, key: KeyEvent, client: &Client) {
+    let Overlay::Goal(mut form) = std::mem::replace(&mut app.overlay, Overlay::None) else {
+        return;
+    };
+
+    // Block input while a submit is in flight.
+    if form.submitting {
+        app.overlay = Overlay::Goal(form);
+        return;
+    }
+
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+    match key.code {
+        KeyCode::Esc => {
+            // Discard and close — overlay already set to None above.
+        }
+
+        KeyCode::Enter if ctrl => {
+            // Ctrl-Enter: submit if text is non-empty.
+            if !goal_overlay_should_submit(&form) {
+                app.overlay = Overlay::Goal(form);
+                return;
+            }
+            form.submitting = true;
+            form.error = None;
+            let text = form.text.trim().to_string();
+            app.overlay = Overlay::Goal(form.clone());
+
+            match client.submit_goal(&text).await {
+                Ok(_resp) => {
+                    // Success — close the overlay; the board will refresh
+                    // via the event bus when the planner creates cards.
+                    app.overlay = Overlay::None;
+                    app.status_msg = Some("Goal submitted — planner is on it".into());
+                    tracing::info!("goal submitted successfully");
+                }
+                Err(e) => {
+                    form.submitting = false;
+                    form.error = Some(format_goal_error(&format!("{e}")));
+                    app.overlay = Overlay::Goal(form);
+                }
+            }
+        }
+
+        KeyCode::Enter => {
+            // Plain Enter: insert a newline into the multi-line text area.
+            goal_overlay_handle_enter(&mut form);
+            app.overlay = Overlay::Goal(form);
+        }
+
+        KeyCode::Backspace => {
+            form.text.pop();
+            app.overlay = Overlay::Goal(form);
+        }
+
+        KeyCode::Char(c) if !ctrl => {
+            form.text.push(c);
+            app.overlay = Overlay::Goal(form);
+        }
+
+        _ => {
+            app.overlay = Overlay::Goal(form);
+        }
+    }
+}
+
+// ── end Goal overlay helpers ──────────────────────────────────────────────────
 
 /// Fetch the listing for `seed` (or `$HOME` if seed is empty/None).
 ///
@@ -8341,7 +8511,7 @@ mod goal_overlay_tests {
     /// submitting stays false. This prevents accidental empty-goal creation.
     #[test]
     fn ctrl_enter_on_empty_text_is_noop() {
-        let mut form = GoalForm::default_for_profile("local".into());
+        let form = GoalForm::default_for_profile("local".into());
         // `text` is empty — trimmed text is also empty.
         let should_submit = goal_overlay_should_submit(&form);
         assert!(!should_submit, "empty text must not trigger submit");
