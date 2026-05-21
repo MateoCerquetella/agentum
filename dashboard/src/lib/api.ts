@@ -276,8 +276,11 @@ export interface SendInput {
   append_enter?: boolean;
 }
 
-/** Ticket type tag the kanban dot color picks up. */
-export type TicketLbl = 'bug' | 'feat' | 'chore' | 'spike';
+/** Ticket type tag the kanban dot color picks up.
+ *  'goal' is added for planner-spawned goal cards (lbl=goal); they render
+ *  with the coral GOAL chip via .ticket .tk-foot .lbl.goal (UI-SPEC §lbl).
+ */
+export type TicketLbl = 'bug' | 'feat' | 'chore' | 'spike' | 'goal';
 /** Tool tag mapped to the ticket's tool dot. */
 export type Tool = 'claude' | 'codex' | 'gemini' | 'hermes' | string;
 

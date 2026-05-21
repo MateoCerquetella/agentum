@@ -20,6 +20,7 @@
   import { deriveState, fmtTokens, fmtCost } from '$lib/dashboard';
   import Ticket from '$components/dashboard/Ticket.svelte';
   import BoardItemDialog from '$components/BoardItemDialog.svelte';
+  import GoalComposer from '$components/GoalComposer.svelte';
 
   // Safety-net refresh interval. The WS event bridge keeps the board
   // fresh on every board.* / session.* event; this only catches the
@@ -444,6 +445,47 @@
     removeItem(profileId, id);
   }
 
+  // Per-column goal filter. Keys are `${laneKey}:${colKey}` — same
+  // compound key used for drop targets so the filter is lane-scoped (not
+  // board-wide). Not persisted to URL in v1 — page reload clears the filter
+  // (UI-SPEC §Column filter pill: "not persisted to URL in v1").
+  let boardFilter = $state<Record<string, { goalId: number } | null>>({});
+
+  // Open the parent goal in the edit dialog. The parent goal lives in
+  // the fleet store; findItem resolves it from there. If the goal card is
+  // in a different lane we still open it via a profile-aware dialog open.
+  function openCard(parentGoalId: number) {
+    const parent = $fleetBoard.items.find((it) => it.id === parentGoalId);
+    if (parent) {
+      openTicket(parent);
+    }
+  }
+
+  // Toggle the column filter AND open the parent goal card. Both effects
+  // happen on a single click per UI-SPEC §Parent-cue chip:
+  //   "Click: same effect as clicking the parent card in the column
+  //    (opens the BoardItemDialog in edit mode, focused on the goal)"
+  //   + "Activation: clicking a parent-cue chip while no filter is active
+  //    sets boardFilter[colKey] = { goalId: parentId }"
+  function onParentCueClick(laneColKey: string, parentGoalId: number) {
+    openCard(parentGoalId);
+    if (boardFilter[laneColKey]?.goalId === parentGoalId) {
+      boardFilter[laneColKey] = null;
+    } else {
+      boardFilter[laneColKey] = { goalId: parentGoalId };
+    }
+  }
+
+  // Esc clears the column filter for the focused lane:col key.
+  // Dispatched from the col div's onkeydown to honour keyboard-first
+  // clearing per UI-SPEC §Column filter pill: "clear on Esc while column
+  // is focused".
+  function onColKeyDown(laneColKey: string, e: KeyboardEvent) {
+    if (e.key === 'Escape' && boardFilter[laneColKey]) {
+      boardFilter[laneColKey] = null;
+    }
+  }
+
   /* -- right-rail metrics ------------------------------------------- */
   const live = $derived($sessions.items.filter((s) => deriveState(s) === 'live'));
   const claimedCount = $derived(
@@ -475,6 +517,12 @@
     <span class="pill"><span style="color: var(--fg-3);">group:</span>&nbsp;server · project</span>
     <button type="button" class="tb-btn primary" onclick={() => openCreate(null)}>+ Ticket</button>
   </div>
+
+  <!-- GoalComposer — persistent input bar above the kanban board. Sits
+       between the toolbar and the board per UI-SPEC §Interaction Contract.
+       The GoalComposer renders its own error block below itself; the board
+       content is unaffected. -->
+  <GoalComposer />
 
   <!-- Per-profile error banner — surfaces offline / unauth profiles so
        a partial fleet failure isn't silently hidden. Each profile gets
@@ -528,7 +576,14 @@
                 <div class="board" style:grid-template-columns={`repeat(${Math.min(cols.length, 4)}, minmax(0, 1fr))`}>
                   {#each cols as col (col.key)}
                     {@const dk = `${lkey}:${col.key}`}
+                    {@const lcKey = `${lkey}:${col.key}`}
                     {@const foreign = draggingProfileId != null && draggingProfileId !== lane.profile_id}
+                    {@const colFilter = boardFilter[lcKey] ?? null}
+                    {@const colItems = colFilter
+                      ? (lane.byStatus[col.key] ?? []).filter(
+                          (it) => it.parent_goal_id === colFilter.goalId || it.id === colFilter.goalId
+                        )
+                      : (lane.byStatus[col.key] ?? [])}
                     <div
                       class="col"
                       class:drop-target={dropTargetKey === dk}
@@ -536,6 +591,7 @@
                       ondragover={onColDragOver(dk, foreign)}
                       ondragleave={onColDragLeave(dk)}
                       ondrop={onColDrop(lane, col.key)}
+                      onkeydown={(e) => onColKeyDown(lcKey, e)}
                       role="region"
                       aria-label={`${col.label} — ${lane.project}`}
                     >
@@ -544,7 +600,22 @@
                         {:else if col.tone === 'warn'}<span style="color: var(--amber);">●</span>
                         {:else if col.tone === 'done'}<span style="color: var(--fg-3);">●</span>{/if}
                         <span>{col.label}</span>
-                        <span class="count">{(lane.byStatus[col.key] ?? []).length}</span>
+                        <span class="count">{colItems.length}</span>
+                        {#if colFilter}
+                          <!-- Filter pill: "Filter: AG-{goalId} ↓ ×". The × button
+                               clears the filter; the pill itself is a visual cue that
+                               the column is narrowed to children of that goal.
+                               Esc on a focused column also clears it (onkeydown above). -->
+                          <span class="pill filter" aria-label={`Filtered to AG-${colFilter.goalId}`}>
+                            Filter: AG-{colFilter.goalId} ↓
+                            <button
+                              type="button"
+                              class="dismiss"
+                              aria-label="Clear column filter"
+                              onclick={() => (boardFilter[lcKey] = null)}
+                            >×</button>
+                          </span>
+                        {/if}
                         <button
                           type="button"
                           class="add"
@@ -553,7 +624,7 @@
                         >+</button>
                       </div>
                       <div class="col-b">
-                        {#each (lane.byStatus[col.key] ?? []) as tk (`${tk.profile_id}:${tk.id}`)}
+                        {#each colItems as tk (`${tk.profile_id}:${tk.id}`)}
                           {@const tkKey = `${tk.profile_id}:${tk.id}`}
                           {@const tkForeign = draggingProfileId != null && draggingProfileId !== tk.profile_id}
                           <Ticket
@@ -562,6 +633,7 @@
                             commentCount={commentCounts[tkKey] ?? 0}
                             dropAbove={dropAboveTicket === tkKey}
                             dragging={draggingProfileId === tk.profile_id && draggingId === tk.id}
+                            onParentCueClick={(parentGoalId) => onParentCueClick(lcKey, parentGoalId)}
                             onDragStart={onTicketDragStart(tk)}
                             onDragEnd={onTicketDragEnd}
                             onDragOver={onTicketDragOver(tk, tkForeign)}
@@ -570,7 +642,7 @@
                             onClick={() => openTicket(tk)}
                           />
                         {/each}
-                        {#if (lane.byStatus[col.key] ?? []).length === 0}
+                        {#if colItems.length === 0}
                           <div class="col-empty mono">empty</div>
                         {/if}
                       </div>

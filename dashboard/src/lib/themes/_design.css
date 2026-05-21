@@ -649,6 +649,53 @@
 .ticket .tk-foot .lbl.feat  { color: var(--green); border-color: rgba(25,214,0,0.4); }
 .ticket .tk-foot .lbl.chore { color: var(--blu);   border-color: rgba(85,190,255,0.4); }
 .ticket .tk-foot .lbl.spike { color: var(--amber); border-color: rgba(255,180,84,0.4); }
+/* Goal card — coral accent matching --cta (UI-SPEC §lbl="goal" chip styling). */
+.ticket .tk-foot .lbl.goal  { color: var(--cta);   border-color: rgba(243,100,88,0.4); }
+/* Parent-cue chip — interactive button that opens the parent goal and
+   toggles the column filter. Mono 10px to sit with the existing lbl row.
+   Hover/focus tints the chip --link-blue to signal "click me". */
+.ticket .tk-foot .lbl.parent-cue {
+  cursor: pointer;
+  transition: color var(--t-hover), border-color var(--t-hover);
+}
+.ticket .tk-foot .lbl.parent-cue:hover,
+.ticket .tk-foot .lbl.parent-cue:focus-visible {
+  color: var(--link);
+  border-color: var(--link);
+  outline: none;
+}
+/* Column filter pill — shown in .col-h when a goal filter is active.
+   Inherits the base .pill shape; border-link tints it to show it is
+   an active filter, not just a decorative chip. */
+.col-h .pill.filter {
+  border-color: var(--link);
+  color: var(--fg-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9.5px;
+  padding: 1px 6px;
+}
+.col-h .pill.filter .dismiss {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--fg-3);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  transition: color var(--t-hover);
+}
+.col-h .pill.filter .dismiss:hover { color: var(--link); }
+/* Mobile: enlarge parent-cue tap target to meet 28px minimum. */
+@media (max-width: 720px) {
+  .ticket .tk-foot .lbl.parent-cue {
+    padding: 4px 8px;
+    min-height: 28px;
+    display: inline-flex;
+    align-items: center;
+  }
+}
 
 /* ---------- mobile toolbar / nav helpers ---------- */
 @media (max-width: 720px) {

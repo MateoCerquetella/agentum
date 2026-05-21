@@ -25,6 +25,11 @@
      *  would land *above* it. The component renders a thin insertion
      *  line at the top edge. */
     dropAbove?: boolean;
+    /** When set, renders a parent-cue chip `↳ AG-{id}` in the tk-foot
+     *  row (before the lbl chip). Only populated for child cards that have
+     *  a parent goal; goal cards themselves never receive this prop. Matches
+     *  §Parent-cue chip in 01-UI-SPEC.md. */
+    onParentCueClick?: (parentGoalId: number) => void;
     onDragStart?: (e: DragEvent) => void;
     onDragEnd?: () => void;
     onDragOver?: (e: DragEvent) => void;
@@ -38,6 +43,7 @@
     sourceLabel = null,
     commentCount = 0,
     dropAbove = false,
+    onParentCueClick,
     onDragStart,
     onDragEnd,
     onDragOver,
@@ -45,6 +51,13 @@
     onDrop,
     onClick
   }: Props = $props();
+
+  // A child card is one that has a parent_goal_id. Goal cards themselves
+  // (lbl === 'goal') do NOT render the parent-cue chip — goals have no
+  // parent in v1 (CONTEXT D-11, 01-UI-SPEC.md §Parent-cue chip).
+  const isChildCard = $derived(
+    tk.parent_goal_id != null && tk.lbl !== 'goal' && onParentCueClick != null
+  );
 
   const lblText = $derived(tk.lbl ?? 'task');
   const toolClass = $derived(tk.tool ?? '');
@@ -97,6 +110,30 @@
     <span class="lbl {tk.lbl ?? ''}">{lblText}</span>
   </div>
   <div class="tk-t" title={tk.title}>{tk.title}</div>
+  {#if isChildCard && tk.parent_goal_id != null}
+    <!-- tk-foot: parent-cue chip for child cards. Goal cards themselves
+         have no parent in v1 so this block is guarded by isChildCard.
+         Chip renders BEFORE any other foot lbl per UI-SPEC §Parent-cue chip. -->
+    <div class="tk-foot">
+      <div class="lbls">
+        <button
+          type="button"
+          class="lbl parent-cue"
+          aria-label="Open parent goal AG-{tk.parent_goal_id}"
+          onclick={(e) => { e.stopPropagation(); onParentCueClick?.(tk.parent_goal_id!); }}
+        >↳ AG-{tk.parent_goal_id}</button>
+      </div>
+    </div>
+  {:else if tk.lbl === 'goal'}
+    <!-- Goal cards get a coral lbl.goal chip in the footer so the CSS rule
+         .ticket .tk-foot .lbl.goal applies and distinguishes them visually
+         (UI-SPEC §lbl="goal" chip styling + 01-UI-SPEC.md Color §Accent). -->
+    <div class="tk-foot">
+      <div class="lbls">
+        <span class="lbl goal">GOAL</span>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
