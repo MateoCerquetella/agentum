@@ -42,7 +42,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 01-03-PLAN.md — HTTP routes (POST /api/board/goals atomic create-goal + planner-spawn, POST/GET/DELETE /api/board/links with symbolic-key resolution, board.rs extended for parent_goal_id)
+- [x] 01-03-PLAN.md — HTTP routes (POST /api/board/goals atomic create-goal + planner-spawn, POST/GET/DELETE /api/board/links with symbolic-key resolution, board.rs extended for parent_goal_id)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -94,6 +94,6 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Goal → Cards (planner slice) | 2/8 | In Progress|  |
+| 1. Goal → Cards (planner slice) | 3/8 | In Progress|  |
 | 2. Card ↔ Session binding | 0/TBD | Not started | - |
 | 3. Dependency gate + dispatch polish | 0/TBD | Not started | - |
