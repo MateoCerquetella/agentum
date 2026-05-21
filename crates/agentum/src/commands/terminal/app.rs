@@ -3429,9 +3429,25 @@ fn extract_selection_text(app: &App, sel: TermSelection) -> String {
             None => return String::new(),
         },
     };
-    let (rows, cols) = screen.size();
     let ((s_col, s_row), (e_col, e_row)) = sel.ordered();
-    // Convert 1-based coords to 0-based and clamp to the live screen.
+    extract_selection_from_screen(screen, (s_col, s_row), (e_col, e_row))
+}
+
+/// Pure screen-walking: copy whichever cells lie inside the
+/// selection rectangle into a `String`. Lives in its own function so
+/// the empty-cell → space substitution (which fixed the
+/// "CIonGitHub" regression from v0.8.2's mouse copy path) can be
+/// unit-tested without standing up an `App`. The `start` and `end`
+/// pairs are 1-based `(col, row)` already ordered such that
+/// `(s_col, s_row) ≤ (e_col, e_row)` per `TermSelection::ordered`.
+fn extract_selection_from_screen(
+    screen: &vt100::Screen,
+    start: (u16, u16),
+    end: (u16, u16),
+) -> String {
+    let (rows, cols) = screen.size();
+    let (s_col, s_row) = start;
+    let (e_col, e_row) = end;
     let s_row0 = s_row.saturating_sub(1).min(rows.saturating_sub(1));
     let e_row0 = e_row.saturating_sub(1).min(rows.saturating_sub(1));
     let s_col0 = s_col.saturating_sub(1).min(cols.saturating_sub(1));
@@ -3450,8 +3466,24 @@ fn extract_selection_text(app: &App, sel: TermSelection) -> String {
         };
         let mut line = String::new();
         for c in col_lo..=col_hi {
-            if let Some(cell) = screen.cell(r, c) {
-                line.push_str(&cell.contents());
+            match screen.cell(r, c) {
+                Some(cell) => {
+                    let contents = cell.contents();
+                    // Empty `contents()` means the inner program left
+                    // this cell untouched — ratatui's diff renderer
+                    // moves the cursor instead of overwriting blanks,
+                    // so the intra-word spaces in lines like "CI on
+                    // GitHub" land in cells whose `contents()` is "".
+                    // Substitute a single space so the copy preserves
+                    // the layout the user sees (the trailing trim
+                    // below still strips the row-pad).
+                    if contents.is_empty() {
+                        line.push(' ');
+                    } else {
+                        line.push_str(&contents);
+                    }
+                }
+                None => line.push(' '),
             }
         }
         // vt100 pads short lines with empty-content cells; strip
@@ -8084,6 +8116,77 @@ mod osc52_tests {
             let expected = format!("\x1bPtmux;{}\x1b\\", inner.replace('\x1b', "\x1b\x1b"));
             assert_eq!(s, expected);
         });
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    //! Shift-drag copy must preserve intra-word spaces even when the
+    //! inner agent painted them via cursor positioning (which ratatui
+    //! does in its diff renderer). Without the empty-cell → space
+    //! substitution in `extract_selection_from_screen` we collapsed
+    //! "CI on GitHub" to "CIonGitHub" because vt100 returns "" for
+    //! cells the agent never wrote to.
+    use super::*;
+
+    fn screen_from(bytes: &[u8], rows: u16, cols: u16) -> vt100::Parser {
+        let mut p = vt100::Parser::new(rows, cols, 0);
+        p.process(bytes);
+        p
+    }
+
+    #[test]
+    fn cursor_positioned_writes_preserve_spaces() {
+        // Move-write-move-write — leaves cols 2 and 5 untouched, which
+        // is exactly the pattern that produced "CIonGitHub" in the
+        // bug report. CSI H is cursor home (1;1), CSI C moves right.
+        let mut p = screen_from(b"", 1, 20);
+        p.process(b"\x1b[1;1HCI");
+        p.process(b"\x1b[1;4Hon");
+        p.process(b"\x1b[1;7HGitHub");
+        let text = extract_selection_from_screen(p.screen(), (1, 1), (12, 1));
+        assert_eq!(text, "CI on GitHub");
+    }
+
+    #[test]
+    fn literal_spaces_unchanged() {
+        // Plain-write path — spaces were always written explicitly,
+        // shouldn't double-up.
+        let mut p = screen_from(b"", 1, 20);
+        p.process(b"CI on GitHub");
+        let text = extract_selection_from_screen(p.screen(), (1, 1), (12, 1));
+        assert_eq!(text, "CI on GitHub");
+    }
+
+    #[test]
+    fn trailing_blanks_trimmed() {
+        // Row-pad cells past the written content must NOT show up as
+        // a long trail of spaces. The trim_end runs once per row.
+        let mut p = screen_from(b"", 1, 40);
+        p.process(b"hello");
+        let text = extract_selection_from_screen(p.screen(), (1, 1), (40, 1));
+        assert_eq!(text, "hello");
+    }
+
+    #[test]
+    fn multi_row_joins_with_newline() {
+        let mut p = screen_from(b"", 3, 10);
+        p.process(b"\x1b[1;1Hone");
+        p.process(b"\x1b[2;1Htwo");
+        p.process(b"\x1b[3;1Hthree");
+        let text = extract_selection_from_screen(p.screen(), (1, 1), (5, 3));
+        assert_eq!(text, "one\ntwo\nthree");
+    }
+
+    #[test]
+    fn single_row_partial_range() {
+        // Start/end in the same row narrows to the selected columns
+        // only, even when the row has more content past `end`.
+        let mut p = screen_from(b"", 1, 20);
+        p.process(b"hello world");
+        // Cols 7..=11 = "world"
+        let text = extract_selection_from_screen(p.screen(), (7, 1), (11, 1));
+        assert_eq!(text, "world");
     }
 }
 
