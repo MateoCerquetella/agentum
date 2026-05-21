@@ -2,6 +2,8 @@ pub mod agent_tasks;
 pub mod agents;
 pub mod auth;
 pub mod board;
+pub mod board_goals;
+pub mod board_links;
 pub mod board_rules;
 pub mod cert;
 pub mod channels;
