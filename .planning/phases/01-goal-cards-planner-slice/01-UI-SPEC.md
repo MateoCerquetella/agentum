@@ -63,6 +63,8 @@ Declared values (must be multiples of 4):
 
 ## Typography
 
+Phase 1 introduces 3 new sizes (14/11/18) and 2 new weights (400/500). The 9px, 10px, and 600-weight entries in the table below are inherited primitives required for chip and display-2 rendering, not new design tokens.
+
 | Role | Size | Weight | Line Height | Used For |
 |------|------|--------|-------------|----------|
 | **Body** | 14px (sans `--display`) | 400 | 1.5 | Composer placeholder + typed text; composer empty-state body. |
@@ -165,8 +167,8 @@ Declared values (must be multiples of 4):
 ### `Overlay::Goal` (TUI)
 
 - **Trigger keybinding:** **`G` (uppercase)** while focused on the Board view. **Not lowercase `g`** — lowercase `g` is reserved for "first row" vim semantics. Document `G` in the `Overlay::Help` panel under the Board section.
-- **Lifecycle:** mirrors `Overlay::NewSession` exactly. Opens via `app.overlay = Overlay::Goal(GoalForm::default())`. Closes via `Esc` (cancel, no submit) or `Enter` (submit when textarea non-empty). `Enter` on an empty form is a no-op (no error, no close).
-- **Layout:** centered modal block, ~60% width, ~40% height of the viewport (matches the `Overlay::NewSession` constants). Footer hint row: `Enter to plan · Esc to cancel`.
+- **Lifecycle:** mirrors `Overlay::NewSession` exactly. Opens via `app.overlay = Overlay::Goal(GoalForm::default())`. Closes via `Esc` (cancel, no submit) or `Ctrl-Enter` (submit when textarea non-empty). `Ctrl-Enter` on an empty form is a no-op (no error, no close).
+- **Layout:** centered modal block, ~60% width, ~40% height of the viewport (matches the `Overlay::NewSession` constants). Footer hint row: `Enter newline · Ctrl-Enter to plan · Esc cancel`.
 - **Visual:** outer block uses `palette.focus_border` for the border (electric blue equivalent), `palette.surface_bg` for the inner background, `palette.fg_strong` for the title bar text. Title: `GOAL`.
 - **Multiline editing:** Enter inserts a newline; Cmd/Ctrl+Enter submits. (Note: TUI's existing newline conventions in `Overlay::NewSession` already differ from dashboard — keep TUI's behavior consistent with `NewSession`, not with the dashboard composer.) **Document the mismatch** in the overlay's footer hint: `Enter newline · Ctrl-Enter to plan · Esc cancel`.
 - **Error surface (after failed submit):** error text replaces the footer hint, colored `palette.error`. Press any non-Esc key to dismiss.
