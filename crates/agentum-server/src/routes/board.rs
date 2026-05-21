@@ -238,14 +238,7 @@ async fn patch(
             session_id: merged_session_id,
             has_comment: false,
         };
-        enforce_transition(
-            &state.store,
-            &state.bus,
-            Some(id),
-            target_status,
-            &mut ctx,
-        )
-        .await?;
+        enforce_transition(&state.store, &state.bus, Some(id), target_status, &mut ctx).await?;
     }
 
     let item = state.store.patch_board_item(id, patch).await?;
@@ -830,7 +823,10 @@ mod tests {
         let (status, body) = err_status_and_body(err).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["status"], "done");
-        assert_eq!(body["missing"], serde_json::json!(["session_id_or_comment"]));
+        assert_eq!(
+            body["missing"],
+            serde_json::json!(["session_id_or_comment"])
+        );
     }
 
     #[tokio::test]
