@@ -268,6 +268,16 @@ EXAMPLES:
         action: ProfilesCmd,
     },
 
+    /// Manage the board (planner agent output surface).
+    ///
+    /// These subcommands are how the planner agent creates goals and cards.
+    /// The bearer token is read from `credentials.toml` — never from argv or
+    /// env vars.
+    Board {
+        #[command(subcommand)]
+        cmd: BoardCmd,
+    },
+
     /// Remove the agentum binary and everything it wrote to disk.
     ///
     /// Wipes the database, TLS material, daemon logs, and the binary
@@ -307,6 +317,58 @@ EXAMPLES:
         /// Reinstall even when already on the latest version.
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BoardCmd {
+    /// Create a new goal card on the board.
+    ///
+    /// Prints the new AG-key to stdout (one line). The planner agent parses
+    /// this from its pane scrollback to chain subsequent `add-card` calls.
+    AddGoal {
+        /// Goal title.
+        #[arg(long)]
+        title: String,
+        /// Optional Markdown body for the goal card.
+        #[arg(long)]
+        body: Option<String>,
+        /// Optional working directory hint stored on the goal.
+        #[arg(long)]
+        workdir: Option<String>,
+        /// Named connection profile to use. Defaults to `local`.
+        #[arg(long, default_value = "local")]
+        profile: String,
+    },
+    /// Create an execution card under an existing goal.
+    ///
+    /// Prints the new AG-key to stdout. `--blocks` accepts a comma-separated
+    /// list of symbolic keys this card must finish before its dependents can
+    /// start. Unknown keys produce exit 5 so the planner can retry after
+    /// creating the missing target.
+    AddCard {
+        /// AG-key of the parent goal (e.g. `AG-7K9X`).
+        #[arg(long)]
+        parent_goal: String,
+        /// Card title.
+        #[arg(long)]
+        title: String,
+        /// Optional Markdown body. The symbolic `--key` is prepended
+        /// automatically as `key: <k>\n\n<body>`.
+        #[arg(long)]
+        body: Option<String>,
+        /// Symbolic key for this card (`[a-zA-Z0-9_-]{1,64}`).
+        #[arg(long)]
+        key: String,
+        /// Comma-separated list of symbolic keys this card blocks.
+        #[arg(long)]
+        blocks: Option<String>,
+        /// Label (e.g. `feat`, `fix`, `chore`).
+        #[arg(long)]
+        lbl: Option<String>,
+        /// Named connection profile to use. Defaults to `local`.
+        #[arg(long, default_value = "local")]
+        profile: String,
     },
 }
 
@@ -460,6 +522,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         }
         Cmd::Hosts { action } => crate::commands::hosts::run(action).await,
         Cmd::Profiles { action } => crate::commands::profiles::run(action).await,
+        Cmd::Board { cmd } => crate::commands::board::run(cmd).await,
         Cmd::Uninstall { yes, all, dry_run } => {
             crate::commands::uninstall::run(crate::commands::uninstall::Options {
                 yes,
