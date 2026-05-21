@@ -171,6 +171,8 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::agents::router())
         .merge(routes::agent_tasks::router())
         .merge(routes::board::router())
+        .merge(routes::board_goals::router())
+        .merge(routes::board_links::router())
         .merge(routes::board_rules::router())
         .merge(routes::notes::router())
         .merge(routes::preferences::router())
