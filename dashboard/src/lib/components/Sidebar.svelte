@@ -1,10 +1,9 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { page } from '$app/state';
   import { sessions } from '$stores/sessions';
   import { openPalette } from '$stores/palette';
   import { openNewSession } from '$stores/newSession';
-  import { api, type Session, type Status } from '$lib/api';
+  import { type Session } from '$lib/api';
   import { connStatus } from '$stores/events';
   import {
     profiles,
@@ -54,17 +53,14 @@
 
   const liveCount = $derived($sessions.items.filter(s => s.status === 'running').length);
 
-  // Version chip pulls from /api/health so it tracks the actual
+  // Version chip pulls from the fleet store so it tracks the actual
   // `agentum serve` we're talking to — not dashboard/package.json
-  // (which has been stuck at 0.1.0 since project init).
-  let serverVersion = $state<string | null>(null);
-  onMount(() => {
-    let cancelled = false;
-    api.health()
-      .then(h => { if (!cancelled) serverVersion = h.version; })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  });
+  // (which has been stuck at 0.1.0 since project init). Reading from
+  // `$fleet` instead of a one-shot `api.health()` at mount means the
+  // chip self-heals when the active server is upgraded + restarted:
+  // the 20-second fleet probe in +layout.svelte refreshes /api/health
+  // across every profile and the chip updates on the next tick.
+  const serverVersion = $derived($fleet[$activeProfileId ?? '']?.version?.trim() || '');
 
   function projectOf(workdir: string | null | undefined): string {
     if (!workdir) return '—';
