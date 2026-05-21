@@ -365,6 +365,7 @@ mod tests {
             uptime_seconds: None,
             state: None,
             pinned: false,
+            card_id: None,
         }
     }
 
