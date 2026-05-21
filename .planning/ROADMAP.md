@@ -37,8 +37,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 Plans:
 **Wave 1**
 
-- [ ] 01-01-PLAN.md — Schema + core types + Store CRUD (migration 0015 + BoardItem.parent_goal_id + Session.card_id + BoardLink + add_board_link/list_children_of_goal/max_child_status_rank/delete_board_link)
-- [ ] 01-02-PLAN.md — planner.toml config loader (planner_config_path + load_planner_config with bundled-prompt fallback + path-traversal guard)
+- [x] 01-01-PLAN.md — Schema + core types + Store CRUD (migration 0015 + BoardItem.parent_goal_id + Session.card_id + BoardLink + add_board_link/list_children_of_goal/max_child_status_rank/delete_board_link)
+- [x] 01-02-PLAN.md — planner.toml config loader (planner_config_path + load_planner_config with bundled-prompt fallback + path-traversal guard)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -94,6 +94,6 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Goal → Cards (planner slice) | 0/8 | Not started | - |
+| 1. Goal → Cards (planner slice) | 2/8 | In Progress|  |
 | 2. Card ↔ Session binding | 0/TBD | Not started | - |
 | 3. Dependency gate + dispatch polish | 0/TBD | Not started | - |
