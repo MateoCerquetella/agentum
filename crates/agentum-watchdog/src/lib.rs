@@ -569,12 +569,206 @@ fn hash_str(s: &str) -> u64 {
     h.finish()
 }
 
+/// Subscribes to the broadcast bus and reconciles goal statuses against their
+/// children per CONTEXT D-03 (`goal.status = max(child statuses)`).
+///
+/// Spawned alongside `Watchdog::run` in `agentum-server::serve()`. Handles:
+/// - `board.created` / `board.updated` / `board.deleted` events with a
+///   `parent_goal_id` payload — recomputes the parent goal's status via a
+///   single `max_child_status_rank` SQL call and patches if the rank differs.
+/// - D-07 planner auto-stop: on the *first* `board.created` event for each
+///   goal, emits `goal.planner.first_child` and calls `graceful_stop` on the
+///   planner session bound via `session.card_id = goal.id`.
+///
+/// The `planner_stopped` HashSet is in-memory only: a daemon restart resets
+/// it, which may cause a duplicate `graceful_stop` call on already-dead
+/// planner panes. Those calls log a warning and are otherwise harmless.
+pub async fn run_goal_reconciler(store: Arc<Store>, bus: tokio::sync::broadcast::Sender<Event>) {
+    let mut rx = bus.subscribe();
+    // Tracks which goal ids have already had their planner session stopped so
+    // we never fire the auto-stop twice per daemon lifetime (D-07 idempotency).
+    let mut planner_stopped: std::collections::HashSet<i64> = std::collections::HashSet::new();
+
+    loop {
+        let ev = match rx.recv().await {
+            Ok(ev) => ev,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                // The bus dropped events we couldn't consume fast enough. The
+                // next event triggers a fresh `max_child_status_rank` read, so
+                // the goal status will converge on the next child transition
+                // even if we missed intermediate events here (T-04-02).
+                tracing::warn!(
+                    lagged = n,
+                    "goal reconciler lagged; will recompute on next event"
+                );
+                continue;
+            }
+        };
+        if !matches!(
+            ev.kind.as_str(),
+            "board.created" | "board.updated" | "board.deleted"
+        ) {
+            continue;
+        }
+        if let Err(e) = handle_board_event(&store, &bus, &ev, &mut planner_stopped).await {
+            tracing::warn!(error = ?e, kind = %ev.kind, "goal reconcile failed");
+        }
+    }
+}
+
+/// Core dispatch for a single board event. Extracts the parent goal id,
+/// applies depth-1 guard, fires the planner auto-stop on first child, then
+/// patches the goal's status when the computed rank diverges.
+async fn handle_board_event(
+    store: &Store,
+    bus: &tokio::sync::broadcast::Sender<Event>,
+    ev: &Event,
+    planner_stopped: &mut std::collections::HashSet<i64>,
+) -> Result<(), WatchdogError> {
+    let Some(goal_id) = extract_parent_goal_id(store, ev).await? else {
+        return Ok(());
+    };
+
+    let goal = match store.get_board_item(goal_id).await? {
+        Some(item) => item,
+        // Goal row deleted concurrently; nothing to reconcile.
+        None => return Ok(()),
+    };
+
+    // Depth-1 invariant (CONTEXT D-03 + PATTERNS.md): goals don't have
+    // parents in v1. If this goal row itself has a parent_goal_id, the data
+    // is in an unexpected state. Log a warning and skip rather than silently
+    // cascading writes up an unbounded tree.
+    if goal.parent_goal_id.is_some() {
+        tracing::warn!(
+            goal_id,
+            "v1 depth-1 invariant violated: goal has a parent; skipping recompute"
+        );
+        return Ok(());
+    }
+
+    // D-07 planner auto-stop — only on the first board.created child observed
+    // for this goal per daemon lifetime. `HashSet::insert` returns true only
+    // on the first insertion, ensuring idempotency.
+    if ev.kind == "board.created" && planner_stopped.insert(goal_id) {
+        if let Some(session) = store.get_session_by_card_id(goal_id).await? {
+            if matches!(session.status, agentum_core::Status::Running) {
+                // Emit the event BEFORE the tmux call so tests without a real
+                // tmux fixture (and downstream observers like the dashboard)
+                // still observe "first child arrived" even when the stop fails.
+                let _ = bus.send(Event::new("goal.planner.first_child").with_payload(
+                    serde_json::json!({
+                        "goal_id": goal_id,
+                        "planner_session_id": session.id.to_string(),
+                    }),
+                ));
+                let target = agentum_tmux::target_for(&session.name);
+                // 5-second timeout mirrors the sessions route's GRACEFUL_STOP_TIMEOUT.
+                if let Err(e) = agentum_tmux::graceful_stop(&target, Duration::from_secs(5)).await {
+                    // Best-effort: the event already fired; log the failure but
+                    // don't propagate it — the goal-status recompute below is
+                    // the important part and must not be skipped.
+                    tracing::warn!(
+                        error = %e,
+                        session = %session.name,
+                        "planner graceful_stop failed; pane may have already exited"
+                    );
+                }
+            }
+        }
+    }
+
+    // Recompute goal status (D-03 invariant). Single SQL call returns the
+    // MAX rank across all children, or NULL when no children exist.
+    let rank = store.max_child_status_rank(goal_id).await?;
+    let target_status = match rank {
+        // No children: max of empty set → todo (D-03 "empty-children" rule).
+        None | Some(0) => "todo",
+        Some(1) => "doing",
+        Some(2) => "done",
+        // Negative ranks come from the SQL ELSE -1 arm (unrecognised status
+        // strings from future migrations or legacy data). Do NOT silently
+        // demote the goal — a bad child status is not a signal to move the
+        // goal backwards. Log and skip.
+        Some(r) if r < 0 => {
+            tracing::warn!(
+                goal_id,
+                rank = r,
+                "child has unrecognised status string; skipping goal recompute"
+            );
+            return Ok(());
+        }
+        Some(other) => {
+            tracing::warn!(
+                goal_id,
+                rank = other,
+                "unexpected child status rank; skipping goal recompute"
+            );
+            return Ok(());
+        }
+    };
+
+    // Skip the PATCH when the goal is already at the right status. Keeps the
+    // bus quiet and prevents spurious `goal.status.changed` events on
+    // repeated identical child events.
+    let current_rank = status_rank(&goal.status);
+    let target_rank = status_rank(target_status);
+    if current_rank == target_rank {
+        return Ok(());
+    }
+
+    // Write directly through `patch_board_item`, bypassing `enforce_transition`.
+    // The watchdog is the sole auto-writer of goal status; goals are not
+    // required to have workdir/tool so the normal gate would reject them.
+    let patch = agentum_core::BoardPatch {
+        status: Some(target_status.to_string()),
+        ..Default::default()
+    };
+    store.patch_board_item(goal_id, patch).await?;
+    let _ = bus.send(
+        Event::new("goal.status.changed").with_payload(serde_json::json!({
+            "goal_id": goal_id,
+            "from": goal.status,
+            "to": target_status,
+        })),
+    );
+    Ok(())
+}
+
+/// Extract the `parent_goal_id` from the event payload.
+///
+/// For `board.created` and `board.updated`, the payload includes
+/// `parent_goal_id` set by the route handler (plan 01-03). For
+/// `board.deleted`, the payload also includes `parent_goal_id` (plan 01-03
+/// Task 1 step 5b extends the delete handler). Falls back to a DB lookup for
+/// `board.updated` events whose payload lacks the field (defensive, shouldn't
+/// happen with plan 01-03 in place). For `board.deleted` without the field,
+/// there is no fallback — the row is gone — so returns `None`.
+async fn extract_parent_goal_id(store: &Store, ev: &Event) -> Result<Option<i64>, WatchdogError> {
+    // Fast path: payload carries parent_goal_id directly.
+    if let Some(v) = ev.payload.get("parent_goal_id") {
+        return Ok(v.as_i64());
+    }
+
+    // Deleted rows can't be re-fetched; accept absence as "no parent".
+    if ev.kind == "board.deleted" {
+        return Ok(None);
+    }
+
+    // Fallback for board.updated/created without the field: DB lookup.
+    if let Some(id) = ev.payload.get("id").and_then(|v| v.as_i64()) {
+        if let Some(item) = store.get_board_item(id).await? {
+            return Ok(item.parent_goal_id);
+        }
+    }
+    Ok(None)
+}
+
 /// Rank ordering used by D-03's invariant: goal.status = max(child statuses).
 /// Returns -1 for any status string not in the canonical set; the caller
 /// must treat negative ranks as "unknown / skip recompute" rather than
 /// silently treating them as todo.
-// Used by run_goal_reconciler; #[allow] removed in Task 2 when caller exists.
-#[allow(dead_code)]
 pub(crate) fn status_rank(s: &str) -> i32 {
     match s {
         "todo" => 0,
@@ -835,5 +1029,424 @@ mod tests {
             classify_activity(bottom, busy, &awaiting, true, Duration::ZERO),
             ActivityState::Working,
         );
+    }
+
+    // ---- goal-status reconciler tests (plan 01-04, Task 2) ----
+
+    async fn tmp_store_for_reconciler() -> Arc<agentum_store::Store> {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("test.sqlite");
+        std::mem::forget(dir);
+        Arc::new(agentum_store::Store::open(&p).await.unwrap())
+    }
+
+    async fn make_goal_item(store: &agentum_store::Store) -> agentum_core::BoardItem {
+        store
+            .create_board_item(agentum_core::NewBoardItem {
+                title: "test goal".into(),
+                body: None,
+                status: None,
+                lbl: Some("goal".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+                parent_goal_id: None,
+            })
+            .await
+            .unwrap()
+    }
+
+    fn make_child_item<'a>(
+        store: &'a agentum_store::Store,
+        goal_id: i64,
+        status: Option<&'a str>,
+    ) -> impl std::future::Future<Output = agentum_core::BoardItem> + 'a {
+        let status = status.map(|s| s.to_string());
+        async move {
+            store
+                .create_board_item(agentum_core::NewBoardItem {
+                    title: "child card".into(),
+                    body: None,
+                    status,
+                    lbl: None,
+                    tool: Some("claude".into()),
+                    workdir: Some("/tmp".into()),
+                    model: None,
+                    session_id: None,
+                    priority: None,
+                    parent_goal_id: Some(goal_id),
+                })
+                .await
+                .unwrap()
+        }
+    }
+
+    /// Helper: wait up to `timeout_ms` for an event with the given `kind` on `rx`.
+    /// Returns `Ok(event)` on success, `Err(())` on timeout.
+    async fn try_wait_for_event(
+        mut rx: tokio::sync::broadcast::Receiver<agentum_core::Event>,
+        kind: &'static str,
+        timeout_ms: u64,
+    ) -> Result<agentum_core::Event, ()> {
+        let deadline = std::time::Duration::from_millis(timeout_ms);
+        tokio::time::timeout(deadline, async move {
+            loop {
+                match rx.recv().await {
+                    Ok(ev) if ev.kind == kind => return ev,
+                    Ok(_) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        // Channel closed; will never receive the event.
+                        // Spin forever so the outer timeout fires cleanly.
+                        std::future::pending::<()>().await;
+                        unreachable!()
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| ())
+    }
+
+    /// Like [`try_wait_for_event`] but panics on timeout.
+    async fn wait_for_event(
+        rx: tokio::sync::broadcast::Receiver<agentum_core::Event>,
+        kind: &'static str,
+        timeout_ms: u64,
+    ) -> agentum_core::Event {
+        try_wait_for_event(rx, kind, timeout_ms)
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for event '{kind}'"))
+    }
+
+    #[tokio::test]
+    async fn reconciler_promotes_goal_when_first_child_moves_to_doing() {
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _rx_keep_alive) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        let goal = make_goal_item(&store).await;
+        let child = make_child_item(&store, goal.id, None).await;
+        let observer = bus.subscribe();
+
+        tokio::spawn(run_goal_reconciler(store.clone(), bus.clone()));
+
+        // Simulate child moving to doing via a PATCH + board.updated event.
+        store
+            .patch_board_item(
+                child.id,
+                agentum_core::BoardPatch {
+                    status: Some("doing".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let _ = bus.send(agentum_core::Event::new("board.updated").with_payload(
+            serde_json::json!({
+                "id": child.id,
+                "key": child.key,
+                "status": "doing",
+                "parent_goal_id": goal.id,
+            }),
+        ));
+
+        let ev = wait_for_event(observer, "goal.status.changed", 500).await;
+        assert_eq!(ev.payload["from"], "todo");
+        assert_eq!(ev.payload["to"], "doing");
+        assert_eq!(ev.payload["goal_id"], goal.id);
+
+        // DB must reflect the new status.
+        let updated_goal = store.get_board_item(goal.id).await.unwrap().unwrap();
+        assert_eq!(updated_goal.status, "doing");
+    }
+
+    #[tokio::test]
+    async fn reconciler_demotes_goal_when_last_doing_child_returns_to_todo() {
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _rx_keep_alive) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        let goal = make_goal_item(&store).await;
+        // Child starts at doing; goal set to doing to reflect it.
+        let child = make_child_item(&store, goal.id, Some("doing")).await;
+        store
+            .patch_board_item(
+                goal.id,
+                agentum_core::BoardPatch {
+                    status: Some("doing".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let observer = bus.subscribe();
+        tokio::spawn(run_goal_reconciler(store.clone(), bus.clone()));
+
+        // Child moves back to todo.
+        store
+            .patch_board_item(
+                child.id,
+                agentum_core::BoardPatch {
+                    status: Some("todo".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let _ = bus.send(agentum_core::Event::new("board.updated").with_payload(
+            serde_json::json!({
+                "id": child.id,
+                "key": child.key,
+                "status": "todo",
+                "parent_goal_id": goal.id,
+            }),
+        ));
+
+        let ev = wait_for_event(observer, "goal.status.changed", 500).await;
+        assert_eq!(ev.payload["from"], "doing");
+        assert_eq!(ev.payload["to"], "todo");
+
+        let updated = store.get_board_item(goal.id).await.unwrap().unwrap();
+        assert_eq!(updated.status, "todo");
+    }
+
+    #[tokio::test]
+    async fn reconciler_promotes_goal_to_done_when_all_children_done() {
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _rx_keep_alive) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        let goal = make_goal_item(&store).await;
+        let child1 = make_child_item(&store, goal.id, Some("done")).await;
+        let child2 = make_child_item(&store, goal.id, Some("done")).await;
+        // Goal currently at todo; both children already done.
+
+        let observer = bus.subscribe();
+        tokio::spawn(run_goal_reconciler(store.clone(), bus.clone()));
+        // Yield so the reconciler task starts and calls bus.subscribe() before
+        // we send the trigger event. Without this yield, the spawn is only
+        // scheduled — the reconciler hasn't entered its receive loop yet and
+        // the broadcast event would be delivered to zero reconciler receivers.
+        tokio::task::yield_now().await;
+
+        // Trigger via board.updated on child2 (both already done).
+        let _ = bus.send(agentum_core::Event::new("board.updated").with_payload(
+            serde_json::json!({
+                "id": child2.id,
+                "key": child2.key,
+                "status": "done",
+                "parent_goal_id": goal.id,
+            }),
+        ));
+        // Also ensure child1 doesn't change observable.
+        let _ = child1.id; // suppress unused warning
+
+        let ev = wait_for_event(observer, "goal.status.changed", 500).await;
+        assert_eq!(ev.payload["to"], "done");
+
+        let updated = store.get_board_item(goal.id).await.unwrap().unwrap();
+        assert_eq!(updated.status, "done");
+    }
+
+    #[tokio::test]
+    async fn reconciler_ignores_events_without_parent_goal_id() {
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _rx_keep_alive) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        let observer = bus.subscribe();
+        tokio::spawn(run_goal_reconciler(store.clone(), bus.clone()));
+
+        // board.updated with parent_goal_id=null — must be ignored.
+        let _ = bus.send(agentum_core::Event::new("board.updated").with_payload(
+            serde_json::json!({
+                "id": 99,
+                "key": "AG-99",
+                "status": "doing",
+                "parent_goal_id": null,
+            }),
+        ));
+
+        // Wait 200 ms; no goal.status.changed event should arrive.
+        let result = try_wait_for_event(observer, "goal.status.changed", 200).await;
+        assert!(
+            result.is_err(),
+            "should not emit goal.status.changed for orphan-less card"
+        );
+    }
+
+    #[tokio::test]
+    async fn reconciler_emits_planner_first_child_and_idempotent_for_repeat_creates() {
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _rx_keep_alive) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        let goal = make_goal_item(&store).await;
+
+        // Create a planner session bound to the goal.
+        let planner_sess = store
+            .create_session(agentum_core::NewSession {
+                name: "planner-test".into(),
+                workdir: "/tmp".into(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: Some(goal.id),
+            })
+            .await
+            .unwrap();
+        // Set its status to Running so the reconciler recognises it.
+        store
+            .update_status_and_target(planner_sess.id, agentum_core::Status::Running, None)
+            .await
+            .unwrap();
+
+        let observer = bus.subscribe();
+        tokio::spawn(run_goal_reconciler(store.clone(), bus.clone()));
+
+        // First child arrives.
+        let child1 = make_child_item(&store, goal.id, None).await;
+        let _ = bus.send(agentum_core::Event::new("board.created").with_payload(
+            serde_json::json!({
+                "id": child1.id,
+                "key": child1.key,
+                "title": "child 1",
+                "parent_goal_id": goal.id,
+            }),
+        ));
+
+        // Must emit goal.planner.first_child before or alongside goal.status.changed.
+        let first_child_ev = wait_for_event(observer, "goal.planner.first_child", 500).await;
+        assert_eq!(first_child_ev.payload["goal_id"], goal.id);
+
+        // Second child arrives — must NOT trigger another goal.planner.first_child.
+        let observer2 = bus.subscribe();
+        let child2 = make_child_item(&store, goal.id, None).await;
+        let _ = bus.send(agentum_core::Event::new("board.created").with_payload(
+            serde_json::json!({
+                "id": child2.id,
+                "key": child2.key,
+                "title": "child 2",
+                "parent_goal_id": goal.id,
+            }),
+        ));
+
+        // Drain observer2 for 200 ms; confirm no second goal.planner.first_child.
+        let second_fire = try_wait_for_event(observer2, "goal.planner.first_child", 200).await;
+        assert!(
+            second_fire.is_err(),
+            "goal.planner.first_child must not fire twice for the same goal"
+        );
+    }
+
+    #[tokio::test]
+    async fn reconciler_skips_recompute_for_goal_with_parent() {
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _rx_keep_alive) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        // Create a "grandparent" goal (v1 invariant: goals don't have parents,
+        // but if one exists the reconciler must skip it).
+        let grandparent = make_goal_item(&store).await;
+        // Create a "goal" that itself has a parent — this violates v1 depth=1.
+        let invalid_goal = store
+            .create_board_item(agentum_core::NewBoardItem {
+                title: "nested goal (invalid v1)".into(),
+                body: None,
+                status: None,
+                lbl: Some("goal".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+                parent_goal_id: Some(grandparent.id),
+            })
+            .await
+            .unwrap();
+        // Create a child under the invalid goal.
+        let child = make_child_item(&store, invalid_goal.id, Some("doing")).await;
+
+        let observer = bus.subscribe();
+        tokio::spawn(run_goal_reconciler(store.clone(), bus.clone()));
+
+        let _ = bus.send(agentum_core::Event::new("board.updated").with_payload(
+            serde_json::json!({
+                "id": child.id,
+                "key": child.key,
+                "status": "doing",
+                "parent_goal_id": invalid_goal.id,
+            }),
+        ));
+
+        // The reconciler warns + skips; no goal.status.changed should fire.
+        let result = try_wait_for_event(observer, "goal.status.changed", 200).await;
+        assert!(
+            result.is_err(),
+            "reconciler must not patch a goal that itself has a parent"
+        );
+        // DB: invalid_goal must still be at todo (no PATCH fired).
+        let still_todo = store
+            .get_board_item(invalid_goal.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(still_todo.status, "todo");
+    }
+
+    #[tokio::test]
+    async fn reconciler_recomputes_on_child_deletion() {
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _rx_keep_alive) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        let goal = make_goal_item(&store).await;
+        let child1 = make_child_item(&store, goal.id, Some("done")).await;
+        let child2 = make_child_item(&store, goal.id, Some("done")).await;
+        // Pre-set goal to done.
+        store
+            .patch_board_item(
+                goal.id,
+                agentum_core::BoardPatch {
+                    status: Some("done".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let observer = bus.subscribe();
+        tokio::spawn(run_goal_reconciler(store.clone(), bus.clone()));
+
+        // Delete child1 from DB, emit board.deleted.
+        store.delete_board_item(child1.id).await.unwrap();
+        let _ = bus.send(agentum_core::Event::new("board.deleted").with_payload(
+            serde_json::json!({
+                "id": child1.id,
+                "parent_goal_id": goal.id,
+            }),
+        ));
+
+        // child2 still done → goal stays done; no goal.status.changed.
+        let no_change = try_wait_for_event(bus.subscribe(), "goal.status.changed", 200).await;
+        assert!(
+            no_change.is_err(),
+            "goal must stay done while at least one done child remains"
+        );
+        let still_done = store.get_board_item(goal.id).await.unwrap().unwrap();
+        assert_eq!(still_done.status, "done");
+
+        // Now delete child2; goal must drop to todo (max-of-empty → todo).
+        store.delete_board_item(child2.id).await.unwrap();
+        let _ = bus.send(agentum_core::Event::new("board.deleted").with_payload(
+            serde_json::json!({
+                "id": child2.id,
+                "parent_goal_id": goal.id,
+            }),
+        ));
+
+        let ev = wait_for_event(observer, "goal.status.changed", 500).await;
+        assert_eq!(ev.payload["from"], "done");
+        assert_eq!(ev.payload["to"], "todo");
+
+        let dropped = store.get_board_item(goal.id).await.unwrap().unwrap();
+        assert_eq!(dropped.status, "todo");
     }
 }

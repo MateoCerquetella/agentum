@@ -256,6 +256,17 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
     let watchdog = agentum_watchdog::Watchdog::new(bus.clone(), state.store.clone());
     tokio::spawn(watchdog.run());
 
+    // Goal-status auto-progression reconciler (plan 01-04). Subscribes to the
+    // broadcast bus and enforces `goal.status = max(child statuses)` per D-03,
+    // and fires the planner auto-stop on first child arrival per D-07.
+    {
+        let store = state.store.clone();
+        let bus = bus.clone();
+        tokio::spawn(async move {
+            agentum_watchdog::run_goal_reconciler(store, bus).await;
+        });
+    }
+
     // Background ticker that publishes `host.metrics` (CPU + RAM) onto
     // the broadcast bus every couple of seconds. The /api/events WS
     // fans these out to every connected dashboard, so a single sampler
