@@ -134,6 +134,10 @@ impl ToolAdapter for ClaudeAdapter {
             "Enter to select · ↑/↓ to navigate",
         ]
     }
+
+    fn is_agent(&self) -> bool {
+        true
+    }
 }
 
 // ---------- codex ----------
@@ -163,6 +167,10 @@ impl ToolAdapter for CodexAdapter {
     fn yolo_flag(&self) -> Option<&'static str> {
         Some("--dangerously-bypass-approvals-and-sandbox")
     }
+
+    fn is_agent(&self) -> bool {
+        true
+    }
 }
 
 // ---------- cursor ----------
@@ -186,6 +194,10 @@ impl ToolAdapter for CursorAdapter {
 
     fn yolo_flag(&self) -> Option<&'static str> {
         Some("--force")
+    }
+
+    fn is_agent(&self) -> bool {
+        true
     }
 }
 
@@ -216,6 +228,10 @@ impl ToolAdapter for AgentAdapter {
     fn yolo_flag(&self) -> Option<&'static str> {
         Some("--force")
     }
+
+    fn is_agent(&self) -> bool {
+        true
+    }
 }
 
 // ---------- gemini ----------
@@ -237,6 +253,10 @@ impl ToolAdapter for GeminiAdapter {
     // Gemini CLI accepts `--yolo` for non-interactive permission skipping.
     fn yolo_flag(&self) -> Option<&'static str> {
         Some("--yolo")
+    }
+
+    fn is_agent(&self) -> bool {
+        true
     }
 }
 
@@ -262,6 +282,10 @@ impl ToolAdapter for HermesAdapter {
 
     fn yolo_flag(&self) -> Option<&'static str> {
         Some("--yolo")
+    }
+
+    fn is_agent(&self) -> bool {
+        true
     }
 }
 

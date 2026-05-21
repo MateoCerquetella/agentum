@@ -35,6 +35,14 @@ use uuid::Uuid;
 const TICK: Duration = Duration::from_secs(1);
 const COMPACT_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 
+/// For agents that don't declare a `busy_signature` (codex, cursor, gemini,
+/// hermes — anything other than Claude), we fall back to change-based
+/// detection: if the visible footer hasn't changed for this long, the
+/// agent is treated as Idle. The pre-fix path classified them as
+/// `Unknown` forever and the sidebar dot stayed green with zero
+/// `agent.finished` events ever firing.
+const IDLE_AFTER_QUIET: Duration = Duration::from_secs(3);
+
 /// How long the orchestrator waits between reconcile passes. Visible for
 /// integration tests that want a faster cadence.
 pub const RECONCILE_TICK: Duration = Duration::from_secs(5);
@@ -123,6 +131,7 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
     let crash_sigs = adapter.crash_signatures();
     let busy_sig = adapter.busy_signature();
     let awaiting_sigs = adapter.awaiting_input_signatures();
+    let is_agent = adapter.is_agent();
 
     let context_low = match Regex::new(r"Context low.*<\s*50%") {
         Ok(r) => r,
@@ -168,6 +177,13 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
     // same recognised adapter before committing.
     let mut current_tool = sess.tool.clone();
     let mut tool_candidate: Option<String> = None;
+    // Change-based idle detection for adapters without a `busy_signature`.
+    // We hash the bottom-20 of the visible viewport and remember when it
+    // last changed; classify_activity treats "footer hasn't changed for
+    // IDLE_AFTER_QUIET" as Idle for `is_agent` adapters. Claude is
+    // unaffected — its busy_signature still drives classification.
+    let mut last_bottom_hash: Option<u64> = None;
+    let mut last_change_at = Instant::now();
     let mut tick = interval(TICK);
     // Drop the immediate first tick so we don't fire before the pane is alive.
     tick.tick().await;
@@ -338,7 +354,15 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
         // comfortably covers Claude's multi-line menu plus the
         // spinner/input footer without picking up scrolled-by chat.
         let bottom = bottom_lines(&viewport, 20);
-        let next = classify_activity(bottom, busy_sig, awaiting_sigs);
+        // Hash the footer; update last_change_at whenever it shifts.
+        // Used by classify_activity for the no-busy-signature fallback.
+        let h = hash_str(bottom);
+        if last_bottom_hash != Some(h) {
+            last_bottom_hash = Some(h);
+            last_change_at = Instant::now();
+        }
+        let pane_quiet_for = last_change_at.elapsed();
+        let next = classify_activity(bottom, busy_sig, awaiting_sigs, is_agent, pane_quiet_for);
         if next != activity {
             match (activity, next) {
                 (ActivityState::Working, ActivityState::Idle) => {
@@ -500,17 +524,49 @@ fn bottom_lines(text: &str, n: usize) -> &str {
 /// signatures take precedence over the busy/idle distinction — Claude
 /// keeps "esc to interrupt" on screen while a permission box is open,
 /// and the user-facing important fact is "you need to answer this".
-fn classify_activity(pane: &str, busy_sig: Option<&str>, awaiting_sigs: &[&str]) -> ActivityState {
+///
+/// When `busy_sig` is `None` but the adapter is an interactive agent
+/// (`is_agent == true`), fall back to change-based detection: the
+/// footer is treated as Idle once it has been quiet for
+/// `IDLE_AFTER_QUIET`. Without this, codex/cursor/gemini/hermes (all
+/// of which have no stable spinner marker) stayed pinned at `Unknown`
+/// forever — the sidebar dot never flipped off green and no
+/// `agent.finished` ever emitted, so no toast/chime ever fired.
+fn classify_activity(
+    pane: &str,
+    busy_sig: Option<&str>,
+    awaiting_sigs: &[&str],
+    is_agent: bool,
+    pane_quiet_for: Duration,
+) -> ActivityState {
     if !awaiting_sigs.is_empty() && awaiting_sigs.iter().any(|s| pane.contains(s)) {
         return ActivityState::AwaitingInput;
     }
     match busy_sig {
         Some(s) if pane.contains(s) => ActivityState::Working,
         Some(_) => ActivityState::Idle,
-        // Adapter opted out — keep Unknown so we never emit spurious
-        // finished/awaiting events for tools without stable markers.
+        None if is_agent => {
+            if pane_quiet_for >= IDLE_AFTER_QUIET {
+                ActivityState::Idle
+            } else {
+                ActivityState::Working
+            }
+        }
+        // Shells and unknown passthroughs deliberately stay Unknown:
+        // an idle bash prompt isn't an "agent finished its turn" event.
         None => ActivityState::Unknown,
     }
+}
+
+/// Cheap stable hash of a `&str`. Used by `watch_session` to detect
+/// when the visible footer last changed (the input for change-based
+/// idle detection). Wrapper around `std::hash::DefaultHasher` so the
+/// callsite reads as a single expression.
+fn hash_str(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
 }
 
 /// Broadcast + persist. Failures on either are logged but don't break the loop.
@@ -550,13 +606,22 @@ mod tests {
     fn classify_activity_states() {
         let busy = Some("esc to interrupt");
         let awaiting = ["Do you want to proceed?", "❯ 1. Yes"];
+        // For busy_sig-driven adapters (Claude), is_agent and
+        // pane_quiet_for don't affect the answer. Pass zero/false.
+        let quiet = Duration::ZERO;
 
         assert_eq!(
-            classify_activity("...working hard (esc to interrupt)", busy, &awaiting),
+            classify_activity(
+                "...working hard (esc to interrupt)",
+                busy,
+                &awaiting,
+                true,
+                quiet,
+            ),
             ActivityState::Working,
         );
         assert_eq!(
-            classify_activity("> _\n", busy, &awaiting),
+            classify_activity("> _\n", busy, &awaiting, true, quiet),
             ActivityState::Idle,
         );
         // Permission prompt outranks busy spinner — Claude leaves the
@@ -565,14 +630,52 @@ mod tests {
             classify_activity(
                 "... esc to interrupt ...\nDo you want to proceed?",
                 busy,
-                &awaiting
+                &awaiting,
+                true,
+                quiet,
             ),
             ActivityState::AwaitingInput,
         );
-        // Adapter without a busy_signature stays in Unknown — no
-        // spurious finished/awaiting toasts for tools we don't know.
+        // Shell / passthrough (is_agent=false, no busy_sig) stays
+        // Unknown — an idle bash prompt isn't a "finished" event.
         assert_eq!(
-            classify_activity("anything goes here", None, &[]),
+            classify_activity("anything goes here", None, &[], false, quiet),
+            ActivityState::Unknown,
+        );
+    }
+
+    #[test]
+    fn classify_activity_change_based_idle_for_agents_without_busy_sig() {
+        // Regression: codex/cursor/gemini/hermes have no `busy_signature`.
+        // Before this fix `classify_activity` returned `Unknown` for them
+        // forever, so the watchdog never emitted `agent.finished`, the
+        // sidebar dot stayed green, and no toast/chime ever fired.
+        // Now: with `is_agent=true` and no busy_sig, a footer that has
+        // been quiet for >= IDLE_AFTER_QUIET classifies as Idle; an
+        // actively-changing footer stays Working.
+        let busy = None;
+        let awaiting: [&str; 0] = [];
+        let just_changed = Duration::from_millis(100);
+        let quiet_long = IDLE_AFTER_QUIET + Duration::from_millis(500);
+
+        assert_eq!(
+            classify_activity(
+                "codex> generating response...",
+                busy,
+                &awaiting,
+                true,
+                just_changed,
+            ),
+            ActivityState::Working,
+        );
+        assert_eq!(
+            classify_activity("codex> ", busy, &awaiting, true, quiet_long,),
+            ActivityState::Idle,
+        );
+        // Same content + same elapsed but is_agent=false → still
+        // Unknown (we don't auto-fire on shells).
+        assert_eq!(
+            classify_activity("$ ", busy, &awaiting, false, quiet_long),
             ActivityState::Unknown,
         );
     }
@@ -592,7 +695,7 @@ mod tests {
         ];
         let menu = "❯ 1. Re-apply both files\n  2. CSP-only fix\n\nEnter to select · ↑/↓ to navigate · Esc to cancel";
         assert_eq!(
-            classify_activity(menu, busy, &awaiting),
+            classify_activity(menu, busy, &awaiting, true, Duration::ZERO),
             ActivityState::AwaitingInput,
         );
     }
@@ -619,7 +722,7 @@ mod tests {
         // up, so the right answer is Working.
         let prose = "...working hard (esc to interrupt)\n// see the docs: Enter to select and ↑/↓ to navigate";
         assert_eq!(
-            classify_activity(prose, busy, &awaiting),
+            classify_activity(prose, busy, &awaiting, true, Duration::ZERO),
             ActivityState::Working,
         );
     }
@@ -671,7 +774,7 @@ mod tests {
 
         let bottom = bottom_lines(&pane, 20);
         assert_eq!(
-            classify_activity(bottom, busy, &awaiting),
+            classify_activity(bottom, busy, &awaiting, true, Duration::ZERO),
             ActivityState::Idle,
             "bottom-20 of a pane whose chat quotes the signatures must classify as Idle, not Working/Awaiting"
         );
@@ -682,7 +785,7 @@ mod tests {
         working_pane.push_str("  ⏵⏵ bypass permissions on · esc to interrupt\n");
         let bottom = bottom_lines(&working_pane, 20);
         assert_eq!(
-            classify_activity(bottom, busy, &awaiting),
+            classify_activity(bottom, busy, &awaiting, true, Duration::ZERO),
             ActivityState::Working,
         );
     }
