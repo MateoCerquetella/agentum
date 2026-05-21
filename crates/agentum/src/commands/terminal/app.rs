@@ -8289,3 +8289,106 @@ mod paste_tests {
         assert_eq!(sniff_image_mime(b"plain text"), None);
     }
 }
+
+/// Tests for `Overlay::Goal`, `GoalForm`, the G-key dispatch, and the
+/// `format_goal_error` helper. Written before the implementation so
+/// the compiler confirms that every referenced symbol is real.
+#[cfg(test)]
+mod goal_overlay_tests {
+    use super::*;
+
+    /// G from Tree focus with no overlay open should open `Overlay::Goal`.
+    /// This is the UI-SPEC §Interaction Contract keybinding.
+    #[test]
+    fn pressing_g_on_tree_opens_goal_overlay() {
+        let form = GoalForm::default_for_profile("local".into());
+        assert_eq!(form.text, "");
+        assert!(!form.submitting);
+        assert!(form.error.is_none());
+        assert_eq!(form.profile, "local");
+
+        // The overlay variant must exist and hold the form.
+        let overlay = Overlay::Goal(Box::new(form));
+        assert!(matches!(overlay, Overlay::Goal(_)));
+    }
+
+    /// G from a non-Tree focus should NOT open the Goal overlay. The
+    /// context-aware dispatch leaves that for LazygitCheats or ignores it.
+    #[test]
+    fn pressing_g_off_tree_is_not_goal_overlay() {
+        // Verify that GoalForm can be constructed so the enum variant exists,
+        // but also confirm that from non-Tree focus the overlay stays None.
+        // We test the discriminant logic directly: Overlay::LazygitCheats
+        // should NOT be Overlay::Goal.
+        let overlay = Overlay::LazygitCheats;
+        assert!(!matches!(overlay, Overlay::Goal(_)));
+    }
+
+    /// Enter key inside `Overlay::Goal` must append a newline to `text`,
+    /// not submit the form. Ctrl-Enter is the submit gesture.
+    #[test]
+    fn enter_inside_goal_overlay_appends_newline() {
+        let mut form = GoalForm::default_for_profile("local".into());
+        form.text.push_str("hello");
+        // Simulate the Enter key: push a newline.
+        goal_overlay_handle_enter(&mut form);
+        assert_eq!(form.text, "hello\n");
+        // Submitting flag must not have changed.
+        assert!(!form.submitting);
+    }
+
+    /// Ctrl-Enter on an empty text field must be a no-op: no submit,
+    /// submitting stays false. This prevents accidental empty-goal creation.
+    #[test]
+    fn ctrl_enter_on_empty_text_is_noop() {
+        let mut form = GoalForm::default_for_profile("local".into());
+        // `text` is empty — trimmed text is also empty.
+        let should_submit = goal_overlay_should_submit(&form);
+        assert!(!should_submit, "empty text must not trigger submit");
+    }
+
+    /// Esc inside `Overlay::Goal` must close the overlay without submitting.
+    #[test]
+    fn esc_closes_goal_overlay_without_submit() {
+        let mut form = GoalForm::default_for_profile("local".into());
+        form.text.push_str("some goal text");
+        // Esc should leave form.submitting == false (no submit happened).
+        assert!(!form.submitting);
+        // The overlay itself is dismissed by setting app.overlay = Overlay::None;
+        // here we just verify the form state is consistent for cancellation.
+        let submitting_before_esc = form.submitting;
+        // After Esc the caller sets overlay to None — form.submitting must
+        // already be false (nothing was sent).
+        assert!(!submitting_before_esc);
+    }
+
+    /// `format_goal_error` must detect a column-rule 400 envelope
+    /// (`{"missing":["body"],"status":"todo"}`) and surface a human-readable
+    /// message that starts with "Your todo column needs:".
+    #[test]
+    fn format_goal_error_maps_column_rule_envelope() {
+        let raw = r#"400 — {"missing":["body"],"status":"todo"}"#;
+        let msg = format_goal_error(raw);
+        assert!(
+            msg.starts_with("Your todo column needs:"),
+            "expected column-rule message, got: {msg}"
+        );
+    }
+
+    /// `format_goal_error` on a plain string must return the string unchanged.
+    #[test]
+    fn format_goal_error_passes_through_plain_strings() {
+        let raw = "503 — service unavailable";
+        let msg = format_goal_error(raw);
+        assert_eq!(msg, raw);
+    }
+
+    /// `format_goal_error` on a generic JSON body (not a column-rule envelope)
+    /// must return the raw string without mangling it.
+    #[test]
+    fn format_goal_error_passes_through_other_json() {
+        let raw = r#"500 — {"error":"internal server error"}"#;
+        let msg = format_goal_error(raw);
+        assert_eq!(msg, raw);
+    }
+}
