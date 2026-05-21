@@ -584,6 +584,11 @@
                           (it) => it.parent_goal_id === colFilter.goalId || it.id === colFilter.goalId
                         )
                       : (lane.byStatus[col.key] ?? [])}
+                    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+                    <!-- Column is a labelled region (screen-reader landmark);
+                         the keydown handler only fires when focus is inside the
+                         column-filter pill, not on the column itself. The
+                         keyboard surface is the pill, not the region. -->
                     <div
                       class="col"
                       class:drop-target={dropTargetKey === dk}
