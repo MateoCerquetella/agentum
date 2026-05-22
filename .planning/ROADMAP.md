@@ -95,5 +95,5 @@ Phases execute in numeric order: 1 → 2 → 3
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Goal → Cards (planner slice) | 8/8 | Complete   | 2026-05-21 |
-| 2. Card ↔ Session binding | 2/6 | In Progress|  |
+| 2. Card ↔ Session binding | 3/6 | In Progress|  |
 | 3. Dependency gate + dispatch polish | 0/TBD | Not started | - |
