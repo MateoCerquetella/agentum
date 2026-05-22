@@ -124,6 +124,125 @@ async fn create_goal(
     }
 }
 
+/// Spawn a tool session bound to the given card and atomically dual-write
+/// the binding via `Store::claim_card`. Mirrors `spawn_planner_session`
+/// but takes a card directly instead of a goal + planner config.
+///
+/// CONTEXT D-01: PATCH→doing auto-spawn fires this from board.rs::patch
+/// after `enforce_transition` passes.
+/// CONTEXT D-02: tool defaults to "claude"; workdir falls through to
+/// parent_goal.workdir, then HTTP 400.
+/// CONTEXT D-03: no opening prompt is sent in v1 — the pane starts blank.
+/// CLAUDE.md YOLO rule: push the canonical YOLO marker into flags; let
+/// translate_yolo_marker in the adapter substitute per-tool.
+/// Plan-checker iter-1 W-3: does NOT emit `session.started` — the
+/// watchdog's per-session loop already emits that event when status
+/// flips to Running (watchdog/src/lib.rs:147).
+pub(crate) async fn spawn_card_session(
+    state: &AppState,
+    card: &BoardItem,
+) -> Result<String, ApiError> {
+    // 1. Resolve tool: card.tool → parent_goal.tool → "claude" (CONTEXT D-02).
+    let tool = match card.tool.as_deref() {
+        Some(t) => t.to_string(),
+        None => {
+            if let Some(pg_id) = card.parent_goal_id {
+                state
+                    .store
+                    .get_board_item(pg_id)
+                    .await?
+                    .and_then(|pg| pg.tool)
+                    .unwrap_or_else(|| "claude".to_string())
+            } else {
+                "claude".to_string()
+            }
+        }
+    };
+
+    // 2. Resolve workdir: card.workdir → parent_goal.workdir → 400 (CONTEXT D-02).
+    let workdir = match card.workdir.as_deref() {
+        Some(w) => w.to_string(),
+        None => {
+            let from_parent = if let Some(pg_id) = card.parent_goal_id {
+                state
+                    .store
+                    .get_board_item(pg_id)
+                    .await?
+                    .and_then(|pg| pg.workdir)
+            } else {
+                None
+            };
+            from_parent.ok_or_else(|| {
+                ApiError::Custom(
+                    axum::http::StatusCode::BAD_REQUEST,
+                    serde_json::json!({"missing": ["workdir"], "status": "doing"}),
+                )
+            })?
+        }
+    };
+
+    // 3. Verify workdir exists on disk (mirrors spawn_planner_session :155-160).
+    let wd = PathBuf::from(&workdir);
+    if !wd.exists() {
+        return Err(ApiError::BadRequest(format!(
+            "workdir does not exist: {}",
+            wd.display()
+        )));
+    }
+
+    // 4. Build NewSession with the canonical YOLO marker pushed verbatim —
+    //    adapters call translate_yolo_marker on launch (CLAUDE.md YOLO rule).
+    //    agentum_executor::YOLO_MARKER = "--dangerously-skip-permissions".
+    let new_session = NewSession {
+        name: format!("card-{}", card.key.to_lowercase()),
+        workdir: workdir.clone(),
+        tool: tool.clone(),
+        model: None,
+        flags: vec![agentum_executor::YOLO_MARKER.to_string()],
+        // card_id is overwritten unconditionally by claim_card — set it
+        // here for clarity but claim_card will enforce it.
+        card_id: Some(card.id),
+    };
+
+    // 5. Atomic dual-write: INSERT session row + UPDATE card.session_id in one tx.
+    //    claim_card returns AlreadyExists (→ HTTP 409) if the card is already bound.
+    let (_card_after, session) = state
+        .store
+        .claim_card(card.id, new_session)
+        .await
+        .map_err(ApiError::from)?;
+
+    // 6. Spawn tmux pane (mirrors spawn_planner_session :152-173).
+    let target = agentum_tmux::target_for(&session.name);
+    let adapter = agentum_executor::adapter_for(&session.tool);
+    let launch = adapter.launch(&session);
+
+    if let Err(e) = agentum_tmux::new_session(&target, &wd, &launch.argv, &launch.env).await {
+        return Err(ApiError::Internal(e.to_string()));
+    }
+
+    let log =
+        paths::pane_log(&session.id.to_string()).map_err(|e| ApiError::Internal(e.to_string()))?;
+    if let Err(e) = agentum_tmux::pipe_pane(&target, &log).await {
+        let _ = agentum_tmux::kill_session(&target).await;
+        return Err(ApiError::Internal(e.to_string()));
+    }
+
+    // 7. Mark session Running so the watchdog reconciler picks it up.
+    //    The watchdog's watch_session loop emits `session.started` on the bus
+    //    once it observes Status::Running — this route does NOT emit that event
+    //    itself (plan-checker iter-1 W-3: avoid duplicate signal on the bus).
+    state
+        .store
+        .update_status_and_target(session.id, Status::Running, Some(&target))
+        .await?;
+
+    // 8. No opening prompt in v1 (CONTEXT D-03) — pane starts blank.
+    //    UX-01/UX-02 prompt assembly is Phase 3.
+
+    Ok(session.id.to_string())
+}
+
 /// Spawn a planner agent session bound to the given goal.
 ///
 /// Mirrors `routes::sessions::start` lines 256-274 exactly — any
@@ -447,5 +566,61 @@ mod tests {
     #[test]
     fn goals_route_requires_auth_verified_at_router_merge() {
         // Documented skip — see comment above.
+    }
+
+    // --- spawn_card_session tests (plan 02-03) ---
+
+    /// spawn_card_session returns HTTP 400 with the canonical missing-workdir
+    /// envelope when the card has no workdir and no parent_goal.
+    ///
+    /// This test exercises the CONTEXT D-02 fallthrough path without needing
+    /// a live tmux server. The tmux-requiring happy-path is deferred to plan
+    /// 02-06 e2e.
+    #[tokio::test]
+    async fn spawn_card_session_missing_workdir_returns_400() {
+        let state = fresh_state().await;
+
+        // Create a card with no workdir and no parent_goal_id.
+        let card = state
+            .store
+            .create_board_item(agentum_core::NewBoardItem {
+                title: "no workdir card".into(),
+                body: None,
+                status: Some("todo".into()),
+                lbl: Some("feat".into()),
+                tool: Some("claude".into()),
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+                parent_goal_id: None,
+            })
+            .await
+            .unwrap();
+
+        let err = spawn_card_session(&state, &card)
+            .await
+            .expect_err("spawn_card_session must fail when workdir is absent");
+
+        // Must be ApiError::Custom(400, {missing: ["workdir"], status: "doing"}).
+        assert!(
+            matches!(&err, ApiError::Custom(s, v)
+                if *s == axum::http::StatusCode::BAD_REQUEST
+                && v["missing"].as_array().is_some_and(|a| a.iter().any(|x| x == "workdir"))
+                && v["status"] == "doing"),
+            "expected Custom 400 missing-workdir envelope, got {err:?}"
+        );
+    }
+
+    /// spawn_card_session with a live tmux requires a running tmux server.
+    /// The full happy-path (workdir resolved, session spawned, dual-write committed,
+    /// board.updated carries session_id) is covered by plan 02-06 e2e.
+    ///
+    /// Marked `#[ignore]` — run with `--ignored` inside a tmux session to exercise
+    /// the live tmux path.
+    #[tokio::test]
+    #[ignore = "requires a live tmux server; covered by plan 02-06 e2e"]
+    async fn spawn_card_session_happy_path_requires_live_tmux() {
+        // Deferred to plan 02-06 end-to-end integration tests.
     }
 }
