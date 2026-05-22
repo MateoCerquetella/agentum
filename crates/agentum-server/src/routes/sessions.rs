@@ -13,7 +13,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use bytes::Bytes;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::time::sleep;
 use uuid::Uuid;
@@ -35,12 +35,36 @@ pub fn router() -> Router<AppState> {
         .route("/api/sessions/{id}/stop", post(stop))
         .route("/api/sessions/{id}/kill", post(kill))
         .route("/api/sessions/{id}/send", post(send))
+        .route("/api/sessions/{id}/pane", get(pane))
         .route("/api/sessions/{id}/stream", get(stream))
 }
 
 #[derive(Deserialize)]
 struct ListQuery {
     status: Option<String>,
+}
+
+/// Clamps the `lines=` query param to the allowed 1..=200 range.
+/// Default (absent) is 20, matching the D-13 polling cadence spec.
+fn clamp_lines(req: Option<u32>) -> usize {
+    let n = req.unwrap_or(20);
+    n.clamp(1, 200) as usize
+}
+
+/// Query extractor for GET /api/sessions/{id}/pane.
+#[derive(Deserialize)]
+struct PaneQuery {
+    lines: Option<u32>,
+}
+
+/// Response body for GET /api/sessions/{id}/pane.
+/// Contract: UI-SPEC §Component Inventory — `{ lines, captured_at }`.
+#[derive(Debug, Serialize)]
+struct PaneSnapshot {
+    /// Last N plain-text lines of the visible pane viewport, chronological order.
+    lines: Vec<String>,
+    /// RFC3339 timestamp of the capture.
+    captured_at: String,
 }
 
 async fn list(
@@ -848,6 +872,47 @@ async fn stream_session(
     );
 }
 
+// ---------- GET /api/sessions/{id}/pane ----------
+
+/// Returns a plain-text snapshot of the last N lines of the session's tmux
+/// pane viewport. Contract: UI-SPEC §Component Inventory — polled every 2 s
+/// by the Bound-session panel (plan 02-05) to display live agent output.
+///
+/// Bearer-auth is inherited automatically via the top-level `require_token`
+/// middleware merge in `lib.rs`; no entry in `auth::is_public` is added.
+async fn pane(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(q): Query<PaneQuery>,
+) -> Result<Json<PaneSnapshot>, ApiError> {
+    let session = state
+        .store
+        .get_session_by_id(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("session {id}")))?;
+
+    let n = clamp_lines(q.lines);
+
+    let captured_at = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let lines: Vec<String> = match session.tmux_target.as_deref() {
+        Some(target) => {
+            let text = agentum_tmux::capture_pane_visible(target)
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+            // Lines reversed/truncated/un-reversed so the last N lines preserve chronological order.
+            let collected: Vec<&str> = text.lines().rev().take(n).collect();
+            collected.into_iter().rev().map(|s| s.to_string()).collect()
+        }
+        // Idle / stopped session: no tmux pane to capture (UI-SPEC §empty state).
+        None => Vec::new(),
+    };
+
+    Ok(Json(PaneSnapshot { lines, captured_at }))
+}
+
 /// Insert / overwrite the resume checkpoint for `id`. Called at two
 /// points: every successful byte-forward (so a concurrent reconnect's
 /// resume delta reflects the bytes the client actually received), and
@@ -911,5 +976,137 @@ mod tests {
         assert_eq!(parse_resize("hello"), None);
         assert_eq!(parse_resize(r#"{"send":"x"}"#), None);
         assert_eq!(parse_resize(""), None);
+    }
+
+    // ---- pane snapshot tests ----
+
+    mod pane_tests {
+        use super::super::*;
+        use agentum_core::NewSession;
+        use agentum_store::Store;
+        use axum::extract::{Path, Query, State};
+        use std::sync::Arc;
+        use tokio::sync::broadcast;
+
+        async fn fresh_state() -> AppState {
+            let dir = tempfile::tempdir().unwrap();
+            let p = dir.path().join("test.sqlite");
+            std::mem::forget(dir);
+            let store = Store::open(&p).await.unwrap();
+            let (bus, _rx) = broadcast::channel(16);
+            AppState {
+                store: Arc::new(store),
+                bus,
+                started_at: std::time::Instant::now(),
+                version: "test",
+                auth_limiter: Arc::new(crate::ratelimit::RateLimiter::new(
+                    8,
+                    std::time::Duration::from_secs(60),
+                )),
+                cert_fingerprint: Arc::new(String::new()),
+                transcripts: crate::TranscriptStore::new(broadcast::channel(16).0),
+                stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+                hostname: "test".to_string(),
+                no_auth: true,
+            }
+        }
+
+        async fn create_test_session(state: &AppState) -> agentum_core::Session {
+            let dir = tempfile::tempdir().unwrap();
+            let workdir = dir.path().to_string_lossy().to_string();
+            std::mem::forget(dir);
+            state
+                .store
+                .create_session(NewSession {
+                    name: "test-session".into(),
+                    workdir,
+                    tool: "claude".into(),
+                    model: None,
+                    flags: vec![],
+                    card_id: None,
+                })
+                .await
+                .unwrap()
+        }
+
+        // Test 2 + 3: pure unit tests for clamp_lines — no HTTP, no DB.
+        #[test]
+        fn pane_clamp_upper_bound() {
+            // lines=500 must clamp to 200 (UI-SPEC §Component Inventory max).
+            assert_eq!(clamp_lines(Some(500)), 200);
+        }
+
+        #[test]
+        fn pane_clamp_lower_bound_and_default() {
+            // lines=0 clamps to 1; absent → default 20.
+            assert_eq!(clamp_lines(Some(0)), 1);
+            assert_eq!(clamp_lines(None), 20);
+        }
+
+        // Test 4: idle session (tmux_target = None) → HTTP 200 with empty lines.
+        #[tokio::test]
+        async fn pane_idle_session_returns_empty_lines() {
+            let state = fresh_state().await;
+            let sess = create_test_session(&state).await;
+            // Session is idle — tmux_target is None.
+            assert!(sess.tmux_target.is_none());
+
+            let res = pane(
+                State(state),
+                Path(sess.id),
+                Query(PaneQuery { lines: None }),
+            )
+            .await;
+
+            let snap = res.expect("idle session must return Ok").0;
+            assert!(snap.lines.is_empty(), "idle session: lines must be empty");
+            assert!(!snap.captured_at.is_empty(), "captured_at must be set");
+            // Must be a valid RFC3339 timestamp.
+            assert!(
+                snap.captured_at.contains('T'),
+                "captured_at must contain T separator"
+            );
+        }
+
+        // Test 5: non-existent session UUID → 404.
+        #[tokio::test]
+        async fn pane_nonexistent_session_returns_404() {
+            let state = fresh_state().await;
+            let missing_id = uuid::Uuid::new_v4();
+
+            let res = pane(
+                State(state),
+                Path(missing_id),
+                Query(PaneQuery { lines: Some(5) }),
+            )
+            .await;
+
+            match res {
+                Err(ApiError::NotFound(_)) => {}
+                other => panic!("expected NotFound, got {:?}", other),
+            }
+        }
+
+        // Test 1 / shape: pane returns the correct JSON shape.
+        // This test re-uses the idle path (no tmux in tests) to verify the
+        // shape — the lines vec is empty but `lines` + `captured_at` fields
+        // are present and well-typed.
+        #[tokio::test]
+        async fn pane_response_shape_is_correct() {
+            let state = fresh_state().await;
+            let sess = create_test_session(&state).await;
+
+            let res = pane(
+                State(state),
+                Path(sess.id),
+                Query(PaneQuery { lines: Some(20) }),
+            )
+            .await;
+
+            let snap = res.expect("must return Ok").0;
+            // Shape: Vec<String> + String.
+            let _: Vec<String> = snap.lines;
+            let _: String = snap.captured_at;
+        }
     }
 }
