@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/state';
+  import { goto } from '$app/navigation';
   import {
     fleetBoard,
     fleetColumns,
@@ -462,6 +463,8 @@
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       el.classList.add('focus-pulse');
       el.addEventListener('animationend', () => el.classList.remove('focus-pulse'), { once: true });
+      // Clear the ?focus param from the URL so reload/share doesn't re-fire.
+      void goto('/board', { replaceState: true });
     });
   });
 
