@@ -841,6 +841,198 @@ impl Store {
         Ok(row.0.map(|v| v as i32))
     }
 
+    // ---------- card-session binding ----------
+
+    /// Atomically create a session and bind it to a board card in one transaction.
+    ///
+    /// This is the **atomic** card-claim primitive — invoked from the PATCH→doing
+    /// auto-spawn path (Phase 2 plan 03). The caller is responsible for resolving
+    /// `tool` and `workdir` BEFORE calling (the helper does not implement Phase 2
+    /// D-02's fall-through policy). This method is the symmetric inverse of
+    /// `transfer_card_binding(card_id, None)` — claim creates AND binds in one
+    /// transaction, whereas transfer rebinds-or-unbinds an existing session.
+    ///
+    /// Returns `(BoardItem, Session)` with both rows reflecting the committed state.
+    /// Errors:
+    /// - `NotFound` if the card does not exist.
+    /// - `AlreadyExists` if the card already has a `session_id` (HTTP 409 via
+    ///   existing `From<StoreError> for ApiError` impl).
+    /// - `AlreadyExists` if the session name collides with an existing session name.
+    pub async fn claim_card(
+        &self,
+        card_id: i64,
+        mut new: NewSession,
+    ) -> Result<(BoardItem, Session)> {
+        agentum_core::validate_name(&new.name)?;
+
+        let mut tx = self.pool.begin().await?;
+
+        // Step 1: Check the card exists and is unbound.
+        let row: Option<(i64, Option<String>)> =
+            sqlx::query_as("SELECT id, session_id FROM board_items WHERE id = ?")
+                .bind(card_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+
+        let (_, existing_sid) = match row {
+            Some(r) => r,
+            None => return Err(StoreError::NotFound(format!("board item {card_id}"))),
+        };
+
+        if let Some(sid) = existing_sid {
+            return Err(StoreError::AlreadyExists(format!(
+                "card {card_id} already bound to session {sid}"
+            )));
+        }
+
+        // Step 2: Force the card binding on the new session.
+        new.card_id = Some(card_id);
+
+        let session_id = Uuid::new_v4();
+        let now = OffsetDateTime::now_utc();
+        let now_s = now.format(&Rfc3339)?;
+        let flags = serde_json::to_string(&new.flags)?;
+        let status = Status::Idle;
+
+        // Step 3: INSERT the new session row.
+        let res = sqlx::query(
+            r#"INSERT INTO sessions
+                (id, name, workdir, tool, model, flags, status, created_at, updated_at, card_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+        )
+        .bind(session_id.to_string())
+        .bind(&new.name)
+        .bind(&new.workdir)
+        .bind(&new.tool)
+        .bind(&new.model)
+        .bind(&flags)
+        .bind(status.as_str())
+        .bind(&now_s)
+        .bind(&now_s)
+        .bind(new.card_id)
+        .execute(&mut *tx)
+        .await;
+
+        if let Err(sqlx::Error::Database(ref db)) = res {
+            if db.is_unique_violation() {
+                return Err(StoreError::AlreadyExists(new.name));
+            }
+        }
+        res?;
+
+        // Step 4: UPDATE the card's session_id.
+        sqlx::query("UPDATE board_items SET session_id = ?, updated_at = ? WHERE id = ?")
+            .bind(session_id.to_string())
+            .bind(&now_s)
+            .bind(card_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+
+        // Step 5: Reload both rows from the committed state.
+        let item = self
+            .get_board_item(card_id)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(format!("board item {card_id}")))?;
+        let session = self
+            .get_session_by_id(session_id)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(session_id.to_string()))?;
+
+        Ok((item, session))
+    }
+
+    /// Atomically rebind or unbind a card's session link in one transaction.
+    ///
+    /// Implements the **3-step atomic transfer** from CONTEXT D-11:
+    /// 1. Clear `card_id` on the old session (if any).
+    /// 2. Set `card_id` on the new session (if `new_session_id` is `Some`).
+    /// 3. Set `session_id` on the card to the new value (or NULL to unbind).
+    ///
+    /// The unbind branch (`new_session_id == None`) skips step 2.
+    ///
+    /// Returns `AlreadyExists` if `new_session_id` is already bound to a
+    /// *different* card — the route layer maps that to HTTP 409.
+    ///
+    /// Note: the previous session's tmux pane is NOT touched by design (D-12:
+    /// crash leaves binding intact; the user navigates to the dead pane).
+    pub async fn transfer_card_binding(
+        &self,
+        card_id: i64,
+        new_session_id: Option<Uuid>,
+    ) -> Result<BoardItem> {
+        let mut tx = self.pool.begin().await?;
+
+        // Step 1: Fetch the card; capture its current session_id.
+        let row: Option<(i64, Option<String>)> =
+            sqlx::query_as("SELECT id, session_id FROM board_items WHERE id = ?")
+                .bind(card_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+
+        let (_, old_sid_str) = match row {
+            Some(r) => r,
+            None => return Err(StoreError::NotFound(format!("board item {card_id}"))),
+        };
+
+        // Step 2: If rebinding, verify the target session exists and is free.
+        if let Some(new) = new_session_id {
+            let sess_row: Option<(String, Option<i64>)> =
+                sqlx::query_as("SELECT id, card_id FROM sessions WHERE id = ?")
+                    .bind(new.to_string())
+                    .fetch_optional(&mut *tx)
+                    .await?;
+
+            match sess_row {
+                None => {
+                    return Err(StoreError::NotFound(format!("session {new}")));
+                }
+                Some((_, Some(existing_card))) if existing_card != card_id => {
+                    return Err(StoreError::AlreadyExists(format!(
+                        "session {new} already bound to card {existing_card}"
+                    )));
+                }
+                _ => {}
+            }
+        }
+
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+
+        // Step 3: Clear the old session's card_id (if there was one).
+        if let Some(ref old_sid) = old_sid_str {
+            sqlx::query("UPDATE sessions SET card_id = NULL, updated_at = ? WHERE id = ?")
+                .bind(&now_s)
+                .bind(old_sid)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        // Step 4: Set the new session's card_id (if rebinding).
+        if let Some(new) = new_session_id {
+            sqlx::query("UPDATE sessions SET card_id = ?, updated_at = ? WHERE id = ?")
+                .bind(card_id)
+                .bind(&now_s)
+                .bind(new.to_string())
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        // Step 5: Update the card's session_id.
+        sqlx::query("UPDATE board_items SET session_id = ?, updated_at = ? WHERE id = ?")
+            .bind(new_session_id.map(|u| u.to_string()))
+            .bind(&now_s)
+            .bind(card_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+
+        self.get_board_item(card_id)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(format!("board item {card_id}")))
+    }
+
     // ---------- notes ----------
 
     pub async fn create_note(&self, new: NewNote) -> Result<Note> {
@@ -2454,5 +2646,327 @@ mod tests {
         // A card_id that no session references returns None, not an error.
         let missing = s.get_session_by_card_id(9999).await.unwrap();
         assert!(missing.is_none(), "unknown card_id must return None");
+    }
+
+    // ---------- claim_card tests ----------
+
+    fn make_card_new_session(name: &str) -> NewSession {
+        NewSession {
+            name: name.into(),
+            workdir: "/tmp".into(),
+            tool: "claude".into(),
+            model: None,
+            flags: vec![],
+            card_id: None,
+        }
+    }
+
+    async fn make_card(s: &Store, title: &str) -> BoardItem {
+        s.create_board_item(NewBoardItem {
+            title: title.into(),
+            body: None,
+            status: None,
+            lbl: None,
+            tool: None,
+            workdir: None,
+            model: None,
+            session_id: None,
+            priority: None,
+            parent_goal_id: None,
+        })
+        .await
+        .unwrap()
+    }
+
+    /// Test 1 (happy path): claim_card on an unbound card atomically
+    /// inserts a session, sets card.session_id and session.card_id.
+    #[tokio::test]
+    async fn claim_card_happy_path() {
+        let s = tmp_store().await;
+        let card = make_card(&s, "claim-me").await;
+
+        let (item, session) = s
+            .claim_card(card.id, make_card_new_session("planner-1"))
+            .await
+            .unwrap();
+
+        // card.session_id = session uuid.
+        assert_eq!(
+            item.session_id.as_deref(),
+            Some(session.id.to_string().as_str()),
+            "card.session_id must equal the new session id"
+        );
+        // session.card_id = card id.
+        assert_eq!(
+            session.card_id,
+            Some(card.id),
+            "session.card_id must equal the card id"
+        );
+
+        // Reload both rows to confirm the commit survived.
+        let reloaded_card = s.get_board_item(card.id).await.unwrap().unwrap();
+        let reloaded_sess = s.get_session_by_id(session.id).await.unwrap().unwrap();
+        assert_eq!(reloaded_card.session_id, item.session_id);
+        assert_eq!(reloaded_sess.card_id, Some(card.id));
+    }
+
+    /// Test 2 (already-bound conflict): claim_card on a card whose
+    /// session_id IS NOT NULL returns AlreadyExists. DB rows are unchanged.
+    #[tokio::test]
+    async fn claim_card_already_bound_returns_already_exists() {
+        let s = tmp_store().await;
+        let card = make_card(&s, "bound-card").await;
+
+        // First claim succeeds.
+        let (_, first_sess) = s
+            .claim_card(card.id, make_card_new_session("planner-first"))
+            .await
+            .unwrap();
+
+        // Second claim must fail.
+        let err = s
+            .claim_card(card.id, make_card_new_session("planner-second"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::AlreadyExists(_)),
+            "expected AlreadyExists, got {err:?}"
+        );
+
+        // The card still points at the first session.
+        let reloaded = s.get_board_item(card.id).await.unwrap().unwrap();
+        assert_eq!(
+            reloaded.session_id.as_deref(),
+            Some(first_sess.id.to_string().as_str()),
+            "card must still reference the first session"
+        );
+        // No second session was created.
+        let all_sessions = s.list_sessions(None).await.unwrap();
+        assert_eq!(all_sessions.len(), 1, "only one session must exist");
+    }
+
+    /// Test 3 (no such card): claim_card(99999, …) returns NotFound.
+    /// No session row is created.
+    #[tokio::test]
+    async fn claim_card_no_such_card_returns_not_found() {
+        let s = tmp_store().await;
+
+        let err = s
+            .claim_card(99999, make_card_new_session("orphan"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::NotFound(_)),
+            "expected NotFound, got {err:?}"
+        );
+
+        // No sessions were created.
+        let sessions = s.list_sessions(None).await.unwrap();
+        assert!(sessions.is_empty(), "no session must be created");
+    }
+
+    /// Test 4 (atomic rollback): a name collision on the session INSERT
+    /// rolls back the card UPDATE — card.session_id stays NULL.
+    #[tokio::test]
+    async fn claim_card_session_name_collision_rolls_back_card() {
+        let s = tmp_store().await;
+
+        // Pre-create a session with the colliding name.
+        s.create_session(make_card_new_session("clash"))
+            .await
+            .unwrap();
+
+        let card = make_card(&s, "atomic-card").await;
+
+        let err = s
+            .claim_card(card.id, make_card_new_session("clash"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::AlreadyExists(_)),
+            "expected AlreadyExists on name collision, got {err:?}"
+        );
+
+        // The card must still be unbound.
+        let reloaded = s.get_board_item(card.id).await.unwrap().unwrap();
+        assert!(
+            reloaded.session_id.is_none(),
+            "card.session_id must remain NULL after rollback"
+        );
+    }
+
+    // ---------- transfer_card_binding tests ----------
+
+    /// Test 1 (unbind happy path): transfer_card_binding(card, None)
+    /// clears both card.session_id and session.card_id in one tx.
+    #[tokio::test]
+    async fn transfer_card_binding_unbind_clears_both_sides() {
+        let s = tmp_store().await;
+        let card = make_card(&s, "unbind-me").await;
+
+        // Bind via claim_card.
+        let (_, sess) = s
+            .claim_card(card.id, make_card_new_session("bound-sess"))
+            .await
+            .unwrap();
+
+        // Unbind.
+        let unbound = s.transfer_card_binding(card.id, None).await.unwrap();
+        assert!(
+            unbound.session_id.is_none(),
+            "card.session_id must be NULL after unbind"
+        );
+
+        // Reload both sides.
+        let reloaded_sess = s.get_session_by_id(sess.id).await.unwrap().unwrap();
+        assert!(
+            reloaded_sess.card_id.is_none(),
+            "session.card_id must be NULL after unbind"
+        );
+    }
+
+    /// Test 2 (rebind from A to B): card bound to session A, session B
+    /// is unbound. After transfer: card → B, A.card_id = NULL, B.card_id = card.
+    #[tokio::test]
+    async fn transfer_card_binding_rebind_updates_all_three_rows() {
+        let s = tmp_store().await;
+        let card = make_card(&s, "rebind-me").await;
+
+        // Bind via claim_card → session A.
+        let (_, sess_a) = s
+            .claim_card(card.id, make_card_new_session("sess-a"))
+            .await
+            .unwrap();
+
+        // Create session B (unbound).
+        let sess_b = s
+            .create_session(make_card_new_session("sess-b"))
+            .await
+            .unwrap();
+
+        // Rebind card to B.
+        let rebound = s
+            .transfer_card_binding(card.id, Some(sess_b.id))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            rebound.session_id.as_deref(),
+            Some(sess_b.id.to_string().as_str()),
+            "card.session_id must point to sess-b"
+        );
+
+        let reload_a = s.get_session_by_id(sess_a.id).await.unwrap().unwrap();
+        assert!(
+            reload_a.card_id.is_none(),
+            "sess-a.card_id must be NULL after rebind"
+        );
+
+        let reload_b = s.get_session_by_id(sess_b.id).await.unwrap().unwrap();
+        assert_eq!(
+            reload_b.card_id,
+            Some(card.id),
+            "sess-b.card_id must equal the card id"
+        );
+    }
+
+    /// Test 3 (rebind to already-bound session): session B is already bound
+    /// to card C. transfer returns AlreadyExists; all rows unchanged.
+    #[tokio::test]
+    async fn transfer_card_binding_conflict_on_already_bound_session() {
+        let s = tmp_store().await;
+        let card_c = make_card(&s, "card-c").await;
+        let card_target = make_card(&s, "card-target").await;
+
+        // Bind sess-b to card_c.
+        let (_, sess_b) = s
+            .claim_card(card_c.id, make_card_new_session("sess-b"))
+            .await
+            .unwrap();
+
+        // Bind card_target to sess-a.
+        let (_, sess_a) = s
+            .claim_card(card_target.id, make_card_new_session("sess-a"))
+            .await
+            .unwrap();
+
+        // Attempt to rebind card_target to sess-b (already bound to card_c).
+        let err = s
+            .transfer_card_binding(card_target.id, Some(sess_b.id))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::AlreadyExists(_)),
+            "expected AlreadyExists, got {err:?}"
+        );
+
+        // All rows must be unchanged.
+        let reload_card_target = s.get_board_item(card_target.id).await.unwrap().unwrap();
+        assert_eq!(
+            reload_card_target.session_id.as_deref(),
+            Some(sess_a.id.to_string().as_str()),
+            "card_target must still reference sess-a"
+        );
+        let reload_card_c = s.get_board_item(card_c.id).await.unwrap().unwrap();
+        assert_eq!(
+            reload_card_c.session_id.as_deref(),
+            Some(sess_b.id.to_string().as_str()),
+            "card_c must still reference sess-b"
+        );
+    }
+
+    /// Test 4 (no such card): transfer_card_binding(99999, Some(sid))
+    /// returns NotFound.
+    #[tokio::test]
+    async fn transfer_card_binding_no_such_card_returns_not_found() {
+        let s = tmp_store().await;
+        let sess = s
+            .create_session(make_card_new_session("orphan-sess"))
+            .await
+            .unwrap();
+
+        let err = s
+            .transfer_card_binding(99999, Some(sess.id))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::NotFound(_)),
+            "expected NotFound, got {err:?}"
+        );
+    }
+
+    /// Test 5 (no such session in rebind): transfer_card_binding(card, Some(bad_uuid))
+    /// returns NotFound; no partial mutation.
+    #[tokio::test]
+    async fn transfer_card_binding_no_such_session_returns_not_found() {
+        let s = tmp_store().await;
+        let card = make_card(&s, "orphan-card").await;
+        let phantom = Uuid::new_v4();
+
+        let err = s
+            .transfer_card_binding(card.id, Some(phantom))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::NotFound(_)),
+            "expected NotFound, got {err:?}"
+        );
+
+        // Card must still be unbound.
+        let reload = s.get_board_item(card.id).await.unwrap().unwrap();
+        assert!(reload.session_id.is_none(), "card must remain unbound");
+    }
+
+    /// Test 6 (unbind on already-unbound card): idempotent no-op.
+    #[tokio::test]
+    async fn transfer_card_binding_unbind_already_unbound_is_noop() {
+        let s = tmp_store().await;
+        let card = make_card(&s, "noop-card").await;
+
+        let result = s.transfer_card_binding(card.id, None).await.unwrap();
+        assert!(
+            result.session_id.is_none(),
+            "unbound card stays unbound after no-op transfer"
+        );
     }
 }
