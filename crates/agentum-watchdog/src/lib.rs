@@ -791,6 +791,130 @@ pub(crate) fn rank_to_status(r: i32) -> Option<&'static str> {
     }
 }
 
+/// Bridge from watchdog/agent events onto the bound card's comment thread.
+///
+/// CONTEXT D-05: separate bus-subscriber task (not folded into watch_session),
+///   sibling to run_goal_reconciler.
+/// CONTEXT D-06: body templates + 80-char signature cap.
+/// CONTEXT D-07: in-memory HashMap<session_id, &'static str> dedupe;
+///   skip identical back-to-back inserts.
+/// CONTEXT D-08: skip events on goal cards (lbl == "goal") — the goal
+///   reconciler already surfaces those state changes via goal.status.changed.
+/// CONTEXT D-09: RecvError::Lagged logs warn and continues; no resync.
+pub async fn run_session_comment_bridge(
+    store: Arc<Store>,
+    bus: tokio::sync::broadcast::Sender<Event>,
+) {
+    use tokio::sync::broadcast::error::RecvError;
+    let mut rx = bus.subscribe();
+    // Last comment kind per session; dedupes back-to-back identical inserts
+    // (defense-in-depth against bus-lag double-fires — D-07).
+    let mut last_kind: std::collections::HashMap<Uuid, &'static str> =
+        std::collections::HashMap::new();
+
+    loop {
+        let ev = match rx.recv().await {
+            Ok(ev) => ev,
+            Err(RecvError::Closed) => break,
+            Err(RecvError::Lagged(n)) => {
+                tracing::warn!(
+                    lagged = n,
+                    "session_comment_bridge: bus lagged; will resume on next event"
+                );
+                continue;
+            }
+        };
+
+        // Filter to the three observable agent events ONLY (D-06).
+        let kind: &'static str = match ev.kind.as_str() {
+            "agent.awaiting_input" => "awaiting_input",
+            "agent.finished" => "finished",
+            "session.crashed" => "crashed",
+            _ => continue,
+        };
+
+        if let Err(e) = handle_session_event(&store, &ev, kind, &mut last_kind).await {
+            tracing::warn!(
+                error = ?e, kind = %ev.kind,
+                "session_comment_bridge: handle failed"
+            );
+        }
+    }
+}
+
+/// Core dispatch for a single agent/session event.
+///
+/// Resolves session → card → applies goal-card filter → dedupe → inserts
+/// the `[system]` comment.
+async fn handle_session_event(
+    store: &Store,
+    ev: &Event,
+    kind: &'static str,
+    last_kind: &mut std::collections::HashMap<Uuid, &'static str>,
+) -> Result<(), WatchdogError> {
+    let Some(session_id) = ev.session_id else {
+        return Ok(());
+    };
+
+    // Resolve the bound card (if any).
+    let session = match store.get_session_by_id(session_id).await? {
+        Some(s) => s,
+        None => return Ok(()), // concurrent session delete; benign
+    };
+    let Some(card_id) = session.card_id else {
+        return Ok(());
+    };
+
+    // Goal-card filter (CONTEXT D-08): skip planner sessions bound to goal
+    // cards — the goal-status reconciler already surfaces those state changes.
+    let card = match store.get_board_item(card_id).await? {
+        Some(c) => c,
+        None => return Ok(()), // card was deleted; benign
+    };
+    if card.lbl.as_deref() == Some("goal") {
+        return Ok(());
+    }
+
+    // In-memory dedupe: skip identical back-to-back (session_id, kind) pairs
+    // to guard against bus-lag double-fires (CONTEXT D-07).
+    if last_kind.get(&session_id) == Some(&kind) {
+        return Ok(());
+    }
+    last_kind.insert(session_id, kind);
+
+    // Compose the body template (CONTEXT D-06 + UI-SPEC §Copywriting Contract).
+    let body = match kind {
+        "awaiting_input" => "[system] agent awaiting input".to_string(),
+        "finished" => "[system] agent finished".to_string(),
+        "crashed" => {
+            let raw_sig = ev
+                .payload
+                .get("signature")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("unknown");
+            // 80-char cap prevents comment-body amplification (T-02-15).
+            let sig: String = raw_sig.chars().take(80).collect();
+            format!("[system] session crashed: {sig}")
+        }
+        // SAFETY: kind is one of the three literals matched above.
+        _ => unreachable!("kind matched one of the three literals above"),
+    };
+
+    store
+        .create_board_comment(
+            card_id,
+            agentum_core::NewBoardComment {
+                author: "system".to_string(),
+                body,
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
 /// Broadcast + persist. Failures on either are logged but don't break the loop.
 async fn emit(bus: &broadcast::Sender<Event>, store: &Store, ev: Event) -> Result<(), ()> {
     if let Err(e) = store.insert_event(&ev).await {
@@ -1390,6 +1514,374 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(still_todo.status, "todo");
+    }
+
+    // ---- session-comment bridge tests (plan 02-04, Task 1) ----
+
+    async fn make_non_goal_card(store: &agentum_store::Store) -> agentum_core::BoardItem {
+        store
+            .create_board_item(agentum_core::NewBoardItem {
+                title: "task card".into(),
+                body: None,
+                status: None,
+                lbl: None, // not a goal
+                tool: Some("claude".into()),
+                workdir: Some("/tmp".into()),
+                model: None,
+                session_id: None,
+                priority: None,
+                parent_goal_id: None,
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn make_bound_session(
+        store: &agentum_store::Store,
+        card_id: i64,
+    ) -> agentum_core::Session {
+        store
+            .create_session(agentum_core::NewSession {
+                name: format!("sess-{card_id}"),
+                workdir: "/tmp".into(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: Some(card_id),
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn wait_for_comment(
+        store: &agentum_store::Store,
+        card_id: i64,
+        timeout_ms: u64,
+    ) -> Vec<agentum_core::BoardComment> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+        loop {
+            let comments = store.list_board_comments(card_id).await.unwrap();
+            if !comments.is_empty() {
+                return comments;
+            }
+            if std::time::Instant::now() >= deadline {
+                return comments;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn bridge_inserts_awaiting_input_comment_on_bound_non_goal_card() {
+        // Test 1: agent.awaiting_input on a bound non-goal card inserts
+        // author="system", body="[system] agent awaiting input".
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        let card = make_non_goal_card(&store).await;
+        let sess = make_bound_session(&store, card.id).await;
+
+        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
+        tokio::task::yield_now().await;
+
+        let _ = bus.send(
+            agentum_core::Event::new("agent.awaiting_input")
+                .with_session(sess.id, sess.name.clone()),
+        );
+
+        let comments = wait_for_comment(&store, card.id, 500).await;
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].author, "system");
+        assert_eq!(comments[0].body, "[system] agent awaiting input");
+    }
+
+    #[tokio::test]
+    async fn bridge_inserts_finished_comment_on_bound_non_goal_card() {
+        // Test 2: agent.finished → "[system] agent finished"
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        let card = make_non_goal_card(&store).await;
+        let sess = make_bound_session(&store, card.id).await;
+
+        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
+        tokio::task::yield_now().await;
+
+        let _ = bus.send(
+            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
+        );
+
+        let comments = wait_for_comment(&store, card.id, 500).await;
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].author, "system");
+        assert_eq!(comments[0].body, "[system] agent finished");
+    }
+
+    #[tokio::test]
+    async fn bridge_inserts_crashed_comment_with_signature() {
+        // Test 3: session.crashed with payload.signature → "[system] session crashed: SIGSEGV"
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        let card = make_non_goal_card(&store).await;
+        let sess = make_bound_session(&store, card.id).await;
+
+        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
+        tokio::task::yield_now().await;
+
+        let _ = bus.send(
+            agentum_core::Event::new("session.crashed")
+                .with_session(sess.id, sess.name.clone())
+                .with_payload(serde_json::json!({ "signature": "SIGSEGV" })),
+        );
+
+        let comments = wait_for_comment(&store, card.id, 500).await;
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].body, "[system] session crashed: SIGSEGV");
+    }
+
+    #[tokio::test]
+    async fn bridge_inserts_crashed_comment_without_signature_uses_unknown() {
+        // Test 4: session.crashed without signature → "[system] session crashed: unknown"
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        let card = make_non_goal_card(&store).await;
+        let sess = make_bound_session(&store, card.id).await;
+
+        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
+        tokio::task::yield_now().await;
+
+        let _ = bus.send(
+            agentum_core::Event::new("session.crashed")
+                .with_session(sess.id, sess.name.clone())
+                .with_payload(serde_json::json!({})),
+        );
+
+        let comments = wait_for_comment(&store, card.id, 500).await;
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].body, "[system] session crashed: unknown");
+    }
+
+    #[tokio::test]
+    async fn bridge_trims_signature_to_80_chars() {
+        // Test 5: 200-char signature trimmed to ≤80 chars
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        let card = make_non_goal_card(&store).await;
+        let sess = make_bound_session(&store, card.id).await;
+
+        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
+        tokio::task::yield_now().await;
+
+        let long_sig: String = "X".repeat(200);
+        let _ = bus.send(
+            agentum_core::Event::new("session.crashed")
+                .with_session(sess.id, sess.name.clone())
+                .with_payload(serde_json::json!({ "signature": long_sig })),
+        );
+
+        let comments = wait_for_comment(&store, card.id, 500).await;
+        assert_eq!(comments.len(), 1);
+        let prefix = "[system] session crashed: ";
+        assert!(comments[0].body.starts_with(prefix));
+        let sig_part = &comments[0].body[prefix.len()..];
+        assert_eq!(
+            sig_part.chars().count(),
+            80,
+            "signature must be trimmed to 80 chars"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_skips_goal_card_events() {
+        // Test 6: events on sessions bound to goal cards are skipped
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        let goal_card = make_goal_item(&store).await; // lbl="goal"
+        let sess = make_bound_session(&store, goal_card.id).await;
+
+        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
+        tokio::task::yield_now().await;
+
+        let _ = bus.send(
+            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let comments = store.list_board_comments(goal_card.id).await.unwrap();
+        assert!(
+            comments.is_empty(),
+            "goal-card events must not produce comments"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_skips_unbound_sessions() {
+        // Test 7: session with no card_id → no comment
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        let unbound_sess = store
+            .create_session(agentum_core::NewSession {
+                name: "unbound".into(),
+                workdir: "/tmp".into(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: None, // no binding
+            })
+            .await
+            .unwrap();
+
+        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
+        tokio::task::yield_now().await;
+
+        let _ = bus.send(
+            agentum_core::Event::new("agent.finished")
+                .with_session(unbound_sess.id, unbound_sess.name.clone()),
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // No card exists for this session, so no comments to check.
+        // Just verifying no panic occurred in the bridge task.
+    }
+
+    #[tokio::test]
+    async fn bridge_dedupes_identical_back_to_back_events() {
+        // Test 8: two back-to-back agent.finished → only ONE comment
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        let card = make_non_goal_card(&store).await;
+        let sess = make_bound_session(&store, card.id).await;
+
+        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
+        tokio::task::yield_now().await;
+
+        let _ = bus.send(
+            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
+        );
+        let _ = bus.send(
+            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let comments = store.list_board_comments(card.id).await.unwrap();
+        assert_eq!(
+            comments.len(),
+            1,
+            "back-to-back identical events must produce only one comment"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_dedupe_resets_on_different_kind() {
+        // Test 9: agent.finished then agent.awaiting_input → both comments inserted
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        let card = make_non_goal_card(&store).await;
+        let sess = make_bound_session(&store, card.id).await;
+
+        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
+        tokio::task::yield_now().await;
+
+        let _ = bus.send(
+            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
+        );
+        // Wait for first comment before sending second event to avoid race.
+        let first = wait_for_comment(&store, card.id, 500).await;
+        assert_eq!(first.len(), 1);
+
+        let _ = bus.send(
+            agentum_core::Event::new("agent.awaiting_input")
+                .with_session(sess.id, sess.name.clone()),
+        );
+
+        // Wait for second comment.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        let comments = loop {
+            let c = store.list_board_comments(card.id).await.unwrap();
+            if c.len() >= 2 || std::time::Instant::now() >= deadline {
+                break c;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
+        assert_eq!(comments.len(), 2, "different kind must bypass dedupe");
+        assert!(comments.iter().any(|c| c.body == "[system] agent finished"));
+        assert!(
+            comments
+                .iter()
+                .any(|c| c.body == "[system] agent awaiting input")
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_recovers_from_bus_lag_and_continues() {
+        // Test 10: bus lag does not kill the bridge; a valid event after lag
+        // still inserts a comment.
+        //
+        // Design: use a small-capacity channel so flooding it triggers Lagged
+        // on the bridge's receiver. The bridge must log a warning and continue
+        // processing subsequent events rather than panicking or exiting.
+        let store = tmp_store_for_reconciler().await;
+        // Use channel capacity=4 so we can overflow it easily.
+        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(4);
+
+        let card = make_non_goal_card(&store).await;
+        let sess = make_bound_session(&store, card.id).await;
+
+        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
+        // Yield so the bridge task starts and calls bus.subscribe() before we
+        // send the flood — we need it subscribed before overflow.
+        tokio::task::yield_now().await;
+
+        // Flood the channel with irrelevant events beyond capacity to trigger
+        // Lagged on the bridge's receiver.
+        for _ in 0..20 {
+            let _ = bus.send(agentum_core::Event::new("host.metrics"));
+        }
+
+        // After the flood, send a real event. The bridge should log the lag
+        // warning from RecvError::Lagged then pick up this event.
+        let _ = bus.send(
+            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
+        );
+
+        let comments = wait_for_comment(&store, card.id, 1000).await;
+        assert_eq!(
+            comments.len(),
+            1,
+            "bridge must continue after bus lag and still handle the real event"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_ignores_irrelevant_event_kinds() {
+        // Test 11: board.created and host.metrics are dropped silently
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        let card = make_non_goal_card(&store).await;
+        let sess = make_bound_session(&store, card.id).await;
+
+        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
+        tokio::task::yield_now().await;
+
+        let _ = bus.send(
+            agentum_core::Event::new("board.created").with_session(sess.id, sess.name.clone()),
+        );
+        let _ = bus.send(agentum_core::Event::new("host.metrics"));
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let comments = store.list_board_comments(card.id).await.unwrap();
+        assert!(
+            comments.is_empty(),
+            "irrelevant event kinds must not produce comments"
+        );
     }
 
     #[tokio::test]
