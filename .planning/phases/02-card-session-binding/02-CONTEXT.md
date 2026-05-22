@@ -232,6 +232,28 @@ surfaces a better fit.
   for tool cycle, `G` for goal overlay, `S` already used for `Ctrl-S`
   profiles).
 
+  **Amended 2026-05-22 (Phase 2 plan-checker iteration 1):** The TUI has
+  no Board view in Phase 2 — the `Focus` enum in
+  `crates/agentum/src/commands/terminal/app.rs` is restricted to
+  `Tree / Term / TermRight / Lazygit` (no `Board` variant). The board-side
+  keybinding (`s` on a card → jump to bound session pane) is therefore
+  **deferred** until a TUI Board view ships in a later phase (cross-ref:
+  `02-UI-SPEC.md` §Reconciliation lines 277-281 — "future-proofing note:
+  when a TUI Board view ships (Phase 3+ or v2), the mnemonic-symmetric
+  pair becomes …"). The session-side keybinding (`c` on a focused session
+  with `card_id != None` → reveal a one-cell hint strip with the bound
+  card id + truncated title) **does ship in Phase 2** as the discoverability
+  affordance for the binding.
+
+  Audit trail: this amendment is the explicit record of the half-decision
+  drop. The original D-15 wording is preserved verbatim above so the
+  Phase 1→2 decision history is auditable. Source for the amendment text
+  and the key-collision rationale: `02-UI-SPEC.md` §Reconciliation +
+  §Key collision audit (around lines 247-263), which audited the existing
+  `s = Stop session` binding (`crates/agentum/src/commands/terminal/app.rs`
+  around `:4768`) and concluded `s` MUST NOT be shadowed, while `c` is
+  free at the top-level handler.
+
 ### Claude's Discretion
 
 The user explicitly invited Claude's judgment on every area for this
