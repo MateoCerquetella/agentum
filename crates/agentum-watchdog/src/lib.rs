@@ -1558,8 +1558,7 @@ mod tests {
         card_id: i64,
         timeout_ms: u64,
     ) -> Vec<agentum_core::BoardComment> {
-        let deadline = std::time::Instant::now()
-            + std::time::Duration::from_millis(timeout_ms);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
         loop {
             let comments = store.list_board_comments(card_id).await.unwrap();
             if !comments.is_empty() {
@@ -1609,8 +1608,7 @@ mod tests {
         tokio::task::yield_now().await;
 
         let _ = bus.send(
-            agentum_core::Event::new("agent.finished")
-                .with_session(sess.id, sess.name.clone()),
+            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
         );
 
         let comments = wait_for_comment(&store, card.id, 500).await;
@@ -1689,7 +1687,11 @@ mod tests {
         let prefix = "[system] session crashed: ";
         assert!(comments[0].body.starts_with(prefix));
         let sig_part = &comments[0].body[prefix.len()..];
-        assert_eq!(sig_part.chars().count(), 80, "signature must be trimmed to 80 chars");
+        assert_eq!(
+            sig_part.chars().count(),
+            80,
+            "signature must be trimmed to 80 chars"
+        );
     }
 
     #[tokio::test]
@@ -1705,8 +1707,7 @@ mod tests {
         tokio::task::yield_now().await;
 
         let _ = bus.send(
-            agentum_core::Event::new("agent.finished")
-                .with_session(sess.id, sess.name.clone()),
+            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
         );
 
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -1761,12 +1762,10 @@ mod tests {
         tokio::task::yield_now().await;
 
         let _ = bus.send(
-            agentum_core::Event::new("agent.finished")
-                .with_session(sess.id, sess.name.clone()),
+            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
         );
         let _ = bus.send(
-            agentum_core::Event::new("agent.finished")
-                .with_session(sess.id, sess.name.clone()),
+            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
         );
 
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -1791,8 +1790,7 @@ mod tests {
         tokio::task::yield_now().await;
 
         let _ = bus.send(
-            agentum_core::Event::new("agent.finished")
-                .with_session(sess.id, sess.name.clone()),
+            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
         );
         // Wait for first comment before sending second event to avoid race.
         let first = wait_for_comment(&store, card.id, 500).await;
@@ -1804,8 +1802,7 @@ mod tests {
         );
 
         // Wait for second comment.
-        let deadline =
-            std::time::Instant::now() + std::time::Duration::from_millis(500);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
         let comments = loop {
             let c = store.list_board_comments(card.id).await.unwrap();
             if c.len() >= 2 || std::time::Instant::now() >= deadline {
@@ -1815,7 +1812,11 @@ mod tests {
         };
         assert_eq!(comments.len(), 2, "different kind must bypass dedupe");
         assert!(comments.iter().any(|c| c.body == "[system] agent finished"));
-        assert!(comments.iter().any(|c| c.body == "[system] agent awaiting input"));
+        assert!(
+            comments
+                .iter()
+                .any(|c| c.body == "[system] agent awaiting input")
+        );
     }
 
     #[tokio::test]
@@ -1847,8 +1848,7 @@ mod tests {
         // After the flood, send a real event. The bridge should log the lag
         // warning from RecvError::Lagged then pick up this event.
         let _ = bus.send(
-            agentum_core::Event::new("agent.finished")
-                .with_session(sess.id, sess.name.clone()),
+            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
         );
 
         let comments = wait_for_comment(&store, card.id, 1000).await;
@@ -1872,8 +1872,7 @@ mod tests {
         tokio::task::yield_now().await;
 
         let _ = bus.send(
-            agentum_core::Event::new("board.created")
-                .with_session(sess.id, sess.name.clone()),
+            agentum_core::Event::new("board.created").with_session(sess.id, sess.name.clone()),
         );
         let _ = bus.send(agentum_core::Event::new("host.metrics"));
 
