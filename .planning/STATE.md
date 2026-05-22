@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 2 UI-SPEC approved
-last_updated: "2026-05-22T17:58:02.124Z"
-last_activity: 2026-05-22 -- Phase 02 planning complete
+last_updated: "2026-05-22T18:19:22.767Z"
+last_activity: 2026-05-22 -- Phase 02 execution started
 progress:
   total_phases: 3
   completed_phases: 1
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-20)
 
 **Core value:** One terminal — and one orchestrator — to manage all your AI coding agents across all your projects. The kanban *is* the orchestrator: a goal in, executing cards out.
-**Current focus:** Phase 2 — card ↔ session binding
+**Current focus:** Phase 02 — card-session-binding
 
 ## Current Position
 
-Phase: 2
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-05-22 -- Phase 02 planning complete
+Phase: 02 (card-session-binding) — EXECUTING
+Plan: 1 of 6
+Status: Executing Phase 02
+Last activity: 2026-05-22 -- Phase 02 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
