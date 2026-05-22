@@ -723,6 +723,50 @@ mod tests {
         );
     }
 
+    /// Exercises the three distinct serde states of `BoardPatch.session_id`
+    /// per Phase 2 CONTEXT D-10:
+    ///   - Field absent → `None` (no-op, store ignores session_id).
+    ///   - Field = `null` → `Some(None)` (explicit unbind: clear session_id).
+    ///   - Field = string → `Some(Some(_))` (explicit rebind to new session).
+    ///
+    /// This is the Phase 2 contract pin. The field already exists from Phase 1;
+    /// this test locks the deserialization shape so plan 02-03's PATCH wiring
+    /// cannot silently regress the double-Option pattern.
+    #[test]
+    fn board_patch_session_id_distinguishes_omitted_explicit_null_and_value() {
+        // Omitted → None (the store must leave session_id column unchanged).
+        let omitted: BoardPatch = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(
+            omitted.session_id.is_none(),
+            "omitted session_id field must be None"
+        );
+
+        // Explicit null → Some(None) (the store should clear the column).
+        let explicit_null: BoardPatch = serde_json::from_str(r#"{"session_id": null}"#).unwrap();
+        assert_eq!(
+            explicit_null.session_id,
+            Some(None),
+            "explicit null must be Some(None)"
+        );
+
+        // String → Some(Some("uuid-string")) (the store should write the value).
+        let with_value: BoardPatch =
+            serde_json::from_str(r#"{"session_id": "uuid-string"}"#).unwrap();
+        assert_eq!(
+            with_value.session_id,
+            Some(Some("uuid-string".to_string())),
+            "value must be Some(Some(_))"
+        );
+    }
+
+    // Plan-checker iter-1 W-4: pin BoardPatch: Clone at compile time so plan
+    // 02-03's PATCH-handler can call `patch.clone()` without a conditional
+    // fallback. Zero-cost: const-eval forces the trait bound check.
+    const _: fn() = || {
+        fn _assert_clone<T: Clone>() {}
+        _assert_clone::<BoardPatch>();
+    };
+
     /// Verifies `LinkKind` as_str / FromStr / unknown-string error path.
     #[test]
     fn link_kind_round_trips() {
