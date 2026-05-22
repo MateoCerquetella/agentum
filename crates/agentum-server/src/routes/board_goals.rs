@@ -3,8 +3,6 @@
 //! parallel table. The planner is a normal agent session bound via
 //! `session.card_id = goal.id` (CONTEXT D-07).
 
-use std::path::PathBuf;
-
 use agentum_core::{BoardItem, Event, NewBoardItem, NewSession, Status, TransitionCtx};
 use agentum_store::paths;
 use axum::Json;
@@ -182,13 +180,14 @@ pub(crate) async fn spawn_card_session(
     };
 
     // 3. Verify workdir exists on disk (mirrors spawn_planner_session :155-160).
-    let wd = PathBuf::from(&workdir);
+    let wd = super::util::expand_workdir(&workdir)?;
     if !wd.exists() {
         return Err(ApiError::BadRequest(format!(
             "workdir does not exist: {}",
             wd.display()
         )));
     }
+    let workdir = wd.to_string_lossy().into_owned();
 
     // 4. Build NewSession with the canonical YOLO marker pushed verbatim —
     //    adapters call translate_yolo_marker on launch (CLAUDE.md YOLO rule).
@@ -256,9 +255,20 @@ async fn spawn_planner_session(
     // Name convention: `planner-<lowercase-goal-key>` e.g. `planner-ag-42`.
     let session_name = format!("planner-{}", goal.key.to_lowercase());
 
+    // Expand `~`/`~/x` once so the stored session row and the tmux spawn
+    // both see the same canonical absolute path.
+    let wd = super::util::expand_workdir(workdir)?;
+    if !wd.exists() {
+        return Err(ApiError::BadRequest(format!(
+            "workdir does not exist: {}",
+            wd.display()
+        )));
+    }
+    let workdir_resolved = wd.to_string_lossy().into_owned();
+
     let new_session = NewSession {
         name: session_name.clone(),
-        workdir: workdir.to_string(),
+        workdir: workdir_resolved,
         tool: cfg.tool.clone(),
         model: None,
         flags: vec![],
@@ -270,13 +280,6 @@ async fn spawn_planner_session(
 
     // Spawn the tmux pane — mirrors sessions::start lines 259-273.
     let target = agentum_tmux::target_for(&session.name);
-    let wd = PathBuf::from(workdir);
-    if !wd.exists() {
-        return Err(ApiError::BadRequest(format!(
-            "workdir does not exist: {}",
-            wd.display()
-        )));
-    }
     let adapter = agentum_executor::adapter_for(&session.tool);
     let launch = adapter.launch(&session);
 
