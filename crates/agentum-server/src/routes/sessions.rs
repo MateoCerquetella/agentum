@@ -89,15 +89,18 @@ async fn list(
 
 async fn create(
     State(state): State<AppState>,
-    Json(payload): Json<NewSession>,
+    Json(mut payload): Json<NewSession>,
 ) -> Result<(StatusCode, Json<Session>), ApiError> {
-    let workdir = PathBuf::from(&payload.workdir);
+    let workdir = super::util::expand_workdir(&payload.workdir)?;
     if !workdir.exists() {
         return Err(ApiError::BadRequest(format!(
             "workdir does not exist: {}",
             workdir.display()
         )));
     }
+    // Persist the expanded form so `start` doesn't need to re-resolve and
+    // the dashboard displays the actual path the daemon will spawn in.
+    payload.workdir = workdir.to_string_lossy().into_owned();
     let s = state.store.create_session(payload).await?;
     Ok((StatusCode::CREATED, Json(s)))
 }
@@ -269,7 +272,10 @@ async fn start(
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
 
-    let workdir = PathBuf::from(&session.workdir);
+    // Older sessions (pre-tilde-expansion fix) may have `~/...` stored
+    // in the DB — re-resolve here so they spawn correctly without a
+    // migration. New sessions are stored already-expanded by `create`.
+    let workdir = super::util::expand_workdir(&session.workdir)?;
     if !workdir.exists() {
         return Err(ApiError::BadRequest(format!(
             "workdir does not exist: {}",
