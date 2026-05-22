@@ -57,6 +57,18 @@ pub struct Health {
     pub capabilities: Vec<String>,
 }
 
+/// Minimal board-item shape returned by `GET /api/board/{id}`.
+/// The TUI only needs `id` and `title` for the hint strip (Phase 2,
+/// plan 05); extra server fields are captured via `#[serde(default)]`
+/// for forward-compat.
+#[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
+pub struct BoardItemSummary {
+    pub id: i64,
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
 /// Response from `POST /api/board/goals`. The server returns the newly
 /// created board item; the TUI currently only needs the `id` so the
 /// planner can be told which goal to expand — extra fields are captured
@@ -533,6 +545,26 @@ impl Client {
             bail!("{status} — {body}");
         }
         Ok(resp.json::<SubmitGoalResponse>().await?)
+    }
+
+    /// `GET /api/board/{id}` — fetch a single board item by its integer
+    /// primary key. Returns a minimal `BoardItemSummary` (id + title).
+    /// Used by the `c`-key hint strip in `Focus::Tree` to display the
+    /// bound card's title without a full board fetch (Phase 2, plan 05).
+    pub async fn get_board_item(&self, id: i64) -> Result<BoardItemSummary> {
+        let url = self.base.join(&format!("/api/board/{id}"))?;
+        let resp = self
+            .http
+            .get(url)
+            .bearer_auth(&self.token)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("{status} — {body}");
+        }
+        Ok(resp.json::<BoardItemSummary>().await?)
     }
 
     /// `PATCH /api/sessions/{id}` with `{name: ...}`. Server validates
