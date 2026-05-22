@@ -336,8 +336,8 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
                     height: 1,
                 };
                 let hint_text = format!(" card #{} — {} ", hint.card_id, hint.title);
-                let hint_para = Paragraph::new(hint_text)
-                    .style(Style::default().fg(p.fg).bg(p.surface_bg));
+                let hint_para =
+                    Paragraph::new(hint_text).style(Style::default().fg(p.fg).bg(p.surface_bg));
                 f.render_widget(hint_para, hint_rect);
             }
         }

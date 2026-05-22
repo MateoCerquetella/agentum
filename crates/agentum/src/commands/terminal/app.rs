@@ -4459,9 +4459,7 @@ async fn handle_key(
         // status bar. Only fires when the selected session has a card_id;
         // no-ops otherwise (no terminal forwarding — tree focus never
         // forwards keys to the PTY). Phase 2, plan 05.
-        KeyCode::Char('c')
-            if app.focus == Focus::Tree && key.modifiers.is_empty() =>
-        {
+        KeyCode::Char('c') if app.focus == Focus::Tree && key.modifiers.is_empty() => {
             if let Some(sess) = app.selected_session() {
                 if let Some(card_id) = sess.card_id {
                     // Toggle: collapse if already showing this card.
@@ -8684,8 +8682,10 @@ mod hint_card_tests {
         let card_id: Option<i64> = None;
 
         // Simulate the guard: if card_id is None, no state change.
-        let hint: Option<HintCardState> =
-            card_id.map(|id| HintCardState { card_id: id, title: "Test".to_string() });
+        let hint: Option<HintCardState> = card_id.map(|id| HintCardState {
+            card_id: id,
+            title: "Test".to_string(),
+        });
         assert!(hint.is_none(), "hint must stay None when card_id is absent");
     }
 
@@ -8693,11 +8693,17 @@ mod hint_card_tests {
     /// needed for the toggle check and any future state diffing.
     #[test]
     fn hint_card_state_derives_clone_and_eq() {
-        let a = HintCardState { card_id: 7, title: "Alpha".to_string() };
+        let a = HintCardState {
+            card_id: 7,
+            title: "Alpha".to_string(),
+        };
         let b = a.clone();
         assert_eq!(a, b);
 
-        let c = HintCardState { card_id: 8, title: "Beta".to_string() };
+        let c = HintCardState {
+            card_id: 8,
+            title: "Beta".to_string(),
+        };
         assert_ne!(a, c);
     }
 }

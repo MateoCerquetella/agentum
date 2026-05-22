@@ -553,12 +553,7 @@ impl Client {
     /// bound card's title without a full board fetch (Phase 2, plan 05).
     pub async fn get_board_item(&self, id: i64) -> Result<BoardItemSummary> {
         let url = self.base.join(&format!("/api/board/{id}"))?;
-        let resp = self
-            .http
-            .get(url)
-            .bearer_auth(&self.token)
-            .send()
-            .await?;
+        let resp = self.http.get(url).bearer_auth(&self.token).send().await?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
