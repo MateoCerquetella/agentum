@@ -267,6 +267,17 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
         });
     }
 
+    // Watchdog → comment bridge (plan 02-04). Subscribes to the same bus
+    // as the reconciler and converts agent.*/session.crashed events into
+    // [system] comments on the bound card's thread (CONTEXT D-04..D-09).
+    {
+        let store = state.store.clone();
+        let bus = bus.clone();
+        tokio::spawn(async move {
+            agentum_watchdog::run_session_comment_bridge(store, bus).await;
+        });
+    }
+
     // Background ticker that publishes `host.metrics` (CPU + RAM) onto
     // the broadcast bus every couple of seconds. The /api/events WS
     // fans these out to every connected dashboard, so a single sampler
