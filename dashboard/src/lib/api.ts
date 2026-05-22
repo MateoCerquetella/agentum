@@ -43,6 +43,9 @@ export interface Session {
   state?: SessionState;
   /** User-toggled "favorite" — sorts to the top of every list. */
   pinned?: boolean;
+  /** Board card this session is bound to (migration 0011). Absent / null
+   *  when the session is not linked to any card. */
+  card_id?: number | null;
   /* --- Multi-endpoint aggregation. Tagged client-side by the
      sessions store; not on the wire. The id matches a `Profile.id`
      in `lib/profiles.ts`. Empty / undefined for sessions returned
@@ -429,6 +432,12 @@ export interface NewMessage {
   body: string;
 }
 
+/** Snapshot of a session's pane — returned by GET /api/sessions/{id}/pane. */
+export interface PaneSnapshot {
+  lines: string[];
+  captured_at: string; // RFC3339
+}
+
 export const api = {
   health: () => request<Health>('/api/health'),
   authStatus: () => request<AuthStatus>('/api/auth/status'),
@@ -451,6 +460,24 @@ export const api = {
     return request<Session[]>(`/api/sessions${qs}`);
   },
   getSession: (id: string) => request<Session>(`/api/sessions/${encodeURIComponent(id)}`),
+  /**
+   * GET /api/sessions/{id}/pane — fetch the last `lines` rows of the
+   * session's pane output. The optional `signal` is plumbed straight into
+   * the underlying fetch so callers can abort in-flight requests on dialog
+   * close or unmount. If `lines` is omitted, the server defaults to 20.
+   */
+  getSessionPane: (
+    id: string,
+    lines?: number,
+    opts?: { signal?: AbortSignal },
+  ): Promise<PaneSnapshot> => {
+    const qs = lines !== undefined ? `?lines=${lines}` : '';
+    const init: RequestInit = opts?.signal ? { signal: opts.signal } : {};
+    return request<PaneSnapshot>(
+      `/api/sessions/${encodeURIComponent(id)}/pane${qs}`,
+      init,
+    );
+  },
   createSession: (body: NewSession) =>
     request<Session>('/api/sessions', { method: 'POST', body: JSON.stringify(body) }),
   startSession: (id: string) =>
@@ -562,6 +589,12 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(body)
     }),
+  /** GET /api/board/{id} — fetch a single board item by numeric id. */
+  getBoardItem: (id: number) =>
+    request<BoardItem>(`/api/board/${id}`),
+  /** Profile-pinned variant of getBoardItem for multi-server fleets. */
+  getBoardItemOn: (profileId: string, id: number) =>
+    requestOn<BoardItem>(profileId, `/api/board/${id}`),
   deleteBoardItemOn: (profileId: string, id: number) =>
     requestOn<void>(profileId, `/api/board/${id}`, { method: 'DELETE' }),
   claimBoardItemOn: (profileId: string, id: number, claimed_by: string) =>

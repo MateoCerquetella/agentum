@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { page } from '$app/state';
+  import { goto } from '$app/navigation';
   import {
     fleetBoard,
     fleetColumns,
@@ -445,6 +447,27 @@
     removeItem(profileId, id);
   }
 
+  // ?focus=N — scroll the target card into view and briefly pulse it.
+  // Fires when the URL search param changes (e.g. navigating back from
+  // a session page with a bound card). Waits one microtask for the board
+  // to render before attempting the scroll; safe to call before mount.
+  $effect(() => {
+    const raw = page.url.searchParams.get('focus');
+    if (!raw) return;
+    const id = parseInt(raw, 10);
+    if (!Number.isFinite(id)) return;
+    // Next microtask so the board DOM has rendered the card.
+    Promise.resolve().then(() => {
+      const el = document.querySelector<HTMLElement>(`[data-card-id="${id}"]`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('focus-pulse');
+      el.addEventListener('animationend', () => el.classList.remove('focus-pulse'), { once: true });
+      // Clear the ?focus param from the URL so reload/share doesn't re-fire.
+      void goto('/board', { replaceState: true });
+    });
+  });
+
   // Per-column goal filter. Keys are `${laneKey}:${colKey}` — same
   // compound key used for drop targets so the filter is lane-scoped (not
   // board-wide). Not persisted to URL in v1 — page reload clears the filter
@@ -632,20 +655,24 @@
                         {#each colItems as tk (`${tk.profile_id}:${tk.id}`)}
                           {@const tkKey = `${tk.profile_id}:${tk.id}`}
                           {@const tkForeign = draggingProfileId != null && draggingProfileId !== tk.profile_id}
-                          <Ticket
-                            {tk}
-                            sourceLabel={showServerChip ? profileLabelFor(tk.profile_id) : null}
-                            commentCount={commentCounts[tkKey] ?? 0}
-                            dropAbove={dropAboveTicket === tkKey}
-                            dragging={draggingProfileId === tk.profile_id && draggingId === tk.id}
-                            onParentCueClick={(parentGoalId) => onParentCueClick(lcKey, parentGoalId)}
-                            onDragStart={onTicketDragStart(tk)}
-                            onDragEnd={onTicketDragEnd}
-                            onDragOver={onTicketDragOver(tk, tkForeign)}
-                            onDragLeave={onTicketDragLeave(tk)}
-                            onDrop={onTicketDrop(lane, col.key, tk)}
-                            onClick={() => openTicket(tk)}
-                          />
+                          <!-- data-card-id enables /board?focus=N scroll-to targeting
+                               from the session back-link chip. -->
+                          <div data-card-id={tk.id}>
+                            <Ticket
+                              {tk}
+                              sourceLabel={showServerChip ? profileLabelFor(tk.profile_id) : null}
+                              commentCount={commentCounts[tkKey] ?? 0}
+                              dropAbove={dropAboveTicket === tkKey}
+                              dragging={draggingProfileId === tk.profile_id && draggingId === tk.id}
+                              onParentCueClick={(parentGoalId) => onParentCueClick(lcKey, parentGoalId)}
+                              onDragStart={onTicketDragStart(tk)}
+                              onDragEnd={onTicketDragEnd}
+                              onDragOver={onTicketDragOver(tk, tkForeign)}
+                              onDragLeave={onTicketDragLeave(tk)}
+                              onDrop={onTicketDrop(lane, col.key, tk)}
+                              onClick={() => openTicket(tk)}
+                            />
+                          </div>
                         {/each}
                         {#if colItems.length === 0}
                           <div class="col-empty mono">empty</div>
@@ -701,6 +728,18 @@
 />
 
 <style>
+  /* focus-pulse: brief highlight animation for ?focus=N board card targeting.
+     Applied by the $effect after scrollIntoView; removed on animationend. */
+  @keyframes focus-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(var(--accent-rgb, 99, 149, 255), 0.5); }
+    50%  { box-shadow: 0 0 0 6px rgba(var(--accent-rgb, 99, 149, 255), 0.25); }
+    100% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb, 99, 149, 255), 0); }
+  }
+  :global([data-card-id].focus-pulse) {
+    animation: focus-pulse 0.8s ease-out forwards;
+    border-radius: var(--radius-md, 4px);
+  }
+
   .page {
     flex: 1;
     display: flex;

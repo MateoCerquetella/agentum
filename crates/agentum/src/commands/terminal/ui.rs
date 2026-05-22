@@ -323,6 +323,24 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
         draw_agent_tasks_panel(f, rp_area, app, p);
     }
     if areas.status.height > 0 {
+        // Hint strip: one-cell row above the status bar showing the bound
+        // card id + truncated title. Rendered as an overlay so it doesn't
+        // require a layout slot — the terminal pane is shortened by 1 row
+        // only when the hint is active (Phase 2, plan 05).
+        if let Some(hint) = app.hint_card.as_ref() {
+            if areas.status.y > 0 {
+                let hint_rect = Rect {
+                    x: areas.status.x,
+                    y: areas.status.y - 1,
+                    width: areas.status.width,
+                    height: 1,
+                };
+                let hint_text = format!(" card #{} — {} ", hint.card_id, hint.title);
+                let hint_para = Paragraph::new(hint_text)
+                    .style(Style::default().fg(p.fg).bg(p.surface_bg));
+                f.render_widget(hint_para, hint_rect);
+            }
+        }
         draw_status(f, areas.status, app, p);
     }
 
@@ -1356,6 +1374,20 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
             format!(" {} ", app.theme.name),
             Style::default().fg(p.chip_fg).bg(p.chip_bg),
         ));
+    }
+
+    // Bound-card chip: shown when the selected session has a card_id.
+    // Pressing `c` in Focus::Tree toggles the one-cell hint strip.
+    // Palette-only colors — no hardcoded Color::* (Phase 2, plan 05).
+    if app.focus == Focus::Tree {
+        if let Some(sess) = app.selected_session() {
+            if let Some(card_id) = sess.card_id {
+                right.push(Span::styled(
+                    format!(" c card #{card_id} "),
+                    Style::default().fg(p.muted).bg(p.chrome_bg),
+                ));
+            }
+        }
     }
 
     // Status message is always shown — it's a transient feedback channel

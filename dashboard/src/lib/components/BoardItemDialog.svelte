@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, ApiError, type AgentInfo, type BoardComment, type BoardItem, type BoardPatch, type NewBoardItem, type TicketLbl, type Tool } from '$lib/api';
+  import { api, ApiError, type AgentInfo, type BoardComment, type BoardItem, type BoardPatch, type NewBoardItem, type Session, type TicketLbl, type Tool } from '$lib/api';
   import { actorId } from '$stores/actor';
   import { profiles, activeProfileId, type Profile } from '$lib/profiles';
   import {
@@ -10,6 +10,7 @@
     type RequiredField
   } from '$lib/board-schema';
   import DirPicker from './DirPicker.svelte';
+  import StatusPill from './StatusPill.svelte';
 
   /**
    * Create + edit dialog for board items. Visual language follows
@@ -478,6 +479,103 @@
     }
   }
 
+  /* -- bound-session panel ----------------------------------------- */
+
+  let boundSession = $state<Session | null>(null);
+  let boundSessionError = $state<string | null>(null);
+  let paneLines = $state<string[]>([]);
+  let paneError = $state<string | null>(null);
+  let paneErrorCount = $state(0);
+  let panePollId: ReturnType<typeof setInterval> | null = null;
+  let paneController: AbortController | null = null;
+  let unbinding = $state(false);
+
+  async function refreshBoundSession() {
+    if (!item?.session_id) return;
+    try {
+      const s = await api.getSession(item.session_id);
+      boundSession = s;
+      boundSessionError = null;
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        boundSessionError = 'bound session no longer exists. unbind to clear the link.';
+      }
+      boundSession = null;
+    }
+  }
+
+  async function refreshPane() {
+    if (!boundSession || boundSession.status !== 'running' || !item?.session_id) return;
+    // Abort any in-flight fetch before starting a new one.
+    paneController?.abort();
+    paneController = new AbortController();
+    try {
+      const result = await api.getSessionPane(
+        item.session_id,
+        20,
+        { signal: paneController.signal },
+      );
+      paneLines = result.lines;
+      paneError = null;
+      paneErrorCount = 0;
+    } catch (e) {
+      // AbortError is benign — the effect teardown cancelled the fetch.
+      if (e instanceof Error && e.name === 'AbortError') return;
+      paneErrorCount += 1;
+      if (paneErrorCount >= 3) {
+        const msg = e instanceof Error ? e.message : String(e);
+        paneError = msg.slice(0, 60);
+        if (panePollId) { clearInterval(panePollId); panePollId = null; }
+      }
+    }
+  }
+
+  $effect(() => {
+    // Teardown previous poll before starting a new one.
+    if (panePollId) { clearInterval(panePollId); panePollId = null; }
+    paneController?.abort();
+    paneController = null;
+    paneLines = [];
+    paneError = null;
+    paneErrorCount = 0;
+    boundSession = null;
+    boundSessionError = null;
+
+    if (!open || !item || !item.session_id) return;
+    void refreshBoundSession();
+    // Poll only when session is running — detected after refreshBoundSession lands,
+    // but we start the interval now and refreshPane guards on status itself.
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      void refreshPane();
+    };
+    tick();
+    panePollId = setInterval(tick, 2000);
+    const onVis = () => { if (typeof document !== 'undefined' && document.visibilityState === 'visible') tick(); };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVis);
+    return () => {
+      if (panePollId) { clearInterval(panePollId); panePollId = null; }
+      paneController?.abort();
+      paneController = null;
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVis);
+    };
+  });
+
+  async function unbindSession() {
+    if (!item || unbinding) return;
+    unbinding = true;
+    try {
+      const updated = await api.patchBoardItemOn(targetProfileId, item.id, { session_id: null });
+      // Optimistic local clear — the parent will also re-emit a board.updated event.
+      item = updated;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('unbind failed', msg);
+    } finally {
+      unbinding = false;
+    }
+  }
+
   /* -- comments thread --------------------------------------------- */
 
   let comments = $state<BoardComment[]>([]);
@@ -865,13 +963,24 @@
             </span>
           </div>
           {#if item.session_id}
-            <button
-              type="button"
-              class="ghost"
-              onclick={openSession}
-              disabled={submitting || spawning}
-              title="Jump into the pane"
-            >Open session ↗</button>
+            <div class="session-actions">
+              <button
+                type="button"
+                class="ghost"
+                onclick={openSession}
+                disabled={submitting || spawning}
+                title="Jump into the pane"
+              >Open session ↗</button>
+              <button
+                type="button"
+                class="ghost"
+                onclick={unbindSession}
+                disabled={submitting || spawning || unbinding}
+                title={`Detach this card from ${item.session_id.slice(0, 8)}… (session keeps running)`}
+              >
+                {#if unbinding}Unbinding…{:else}Unbind{/if}
+              </button>
+            </div>
           {:else}
             <button
               type="button"
@@ -889,6 +998,21 @@
           {/if}
         </section>
 
+        {#if item.session_id && boundSession}
+          <section class="bound-session-panel">
+            <div class="bsp-head">
+              <span class="eyebrow">BOUND SESSION</span>
+              <StatusPill status={boundSession.status} />
+            </div>
+            <pre class="pane-tail" aria-live="polite">{#if paneError}couldn't fetch pane: {paneError}{:else if paneLines.length === 0 && boundSession.status === 'running'}waiting for output…{:else if paneLines.length === 0}pane not active.{:else}{paneLines.join('\n')}{/if}</pre>
+            <a class="open-session-link" href={`/sessions/${boundSession.id}`}>Open session →</a>
+          </section>
+        {:else if boundSessionError}
+          <section class="bound-session-panel error">
+            <p class="muted">{boundSessionError}</p>
+          </section>
+        {/if}
+
         <section class="comments">
           <span class="eyebrow">Comments {#if comments.length > 0}<span class="count-chip">{comments.length}</span>{/if}</span>
           {#if commentLoading && comments.length === 0}
@@ -898,7 +1022,11 @@
           {:else}
             <ol class="cmt-list">
               {#each comments as c (c.id)}
-                <li class="cmt-item">
+                <li
+                  class="cmt-item"
+                  class:system={c.author === 'system'}
+                  class:crash={c.author === 'system' && c.body.startsWith('[system] session crashed:')}
+                >
                   <div class="cmt-head">
                     <span class="cmt-author">{c.author}</span>
                     <span class="cmt-time" title={c.created_at}>{fmtCommentTime(c.created_at)}</span>
@@ -1419,4 +1547,49 @@
   @media (max-width: 540px) {
     .grid { grid-template-columns: 1fr; }
   }
+
+  /* ---- Bound-session panel ---- */
+  .bound-session-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px;
+    margin-bottom: 0;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--radius-md);
+  }
+  .bound-session-panel.error { padding: 8px 16px; }
+  .bsp-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .pane-tail {
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--fg-2);
+    background: var(--bg-2);
+    padding: 8px;
+    margin: 0;
+    max-height: calc(20 * 1.4em + 16px);
+    overflow-y: auto;
+    white-space: pre;
+  }
+  @media (max-width: 720px) {
+    .pane-tail { max-height: calc(12 * 1.4em + 16px); font-size: 16px; }
+  }
+  .open-session-link {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--fg-2);
+    text-decoration: none;
+  }
+  .open-session-link:hover { color: var(--link, var(--cta)); }
+  .muted { color: var(--fg-3); font-size: 12px; margin: 0; }
+  .session-actions { display: flex; gap: 8px; align-items: center; }
+  /* ---- System comment rows ---- */
+  .cmt-item.system .cmt-author { color: var(--fg-3); }
+  .cmt-item.system.crash { border-left: 2px solid var(--crash); padding-left: 8px; }
 </style>

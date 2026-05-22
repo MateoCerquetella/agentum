@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { api, type Session } from '$lib/api';
+  import { api, type Session, type BoardItem } from '$lib/api';
   import Terminal from '$components/Terminal.svelte';
   import SessionRail from '$components/dashboard/SessionRail.svelte';
   import { ctxOf, fmtUptime } from '$lib/dashboard';
@@ -10,6 +10,10 @@
   /* -- session state ------------------------------------------------- */
   let session = $state<Session | null>(null);
   let error = $state<string | null>(null);
+  /** Board card this session is bound to. Fetched when session.card_id is set. */
+  let card = $state<BoardItem | null>(null);
+  /** Parent goal of the bound card, for the back-link chip title. */
+  let parentGoal = $state<BoardItem | null>(null);
   let inputText = $state('');
   let sending = $state(false);
   let lifecycleBusy = $state<null | 'start' | 'stop' | 'kill' | 'delete' | 'yolo'>(null);
@@ -42,6 +46,21 @@
       session = await api.getSession(id);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+    }
+    // Fetch the bound board card + optional parent goal for the back-link chip.
+    if (session?.card_id) {
+      try {
+        card = await api.getBoardItem(session.card_id);
+        parentGoal = card?.parent_goal_id
+          ? await api.getBoardItem(card.parent_goal_id)
+          : null;
+      } catch {
+        card = null;
+        parentGoal = null;
+      }
+    } else {
+      card = null;
+      parentGoal = null;
     }
   }
 
@@ -168,6 +187,19 @@
       <button type="button" class="tab" disabled title="Coming soon">Activity</button>
     </div>
     <span class="spacer"></span>
+    {#if session?.card_id && card}
+      {@const boundCard = card!}
+      {@const goalTitle = parentGoal?.title ?? ''}
+      {@const truncatedGoal = goalTitle.length > 40 ? goalTitle.slice(0, 40) + '…' : goalTitle}
+      {@const chipText = parentGoal ? `← Card #${boundCard.id} (in "${truncatedGoal}")` : `← Card #${boundCard.id}`}
+      <a
+        class="pill card-back-link"
+        href={`/board?focus=${boundCard.id}`}
+        onclick={(e) => { e.preventDefault(); goto(`/board?focus=${boundCard.id}`); }}
+        aria-label={`Back to Card #${boundCard.id} on the board`}
+        title={`Open Card #${boundCard.id} on the board`}
+      >{chipText}</a>
+    {/if}
     {#if session?.tmux_target}
       <span class="pill"><span style="color: var(--fg-3);">pane:</span>&nbsp;{session.tmux_target}</span>
     {/if}
@@ -369,6 +401,19 @@
   }
   .input .qk:hover:not(:disabled) { color: var(--fg); border-color: var(--fg-3); }
   .input .qk:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Back-link chip to the bound board card. Renders as a pill anchor
+     that navigates to /board?focus=N. Inherits .pill layout from _design.css
+     but adds hover accent and removes default link underline. */
+  .card-back-link {
+    text-decoration: none;
+    color: var(--accent);
+    border-color: rgba(var(--accent-rgb, 99, 149, 255), 0.35);
+  }
+  .card-back-link:hover {
+    border-color: var(--accent);
+    background: rgba(var(--accent-rgb, 99, 149, 255), 0.1);
+  }
 
   .error {
     margin: 12px 16px;
