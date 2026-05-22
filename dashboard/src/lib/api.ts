@@ -43,6 +43,9 @@ export interface Session {
   state?: SessionState;
   /** User-toggled "favorite" — sorts to the top of every list. */
   pinned?: boolean;
+  /** Board card this session is bound to (migration 0011). Absent / null
+   *  when the session is not linked to any card. */
+  card_id?: number | null;
   /* --- Multi-endpoint aggregation. Tagged client-side by the
      sessions store; not on the wire. The id matches a `Profile.id`
      in `lib/profiles.ts`. Empty / undefined for sessions returned
