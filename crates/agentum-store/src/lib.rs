@@ -331,6 +331,34 @@ impl Store {
         let priority = new.priority.unwrap_or(0);
 
         let mut tx = self.pool.begin().await?;
+
+        // If the payload binds to an existing session, validate it inside the
+        // tx so the dual-write (board_items.session_id ↔ sessions.card_id)
+        // is atomic. Without this, creating a card pre-bound to a session
+        // would leave sessions.card_id NULL — the watchdog→comment bridge
+        // and the bound-session panel both read sessions.card_id, so the
+        // binding would be invisible to half the system.
+        //
+        // Returns AlreadyExists (HTTP 409) when the target session is
+        // already bound to a different card.
+        if let Some(sid) = &new.session_id {
+            let row: Option<(String, Option<i64>)> = sqlx::query_as(
+                "SELECT id, card_id FROM sessions WHERE id = ?",
+            )
+            .bind(sid)
+            .fetch_optional(&mut *tx)
+            .await?;
+            match row {
+                None => return Err(StoreError::NotFound(format!("session {sid}"))),
+                Some((_, Some(other))) => {
+                    return Err(StoreError::AlreadyExists(format!(
+                        "session {sid} already bound to card {other}"
+                    )));
+                }
+                Some((_, None)) => { /* fall through to the dual-write below */ }
+            }
+        }
+
         let result = sqlx::query(
             r#"INSERT INTO board_items
                 (key, title, body, status, lbl, tool, workdir, model, session_id, priority,
@@ -358,6 +386,20 @@ impl Store {
             .bind(id)
             .execute(&mut *tx)
             .await?;
+
+        // Reverse leg of the dual-write — the existence + ownership check
+        // above guarantees this UPDATE touches exactly one row that's
+        // currently unbound, so a races-free single-statement update is
+        // safe inside the same tx.
+        if let Some(sid) = &new.session_id {
+            sqlx::query("UPDATE sessions SET card_id = ?, updated_at = ? WHERE id = ?")
+                .bind(id)
+                .bind(&now_s)
+                .bind(sid)
+                .execute(&mut *tx)
+                .await?;
+        }
+
         tx.commit().await?;
 
         Ok(BoardItem {
@@ -2967,6 +3009,142 @@ mod tests {
         assert!(
             result.session_id.is_none(),
             "unbound card stays unbound after no-op transfer"
+        );
+    }
+
+    // --- create_board_item dual-write (existing-session picker) -----
+
+    /// `create_board_item` with `session_id = Some(_)` must dual-write:
+    /// the card row gets `session_id`, AND the matching `sessions.card_id`
+    /// gets the new card id, atomically in one tx.
+    ///
+    /// This is the contract the dashboard's existing-session picker
+    /// relies on — without the reverse-leg UPDATE, the watchdog→comment
+    /// bridge and the bound-session panel can't find the binding.
+    #[tokio::test]
+    async fn create_board_item_with_session_id_dual_writes_both_sides() {
+        let s = tmp_store().await;
+
+        // Seed an unbound session.
+        let sess = s
+            .create_session(NewSession {
+                name: "existing-pane".into(),
+                workdir: "/tmp".into(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: None,
+            })
+            .await
+            .unwrap();
+        assert!(sess.card_id.is_none(), "freshly created session is unbound");
+
+        // Create a card that pre-binds to it.
+        let card = s
+            .create_board_item(NewBoardItem {
+                title: "attach me".into(),
+                body: None,
+                status: None,
+                lbl: Some("feat".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: Some(sess.id.to_string()),
+                priority: None,
+                parent_goal_id: None,
+            })
+            .await
+            .unwrap();
+
+        // Forward leg: card.session_id = session uuid.
+        assert_eq!(card.session_id.as_deref(), Some(sess.id.to_string().as_str()));
+
+        // Reverse leg: sessions.card_id = card.id (the bug this test pins
+        // against — the previous implementation skipped this UPDATE).
+        let reloaded = s.get_session_by_id(sess.id).await.unwrap().unwrap();
+        assert_eq!(
+            reloaded.card_id,
+            Some(card.id),
+            "sessions.card_id must equal the new card id (reverse leg of dual-write)"
+        );
+    }
+
+    /// `create_board_item` with `session_id` pointing to a session that's
+    /// already bound to another card returns AlreadyExists — preventing
+    /// silent rebind-via-create. The card row must NOT be inserted (tx
+    /// rolls back).
+    #[tokio::test]
+    async fn create_board_item_with_session_already_bound_returns_already_exists() {
+        let s = tmp_store().await;
+
+        let other_card = make_card(&s, "owner-card").await;
+        let sess = s
+            .create_session(NewSession {
+                name: "owned-pane".into(),
+                workdir: "/tmp".into(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: None,
+            })
+            .await
+            .unwrap();
+        // Bind sess to other_card via the canonical helper.
+        let _ = s
+            .transfer_card_binding(other_card.id, Some(sess.id))
+            .await
+            .unwrap();
+
+        // Now try to create a new card pointing at the same session.
+        let err = s
+            .create_board_item(NewBoardItem {
+                title: "thief".into(),
+                body: None,
+                status: None,
+                lbl: Some("feat".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: Some(sess.id.to_string()),
+                priority: None,
+                parent_goal_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::AlreadyExists(_)),
+            "expected AlreadyExists, got {err:?}"
+        );
+
+        // The original binding is intact.
+        let reloaded = s.get_session_by_id(sess.id).await.unwrap().unwrap();
+        assert_eq!(reloaded.card_id, Some(other_card.id));
+    }
+
+    /// `create_board_item` with `session_id` pointing to a non-existent
+    /// session returns NotFound. No card row is created (tx rolls back).
+    #[tokio::test]
+    async fn create_board_item_with_unknown_session_id_returns_not_found() {
+        let s = tmp_store().await;
+        let missing = Uuid::new_v4();
+        let err = s
+            .create_board_item(NewBoardItem {
+                title: "ghost".into(),
+                body: None,
+                status: None,
+                lbl: Some("feat".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: Some(missing.to_string()),
+                priority: None,
+                parent_goal_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::NotFound(_)),
+            "expected NotFound, got {err:?}"
         );
     }
 }

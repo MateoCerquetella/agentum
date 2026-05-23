@@ -983,6 +983,20 @@ mod tests {
         // assertion to gate-on-target behavior, which is what this test
         // exists to pin.
         let state = fresh_state().await;
+        // create_board_item validates session_id existence (dual-write), so
+        // we seed a real session row to bind against.
+        let stranded_sess = state
+            .store
+            .create_session(agentum_core::NewSession {
+                name: "stranded-pane".into(),
+                workdir: "/tmp".into(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: None,
+            })
+            .await
+            .unwrap();
         let seed = state
             .store
             .create_board_item(NewBoardItem {
@@ -993,7 +1007,7 @@ mod tests {
                 tool: None,
                 workdir: None,
                 model: None,
-                session_id: Some("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa".into()),
+                session_id: Some(stranded_sess.id.to_string()),
                 priority: None,
                 parent_goal_id: None,
             })
@@ -1093,6 +1107,20 @@ mod tests {
         // calls `has_board_comments` regardless, but the validator's OR
         // short-circuits on `session_id`.
         let state = fresh_state().await;
+        // Seed a real session — create_board_item validates session_id
+        // existence so we can no longer use synthetic UUIDs as a shortcut.
+        let anchor_sess = state
+            .store
+            .create_session(agentum_core::NewSession {
+                name: "done-anchor-pane".into(),
+                workdir: "/tmp".into(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: None,
+            })
+            .await
+            .unwrap();
         let seed = state
             .store
             .create_board_item(NewBoardItem {
@@ -1104,7 +1132,7 @@ mod tests {
                 workdir: Some("/home/me/foo".into()),
                 model: None,
                 // Session id is the anchor we're proving works alone.
-                session_id: Some("11111111-1111-1111-1111-111111111111".into()),
+                session_id: Some(anchor_sess.id.to_string()),
                 priority: None,
                 parent_goal_id: None,
             })
@@ -1484,6 +1512,21 @@ mod tests {
     async fn patch_doing_skips_autospawn_when_already_bound() {
         let state = fresh_state().await;
 
+        // Seed a real session — create_board_item now validates session_id
+        // existence so synthetic UUIDs no longer work as a shortcut.
+        let existing = state
+            .store
+            .create_session(agentum_core::NewSession {
+                name: "already-bound-pane".into(),
+                workdir: "/tmp".into(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: None,
+            })
+            .await
+            .unwrap();
+
         // Create a card with workdir + tool so the gate-merge satisfies doing.
         let card = state
             .store
@@ -1495,8 +1538,8 @@ mod tests {
                 tool: Some("claude".into()),
                 workdir: Some("/tmp".into()),
                 model: None,
-                // Seed with a synthetic session_id so the card is already bound.
-                session_id: Some("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa".into()),
+                // Real session id so the dual-write succeeds.
+                session_id: Some(existing.id.to_string()),
                 priority: None,
                 parent_goal_id: None,
             })
@@ -1527,7 +1570,7 @@ mod tests {
         // session_id unchanged.
         assert_eq!(
             out.0.session_id.as_deref(),
-            Some("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            Some(existing.id.to_string().as_str()),
             "existing session_id must be preserved"
         );
 
