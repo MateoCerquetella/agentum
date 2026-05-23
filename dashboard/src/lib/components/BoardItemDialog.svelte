@@ -2,6 +2,7 @@
   import { api, ApiError, type AgentInfo, type BoardComment, type BoardItem, type BoardPatch, type NewBoardItem, type Session, type TicketLbl, type Tool } from '$lib/api';
   import { actorId } from '$stores/actor';
   import { sessions, loadSessions } from '$stores/sessions';
+  import { fleet } from '$stores/fleet';
   import { profiles, activeProfileId, type Profile } from '$lib/profiles';
   import {
     parseGateRejection,
@@ -110,6 +111,12 @@
   /// tmux session instead of auto-spawning one. Picker only renders in
   /// create mode against the same target profile.
   let pickedSessionId = $state<string>('');
+  /// When true, after a successful create we immediately PATCH the card
+  /// to status="doing" so the server's auto-spawn (or attach-to-picked
+  /// branch) fires without the user having to drag the card. Defaults
+  /// to true because the user's mental model is "I'm starting this work
+  /// now, not making a draft" — they can untick for true drafts.
+  let startNow = $state(true);
   /// Target daemon for the ticket. In create mode the user can pick;
   /// in edit mode it's locked to the row's home profile.
   let targetProfileId = $state<string>('');
@@ -153,14 +160,23 @@
 
   /// Servers tiles — every configured profile gets a tile so the user
   /// can pin the ticket to whichever daemon owns the work. Mirrors the
-  /// `Servers` block in NewSessionDialog. Empty `baseUrl` ⇒ "this
-  /// machine" (loopback profile), same convention.
+  /// `Servers` block in NewSessionDialog. For loopback (empty baseUrl)
+  /// we show the *real* hostname from `/api/health` via the fleet
+  /// store — same as Sidebar — so the user sees "omarchy" / "mateo-mac"
+  /// instead of a generic placeholder.
   function serverLabel(p: Profile): string {
-    return p.baseUrl ? p.label : 'this machine';
+    if (p.baseUrl) return p.label;
+    const host = $fleet[p.id]?.hostname?.trim();
+    return host || 'this machine';
   }
   function serverHost(p: Profile): string {
-    if (!p.baseUrl) return 'local loopback';
-    try { return new URL(p.baseUrl).host; } catch { return p.baseUrl; }
+    if (p.baseUrl) {
+      try { return new URL(p.baseUrl).host; } catch { return p.baseUrl; }
+    }
+    // Loopback: the label already carries the real hostname (from the
+    // fleet store), so the host hint stays empty — matches the pattern
+    // in `profileHostHint`/EndpointSwitcher.
+    return '';
   }
 
   function toolAvailable(t: ToolTile): boolean {
@@ -250,6 +266,8 @@
       // Always reset the picker on a fresh open so a previously-picked
       // session doesn't leak across dialog instances.
       pickedSessionId = '';
+      // Reset start-now per open; sticky-default-true matches user intent.
+      startNow = true;
     }
     // Seed server-rejection highlights from the parent (drag-drop
     // snap-back path). Setting `priorStatus = status` before the
@@ -381,7 +399,54 @@
           session_id: pickedSessionId || null
         };
         const created = await api.createBoardItemOn(targetProfileId, payload);
-        onCreated?.(targetProfileId, created);
+
+        // Start-now: PATCH the freshly-created card to status=doing so
+        // the server's auto-spawn (or attach-to-picked-session) branch
+        // fires immediately. Without this, the user had to drag the
+        // card or open it and change the column manually — the v0.8.4
+        // user feedback was "I created the ticket and it didn't trigger
+        // at start, we should have an option for that".
+        //
+        // Only PATCH when the create didn't already land in doing, and
+        // when the user has agent context (workdir+tool) so the server
+        // gate would pass. If client gate would fail for doing, surface
+        // the error inline instead of issuing a doomed PATCH.
+        let final = created;
+        if (startNow && created.status !== 'doing') {
+          const doingMissing = validateTransition('doing', {
+            title: t,
+            lbl: created.lbl ?? null,
+            workdir: created.workdir ?? '',
+            tool: created.tool ?? null,
+            // create endpoint never sets claimed_by; the auto-spawn
+            // branch fires on PATCH→doing AFTER claim. If we don't
+            // claim first the gate will reject with `claimed_by` missing.
+            claimed_by: null,
+            session_id: created.session_id ?? null
+          });
+          if (doingMissing.length > 0) {
+            // Ticket exists; we just can't start it. Tell the user.
+            onCreated?.(targetProfileId, created);
+            const labels = doingMissing.map(requiredFieldLabel).join(', ');
+            error = `created — to start, set: ${labels}`;
+            submitting = false;
+            return;
+          }
+          try {
+            // claim_by-self before PATCH so the doing-gate passes.
+            await api.claimBoardItemOn(targetProfileId, created.id, actorId());
+            final = await api.patchBoardItemOn(targetProfileId, created.id, { status: 'doing' });
+          } catch (startErr) {
+            // Ticket exists — surface the start failure but don't lose the create.
+            onCreated?.(targetProfileId, created);
+            const msg = startErr instanceof Error ? startErr.message : String(startErr);
+            error = `created — start failed: ${msg}`;
+            submitting = false;
+            return;
+          }
+        }
+
+        onCreated?.(targetProfileId, final);
         onClose();
       } else if (item) {
         const patch: BoardPatch = {};
@@ -1049,13 +1114,13 @@
       {#if mode === 'edit' && item}
         <section class="claim-row">
           <div class="claim-meta">
-            <span class="lbl">Claim</span>
+            <span class="lbl" title="Who is currently working on this ticket — claim it to mark it as yours, release to hand off">Owner</span>
             <span class="claim-text">
               {#if item.claimed_by}
                 <span class="actor" class:me={claimedByMe}>{item.claimed_by}</span>
                 {#if claimedByMe}<span class="sub-tag">— you</span>{/if}
               {:else}
-                <span class="actor unclaimed">unclaimed</span>
+                <span class="actor unclaimed">no one yet</span>
               {/if}
             </span>
           </div>
@@ -1065,21 +1130,27 @@
               class="ghost"
               onclick={unclaim}
               disabled={submitting || !claimedByMe}
-              title={!claimedByMe ? 'only the current holder can release' : ''}
-            >Unclaim</button>
+              title={!claimedByMe ? 'only the current holder can release it' : 'Release the ticket so someone else can pick it up'}
+            >Release</button>
           {:else}
-            <button type="button" class="ghost" onclick={claim} disabled={submitting}>Claim</button>
+            <button
+              type="button"
+              class="ghost"
+              onclick={claim}
+              disabled={submitting}
+              title="Mark this ticket as yours"
+            >Take it</button>
           {/if}
         </section>
 
         <section class="claim-row">
           <div class="claim-meta">
-            <span class="lbl">Session</span>
+            <span class="lbl" title="The tmux pane (and the agent running in it) that this ticket is attached to">Agent pane</span>
             <span class="claim-text">
               {#if item.session_id}
-                <span class="actor">{item.session_id.slice(0, 8)}…</span>
+                <span class="actor" title={item.session_id}>{item.session_id.slice(0, 8)}…</span>
               {:else}
-                <span class="actor unclaimed">none yet</span>
+                <span class="actor unclaimed">not attached yet</span>
               {/if}
             </span>
           </div>
@@ -1090,16 +1161,16 @@
                 class="ghost"
                 onclick={openSession}
                 disabled={submitting || spawning}
-                title="Jump into the pane"
-              >Open session ↗</button>
+                title="Open the pane in a new dashboard tab"
+              >Open ↗</button>
               <button
                 type="button"
                 class="ghost"
                 onclick={unbindSession}
                 disabled={submitting || spawning || unbinding}
-                title={`Detach this card from ${item.session_id.slice(0, 8)}… (session keeps running)`}
+                title={`Detach this ticket from ${item.session_id.slice(0, 8)}… (the pane keeps running)`}
               >
-                {#if unbinding}Unbinding…{:else}Unbind{/if}
+                {#if unbinding}Detaching…{:else}Detach{/if}
               </button>
             </div>
           {:else}
@@ -1108,12 +1179,12 @@
               class="ghost"
               onclick={startSession}
               disabled={submitting || spawning || !workdir.trim()}
-              title={!workdir.trim() ? 'set a working directory first' : 'Spawn a session for this ticket'}
+              title={!workdir.trim() ? 'set a working directory first' : 'Spawn a fresh tmux pane bound to this ticket'}
             >
               {#if spawning}
                 <span class="spin"></span> starting…
               {:else}
-                Start session
+                Start a pane
               {/if}
             </button>
           {/if}
@@ -1216,6 +1287,21 @@
           </button>
         {/if}
         <span class="spacer"></span>
+        {#if mode === 'create'}
+          <!--
+            Start-now toggle. On (default) → after create, the dialog
+            claims the card and PATCHes status=doing, which fires the
+            server's auto-spawn branch (or attaches the picked existing
+            session). Off → card lands in its column unstarted, like a
+            classic draft. Direct response to user feedback: "I created
+            the ticket and it didn't trigger at start, we should have
+            an option for that".
+          -->
+          <label class="start-now" title="Claim + move to doing right after create — fires the auto-spawn or attaches the picked session">
+            <input type="checkbox" bind:checked={startNow} disabled={submitting} />
+            <span>Start now</span>
+          </label>
+        {/if}
         <button type="button" class="ghost" onclick={close} disabled={submitting || deleting}>Cancel</button>
         <!--
           Submit stays enabled even when the client-side gate fails so
@@ -1233,9 +1319,15 @@
         >
           {#if submitting}
             <span class="spin"></span>
-            {mode === 'create' ? 'creating…' : 'saving…'}
+            {#if mode === 'create'}
+              {startNow ? 'starting…' : 'creating…'}
+            {:else}
+              saving…
+            {/if}
+          {:else if mode === 'create'}
+            {startNow ? 'Create + start' : 'Create ticket'}
           {:else}
-            {mode === 'create' ? 'Create ticket' : 'Save changes'}
+            Save changes
           {/if}
         </button>
       </footer>
@@ -1685,6 +1777,27 @@
     border-color: var(--crash);
   }
   footer button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+  /* Start-now toggle — quiet checkbox tucked left of Cancel so it
+     reads as a modifier on the primary action rather than a separate
+     control. */
+  footer .start-now {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-right: 8px;
+    color: var(--fg-2);
+    font-size: 12px;
+    cursor: pointer;
+    user-select: none;
+  }
+  footer .start-now input[type='checkbox'] {
+    width: 13px;
+    height: 13px;
+    accent-color: var(--cta);
+    cursor: pointer;
+  }
+  footer .start-now:hover { color: var(--fg); }
 
   .spin {
     width: 11px;

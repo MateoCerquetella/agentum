@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type NewSession, type AgentInfo } from '$lib/api';
   import { loadSessions } from '$stores/sessions';
+  import { fleet } from '$stores/fleet';
   import { profiles, activeProfileId, type Profile } from '$lib/profiles';
   import DirPicker from './DirPicker.svelte';
 
@@ -41,15 +42,21 @@
   /// label parity with the TUI is preserved.
   const serverTiles = $derived<Profile[]>($profiles);
   function serverLabel(p: Profile): string {
-    return p.baseUrl ? p.label : 'this machine';
+    if (p.baseUrl) return p.label;
+    // Loopback: pull the real hostname from the fleet store (populated
+    // by /api/health) so users see "omarchy" / "mateo-mac" instead of
+    // a generic placeholder. Matches the Sidebar convention.
+    const host = $fleet[p.id]?.hostname?.trim();
+    return host || 'this machine';
   }
   function serverHost(p: Profile): string {
-    if (!p.baseUrl) return 'local loopback';
-    try {
-      return new URL(p.baseUrl).host;
-    } catch {
-      return p.baseUrl;
+    if (p.baseUrl) {
+      try { return new URL(p.baseUrl).host; } catch { return p.baseUrl; }
     }
+    // Loopback: label already carries the hostname; keep the host hint
+    // empty so we don't repeat "omarchy / omarchy" or print a misleading
+    // hardcoded URL.
+    return '';
   }
 
   type Tool = {
