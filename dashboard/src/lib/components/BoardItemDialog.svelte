@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, ApiError, type AgentInfo, type BoardComment, type BoardItem, type BoardPatch, type NewBoardItem, type Session, type TicketLbl, type Tool } from '$lib/api';
   import { actorId } from '$stores/actor';
+  import { sessions, loadSessions } from '$stores/sessions';
   import { profiles, activeProfileId, type Profile } from '$lib/profiles';
   import {
     parseGateRejection,
@@ -104,6 +105,11 @@
   let tool    = $state<Tool | ''>('');
   let workdir = $state('');
   let model   = $state('');
+  /// Optional pre-bind: when set, the create payload sends `session_id`
+  /// and the server's dual-write attaches the new card to this running
+  /// tmux session instead of auto-spawning one. Picker only renders in
+  /// create mode against the same target profile.
+  let pickedSessionId = $state<string>('');
   /// Target daemon for the ticket. In create mode the user can pick;
   /// in edit mode it's locked to the row's home profile.
   let targetProfileId = $state<string>('');
@@ -241,6 +247,9 @@
       workdir = defaultWorkdir ?? '';
       model   = '';
       targetProfileId = defaultProfileId || $activeProfileId;
+      // Always reset the picker on a fresh open so a previously-picked
+      // session doesn't leak across dialog instances.
+      pickedSessionId = '';
     }
     // Seed server-rejection highlights from the parent (drag-drop
     // snap-back path). Setting `priorStatus = status` before the
@@ -251,7 +260,53 @@
     // Probe agent availability for the target profile. Subsequent
     // server tile clicks re-trigger via pickServer().
     void refreshAvailability(targetProfileId);
+    // Refresh the sessions store so the existing-session picker shows
+    // an up-to-date list of attachable sessions for the target profile.
+    // Best-effort — failure leaves the picker empty, no UX break.
+    if (mode === 'create') {
+      void loadSessions();
+    }
   });
+
+  /// Sessions on the target profile that are *available* to bind: must
+  /// be running, must be on the same profile we're creating against,
+  /// and must not already be bound to a card. Filters out planner
+  /// sessions (lbl="goal"-spawned) by name convention — they're
+  /// owned by their goal card.
+  const attachableSessions = $derived.by<Session[]>(() => {
+    const list = $sessions.items.filter((s) => {
+      const profileId = (s as Session & { profile?: string }).profile ?? '';
+      return (
+        profileId === targetProfileId &&
+        s.status === 'running' &&
+        s.card_id == null &&
+        !s.name.startsWith('planner-')
+      );
+    });
+    // Stable order — newest activity first so freshly-spawned panes
+    // surface at the top.
+    return list.slice().sort((a, b) => {
+      const av = a.last_activity_at ?? a.updated_at;
+      const bv = b.last_activity_at ?? b.updated_at;
+      return (bv ?? '').localeCompare(av ?? '');
+    });
+  });
+
+  /// Toggle a session pick. When picked, prefill workdir + tool from the
+  /// session so the visible context matches what will land server-side
+  /// (the server preserves the bind even if the user changes these — but
+  /// the prefill makes the panel honest about the current state).
+  function toggleSession(s: Session) {
+    if (pickedSessionId === s.id) {
+      pickedSessionId = '';
+      return;
+    }
+    pickedSessionId = s.id;
+    // Only prefill empty fields so we don't clobber what the user typed.
+    if (!workdir.trim()) workdir = s.workdir;
+    const sTool = s.tool as Tool | '';
+    if (tool === '' && sTool) tool = sTool;
+  }
 
   /// Switching the Servers tile re-probes /api/agents on the chosen
   /// daemon. Cached results in `availabilityByProfile` make repeats
@@ -283,6 +338,17 @@
       error = 'title is required';
       return;
     }
+    // If the client-side gate sees something missing, surface it as a
+    // visible banner instead of silently doing nothing. The button is
+    // no longer disabled on gate failure, so this is the user's
+    // feedback path. The server gate is still authoritative — we
+    // never block a submit that the client thinks is fine.
+    if (!clientGatePasses) {
+      const labels = missingFields.map(requiredFieldLabel).join(', ');
+      error = `move to ${status} needs: ${labels}`;
+      rejectedFields = new Set(missingFields);
+      return;
+    }
     submitting = true;
     error = null;
     try {
@@ -308,7 +374,11 @@
           lbl: lbl || null,
           tool: (effectiveTool || null) as string | null,
           workdir: cleanWorkdir || null,
-          model:   cleanModel || null
+          model:   cleanModel || null,
+          // When the user picked an existing session, send it so the
+          // server's create_board_item dual-write attaches the card to
+          // that running pane instead of auto-spawning a new one.
+          session_id: pickedSessionId || null
         };
         const created = await api.createBoardItemOn(targetProfileId, payload);
         onCreated?.(targetProfileId, created);
@@ -860,6 +930,57 @@
         </div>
       {/if}
 
+      <!--
+        Existing-session picker (create mode only). Lets the user attach
+        the new card to a running tmux pane instead of letting the
+        auto-spawn branch start a fresh one. Picking prefills workdir +
+        tool from the session so the visible context is honest.
+      -->
+      {#if mode === 'create'}
+        <section>
+          <span class="eyebrow">
+            Existing session
+            <span class="opt" style="text-transform:none; letter-spacing:0;">
+              {#if attachableSessions.length === 0}
+                — none available on this server (a fresh pane will spawn when you move the card to doing)
+              {:else if pickedSessionId}
+                — this card will attach to the picked pane on submit; no new session is spawned
+              {:else}
+                — optional: attach to a running pane instead of auto-spawning
+              {/if}
+            </span>
+          </span>
+          {#if attachableSessions.length > 0}
+            <div class="sessions">
+              {#each attachableSessions as s (s.id)}
+                <button
+                  type="button"
+                  class="session-tile"
+                  class:on={pickedSessionId === s.id}
+                  onclick={() => toggleSession(s)}
+                  title={`${s.name} · ${s.tool} · ${s.workdir}`}
+                >
+                  <span class="s-dot" style:background="var(--tool-{s.tool}, var(--cta))"></span>
+                  <span class="s-name">{s.name}</span>
+                  <span class="s-meta">{s.tool} · {s.workdir}</span>
+                </button>
+              {/each}
+              {#if pickedSessionId}
+                <button
+                  type="button"
+                  class="session-tile session-clear"
+                  onclick={() => (pickedSessionId = '')}
+                  title="Forget the picked session — auto-spawn will fire on move to doing"
+                >
+                  <span class="s-name">none</span>
+                  <span class="s-meta">auto-spawn instead</span>
+                </button>
+              {/if}
+            </div>
+          {/if}
+        </section>
+      {/if}
+
       <section>
         <span class="eyebrow">
           Agent
@@ -1096,10 +1217,18 @@
         {/if}
         <span class="spacer"></span>
         <button type="button" class="ghost" onclick={close} disabled={submitting || deleting}>Cancel</button>
+        <!--
+          Submit stays enabled even when the client-side gate fails so
+          clicking always produces feedback (either the create succeeds,
+          the server gate returns a 400 with `{missing, status}`, or our
+          own preview-check above surfaces the missing fields as a
+          banner). Disabling the button was the silent-submit trap that
+          made users think the dialog was broken.
+        -->
         <button
           type="submit"
           class="primary"
-          disabled={submitting || deleting || !clientGatePasses}
+          disabled={submitting || deleting}
           title={clientGatePasses ? '' : `move to ${status} needs: ${missingFields.map(requiredFieldLabel).join(', ')}`}
         >
           {#if submitting}
@@ -1284,6 +1413,62 @@
     grid-template-columns: repeat(3, 1fr);
     gap: 6px;
   }
+
+  /* Existing-session picker — same visual rhythm as .agent tiles so
+     the dialog reads as one consistent set of "pick something" rows. */
+  .sessions {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+  }
+  .session-tile {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-rows: auto auto;
+    align-items: center;
+    column-gap: 8px;
+    row-gap: 2px;
+    padding: 9px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--radius-md);
+    color: var(--fg-2);
+    cursor: pointer;
+    transition: border-color var(--t-hover), background var(--t-hover), color var(--t-hover);
+    text-align: left;
+  }
+  .session-tile:hover { border-color: var(--fg-3); color: var(--fg); }
+  .session-tile.on {
+    border-color: var(--cta);
+    background: color-mix(in srgb, var(--cta) 10%, var(--surface));
+    color: var(--fg);
+  }
+  .session-tile .s-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-pill);
+    grid-row: 1 / span 2;
+  }
+  .session-tile .s-name {
+    font-size: 13px;
+    letter-spacing: -0.01em;
+    color: inherit;
+  }
+  .session-tile .s-meta {
+    grid-column: 2;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .session-clear {
+    border-style: dashed;
+    grid-template-columns: 1fr;
+  }
+  .session-clear .s-meta { grid-column: 1; }
+
   .agent {
     display: flex;
     flex-direction: column;
