@@ -413,19 +413,24 @@
         // the error inline instead of issuing a doomed PATCH.
         let final = created;
         if (startNow && created.status !== 'doing') {
+          // The start path runs as: claim → PATCH status=doing. The doing
+          // gate requires claimed_by — but we're about to set it ourselves
+          // in the very next call, so the pre-check uses the actor id we
+          // intend to claim with, not `null` (the row's current value).
+          // The previous version always tripped "missing claimed_by" and
+          // the user never got to the start path.
+          const willClaimAs = actorId();
           const doingMissing = validateTransition('doing', {
             title: t,
             lbl: created.lbl ?? null,
             workdir: created.workdir ?? '',
             tool: created.tool ?? null,
-            // create endpoint never sets claimed_by; the auto-spawn
-            // branch fires on PATCH→doing AFTER claim. If we don't
-            // claim first the gate will reject with `claimed_by` missing.
-            claimed_by: null,
+            claimed_by: willClaimAs,
             session_id: created.session_id ?? null
           });
           if (doingMissing.length > 0) {
-            // Ticket exists; we just can't start it. Tell the user.
+            // Ticket exists; we just can't start it. Tell the user which
+            // field(s) to fill in by re-opening the ticket.
             onCreated?.(targetProfileId, created);
             const labels = doingMissing.map(requiredFieldLabel).join(', ');
             error = `created — to start, set: ${labels}`;
@@ -433,8 +438,7 @@
             return;
           }
           try {
-            // claim_by-self before PATCH so the doing-gate passes.
-            await api.claimBoardItemOn(targetProfileId, created.id, actorId());
+            await api.claimBoardItemOn(targetProfileId, created.id, willClaimAs);
             final = await api.patchBoardItemOn(targetProfileId, created.id, { status: 'doing' });
           } catch (startErr) {
             // Ticket exists — surface the start failure but don't lose the create.
