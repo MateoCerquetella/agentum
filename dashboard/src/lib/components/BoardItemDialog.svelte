@@ -912,13 +912,14 @@
         <button type="button" class="x" onclick={close} aria-label="close">×</button>
       </header>
 
-      <label class="field">
+      <label class="field title-field">
         <span class="lbl">Title</span>
         <!-- svelte-ignore a11y_autofocus -->
         <input
           type="text"
+          class="title-input"
           bind:value={title}
-          placeholder="Wire the dashboard kanban"
+          placeholder="What is the agent going to do?"
           autocomplete="off"
           spellcheck="false"
           required
@@ -927,11 +928,21 @@
       </label>
 
       <label class="field">
-        <span class="lbl">Body <span class="opt">optional</span></span>
+        <span class="lbl">
+          Body
+          {#if mode === 'create' && startNow}
+            <span class="hint-prompt">— sent to the agent as its first prompt</span>
+          {:else}
+            <span class="opt">optional</span>
+          {/if}
+        </span>
         <textarea
+          class="body-input"
           bind:value={body}
-          rows="4"
-          placeholder="Notes, links, acceptance criteria…"
+          rows="6"
+          placeholder={mode === 'create' && startNow
+            ? 'Tell the agent what you want done.\n\nE.g. "Add a `/api/status` endpoint that returns build SHA + uptime, with tests."'
+            : 'Notes, links, acceptance criteria…'}
           spellcheck="false"
         ></textarea>
       </label>
@@ -1301,9 +1312,16 @@
             the ticket and it didn't trigger at start, we should have
             an option for that".
           -->
-          <label class="start-now" title="Claim + move to doing right after create — fires the auto-spawn or attaches the picked session">
+          <label
+            class="start-now"
+            class:on={startNow}
+            title={startNow
+              ? 'On submit: claim, move to doing, spawn an agent pane, and send the body as its first prompt.'
+              : 'Drafts the ticket without spawning an agent. Move the card to doing later to start.'}
+          >
             <input type="checkbox" bind:checked={startNow} disabled={submitting} />
-            <span>Start now</span>
+            <span class="dot" aria-hidden="true"></span>
+            <span class="sn-label">Start now</span>
           </label>
         {/if}
         <button type="button" class="ghost" onclick={close} disabled={submitting || deleting}>Cancel</button>
@@ -1782,26 +1800,81 @@
   }
   footer button:disabled { opacity: 0.55; cursor: not-allowed; }
 
-  /* Start-now toggle — quiet checkbox tucked left of Cancel so it
-     reads as a modifier on the primary action rather than a separate
-     control. */
+  /* Start-now toggle — pill-style modifier on the primary submit. When
+     ON (default), the dialog claims the card + moves to doing right
+     after create so the server's auto-spawn fires. Visually prominent
+     because users were missing it. */
   footer .start-now {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    margin-right: 8px;
+    gap: 7px;
+    margin-right: 6px;
+    padding: 6px 11px;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--border-2);
+    background: var(--surface);
     color: var(--fg-2);
-    font-size: 12px;
+    font-family: var(--mono);
+    font-size: 11px;
     cursor: pointer;
     user-select: none;
+    transition: border-color var(--t-hover), background var(--t-hover), color var(--t-hover);
   }
   footer .start-now input[type='checkbox'] {
-    width: 13px;
-    height: 13px;
-    accent-color: var(--cta);
-    cursor: pointer;
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+    width: 0;
+    height: 0;
   }
-  footer .start-now:hover { color: var(--fg); }
+  footer .start-now .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--fg-3);
+    transition: background var(--t-hover), box-shadow var(--t-hover);
+  }
+  footer .start-now.on {
+    border-color: var(--cta);
+    background: color-mix(in srgb, var(--cta) 10%, var(--surface));
+    color: var(--fg);
+  }
+  footer .start-now.on .dot {
+    background: var(--cta);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--cta) 22%, transparent);
+  }
+  footer .start-now:hover { color: var(--fg); border-color: var(--fg-3); }
+  footer .start-now.on:hover { border-color: var(--cta); }
+  footer .start-now:focus-within {
+    outline: 2px solid var(--cta);
+    outline-offset: 2px;
+  }
+
+  /* "this body becomes the agent's first prompt" hint next to the Body
+     label — only shown in create + start-now mode so users learn what
+     the field actually does at the moment it matters. */
+  .hint-prompt {
+    color: var(--cta);
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 10px;
+    font-weight: 500;
+  }
+  /* Bigger body textarea — body is the agent's brief; gets visual
+     weight to match its importance. */
+  .body-input {
+    min-height: 110px;
+    line-height: 1.5;
+  }
+  /* Title gets a larger, display-font input so the most-prominent
+     field reads as the heading of the dialog. */
+  .title-input {
+    font-family: var(--display);
+    font-size: 15.5px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    padding: 10px 12px;
+  }
 
   .spin {
     width: 11px;
