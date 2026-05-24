@@ -130,7 +130,10 @@ async fn create_goal(
 /// after `enforce_transition` passes.
 /// CONTEXT D-02: tool defaults to "claude"; workdir falls through to
 /// parent_goal.workdir, then HTTP 400.
-/// CONTEXT D-03: no opening prompt is sent in v1 — the pane starts blank.
+/// CONTEXT D-03 (superseded): the ticket title+body is sent as the first
+/// prompt so the agent starts with context instead of a blank pane. The
+/// send is fire-and-forget on a tokio task after a short delay so the
+/// agent's splash/trust dialog is past before keystrokes arrive.
 /// CLAUDE.md YOLO rule: push the canonical YOLO marker into flags; let
 /// translate_yolo_marker in the adapter substitute per-tool.
 /// Plan-checker iter-1 W-3: does NOT emit `session.started` — the
@@ -236,10 +239,41 @@ pub(crate) async fn spawn_card_session(
         .update_status_and_target(session.id, Status::Running, Some(&target))
         .await?;
 
-    // 8. No opening prompt in v1 (CONTEXT D-03) — pane starts blank.
-    //    UX-01/UX-02 prompt assembly is Phase 3.
+    // 8. Send the ticket title+body as the first prompt so the agent
+    //    starts with context. Fire-and-forget on a tokio task because
+    //    Claude's splash + trust dialog can swallow keystrokes that
+    //    arrive too early — wait ~1.5s before send_keys. The HTTP
+    //    response doesn't block on this; if the send fails the user
+    //    can paste the prompt manually.
+    if let Some(prompt) = build_card_prompt(card) {
+        let target_for_prompt = target.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            if let Err(e) = agentum_tmux::send_keys(&target_for_prompt, &prompt, true).await {
+                tracing::warn!(error = %e, "send card prompt failed; session still running");
+            }
+        });
+    }
 
     Ok(session.id.to_string())
+}
+
+/// Compose the opening prompt sent to a freshly-spawned card session.
+/// Returns `None` when the card has neither body nor a non-empty title
+/// (defensive — title is required by the schema but we don't want to
+/// send an empty Enter to the agent on edge cases).
+fn build_card_prompt(card: &BoardItem) -> Option<String> {
+    let title = card.title.trim();
+    let body = card.body.as_deref().map(str::trim).unwrap_or("");
+    match (title.is_empty(), body.is_empty()) {
+        (true, true) => None,
+        (false, true) => Some(format!("Working on {key}: {title}", key = card.key)),
+        (true, false) => Some(body.to_string()),
+        (false, false) => Some(format!(
+            "Working on {key}: {title}\n\n{body}",
+            key = card.key
+        )),
+    }
 }
 
 /// Spawn a planner agent session bound to the given goal.
@@ -625,5 +659,55 @@ mod tests {
     #[ignore = "requires a live tmux server; covered by plan 02-06 e2e"]
     async fn spawn_card_session_happy_path_requires_live_tmux() {
         // Deferred to plan 02-06 end-to-end integration tests.
+    }
+
+    fn card_with(title: &str, body: Option<&str>) -> BoardItem {
+        BoardItem {
+            id: 1,
+            key: "AG-1".into(),
+            title: title.into(),
+            body: body.map(str::to_string),
+            status: "doing".into(),
+            claimed_by: None,
+            created_at: time::OffsetDateTime::now_utc(),
+            updated_at: time::OffsetDateTime::now_utc(),
+            lbl: None,
+            tool: None,
+            workdir: None,
+            model: None,
+            session_id: None,
+            priority: 0,
+            parent_goal_id: None,
+        }
+    }
+
+    #[test]
+    fn build_card_prompt_combines_title_and_body() {
+        let card = card_with("Wire dashboard", Some("Use Svelte 5 runes"));
+        let p = build_card_prompt(&card).expect("title+body must produce a prompt");
+        assert!(p.contains("AG-1"), "prompt must include the card key");
+        assert!(p.contains("Wire dashboard"), "prompt must include title");
+        assert!(p.contains("Use Svelte 5 runes"), "prompt must include body");
+    }
+
+    #[test]
+    fn build_card_prompt_title_only_includes_key() {
+        let card = card_with("Wire dashboard", None);
+        let p = build_card_prompt(&card).expect("title-only must produce a prompt");
+        assert!(p.contains("AG-1"));
+        assert!(p.contains("Wire dashboard"));
+    }
+
+    #[test]
+    fn build_card_prompt_body_only_is_verbatim() {
+        let card = card_with("", Some("Investigate the panic"));
+        let p = build_card_prompt(&card).expect("body-only must produce a prompt");
+        assert_eq!(p, "Investigate the panic");
+    }
+
+    #[test]
+    fn build_card_prompt_empty_returns_none() {
+        let card = card_with("   ", Some("   "));
+        assert!(build_card_prompt(&card).is_none());
     }
 }
