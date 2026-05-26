@@ -631,6 +631,62 @@ ask_expose() {
     done
 }
 
+# Register the local OS clip-agent so Ctrl-V image paste works from a
+# remote TUI (the daemon brokers the clipboard hop). Skipped in
+# non-interactive runs (CI, `curl … | sh` without a tty) so the
+# installer never silently registers a launchd plist or systemd unit
+# under automation. Users can run `agentum clip-agent --install` later.
+#
+# Escape hatch: AGENTUM_INSTALL_NO_CLIP_AGENT=1 forces skip. Used by
+# `agentum update --skip-clip-agent` and exposed for ops scripts.
+#
+# Test seam: AGENTUM_INSTALL_DRY_RUN=1 prints `would run: …` instead
+# of invoking the real subcommand, so `tests/install_clip_agent_autostart.sh`
+# can pin the gate logic without touching launchctl/systemctl.
+install_clip_agent_autostart() {
+    if [ -n "${AGENTUM_INSTALL_NO_CLIP_AGENT:-}" ]; then
+        h "clipboard agent autostart skipped (AGENTUM_INSTALL_NO_CLIP_AGENT set)"
+        h "run later: ${C_C}agentum clip-agent --install${C_R}"
+        return 0
+    fi
+    # Gate on the script-wide INTERACTIVE flag set by the tty probe at
+    # install.sh:71-78. Works whether install.sh runs from a real tty,
+    # via `curl | sh` (which sets INTERACTIVE=false because stdin is
+    # piped), or under CI (CI=1 forces INTERACTIVE=false).
+    if [ "$INTERACTIVE" != true ]; then
+        h "clipboard agent autostart skipped (non-interactive install)"
+        h "run later: ${C_C}agentum clip-agent --install${C_R}"
+        return 0
+    fi
+    # Defensive — main flow runs install_binary first, but a future
+    # refactor that reorders these calls should still get a clean
+    # warning rather than a "binary missing" surprise from launchctl.
+    if [ ! -x "$INSTALL_DIR/agentum" ]; then
+        w "skipping clip-agent autostart" "binary missing at $INSTALL_DIR/agentum"
+        return 0
+    fi
+    # `clip-agent --install` only knows launchd and systemd. Skip on
+    # anything else (Windows, exotic Unix) — the user can run the
+    # subcommand manually if they have a custom launch story.
+    case "$(uname -s)" in
+        Darwin|Linux) ;;
+        *)
+            h "clipboard agent autostart skipped (unsupported platform: $(uname -s))"
+            return 0
+            ;;
+    esac
+    if [ -n "${AGENTUM_INSTALL_DRY_RUN:-}" ]; then
+        echo "would run: $INSTALL_DIR/agentum clip-agent --install"
+        return 0
+    fi
+    if "$INSTALL_DIR/agentum" clip-agent --install; then
+        o "clip-agent installed" "starts at login"
+    else
+        w "clip-agent --install failed — image paste from Mac→remote will not work"
+        h "run later: ${C_C}agentum clip-agent --install${C_R}"
+    fi
+}
+
 # Final tip both paths share. Surfaces multi-machine control without
 # making first-run users learn the concept up front.
 multi_server_tip() {
@@ -669,6 +725,10 @@ post_host() {
     offer_auth_setup
     offer_auto_start "$dash_url" "$serve_args"
     register_local_profile
+    # Install the clipboard agent for seamless Mac→remote Ctrl-V.
+    # Gated by INTERACTIVE + AGENTUM_INSTALL_NO_CLIP_AGENT inside the
+    # function, so non-interactive / CI runs become a no-op.
+    install_clip_agent_autostart
 
     # Reference card last: by this point auth + autostart are done,
     # so these commands are "what to run when you want them again",
@@ -730,6 +790,15 @@ post_client() {
     multi_server_tip
 }
 
+# ── Source-only guard ─────────────────────────────────────────
+# When sourced with `AGENTUM_INSTALL_SOURCE_ONLY=1`, return without
+# running the main flow so tests can `source` the script just to get
+# the function definitions. Skipping the `download`/`install_binary`
+# calls keeps unit tests offline and idempotent.
+if [ -n "${AGENTUM_INSTALL_SOURCE_ONLY:-}" ]; then
+    return 0 2>/dev/null || exit 0
+fi
+
 # ── Main ───────────────────────────────────────────────────────
 banner
 
@@ -775,6 +844,11 @@ printf '\n'
 check_tmux
 
 if [ "$IS_UPDATE" = true ]; then
+    # Re-run clip-agent install on update so newly-cut binaries pick
+    # up any fixes to the launchd/systemd plist/unit they write. The
+    # function is idempotent — re-installing over an existing plist
+    # leaves the active service intact.
+    install_clip_agent_autostart
     printf '\n  %s%s✨  Updated to %s%s\n\n' "${C_Y}" "${C_B}" "${VERSION}" "${C_R}"
 else
     case "$INSTALL_MODE" in

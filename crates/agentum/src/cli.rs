@@ -343,6 +343,14 @@ EXAMPLES:
         /// Reinstall even when already on the latest version.
         #[arg(long)]
         force: bool,
+
+        /// Skip the post-install `clip-agent --install` invocation.
+        /// Sets AGENTUM_INSTALL_NO_CLIP_AGENT=1 in the spawned sh env
+        /// so the installer's autostart hook becomes a no-op. Useful
+        /// in CI or scripted updates where you don't want to register
+        /// a launchd plist / systemd user unit.
+        #[arg(long)]
+        skip_clip_agent: bool,
     },
 }
 
@@ -587,14 +595,18 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             })
             .await
         }
-        Cmd::Update { mode, force } => {
+        Cmd::Update {
+            mode,
+            force,
+            skip_clip_agent,
+        } => {
             let mode = match mode.as_deref() {
                 Some("server") => Some(crate::commands::update::Mode::Server),
                 Some("cli") => Some(crate::commands::update::Mode::Cli),
                 Some("both") => Some(crate::commands::update::Mode::Both),
                 _ => None,
             };
-            crate::commands::update::run(mode, force).await
+            crate::commands::update::run(mode, force, skip_clip_agent).await
         }
     }
 }
