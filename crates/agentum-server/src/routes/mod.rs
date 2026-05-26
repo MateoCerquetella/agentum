@@ -7,6 +7,7 @@ pub mod board_links;
 pub mod board_rules;
 pub mod cert;
 pub mod channels;
+pub mod clipboard;
 pub mod doctor;
 pub mod events;
 pub mod fs;
