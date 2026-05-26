@@ -454,10 +454,10 @@ async fn goal_cards_full_happy_path() {
             result = bus_rx.recv() => {
                 match result {
                     Ok(ev) => match ev.kind.as_str() {
-                        "board.created" => {
-                            if ev.payload["parent_goal_id"].as_i64() == Some(goal_id) {
-                                saw_board_created += 1;
-                            }
+                        "board.created"
+                            if ev.payload["parent_goal_id"].as_i64() == Some(goal_id) =>
+                        {
+                            saw_board_created += 1;
                         }
                         "goal.planner.first_child" => {
                             assert_eq!(
