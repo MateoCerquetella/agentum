@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-05-20)
 Phase: 02 (card-session-binding) — EXECUTING
 Plan: 1 of 6
 Status: Executing Phase 02
-Last activity: 2026-05-26 -- Completed quick task 260526-jc2: TUI image paste via Ctrl-V
+Last activity: 2026-05-26 -- Completed quick task 260526-ma9: seamless Mac→remote image paste via clipboard broker + clip-agent
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -78,6 +78,7 @@ None yet.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260526-jc2 | TUI image paste: Ctrl-V uploads local clipboard image to daemon, lands in session workdir `.agentum-uploads/`, path typed into tmux pane | 2026-05-26 | ae76aa0 | [260526-jc2-add-tui-image-paste-ctrl-v-reads-local-c](./quick/260526-jc2-add-tui-image-paste-ctrl-v-reads-local-c/) |
+| 260526-ma9 | Seamless Mac→remote image paste: daemon clipboard broker + `agentum clip-agent` (long-poll WS + arboard + correlated upload) + TUI broker-first Ctrl-V + autostart on install/update (launchd, systemd) | 2026-05-26 | 1375365 | [260526-ma9-add-seamless-mac-remote-image-paste-via-](./quick/260526-ma9-add-seamless-mac-remote-image-paste-via-/) |
 
 ## Deferred Items
 
