@@ -150,9 +150,32 @@ async fn upload(
 
     let resp = UploadResponse {
         path: abs_path.to_string_lossy().into_owned(),
-        relative_path,
+        relative_path: relative_path.clone(),
         size_bytes: body.len() as u64,
     };
+
+    // Clipboard broker correlation: an `agentum clip-agent` that
+    // received a `/api/clipboard/agent` request frame echoes the
+    // request_id back on the upload so the broker can wake the
+    // waiting TUI immediately instead of letting the 3 s timer
+    // expire. Header is optional — direct uploads (e.g. TUI's local
+    // fallback, dashboard image paste) skip it and the 200 response
+    // shape stays identical.
+    if let Some(rid_hdr) = headers.get("X-Clipboard-Request-Id")
+        && let Ok(rid_str) = rid_hdr.to_str()
+        && let Ok(request_id) = Uuid::parse_str(rid_str)
+    {
+        super::clipboard::tests_helpers_complete_clipboard_request(
+            &state,
+            request_id,
+            super::clipboard::ClipboardOutcome::Uploaded {
+                path: resp.path.clone(),
+                relative_path: resp.relative_path.clone(),
+                size_bytes: resp.size_bytes,
+            },
+        );
+    }
+
     Ok((StatusCode::CREATED, Json(resp)))
 }
 
