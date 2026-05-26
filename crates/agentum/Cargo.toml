@@ -60,6 +60,20 @@ base64             = "0.22"
 which              = "7"
 tempfile           = "3"
 
+# Cross-platform local clipboard reader for Ctrl-V image paste. The
+# default feature set on arboard 3 already pulls `image-data`; we
+# declare it explicitly so the intent is visible at the call site, and
+# add `wayland-data-control` so Wayland sessions (omarchy is the
+# primary dev host) get the modern protocol instead of falling back
+# through XWayland. Defaults are off so we don't drag in the rest of
+# arboard's optional features by accident.
+arboard            = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
+# PNG-encode the RGBA pixels arboard hands us. We don't decode
+# arbitrary formats here, so disable defaults and only enable `png`.
+# Pinning the same major series arboard 3 already depends on
+# transitively keeps the dep graph from duplicating `image`.
+image              = { version = "0.25", default-features = false, features = ["png"] }
+
 # Detach the auto-spawned `agentum serve` sidecar from the TUI's
 # controlling terminal so it survives the user closing the alt-screen.
 [target.'cfg(unix)'.dependencies]
