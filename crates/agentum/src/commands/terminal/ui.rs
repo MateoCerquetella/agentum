@@ -32,6 +32,11 @@ pub struct Areas {
     /// the body claims the row back without a re-layout.
     pub banner: Rect,
     pub tree: Rect,
+    /// Bottom slice of the tree column showing per-agent + per-session
+    /// usage (tokens, context %, cost). Zero-sized when the tree column
+    /// is hidden (fullscreen, sidebar collapsed) or too short to give
+    /// the session list ≥ 8 rows after carving off the panel.
+    pub usage: Rect,
     /// Primary (left) terminal pane. Always present.
     pub terminal: Rect,
     /// Right terminal pane in a horizontal split. `Some` when the user
@@ -105,6 +110,7 @@ pub fn compute_layout(
             title: empty,
             banner: empty,
             tree: empty,
+            usage: empty,
             terminal: term_left,
             terminal_right: term_right,
             lazygit: lazygit_rect,
@@ -195,10 +201,34 @@ pub fn compute_layout(
     let (term_left, term_right) = split_terminal(terminal_rect, split_open, term_split_pct);
     let agent_tasks_rect = if rw > 0 { Some(body[2]) } else { None };
 
+    // Carve a fixed 10-row Usage panel off the bottom of the tree column.
+    // Floor is 18 rows so the session list above keeps at least 8 rows;
+    // tighter viewports hide the panel rather than starve the list.
+    let tree_full = body[0];
+    let usage_h: u16 = if tree_full.height >= 18 { 10 } else { 0 };
+    let (tree_rect, usage_rect) = if usage_h > 0 {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(8), Constraint::Length(usage_h)])
+            .split(tree_full);
+        (rows[0], rows[1])
+    } else {
+        (
+            tree_full,
+            Rect {
+                x: tree_full.x,
+                y: tree_full.y,
+                width: 0,
+                height: 0,
+            },
+        )
+    };
+
     Areas {
         title: v[0],
         banner: v[1],
-        tree: body[0],
+        tree: tree_rect,
+        usage: usage_rect,
         terminal: term_left,
         terminal_right: term_right,
         lazygit: lazygit_rect,
@@ -312,6 +342,9 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
     }
     if areas.tree.width > 0 {
         draw_tree(f, areas.tree, app, p);
+    }
+    if areas.usage.width > 0 && areas.usage.height > 0 {
+        draw_usage_panel(f, areas.usage, app, p);
     }
     draw_terminal(f, areas.terminal, app, p);
     if let Some(right_area) = areas.terminal_right {
@@ -3402,7 +3435,10 @@ pub(super) fn draw_usage_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Pal
                 let line = Line::from(vec![
                     Span::styled(truncate_pad(&s.name, 10), Style::default().fg(p.fg_strong)),
                     Span::raw("  "),
-                    Span::styled(truncate_pad(&format_ctx(s.ctx), 4), Style::default().fg(p.fg)),
+                    Span::styled(
+                        truncate_pad(&format_ctx(s.ctx), 4),
+                        Style::default().fg(p.fg),
+                    ),
                     Span::raw("  "),
                     Span::styled(
                         truncate_pad(&format_tokens(s.tokens), 6),
