@@ -1226,6 +1226,27 @@ pub struct App {
     /// in `Focus::Tree` when the selected session has a `card_id`.
     /// `None` hides the strip entirely (Phase 2, plan 05).
     pub hint_card: Option<HintCardState>,
+    /// Result channel for the Ctrl-V clipboard-image-paste flow. The
+    /// spawned task (which runs the arboard clipboard read + PNG
+    /// encode in `spawn_blocking`, then `upload_image`) sends one
+    /// `UploadOutcome` per Ctrl-V; the run-loop's `select!` drains it
+    /// and writes the message into `status_msg` (success) or pushes
+    /// it as a toast (error). Lives here because the spawned task
+    /// can't mutate `App` directly (we're behind `&mut App`), and the
+    /// existing toast/status surfaces both want main-task access.
+    pub upload_outcome_tx: Option<mpsc::UnboundedSender<UploadOutcome>>,
+}
+
+/// One result from the Ctrl-V image-paste flow. Posted by the spawned
+/// uploader task; drained by the run-loop and surfaced as a toast.
+#[derive(Debug, Clone)]
+pub struct UploadOutcome {
+    /// `true` → success path: the daemon wrote the image and typed
+    /// the relative path into the pane. `false` → any failure, with
+    /// `message` explaining what went wrong (no image in clipboard,
+    /// upload failed, etc.).
+    pub ok: bool,
+    pub message: String,
 }
 
 /// One slot in [`App::clients`]. Tracks whether the server is
@@ -1368,6 +1389,7 @@ impl App {
             session_profile: HashMap::new(),
             reconnecting: HashSet::new(),
             hint_card: None,
+            upload_outcome_tx: None,
         }
     }
 
@@ -2541,6 +2563,12 @@ pub async fn run_loop(
     let (lg_tx, mut lg_rx) = mpsc::unbounded_channel::<PtyMsg>();
     let (agent_tasks_tx, mut agent_tasks_rx) =
         mpsc::unbounded_channel::<(Uuid, Option<AgentTaskState>)>();
+    // Result channel for the Ctrl-V image-paste flow. One uploader
+    // task posts a single `UploadOutcome` per Ctrl-V; the `select!`
+    // arm below drains the rx and surfaces the message as a status
+    // or error toast. Mirrors `agent_tasks_tx` exactly so the
+    // surrounding code stays consistent.
+    let (upload_outcome_tx, mut upload_outcome_rx) = mpsc::unbounded_channel::<UploadOutcome>();
     // Stash cheap clones on `App` so `update_selection` can pick the
     // correct sender by side without re-threading args. The lazygit
     // sender lives here too so `refresh_lazygit_for_selection` can
@@ -2550,6 +2578,7 @@ pub async fn run_loop(
     app.term_tx_right = Some(term_tx_right);
     app.lg_tx = Some(lg_tx.clone());
     app.agent_tasks_tx = Some(agent_tasks_tx);
+    app.upload_outcome_tx = Some(upload_outcome_tx);
 
     // Subscribe to the daemon's event bus.
     let _events_handle: JoinHandle<()> = client.open_event_stream(event_tx);
@@ -2790,6 +2819,19 @@ pub async fn run_loop(
                 app.agent_tasks_inflight.remove(&id);
                 if let Some(state) = maybe_state {
                     app.agent_tasks.insert(id, state);
+                }
+            }
+
+            Some(outcome) = upload_outcome_rx.recv() => {
+                // Ctrl-V clipboard-image-paste result. Success → put
+                // the message in `status_msg` (transient bottom-right
+                // hint). Failure → escalate to `push_error` so the
+                // toast stack catches it; people will want to know
+                // why their paste didn't land.
+                if outcome.ok {
+                    app.status_msg = Some(outcome.message);
+                } else {
+                    app.push_error(outcome.message);
                 }
             }
 
@@ -3312,6 +3354,144 @@ fn write_paste_image(bytes: &[u8], mime: &str) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
+/// Spawn the Ctrl-V clipboard-image-paste flow. Gates on focus +
+/// selection synchronously (so we can use `&mut App` to set status
+/// hints), then drops to a detached `tokio::spawn` that runs the
+/// arboard clipboard read + PNG encode inside `spawn_blocking`
+/// (arboard's `Clipboard::new()` and `get_image()` are sync and can
+/// block on X11 selection-owner negotiation). The uploader posts one
+/// `UploadOutcome` back through `app.upload_outcome_tx`; the
+/// run-loop's `select!` drains it and surfaces the result as a
+/// status / error toast.
+///
+/// We deliberately do NOT mutate `app` from inside the spawned task
+/// (the borrow checker wouldn't allow it anyway, and the rest of the
+/// codebase consistently passes results back via mpsc).
+fn spawn_ctrl_v_image_paste(app: &mut App, client: &Client) {
+    // Focus gate — same shape as `paste_from_system_clipboard`. The
+    // user can hit Ctrl-V anywhere in the TUI; we only act on it
+    // when a terminal pane has focus, so accidentally pressing it
+    // in the tree (where 'v' is a filter character) doesn't trigger
+    // an upload.
+    if !matches!(app.focus, Focus::Term | Focus::TermRight) {
+        app.status_msg = Some("Ctrl-V: focus a terminal pane first".into());
+        return;
+    }
+    let id = match app.selected {
+        Some(id) => id,
+        None => {
+            app.status_msg = Some("Ctrl-V: no session selected".into());
+            return;
+        }
+    };
+    // Per-profile client lookup — a peer session has to ask its own
+    // daemon to write the file (the active client knows nothing
+    // about the peer's workdir). Falls back to the active client
+    // when the session is on the default profile.
+    let target_client = app
+        .client_for_session(id)
+        .cloned()
+        .unwrap_or_else(|| client.clone());
+    // Pull the result sender BEFORE the async task — the task can't
+    // borrow `app`. If it's None (run-loop hasn't initialised yet)
+    // we just bail without firing the upload.
+    let Some(tx) = app.upload_outcome_tx.clone() else {
+        return;
+    };
+    // Up-front status hint so the user has feedback if the clipboard
+    // read is slow (X11 selection negotiation can stall for hundreds
+    // of ms).
+    app.status_msg = Some("Ctrl-V: reading clipboard…".into());
+
+    tokio::spawn(async move {
+        // Clipboard read + PNG encode run on a blocking thread so a
+        // large paste doesn't stall the ratatui render loop.
+        let png_result = tokio::task::spawn_blocking(|| -> Result<Vec<u8>, String> {
+            let mut clipboard =
+                arboard::Clipboard::new().map_err(|e| format!("clipboard init failed: {e}"))?;
+            let image = clipboard.get_image().map_err(clipboard_error_message)?;
+            encode_rgba_as_png(
+                image.width as u32,
+                image.height as u32,
+                image.bytes.as_ref(),
+            )
+            .map_err(|e| format!("PNG encode failed: {e}"))
+        })
+        .await;
+
+        let png_bytes = match png_result {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(msg)) => {
+                let _ = tx.send(UploadOutcome {
+                    ok: false,
+                    message: format!("Ctrl-V: {msg}"),
+                });
+                return;
+            }
+            Err(join_err) => {
+                let _ = tx.send(UploadOutcome {
+                    ok: false,
+                    message: format!("Ctrl-V: clipboard task panicked: {join_err}"),
+                });
+                return;
+            }
+        };
+
+        match target_client.upload_image(id, png_bytes, "image/png").await {
+            Ok(resp) => {
+                let _ = tx.send(UploadOutcome {
+                    ok: true,
+                    message: format!(
+                        "uploaded {} ({} bytes)",
+                        resp.relative_path, resp.size_bytes
+                    ),
+                });
+            }
+            Err(e) => {
+                let _ = tx.send(UploadOutcome {
+                    ok: false,
+                    message: format!("Ctrl-V: upload failed: {e}"),
+                });
+            }
+        }
+    });
+}
+
+/// Encode an RGBA pixel buffer as PNG bytes. Used by the Ctrl-V
+/// image-paste handler — arboard hands us raw pixels, and the
+/// daemon's upload route expects a real image file format so agents
+/// can open it without further conversion. Pure synchronous fn so
+/// the unit tests can pin the magic-number prefix without touching
+/// the clipboard.
+fn encode_rgba_as_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    use image::codecs::png::PngEncoder;
+    use image::{ExtendedColorType, ImageBuffer, ImageEncoder, Rgba};
+    // image 0.25 wants an owned `Vec<u8>` for `from_raw` (it stores
+    // the container internally). The clone is unavoidable.
+    let buf = ImageBuffer::<Rgba<u8>, _>::from_raw(width, height, rgba.to_vec())
+        .ok_or_else(|| "RGBA buffer size mismatch".to_string())?;
+    let mut out = Vec::with_capacity(rgba.len() / 2);
+    PngEncoder::new(&mut out)
+        .write_image(buf.as_raw(), width, height, ExtendedColorType::Rgba8)
+        .map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// Map an arboard error to a user-readable status message.
+/// Specifically calls out the "nothing copied" case, which is by far
+/// the most common Ctrl-V failure mode — the message guides users
+/// toward the right behaviour (copy an image first) instead of
+/// dropping a stack-trace into the toast stack.
+fn clipboard_error_message(err: arboard::Error) -> String {
+    use arboard::Error::*;
+    match err {
+        ContentNotAvailable => "no image in clipboard — copy an image first (Ctrl-V is for images only — use bracketed paste for text)".to_string(),
+        ClipboardNotSupported => "clipboard not supported in this environment".to_string(),
+        ClipboardOccupied => "clipboard is busy — try again".to_string(),
+        other => format!("clipboard error: {other}"),
+    }
+}
+
 /// Route mouse events. Three-layer dispatch (most specific wins):
 ///
 /// 1. **Active text selection**: once a click-drag selection has been
@@ -3786,7 +3966,7 @@ async fn handle_key(
     if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('k')) {
         app.chord = Some('K');
         app.status_msg = Some(
-            "Ctrl-K · waiting (Z fullscreen · B sidebar · I image paste · , / . lazygit width)"
+            "Ctrl-K · waiting (Z fullscreen · B sidebar · I image paste · , / . lazygit width) · Ctrl-V: paste clipboard image"
                 .into(),
         );
         return;
@@ -3861,6 +4041,27 @@ async fn handle_key(
         {
             spawn_agent_tasks_fetch(app, client, id);
         }
+        return;
+    }
+
+    // Ctrl-V — paste an image from the LOCAL OS clipboard into the
+    // focused agent pane. Distinct from `Ctrl-K I` (which shells out
+    // to `wl-paste`/`pbpaste`/`xclip` on whatever host the TUI runs
+    // on, and so reads the *wrong* clipboard over SSH or a remote
+    // `--profile`): this branch reads the host where the TUI is
+    // actually running via `arboard`, PNG-encodes the pixels off the
+    // main task, and uploads them to the owning daemon — which writes
+    // the file next to the agent's working tree and types the path
+    // into the pane. We deliberately gate on Ctrl alone, NOT
+    // Ctrl-Shift — Ctrl-Shift-V is reserved for the terminal
+    // emulator's own paste binding (kitty, alacritty, gnome-terminal
+    // all use it for text paste from the host clipboard) and
+    // intercepting it would break that workflow.
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('v') | KeyCode::Char('V'))
+        && !key.modifiers.contains(KeyModifiers::SHIFT)
+    {
+        spawn_ctrl_v_image_paste(app, client);
         return;
     }
 
@@ -8705,5 +8906,69 @@ mod hint_card_tests {
             title: "Beta".to_string(),
         };
         assert_ne!(a, c);
+    }
+}
+
+#[cfg(test)]
+mod ctrl_v_tests {
+    use super::{clipboard_error_message, encode_rgba_as_png};
+
+    /// PNG file format magic bytes. The encoder is third-party
+    /// (`image` 0.25), so the only thing worth asserting at our
+    /// layer is that the output really is a PNG — anything else
+    /// would be re-testing the encoder.
+    const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+
+    #[test]
+    fn encode_rgba_as_png_produces_png_magic_prefix() {
+        // 2x2 image of opaque white. 4 bytes per pixel × 4 pixels =
+        // 16 bytes. Tiny on purpose — keeps the test fast and the
+        // failure surface narrow (any drift in the encoder's output
+        // prefix is a wire-format regression we want to know about).
+        let rgba = vec![0xff_u8; 16];
+        let out = encode_rgba_as_png(2, 2, &rgba).expect("encode must succeed");
+        assert!(
+            out.len() >= PNG_MAGIC.len(),
+            "output too small: {} bytes",
+            out.len()
+        );
+        assert_eq!(&out[..PNG_MAGIC.len()], PNG_MAGIC, "missing PNG magic");
+    }
+
+    #[test]
+    fn encode_rgba_as_png_rejects_size_mismatch() {
+        // 2x2 should require 16 bytes; passing 15 must error rather
+        // than panic. Defensive against arboard handing back a
+        // truncated buffer mid-paste (unlikely but free to assert).
+        let short = vec![0xff_u8; 15];
+        let err = encode_rgba_as_png(2, 2, &short).unwrap_err();
+        assert!(
+            err.contains("size mismatch"),
+            "expected size-mismatch error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn clipboard_error_message_pins_user_facing_string() {
+        // Pinning the string ensures the most common Ctrl-V failure
+        // mode ("nothing copied") gets a stable, debuggable hint
+        // that's also greppable from issue reports.
+        let msg = clipboard_error_message(arboard::Error::ContentNotAvailable);
+        assert_eq!(
+            msg,
+            "no image in clipboard — copy an image first (Ctrl-V is for images only — use bracketed paste for text)"
+        );
+    }
+
+    #[test]
+    fn clipboard_error_message_handles_other_variants() {
+        // Spot-check the other branches so a future arboard upgrade
+        // that adds variants forces a re-look at this match (the
+        // catch-all `other => …` keeps the build green either way,
+        // but the explicit branches stay covered).
+        let msg = clipboard_error_message(arboard::Error::ClipboardOccupied);
+        assert!(msg.contains("busy"), "got: {msg}");
+        let msg = clipboard_error_message(arboard::Error::ClipboardNotSupported);
+        assert!(msg.contains("not supported"), "got: {msg}");
     }
 }
