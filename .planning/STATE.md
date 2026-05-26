@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-05-20)
 Phase: 02 (card-session-binding) — EXECUTING
 Plan: 1 of 6
 Status: Executing Phase 02
-Last activity: 2026-05-22 -- Phase 02 execution started
+Last activity: 2026-05-26 -- Completed quick task 260526-jc2: TUI image paste via Ctrl-V
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -72,6 +72,12 @@ None yet.
 ### Blockers/Concerns
 
 None yet.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260526-jc2 | TUI image paste: Ctrl-V uploads local clipboard image to daemon, lands in session workdir `.agentum-uploads/`, path typed into tmux pane | 2026-05-26 | ae76aa0 | [260526-jc2-add-tui-image-paste-ctrl-v-reads-local-c](./quick/260526-jc2-add-tui-image-paste-ctrl-v-reads-local-c/) |
 
 ## Deferred Items
 
