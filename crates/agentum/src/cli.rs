@@ -300,13 +300,39 @@ EXAMPLES:
         dry_run: bool,
     },
 
+    /// Run the local clipboard agent — long-poll the daemon for
+    /// clipboard requests and upload PNG bytes of the local clipboard
+    /// image on demand. Defaults to running the loop forever against
+    /// every profile in `profiles.toml`. The action flags
+    /// (`--install`, `--uninstall`, `--status`, `--logs`) are mutually
+    /// exclusive.
+    ClipAgent {
+        /// Only attach to this profile (default: every profile).
+        #[arg(long)]
+        profile: Option<String>,
+        /// Register the launchd plist (macOS) or systemd user unit
+        /// (Linux) so the agent starts at login. Idempotent.
+        #[arg(long, conflicts_with_all = ["uninstall", "status", "logs"])]
+        install: bool,
+        /// Remove the launchd plist or systemd unit. Idempotent.
+        #[arg(long, conflicts_with_all = ["install", "status", "logs"])]
+        uninstall: bool,
+        /// Print JSON `{loaded, active, connected_profiles, log_path}`.
+        #[arg(long, conflicts_with_all = ["install", "uninstall", "logs"])]
+        status: bool,
+        /// Print the last 100 lines of the clip-agent log file.
+        #[arg(long, conflicts_with_all = ["install", "uninstall", "status"])]
+        logs: bool,
+    },
+
     /// Update agentum to the latest release (re-runs install.sh).
     ///
     /// Downloads `releases/latest/download/install.sh` and pipes it to `sh`,
     /// preserving your `INSTALL_DIR`. Pass `--mode server|cli` to skip the
     /// interactive prompt; otherwise the installer behaves identically to a
     /// fresh `curl … | sh` (interactive when on a TTY, defaults to `server`
-    /// when not).
+    /// when not). Pass `--skip-clip-agent` to skip the post-install
+    /// `clip-agent --install` invocation (useful in CI / non-tty scripts).
     Update {
         /// Install mode for the installer (`server` = full Control Plane,
         /// `cli` = lightweight CLI, `both` = show both post-install guides).
@@ -317,6 +343,14 @@ EXAMPLES:
         /// Reinstall even when already on the latest version.
         #[arg(long)]
         force: bool,
+
+        /// Skip the post-install `clip-agent --install` invocation.
+        /// Sets AGENTUM_INSTALL_NO_CLIP_AGENT=1 in the spawned sh env
+        /// so the installer's autostart hook becomes a no-op. Useful
+        /// in CI or scripted updates where you don't want to register
+        /// a launchd plist / systemd user unit.
+        #[arg(long)]
+        skip_clip_agent: bool,
     },
 }
 
@@ -462,6 +496,20 @@ pub enum ConfigCmd {
     Edit,
 }
 
+/// Args struct the dispatcher hands to `commands::clip_agent::run`. Mirrors
+/// the `Cmd::ClipAgent` variant's fields one-for-one. Defined as a struct
+/// (rather than passing the enum variant directly) so the subcommand
+/// module can take a single value, and so tests can construct
+/// representative arg sets without going through clap.
+#[derive(Debug, Default, Clone)]
+pub struct ClipAgentArgs {
+    pub profile: Option<String>,
+    pub install: bool,
+    pub uninstall: bool,
+    pub status: bool,
+    pub logs: bool,
+}
+
 pub async fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
         Cmd::New {
@@ -531,14 +579,34 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             })
             .await
         }
-        Cmd::Update { mode, force } => {
+        Cmd::ClipAgent {
+            profile,
+            install,
+            uninstall,
+            status,
+            logs,
+        } => {
+            crate::commands::clip_agent::run(ClipAgentArgs {
+                profile,
+                install,
+                uninstall,
+                status,
+                logs,
+            })
+            .await
+        }
+        Cmd::Update {
+            mode,
+            force,
+            skip_clip_agent,
+        } => {
             let mode = match mode.as_deref() {
                 Some("server") => Some(crate::commands::update::Mode::Server),
                 Some("cli") => Some(crate::commands::update::Mode::Cli),
                 Some("both") => Some(crate::commands::update::Mode::Both),
                 _ => None,
             };
-            crate::commands::update::run(mode, force).await
+            crate::commands::update::run(mode, force, skip_clip_agent).await
         }
     }
 }

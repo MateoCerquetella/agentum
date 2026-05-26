@@ -27,6 +27,7 @@ agentum-server    = { workspace = true }
 agentum-tmux      = { workspace = true }
 agentum-executor  = { workspace = true }
 anyhow          = { workspace = true }
+thiserror       = { workspace = true }
 clap            = { workspace = true }
 tokio           = { workspace = true }
 tracing         = { workspace = true }

@@ -18,7 +18,9 @@ use tokio::task::JoinHandle;
 use tokio::time::{Instant, interval};
 use uuid::Uuid;
 
-use super::api::{Client, EventMsg, TermOut, TerminalMsg};
+use crate::clipboard::encode_rgba_as_png;
+
+use super::api::{self, Client, EventMsg, TermOut, TerminalMsg};
 use super::extensions::{self, LAZYGIT};
 use super::iometer::IoMeter;
 use super::palette::{ActionKind, Catalog, ViewState};
@@ -3398,11 +3400,83 @@ fn spawn_ctrl_v_image_paste(app: &mut App, client: &Client) {
     let Some(tx) = app.upload_outcome_tx.clone() else {
         return;
     };
-    // Up-front status hint so the user has feedback if the clipboard
-    // read is slow (X11 selection negotiation can stall for hundreds
-    // of ms).
-    app.status_msg = Some("Ctrl-V: reading clipboard…".into());
+    // Up-front status hint so the user has feedback while the broker
+    // round-trip is in flight. The broker timeout is 3s — well under
+    // anything the user would interpret as "the TUI froze".
+    app.status_msg = Some("Ctrl-V: requesting clipboard…".into());
 
+    tokio::spawn(async move {
+        // Broker-first: ask the daemon to hop the request to a
+        // connected clip-agent. The agent reads the local clipboard
+        // and POSTs the upload with the request_id header, so the
+        // 200 here carries the same UploadResponse shape as a direct
+        // upload — TUI's success-toast path stays single-branch.
+        let result = target_client.request_clipboard(id, 3000).await;
+        match classify_clipboard_result(result) {
+            CtrlVDecision::Success(message) => {
+                let _ = tx.send(UploadOutcome { ok: true, message });
+            }
+            CtrlVDecision::FallbackToArboard => {
+                // Single-host fallback: no clip-agent attached, so
+                // try reading the OS clipboard on THIS host directly.
+                // Keeps the "TUI on the same machine that owns the
+                // clipboard" flow working unchanged for users who
+                // never installed clip-agent.
+                spawn_arboard_paste_direct(target_client, id, tx);
+            }
+            CtrlVDecision::ErrorNoFallback(message) => {
+                let _ = tx.send(UploadOutcome { ok: false, message });
+            }
+        }
+    });
+}
+
+/// Pure decision over a clipboard request outcome. Captures the
+/// rule the broker-first Ctrl-V wrapper applies to a
+/// `Result<UploadResponse, ClipboardRequestError>` so unit tests can
+/// pin behaviour without spinning a real HTTP server or arboard
+/// driver. Only `AgentNotConnected` triggers the arboard fallback;
+/// `NoImage`/`Timeout` surface targeted toasts because falling back
+/// would either repeat the same answer (NoImage) or paper over the
+/// real cause (Timeout — agent there but stuck).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CtrlVDecision {
+    Success(String),
+    FallbackToArboard,
+    ErrorNoFallback(String),
+}
+
+pub(crate) fn classify_clipboard_result(
+    result: Result<api::UploadResponse, api::ClipboardRequestError>,
+) -> CtrlVDecision {
+    match result {
+        Ok(resp) => CtrlVDecision::Success(format!(
+            "uploaded {} ({} bytes)",
+            resp.relative_path, resp.size_bytes
+        )),
+        Err(api::ClipboardRequestError::AgentNotConnected) => CtrlVDecision::FallbackToArboard,
+        Err(api::ClipboardRequestError::NoImage) => CtrlVDecision::ErrorNoFallback(
+            "no image in clipboard — copy an image first".into(),
+        ),
+        Err(api::ClipboardRequestError::Timeout) => CtrlVDecision::ErrorNoFallback(
+            "no clipboard agent responded — run `agentum clip-agent --install` on the host with your clipboard".into(),
+        ),
+        Err(api::ClipboardRequestError::Other(e)) => {
+            CtrlVDecision::ErrorNoFallback(format!("Ctrl-V: {e}"))
+        }
+    }
+}
+
+/// Direct local-arboard fallback: the historical Ctrl-V path,
+/// extracted verbatim from `spawn_ctrl_v_image_paste` so the broker-
+/// first wrapper can call it on `AgentNotConnected` without
+/// duplicating the logic. Used only when no clip-agent is attached
+/// to the daemon — single-host setups keep working unchanged.
+fn spawn_arboard_paste_direct(
+    target_client: Client,
+    id: Uuid,
+    tx: tokio::sync::mpsc::UnboundedSender<UploadOutcome>,
+) {
     tokio::spawn(async move {
         // Clipboard read + PNG encode run on a blocking thread so a
         // large paste doesn't stall the ratatui render loop.
@@ -3455,26 +3529,6 @@ fn spawn_ctrl_v_image_paste(app: &mut App, client: &Client) {
             }
         }
     });
-}
-
-/// Encode an RGBA pixel buffer as PNG bytes. Used by the Ctrl-V
-/// image-paste handler — arboard hands us raw pixels, and the
-/// daemon's upload route expects a real image file format so agents
-/// can open it without further conversion. Pure synchronous fn so
-/// the unit tests can pin the magic-number prefix without touching
-/// the clipboard.
-fn encode_rgba_as_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
-    use image::codecs::png::PngEncoder;
-    use image::{ExtendedColorType, ImageBuffer, ImageEncoder, Rgba};
-    // image 0.25 wants an owned `Vec<u8>` for `from_raw` (it stores
-    // the container internally). The clone is unavoidable.
-    let buf = ImageBuffer::<Rgba<u8>, _>::from_raw(width, height, rgba.to_vec())
-        .ok_or_else(|| "RGBA buffer size mismatch".to_string())?;
-    let mut out = Vec::with_capacity(rgba.len() / 2);
-    PngEncoder::new(&mut out)
-        .write_image(buf.as_raw(), width, height, ExtendedColorType::Rgba8)
-        .map_err(|e| e.to_string())?;
-    Ok(out)
 }
 
 /// Map an arboard error to a user-readable status message.
@@ -8911,41 +8965,72 @@ mod hint_card_tests {
 
 #[cfg(test)]
 mod ctrl_v_tests {
-    use super::{clipboard_error_message, encode_rgba_as_png};
+    use super::{CtrlVDecision, api, classify_clipboard_result, clipboard_error_message};
 
-    /// PNG file format magic bytes. The encoder is third-party
-    /// (`image` 0.25), so the only thing worth asserting at our
-    /// layer is that the output really is a PNG — anything else
-    /// would be re-testing the encoder.
-    const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
-
-    #[test]
-    fn encode_rgba_as_png_produces_png_magic_prefix() {
-        // 2x2 image of opaque white. 4 bytes per pixel × 4 pixels =
-        // 16 bytes. Tiny on purpose — keeps the test fast and the
-        // failure surface narrow (any drift in the encoder's output
-        // prefix is a wire-format regression we want to know about).
-        let rgba = vec![0xff_u8; 16];
-        let out = encode_rgba_as_png(2, 2, &rgba).expect("encode must succeed");
-        assert!(
-            out.len() >= PNG_MAGIC.len(),
-            "output too small: {} bytes",
-            out.len()
-        );
-        assert_eq!(&out[..PNG_MAGIC.len()], PNG_MAGIC, "missing PNG magic");
+    fn upload(rel: &str, bytes: u64) -> api::UploadResponse {
+        api::UploadResponse {
+            path: format!("/tmp/{rel}"),
+            relative_path: rel.into(),
+            size_bytes: bytes,
+        }
     }
 
     #[test]
-    fn encode_rgba_as_png_rejects_size_mismatch() {
-        // 2x2 should require 16 bytes; passing 15 must error rather
-        // than panic. Defensive against arboard handing back a
-        // truncated buffer mid-paste (unlikely but free to assert).
-        let short = vec![0xff_u8; 15];
-        let err = encode_rgba_as_png(2, 2, &short).unwrap_err();
-        assert!(
-            err.contains("size mismatch"),
-            "expected size-mismatch error, got: {err}"
+    fn ctrl_v_uses_broker_when_present() {
+        // Broker returns Ok(UploadResponse) → success toast, no
+        // arboard fallback.
+        let result = Ok(upload(".agentum-uploads/a.png", 42));
+        let decision = classify_clipboard_result(result);
+        assert_eq!(
+            decision,
+            CtrlVDecision::Success("uploaded .agentum-uploads/a.png (42 bytes)".into())
         );
+    }
+
+    #[test]
+    fn ctrl_v_falls_back_to_arboard_on_agent_not_connected() {
+        // Only `AgentNotConnected` triggers the arboard fallback —
+        // single-host users who never installed clip-agent keep
+        // working unchanged.
+        let result = Err(api::ClipboardRequestError::AgentNotConnected);
+        let decision = classify_clipboard_result(result);
+        assert_eq!(decision, CtrlVDecision::FallbackToArboard);
+    }
+
+    #[test]
+    fn ctrl_v_no_image_kind_does_not_fallback() {
+        // Broker just told us the remote clipboard has no image;
+        // falling back would either give the same answer or paste a
+        // stale local image the user didn't intend.
+        let result = Err(api::ClipboardRequestError::NoImage);
+        let decision = classify_clipboard_result(result);
+        match decision {
+            CtrlVDecision::ErrorNoFallback(msg) => {
+                assert!(
+                    msg.contains("no image in clipboard"),
+                    "expected 'no image in clipboard' in toast, got: {msg}"
+                );
+            }
+            other => panic!("expected ErrorNoFallback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ctrl_v_timeout_kind_does_not_fallback() {
+        // Timeout means agent is connected but stuck; fallback would
+        // mask the real issue. Toast steers users toward the install
+        // command instead.
+        let result = Err(api::ClipboardRequestError::Timeout);
+        let decision = classify_clipboard_result(result);
+        match decision {
+            CtrlVDecision::ErrorNoFallback(msg) => {
+                assert!(
+                    msg.contains("clip-agent --install"),
+                    "expected install hint in toast, got: {msg}"
+                );
+            }
+            other => panic!("expected ErrorNoFallback, got {other:?}"),
+        }
     }
 
     #[test]

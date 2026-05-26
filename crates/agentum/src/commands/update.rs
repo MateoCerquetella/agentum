@@ -22,7 +22,7 @@ impl Mode {
     }
 }
 
-pub async fn run(mode: Option<Mode>, force: bool) -> Result<()> {
+pub async fn run(mode: Option<Mode>, force: bool, skip_clip_agent: bool) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
     eprintln!("agentum update — current version: v{current}");
 
@@ -47,6 +47,13 @@ pub async fn run(mode: Option<Mode>, force: bool) -> Result<()> {
     }
     if force {
         sh.env("AGENTUM_FORCE_UPDATE", "1");
+    }
+    if skip_clip_agent {
+        // The Rust process never sees the updated binary — install.sh
+        // handles the swap. So the opt-out lives entirely in the spawned
+        // shell's env, which is then read by
+        // `install.sh::install_clip_agent_autostart` to short-circuit.
+        sh.env("AGENTUM_INSTALL_NO_CLIP_AGENT", "1");
     }
     sh.stdin(Stdio::piped());
     sh.stdout(Stdio::inherit());

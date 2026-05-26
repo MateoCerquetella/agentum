@@ -103,6 +103,28 @@ pub struct AppState {
     /// When `true`, the auth middleware is bypassed and all API routes are
     /// accessible without a bearer token. Set via `agentum serve --no-auth`.
     pub no_auth: bool,
+    /// Pending clipboard requests, keyed by request_id. Inserted by
+    /// `POST /api/clipboard/request`, removed by either the timeout
+    /// path, the uploads route (on a matching
+    /// `X-Clipboard-Request-Id` header), or a `no_image` WS frame
+    /// from the agent. `std::sync::Mutex` for symmetry with
+    /// `stream_positions` — the critical section is a HashMap touch,
+    /// no `.await` while holding the lock.
+    pub clipboard_pending: Arc<
+        std::sync::Mutex<
+            std::collections::HashMap<
+                uuid::Uuid,
+                tokio::sync::oneshot::Sender<routes::clipboard::ClipboardOutcome>,
+            >,
+        >,
+    >,
+    /// Broadcast bus that fans clipboard request frames out to every
+    /// connected `agentum clip-agent`. Capacity 64 is well above the
+    /// expected concurrent request count (one user × one Ctrl-V
+    /// every few seconds, at most) and gives the per-agent WS
+    /// handler comfortable headroom against transient task
+    /// scheduling jitter.
+    pub clipboard_request_bus: broadcast::Sender<routes::clipboard::ClipboardRequestFrame>,
 }
 
 impl AppState {
@@ -116,6 +138,9 @@ impl AppState {
         cert_fingerprint: String,
     ) -> Self {
         let transcripts = TranscriptStore::new(bus.clone());
+        // Capacity 64: see ClipboardRequestFrame docs. Slow-agent
+        // lag is logged in the WS handler and the channel survives.
+        let (clipboard_request_bus, _) = broadcast::channel(64);
         Self {
             store: Arc::new(store),
             bus,
@@ -130,6 +155,8 @@ impl AppState {
             stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             hostname: detect_short_hostname(),
             no_auth: false,
+            clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            clipboard_request_bus,
         }
     }
 }
@@ -179,6 +206,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::preferences::router())
         .merge(routes::profiles::router())
         .merge(routes::channels::router())
+        .merge(routes::clipboard::router())
         .merge(routes::events::router())
         .merge(routes::watchdog::router())
         .merge(routes::fs::router())
