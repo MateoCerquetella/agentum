@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use tui_term::widget::PseudoTerminal;
 
+use std::collections::BTreeMap;
 use std::time::SystemTime;
 
 use agentum_core::Status as SessionStatus;
@@ -3233,6 +3234,226 @@ fn overlay_box_with_title_style(
         .style(Style::default().bg(p.surface_bg).fg(p.fg));
     f.render_widget(Clear, r);
     f.render_widget(para, r);
+}
+
+// ---------------------------------------------------------------------------
+// Usage panel — bottom-left readout of tokens / ctx / cost across running
+// sessions. The four helpers below are pure (testable) so the render
+// function stays a thin composition. The Session struct stores tokens as
+// i64 and ctx as i32 (see crates/agentum-core/src/lib.rs); negative values
+// are treated as missing so a stale "-1 sentinel" never bleeds onto screen.
+// ---------------------------------------------------------------------------
+
+/// Format a token count for the Usage panel. `None` and any negative value
+/// render as an em-dash so the wire shape stays compact when the watchdog
+/// hasn't reported tokens yet. Thresholds (`1_000`, `1_000_000`) match the
+/// FleetRow convention so two surfaces never disagree on the same number.
+pub(super) fn format_tokens(t: Option<i64>) -> String {
+    match t {
+        None => "—".to_string(),
+        Some(n) if n < 0 => "—".to_string(),
+        Some(n) if n < 1_000 => n.to_string(),
+        Some(n) if n < 1_000_000 => format!("{:.1}k", n as f64 / 1_000.0),
+        Some(n) => format!("{:.1}M", n as f64 / 1_000_000.0),
+    }
+}
+
+/// Format a USD cost. Non-finite (NaN/inf) and negative values collapse to
+/// the em-dash sentinel — they only appear when an upstream pricing table
+/// returns garbage, and rendering "$NaN" would be worse than admitting we
+/// don't know.
+pub(super) fn format_cost(c: Option<f64>) -> String {
+    match c {
+        None => "—".to_string(),
+        Some(v) if !v.is_finite() || v < 0.0 => "—".to_string(),
+        Some(v) => format!("${:.2}", v),
+    }
+}
+
+/// Format a context-remaining percentage. The watchdog clamps to 0..=100,
+/// but we still guard the range here so a future agent that overshoots
+/// doesn't render "150%" without a fallback.
+pub(super) fn format_ctx(p: Option<i32>) -> String {
+    match p {
+        None => "—".to_string(),
+        Some(v) if !(0..=100).contains(&v) => "—".to_string(),
+        Some(v) => format!("{}%", v),
+    }
+}
+
+/// Truncate-or-pad a string to exactly `n` display chars. Truncation
+/// appends `…` so the column boundary stays visible without ambiguity.
+/// `n.saturating_sub(1)` guards the degenerate `n == 0` case (returns "").
+fn truncate_pad(s: &str, n: usize) -> String {
+    let len = s.chars().count();
+    if len > n {
+        let mut out: String = s.chars().take(n.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    } else {
+        let mut out = s.to_string();
+        for _ in len..n {
+            out.push(' ');
+        }
+        out
+    }
+}
+
+/// Bottom-left "Usage" panel. Two stacked sections inside one block:
+/// top half aggregates running sessions by tool name (count + total
+/// tokens); bottom half lists each running session sorted by spend.
+/// Passive readout — never focused — so we render with `panel_block(..,
+/// false, ..)`. Short-circuits on zero-sized rects to match the rest of
+/// the draw_* helpers.
+pub(super) fn draw_usage_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let block = panel_block(" Usage ", false, p);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    // Collect once; both halves reuse this slice.
+    let running: Vec<&agentum_core::Session> = app
+        .sessions
+        .iter()
+        .filter(|s| s.status == SessionStatus::Running)
+        .collect();
+
+    if running.is_empty() {
+        let empty = Paragraph::new("No active agents")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(p.muted).bg(p.panel_bg));
+        f.render_widget(empty, inner);
+        return;
+    }
+
+    let halves = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(inner);
+    let top_half = halves[0];
+    let bottom_half = halves[1];
+
+    // --- Top half: per-tool aggregate ---
+    // BTreeMap keeps the by-tool iteration order stable so the alpha
+    // tie-breaker below behaves deterministically across redraws.
+    let mut by_tool: BTreeMap<String, (usize, i64)> = BTreeMap::new();
+    for s in &running {
+        let entry = by_tool.entry(s.tool.clone()).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 += s.tokens.unwrap_or(0).max(0);
+    }
+    let mut tool_rows: Vec<(String, usize, i64)> =
+        by_tool.into_iter().map(|(k, v)| (k, v.0, v.1)).collect();
+    // Count desc, then tool name asc — matches the dashboard's FleetRow ordering.
+    tool_rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    if top_half.height > 0 {
+        let top_split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .split(top_half);
+        let title = Paragraph::new("Agents")
+            .style(Style::default().fg(p.accent).add_modifier(Modifier::BOLD));
+        f.render_widget(title, top_split[0]);
+
+        let body_rows = top_split[1].height as usize;
+        let items: Vec<ListItem> = tool_rows
+            .iter()
+            .take(body_rows)
+            .map(|(tool, count, tokens)| {
+                let line = Line::from(vec![
+                    Span::styled(truncate_pad(tool, 8), Style::default().fg(p.fg_strong)),
+                    Span::raw("  "),
+                    Span::styled(format!("{} sess", count), Style::default().fg(p.fg)),
+                    Span::raw("  "),
+                    Span::styled(format_tokens(Some(*tokens)), Style::default().fg(p.muted)),
+                ]);
+                ListItem::new(line)
+            })
+            .collect();
+        f.render_widget(List::new(items), top_split[1]);
+    }
+
+    // --- Bottom half: per-session detail, biggest spend first ---
+    let mut by_session: Vec<&agentum_core::Session> = running.clone();
+    by_session.sort_by(|a, b| b.tokens.unwrap_or(0).cmp(&a.tokens.unwrap_or(0)));
+
+    if bottom_half.height > 0 {
+        let bot_split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .split(bottom_half);
+        let title = Paragraph::new("Tasks")
+            .style(Style::default().fg(p.accent).add_modifier(Modifier::BOLD));
+        f.render_widget(title, bot_split[0]);
+
+        let body_rows = bot_split[1].height as usize;
+        let items: Vec<ListItem> = by_session
+            .iter()
+            .take(body_rows)
+            .map(|s| {
+                let line = Line::from(vec![
+                    Span::styled(truncate_pad(&s.name, 10), Style::default().fg(p.fg_strong)),
+                    Span::raw("  "),
+                    Span::styled(truncate_pad(&format_ctx(s.ctx), 4), Style::default().fg(p.fg)),
+                    Span::raw("  "),
+                    Span::styled(
+                        truncate_pad(&format_tokens(s.tokens), 6),
+                        Style::default().fg(p.fg),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(
+                        truncate_pad(&format_cost(s.cost_usd), 6),
+                        Style::default().fg(p.muted),
+                    ),
+                ]);
+                ListItem::new(line)
+            })
+            .collect();
+        f.render_widget(List::new(items), bot_split[1]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_tokens_variants() {
+        assert_eq!(format_tokens(None), "—");
+        assert_eq!(format_tokens(Some(-5)), "—");
+        assert_eq!(format_tokens(Some(0)), "0");
+        assert_eq!(format_tokens(Some(999)), "999");
+        assert_eq!(format_tokens(Some(1500)), "1.5k");
+        assert_eq!(format_tokens(Some(42_000)), "42.0k");
+        assert_eq!(format_tokens(Some(1_500_000)), "1.5M");
+    }
+
+    #[test]
+    fn format_cost_variants() {
+        assert_eq!(format_cost(None), "—");
+        assert_eq!(format_cost(Some(-0.10)), "—");
+        assert_eq!(format_cost(Some(f64::NAN)), "—");
+        assert_eq!(format_cost(Some(0.314)), "$0.31");
+        assert_eq!(format_cost(Some(12.5)), "$12.50");
+    }
+
+    #[test]
+    fn format_ctx_variants() {
+        assert_eq!(format_ctx(None), "—");
+        assert_eq!(format_ctx(Some(-1)), "—");
+        assert_eq!(format_ctx(Some(0)), "0%");
+        assert_eq!(format_ctx(Some(42)), "42%");
+        assert_eq!(format_ctx(Some(100)), "100%");
+        assert_eq!(format_ctx(Some(101)), "—");
+    }
 }
 
 // ── end Goal overlay ──────────────────────────────────────────────────────────
