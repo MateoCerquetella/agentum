@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agentum_core::{Event, Session, transcript::AgentTaskState};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Client as HttpClient;
@@ -113,6 +113,27 @@ pub struct UploadResponse {
     pub path: String,
     pub relative_path: String,
     pub size_bytes: u64,
+}
+
+/// Typed result from `Client::request_clipboard`. The 503 `kind`
+/// discriminant from the broker is what drives the TUI's fallback
+/// decision — only `AgentNotConnected` triggers the local arboard
+/// fallback (single-host users who never installed clip-agent should
+/// keep working). `NoImage` and `Timeout` get targeted toasts but no
+/// fallback because the user already had a chance to provide an
+/// image and falling back would either yield the same "no image"
+/// error from arboard or write whatever stale image had been copied
+/// before the user's intended one.
+#[derive(Debug, thiserror::Error)]
+pub enum ClipboardRequestError {
+    #[error("no clipboard agent connected")]
+    AgentNotConnected,
+    #[error("no image in clipboard")]
+    NoImage,
+    #[error("clipboard agent did not respond in time")]
+    Timeout,
+    #[error("{0}")]
+    Other(#[from] anyhow::Error),
 }
 
 /// Optional pinned fingerprint, plus an "insecure" escape hatch. The
@@ -508,6 +529,69 @@ impl Client {
             bail!("{status} — {body}");
         }
         Ok(resp.json::<UploadResponse>().await?)
+    }
+
+    /// POST `/api/clipboard/request` — ask the daemon's clipboard
+    /// broker to fetch an image from the user's local clipboard via
+    /// the long-running `agentum clip-agent` on whichever host owns
+    /// the OS clipboard, and write it as a session upload.
+    ///
+    /// Returns the same `UploadResponse` shape as a direct upload so
+    /// the TUI's success-toast code path stays one branch. The 503
+    /// `kind` discriminant is decoded into the typed error so the
+    /// caller can decide whether to fall back to the local arboard
+    /// path (only on `AgentNotConnected`).
+    pub async fn request_clipboard(
+        &self,
+        session_id: Uuid,
+        timeout_ms: u64,
+    ) -> Result<UploadResponse, ClipboardRequestError> {
+        let url = self
+            .base
+            .join("/api/clipboard/request")
+            .map_err(|e| ClipboardRequestError::Other(anyhow!("build url: {e}")))?;
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .json(&serde_json::json!({
+                "session_id": session_id,
+                "timeout_ms": timeout_ms,
+            }))
+            .send()
+            .await
+            .map_err(|e| ClipboardRequestError::Other(anyhow!("request failed: {e}")))?;
+        let status = resp.status();
+        if status.is_success() {
+            return resp
+                .json::<UploadResponse>()
+                .await
+                .map_err(|e| ClipboardRequestError::Other(anyhow!("decode 200 body: {e}")));
+        }
+        if status.as_u16() == 503 {
+            // Decode the 503 envelope: `{ "error": "...", "kind": "..." }`.
+            // The `kind` discriminant drives the caller's fallback decision.
+            #[derive(serde::Deserialize)]
+            struct Body {
+                #[serde(default)]
+                kind: String,
+            }
+            let body = resp.json::<Body>().await.unwrap_or(Body {
+                kind: String::new(),
+            });
+            return Err(match body.kind.as_str() {
+                "agent_not_connected" => ClipboardRequestError::AgentNotConnected,
+                "no_image" => ClipboardRequestError::NoImage,
+                "timeout" => ClipboardRequestError::Timeout,
+                other => {
+                    ClipboardRequestError::Other(anyhow!("unknown clipboard 503 kind: {other}"))
+                }
+            });
+        }
+        let body = resp.text().await.unwrap_or_default();
+        Err(ClipboardRequestError::Other(anyhow!(
+            "clipboard request HTTP {status}: {body}"
+        )))
     }
 
     /// `GET /api/fs/list` — enumerate directories under `path` (or `$HOME`
