@@ -183,31 +183,62 @@ impl Profiles {
     }
 }
 
-/// Resolve `$XDG_CONFIG_HOME/agentum/profiles.toml`, falling back to
-/// `$HOME/.config/agentum/profiles.toml`. Errors when both env vars
-/// are missing — that's a misconfigured environment, not a missing
-/// file (an absent file is fine; an absent path resolver isn't).
+/// Resolve the canonical profiles file path.
 ///
-/// `XDG_CONFIG_HOME` is only honoured when it's a non-empty absolute
-/// path. An empty or relative value is treated the same as "unset"
-/// and we fall through to `$HOME/.config`. This matches the
-/// `directories` crate (the prior path resolver) so users who upgrade
-/// from ≤0.8.6 don't suddenly see an empty server list — the v0.8.7
-/// switch to `std::env`-based resolution silently produced a relative
-/// `agentum/profiles.toml` path (i.e. resolved against CWD) when XDG
-/// was misconfigured, hiding their on-disk profiles.
+/// The location is platform-specific and must match what the
+/// `directories` crate (the pre-v0.8.7 path resolver) returns, so
+/// users who upgrade from ≤0.8.6 keep reading their existing
+/// `profiles.toml`:
+///
+/// - **macOS:** `$HOME/Library/Application Support/agentum/profiles.toml`.
+///   This is `ProjectDirs::from("", "", "agentum").config_dir()` on
+///   Darwin. v0.8.7..=v0.8.9 incorrectly used the XDG path here, so
+///   every Mac user who upgraded saw an empty SERVERS list because
+///   their profiles still lived at the `Library/Application Support`
+///   location while the new code looked at `~/.config/agentum`.
+/// - **Linux / BSD:** `$XDG_CONFIG_HOME/agentum/profiles.toml`,
+///   falling back to `$HOME/.config/agentum/profiles.toml` when XDG
+///   is unset, empty, or a non-absolute path. The empty/relative
+///   guard matches the `directories` crate behaviour and fixes the
+///   v0.8.7 regression where some login-manager Linux setups
+///   exported `XDG_CONFIG_HOME=""` and silently resolved profiles to
+///   a CWD-relative `agentum/profiles.toml`.
+///
+/// Errors only when `HOME` is missing on a Unix-like host — that's a
+/// misconfigured environment, not a missing file (an absent file is
+/// fine; an absent path resolver isn't).
+///
+/// Kept private — callers should prefer `Profiles::load()` so the
+/// resolved path doesn't leak into other code's path-handling.
 fn default_path() -> Result<PathBuf> {
-    let xdg = std::env::var_os("XDG_CONFIG_HOME")
+    let home = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty() && p.is_absolute());
-    let base: PathBuf = if let Some(xdg) = xdg {
-        xdg
-    } else if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join(".config")
-    } else {
-        bail!("neither XDG_CONFIG_HOME nor HOME is set; cannot resolve profiles.toml");
-    };
-    Ok(base.join("agentum").join("profiles.toml"))
+        .ok_or_else(|| anyhow::anyhow!("HOME is not set; cannot resolve profiles.toml"))?;
+
+    // On macOS the `directories` crate (which the TUI used pre-0.8.7)
+    // returns `$HOME/Library/Application Support/agentum` for the
+    // config dir, NOT the XDG path. Match that so existing Mac users
+    // keep reading the file they've been writing for months.
+    #[cfg(target_os = "macos")]
+    {
+        return Ok(home
+            .join("Library")
+            .join("Application Support")
+            .join("agentum")
+            .join("profiles.toml"));
+    }
+
+    // Linux + BSD: XDG, with the same empty/non-absolute guard the
+    // `directories` crate applies. An empty `XDG_CONFIG_HOME=""` or
+    // a relative value both fall through to `$HOME/.config`.
+    #[cfg(not(target_os = "macos"))]
+    {
+        let xdg = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty() && p.is_absolute());
+        let base = xdg.unwrap_or_else(|| home.join(".config"));
+        Ok(base.join("agentum").join("profiles.toml"))
+    }
 }
 
 /// Profile name allowlist. The set is a strict subset of what TOML
@@ -323,6 +354,7 @@ mod tests {
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn profiles_load_reads_xdg_config_home() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
@@ -354,7 +386,56 @@ mod tests {
         assert_eq!(p.get("vps").unwrap().url, "https://my-vps:8822");
     }
 
-    /// Regression for v0.8.7..=v0.8.8: when `XDG_CONFIG_HOME` was set
+    /// macOS resolves to `$HOME/Library/Application Support/agentum`,
+    /// matching the `directories` crate that the TUI used pre-0.8.7.
+    /// XDG_CONFIG_HOME is irrelevant on Darwin.
+    ///
+    /// Regression for v0.8.7..=v0.8.9: every Mac user who upgraded
+    /// from ≤0.8.6 saw an empty SERVERS list because `default_path()`
+    /// looked at `~/.config/agentum/profiles.toml` while their actual
+    /// profiles lived at `~/Library/Application Support/agentum/profiles.toml`.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn profiles_load_reads_application_support_on_macos() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        let fake_home = tmp.path().to_path_buf();
+        let profiles_dir = fake_home
+            .join("Library")
+            .join("Application Support")
+            .join("agentum");
+        std::fs::create_dir_all(&profiles_dir).unwrap();
+        std::fs::write(
+            profiles_dir.join("profiles.toml"),
+            "[profiles.vps]\nurl = \"https://my-vps:8822\"\n",
+        )
+        .unwrap();
+
+        // SAFETY: serialised by ENV_LOCK; no other test in this crate
+        // mutates HOME at the same time. We also clobber XDG_CONFIG_HOME
+        // to prove macOS resolution ignores it.
+        let prev_home = std::env::var_os("HOME");
+        let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        unsafe {
+            std::env::set_var("HOME", &fake_home);
+            std::env::set_var("XDG_CONFIG_HOME", "/tmp/should-be-ignored-on-mac");
+        }
+        let result = Profiles::load();
+        unsafe {
+            match prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match prev_xdg {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+        let p = result.unwrap();
+        assert_eq!(p.get("vps").unwrap().url, "https://my-vps:8822");
+    }
+
+    /// Regression for v0.8.7..=v0.8.9: when `XDG_CONFIG_HOME` was set
     /// to an empty string (a few login-manager setups do this on
     /// Linux), `default_path()` produced the relative path
     /// `agentum/profiles.toml`, which `Profiles::load_from` resolved
@@ -364,6 +445,7 @@ mod tests {
     /// empty / non-absolute XDG values, matching the `directories`
     /// crate that was used pre-0.8.7.
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn profiles_load_falls_back_when_xdg_is_empty() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
@@ -405,6 +487,7 @@ mod tests {
     /// reading a relative `./agentum/profiles.toml` that depends on
     /// where the binary was invoked.
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn profiles_load_falls_back_when_xdg_is_relative() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
