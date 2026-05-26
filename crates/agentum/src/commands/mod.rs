@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod board;
+pub mod clip_agent;
 pub mod config;
 pub mod doctor;
 pub mod down;

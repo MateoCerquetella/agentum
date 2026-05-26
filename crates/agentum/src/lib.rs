@@ -2,7 +2,10 @@
 //! (`agentum`, `lazyagentum`) can share it.
 
 pub mod cli;
+pub mod clipboard;
 pub mod commands;
+
+use std::path::Path;
 
 pub fn init_tracing() {
     use tracing_subscriber::EnvFilter;
@@ -25,20 +28,36 @@ pub fn init_tracing() {
 /// next full repaint. Skips subscriber init entirely if the cache
 /// dir can't be created — better silent than corrupting the screen.
 pub fn init_tracing_for_tui() {
-    use tracing_subscriber::EnvFilter;
-    let filter = EnvFilter::try_from_env("AGENTUM_LOG")
-        .unwrap_or_else(|_| EnvFilter::new("warn,sqlx=warn,hyper=warn,h2=warn"));
     let Ok(dir) = agentum_store::paths::cache_dir() else {
         return;
     };
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
-    let log_path = dir.join("tui.log");
+    init_tracing_to_file(&dir.join("tui.log"));
+}
+
+/// Tracing init for the `agentum clip-agent` subcommand. Mirrors
+/// `init_tracing_for_tui` but takes a caller-supplied path so the
+/// macOS/Linux log locations can diverge (`~/Library/Logs/agentum`
+/// vs `$XDG_CACHE_HOME/agentum`) without forcing every subcommand
+/// to negotiate that here.
+pub fn init_tracing_for_clip_agent(log_path: &Path) {
+    init_tracing_to_file(log_path);
+}
+
+/// Append-only file tracing subscriber. Private helper shared by the
+/// TUI and clip-agent init paths to keep their behaviour identical.
+/// Skips init entirely on any I/O error — silent is preferable to
+/// crashing the alt-screen or daemonised process at boot.
+fn init_tracing_to_file(log_path: &Path) {
+    use tracing_subscriber::EnvFilter;
+    let filter = EnvFilter::try_from_env("AGENTUM_LOG")
+        .unwrap_or_else(|_| EnvFilter::new("warn,sqlx=warn,hyper=warn,h2=warn"));
     let Ok(file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&log_path)
+        .open(log_path)
     else {
         return;
     };

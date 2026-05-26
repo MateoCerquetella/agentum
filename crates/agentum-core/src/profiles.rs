@@ -79,6 +79,19 @@ impl Profiles {
         Ok(Self { path, file })
     }
 
+    /// Convenience wrapper that resolves the canonical
+    /// `$XDG_CONFIG_HOME/agentum/profiles.toml` path (falling back to
+    /// `$HOME/.config/agentum/profiles.toml`) and delegates to
+    /// `load_from`. Used by both the TUI shim (so it stops having to
+    /// duplicate the resolution logic) and the new clip-agent loop.
+    ///
+    /// Deliberately uses `std::env` instead of the `directories` crate
+    /// so `agentum-core` stays dependency-light — pulling in
+    /// `directories` here would force every consumer to drag it in too.
+    pub fn load() -> Result<Self> {
+        Self::load_from(default_path()?)
+    }
+
     pub fn list(&self) -> Vec<(String, Profile, bool)> {
         let default = self.normalized_default();
         self.file
@@ -168,6 +181,24 @@ impl Profiles {
     pub fn path(&self) -> &Path {
         &self.path
     }
+}
+
+/// Resolve `$XDG_CONFIG_HOME/agentum/profiles.toml`, falling back to
+/// `$HOME/.config/agentum/profiles.toml`. Errors when both env vars
+/// are missing — that's a misconfigured environment, not a missing
+/// file (an absent file is fine; an absent path resolver isn't).
+///
+/// Kept private — callers should prefer `Profiles::load()` so the
+/// resolved path doesn't leak into other code's path-handling.
+fn default_path() -> Result<PathBuf> {
+    let base: PathBuf = if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        PathBuf::from(xdg)
+    } else if let Some(home) = std::env::var_os("HOME") {
+        PathBuf::from(home).join(".config")
+    } else {
+        bail!("neither XDG_CONFIG_HOME nor HOME is set; cannot resolve profiles.toml");
+    };
+    Ok(base.join("agentum").join("profiles.toml"))
 }
 
 /// Profile name allowlist. The set is a strict subset of what TOML
@@ -275,5 +306,42 @@ mod tests {
         .unwrap();
         let p = Profiles::load_from(path).unwrap();
         assert!(p.default_name().is_none());
+    }
+
+    // Serialise tests that mutate XDG_CONFIG_HOME so they don't
+    // collide when `cargo test` runs them concurrently. Same pattern
+    // as `agentum-server::routes::profiles::tests`.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn profiles_load_reads_xdg_config_home() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        let cfg_home = tmp.path().to_path_buf();
+        let profiles_dir = cfg_home.join("agentum");
+        std::fs::create_dir_all(&profiles_dir).unwrap();
+        let path = profiles_dir.join("profiles.toml");
+        std::fs::write(
+            &path,
+            "default = \"vps\"\n[profiles.vps]\nurl = \"https://my-vps:8822\"\n",
+        )
+        .unwrap();
+
+        // SAFETY: serialised by ENV_LOCK; no other test in this crate
+        // mutates XDG_CONFIG_HOME at the same time.
+        let prev = std::env::var_os("XDG_CONFIG_HOME");
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", &cfg_home);
+        }
+        let result = Profiles::load();
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+        let p = result.unwrap();
+        assert_eq!(p.default_name(), Some("vps"));
+        assert_eq!(p.get("vps").unwrap().url, "https://my-vps:8822");
     }
 }

@@ -18,6 +18,8 @@ use tokio::task::JoinHandle;
 use tokio::time::{Instant, interval};
 use uuid::Uuid;
 
+use crate::clipboard::encode_rgba_as_png;
+
 use super::api::{Client, EventMsg, TermOut, TerminalMsg};
 use super::extensions::{self, LAZYGIT};
 use super::iometer::IoMeter;
@@ -3455,26 +3457,6 @@ fn spawn_ctrl_v_image_paste(app: &mut App, client: &Client) {
             }
         }
     });
-}
-
-/// Encode an RGBA pixel buffer as PNG bytes. Used by the Ctrl-V
-/// image-paste handler — arboard hands us raw pixels, and the
-/// daemon's upload route expects a real image file format so agents
-/// can open it without further conversion. Pure synchronous fn so
-/// the unit tests can pin the magic-number prefix without touching
-/// the clipboard.
-fn encode_rgba_as_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
-    use image::codecs::png::PngEncoder;
-    use image::{ExtendedColorType, ImageBuffer, ImageEncoder, Rgba};
-    // image 0.25 wants an owned `Vec<u8>` for `from_raw` (it stores
-    // the container internally). The clone is unavoidable.
-    let buf = ImageBuffer::<Rgba<u8>, _>::from_raw(width, height, rgba.to_vec())
-        .ok_or_else(|| "RGBA buffer size mismatch".to_string())?;
-    let mut out = Vec::with_capacity(rgba.len() / 2);
-    PngEncoder::new(&mut out)
-        .write_image(buf.as_raw(), width, height, ExtendedColorType::Rgba8)
-        .map_err(|e| e.to_string())?;
-    Ok(out)
 }
 
 /// Map an arboard error to a user-readable status message.
@@ -8911,42 +8893,7 @@ mod hint_card_tests {
 
 #[cfg(test)]
 mod ctrl_v_tests {
-    use super::{clipboard_error_message, encode_rgba_as_png};
-
-    /// PNG file format magic bytes. The encoder is third-party
-    /// (`image` 0.25), so the only thing worth asserting at our
-    /// layer is that the output really is a PNG — anything else
-    /// would be re-testing the encoder.
-    const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
-
-    #[test]
-    fn encode_rgba_as_png_produces_png_magic_prefix() {
-        // 2x2 image of opaque white. 4 bytes per pixel × 4 pixels =
-        // 16 bytes. Tiny on purpose — keeps the test fast and the
-        // failure surface narrow (any drift in the encoder's output
-        // prefix is a wire-format regression we want to know about).
-        let rgba = vec![0xff_u8; 16];
-        let out = encode_rgba_as_png(2, 2, &rgba).expect("encode must succeed");
-        assert!(
-            out.len() >= PNG_MAGIC.len(),
-            "output too small: {} bytes",
-            out.len()
-        );
-        assert_eq!(&out[..PNG_MAGIC.len()], PNG_MAGIC, "missing PNG magic");
-    }
-
-    #[test]
-    fn encode_rgba_as_png_rejects_size_mismatch() {
-        // 2x2 should require 16 bytes; passing 15 must error rather
-        // than panic. Defensive against arboard handing back a
-        // truncated buffer mid-paste (unlikely but free to assert).
-        let short = vec![0xff_u8; 15];
-        let err = encode_rgba_as_png(2, 2, &short).unwrap_err();
-        assert!(
-            err.contains("size mismatch"),
-            "expected size-mismatch error, got: {err}"
-        );
-    }
+    use super::clipboard_error_message;
 
     #[test]
     fn clipboard_error_message_pins_user_facing_string() {

@@ -19,8 +19,11 @@ pub fn path() -> Result<PathBuf> {
     Ok(dir.join("profiles.toml"))
 }
 
-/// Load the profile set from the canonical XDG location. Equivalent to
-/// `Profiles::load_from(profiles::path()?)`.
+/// Load the profile set from the canonical XDG location.
+///
+/// Delegates to `agentum_core::profiles::Profiles::load()` so the TUI
+/// and the new `agentum clip-agent` subcommand resolve the same path
+/// the same way — no duplicated env-var handling.
 pub fn load() -> Result<Profiles> {
-    Profiles::load_from(path()?)
+    Profiles::load().map_err(|e| anyhow!("load profiles: {e}"))
 }
