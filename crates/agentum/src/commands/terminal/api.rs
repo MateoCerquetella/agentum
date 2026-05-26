@@ -101,6 +101,20 @@ pub struct AgentInfo {
     pub path: Option<String>,
 }
 
+/// Mirrors `agentum_server::routes::uploads::UploadResponse`. Returned by
+/// `POST /api/sessions/{id}/uploads` after the daemon has written the
+/// image bytes to disk and typed the relative path into the tmux pane.
+/// The TUI only needs `relative_path` + `size_bytes` for the success
+/// toast; `path` (absolute on the daemon host) is captured for
+/// forward-compat debugging surfaces.
+#[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
+pub struct UploadResponse {
+    pub path: String,
+    pub relative_path: String,
+    pub size_bytes: u64,
+}
+
 /// Optional pinned fingerprint, plus an "insecure" escape hatch. The
 /// escape hatch is *only* exposed via an explicit CLI flag and only
 /// covers the user's own machine in throwaway test setups.
@@ -464,6 +478,36 @@ impl Client {
             bail!("{status} — {body}");
         }
         Ok(())
+    }
+
+    /// POST raw image bytes to `/api/sessions/{id}/uploads`. The daemon
+    /// writes the bytes under `<session.workdir>/.agentum-uploads/` and
+    /// types the relative path into the tmux pane (no Enter — the
+    /// agent's prompt commits when the user hits return themselves).
+    /// Returns the daemon's response so the TUI can echo
+    /// `relative_path` + `size_bytes` in a success toast.
+    pub async fn upload_image(
+        &self,
+        id: Uuid,
+        bytes: Vec<u8>,
+        mime: &str,
+    ) -> Result<UploadResponse> {
+        let url = build_upload_url(&self.base, id)?;
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .header(reqwest::header::CONTENT_TYPE, mime)
+            .body(bytes)
+            .send()
+            .await
+            .context("upload_image request failed")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("{status} — {body}");
+        }
+        Ok(resp.json::<UploadResponse>().await?)
     }
 
     /// `GET /api/fs/list` — enumerate directories under `path` (or `$HOME`
@@ -942,6 +986,13 @@ pub async fn probe_health(base: &Url, trust: &TlsTrust, timeout: Duration) -> Re
     }
 }
 
+/// Build the upload URL for a session. Extracted so the Ctrl-V
+/// handler can pin the path shape in a unit test without spinning up
+/// a real `Client`.
+pub fn build_upload_url(base: &Url, id: Uuid) -> Result<Url> {
+    Ok(base.join(&format!("/api/sessions/{id}/uploads"))?)
+}
+
 /// Build a `wss://` (or `ws://`) URL for a daemon WebSocket endpoint.
 ///
 /// `path` MUST be a path-only string (no `?`). Embedding a query in
@@ -989,11 +1040,24 @@ fn backoff_delay(attempt: u32) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use super::ws_url;
+    use super::{build_upload_url, ws_url};
     use url::Url;
+    use uuid::Uuid;
 
     fn base(scheme: &str) -> Url {
         Url::parse(&format!("{scheme}://127.0.0.1:8822/")).unwrap()
+    }
+
+    #[test]
+    fn upload_url_is_session_scoped() {
+        // Pin the wire path so the daemon side (routes/uploads.rs) and
+        // the TUI side never drift on the route shape. Any change
+        // here is a coordinated breaking change.
+        let b = base("https");
+        let id = Uuid::nil();
+        let u = build_upload_url(&b, id).unwrap();
+        assert_eq!(u.scheme(), "https");
+        assert_eq!(u.path(), format!("/api/sessions/{id}/uploads"));
     }
 
     #[test]

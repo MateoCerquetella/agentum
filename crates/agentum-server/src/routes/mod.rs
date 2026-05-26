@@ -16,5 +16,6 @@ pub mod notes;
 pub mod preferences;
 pub mod profiles;
 pub mod sessions;
+pub mod uploads;
 pub mod util;
 pub mod watchdog;
