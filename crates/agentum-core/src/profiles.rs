@@ -188,11 +188,20 @@ impl Profiles {
 /// are missing — that's a misconfigured environment, not a missing
 /// file (an absent file is fine; an absent path resolver isn't).
 ///
-/// Kept private — callers should prefer `Profiles::load()` so the
-/// resolved path doesn't leak into other code's path-handling.
+/// `XDG_CONFIG_HOME` is only honoured when it's a non-empty absolute
+/// path. An empty or relative value is treated the same as "unset"
+/// and we fall through to `$HOME/.config`. This matches the
+/// `directories` crate (the prior path resolver) so users who upgrade
+/// from ≤0.8.6 don't suddenly see an empty server list — the v0.8.7
+/// switch to `std::env`-based resolution silently produced a relative
+/// `agentum/profiles.toml` path (i.e. resolved against CWD) when XDG
+/// was misconfigured, hiding their on-disk profiles.
 fn default_path() -> Result<PathBuf> {
-    let base: PathBuf = if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-        PathBuf::from(xdg)
+    let xdg = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty() && p.is_absolute());
+    let base: PathBuf = if let Some(xdg) = xdg {
+        xdg
     } else if let Some(home) = std::env::var_os("HOME") {
         PathBuf::from(home).join(".config")
     } else {
@@ -343,5 +352,89 @@ mod tests {
         let p = result.unwrap();
         assert_eq!(p.default_name(), Some("vps"));
         assert_eq!(p.get("vps").unwrap().url, "https://my-vps:8822");
+    }
+
+    /// Regression for v0.8.7..=v0.8.8: when `XDG_CONFIG_HOME` was set
+    /// to an empty string (a few login-manager setups do this on
+    /// Linux), `default_path()` produced the relative path
+    /// `agentum/profiles.toml`, which `Profiles::load_from` resolved
+    /// against the current working directory. Users with profiles in
+    /// `~/.config/agentum/profiles.toml` saw an empty server list in
+    /// `agentum terminal`. The fix falls back to `$HOME/.config` for
+    /// empty / non-absolute XDG values, matching the `directories`
+    /// crate that was used pre-0.8.7.
+    #[test]
+    fn profiles_load_falls_back_when_xdg_is_empty() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        let fake_home = tmp.path().to_path_buf();
+        let profiles_dir = fake_home.join(".config").join("agentum");
+        std::fs::create_dir_all(&profiles_dir).unwrap();
+        let path = profiles_dir.join("profiles.toml");
+        std::fs::write(
+            &path,
+            "[profiles.vps]\nurl = \"https://my-vps:8822\"\n",
+        )
+        .unwrap();
+
+        // SAFETY: serialised by ENV_LOCK; no other test in this crate
+        // mutates HOME / XDG_CONFIG_HOME at the same time.
+        let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        let prev_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", "");
+            std::env::set_var("HOME", &fake_home);
+        }
+        let result = Profiles::load();
+        unsafe {
+            match prev_xdg {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+            match prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        let p = result.unwrap();
+        assert_eq!(p.get("vps").unwrap().url, "https://my-vps:8822");
+    }
+
+    /// Same fallback path for non-absolute XDG values. `directories`
+    /// silently ignores relative paths here, so we do too rather than
+    /// reading a relative `./agentum/profiles.toml` that depends on
+    /// where the binary was invoked.
+    #[test]
+    fn profiles_load_falls_back_when_xdg_is_relative() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        let fake_home = tmp.path().to_path_buf();
+        let profiles_dir = fake_home.join(".config").join("agentum");
+        std::fs::create_dir_all(&profiles_dir).unwrap();
+        std::fs::write(
+            profiles_dir.join("profiles.toml"),
+            "[profiles.lan]\nurl = \"https://lan:8822\"\n",
+        )
+        .unwrap();
+
+        let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        let prev_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", "relative/path");
+            std::env::set_var("HOME", &fake_home);
+        }
+        let result = Profiles::load();
+        unsafe {
+            match prev_xdg {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+            match prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        let p = result.unwrap();
+        assert_eq!(p.get("lan").unwrap().url, "https://lan:8822");
     }
 }
