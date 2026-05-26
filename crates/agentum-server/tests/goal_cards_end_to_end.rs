@@ -24,7 +24,7 @@
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-use agentum_core::{Event, Status};
+use agentum_core::{Event, NewSession, Status};
 use agentum_server::AppState;
 use agentum_store::Store;
 use axum::Router;
@@ -349,6 +349,22 @@ async fn goal_cards_full_happy_path() {
     // /claim to set claimed_by before each status transition.
     let mut child_ids: Vec<i64> = Vec::with_capacity(3);
     for key in ["a", "b", "c"] {
+        // Real session row per child — `create_board_item` validates that
+        // session_id references an existing sessions row (the dual-write
+        // landed in v0.8.3 / e081d89). A dummy UUID is rejected with 404.
+        let child_session = state
+            .store
+            .create_session(NewSession {
+                name: format!("child-{key}-{}", uuid::Uuid::new_v4()),
+                workdir: "/tmp".to_string(),
+                tool: "bash".to_string(),
+                model: None,
+                flags: vec![],
+                card_id: None,
+            })
+            .await
+            .expect("create child session must succeed");
+
         let resp = app
             .clone()
             .oneshot(post_json(
@@ -360,10 +376,10 @@ async fn goal_cards_full_happy_path() {
                     "status": "todo",
                     "workdir": "/tmp",
                     "tool": "bash",
-                    // A dummy session_id satisfies the `done` gate
-                    // (SessionOrComment OR-clause) without needing a real
-                    // agent session or a comment on every card.
-                    "session_id": "00000000-0000-0000-0000-000000000001",
+                    // Real session_id satisfies the `done` gate
+                    // (SessionOrComment OR-clause) AND the store's dual-write
+                    // existence check.
+                    "session_id": child_session.id.to_string(),
                     "parent_goal_id": goal_id,
                 }),
             ))
