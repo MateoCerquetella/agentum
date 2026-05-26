@@ -342,12 +342,11 @@ impl Store {
         // Returns AlreadyExists (HTTP 409) when the target session is
         // already bound to a different card.
         if let Some(sid) = &new.session_id {
-            let row: Option<(String, Option<i64>)> = sqlx::query_as(
-                "SELECT id, card_id FROM sessions WHERE id = ?",
-            )
-            .bind(sid)
-            .fetch_optional(&mut *tx)
-            .await?;
+            let row: Option<(String, Option<i64>)> =
+                sqlx::query_as("SELECT id, card_id FROM sessions WHERE id = ?")
+                    .bind(sid)
+                    .fetch_optional(&mut *tx)
+                    .await?;
             match row {
                 None => return Err(StoreError::NotFound(format!("session {sid}"))),
                 Some((_, Some(other))) => {
@@ -3057,7 +3056,10 @@ mod tests {
             .unwrap();
 
         // Forward leg: card.session_id = session uuid.
-        assert_eq!(card.session_id.as_deref(), Some(sess.id.to_string().as_str()));
+        assert_eq!(
+            card.session_id.as_deref(),
+            Some(sess.id.to_string().as_str())
+        );
 
         // Reverse leg: sessions.card_id = card.id (the bug this test pins
         // against — the previous implementation skipped this UPDATE).
