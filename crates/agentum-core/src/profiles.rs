@@ -453,11 +453,7 @@ mod tests {
         let profiles_dir = fake_home.join(".config").join("agentum");
         std::fs::create_dir_all(&profiles_dir).unwrap();
         let path = profiles_dir.join("profiles.toml");
-        std::fs::write(
-            &path,
-            "[profiles.vps]\nurl = \"https://my-vps:8822\"\n",
-        )
-        .unwrap();
+        std::fs::write(&path, "[profiles.vps]\nurl = \"https://my-vps:8822\"\n").unwrap();
 
         // SAFETY: serialised by ENV_LOCK; no other test in this crate
         // mutates HOME / XDG_CONFIG_HOME at the same time.
