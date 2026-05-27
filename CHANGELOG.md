@@ -4,6 +4,26 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.11] — 2026-05-26
+
+### Fixed
+- **TUI sidebar agent dot was stuck on green for any session whose
+  connect-time replay snapshot was missing.** The dot color used to
+  fall back to `status_dot(Status::Running) = green ●` whenever the
+  session was not in `app.idle` / `app.awaiting_input` — but those
+  sets are only populated by inbound `agent.*` events. A fresh-
+  connected TUI, a daemon that returned an empty
+  `latest_agent_event_per_session` snapshot, or a session that had
+  not yet emitted a state event all read as a misleading pulsing
+  green for the lifetime of the session. Same class of bug as
+  v0.7.49's dashboard regression, this time in the terminal client.
+  Green now requires *positive evidence* the agent is working
+  (new `app.working: HashSet<Uuid>` populated by `agent.working`
+  and the `state: working` variant of `agent.input_resolved`). A
+  Running tmux pane with no known agent state reads as a neutral
+  muted dot until the watchdog emits its first observation
+  (typically within ~1 s).
+
 ## [0.7.63] — 2026-05-18
 
 ### Fixed

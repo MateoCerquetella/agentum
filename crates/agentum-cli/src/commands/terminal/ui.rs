@@ -834,14 +834,21 @@ fn render_tree_row(
             let session = app.sessions.iter().find(|s| s.id == id);
             let (name, dot, dot_color, icon_glyph, icon_color, tool_label) = match session {
                 Some(s) => {
-                    // Priority: Crashed > Awaiting > Idle > underlying
-                    // status. A dead pane should never look like it's
-                    // just waiting; a pending prompt overrides the
-                    // green/idle dot so attention is unmissable; a
-                    // sleeping agent reads as muted `◌` instead of
-                    // green `●` so "working" and "idle at prompt" are
-                    // visually distinct without a 2-cell emoji that
-                    // would shift later spans.
+                    // Priority: Crashed > Awaiting > Idle > Working >
+                    // underlying status. A dead pane should never look
+                    // like it's just waiting; a pending prompt overrides
+                    // the green/idle dot so attention is unmissable; a
+                    // sleeping agent reads as muted `◌` instead of green
+                    // `●` so "working" and "idle at prompt" are visually
+                    // distinct.
+                    //
+                    // Green `●` requires *positive evidence* the agent
+                    // is working (`app.working`). The old fallback
+                    // `status_dot(Status::Running)` returned green for
+                    // every running tmux pane, which made every session
+                    // whose connect-time replay snapshot was missing
+                    // read as a misleading pulsing green
+                    // (#stuck-green-dot regression).
                     let (dot, color) = if s.status == agentum_core::Status::Crashed {
                         status_dot(s.status)
                     } else if app.awaiting_input.contains(&s.id) {
@@ -854,6 +861,17 @@ fn render_tree_row(
                         // distinct from green (working), yellow
                         // (awaiting), and red (crashed).
                         ("◌", p.accent_alt)
+                    } else if app.working.contains(&s.id)
+                        && s.status == agentum_core::Status::Running
+                    {
+                        status_dot(s.status)
+                    } else if s.status == agentum_core::Status::Running {
+                        // Running tmux pane, agent state unknown (no
+                        // agent.* observation yet, or replay snapshot
+                        // was empty). Neutral dot instead of green —
+                        // the watchdog will emit `agent.working` within
+                        // ~1 s if the agent is actually active.
+                        ("●", p.muted)
                     } else {
                         status_dot(s.status)
                     };
