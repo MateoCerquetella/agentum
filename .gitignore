@@ -28,3 +28,7 @@ web/dist
 .claude/
 .syncthing.*
 .playwright-mcp/
+
+# Runtime upload sink — written by the dashboard's drag-drop / paste flow.
+# Local data, not source — should never enter the repo.
+.agentum-uploads/
