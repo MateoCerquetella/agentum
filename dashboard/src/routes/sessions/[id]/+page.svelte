@@ -5,6 +5,7 @@
   import { api, type Session, type BoardItem } from '$lib/api';
   import Terminal from '$components/Terminal.svelte';
   import SessionRail from '$components/dashboard/SessionRail.svelte';
+  import SessionGitPanel from '$components/SessionGitPanel.svelte';
   import { ctxOf, fmtUptime } from '$lib/dashboard';
 
   /* -- session state ------------------------------------------------- */
@@ -288,6 +289,10 @@
       <SessionRail s={session} />
     {/if}
   </div>
+
+  {#if session}
+    <SessionGitPanel session={session} />
+  {/if}
 
   {#if error}
     <div class="error mono" role="alert">{error}</div>

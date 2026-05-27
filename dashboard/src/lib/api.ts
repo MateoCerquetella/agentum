@@ -444,6 +444,17 @@ export interface PaneSnapshot {
   captured_at: string; // RFC3339
 }
 
+/** Repo-relative path lists from `git status --porcelain` in a session's
+ *  worktree (or workdir when no worktree is set). Returned by
+ *  GET /api/sessions/{id}/git/status. Files with both staged + unstaged
+ *  changes appear in BOTH `staged` and `unstaged` — render them as two
+ *  rows so the user can act on either side. */
+export interface GitStatus {
+  staged: string[];
+  unstaged: string[];
+  untracked: string[];
+}
+
 export const api = {
   health: () => request<Health>('/api/health'),
   authStatus: () => request<AuthStatus>('/api/auth/status'),
@@ -547,6 +558,42 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body)
     }),
+
+  // ---------- git (ORCA §3 diff viewer) ----------
+  /** GET /api/sessions/{id}/git/status — repo-relative path lists. */
+  gitStatus: (id: string) =>
+    request<GitStatus>(`/api/sessions/${encodeURIComponent(id)}/git/status`),
+  /** GET /api/sessions/{id}/git/diff?path=&staged= — unified diff text.
+   *  The server returns `text/plain`, so we bypass the JSON-parsing
+   *  `request()` helper and read the response body verbatim. */
+  async gitDiff(id: string, path: string, staged = false): Promise<string> {
+    const qs = new URLSearchParams({ path, staged: String(staged) }).toString();
+    const headers = new Headers();
+    const token = readToken();
+    if (token) headers.set('authorization', `Bearer ${token}`);
+    const res = await fetch(
+      apiUrl(`/api/sessions/${encodeURIComponent(id)}/git/diff?${qs}`),
+      { headers }
+    );
+    if (res.status === 401) {
+      setToken(null);
+      throw new ApiError(401, 'unauthorized');
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new ApiError(res.status, text || res.statusText);
+    }
+    return res.text();
+  },
+  /** POST /api/sessions/{id}/git/commit — stages + commits the listed
+   *  paths in one shot. The server pins the author identity
+   *  (`agentum-bot <agentum@localhost>`) so worktrees that inherit no
+   *  gitconfig still commit cleanly. */
+  gitCommit: (id: string, message: string, paths: string[]) =>
+    request<{ sha: string }>(
+      `/api/sessions/${encodeURIComponent(id)}/git/commit`,
+      { method: 'POST', body: JSON.stringify({ message, paths }) }
+    ),
 
   /**
    * Open a WebSocket to the session's pane stream. Caller is responsible
