@@ -15,6 +15,7 @@
   import { connect as connectEvents, disconnect as disconnectEvents } from '$stores/events';
   import { startEventBridge, stopEventBridge } from '$stores/event-bridge';
   import { startHostMetrics } from '$stores/host';
+  import { startUsagePoll, stopUsagePoll } from '$stores/usage';
   import { startAttentionBridge } from '$stores/attention';
   import { tweaks, applyTweaks } from '$stores/tweaks';
   import { startThemeBridge, pullPreferences } from '$stores/theme-bridge';
@@ -123,6 +124,7 @@
         connectEvents();
         startEventBridge();
         startHostMetrics();
+        startUsagePoll();
         startAttentionBridge();
         // Re-probe immediately after login so the chip refreshes the
         // status of any profile whose token we just acquired.
@@ -142,7 +144,7 @@
     };
   });
 
-  onDestroy(() => { stopEventBridge(); disconnectEvents(); });
+  onDestroy(() => { stopEventBridge(); disconnectEvents(); stopUsagePoll(); });
 </script>
 
 <TokenGate>

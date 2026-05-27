@@ -1657,9 +1657,14 @@ struct SessionRow {
     #[sqlx(default)]
     worktree_base_ref: Option<String>,
     /* ---- agent hooks (migration 0017) ---- */
+    // Columns are persisted by the migration but consumed via the in-memory
+    // `AppState.hook_tokens` map for now; reads from these row fields land
+    // in a follow-up that survives daemon restarts.
     #[sqlx(default)]
+    #[allow(dead_code)]
     hook_token: Option<String>,
     #[sqlx(default)]
+    #[allow(dead_code)]
     hook_events_enabled: i64,
 }
 

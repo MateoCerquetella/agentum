@@ -15,7 +15,7 @@ pub fn router() -> Router<AppState> {
 /// feature-detect without parsing version strings. Whenever you add a
 /// new capability that depends on server-side behaviour (currently:
 /// PTY resize messages over the WS terminal stream), append a tag.
-const CAPABILITIES: &[&str] = &["resize", "resume"];
+const CAPABILITIES: &[&str] = &["resize", "resume", "refresh"];
 
 #[derive(Serialize)]
 struct Health {

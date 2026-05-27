@@ -9,6 +9,7 @@
   import { tweaks, setTheme } from '$stores/tweaks';
   import { THEMES } from '$stores/themes';
   import { api } from '$lib/api';
+  import { usage, refreshUsageNow, claudeChip, codexChip } from '$stores/usage';
 
   type Entry = {
     id: string;
@@ -106,6 +107,52 @@
     });
     out.push({ id: 'cmd:settings',               title: 'Open settings',                 badge: 'cmd', action: () => goto('/settings') });
 
+    // Connect-account entries (ORCA §accounts port). Spawn a bash
+    // pane in $HOME and auto-type the login command so the OAuth
+    // flow happens visibly in-app. We don't manage credentials —
+    // Claude Code / Codex CLIs own that; we just open the door.
+    const u = get(usage);
+    const claudeReady = u?.claude?.claude_installed;
+    const codexReady = u?.codex?.codex_installed;
+    out.push({
+      id: 'cmd:connect-claude',
+      title: claudeReady ? 'Re-authenticate Claude account' : 'Connect Claude account',
+      badge: 'auth',
+      subtitle: claudeReady ? 'runs: claude /login' : 'first run will install if needed',
+      action: () => { closePalette(); void connectAccount('claude', '/login'); }
+    });
+    out.push({
+      id: 'cmd:connect-codex',
+      title: codexReady ? 'Re-authenticate Codex account' : 'Connect Codex account',
+      badge: 'auth',
+      subtitle: codexReady ? 'runs: codex login' : 'first run will install if needed',
+      action: () => { closePalette(); void connectAccount('codex', 'login'); }
+    });
+
+    // Usage commands — let the user yank the chip's contents without
+    // hover-and-read. Selecting these refreshes from the daemon so
+    // a stale chip can be force-poked.
+    const chipClaude = get(claudeChip);
+    const chipCodex = get(codexChip);
+    if (chipClaude.show) {
+      out.push({
+        id: 'cmd:usage-claude',
+        title: `Show Claude usage — ${chipClaude.label}`,
+        badge: 'usage',
+        subtitle: chipClaude.resets ?? chipClaude.detail,
+        action: () => { refreshUsageNow(); closePalette(); }
+      });
+    }
+    if (chipCodex.show) {
+      out.push({
+        id: 'cmd:usage-codex',
+        title: `Show Codex usage — ${chipCodex.label}`,
+        badge: 'usage',
+        subtitle: chipCodex.resets ?? chipCodex.detail,
+        action: () => { refreshUsageNow(); closePalette(); }
+      });
+    }
+
     // Pages
     const pages: Array<[string, string]> = [
       ['/',         'Agents'],
@@ -159,6 +206,45 @@
   // user's home, start it, and navigate to its detail page. Errors fall
   // through to the console — the dashboard's main page has its own banner;
   // here we keep the palette interaction silent on success.
+  // Spawns a bash pane in $HOME, then types the agent's login
+  // command. We give the pane ~600ms to fully attach before sending
+  // input — without it, the keystrokes race tmux's pane-init and
+  // land into the void.
+  async function connectAccount(tool: 'claude' | 'codex', subcommand: string) {
+    try {
+      let workdir = '.';
+      try {
+        const home = await api.listDir();
+        if (home?.path) workdir = home.path;
+      } catch { /* best-effort */ }
+      const suffix = Math.random().toString(16).slice(2, 6);
+      const created = await api.createSession({
+        name: `${tool}-login-${suffix}`,
+        workdir,
+        tool: 'bash',
+        model: null,
+        flags: []
+      });
+      try { await api.startSession(created.id); } catch { /* surface on detail page */ }
+      await loadSessions();
+      await goto(`/sessions/${created.id}`);
+      // Send the login command after a beat. setTimeout because the
+      // session-detail page mounts the WS asynchronously; a too-fast
+      // send writes into a pane that isn't drawing yet.
+      setTimeout(() => {
+        void api
+          .sendInput(created.id, {
+            text: `${tool} ${subcommand}`,
+            append_enter: true
+          })
+          .then(() => refreshUsageNow())
+          .catch((err) => console.error(`${tool} login send failed`, err));
+      }, 600);
+    } catch (err) {
+      console.error(`connect-${tool} failed`, err);
+    }
+  }
+
   async function spawnShellFromPalette() {
     try {
       let workdir = '.';

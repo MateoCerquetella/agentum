@@ -145,6 +145,7 @@ async fn status(
 ///   * `?? path`      → untracked
 ///   * `X` ≠ space/?  → staged (path lands in `staged`)
 ///   * `Y` ≠ space/?  → unstaged (path lands in `unstaged`)
+///
 /// A path with both X and Y set lands in BOTH lists, which is the
 /// "added with further unsaved edits" case.
 fn parse_porcelain_z(bytes: &[u8]) -> GitStatus {

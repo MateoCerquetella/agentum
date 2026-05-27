@@ -87,6 +87,7 @@ async fn make_state(dir: &std::path::Path) -> AppState {
         no_auth: true,
         clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         clipboard_request_bus: broadcast::channel(64).0,
+        hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     }
 }
 
@@ -500,6 +501,12 @@ async fn card_session_binding_full_happy_path() -> anyhow::Result<()> {
         // by reading the auth.rs source at compile time. Static proof that the route
         // inherits bearer-auth middleware; runtime enforcement is covered by the
         // plan 02-02 unit tests inside the server crate.
+        //
+        // Hook endpoints (`/api/sessions/{id}/hook`) are intentionally public for
+        // the per-session ephemeral-token flow — agent CLIs don't know the user's
+        // bearer token. The runtime matcher requires BOTH a `/api/sessions/` prefix
+        // AND a `/hook` suffix, so pane/stream/etc. can't slip through. We assert
+        // the narrower invariant: no `/pane` literal in the allow-list.
         const AUTH_RS: &str = include_str!("../src/auth.rs");
         let is_public_fn = {
             let start = AUTH_RS
@@ -512,8 +519,12 @@ async fn card_session_binding_full_happy_path() -> anyhow::Result<()> {
             &AUTH_RS[start..end_marker]
         };
         assert!(
-            !is_public_fn.contains("/api/sessions"),
-            "is_public must NOT grant public access to /api/sessions/* (pane route would be unprotected)"
+            !is_public_fn.contains("/pane"),
+            "is_public must NOT grant public access to /api/sessions/{{id}}/pane"
+        );
+        assert!(
+            !is_public_fn.contains("/stream"),
+            "is_public must NOT grant public access to /api/sessions/{{id}}/stream"
         );
 
         // === Scenario 7: Comment bridge — agent.finished inserts [system] comment (BIND-04 + D-06) ===

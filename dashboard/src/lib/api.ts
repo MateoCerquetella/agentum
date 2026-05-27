@@ -455,6 +455,40 @@ export interface GitStatus {
   untracked: string[];
 }
 
+/**
+ * Plan-usage snapshot returned by `/api/usage`. Backend scans
+ * `~/.claude/projects` (token sum over a 5h rolling window) and
+ * `~/.codex/sessions` (most recent `token_count` event's
+ * `rate_limits` block from the OpenAI response).
+ */
+export interface ClaudeUsage {
+  window_tokens: number;
+  window_start_ms: number | null;
+  window_end_ms: number | null;
+  all_time_tokens: number;
+  by_model: Record<string, number>;
+  claude_installed: boolean;
+}
+
+export interface CodexUsageWindow {
+  used_percent: number;
+  window_minutes: number;
+  resets_at: number;
+}
+
+export interface CodexUsage {
+  primary: CodexUsageWindow | null;
+  secondary: CodexUsageWindow | null;
+  plan_type: string | null;
+  codex_installed: boolean;
+}
+
+export interface UsageBundle {
+  claude: ClaudeUsage;
+  codex: CodexUsage;
+  generated_at_ms: number;
+}
+
 export const api = {
   health: () => request<Health>('/api/health'),
   authStatus: () => request<AuthStatus>('/api/auth/status'),
@@ -594,6 +628,10 @@ export const api = {
       `/api/sessions/${encodeURIComponent(id)}/git/commit`,
       { method: 'POST', body: JSON.stringify({ message, paths }) }
     ),
+
+  // ---------- usage (Claude/Codex plan headroom) ----------
+  /** GET /api/usage — plan-usage snapshot for the sidebar chip. */
+  getUsage: () => request<UsageBundle>('/api/usage'),
 
   /**
    * Open a WebSocket to the session's pane stream. Caller is responsible

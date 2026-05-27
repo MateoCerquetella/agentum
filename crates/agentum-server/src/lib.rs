@@ -32,6 +32,7 @@ mod routes;
 mod rules;
 pub mod tls;
 mod transcript_store;
+pub mod usage;
 
 pub use transcript_store::TranscriptStore;
 
@@ -221,6 +222,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::watchdog::router())
         .merge(routes::fs::router())
         .merge(routes::git::router())
+        .merge(routes::usage::router())
         .layer(axum_mw::from_fn_with_state(
             state.clone(),
             auth::require_token,

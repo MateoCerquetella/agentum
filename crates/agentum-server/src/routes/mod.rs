@@ -19,5 +19,6 @@ pub mod preferences;
 pub mod profiles;
 pub mod sessions;
 pub mod uploads;
+pub mod usage;
 pub mod util;
 pub mod watchdog;

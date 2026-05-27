@@ -13,6 +13,7 @@
   } from '$lib/profiles';
   import { fleet, profileHostHint, versionDrift } from '$stores/fleet';
   import { awaitingInput, idleSessions } from '$stores/attention';
+  import { claudeChip, codexChip } from '$stores/usage';
 
   /**
    * Map server-side Status onto the design's state vocabulary used for
@@ -312,12 +313,47 @@
     </div>
   </div>
 
-  <div class="footer">
-    <span class="dot"></span>
-    <span style="color: var(--fg-2);">tmux</span>
-    <span>· {liveCount} pane{liveCount === 1 ? '' : 's'}</span>
-    <span style="flex: 1;"></span>
-    <span style="color: var(--fg-2);">{serverVersion ? `v${serverVersion}` : ''}</span>
+  <div class="footer-stack">
+    {#if $claudeChip.show || $codexChip.show}
+      <div class="usage-row">
+        {#if $claudeChip.show}
+          <button
+            class="usage-chip {$claudeChip.severity}"
+            title={`${$claudeChip.detail}${$claudeChip.resets ? ' · ' + $claudeChip.resets : ''}`}
+            onclick={() => openPalette()}
+          >
+            <span class="usage-label">{$claudeChip.label}</span>
+            {#if $claudeChip.resets}
+              <span class="usage-resets mono">{$claudeChip.resets}</span>
+            {/if}
+          </button>
+        {/if}
+        {#if $codexChip.show}
+          <button
+            class="usage-chip {$codexChip.severity}"
+            title={`${$codexChip.detail}${$codexChip.resets ? ' · ' + $codexChip.resets : ''}`}
+            onclick={() => openPalette()}
+          >
+            {#if $codexChip.percent !== null}
+              <span class="usage-bar" aria-hidden="true">
+                <span class="usage-fill" style:width={`${Math.min(100, $codexChip.percent)}%`}></span>
+              </span>
+            {/if}
+            <span class="usage-label">{$codexChip.label}</span>
+            {#if $codexChip.resets}
+              <span class="usage-resets mono">{$codexChip.resets}</span>
+            {/if}
+          </button>
+        {/if}
+      </div>
+    {/if}
+    <div class="footer">
+      <span class="dot"></span>
+      <span style="color: var(--fg-2);">tmux</span>
+      <span>· {liveCount} pane{liveCount === 1 ? '' : 's'}</span>
+      <span style="flex: 1;"></span>
+      <span style="color: var(--fg-2);">{serverVersion ? `v${serverVersion}` : ''}</span>
+    </div>
   </div>
 </aside>
 
@@ -551,6 +587,83 @@
     font-size: 11px;
     color: var(--fg-3);
     font-family: var(--mono);
+  }
+
+  /* --- Plan-usage chip (ORCA §claude-usage / §codex-usage port). The
+     chip sits above the version footer and reads as a calm status
+     pill at idle. Severity bumps the border + bar color when the
+     window starts filling up. */
+  .footer-stack {
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--border);
+  }
+  .usage-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px 4px;
+  }
+  .usage-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm, 4px);
+    color: var(--fg-2);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--t-hover, 150ms ease), border-color var(--t-hover, 150ms ease);
+    position: relative;
+    overflow: hidden;
+  }
+  .usage-chip:hover {
+    background: color-mix(in srgb, var(--fg) 5%, transparent);
+    color: var(--fg);
+  }
+  .usage-chip.warn { border-color: var(--amber, #ffb454); }
+  .usage-chip.danger { border-color: var(--crash, #ff4d4f); color: var(--fg); }
+  .usage-label {
+    font-size: 11px;
+    font-family: var(--mono);
+    letter-spacing: 0.02em;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    position: relative;
+    z-index: 1;
+  }
+  .usage-resets {
+    font-size: 10px;
+    color: var(--fg-3);
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+  }
+  /* Bar lives behind the label as a subtle fill so the chip stays
+     compact instead of needing a second row. */
+  .usage-bar {
+    position: absolute;
+    inset: 0;
+    background: transparent;
+    overflow: hidden;
+    border-radius: inherit;
+  }
+  .usage-fill {
+    display: block;
+    height: 100%;
+    background: color-mix(in srgb, var(--cta) 18%, transparent);
+    transition: width 400ms ease;
+  }
+  .usage-chip.warn .usage-fill {
+    background: color-mix(in srgb, var(--amber, #ffb454) 25%, transparent);
+  }
+  .usage-chip.danger .usage-fill {
+    background: color-mix(in srgb, var(--crash, #ff4d4f) 30%, transparent);
   }
 
   /* Phone: drawer-mode sidebar gets fatter rows so taps actually land

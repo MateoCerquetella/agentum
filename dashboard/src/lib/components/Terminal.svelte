@@ -53,6 +53,7 @@
   // capability isn't there.
   let lastSentSize = { cols: 0, rows: 0 };
   let resizeSupported = false;
+  let refreshSupported = false;
   function sendResize() {
     if (!resizeSupported) return;
     if (!ws || ws.readyState !== WebSocket.OPEN || !term) return;
@@ -62,6 +63,20 @@
     if (cols === lastSentSize.cols && rows === lastSentSize.rows) return;
     lastSentSize = { cols, rows };
     ws.send(JSON.stringify({ resize: { cols, rows } }));
+  }
+
+  // Server-side re-snapshot. Used to clear initial-snapshot corruption
+  // — sometimes the first capture-pane lands mid-repaint or before the
+  // client's final layout has settled, leaving scrollback artefacts
+  // that only a fresh `ESC c + capture-pane -e` reliably wipes.
+  //
+  // Capability-gated via `/api/health`: older daemons forward unknown
+  // text frames to `tmux send-keys`, so silently downgrading is the
+  // only safe option.
+  function sendRefresh() {
+    if (!refreshSupported) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ refresh: true }));
   }
 
   let destroyed = false;
@@ -128,8 +143,10 @@
     // correctly-sized resize frame.
     try {
       const h = await api.health();
-      resizeSupported = Array.isArray(h.capabilities) && h.capabilities.includes('resize');
-    } catch { /* leave resizeSupported = false */ }
+      const caps = Array.isArray(h.capabilities) ? h.capabilities : [];
+      resizeSupported = caps.includes('resize');
+      refreshSupported = caps.includes('refresh');
+    } catch { /* leave resizeSupported / refreshSupported = false */ }
     if (destroyed) return;
 
     // Route the WS to the endpoint that owns this session, not just
@@ -152,6 +169,20 @@
       // Reset cache so the first send always fires once we know the size.
       lastSentSize = { cols: 0, rows: 0 };
       sendResize();
+      // Schedule a single re-snapshot once the host layout has settled.
+      // The initial snapshot occasionally lands at the wrong grid (host
+      // not yet fully laid out, ResizeObserver hasn't fired the final
+      // fit, embedded TUI mid-repaint) and leaves garbled scrollback
+      // characters until the next agent output overwrites them — which
+      // can be minutes for an idle pane. A delayed re-snapshot wipes
+      // the corruption without touching the live byte tail. No-op on
+      // older daemons via the capability gate.
+      setTimeout(() => {
+        if (destroyed) return;
+        fit?.fit();
+        sendResize();
+        sendRefresh();
+      }, 250);
     };
     ws.onmessage = (ev) => {
       if (typeof ev.data === 'string') {

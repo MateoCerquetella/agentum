@@ -3,6 +3,8 @@ import { tweaks } from './tweaks';
 import { notify, requestPermission, notifyPermission } from './notify';
 import { playChime } from './chime';
 import { applyServerPrefs } from './theme-bridge';
+import { profiles, activeProfileId } from '../profiles';
+import { wsUrlForProfile } from '../profiles';
 
 export interface BusEvent {
   kind: string;
@@ -10,6 +12,12 @@ export interface BusEvent {
   session_name: string | null;
   payload: Record<string, unknown>;
   ts: string;
+  /**
+   * Source profile id — stamped by the bus before fanout so listeners
+   * can attribute the event to a specific endpoint. Undefined for
+   * locally-synthesised events.
+   */
+  profile?: string;
 }
 
 export interface Toast {
@@ -26,12 +34,11 @@ let nextToastId = 1;
 export const toasts: Writable<Toast[]> = writable([]);
 
 /**
- * Live WS connection state, surfaced for the topbar offline banner.
- * `idle` = haven't tried to connect yet (page just loaded);
- * `connected` = socket open;
- * `reconnecting` = socket closed, backoff in flight. `attempt` follows
- *   the same counter as the WS handler so a `>= 2` test in the UI
- *   debounces single-blip reconnects.
+ * Live WS connection state for the **active** profile, surfaced for
+ * the topbar offline banner. Non-active profile buses run in the
+ * background and don't affect this — the banner is the user's primary
+ * "is my dashboard live" signal and that's anchored to whichever
+ * endpoint they're sitting on.
  */
 export type ConnStatus =
   | { state: 'idle' }
@@ -40,42 +47,25 @@ export type ConnStatus =
 
 export const connStatus: Writable<ConnStatus> = writable({ state: 'idle' });
 
-// Track HTTP failures alongside the WS one. The WS connect/disconnect
-// flips connStatus directly; the HTTP path can flip to `reconnecting`
-// when fetches start failing (daemon went away, LAN dropped, …) even
-// before the WS notices via its own onclose. Only the WS onopen is
-// allowed to flip back to `connected` — that's the authoritative
-// signal. Counted as "the next WS retry attempt" so the same `>= 2`
-// threshold in the UI keeps both halves debounced consistently.
+// Track HTTP failures alongside the active-profile WS one. The WS
+// connect/disconnect flips connStatus directly; the HTTP path can
+// flip to `reconnecting` when fetches start failing (daemon went
+// away, LAN dropped, …) even before the WS notices via its own
+// onclose. Only the WS onopen is allowed to flip back to `connected`
+// — that's the authoritative signal.
 let httpFailures = 0;
 const HTTP_FAIL_THRESHOLD = 2;
 
-/** Called by the HTTP request layer on every successful fetch. */
 export function markFetchOk(): void {
   httpFailures = 0;
-  // Do NOT flip to `connected` here — the WS is the source of truth
-  // for the bus being live. A single successful HTTP probe doesn't
-  // mean the event stream is back.
 }
 
-/**
- * Called when a fetch throws (network error) or returns 5xx. 4xx is
- * not a network problem so skip; 401 is the gate's job. We count
- * consecutive failures and flip to `reconnecting` once we cross the
- * threshold, mirroring the WS retry counter.
- */
 export function markFetchFailed(): void {
   httpFailures += 1;
   if (httpFailures < HTTP_FAIL_THRESHOLD) return;
   connStatus.update((s) => {
-    // Already reconnecting via the WS path? Leave it — the WS-side
-    // attempt counter is more precise.
     if (s.state === 'reconnecting') return s;
-    return {
-      state: 'reconnecting',
-      attempt: httpFailures,
-      nextDelayMs: 0,
-    };
+    return { state: 'reconnecting', attempt: httpFailures, nextDelayMs: 0 };
   });
 }
 
@@ -87,10 +77,6 @@ function pushToast(t: Omit<Toast, 'id' | 'created_at'>) {
   }, t.ttl_ms);
 }
 
-/// Programmatic toast — used by callers outside the WS event loop
-/// (e.g. drag-drop snap-back in `stores/board.ts`). Same semantics as
-/// the internal `pushToast`; renamed to keep the call-site reading
-/// like a public API.
 export function showToast(t: Omit<Toast, 'id' | 'created_at'>): void {
   pushToast(t);
 }
@@ -99,34 +85,23 @@ export function dismissToast(id: number) {
   toasts.update((xs) => xs.filter((x) => x.id !== id));
 }
 
-let ws: WebSocket | null = null;
-let stopRequested = false;
-let reconnectAttempt = 0;
+// ---------- multi-profile connection registry ----------
 
-/**
- * Wall-clock time the WS connected. Toasts/notifications fired within
- * `RECONNECT_QUIET_MS` of that moment are suppressed — when the daemon
- * restarts or the network blips, the watchdog often re-classifies a
- * handful of panes simultaneously and we'd otherwise stack a toast per
- * session for events the user did not cause and cannot meaningfully
- * act on.
- */
-let connectedAt = 0;
+interface Conn {
+  profileId: string;
+  ws: WebSocket | null;
+  /** True after `disconnect()` / `closeConn()` — suppresses auto-reconnect. */
+  stopRequested: boolean;
+  reconnectAttempt: number;
+  connectedAt: number;
+}
+
+const conns = new Map<string, Conn>();
+let started = false;
+
 const RECONNECT_QUIET_MS = 3000;
-
-/**
- * Pending `agent.finished` notifications, keyed by session id. We
- * defer them by `FINISHED_DEBOUNCE_MS` so a transient Working→Idle→
- * Working flicker — common when a tool call returns an error and the
- * agent immediately retries — gets cancelled by the follow-up
- * `agent.working` event instead of toasting "X finished" mid-turn.
- */
-// Short safety net for Working→Idle→Working flickers. Was 2500 ms; a
-// long wait felt like "no notification" to users staring at the dot.
-// The watchdog is its own debounce-free signal source as of v0.7.51,
-// so this only needs to cover the rare tool-error + retry burst, not
-// the watchdog's classification window.
 const FINISHED_DEBOUNCE_MS = 800;
+
 const pendingFinished = new Map<string, ReturnType<typeof setTimeout>>();
 function clearPendingFinished(sid: string) {
   const t = pendingFinished.get(sid);
@@ -136,24 +111,21 @@ function clearPendingFinished(sid: string) {
   }
 }
 
-// Wire the events WS through the profile-aware helper so a profile
-// switch routes future reconnects at the new endpoint. The legacy
-// inline URL builder pre-dated multi-endpoint support and only ever
-// looked at the page origin; that broke remote-profile event streams.
-import { eventsUrlForActiveProfile } from './profile-bridge';
-
-function eventsUrl(): string {
-  return eventsUrlForActiveProfile();
+function isActive(profileId: string): boolean {
+  return get(activeProfileId) === profileId;
 }
 
-function bind(socket: WebSocket) {
+function eventsUrlFor(profileId: string): string {
+  return wsUrlForProfile(profileId, '/api/events');
+}
+
+function bind(conn: Conn, socket: WebSocket) {
   socket.onopen = () => {
-    reconnectAttempt = 0;
-    connectedAt = Date.now();
-    connStatus.set({ state: 'connected' });
-    // Drop any pending finished-toasts queued from before the
-    // disconnect — the bus state is fresh now and replaying them
-    // would lie about current activity.
+    conn.reconnectAttempt = 0;
+    conn.connectedAt = Date.now();
+    if (isActive(conn.profileId)) {
+      connStatus.set({ state: 'connected' });
+    }
     for (const t of pendingFinished.values()) clearTimeout(t);
     pendingFinished.clear();
   };
@@ -165,29 +137,89 @@ function bind(socket: WebSocket) {
     } catch {
       return;
     }
-    handle(data);
+    data.profile = conn.profileId;
+    handle(conn, data);
   };
   socket.onclose = () => {
-    if (stopRequested) return;
-    // Exponential backoff up to 8s (matches the TUI's events-bus task).
-    const delay = Math.min(1000 * 2 ** reconnectAttempt, 8000);
-    reconnectAttempt += 1;
-    connStatus.set({
-      state: 'reconnecting',
-      attempt: reconnectAttempt,
-      nextDelayMs: delay,
-    });
-    setTimeout(connect, delay);
+    if (conn.stopRequested) return;
+    const delay = Math.min(1000 * 2 ** conn.reconnectAttempt, 8000);
+    conn.reconnectAttempt += 1;
+    if (isActive(conn.profileId)) {
+      connStatus.set({
+        state: 'reconnecting',
+        attempt: conn.reconnectAttempt,
+        nextDelayMs: delay,
+      });
+    }
+    setTimeout(() => {
+      if (!conn.stopRequested) openConn(conn.profileId);
+    }, delay);
   };
   socket.onerror = () => {
     socket.close();
   };
 }
 
+function openConn(profileId: string) {
+  const list = get(profiles);
+  const profile = list.find((p) => p.id === profileId);
+  if (!profile) return;
+  // Skip profiles with no token — the daemon's WS upgrade would 401
+  // (auth middleware rejects the bearer-less upgrade). The reconciler
+  // will retry once a token lands.
+  if (!profile.token) return;
+
+  let conn = conns.get(profileId);
+  if (!conn) {
+    conn = {
+      profileId,
+      ws: null,
+      stopRequested: false,
+      reconnectAttempt: 0,
+      connectedAt: 0,
+    };
+    conns.set(profileId, conn);
+  }
+  if (conn.ws && conn.ws.readyState <= 1) return;
+  conn.stopRequested = false;
+  conn.ws = new WebSocket(eventsUrlFor(profileId));
+  bind(conn, conn.ws);
+}
+
+function closeConn(profileId: string) {
+  const conn = conns.get(profileId);
+  if (!conn) return;
+  conn.stopRequested = true;
+  conn.ws?.close();
+  conn.ws = null;
+  conns.delete(profileId);
+}
+
+/**
+ * Sync the open WS set against the current profile list. Idempotent —
+ * safe to call from a store subscription. Opens new connections,
+ * closes connections to profiles that vanished or lost their token.
+ */
+function reconcile() {
+  const list = get(profiles);
+  const wanted = new Set(list.filter((p) => !!p.token).map((p) => p.id));
+  for (const id of wanted) {
+    if (!conns.has(id)) openConn(id);
+  }
+  for (const [id] of conns) {
+    if (!wanted.has(id)) closeConn(id);
+  }
+  const activeId = get(activeProfileId);
+  if (!conns.has(activeId)) {
+    connStatus.set({ state: 'idle' });
+  }
+}
+
+// ---------- fanout to in-tab subscribers ----------
+
 type Listener = (ev: BusEvent) => void;
 const listeners: Set<Listener> = new Set();
 
-/** Subscribe to every bus event. Returns an unsubscribe callback. */
 export function onEvent(cb: Listener): () => void {
   listeners.add(cb);
   return () => listeners.delete(cb);
@@ -195,23 +227,24 @@ export function onEvent(cb: Listener): () => void {
 
 function fanOut(ev: BusEvent) {
   for (const cb of listeners) {
-    try { cb(ev); } catch (e) { console.error('event listener failed:', e); }
+    try {
+      cb(ev);
+    } catch (e) {
+      console.error('event listener failed:', e);
+    }
   }
 }
 
-function handle(ev: BusEvent) {
-  fanOut(ev);
-  // Quiet window after (re)connect: the bus often replays a flurry of
-  // watchdog re-classifications when the daemon restarts or the WS
-  // reconnects across a network blip. Let the data stores update via
-  // the event-bridge fan-out above, but suppress human-facing toasts /
-  // OS notifications so the user doesn't see "X finished" for every
-  // running pane.
-  const inQuiet = Date.now() - connectedAt < RECONNECT_QUIET_MS;
+// ---------- event handler (toast + chime + OS notify) ----------
 
-  // `agent.working` always cancels any pending finished-toast for the
-  // same session — even inside the quiet window. A genuine flicker
-  // (Working → Idle → Working within ~2 s) shouldn't toast, period.
+function handle(conn: Conn, ev: BusEvent) {
+  fanOut(ev);
+  // Quiet window after (re)connect, scoped per profile: the bus often
+  // replays a flurry of watchdog re-classifications when the daemon
+  // restarts or the network blips. Let data stores update via fan-out,
+  // but suppress human-facing toasts / OS notifications.
+  const inQuiet = Date.now() - conn.connectedAt < RECONNECT_QUIET_MS;
+
   if (ev.kind === 'agent.working' && ev.session_id) {
     clearPendingFinished(ev.session_id);
   }
@@ -219,64 +252,58 @@ function handle(ev: BusEvent) {
   switch (ev.kind) {
     case 'watchdog.compact': {
       if (inQuiet || !get(tweaks).notifyCompact) break;
-      const name = ev.session_name ?? 'session';
+      const name = labelFor(ev);
       pushToast({
         kind: 'info',
         title: `auto-compacted ${name}`,
         body: 'watchdog detected low context and sent /compact',
-        ttl_ms: 6000
+        ttl_ms: 6000,
       });
       maybeNotify({
         title: `auto-compacted ${name}`,
         body: 'watchdog detected low context and sent /compact',
-        tag: `${ev.session_id ?? 'global'}.compact`,
-        sessionId: ev.session_id
+        tag: `${ev.profile ?? 'global'}.${ev.session_id ?? 'global'}.compact`,
+        sessionId: ev.session_id,
       });
       break;
     }
     case 'session.crashed': {
       if (inQuiet || !get(tweaks).notifyCrashed) break;
-      // A crash invalidates any pending "finished" — never toast both.
       if (ev.session_id) clearPendingFinished(ev.session_id);
-      const name = ev.session_name ?? 'session';
-      const reason = (ev.payload?.reason as string) ?? (ev.payload?.signature as string) ?? 'unknown';
+      const name = labelFor(ev);
+      const reason =
+        (ev.payload?.reason as string) ?? (ev.payload?.signature as string) ?? 'unknown';
       pushToast({
         kind: 'error',
         title: `${name} crashed`,
         body: `reason: ${reason}`,
-        ttl_ms: 12000
+        ttl_ms: 12000,
       });
-      // Crashes are urgent — fire even if the user is staring at the
-      // dashboard. They almost certainly want to triage immediately.
       maybeNotify({
         title: `${name} crashed`,
         body: `reason: ${reason}`,
-        tag: `${ev.session_id ?? 'global'}.crashed`,
+        tag: `${ev.profile ?? 'global'}.${ev.session_id ?? 'global'}.crashed`,
         sessionId: ev.session_id,
-        urgent: true
+        urgent: true,
       });
       break;
     }
     case 'session.started': {
-      // No toast — this can be noisy on first connection. Silent for now.
       break;
     }
     case 'session.stopped': {
-      const name = ev.session_name ?? 'session';
-      pushToast({
-        kind: 'info',
-        title: `${name} stopped`,
-        ttl_ms: 4000
-      });
+      const name = labelFor(ev);
+      pushToast({ kind: 'info', title: `${name} stopped`, ttl_ms: 4000 });
       break;
     }
     case 'preferences.changed': {
-      // The TUI (or another dashboard tab) just persisted a different
-      // theme. Adopt it locally before any user-visible toast — the
-      // bridge guards against echo loops via `lastSent`.
+      // Only adopt theme prefs from the ACTIVE profile — pulling them
+      // from background profiles would let a remote daemon overwrite
+      // the user's local theme choice every time it broadcasts.
+      if (!isActive(conn.profileId)) break;
       applyServerPrefs({
         theme: (ev.payload?.theme as string | null) ?? undefined,
-        tui_theme: (ev.payload?.tui_theme as string | null) ?? undefined
+        tui_theme: (ev.payload?.tui_theme as string | null) ?? undefined,
       });
       break;
     }
@@ -286,7 +313,7 @@ function handle(ev: BusEvent) {
         kind: 'warn',
         title: `event stream lagged`,
         body: `${skipped} events skipped`,
-        ttl_ms: 4000
+        ttl_ms: 4000,
       });
       break;
     }
@@ -294,100 +321,52 @@ function handle(ev: BusEvent) {
       if (inQuiet) break;
       const key = (ev.payload?.key as string) ?? 'ticket';
       const title = (ev.payload?.title as string) ?? '';
-      pushToast({
-        kind: 'info',
-        title: `${key} created`,
-        body: title,
-        ttl_ms: 3500
-      });
+      pushToast({ kind: 'info', title: `${key} created`, body: title, ttl_ms: 3500 });
       break;
     }
     case 'board.updated': {
       if (inQuiet) break;
       const key = (ev.payload?.key as string) ?? 'ticket';
       const status = (ev.payload?.status as string) ?? '';
-      pushToast({
-        kind: 'info',
-        title: `${key} → ${status}`,
-        ttl_ms: 2800
-      });
+      pushToast({ kind: 'info', title: `${key} → ${status}`, ttl_ms: 2800 });
       break;
     }
     case 'board.claimed': {
       if (inQuiet) break;
       const key = (ev.payload?.key as string) ?? 'ticket';
       const by = (ev.payload?.claimed_by as string) ?? 'someone';
-      pushToast({
-        kind: 'info',
-        title: `${key} claimed`,
-        body: `by ${by}`,
-        ttl_ms: 3000
-      });
+      pushToast({ kind: 'info', title: `${key} claimed`, body: `by ${by}`, ttl_ms: 3000 });
       break;
     }
     case 'board.released': {
       if (inQuiet) break;
       const key = (ev.payload?.key as string) ?? 'ticket';
-      pushToast({
-        kind: 'info',
-        title: `${key} released`,
-        ttl_ms: 2500
-      });
+      pushToast({ kind: 'info', title: `${key} released`, ttl_ms: 2500 });
       break;
     }
     case 'board.deleted': {
       if (inQuiet) break;
       const id = ev.payload?.id ?? '?';
-      pushToast({
-        kind: 'info',
-        title: `ticket ${id} deleted`,
-        ttl_ms: 2500
-      });
+      pushToast({ kind: 'info', title: `ticket ${id} deleted`, ttl_ms: 2500 });
       break;
     }
     case 'agent.finished': {
       if (inQuiet || !get(tweaks).notifyFinished) break;
       const p = ev.payload as { initial?: boolean; replay?: boolean } | undefined;
-      // `replay: true` events come from the daemon's connect-time
-      // snapshot of the current activity overlay. The attention
-      // store still picks them up so the dot mutes — but a toast
-      // would be stale because the event itself fired pre-connect.
-      // `initial: true` is the same idea on the watchdog side: the
-      // first observation after the watchdog spawns onto an
-      // already-finished session.
       if (p?.replay || p?.initial) break;
-      // Defer the user-facing notification by FINISHED_DEBOUNCE_MS —
-      // any `agent.working` event for the same session within that
-      // window cancels it, swallowing transient Working→Idle→Working
-      // flickers (tool error + retry, brief shell-out, etc.) so the
-      // user isn't told the agent finished when it's still mid-turn.
-      const name = ev.session_name ?? 'agent';
+      const name = labelFor(ev);
       const sid = ev.session_id;
-      if (!sid) break; // can't debounce without a key — skip
+      if (!sid) break;
       clearPendingFinished(sid);
       const t = setTimeout(() => {
         pendingFinished.delete(sid);
-        // Always toast — matches the TUI's behaviour. A long agent
-        // run that finishes silently under a focused-but-not-staring
-        // user is exactly the case people are tabbed away from their
-        // browser tab for; the pre-v0.7.48 viewing-session
-        // suppression meant they saw nothing at all and missed the
-        // turn ending.
-        pushToast({
-          kind: 'info',
-          title: `${name} finished`,
-          ttl_ms: 6000
-        });
-        // In-page chime — works without browser-notification
-        // permission, so the user gets an audible cue even on a
-        // first-visit dashboard where they haven't approved OS
-        // notifications yet. The OS banner below is additive.
+        pushToast({ kind: 'info', title: `${name} finished`, ttl_ms: 6000 });
         playChime('finished');
         maybeNotify({
           title: `${name} finished`,
           body: 'agent is back at idle — output ready to review',
-          tag: `${sid}.finished`,
-          sessionId: sid
+          tag: `${ev.profile ?? 'global'}.${sid}.finished`,
+          sessionId: sid,
         });
       }, FINISHED_DEBOUNCE_MS);
       pendingFinished.set(sid, t);
@@ -396,41 +375,44 @@ function handle(ev: BusEvent) {
     case 'agent.awaiting_input': {
       if (inQuiet || !get(tweaks).notifyAwaitingInput) break;
       const p = ev.payload as { initial?: boolean; replay?: boolean } | undefined;
-      // `initial`/`replay` mean the agent was already blocked
-      // before the watchdog/client tuned in — flip the dot via
-      // the attention store but skip the toast (nothing new
-      // demands an immediate user response).
       if (p?.initial || p?.replay) break;
-      // An open prompt supersedes any pending "finished" for this
-      // session — the agent isn't done, it's waiting on you.
       if (ev.session_id) clearPendingFinished(ev.session_id);
-      // Permission prompt is open. Always toast — this is a "you have to
-      // do something" event and the user might be on another tab. The
-      // OS-level notify is urgent so it fires even when the dashboard
-      // is foregrounded; missing this one is the worst-case for the
-      // user (agent halts until they answer).
-      const name = ev.session_name ?? 'agent';
+      const name = labelFor(ev);
       pushToast({
         kind: 'warn',
         title: `${name} needs input`,
         body: 'agent is waiting on a permission prompt',
-        ttl_ms: 8000
+        ttl_ms: 8000,
       });
       playChime('attention');
       maybeNotify({
         title: `${name} needs input`,
         body: 'agent is waiting on a permission prompt',
-        tag: `${ev.session_id ?? 'global'}.awaiting_input`,
+        tag: `${ev.profile ?? 'global'}.${ev.session_id ?? 'global'}.awaiting_input`,
         sessionId: ev.session_id,
-        urgent: true
+        urgent: true,
       });
       break;
     }
   }
 }
 
-/** Bridge to the OS notify layer. Gated on `notifyBrowser` and clicks
- *  jump to the relevant session if one is attached. */
+/**
+ * Compose the user-facing session label, suffixing the source profile
+ * when the event came from a non-active endpoint so the user can tell
+ * "claude finished" on local vs. on a remote VPS apart.
+ */
+function labelFor(ev: BusEvent): string {
+  const base = ev.session_name ?? 'session';
+  if (!ev.profile || isActive(ev.profile)) return base;
+  const profile = get(profiles).find((p) => p.id === ev.profile);
+  const tag = profile?.label || ev.profile;
+  return `${base} · @${tag}`;
+}
+
+/** Bridge to the OS notify layer. Click-through deep-links to the
+ *  session — the session page itself routes its WS through the owning
+ *  profile, so cross-profile clicks just navigate. */
 function maybeNotify(opts: {
   title: string;
   body?: string;
@@ -439,17 +421,8 @@ function maybeNotify(opts: {
   urgent?: boolean;
 }) {
   if (!get(tweaks).notifyBrowser) return;
-  // Permission is `default` until the user clicks the prompt. Most
-  // users never visit Settings → Notifications, so a silent no-op
-  // here would mean they never see OS banners. Kick off the prompt
-  // lazily — once per session — so the first finished/awaiting event
-  // upgrades them into `granted` for the rest of the tab's lifetime.
-  // requestPermission() is no-op on unsupported platforms.
   if (get(notifyPermission) === 'default') {
     void requestPermission();
-    // Don't try to fire this notification — Notification() before
-    // permission is granted throws. Future events will reach
-    // notify() once the user clicks Allow.
     return;
   }
   notify({
@@ -459,29 +432,53 @@ function maybeNotify(opts: {
     urgent: opts.urgent,
     onClick: opts.sessionId
       ? () => {
-          // Best-effort deep-link. window.focus() already ran inside
-          // notify(); follow up by routing to the session so the user
-          // lands where they need to act.
           if (typeof location !== 'undefined') {
             location.href = `/sessions/${opts.sessionId}`;
           }
         }
-      : undefined
+      : undefined,
   });
 }
 
+// ---------- public lifecycle API ----------
+
+let unsubProfiles: (() => void) | null = null;
+let unsubActive: (() => void) | null = null;
+
+/**
+ * Start the multi-profile bus. Idempotent. Opens a WebSocket per
+ * profile that carries a bearer token; reconciles whenever the
+ * profile list (or its tokens) changes. The legacy single-WS contract
+ * is preserved via the active-profile binding of `connStatus`.
+ */
 export function connect() {
-  if (ws && ws.readyState <= 1) return;
-  stopRequested = false;
-  ws = new WebSocket(eventsUrl());
-  bind(ws);
+  if (started) {
+    reconcile();
+    return;
+  }
+  started = true;
+  reconcile();
+  unsubProfiles = profiles.subscribe(() => reconcile());
+  // Active-profile changes are handled by a full page reload in the
+  // EndpointSwitcher today, but subscribe defensively so a programmatic
+  // switch still updates the banner to track the new active conn.
+  unsubActive = activeProfileId.subscribe((id) => {
+    const c = conns.get(id);
+    if (!c || !c.ws || c.ws.readyState !== WebSocket.OPEN) {
+      connStatus.set({ state: 'idle' });
+    } else {
+      connStatus.set({ state: 'connected' });
+    }
+  });
 }
 
+/** Close every per-profile WS and reset state. */
 export function disconnect() {
-  stopRequested = true;
-  ws?.close();
-  ws = null;
-  // Caller asked for shutdown; don't leave a stale "connected" status
-  // floating in the UI. Hide the banner by reverting to idle.
+  started = false;
+  unsubProfiles?.();
+  unsubActive?.();
+  unsubProfiles = null;
+  unsubActive = null;
+  for (const id of Array.from(conns.keys())) closeConn(id);
   connStatus.set({ state: 'idle' });
 }

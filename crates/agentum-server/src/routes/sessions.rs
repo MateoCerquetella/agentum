@@ -441,12 +441,11 @@ async fn start(
     // Claude Code supports --hook-post-tool-use: inject a curl one-liner so
     // every tool completion posts back to the hook endpoint automatically.
     if session.tool == "claude" {
-        let hook_cmd = format!(
-            "curl -s -X POST \"$AGENTUM_HOOK_URL\" \
+        let hook_cmd = "curl -s -X POST \"$AGENTUM_HOOK_URL\" \
              -H \"X-Agentum-Hook-Token: $AGENTUM_HOOK_TOKEN\" \
              -H \"Content-Type: application/json\" \
-             -d '{{\"kind\":\"tool_done\",\"payload\":{{}}}}'",
-        );
+             -d '{\"kind\":\"tool_done\",\"payload\":{}}'"
+            .to_string();
         launch.argv.push("--hook-post-tool-use".into());
         launch.argv.push(hook_cmd);
     }
@@ -995,11 +994,31 @@ async fn stream_session(
                 }
                 Some(Ok(Message::Text(t))) => {
                     // Text frames double as a side-channel for control
-                    // messages — currently only `{"resize":{"cols":N,"rows":N}}`.
-                    // Anything that isn't a recognised JSON envelope is
-                    // forwarded as raw input bytes (preserves the old
-                    // behaviour for clients that send keystrokes as text).
-                    if let Some((cols, rows)) = parse_resize(&t) {
+                    // messages — `{"resize":{"cols":N,"rows":N}}` and
+                    // `{"refresh":true}`. Anything that isn't a recognised
+                    // JSON envelope is forwarded as raw input bytes
+                    // (preserves the old behaviour for clients that send
+                    // keystrokes as text).
+                    if parse_refresh(&t) {
+                        // Client asked for a clean re-snapshot. Same
+                        // payload shape as the initial fresh-snapshot
+                        // path: parser reset (RIS) + current visible
+                        // grid. Cheap and side-effect-free on tmux.
+                        if let Ok(snap) = agentum_tmux::capture_pane_ansi(&target).await
+                            && !snap.is_empty()
+                        {
+                            let mut payload = Vec::with_capacity(snap.len() + 4);
+                            payload.extend_from_slice(b"\x1bc");
+                            payload.extend_from_slice(&snap);
+                            if socket
+                                .send(Message::Binary(Bytes::from(payload)))
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                    } else if let Some((cols, rows)) = parse_resize(&t) {
                         // Track every successful resize so the disconnect
                         // checkpoint records the size at the time the
                         // client actually left, not the size we captured
@@ -1192,9 +1211,28 @@ fn parse_resize(t: &str) -> Option<(u16, u16)> {
     ))
 }
 
+/// Recognise `{"refresh":true}` text frames. Clients send this once
+/// shortly after WS open (after the xterm fit settles) to request a
+/// fresh `ESC c + capture-pane -e` payload — the initial snapshot is
+/// sometimes captured mid-repaint or before the client's final size
+/// is known, leaving scrollback corruption that only a re-snapshot
+/// reliably clears. Older daemons (lacking the `"refresh"` health
+/// capability) forward unknown text frames to `tmux send-keys`, so
+/// clients MUST capability-gate the send.
+fn parse_refresh(t: &str) -> bool {
+    let trimmed = t.trim();
+    if !trimmed.starts_with('{') || !trimmed.contains("refresh") {
+        return false;
+    }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return false;
+    };
+    v.get("refresh").and_then(|x| x.as_bool()).unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_resize;
+    use super::{parse_refresh, parse_resize};
 
     #[test]
     fn parse_resize_recognises_envelope() {
@@ -1209,6 +1247,21 @@ mod tests {
         assert_eq!(parse_resize("hello"), None);
         assert_eq!(parse_resize(r#"{"send":"x"}"#), None);
         assert_eq!(parse_resize(""), None);
+    }
+
+    #[test]
+    fn parse_refresh_recognises_envelope() {
+        assert!(parse_refresh(r#"{"refresh":true}"#));
+        assert!(parse_refresh(r#"{ "refresh": true }"#));
+    }
+
+    #[test]
+    fn parse_refresh_rejects_falsy_and_other_text() {
+        assert!(!parse_refresh(r#"{"refresh":false}"#));
+        assert!(!parse_refresh(r#"{"refresh":"yes"}"#));
+        assert!(!parse_refresh("hello"));
+        assert!(!parse_refresh(r#"{"resize":{"cols":80,"rows":24}}"#));
+        assert!(!parse_refresh(""));
     }
 
     // ---- pane snapshot tests ----
@@ -1379,14 +1432,12 @@ mod tests {
                 )),
                 cert_fingerprint: Arc::new(String::new()),
                 transcripts: crate::TranscriptStore::new(broadcast::channel(16).0),
-                stream_positions: Arc::new(std::sync::Mutex::new(
-                    std::collections::HashMap::new(),
-                )),
+                stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
                 hostname: "test".to_string(),
                 no_auth: true,
-                clipboard_pending: Arc::new(std::sync::Mutex::new(
-                    std::collections::HashMap::new(),
-                )),
+                clipboard_pending: Arc::new(
+                    std::sync::Mutex::new(std::collections::HashMap::new()),
+                ),
                 clipboard_request_bus: broadcast::channel(64).0,
                 hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             }
@@ -1418,10 +1469,7 @@ mod tests {
             let state = fresh_state().await;
             let unknown_id = uuid::Uuid::new_v4().to_string();
             let mut hdrs = HeaderMap::new();
-            hdrs.insert(
-                "x-agentum-hook-token",
-                "anytoken".parse().unwrap(),
-            );
+            hdrs.insert("x-agentum-hook-token", "anytoken".parse().unwrap());
             let res = hook(
                 State(state),
                 Path(unknown_id),
