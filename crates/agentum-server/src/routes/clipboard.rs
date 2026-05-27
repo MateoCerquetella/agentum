@@ -347,6 +347,7 @@ mod tests {
             no_auth: true,
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             clipboard_request_bus: clip_bus,
+            hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 

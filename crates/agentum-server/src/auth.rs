@@ -72,7 +72,7 @@ fn verify_password_sync(plain: &str, stored_hash: &str) -> bool {
 /// `/api/auth/register` is also public-ish, but only behaves as such when no
 /// users exist yet; the route handler enforces that.
 fn is_public(path: &str) -> bool {
-    matches!(
+    if matches!(
         path,
         "/api/health"
             | "/api/cert"
@@ -80,7 +80,12 @@ fn is_public(path: &str) -> bool {
             | "/api/auth/status"
             | "/api/auth/login"
             | "/api/auth/register"
-    )
+    ) {
+        return true;
+    }
+    // Hook endpoints use per-session ephemeral tokens, not bearer auth.
+    // Agent CLIs don't know the user's bearer token.
+    path.starts_with("/api/sessions/") && path.ends_with("/hook")
 }
 
 fn extract_token(req: &Request<Body>) -> Option<String> {

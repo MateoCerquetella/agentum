@@ -42,6 +42,7 @@ pub fn router() -> Router<AppState> {
             "/api/sessions/{id}/worktree/status",
             get(worktree_status_route),
         )
+        .route("/api/sessions/{id}/hook", post(hook))
 }
 
 /// HTTP body for POST /api/sessions. Wraps `NewSession` to layer the
@@ -423,7 +424,37 @@ async fn start(
     }
 
     let adapter = agentum_executor::adapter_for(&session.tool);
-    let launch = adapter.launch(&session);
+    let mut launch = adapter.launch(&session);
+
+    // Generate an ephemeral hook token for this launch and expose it to the
+    // agent process via env vars. The hook endpoint validates against the
+    // in-memory map, so tokens survive only as long as the daemon is running.
+    let hook_token = crate::auth::new_token();
+    let hook_url = format!("http://127.0.0.1:8822/api/sessions/{}/hook", session.id);
+    launch
+        .env
+        .push(("AGENTUM_HOOK_URL".into(), hook_url.clone()));
+    launch
+        .env
+        .push(("AGENTUM_HOOK_TOKEN".into(), hook_token.clone()));
+
+    // Claude Code supports --hook-post-tool-use: inject a curl one-liner so
+    // every tool completion posts back to the hook endpoint automatically.
+    if session.tool == "claude" {
+        let hook_cmd = format!(
+            "curl -s -X POST \"$AGENTUM_HOOK_URL\" \
+             -H \"X-Agentum-Hook-Token: $AGENTUM_HOOK_TOKEN\" \
+             -H \"Content-Type: application/json\" \
+             -d '{{\"kind\":\"tool_done\",\"payload\":{{}}}}'",
+        );
+        launch.argv.push("--hook-post-tool-use".into());
+        launch.argv.push(hook_cmd);
+    }
+
+    {
+        let mut map = state.hook_tokens.lock().unwrap();
+        map.insert(session.id, hook_token);
+    }
 
     agentum_tmux::new_session(&target, &workdir, &launch.argv, &launch.env)
         .await
@@ -457,6 +488,7 @@ async fn stop(
         .store
         .update_status_and_target(id, Status::Stopped, None)
         .await?;
+    state.hook_tokens.lock().unwrap().remove(&id);
     emit_stopped(&state, &session, "stop").await;
     Ok(Json(load(&state, id).await?))
 }
@@ -475,6 +507,7 @@ async fn kill(
         .store
         .update_status_and_target(id, Status::Stopped, None)
         .await?;
+    state.hook_tokens.lock().unwrap().remove(&id);
     emit_stopped(&state, &session, "kill").await;
     Ok(Json(load(&state, id).await?))
 }
@@ -1082,6 +1115,61 @@ fn save_checkpoint(
     }
 }
 
+// ---------- /hook ----------
+
+#[derive(Deserialize)]
+struct HookBody {
+    kind: String,
+    #[serde(default)]
+    payload: serde_json::Value,
+}
+
+/// POST /api/sessions/{id}/hook
+///
+/// Unauthenticated endpoint (no bearer token needed). Agents validate via the
+/// `X-Agentum-Hook-Token` header using the ephemeral token injected at launch
+/// time. On success, emits an `agent.hook` event on the broadcast bus so the
+/// dashboard/TUI can react in real-time.
+async fn hook(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<HookBody>,
+) -> Result<StatusCode, ApiError> {
+    let id = parse_uuid(&id)?;
+
+    // 404 before revealing whether the token is good or bad.
+    let session = state
+        .store
+        .get_session_by_id(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
+
+    let provided = headers
+        .get("x-agentum-hook-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let valid = {
+        let map = state.hook_tokens.lock().unwrap();
+        map.get(&id).map(|t| t == provided).unwrap_or(false)
+    };
+
+    if !valid {
+        return Err(ApiError::Unauthorized("invalid hook token".into()));
+    }
+
+    let ev = Event::new("agent.hook")
+        .with_session(session.id, &session.name)
+        .with_payload(serde_json::json!({
+            "kind": body.kind,
+            "payload": body.payload,
+        }));
+    let _ = state.bus.send(ev);
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 fn parse_uuid(s: &str) -> Result<Uuid, ApiError> {
     Uuid::parse_str(s).map_err(|e| ApiError::BadRequest(e.to_string()))
 }
@@ -1157,6 +1245,7 @@ mod tests {
                     std::sync::Mutex::new(std::collections::HashMap::new()),
                 ),
                 clipboard_request_bus: broadcast::channel(64).0,
+                hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             }
         }
 
@@ -1259,6 +1348,155 @@ mod tests {
             // Shape: Vec<String> + String.
             let _: Vec<String> = snap.lines;
             let _: String = snap.captured_at;
+        }
+    }
+
+    // ---- hook endpoint tests ----
+
+    mod hook_tests {
+        use super::super::*;
+        use agentum_core::NewSession;
+        use agentum_store::Store;
+        use axum::extract::{Path, State};
+        use axum::http::HeaderMap;
+        use std::sync::Arc;
+        use tokio::sync::broadcast;
+
+        async fn fresh_state() -> AppState {
+            let dir = tempfile::tempdir().unwrap();
+            let p = dir.path().join("test.sqlite");
+            std::mem::forget(dir);
+            let store = Store::open(&p).await.unwrap();
+            let (bus, _rx) = broadcast::channel(16);
+            AppState {
+                store: Arc::new(store),
+                bus,
+                started_at: std::time::Instant::now(),
+                version: "test",
+                auth_limiter: Arc::new(crate::ratelimit::RateLimiter::new(
+                    8,
+                    std::time::Duration::from_secs(60),
+                )),
+                cert_fingerprint: Arc::new(String::new()),
+                transcripts: crate::TranscriptStore::new(broadcast::channel(16).0),
+                stream_positions: Arc::new(std::sync::Mutex::new(
+                    std::collections::HashMap::new(),
+                )),
+                hostname: "test".to_string(),
+                no_auth: true,
+                clipboard_pending: Arc::new(std::sync::Mutex::new(
+                    std::collections::HashMap::new(),
+                )),
+                clipboard_request_bus: broadcast::channel(64).0,
+                hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            }
+        }
+
+        async fn make_session(state: &AppState) -> agentum_core::Session {
+            let dir = tempfile::tempdir().unwrap();
+            let workdir = dir.path().to_string_lossy().to_string();
+            std::mem::forget(dir);
+            state
+                .store
+                .create_session(NewSession {
+                    name: "hook-test".into(),
+                    workdir,
+                    tool: "claude".into(),
+                    model: None,
+                    flags: vec![],
+                    card_id: None,
+                    worktree_path: None,
+                    worktree_branch: None,
+                    worktree_base_ref: None,
+                })
+                .await
+                .unwrap()
+        }
+
+        #[tokio::test]
+        async fn hook_unknown_session_returns_404() {
+            let state = fresh_state().await;
+            let unknown_id = uuid::Uuid::new_v4().to_string();
+            let mut hdrs = HeaderMap::new();
+            hdrs.insert(
+                "x-agentum-hook-token",
+                "anytoken".parse().unwrap(),
+            );
+            let res = hook(
+                State(state),
+                Path(unknown_id),
+                hdrs,
+                Json(HookBody {
+                    kind: "tool_done".into(),
+                    payload: serde_json::Value::Null,
+                }),
+            )
+            .await;
+            assert!(
+                matches!(res, Err(ApiError::NotFound(_))),
+                "unknown session must 404"
+            );
+        }
+
+        #[tokio::test]
+        async fn hook_bad_token_returns_401() {
+            let state = fresh_state().await;
+            let sess = make_session(&state).await;
+            // Insert a known token but present a different one.
+            state
+                .hook_tokens
+                .lock()
+                .unwrap()
+                .insert(sess.id, "correct-token".into());
+            let mut hdrs = HeaderMap::new();
+            hdrs.insert("x-agentum-hook-token", "wrong-token".parse().unwrap());
+            let res = hook(
+                State(state),
+                Path(sess.id.to_string()),
+                hdrs,
+                Json(HookBody {
+                    kind: "tool_done".into(),
+                    payload: serde_json::Value::Null,
+                }),
+            )
+            .await;
+            assert!(
+                matches!(res, Err(ApiError::Unauthorized(_))),
+                "wrong token must 401"
+            );
+        }
+
+        #[tokio::test]
+        async fn hook_good_token_returns_204_and_emits_event() {
+            let state = fresh_state().await;
+            let mut rx = state.bus.subscribe();
+            let sess = make_session(&state).await;
+            let token = "valid-token-abc123".to_string();
+            state
+                .hook_tokens
+                .lock()
+                .unwrap()
+                .insert(sess.id, token.clone());
+            let mut hdrs = HeaderMap::new();
+            hdrs.insert("x-agentum-hook-token", token.parse().unwrap());
+            let res = hook(
+                State(state),
+                Path(sess.id.to_string()),
+                hdrs,
+                Json(HookBody {
+                    kind: "tool_done".into(),
+                    payload: serde_json::json!({"tool": "bash"}),
+                }),
+            )
+            .await;
+            assert!(
+                matches!(res, Ok(axum::http::StatusCode::NO_CONTENT)),
+                "valid token must 204"
+            );
+            let ev = rx.try_recv().expect("event must be on bus");
+            assert_eq!(ev.kind, "agent.hook");
+            assert_eq!(ev.session_id, Some(sess.id));
+            assert_eq!(ev.payload["kind"], "tool_done");
         }
     }
 }

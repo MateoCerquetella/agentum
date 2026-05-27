@@ -126,6 +126,14 @@ pub struct AppState {
     /// handler comfortable headroom against transient task
     /// scheduling jitter.
     pub clipboard_request_bus: broadcast::Sender<routes::clipboard::ClipboardRequestFrame>,
+    /// Ephemeral per-session hook tokens. Inserted on `start`, removed on
+    /// stop/kill/crash. The hook endpoint validates POSTs against this map
+    /// instead of the standard bearer-token auth so agent CLIs (which don't
+    /// know the user's bearer token) can self-report lifecycle events via
+    /// a simple curl one-liner injected as env vars at launch time.
+    /// `std::sync::Mutex` because the critical section is a single HashMap
+    /// lookup/insert/remove — no `.await` while holding the lock.
+    pub hook_tokens: Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, String>>>,
 }
 
 impl AppState {
@@ -158,6 +166,7 @@ impl AppState {
             no_auth: false,
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             clipboard_request_bus,
+            hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 }
