@@ -64,6 +64,12 @@ export interface NewSession {
   tool: string;
   model?: string | null;
   flags?: string[];
+  /// Opt-in `git worktree add` request. When present, the server creates
+  /// a sibling worktree at `<repo>-worktrees/<branch>` and uses it as
+  /// the agent's cwd instead of `workdir`. Both inner fields are
+  /// optional: `branch` defaults to a slugified session name prefixed
+  /// `agentum/`; `base_ref` defaults to `HEAD`.
+  worktree?: { branch?: string; base_ref?: string } | null;
 }
 
 /// Mirrors `agentum_server::routes::agents::AgentInfo`. The dashboard
