@@ -206,6 +206,9 @@ async fn card_session_binding_full_happy_path() -> anyhow::Result<()> {
                     model: None,
                     flags: vec![],
                     card_id: None, // overwritten unconditionally by claim_card
+                    worktree_path: None,
+                    worktree_branch: None,
+                    worktree_base_ref: None,
                 },
             )
             .await
@@ -631,6 +634,9 @@ async fn card_session_binding_full_happy_path() -> anyhow::Result<()> {
                     model: None,
                     flags: vec![],
                     card_id: None,
+                    worktree_path: None,
+                    worktree_branch: None,
+                    worktree_base_ref: None,
                 },
             )
             .await
@@ -694,6 +700,9 @@ async fn card_session_binding_full_happy_path() -> anyhow::Result<()> {
                     model: None,
                     flags: vec![],
                     card_id: None,
+                    worktree_path: None,
+                    worktree_branch: None,
+                    worktree_base_ref: None,
                 },
             )
             .await
@@ -789,6 +798,9 @@ async fn card_session_binding_full_happy_path() -> anyhow::Result<()> {
                 model: None,
                 flags: vec![],
                 card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await?;
         let session_a_id = session_a.id;
@@ -802,6 +814,9 @@ async fn card_session_binding_full_happy_path() -> anyhow::Result<()> {
                 model: None,
                 flags: vec![],
                 card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await?;
         let sb_id = session_b.id;
@@ -895,6 +910,9 @@ async fn card_session_binding_full_happy_path() -> anyhow::Result<()> {
                 model: None,
                 flags: vec![],
                 card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await?;
         let session_c_id = session_c.id;

@@ -15,6 +15,16 @@
   let argsRaw = $state('');
   let upAfter = $state(true);
   let yolo = $state(false);
+  /// Opt-in: create a dedicated `git worktree` for this session so it
+  /// runs on its own branch + checkout. Lets the user spawn N agents
+  /// against the same repo in parallel without stomping each other's
+  /// stash/branch. See ORCA_COMPETITIVE_ANALYSIS.md §1.
+  let useWorktree = $state(false);
+  /// Ref the new worktree branch forks from. Empty → server defaults to
+  /// `HEAD`. Branch name is always derived from the session name
+  /// (server-side slug) — we don't expose a freeform branch input
+  /// because the more useful knob is "off what".
+  let baseRef = $state('');
   let submitting = $state(false);
   let error = $state<string | null>(null);
   /// Target server profile id. Mirrors the TUI's `Servers` field on the
@@ -190,6 +200,8 @@
     argsRaw = '';
     upAfter = true;
     yolo = false;
+    useWorktree = false;
+    baseRef = '';
     submitting = false;
     error = null;
     targetProfileId = '';
@@ -235,7 +247,14 @@
         tool: tool.trim(),
         workdir: cleanWorkdir,
         model: model.trim() || null,
-        flags
+        flags,
+        // Only attach the worktree key when the toggle is on — leaving
+        // it undefined keeps the JSON wire payload identical to the
+        // pre-worktree shape, so an older daemon (no `CreateBody.worktree`)
+        // still accepts the request.
+        ...(useWorktree
+          ? { worktree: { base_ref: baseRef.trim() || undefined } }
+          : {})
       };
       // Spawn against the *target* server picked by the Servers tiles,
       // not just whatever the topbar EndpointSwitcher has active.
@@ -383,6 +402,29 @@
             </span>
           </span>
         </label>
+        <label class="toggle">
+          <input type="checkbox" bind:checked={useWorktree} />
+          <span class="t-text">
+            <span class="t-title">Isolate in git worktree</span>
+            <span class="t-sub">
+              spawn on a fresh branch + checkout at
+              <code>&lt;repo&gt;-worktrees/agentum-&lt;name&gt;</code>
+              — run N agents on the same repo without collisions
+            </span>
+          </span>
+        </label>
+        {#if useWorktree}
+          <label class="field" style="margin-left: 28px; margin-top: -4px;">
+            <span class="lbl">Base ref <span class="opt">defaults to HEAD</span></span>
+            <input
+              type="text"
+              bind:value={baseRef}
+              placeholder="HEAD"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </label>
+        {/if}
       </section>
 
       <details>

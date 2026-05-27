@@ -3,7 +3,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use agentum_core::{Event, NewSession, Session, Status};
+use agentum_core::{Event, NewSession, Session, Status, WorktreeSpec};
 use agentum_store::paths;
 use axum::Json;
 use axum::Router;
@@ -37,6 +37,24 @@ pub fn router() -> Router<AppState> {
         .route("/api/sessions/{id}/send", post(send))
         .route("/api/sessions/{id}/pane", get(pane))
         .route("/api/sessions/{id}/stream", get(stream))
+        .route("/api/sessions/{id}/worktree/prune", post(worktree_prune))
+        .route(
+            "/api/sessions/{id}/worktree/status",
+            get(worktree_status_route),
+        )
+}
+
+/// HTTP body for POST /api/sessions. Wraps `NewSession` to layer the
+/// optional `worktree: WorktreeSpec` on top — the spec is consumed
+/// server-side by [`crate::git::create_worktree`] before the store
+/// ever sees this struct, so `NewSession` itself stays free of any
+/// "pending" worktree state.
+#[derive(Deserialize)]
+struct CreateBody {
+    #[serde(flatten)]
+    new: NewSession,
+    #[serde(default)]
+    worktree: Option<WorktreeSpec>,
 }
 
 #[derive(Deserialize)]
@@ -89,9 +107,11 @@ async fn list(
 
 async fn create(
     State(state): State<AppState>,
-    Json(mut payload): Json<NewSession>,
+    Json(body): Json<CreateBody>,
 ) -> Result<(StatusCode, Json<Session>), ApiError> {
-    let workdir = super::util::expand_workdir(&payload.workdir)?;
+    let CreateBody { mut new, worktree } = body;
+
+    let workdir = super::util::expand_workdir(&new.workdir)?;
     if !workdir.exists() {
         return Err(ApiError::BadRequest(format!(
             "workdir does not exist: {}",
@@ -100,9 +120,124 @@ async fn create(
     }
     // Persist the expanded form so `start` doesn't need to re-resolve and
     // the dashboard displays the actual path the daemon will spawn in.
-    payload.workdir = workdir.to_string_lossy().into_owned();
-    let s = state.store.create_session(payload).await?;
+    new.workdir = workdir.to_string_lossy().into_owned();
+
+    // Worktree isolation: if the user asked for it, run `git worktree
+    // add` *before* persisting so the session row records the resolved
+    // path. We do this before the store insert so a partial failure
+    // (worktree created, DB insert failed) is the rare path; the more
+    // common partial failure (DB insert ok, worktree creation failed)
+    // is impossible by construction.
+    if let Some(spec) = worktree {
+        let resolved = crate::git::create_worktree(
+            &workdir,
+            &new.name,
+            spec.branch.as_deref(),
+            spec.base_ref.as_deref(),
+        )
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("worktree: {}", e)))?;
+        new.worktree_path = Some(resolved.path.to_string_lossy().into_owned());
+        new.worktree_branch = Some(resolved.branch);
+        new.worktree_base_ref = Some(resolved.base_ref);
+    }
+
+    let s = state.store.create_session(new).await?;
     Ok((StatusCode::CREATED, Json(s)))
+}
+
+/// POST /api/sessions/{id}/worktree/prune
+///
+/// Tears down the worktree associated with this session. Requires the
+/// session to be in a non-running state (Stopped/Crashed/Idle without
+/// tmux_target) — pruning the cwd of a live tmux pane would yank the
+/// rug out from under the agent process.
+///
+/// Body (all optional):
+///   { "force": bool }   — pass through to `git worktree remove --force`,
+///                         abandoning uncommitted changes. Defaults to
+///                         false; the route preflights with `git status
+///                         --porcelain` and refuses on dirty trees unless
+///                         this is true.
+#[derive(Default, Deserialize)]
+struct PruneBody {
+    #[serde(default)]
+    force: bool,
+}
+
+async fn worktree_prune(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: Option<Json<PruneBody>>,
+) -> Result<Json<Session>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let force = body.map(|Json(b)| b.force).unwrap_or(false);
+
+    let session = load(&state, id).await?;
+
+    let wt_path = session
+        .worktree_path
+        .as_ref()
+        .ok_or_else(|| ApiError::BadRequest("session has no worktree to prune".into()))?;
+    if matches!(session.status, Status::Running) {
+        return Err(ApiError::BadRequest(
+            "stop the session before pruning its worktree".into(),
+        ));
+    }
+
+    let wt_pathbuf = PathBuf::from(wt_path);
+    // Preflight dirty check: refuse silently destroying work unless the
+    // caller explicitly passed force=true.
+    if !force {
+        if let Ok(status) = crate::git::worktree_status(&wt_pathbuf).await {
+            if !status.is_clean() {
+                return Err(ApiError::BadRequest(format!(
+                    "worktree has uncommitted changes (staged={}, unstaged={}, untracked={}); pass force=true to discard",
+                    status.staged, status.unstaged, status.untracked
+                )));
+            }
+        }
+    }
+
+    let repo = PathBuf::from(&session.workdir);
+    crate::git::prune_worktree(
+        &repo,
+        &wt_pathbuf,
+        session.worktree_branch.as_deref(),
+        force,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(format!("git: {}", e)))?;
+
+    state.store.clear_session_worktree(id).await?;
+    let updated = load(&state, id).await?;
+    let _ = state.bus.send(
+        Event::new("session.worktree.pruned")
+            .with_session(updated.id, &updated.name)
+            .with_payload(serde_json::json!({"path": wt_path})),
+    );
+    Ok(Json(updated))
+}
+
+/// GET /api/sessions/{id}/worktree/status
+///
+/// Returns `{ staged, unstaged, untracked }` counts. Used by the
+/// dashboard prune confirmation to show "you'll lose N files" before
+/// the user clicks through. 404s when the session has no worktree.
+async fn worktree_status_route(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::git::WorktreeStatus>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let session = load(&state, id).await?;
+    let wt_path = session
+        .worktree_path
+        .as_ref()
+        .ok_or_else(|| ApiError::NotFound("session has no worktree".into()))?;
+    let s = crate::git::worktree_status(&PathBuf::from(wt_path))
+        .await
+        .map_err(|e| ApiError::Internal(format!("git: {}", e)))?;
+    Ok(Json(s))
 }
 
 async fn get_one(
@@ -275,7 +410,11 @@ async fn start(
     // Older sessions (pre-tilde-expansion fix) may have `~/...` stored
     // in the DB — re-resolve here so they spawn correctly without a
     // migration. New sessions are stored already-expanded by `create`.
-    let workdir = super::util::expand_workdir(&session.workdir)?;
+    //
+    // When the session has an isolated worktree, that takes precedence
+    // over `workdir` — `effective_cwd()` encapsulates the precedence
+    // so adapters/callers never have to think about it.
+    let workdir = super::util::expand_workdir(session.effective_cwd())?;
     if !workdir.exists() {
         return Err(ApiError::BadRequest(format!(
             "workdir does not exist: {}",
@@ -1034,6 +1173,9 @@ mod tests {
                     model: None,
                     flags: vec![],
                     card_id: None,
+                    worktree_path: None,
+                    worktree_branch: None,
+                    worktree_base_ref: None,
                 })
                 .await
                 .unwrap()

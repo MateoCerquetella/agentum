@@ -1415,6 +1415,9 @@ mod tests {
                 model: None,
                 flags: vec![],
                 card_id: Some(goal.id),
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await
             .unwrap();
@@ -1548,6 +1551,9 @@ mod tests {
                 model: None,
                 flags: vec![],
                 card_id: Some(card_id),
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await
             .unwrap()
@@ -1732,6 +1738,9 @@ mod tests {
                 model: None,
                 flags: vec![],
                 card_id: None, // no binding
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await
             .unwrap();

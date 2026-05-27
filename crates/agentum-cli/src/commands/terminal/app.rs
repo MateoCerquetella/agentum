@@ -8239,6 +8239,9 @@ mod merge_dedup_tests {
             state: None,
             pinned: false,
             card_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            worktree_base_ref: None,
         }
     }
 

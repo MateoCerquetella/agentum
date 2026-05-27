@@ -204,6 +204,9 @@ pub(crate) async fn spawn_card_session(
         // card_id is overwritten unconditionally by claim_card — set it
         // here for clarity but claim_card will enforce it.
         card_id: Some(card.id),
+        worktree_path: None,
+        worktree_branch: None,
+        worktree_base_ref: None,
     };
 
     // 5. Atomic dual-write: INSERT session row + UPDATE card.session_id in one tx.
@@ -309,6 +312,9 @@ async fn spawn_planner_session(
         // card_id binds this session to the goal; the watchdog (plan 01-04)
         // uses this FK to decide which goal to recompute on session events.
         card_id: Some(goal.id),
+        worktree_path: None,
+        worktree_branch: None,
+        worktree_base_ref: None,
     };
     let session = state.store.create_session(new_session).await?;
 

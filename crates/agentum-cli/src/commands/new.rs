@@ -43,6 +43,9 @@ pub async fn run(
             model,
             flags,
             card_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            worktree_base_ref: None,
         })
         .await?;
 
