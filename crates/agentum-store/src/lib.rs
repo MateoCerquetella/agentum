@@ -1656,6 +1656,11 @@ struct SessionRow {
     worktree_branch: Option<String>,
     #[sqlx(default)]
     worktree_base_ref: Option<String>,
+    /* ---- agent hooks (migration 0017) ---- */
+    #[sqlx(default)]
+    hook_token: Option<String>,
+    #[sqlx(default)]
+    hook_events_enabled: i64,
 }
 
 #[derive(Debug, FromRow)]
