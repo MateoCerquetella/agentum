@@ -110,18 +110,13 @@ jobs:
           ( cd dist && sha256sum *.tar.gz > SHA256SUMS )
           cat dist/SHA256SUMS
 
-      - name: Stage installer
+      - name: Stage installer + uninstaller
         run: |
           set -eux
           # Attached to the release so `…/releases/latest/download/install.sh`
-          # works (the README's recommended one-liner). Tolerant of the
-          # file being absent until docs/plans/AGENTUM_V2_PRD.md step 3
-          # lands the curl-based installer.
-          if [ -f scripts/install.sh ]; then
-            cp scripts/install.sh dist/install.sh
-          else
-            echo "scripts/install.sh not present yet (PRD step 3) — skipping"
-          fi
+          # and …/uninstall.sh work (the README's recommended one-liners).
+          cp scripts/install.sh dist/install.sh
+          cp scripts/uninstall.sh dist/uninstall.sh
 
       - name: Extract release notes
         id: notes
@@ -144,12 +139,9 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           body_path: release-notes.md
-          # install.sh isn't always present yet (see Stage installer
-          # step) — softprops silently skips missing glob entries when
-          # this is false. Once PRD step 3 ships scripts/install.sh,
-          # flip back to true.
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS
             dist/install.sh
+            dist/uninstall.sh
