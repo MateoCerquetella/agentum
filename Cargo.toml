@@ -1,7 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/agentum",
+    "crates/agentum-cli",
+    "crates/agentum-desktop",
     "crates/agentum-server",
     "crates/agentum-tmux",
     "crates/agentum-watchdog",

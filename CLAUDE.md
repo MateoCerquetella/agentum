@@ -29,13 +29,24 @@ crates/
   agentum-watchdog/    # Background loop. Tails panes, emits Event::AgentFinished/AwaitingInput/Crashed.
   agentum-executor/    # ToolAdapter trait + per-agent argv builders. Owns YOLO marker translation.
   agentum-server/      # axum HTTP+WS API + TLS + auth + routes/. Embeds the dashboard SPA.
-  agentum/             # CLI binary. Houses the TUI under commands/terminal/.
+  agentum-cli/         # CLI package (binary still named `agentum`). Houses the TUI under commands/terminal/.
+  agentum-desktop/     # Tauri shell placeholder. Implemented in v2 Phase 3 (docs/plans/AGENTUM_V2_PRD.md §6).
 
 dashboard/             # SvelteKit SPA. Builds to dashboard/build/, embedded into the daemon.
 ```
 
 Each `crates/<x>/Cargo.toml` declares its deps; the workspace root
 `Cargo.toml` pins shared versions.
+
+> Note on PRD §6.3: the v2 PRD's three-crate diagram (`agentum-core`,
+> `agentum-cli`, `agentum-desktop`) is conceptual. "agentum-core" in
+> PRD parlance = the collection of backend crates above
+> (`agentum-{core,store,tmux,watchdog,executor,server}`). The Tauri
+> shell (Phase 3) depends on `agentum-server`, which transitively
+> pulls in the rest. We kept the fine-grained split for compile-time
+> parallelism and clearer ownership; only the binary crate was
+> renamed (`agentum` → `agentum-cli` in 2026-05) and an empty
+> `agentum-desktop` placeholder was added.
 
 ---
 

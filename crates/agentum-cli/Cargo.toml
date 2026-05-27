@@ -1,5 +1,5 @@
 [package]
-name = "agentum"
+name = "agentum-cli"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

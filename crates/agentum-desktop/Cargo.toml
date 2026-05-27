@@ -1,0 +1,13 @@
+[package]
+name = "agentum-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Tauri desktop shell for agentum. Placeholder until PRD Phase 3 (docs/plans/AGENTUM_V2_PRD.md §6)."
+
+[lib]
+name = "agentum_desktop"
+path = "src/lib.rs"
