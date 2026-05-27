@@ -11,6 +11,7 @@ pub mod clipboard;
 pub mod doctor;
 pub mod events;
 pub mod fs;
+pub mod git;
 pub mod health;
 pub mod host;
 pub mod notes;
