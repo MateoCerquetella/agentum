@@ -93,11 +93,20 @@ impl Store {
         let flags = serde_json::to_string(&new.flags)?;
         let status = Status::Idle;
 
+        // Worktree fields are resolved by the server *before* calling
+        // create_session: by the time we hit the store, they're either
+        // all None (no isolation) or all Some (server already ran
+        // `git worktree add`).
+        let wt_path = new.worktree_path.clone();
+        let wt_branch = new.worktree_branch.clone();
+        let wt_base = new.worktree_base_ref.clone();
+
         let res = sqlx::query(
             r#"
             INSERT INTO sessions
-                (id, name, workdir, tool, model, flags, status, created_at, updated_at, card_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, name, workdir, tool, model, flags, status, created_at, updated_at, card_id,
+                 worktree_path, worktree_branch, worktree_base_ref)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(id.to_string())
@@ -110,6 +119,9 @@ impl Store {
         .bind(&now_s)
         .bind(&now_s)
         .bind(new.card_id)
+        .bind(wt_path.as_deref())
+        .bind(wt_branch.as_deref())
+        .bind(wt_base.as_deref())
         .execute(&self.pool)
         .await;
 
@@ -140,7 +152,24 @@ impl Store {
             state: None,
             pinned: false,
             card_id: new.card_id,
+            worktree_path: wt_path,
+            worktree_branch: wt_branch,
+            worktree_base_ref: wt_base,
         })
+    }
+
+    /// Null out the three worktree columns after the server has called
+    /// `git worktree remove`. Idempotent — a session without a worktree
+    /// no-ops cleanly.
+    pub async fn clear_session_worktree(&self, id: Uuid) -> Result<()> {
+        sqlx::query(
+            "UPDATE sessions SET worktree_path = NULL, worktree_branch = NULL, worktree_base_ref = NULL, updated_at = ? WHERE id = ?",
+        )
+        .bind(OffsetDateTime::now_utc().format(&Rfc3339)?)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     pub async fn list_sessions(&self, status: Option<Status>) -> Result<Vec<Session>> {
@@ -1620,6 +1649,13 @@ struct SessionRow {
     /* ---- orchestrator binding (migration 0015) ---- */
     #[sqlx(default)]
     card_id: Option<i64>,
+    /* ---- worktree isolation (migration 0016) ---- */
+    #[sqlx(default)]
+    worktree_path: Option<String>,
+    #[sqlx(default)]
+    worktree_branch: Option<String>,
+    #[sqlx(default)]
+    worktree_base_ref: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -1814,6 +1850,9 @@ impl TryFrom<SessionRow> for Session {
             state,
             pinned: r.pinned != 0,
             card_id: r.card_id,
+            worktree_path: r.worktree_path,
+            worktree_branch: r.worktree_branch,
+            worktree_base_ref: r.worktree_base_ref,
         })
     }
 }
@@ -1870,6 +1909,9 @@ mod tests {
                 model: None,
                 flags: vec!["--foo".into()],
                 card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await
             .unwrap();
@@ -1891,6 +1933,9 @@ mod tests {
             model: None,
             flags: vec![],
             card_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            worktree_base_ref: None,
         };
         s.create_session(new.clone()).await.unwrap();
         let err = s.create_session(new).await.unwrap_err();
@@ -2405,6 +2450,9 @@ mod tests {
             model: None,
             flags: vec![],
             card_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            worktree_base_ref: None,
         })
         .await
         .unwrap()
@@ -2488,6 +2536,9 @@ mod tests {
                 model: None,
                 flags: vec![],
                 card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await
             .unwrap();
@@ -2675,6 +2726,9 @@ mod tests {
                 model: None,
                 flags: vec![],
                 card_id: Some(goal.id),
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await
             .unwrap();
@@ -2699,6 +2753,9 @@ mod tests {
             model: None,
             flags: vec![],
             card_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            worktree_base_ref: None,
         }
     }
 
@@ -3033,6 +3090,9 @@ mod tests {
                 model: None,
                 flags: vec![],
                 card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await
             .unwrap();
@@ -3088,6 +3148,9 @@ mod tests {
                 model: None,
                 flags: vec![],
                 card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await
             .unwrap();

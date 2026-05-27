@@ -363,6 +363,9 @@ async fn goal_cards_full_happy_path() {
                 model: None,
                 flags: vec![],
                 card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await
             .expect("create child session must succeed");

@@ -23,6 +23,7 @@ use tokio::sync::broadcast;
 pub mod auth;
 mod embed;
 mod error;
+pub mod git;
 mod headers;
 mod logging;
 pub mod planner;
