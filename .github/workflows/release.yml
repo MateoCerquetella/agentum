@@ -66,11 +66,11 @@ jobs:
 
       - name: Build (native)
         if: ${{ !matrix.cross }}
-        run: cargo build --release --target ${{ matrix.target }} -p agentum
+        run: cargo build --release --target ${{ matrix.target }} -p agentum-cli
 
       - name: Build (cross)
         if: matrix.cross
-        run: cross build --release --target ${{ matrix.target }} -p agentum
+        run: cross build --release --target ${{ matrix.target }} -p agentum-cli
 
       - name: Stage release
         shell: bash
@@ -114,8 +114,14 @@ jobs:
         run: |
           set -eux
           # Attached to the release so `…/releases/latest/download/install.sh`
-          # works (the README's recommended one-liner).
-          cp scripts/install.sh dist/install.sh
+          # works (the README's recommended one-liner). Tolerant of the
+          # file being absent until docs/plans/AGENTUM_V2_PRD.md step 3
+          # lands the curl-based installer.
+          if [ -f scripts/install.sh ]; then
+            cp scripts/install.sh dist/install.sh
+          else
+            echo "scripts/install.sh not present yet (PRD step 3) — skipping"
+          fi
 
       - name: Extract release notes
         id: notes
@@ -138,7 +144,11 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           body_path: release-notes.md
-          fail_on_unmatched_files: true
+          # install.sh isn't always present yet (see Stage installer
+          # step) — softprops silently skips missing glob entries when
+          # this is false. Once PRD step 3 ships scripts/install.sh,
+          # flip back to true.
+          fail_on_unmatched_files: false
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS
