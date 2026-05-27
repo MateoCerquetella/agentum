@@ -1167,6 +1167,16 @@ pub struct App {
     /// from one that's actively working — without needing a wider
     /// 2-cell emoji that would shift the rest of the row.
     pub idle: HashSet<Uuid>,
+    /// Sessions we have positive evidence are actively working
+    /// (ActivityState::Working on the watchdog side). Driven by
+    /// `agent.working` and the `state: working` variant of
+    /// `agent.input_resolved`. The sidebar dot renders green `●`
+    /// ONLY when the id is in this set — `Status::Running` alone is
+    /// no longer enough, because a long-lived tmux pane reads as
+    /// Running even after the agent has gone idle. Without this
+    /// the dot stuck on green for every session whose connect-time
+    /// replay snapshot was missing (#stuck-green-dot regression).
+    pub working: HashSet<Uuid>,
     /// First-class agents whose binary is installed on the daemon's
     /// PATH. Populated once at startup from `/api/agents`; consulted by
     /// the New Session form and the tool-cycle key to skip agents the
@@ -1380,6 +1390,7 @@ impl App {
             prefs,
             awaiting_input: HashSet::new(),
             idle: HashSet::new(),
+            working: HashSet::new(),
             agent_availability: None,
             pending_switch_profile: None,
             pending_after_switch: None,
@@ -4640,6 +4651,11 @@ async fn handle_key(
         if let Some(id) = typed_id {
             app.idle.remove(&id);
             app.awaiting_input.remove(&id);
+            // A keypress is strong "agent is working again" signal —
+            // flip the dot to green locally instead of waiting on the
+            // round-trip `agent.working` event, mirroring the same
+            // optimism used for the idle/awaiting clears just above.
+            app.working.insert(id);
             // Shadow the line buffer so we can spot `/clear` (or
             // `\clear`) and mirror the agent's context wipe in the
             // plan/todo panel. Runs unconditionally — cheap, and we
@@ -7809,6 +7825,7 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
             if let Some(id) = ev.session_id {
                 app.awaiting_input.remove(&id);
                 app.idle.remove(&id);
+                app.working.remove(&id);
             }
             refresh_all(app).await;
         }
@@ -7823,6 +7840,7 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
             if let Some(id) = ev.session_id {
                 app.awaiting_input.remove(&id);
                 app.idle.remove(&id);
+                app.working.remove(&id);
             }
             refresh_all(app).await;
         }
@@ -7866,11 +7884,12 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
             // Working→Idle: the agent is now sleeping at the prompt.
             // Mirror the watchdog's ActivityState::Idle so the sidebar
             // dot shows a muted `◌` instead of a misleading green `●`.
-            // Defensive cleanup of awaiting_input in case
+            // Defensive cleanup of awaiting_input + working in case
             // `agent.input_resolved` was missed (event-bus lag,
             // watchdog restart).
             if let Some(id) = ev.session_id {
                 app.awaiting_input.remove(&id);
+                app.working.remove(&id);
                 app.idle.insert(id);
             }
         }
@@ -7902,20 +7921,26 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
             }
             if let Some(id) = ev.session_id {
                 app.awaiting_input.insert(id);
-                // An awaiting agent isn't sleeping — drop any stale idle
-                // bit so the dot doesn't briefly flicker through `◌`
-                // before it lands on `▲`.
+                // An awaiting agent isn't sleeping or working — drop
+                // any stale idle/working bits so the dot doesn't
+                // briefly flicker through `◌`/`●` before it lands
+                // on `▲`.
                 app.idle.remove(&id);
+                app.working.remove(&id);
             }
         }
         "agent.working" => {
             // Agent just resumed work (Idle → Working). Without this the
-            // sidebar dot stays grey while the agent is visibly working —
-            // the bug that ships before this handler exists. No toast: a
-            // quiet resume isn't notification-worthy.
+            // sidebar dot stays grey while the agent is visibly working.
+            // We also INSERT into `working` so the dot turns green — the
+            // dot used to derive green from `Status::Running` alone,
+            // which made every long-lived session read as green forever
+            // (#stuck-green-dot regression).  No toast: a quiet resume
+            // isn't notification-worthy.
             if let Some(id) = ev.session_id {
                 app.idle.remove(&id);
                 app.awaiting_input.remove(&id);
+                app.working.insert(id);
             }
         }
         "agent.input_resolved" => {
@@ -7931,15 +7956,17 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                 match resolved {
                     Some("idle") => {
                         app.idle.insert(id);
+                        app.working.remove(&id);
                     }
                     Some("working") => {
                         app.idle.remove(&id);
+                        app.working.insert(id);
                     }
                     // Older watchdogs (pre-v0.6.28) emit this event with
                     // no payload. Without the resolved-state hint we
                     // can't tell working from idle, so we just clear
                     // awaiting and let the next finished/working event
-                    // settle the idle bit.
+                    // settle the idle/working bits.
                     _ => {}
                 }
             }
@@ -7951,6 +7978,7 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
             if let Some(id) = ev.session_id {
                 app.awaiting_input.remove(&id);
                 app.idle.remove(&id);
+                app.working.remove(&id);
             }
             refresh_all(app).await;
         }
