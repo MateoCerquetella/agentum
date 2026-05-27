@@ -118,6 +118,47 @@ pub struct Session {
     /// all other sessions. Added in migration 0015.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub card_id: Option<i64>,
+    /// Absolute filesystem path of the git worktree this session runs in.
+    /// `None` = no worktree isolation; the agent runs directly in
+    /// `workdir`. When `Some`, `start()` uses this path as the tmux pane
+    /// cwd instead of `workdir`. Added in migration 0016.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    /// Branch the worktree has checked out. Tracked so prune knows what
+    /// to delete and a future "uncommitted changes?" check has a name
+    /// to look up. Added in migration 0016.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_branch: Option<String>,
+    /// Ref the worktree branch was forked from. Defaults to `HEAD` at
+    /// creation time; stored for provenance and future "rebase onto
+    /// base" actions. Added in migration 0016.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_base_ref: Option<String>,
+}
+
+/// Opt-in spec submitted with `NewSession` to request a `git worktree`
+/// for this session. The server resolves it before persistence — the
+/// resulting `worktree_path`/`worktree_branch`/`worktree_base_ref`
+/// columns on `sessions` are what gets stored.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorktreeSpec {
+    /// Branch name to create. `None` = server derives one from the
+    /// session name (slugified, prefixed `agentum/`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Ref to fork from. `None` = `HEAD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_ref: Option<String>,
+}
+
+impl Session {
+    /// Path the agent's tmux pane should `cd` into. When the session
+    /// has a worktree, the worktree wins; otherwise the original
+    /// workdir. Callers should never index `workdir` directly when
+    /// launching — go through this helper.
+    pub fn effective_cwd(&self) -> &str {
+        self.worktree_path.as_deref().unwrap_or(&self.workdir)
+    }
 }
 
 /// Lifecycle state surfaced on the dashboard. Mirrors the TypeScript
@@ -170,6 +211,16 @@ pub struct NewSession {
     /// this planning session. NULL for all other sessions.
     #[serde(default)]
     pub card_id: Option<i64>,
+    /// Resolved worktree fields. The HTTP layer accepts a `WorktreeSpec`
+    /// and runs `git worktree add` before constructing this struct, so
+    /// by the time `NewSession` reaches the store these are either all
+    /// `None` (no isolation) or all `Some` (worktree already on disk).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_base_ref: Option<String>,
 }
 
 /// Event published on the broadcast bus and persisted to the `events` table.
@@ -666,6 +717,9 @@ mod tests {
             state: None,
             pinned: false,
             card_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            worktree_base_ref: None,
         };
 
         // card_id = None → absent from wire.

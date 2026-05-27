@@ -996,6 +996,9 @@ mod tests {
                 model: None,
                 flags: vec![],
                 card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await
             .unwrap();
@@ -1120,6 +1123,9 @@ mod tests {
                 model: None,
                 flags: vec![],
                 card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await
             .unwrap();
@@ -1525,6 +1531,9 @@ mod tests {
                 model: None,
                 flags: vec![],
                 card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await
             .unwrap();
@@ -1597,6 +1606,9 @@ mod tests {
                 model: None,
                 flags: vec![],
                 card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await
             .unwrap();
@@ -1712,6 +1724,9 @@ mod tests {
                 model: None,
                 flags: vec![],
                 card_id: Some(card_c.id),
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await
             .unwrap();
