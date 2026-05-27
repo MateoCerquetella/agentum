@@ -270,7 +270,12 @@ async fn commit(
         )));
     }
 
-    let commit_out = Command::new("git")
+    // `git commit -m <msg> -- <paths>` commits a snapshot of ONLY the
+    // listed paths, independent of whatever else might be staged in the
+    // index. Without the pathspec the dashboard's "select these N files"
+    // UX would silently include sibling work the user didn't pick.
+    let mut commit = Command::new("git");
+    commit
         .arg("-C")
         .arg(&cwd)
         .args([
@@ -282,6 +287,11 @@ async fn commit(
             "-m",
         ])
         .arg(&body.message)
+        .arg("--");
+    for p in &body.paths {
+        commit.arg(p);
+    }
+    let commit_out = commit
         .output()
         .await
         .map_err(|e| ApiError::Internal(format!("git commit: {}", e)))?;
