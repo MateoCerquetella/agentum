@@ -28,12 +28,16 @@ pub const BOOTSTRAPABLE: &[&str] = &["tmux", "git"];
 /// the table never renders a bare missing entry with no guidance.
 pub fn agent_install_hint(tool: &str) -> &'static str {
     match tool {
-        "claude" => "npm install -g @anthropic-ai/claude-code  ·  https://docs.claude.com/en/docs/claude-code",
+        "claude" => {
+            "npm install -g @anthropic-ai/claude-code  ·  https://docs.claude.com/en/docs/claude-code"
+        }
         "codex" => "npm install -g @openai/codex  ·  https://github.com/openai/codex",
         // Cursor ships its headless CLI as `cursor-agent`. Both the
         // `cursor` and `agent` tool ids resolve to it.
         "cursor" | "agent" => "https://cursor.com/cli",
-        "gemini" => "npm install -g @google/gemini-cli  ·  https://github.com/google-gemini/gemini-cli",
+        "gemini" => {
+            "npm install -g @google/gemini-cli  ·  https://github.com/google-gemini/gemini-cli"
+        }
         "hermes" => "https://github.com/anthropics/hermes",
         "opencode" => "npm install -g opencode-ai  ·  https://github.com/sst/opencode",
         "aider" => "python -m pip install aider-install && aider-install  ·  https://aider.chat",
@@ -73,9 +77,8 @@ pub fn fill_hints(readiness: &mut HostReadiness) {
             None
         } else {
             Some(
-                bootstrap_command(&pkg, &[dep.id.as_str()]).unwrap_or_else(|| {
-                    format!("install {} with your package manager", dep.id)
-                }),
+                bootstrap_command(&pkg, &[dep.id.as_str()])
+                    .unwrap_or_else(|| format!("install {} with your package manager", dep.id)),
             )
         };
     }
@@ -176,7 +179,10 @@ mod tests {
         );
 
         let git = &r.required[1];
-        assert!(git.bootstrapable, "git is bootstrapable even when installed");
+        assert!(
+            git.bootstrapable,
+            "git is bootstrapable even when installed"
+        );
         assert!(
             git.install_hint.is_none(),
             "installed dep gets no install hint"
@@ -188,10 +194,7 @@ mod tests {
         let claude = &r.agents[0];
         assert!(claude.install_hint.is_some(), "missing agent gets a hint");
         let codex = &r.agents[1];
-        assert!(
-            codex.install_hint.is_none(),
-            "installed agent gets no hint"
-        );
+        assert!(codex.install_hint.is_none(), "installed agent gets no hint");
     }
 
     #[test]
