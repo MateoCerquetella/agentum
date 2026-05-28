@@ -1,3 +1,8 @@
+# Pinned (not "stable") so CI's rustfmt + clippy match what developers run
+# locally. "stable" let CI float to a newer toolchain whose rustfmt/clippy
+# were stricter than the local one, turning `ci` red on tags the author had
+# verified green (v0.8.12 clippy, v0.8.13 fmt). Bump this deliberately when
+# adopting a newer toolchain, after running fmt/clippy locally on the bump.
 [toolchain]
-channel = "stable"
+channel = "1.94.1"
 components = ["rustfmt", "clippy"]
