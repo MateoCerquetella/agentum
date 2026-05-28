@@ -21,8 +21,15 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Pin the toolchain (not @stable) so CI's rustfmt + clippy match the
+      # repo's rust-toolchain.toml and what developers run locally. @stable
+      # set RUSTUP_TOOLCHAIN=stable, which overrides rust-toolchain.toml and
+      # floated CI to newer, stricter tooling — turning ci red on tags the
+      # author had verified green (v0.8.12 clippy, v0.8.13 fmt). Keep this in
+      # lockstep with rust-toolchain.toml's channel when bumping.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.94.1
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
 
