@@ -92,7 +92,7 @@
     modelHint: string;
   };
   const TOOLS: ToolTile[] = [
-    { id: 'claude', label: 'Claude', desc: 'Anthropic',    dot: 'var(--tool-claude)', firstClass: true,  modelHint: 'claude-opus-4-7' },
+    { id: 'claude', label: 'Claude', desc: 'Anthropic',    dot: 'var(--tool-claude)', firstClass: true,  modelHint: 'claude-opus-4-8' },
     { id: 'codex',  label: 'Codex',  desc: 'OpenAI',       dot: 'var(--tool-codex)',  firstClass: true,  modelHint: 'gpt-5'           },
     { id: 'cursor', label: 'Cursor', desc: 'cursor-agent', dot: 'var(--tool-cursor, var(--cta))', firstClass: true, modelHint: 'default' },
     { id: 'gemini', label: 'Gemini', desc: 'Google',       dot: 'var(--tool-gemini)', firstClass: true,  modelHint: 'default' },

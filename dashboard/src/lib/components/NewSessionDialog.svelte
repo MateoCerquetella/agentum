@@ -432,7 +432,7 @@
           <input
             type="text"
             bind:value={model}
-            placeholder={tool === 'claude' ? 'claude-opus-4-7' : tool === 'codex' ? 'gpt-5' : 'default'}
+            placeholder={tool === 'claude' ? 'claude-opus-4-8' : tool === 'codex' ? 'gpt-5' : 'default'}
             autocomplete="off"
             spellcheck="false"
           />

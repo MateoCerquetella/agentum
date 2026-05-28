@@ -9,7 +9,7 @@ CREATE TABLE sessions (
     name        TEXT NOT NULL UNIQUE,              -- human-friendly slug
     workdir     TEXT NOT NULL,
     tool        TEXT NOT NULL DEFAULT 'claude',    -- claude | codex | opencode | gemini | hermes | custom
-    model       TEXT,                              -- e.g. claude-opus-4-7
+    model       TEXT,                              -- e.g. claude-opus-4-8
     flags       TEXT NOT NULL DEFAULT '[]',        -- JSON array of CLI flags
     status      TEXT NOT NULL DEFAULT 'idle',      -- idle | running | stopped | crashed
     tmux_target TEXT,                              -- e.g. "agentum-Bandely"
