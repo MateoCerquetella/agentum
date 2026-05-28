@@ -221,11 +221,11 @@ fn default_path() -> Result<PathBuf> {
     // keep reading the file they've been writing for months.
     #[cfg(target_os = "macos")]
     {
-        return Ok(home
+        Ok(home
             .join("Library")
             .join("Application Support")
             .join("agentum")
-            .join("profiles.toml"));
+            .join("profiles.toml"))
     }
 
     // Linux + BSD: XDG, with the same empty/non-absolute guard the
