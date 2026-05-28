@@ -12,7 +12,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use agentum_core::{Event, Host, NewHost, Session, WorktreeSpec, transcript::AgentTaskState};
+use agentum_core::{
+    Event, Host, HostReadiness, NewHost, Session, WorktreeSpec, transcript::AgentTaskState,
+};
 use anyhow::{Context, Result, anyhow, bail};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -442,6 +444,61 @@ impl Client {
             bail!("{status} — {body}");
         }
         Ok(resp.json::<HostProbe>().await?)
+    }
+
+    /// `GET /api/hosts/{id}/readiness` — full structured readiness report
+    /// (required deps + agent CLIs + package manager + install hints).
+    /// Daemons predating this route return 404; we surface a clear
+    /// "update the daemon" message rather than a bare error so the user
+    /// knows the gap is the server, not their host.
+    pub async fn host_readiness(&self, id: Uuid) -> Result<HostReadiness> {
+        let url = self.base.join(&format!("/api/hosts/{id}/readiness"))?;
+        let resp = self.http.get(url).bearer_auth(&self.token).send().await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            // Ambiguous between "old daemon, no route" and "unknown host
+            // id". An empty body means the route itself is missing; a
+            // non-empty ApiError body means the host id wasn't found.
+            let body = resp.text().await.unwrap_or_default();
+            if body.trim().is_empty() {
+                bail!("daemon does not support host readiness — update `agentum serve`");
+            }
+            bail!("host not found");
+        }
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("{status} — {body}");
+        }
+        Ok(resp.json::<HostReadiness>().await?)
+    }
+
+    /// `POST /api/hosts/{id}/bootstrap` — install `tmux`/`git` on the host
+    /// after explicit confirmation. `confirm: true` is sent unconditionally
+    /// because the TUI already gated this behind a y/N Confirm overlay.
+    /// Returns the re-probed readiness so the caller can refresh its dots.
+    pub async fn bootstrap_host(&self, id: Uuid, items: &[&str]) -> Result<HostReadiness> {
+        #[derive(Serialize)]
+        struct BootstrapBody<'a> {
+            items: &'a [&'a str],
+            confirm: bool,
+        }
+        let url = self.base.join(&format!("/api/hosts/{id}/bootstrap"))?;
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .json(&BootstrapBody {
+                items,
+                confirm: true,
+            })
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("{status} — {body}");
+        }
+        Ok(resp.json::<HostReadiness>().await?)
     }
 
     pub async fn delete_host(&self, id: Uuid) -> Result<()> {

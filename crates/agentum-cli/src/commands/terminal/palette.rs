@@ -126,6 +126,10 @@ pub enum ActionKind {
     /// keybinding so the profile picker is reachable through palette
     /// filtering ("server" / "profile" / "switch").
     OpenProfiles,
+    /// Open the SSH hosts overlay (readiness reports). Mirrors the
+    /// `Ctrl-H` keybinding so the hosts manager is reachable through
+    /// palette filtering ("host" / "readiness" / "ssh").
+    OpenHosts,
     /// Collapse / expand the SERVERS section of the sidebar. Mirrors
     /// the `Ctrl-K V` chord. Persisted across runs via prefs.
     ToggleServers,
@@ -365,6 +369,12 @@ impl Catalog {
             hint: "Ctrl-S".into(),
             group: "general",
             kind: ActionKind::OpenProfiles,
+        });
+        a.push(Action {
+            label: "Hosts…  (SSH readiness)".into(),
+            hint: "Ctrl-H".into(),
+            group: "general",
+            kind: ActionKind::OpenHosts,
         });
         a.push(Action {
             label: format!("Sound: master [{}]", onoff(prefs.sound_master)),

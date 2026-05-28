@@ -13,9 +13,11 @@ use std::time::SystemTime;
 use agentum_core::Status as SessionStatus;
 use agentum_core::transcript::{AgentTaskState, TaskStatus, TodoStatus};
 
+use uuid::Uuid;
+
 use super::app::{
     AddProfileField, AddProfileForm, App, ConnState, DirPickerState, ErrorEntry, Focus, GoalForm,
-    NewSessionField, NewSessionForm, NotifKind, Notification, Overlay, PendingAction,
+    HostsOverlay, NewSessionField, NewSessionForm, NotifKind, Notification, Overlay, PendingAction,
     ProfilesOverlay, RenameState, Row, SettingsRow, SettingsState, Side, ToolPickerState,
     TreeSection, palette_catalog, status_dot, tool_icon,
 };
@@ -418,6 +420,9 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
             p,
         ),
         Overlay::Goal(form) => draw_overlay_goal(f, f.area(), form, p),
+        Overlay::Hosts(state) => {
+            draw_hosts_overlay(f, f.area(), state, &app.hosts, &app.host_readiness_cache, p)
+        }
     }
 }
 
@@ -1583,6 +1588,10 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         head("  Universal (work even inside the terminal pane)", p),
         body("  Ctrl-P / Ctrl-Shift-P  command palette", p),
         body("  Ctrl-S            open the servers switcher overlay", p),
+        body(
+            "  Ctrl-H            SSH hosts readiness overlay (tree only)",
+            p,
+        ),
         body("  Ctrl-E            toggle focus: tree ↔ terminal", p),
         body("  Ctrl-G            toggle lazygit side pane", p),
         body("  Ctrl-Tab          flip back to last session", p),
@@ -2215,6 +2224,186 @@ fn draw_profiles_add_form(f: &mut Frame<'_>, area: Rect, form: &AddProfileForm, 
     overlay_box(f, area, frame_title, lines, 80, p);
 }
 
+/// Status dot for a host's last readiness report:
+/// green = ready (all agents too), yellow = required ok but some agent
+/// CLIs missing, red = a required dep missing / unreachable, hollow grey
+/// = not checked yet.
+fn host_dot_style(
+    report: Option<&agentum_core::HostReadiness>,
+    p: &Palette,
+) -> (&'static str, Color) {
+    match report {
+        None => ("○", p.muted),
+        Some(r) if !r.ok => ("●", p.error),
+        Some(r) if r.agents.iter().any(|a| !a.installed) => ("●", p.warning),
+        Some(_) => ("●", p.success),
+    }
+}
+
+/// Render the Ctrl-H hosts overlay: a list of daemon-controlled hosts
+/// with readiness dots, plus a detail pane for the selected host. Dots
+/// and detail come from `cache`; a host with no cache entry shows a
+/// hollow dot and the user presses Enter/`t` to probe it.
+fn draw_hosts_overlay(
+    f: &mut Frame<'_>,
+    area: Rect,
+    state: &HostsOverlay,
+    hosts: &[agentum_core::Host],
+    cache: &std::collections::HashMap<Uuid, (tokio::time::Instant, agentum_core::HostReadiness)>,
+    p: &Palette,
+) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(head("SSH Hosts", p));
+    lines.push(Line::from(""));
+
+    if let Some(err) = state.error.as_ref() {
+        lines.push(Line::from(Span::styled(
+            format!("  ⚠ {err}"),
+            Style::default().fg(p.error),
+        )));
+        lines.push(Line::from(""));
+    }
+
+    // ── Host list ──────────────────────────────────────────────────
+    for (i, id) in state.host_ids.iter().enumerate() {
+        let Some(host) = hosts.iter().find(|h| &h.id == id) else {
+            continue;
+        };
+        let report = cache.get(id).map(|(_, r)| r);
+        let selected = i == state.cursor;
+        let (dot, dot_color) = host_dot_style(report, p);
+        let marker = if selected { "▶ " } else { "  " };
+        lines.push(Line::from(vec![
+            Span::styled(
+                marker.to_string(),
+                Style::default().fg(if selected { p.accent } else { p.muted }),
+            ),
+            Span::styled(format!("{dot} "), Style::default().fg(dot_color)),
+            Span::styled(
+                host.name.clone(),
+                Style::default()
+                    .fg(if selected { p.fg_strong } else { p.fg })
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}", host_target_label(host)),
+                Style::default().fg(p.muted),
+            ),
+        ]));
+    }
+
+    // ── Detail pane for the selected host ──────────────────────────
+    lines.push(Line::from(""));
+    let selected_report = state
+        .selected()
+        .and_then(|id| cache.get(&id).map(|(_, r)| r));
+    if state.loading {
+        lines.push(Line::from(Span::styled(
+            "  checking… (one SSH round trip)".to_string(),
+            Style::default().fg(p.muted),
+        )));
+    } else if let Some(r) = selected_report {
+        let uname = r.system.uname.as_deref().unwrap_or("unknown");
+        lines.push(Line::from(Span::styled(
+            format!("  {uname} · pkg={}", r.system.pkg_manager),
+            Style::default().fg(p.subtle),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  REQUIRED".to_string(),
+            Style::default().fg(p.muted).add_modifier(Modifier::BOLD),
+        )));
+        for dep in &r.required {
+            push_dep_line(
+                &mut lines,
+                &dep.label,
+                dep.installed,
+                dep.install_hint.as_deref(),
+                p,
+            );
+        }
+        lines.push(Line::from(Span::styled(
+            "  AGENTS (optional)".to_string(),
+            Style::default().fg(p.muted).add_modifier(Modifier::BOLD),
+        )));
+        for agent in &r.agents {
+            push_dep_line(
+                &mut lines,
+                &agent.id,
+                agent.installed,
+                agent.install_hint.as_deref(),
+                p,
+            );
+        }
+        lines.push(Line::from(""));
+        let (verdict, color) = if r.ok {
+            ("Ready: yes".to_string(), p.success)
+        } else if r.system.uname.is_none() {
+            (format!("Ready: no — {}", r.message), p.error)
+        } else {
+            let missing = r.required.iter().filter(|d| !d.installed).count();
+            (format!("Ready: no ({missing} required missing)"), p.error)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  {verdict}"),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  press Enter/t to run a readiness check".to_string(),
+            Style::default().fg(p.muted),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  ↑↓ move · Enter/t check · b bootstrap tmux+git · Esc close".to_string(),
+        Style::default().fg(p.muted),
+    )));
+
+    overlay_box(f, area, " hosts ", lines, 88, p);
+}
+
+/// Push one `[x]/[ ] label — hint` dependency row into a line buffer,
+/// colouring the mark green/red and showing the install hint only when
+/// the dep is missing.
+fn push_dep_line(
+    lines: &mut Vec<Line<'static>>,
+    label: &str,
+    installed: bool,
+    hint: Option<&str>,
+    p: &Palette,
+) {
+    let (mark, color) = if installed {
+        ("✓", p.success)
+    } else {
+        ("✗", p.error)
+    };
+    let mut spans = vec![
+        Span::styled(format!("    {mark} "), Style::default().fg(color)),
+        Span::styled(format!("{label:<10}"), Style::default().fg(p.fg)),
+    ];
+    if !installed && let Some(h) = hint {
+        spans.push(Span::styled(
+            format!(" — {h}"),
+            Style::default().fg(p.muted),
+        ));
+    }
+    lines.push(Line::from(spans));
+}
+
+/// `ssh user@host:port` / `this machine` label for a host row.
+fn host_target_label(host: &agentum_core::Host) -> String {
+    match &host.kind {
+        agentum_core::HostKind::Local => "this machine".to_string(),
+        agentum_core::HostKind::Ssh {
+            user,
+            hostname,
+            port,
+            ..
+        } => format!("ssh {user}@{hostname}:{port}"),
+    }
+}
+
 fn draw_errors_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let w = 100.min(area.width.saturating_sub(4));
     let h = 28.min(area.height.saturating_sub(4));
@@ -2447,7 +2636,7 @@ fn draw_new_session_overlay(
         "Model",
         &form.model,
         form.field == NewSessionField::Model,
-        "e.g. claude-opus-4-7",
+        "e.g. claude-opus-4-8",
         Some("(optional)"),
         p,
     );

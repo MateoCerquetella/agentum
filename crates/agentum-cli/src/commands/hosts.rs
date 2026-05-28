@@ -1,12 +1,8 @@
 //! `agentum hosts` — manage SSH-agentless hosts plus the legacy
 //! SSH-style known_hosts file for remote Agentum server certificates.
 
-use agentum_core::{HostKind, NewHost, SshAuth};
+use agentum_core::{Host, HostKind, HostReadiness, NewHost, SshAuth};
 use anyhow::Result;
-use tokio::process::Command;
-use tokio::time::{Duration, timeout};
-
-const SSH_TEST_TIMEOUT: Duration = Duration::from_secs(12);
 
 use crate::cli::HostsCmd;
 use crate::commands::terminal::trust;
@@ -22,6 +18,8 @@ pub async fn run(action: HostsCmd) -> Result<()> {
             key,
         } => add(name, user, hostname, port, key).await,
         HostsCmd::Test { name } => test(name).await,
+        HostsCmd::Readiness { name } => readiness(name).await,
+        HostsCmd::Bootstrap { name, yes } => bootstrap(name, yes).await,
         HostsCmd::Rm { name } => remove(name).await,
         HostsCmd::Forget { host } => forget(&host).await,
     }
@@ -82,67 +80,172 @@ async fn add(
         })
         .await?;
     println!("saved host `{}` ({})", host.name, host.id);
-    println!("test with: agentum hosts test {}", name);
+    println!();
+    // Run readiness in-process: the CLI runs on the same machine as the
+    // local daemon (the box that SSHes to the host), so the user sees the
+    // full dependency report immediately on add — no running `agentum
+    // serve` required.
+    let report = agentum_server::host_runtime::readiness(&host).await;
+    print_readiness(&host, &report);
+    if report.ok {
+        let _ = store.update_host_seen(host.id).await;
+    } else {
+        // US-1: non-zero exit when a required dependency is missing.
+        std::process::exit(1);
+    }
     Ok(())
 }
 
+/// `agentum hosts test <name>` — concise, script-friendly one-line
+/// summary. For the full per-dependency table use `hosts readiness`.
 async fn test(name: String) -> Result<()> {
     let (store, _) = agentum_store::open_default().await?;
-    let host = store
+    let host = find_host(&store, &name).await?;
+    let report = agentum_server::host_runtime::readiness(&host).await;
+    if report.ok {
+        let agents = report.agents.iter().filter(|a| a.installed).count();
+        println!(
+            "{}: ready · {agents} agent CLI{} available",
+            host.name,
+            if agents == 1 { "" } else { "s" }
+        );
+        let _ = store.update_host_seen(host.id).await;
+    } else {
+        println!("{}: not ready — {}", host.name, report.message);
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// `agentum hosts readiness <name>` — full dependency report.
+async fn readiness(name: String) -> Result<()> {
+    let (store, _) = agentum_store::open_default().await?;
+    let host = find_host(&store, &name).await?;
+    let report = agentum_server::host_runtime::readiness(&host).await;
+    print_readiness(&host, &report);
+    if report.ok {
+        let _ = store.update_host_seen(host.id).await;
+    } else {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// `agentum hosts bootstrap <name> [--yes]` — install the missing
+/// required deps (tmux/git) via the host's package manager. Runs the
+/// install in-process (CLI is co-located with the daemon). Prompts unless
+/// `--yes`. PRD US-4.
+async fn bootstrap(name: String, yes: bool) -> Result<()> {
+    let (store, _) = agentum_store::open_default().await?;
+    let host = find_host(&store, &name).await?;
+
+    // Probe first so we only install what's actually missing — and so a
+    // fully-ready host short-circuits without a sudo round trip.
+    let pre = agentum_server::host_runtime::readiness(&host).await;
+    let missing: Vec<String> = pre
+        .required
+        .iter()
+        .filter(|d| !d.installed && d.bootstrapable)
+        .map(|d| d.id.clone())
+        .collect();
+    if missing.is_empty() {
+        println!("{}: required deps already installed", host.name);
+        return Ok(());
+    }
+
+    if !yes {
+        use std::io::Write;
+        print!(
+            "Install {} on `{}` (sudo)? [y/N] ",
+            missing.join(" + "),
+            host.name
+        );
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        if !matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            println!("aborted");
+            return Ok(());
+        }
+    }
+
+    println!("installing {} on `{}`…", missing.join(" + "), host.name);
+    match agentum_server::host_runtime::bootstrap(&host, &missing).await {
+        Ok(report) => {
+            println!();
+            print_readiness(&host, &report);
+            if report.ok {
+                let _ = store.update_host_seen(host.id).await;
+            } else {
+                std::process::exit(1);
+            }
+        }
+        Err(e) => anyhow::bail!("bootstrap failed: {e}"),
+    }
+    Ok(())
+}
+
+async fn find_host(store: &agentum_store::Store, name: &str) -> Result<Host> {
+    store
         .list_hosts()
         .await?
         .into_iter()
         .find(|h| h.name == name)
-        .ok_or_else(|| anyhow::anyhow!("no host named `{name}`"))?;
-    match host.kind {
-        HostKind::Local => {
-            println!(
-                "local host: tmux={} git={}",
-                which::which("tmux").is_ok(),
-                which::which("git").is_ok()
-            );
-        }
+        .ok_or_else(|| anyhow::anyhow!("no host named `{name}`"))
+}
+
+/// Render a readiness report as a Hermes-style table (PRD §7.5).
+fn print_readiness(host: &Host, report: &HostReadiness) {
+    println!("Host: {} ({})", host.name, host_target_label(host));
+    let uname = report.system.uname.as_deref().unwrap_or("unknown");
+    println!(
+        "System: {uname} · pkg_manager={}",
+        report.system.pkg_manager
+    );
+    println!();
+
+    println!("REQUIRED");
+    for dep in &report.required {
+        print_dep_row(&dep.label, dep.installed, dep.install_hint.as_deref());
+    }
+    println!();
+
+    println!("AGENTS (optional)");
+    for agent in &report.agents {
+        print_dep_row(&agent.id, agent.installed, agent.install_hint.as_deref());
+    }
+    println!();
+
+    if report.ok {
+        println!("Ready: yes");
+    } else if report.system.uname.is_none() {
+        // Unreachable host — `message` carries the SSH error; the table
+        // above is all "missing" because nothing could be verified.
+        println!("Ready: no — {}", report.message);
+    } else {
+        let missing = report.required.iter().filter(|d| !d.installed).count();
+        println!("Ready: no ({missing} required missing)");
+    }
+}
+
+fn print_dep_row(label: &str, installed: bool, hint: Option<&str>) {
+    let mark = if installed { "[x]" } else { "[ ]" };
+    match hint {
+        Some(h) if !installed => println!("  {mark} {label:<10} — {h}"),
+        _ => println!("  {mark} {label}"),
+    }
+}
+
+fn host_target_label(host: &Host) -> String {
+    match &host.kind {
+        HostKind::Local => "this machine".to_string(),
         HostKind::Ssh {
             user,
             hostname,
             port,
-            auth,
-        } => {
-            let mut cmd = Command::new("ssh");
-            cmd.arg("-o")
-                .arg("BatchMode=yes")
-                .arg("-o")
-                .arg("ConnectTimeout=8")
-                .arg("-o")
-                .arg("ConnectionAttempts=1")
-                .arg("-o")
-                .arg("ServerAliveInterval=5")
-                .arg("-o")
-                .arg("ServerAliveCountMax=1")
-                .arg("-o")
-                .arg("StrictHostKeyChecking=accept-new")
-                .arg("-p")
-                .arg(port.to_string());
-            if let SshAuth::Key { path } = auth {
-                cmd.arg("-i").arg(path);
-            }
-            let output = timeout(
-                SSH_TEST_TIMEOUT,
-                cmd.arg(format!("{user}@{hostname}"))
-                    .arg("command -v tmux >/dev/null && command -v git >/dev/null && uname -sr")
-                    .output(),
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("ssh test timed out"))??;
-            if output.status.success() {
-                println!("ok: {}", String::from_utf8_lossy(&output.stdout).trim());
-                store.update_host_seen(host.id).await?;
-            } else {
-                anyhow::bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
-            }
-        }
+            ..
+        } => format!("ssh {user}@{hostname}:{port}"),
     }
-    Ok(())
 }
 
 async fn remove(name: String) -> Result<()> {

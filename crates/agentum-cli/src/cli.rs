@@ -422,8 +422,21 @@ pub enum HostsCmd {
         #[arg(long)]
         key: Option<String>,
     },
-    /// Probe an SSH host by name.
+    /// Probe an SSH host by name (one-line ready/not-ready summary).
     Test { name: String },
+    /// Full readiness report for a host: required deps (tmux, git), agent
+    /// CLIs, detected package manager, and install hints. Exits non-zero
+    /// when a required dependency is missing.
+    Readiness { name: String },
+    /// Install missing required deps (tmux, git) on a host via its package
+    /// manager. Prompts to confirm unless `--yes`. Needs passwordless sudo
+    /// (or root) on the remote — never installs agent CLIs.
+    Bootstrap {
+        name: String,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Remove an SSH host by name. Refuses when sessions still reference it.
     Rm { name: String },
     /// Forget a pinned Agentum server certificate host (legacy trust store).

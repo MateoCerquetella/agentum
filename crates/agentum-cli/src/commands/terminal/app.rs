@@ -33,6 +33,12 @@ use super::ui;
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const TICK_INTERVAL: Duration = Duration::from_millis(100);
 
+/// How long a cached host readiness report stays "fresh" before the
+/// Ctrl-H overlay and New Session submit guard treat it as stale and
+/// re-probe. 5 min balances "don't re-SSH on every keystroke" against
+/// "notice when the user just installed tmux on the remote".
+const HOST_READINESS_TTL: Duration = Duration::from_secs(5 * 60);
+
 /// Maximum visible notification toasts in the bottom-left stack. Older
 /// entries are evicted FIFO when a new one arrives — same ceiling as
 /// the dashboard's `ToastStack`.
@@ -192,6 +198,33 @@ pub enum Overlay {
     /// area; Enter appends a newline, Ctrl-Enter submits the goal to
     /// `POST /api/board/goals`, Esc discards. UI-SPEC §Goal Composer.
     Goal(Box<GoalForm>),
+    /// SSH hosts manager. Opened with `Ctrl-H`. Lists daemon-controlled
+    /// hosts with a readiness status dot; Enter / `t` runs a readiness
+    /// preflight for the selected host, Esc closes. Detail + dots read
+    /// from `App::host_readiness_cache`. See SSH_HOST_READINESS_PRD §7.6.
+    Hosts(HostsOverlay),
+}
+
+/// In-memory state for the [`Overlay::Hosts`] manager. Holds only a
+/// stable snapshot of host ids (so the cursor doesn't jump if `app.hosts`
+/// is refreshed underneath) plus transient loading/error state — the
+/// readiness reports themselves live in [`App::host_readiness_cache`] and
+/// are resolved per host at render time.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub struct HostsOverlay {
+    pub host_ids: Vec<Uuid>,
+    pub cursor: usize,
+    /// True while a readiness round trip is in flight for the selected
+    /// host. (Currently inline-awaited like the New Session host probe;
+    /// a background refresh — PRD phase 3 — will make this meaningful.)
+    pub loading: bool,
+    pub error: Option<String>,
+}
+
+impl HostsOverlay {
+    pub fn selected(&self) -> Option<Uuid> {
+        self.host_ids.get(self.cursor).copied()
+    }
 }
 
 /// In-memory state for the [`Overlay::Profiles`] switcher.
@@ -747,6 +780,14 @@ pub enum PendingAction {
         ids: Vec<Uuid>,
         names: Vec<String>,
     },
+    /// Install missing required deps (tmux/git) on a host. Opened with
+    /// `b` from the Ctrl-H hosts overlay. `items` is captured at prompt
+    /// time so the confirm text and the install agree. Phase 2.
+    BootstrapHost {
+        id: Uuid,
+        name: String,
+        items: Vec<String>,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -792,10 +833,16 @@ impl PendingAction {
                     ),
                 }
             }
+            PendingAction::BootstrapHost { name, items, .. } => format!(
+                "install {} on `{name}` via sudo? Needs passwordless sudo (or root) on the remote.",
+                items.join(" + ")
+            ),
         }
     }
 
     pub fn is_destructive(&self) -> bool {
+        // Bootstrap installs packages — consequential but not destructive,
+        // so it gets the plain " confirm " framing, not the red one.
         !matches!(
             self,
             PendingAction::Start { .. }
@@ -803,6 +850,7 @@ impl PendingAction {
                     kind: BulkKind::Start,
                     ..
                 }
+                | PendingAction::BootstrapHost { .. }
         )
     }
 }
@@ -1256,6 +1304,12 @@ pub struct App {
     /// while the startup probe is pending; the New Session Host field
     /// treats empty as "local".
     pub hosts: Vec<agentum_core::Host>,
+    /// Per-host readiness cache: the last report plus the instant it was
+    /// fetched. Feeds the Ctrl-H overlay's status dots + detail pane and
+    /// the New Session submit guard so we don't re-SSH on every keystroke.
+    /// Entries older than [`HOST_READINESS_TTL`] are treated as stale.
+    /// See SSH_HOST_READINESS_PRD §7.6.
+    pub host_readiness_cache: HashMap<Uuid, (Instant, agentum_core::HostReadiness)>,
     /// Which sidebar section the cursor is on. Two sections share one
     /// pane: an Servers list at the top, then the Sessions tree.
     /// `j`/`k` flips between them at the boundaries.
@@ -1366,6 +1420,16 @@ pub enum PendingAfterSwitch {
 }
 
 impl App {
+    /// Fetch a host's cached readiness report if it's still fresh
+    /// (within [`HOST_READINESS_TTL`]). Returns `None` for an absent or
+    /// stale entry so callers re-probe rather than act on old data.
+    pub fn cached_readiness(&self, id: Uuid) -> Option<&agentum_core::HostReadiness> {
+        self.host_readiness_cache
+            .get(&id)
+            .filter(|(at, _)| at.elapsed() < HOST_READINESS_TTL)
+            .map(|(_, report)| report)
+    }
+
     pub fn new(sessions: Vec<Session>) -> Self {
         let tree = Tree::build(&sessions, &HashMap::new());
         let selected = first_visible_session(&tree, &sessions);
@@ -1449,6 +1513,7 @@ impl App {
             active_profile: None,
             profiles: Vec::new(),
             hosts: Vec::new(),
+            host_readiness_cache: HashMap::new(),
             tree_section: TreeSection::Sessions,
             servers_cursor: 0,
             clients: HashMap::new(),
@@ -4245,6 +4310,17 @@ async fn handle_key(
         return;
     }
 
+    // Ctrl-H opens the SSH hosts readiness overlay. Gated to Tree focus so
+    // Ctrl-H stays the shell's erase key (^H) inside a terminal pane;
+    // reachable from any focus via the command palette ("Hosts…").
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('h') | KeyCode::Char('H'))
+        && app.focus == Focus::Tree
+    {
+        open_hosts_overlay(app);
+        return;
+    }
+
     // Ctrl-Tab — flip back to the previously selected session. Mirrors
     // VS Code's "go to last edited file" / iTerm2's "last tab". A
     // no-op when there's no prior session (first run, or the last
@@ -4509,6 +4585,10 @@ async fn handle_key(
         }
         Overlay::Goal(_) => {
             handle_goal_key(app, key, client).await;
+            return;
+        }
+        Overlay::Hosts(_) => {
+            handle_hosts_key(app, key, client).await;
             return;
         }
         Overlay::None => {}
@@ -5189,6 +5269,115 @@ async fn handle_key(
     }
 }
 
+/// Build and open the Ctrl-H hosts overlay from the current host list.
+/// Snapshots host ids so the cursor is stable; readiness is fetched
+/// lazily (Enter / `t`), not on open.
+fn open_hosts_overlay(app: &mut App) {
+    let host_ids: Vec<Uuid> = app.hosts.iter().map(|h| h.id).collect();
+    if host_ids.is_empty() {
+        app.status_msg = Some("no hosts defined — add one with `agentum hosts add …`".into());
+        return;
+    }
+    app.overlay = Overlay::Hosts(HostsOverlay {
+        host_ids,
+        cursor: 0,
+        loading: false,
+        error: None,
+    });
+    app.status_msg =
+        Some("hosts · ↑↓ move · Enter/t check · b bootstrap tmux+git · Esc close".into());
+}
+
+/// Key handling for [`Overlay::Hosts`]. ↑/↓ (or k/j) move the cursor;
+/// Enter or `t` runs a readiness preflight for the selected host (an
+/// inline SSH round trip — same blocking pattern as the New Session host
+/// probe — cached in `app.host_readiness_cache`); Esc closes.
+async fn handle_hosts_key(app: &mut App, key: KeyEvent, client: &Client) {
+    let Overlay::Hosts(mut overlay) = std::mem::replace(&mut app.overlay, Overlay::None) else {
+        return;
+    };
+    match key.code {
+        // Already swapped to `Overlay::None` above — leave it closed.
+        KeyCode::Esc => return,
+        KeyCode::Up | KeyCode::Char('k') => {
+            overlay.cursor = overlay.cursor.saturating_sub(1);
+            overlay.error = None;
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if overlay.cursor + 1 < overlay.host_ids.len() {
+                overlay.cursor += 1;
+            }
+            overlay.error = None;
+        }
+        KeyCode::Enter | KeyCode::Char('t') => {
+            if let Some(id) = overlay.selected() {
+                overlay.loading = true;
+                overlay.error = None;
+                match client.host_readiness(id).await {
+                    Ok(report) => {
+                        app.host_readiness_cache
+                            .insert(id, (Instant::now(), report));
+                    }
+                    Err(e) => overlay.error = Some(e.to_string()),
+                }
+                overlay.loading = false;
+            }
+        }
+        // `b` bootstraps the missing required deps (tmux/git) on the
+        // selected host. Uses the cached readiness to decide what's
+        // missing, then hands off to a Confirm overlay (phase 2). Needs a
+        // prior readiness check (Enter/t) so we know the gap.
+        KeyCode::Char('b') => {
+            if let Some(id) = overlay.selected() {
+                let missing: Vec<String> = app
+                    .cached_readiness(id)
+                    .map(|r| {
+                        r.required
+                            .iter()
+                            .filter(|d| !d.installed && d.bootstrapable)
+                            .map(|d| d.id.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if missing.is_empty() {
+                    overlay.error = Some(
+                        "nothing to bootstrap — press Enter/t to check, or tmux+git already present"
+                            .into(),
+                    );
+                } else {
+                    let name = app
+                        .hosts
+                        .iter()
+                        .find(|h| h.id == id)
+                        .map(|h| h.name.clone())
+                        .unwrap_or_else(|| "host".into());
+                    // Hand off to the Confirm overlay; don't restore Hosts.
+                    app.overlay = Overlay::Confirm(PendingAction::BootstrapHost {
+                        id,
+                        name,
+                        items: missing,
+                    });
+                    return;
+                }
+            }
+        }
+        _ => {}
+    }
+    app.overlay = Overlay::Hosts(overlay);
+}
+
+/// Reopen the Ctrl-H hosts overlay with the cursor positioned on `id`.
+/// Used after a bootstrap confirm so the user lands back on the host they
+/// just acted on, with its (now refreshed) status dot.
+fn reopen_hosts_overlay_at(app: &mut App, id: Uuid) {
+    open_hosts_overlay(app);
+    if let Overlay::Hosts(ref mut o) = app.overlay
+        && let Some(pos) = o.host_ids.iter().position(|h| *h == id)
+    {
+        o.cursor = pos;
+    }
+}
+
 async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
     let Overlay::NewSession(mut form) = std::mem::replace(&mut app.overlay, Overlay::None) else {
         return;
@@ -5310,25 +5499,81 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
                 } else {
                     form.cycle_host(&app.hosts);
                     let host_id = Uuid::parse_str(&form.host_id).ok();
+                    let host_name = host_id
+                        .and_then(|id| app.hosts.iter().find(|h| h.id == id))
+                        .map(|h| h.name.clone())
+                        .unwrap_or_else(|| "host".to_string());
                     let target_client = app
                         .clients
                         .get(form.profile.as_str())
                         .and_then(|e| e.client.clone());
                     let target_ref = target_client.as_ref().unwrap_or(client);
-                    app.agent_availability =
-                        target_ref.list_agents_on(host_id).await.ok().map(|list| {
-                            list.into_iter()
-                                .filter(|a| a.available)
-                                .map(|a| a.name)
-                                .collect()
-                        });
+
+                    // Prefer a single readiness round trip per host: it
+                    // reports agent availability *and* required-dep gaps,
+                    // so we derive the tool picker's availability set from
+                    // it and surface a blocking hint when tmux/git are
+                    // missing. Caching feeds the submit guard. PRD §7.6.
+                    let mut readiness_ok = true;
+                    match host_id {
+                        Some(id) => match target_ref.host_readiness(id).await {
+                            Ok(report) => {
+                                app.agent_availability = Some(
+                                    report
+                                        .agents
+                                        .iter()
+                                        .filter(|a| a.installed)
+                                        .map(|a| a.id.clone())
+                                        .collect(),
+                                );
+                                readiness_ok = report.ok;
+                                if !report.ok {
+                                    form.error = Some(format!(
+                                        "{host_name} not ready — {} (fix via Ctrl-H)",
+                                        report.message
+                                    ));
+                                }
+                                app.host_readiness_cache
+                                    .insert(id, (Instant::now(), report));
+                            }
+                            // Old daemon without `/readiness`, or a
+                            // transient failure: fall back to the agents
+                            // probe so the picker still gates correctly.
+                            Err(_) => {
+                                app.agent_availability =
+                                    target_ref.list_agents_on(host_id).await.ok().map(|list| {
+                                        list.into_iter()
+                                            .filter(|a| a.available)
+                                            .map(|a| a.name)
+                                            .collect()
+                                    });
+                            }
+                        },
+                        // Local host (empty id): instant probe, no SSH.
+                        None => {
+                            app.agent_availability =
+                                target_ref.list_agents_on(host_id).await.ok().map(|list| {
+                                    list.into_iter()
+                                        .filter(|a| a.available)
+                                        .map(|a| a.name)
+                                        .collect()
+                                });
+                        }
+                    }
+
+                    // Default the workdir to the host's home. Don't clear
+                    // a readiness error if one is already blocking.
                     match target_ref.list_dir_on(None, host_id).await {
                         Ok(listing) => {
                             form.workdir = listing.path;
-                            form.error = None;
+                            if readiness_ok {
+                                form.error = None;
+                            }
                         }
                         Err(e) => {
-                            form.error = Some(format!("couldn't list host home: {e}"));
+                            if readiness_ok {
+                                form.error = Some(format!("couldn't list host home: {e}"));
+                            }
                         }
                     }
                 }
@@ -5455,6 +5700,23 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
                     other => other,
                 };
                 form.error = Some(format!("{bin} not installed on the daemon"));
+                app.overlay = Overlay::NewSession(form);
+                return;
+            }
+            // Block spawning on a host whose last readiness check found a
+            // required dependency (tmux/git) missing. Reuses the cached
+            // report from the Host-field probe so submit adds no round
+            // trip; a host the user never probed has no cache entry and
+            // isn't blocked here (the daemon still rejects an unworkable
+            // spawn). No "proceed anyway" in the MVP — PRD US-3.
+            if let Some(host_id) = form.host_uuid()
+                && let Some(report) = app.cached_readiness(host_id)
+                && !report.ok
+            {
+                form.error = Some(format!(
+                    "host not ready — {} (Ctrl-H to fix)",
+                    report.message
+                ));
                 app.overlay = Overlay::NewSession(form);
                 return;
             }
@@ -6092,6 +6354,43 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         return;
     }
 
+    // Host bootstrap is not a session action — it talks to the active
+    // daemon (which owns the host) and refreshes the readiness cache.
+    // Handle it before the session-id match below (which would panic on
+    // this variant).
+    if let PendingAction::BootstrapHost { id, name, items } = &action {
+        let item_refs: Vec<&str> = items.iter().map(String::as_str).collect();
+        app.status_msg = Some(format!("bootstrapping `{name}`… (sudo install)"));
+        match client.bootstrap_host(*id, &item_refs).await {
+            Ok(report) => {
+                let ok = report.ok;
+                app.host_readiness_cache
+                    .insert(*id, (Instant::now(), report));
+                let (label, kind) = if ok {
+                    (
+                        format!("`{name}` ready — installed {}", items.join(" + ")),
+                        NotifKind::Info,
+                    )
+                } else {
+                    (
+                        format!("`{name}`: install ran but host still not ready"),
+                        NotifKind::Warn,
+                    )
+                };
+                app.status_msg = Some(label.clone());
+                push_notification(app, label, None, kind);
+            }
+            Err(e) => {
+                let msg = format!("bootstrap `{name}` failed: {e}");
+                app.push_error(msg.clone());
+                app.status_msg = Some(msg);
+            }
+        }
+        // Land the user back on the host they acted on, dot refreshed.
+        reopen_hosts_overlay_at(app, *id);
+        return;
+    }
+
     // Lifecycle ops (start/stop/kill) target a specific session id, so
     // they have to talk to whichever server owns that session — not
     // the default. Look up the owner's client; fall back to `client`
@@ -6101,7 +6400,9 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         PendingAction::Start { id, .. }
         | PendingAction::Stop { id, .. }
         | PendingAction::Kill { id, .. } => *id,
-        PendingAction::RemoveServer { .. } | PendingAction::Bulk { .. } => unreachable!(),
+        PendingAction::RemoveServer { .. }
+        | PendingAction::Bulk { .. }
+        | PendingAction::BootstrapHost { .. } => unreachable!(),
     };
     let owner = app.client_for_session(session_id).cloned();
     let target = owner.unwrap_or_else(|| client.clone());
@@ -6140,7 +6441,9 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         PendingAction::Start { name, .. } => format!("started `{name}`"),
         PendingAction::Stop { name, .. } => format!("stopped `{name}`"),
         PendingAction::Kill { name, .. } => format!("killed `{name}`"),
-        PendingAction::RemoveServer { .. } | PendingAction::Bulk { .. } => unreachable!(),
+        PendingAction::RemoveServer { .. }
+        | PendingAction::Bulk { .. }
+        | PendingAction::BootstrapHost { .. } => unreachable!(),
     };
     match result {
         Ok(()) => {
@@ -7019,6 +7322,9 @@ async fn run_palette_action(
             open_profiles_overlay(app);
             app.status_msg =
                 Some("servers (Enter switch · a add · d remove · s scope · Esc close)".into());
+        }
+        ActionKind::OpenHosts => {
+            open_hosts_overlay(app);
         }
         ActionKind::ToggleSoundMaster => {
             let on = app.prefs.toggle_sound_master();
