@@ -25,6 +25,8 @@ mod embed;
 mod error;
 pub mod git;
 mod headers;
+pub mod host_install_hints;
+pub mod host_runtime;
 mod logging;
 pub mod planner;
 pub mod ratelimit;
@@ -202,6 +204,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::health::router())
         .merge(routes::host::router())
+        .merge(routes::hosts::router())
         .merge(routes::cert::router())
         .merge(routes::doctor::router())
         .merge(routes::auth::router())

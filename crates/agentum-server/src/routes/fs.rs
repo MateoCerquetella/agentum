@@ -6,12 +6,14 @@
 
 use std::path::{Path, PathBuf};
 
+use agentum_core::{HostKind, LOCAL_HOST_ID};
 use axum::Json;
 use axum::Router;
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::routing::get;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
+use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
@@ -29,6 +31,9 @@ struct ListQuery {
     /// Include dotfiles. Defaults to false.
     #[serde(default)]
     show_hidden: bool,
+    /// Host to list on. Missing means the daemon's local machine.
+    #[serde(default)]
+    host_id: Option<Uuid>,
 }
 
 #[derive(Serialize)]
@@ -48,7 +53,20 @@ struct ListResp {
     dirs: Vec<Entry>,
 }
 
-async fn list_dir(Query(q): Query<ListQuery>) -> Result<Json<ListResp>, ApiError> {
+async fn list_dir(
+    State(state): State<AppState>,
+    Query(q): Query<ListQuery>,
+) -> Result<Json<ListResp>, ApiError> {
+    let host_id = q.host_id.unwrap_or(LOCAL_HOST_ID);
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown host: {host_id}")))?;
+    if matches!(host.kind, HostKind::Ssh { .. }) {
+        return list_remote_dir(&host, q).await;
+    }
+
     let raw = q.path.unwrap_or_default();
     let resolved = resolve(&raw)?;
 
@@ -107,6 +125,54 @@ async fn list_dir(Query(q): Query<ListQuery>) -> Result<Json<ListResp>, ApiError
         parent,
         dirs,
     }))
+}
+
+async fn list_remote_dir(
+    host: &agentum_core::Host,
+    q: ListQuery,
+) -> Result<Json<ListResp>, ApiError> {
+    let raw = q.path.unwrap_or_default();
+    let quoted =
+        shlex::try_quote(raw.trim()).map_err(|_| ApiError::BadRequest("bad path".into()))?;
+    let hidden_filter = if q.show_hidden {
+        ""
+    } else {
+        " | awk -F '\\t' '$2 !~ /^\\./'"
+    };
+    let script = format!(
+        r#"base={quoted}
+if [ -z "$base" ] || [ "$base" = "~" ]; then
+  base="$HOME"
+else
+  case "$base" in "~/"*) base="$HOME/${{base#~/}}" ;; esac
+fi
+if [ ! -d "$base" ]; then echo "not a directory: $base" >&2; exit 2; fi
+printf 'PATH\t%s\n' "$base"
+parent=$(dirname -- "$base")
+if [ "$parent" != "$base" ]; then printf 'PARENT\t%s\n' "$parent"; fi
+find "$base" -mindepth 1 -maxdepth 1 -type d -printf 'DIR\t%f\t%p\n'{hidden_filter} | sort -f
+"#
+    );
+    let out = crate::host_runtime::ssh_stdout(host, &script)
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("remote fs: {e}")))?;
+    let mut path = String::new();
+    let mut parent = None;
+    let mut dirs = Vec::new();
+    for line in out.lines() {
+        let mut parts = line.splitn(3, '\t');
+        match parts.next() {
+            Some("PATH") => path = parts.next().unwrap_or_default().to_string(),
+            Some("PARENT") => parent = Some(parts.next().unwrap_or_default().to_string()),
+            Some("DIR") => {
+                let name = parts.next().unwrap_or_default().to_string();
+                let path = parts.next().unwrap_or_default().to_string();
+                dirs.push(Entry { name, path });
+            }
+            _ => {}
+        }
+    }
+    Ok(Json(ListResp { path, parent, dirs }))
 }
 
 /// Expand `~` / `~/x` and turn empty input into `$HOME`. Relative paths get

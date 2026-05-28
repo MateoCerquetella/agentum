@@ -7,8 +7,17 @@
     onChange: (next: string) => void;
     placeholder?: string;
     required?: boolean;
+    profileId?: string;
+    hostId?: string | null;
   };
-  let { value = $bindable(), onChange, placeholder = '/home/you/projects/foo', required = false }: Props = $props();
+  let {
+    value = $bindable(),
+    onChange,
+    placeholder = '/home/you/projects/foo',
+    required = false,
+    profileId = '',
+    hostId = null
+  }: Props = $props();
 
   let input: HTMLInputElement | null = $state(null);
   let open = $state(false);
@@ -16,6 +25,7 @@
   let error = $state<string | null>(null);
   let listed = $state<DirEntry[]>([]);
   let listedFor = $state<string>('');
+  let listedKey = $state<string>('');
   let highlight = $state(-1);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -42,17 +52,22 @@
 
   async function refresh() {
     const { parent } = parentAndPrefix(value);
-    if (parent === listedFor && listed.length) return; // cached
+    const key = `${profileId}:${hostId ?? 'local'}:${parent}`;
+    if (key === listedKey && listed.length) return; // cached
     loading = true;
     error = null;
     try {
-      const r = await api.listDir(parent || undefined);
+      const r = await api.listDirHostOn(profileId, hostId, parent || undefined);
+      if (key !== `${profileId}:${hostId ?? 'local'}:${parent}`) return;
       listed = r.dirs;
       listedFor = parent;
+      listedKey = key;
       highlight = -1;
     } catch (e) {
+      if (key !== `${profileId}:${hostId ?? 'local'}:${parent}`) return;
       listed = [];
       listedFor = parent;
+      listedKey = key;
       error = e instanceof Error ? e.message : String(e);
     } finally {
       loading = false;

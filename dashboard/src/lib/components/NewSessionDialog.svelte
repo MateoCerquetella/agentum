@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { api, type NewSession, type AgentInfo } from '$lib/api';
+  import { api, type NewSession, type AgentInfo, type Host } from '$lib/api';
   import { loadSessions } from '$stores/sessions';
   import { fleet } from '$stores/fleet';
+  import { hosts, refreshHosts, hostLabel } from '$stores/hosts';
   import { profiles, activeProfileId, type Profile } from '$lib/profiles';
   import DirPicker from './DirPicker.svelte';
 
@@ -15,11 +16,14 @@
   let argsRaw = $state('');
   let upAfter = $state(true);
   let yolo = $state(false);
-  /// Opt-in: create a dedicated `git worktree` for this session so it
-  /// runs on its own branch + checkout. Lets the user spawn N agents
+  /// Default-on: create a dedicated `git worktree` for this session so
+  /// it runs on its own branch + checkout. Lets the user spawn N agents
   /// against the same repo in parallel without stomping each other's
-  /// stash/branch. See ORCA_COMPETITIVE_ANALYSIS.md §1.
-  let useWorktree = $state(false);
+  /// stash/branch. Toggle off for a non-git workdir; forced off when an
+  /// explicit host is picked (worktrees are local-host only for now —
+  /// see `pickHost`). Parity with the TUI's worktree-by-default toggle.
+  /// See ORCA_COMPETITIVE_ANALYSIS.md §1.
+  let useWorktree = $state(true);
   /// Ref the new worktree branch forks from. Empty → server defaults to
   /// `HEAD`. Branch name is always derived from the session name
   /// (server-side slug) — we don't expose a freeform branch input
@@ -33,6 +37,7 @@
   /// Defaults to the active profile so the most common "spawn here"
   /// flow still works without extra clicks.
   let targetProfileId = $state('');
+  let targetHostId = $state('');
   /// Used to no-op the workdir refetch effect when the dialog isn't
   /// open yet — otherwise we'd fire a fetch every time the active
   /// profile changes outside of an open form.
@@ -42,6 +47,7 @@
   /// dialog open. Tools missing from the map are treated as available
   /// (passthrough) so unknown free-form tool ids stay spawnable.
   let availability = $state<Record<string, AgentInfo>>({});
+  let targetHosts = $state<Host[]>([]);
 
   /// Profiles list rendered as Servers tiles. We don't synthesize a
   /// virtual "this machine" entry the way the TUI does — the dashboard's
@@ -120,16 +126,36 @@
   }
 
   async function refreshAvailability() {
+    const profileId = targetProfileId;
+    const hostId = targetHostId || null;
     try {
-      const list = await api.listAgentsOn(targetProfileId);
+      const list = await api.listAgentsOn(profileId, hostId);
+      if (profileId !== targetProfileId || hostId !== (targetHostId || null)) return;
       const map: Record<string, AgentInfo> = {};
       for (const a of list) map[a.name] = a;
       availability = map;
     } catch {
+      if (profileId !== targetProfileId || hostId !== (targetHostId || null)) return;
       // Older daemons (pre-this-change) won't expose /api/agents. Fail
       // open: the picker shows everything and a missing binary surfaces
       // as a `command not found` later instead of being blocked here.
       availability = {};
+    }
+  }
+
+  async function refreshTargetHosts() {
+    const profileId = targetProfileId;
+    try {
+      const list = await api.listHostsOn(profileId);
+      if (profileId !== targetProfileId) return;
+      targetHosts = list;
+      if (targetHostId && !targetHosts.some((h) => h.id === targetHostId)) {
+        targetHostId = '';
+      }
+    } catch {
+      if (profileId !== targetProfileId) return;
+      targetHosts = [];
+      targetHostId = '';
     }
   }
 
@@ -141,16 +167,21 @@
   /// the workdir manually and then refocusing the dialog would clobber
   /// the user's typed path.
   async function refreshWorkdirHome() {
-    if (lastFetchedFor === targetProfileId) return;
+    const profileId = targetProfileId;
+    const hostId = targetHostId || null;
+    const fetchKey = `${profileId}:${hostId || 'local'}`;
+    if (lastFetchedFor === fetchKey) return;
     try {
-      const listing = await api.listDirOn(targetProfileId, undefined);
+      const listing = await api.listDirHostOn(profileId, hostId, undefined);
+      if (profileId !== targetProfileId || hostId !== (targetHostId || null)) return;
       workdir = listing.path;
-      lastFetchedFor = targetProfileId;
+      lastFetchedFor = fetchKey;
       // A successful refetch means the target is reachable; clear any
       // stale per-target error so the user isn't staring at a message
       // that no longer applies.
       if (error && error.startsWith("couldn't reach ")) error = null;
     } catch (e) {
+      if (profileId !== targetProfileId || hostId !== (targetHostId || null)) return;
       const label = (() => {
         const p = $profiles.find((x) => x.id === targetProfileId);
         return p ? serverLabel(p) : targetProfileId;
@@ -167,6 +198,8 @@
       // opens or the topbar's EndpointSwitcher would feel like it
       // wasn't doing anything when re-opening the dialog.
       if (!targetProfileId) targetProfileId = $activeProfileId;
+      if (!$hosts.length) void refreshHosts();
+      void refreshTargetHosts();
       void refreshAvailability();
       void refreshWorkdirHome();
     }
@@ -178,6 +211,18 @@
   async function pickServer(id: string) {
     if (id === targetProfileId) return;
     targetProfileId = id;
+    targetHostId = '';
+    targetHosts = [];
+    lastFetchedFor = null;
+    await Promise.all([refreshTargetHosts(), refreshAvailability(), refreshWorkdirHome()]);
+  }
+
+  async function pickHost(id: string) {
+    if (id === targetHostId) return;
+    targetHostId = id;
+    useWorktree = false;
+    availability = {};
+    lastFetchedFor = null;
     await Promise.all([refreshAvailability(), refreshWorkdirHome()]);
   }
 
@@ -200,11 +245,12 @@
     argsRaw = '';
     upAfter = true;
     yolo = false;
-    useWorktree = false;
+    useWorktree = true;
     baseRef = '';
     submitting = false;
     error = null;
     targetProfileId = '';
+    targetHostId = '';
     lastFetchedFor = null;
   }
 
@@ -248,6 +294,7 @@
         workdir: cleanWorkdir,
         model: model.trim() || null,
         flags,
+        ...(targetHostId ? { host_id: targetHostId } : {}),
         // Only attach the worktree key when the toggle is on — leaving
         // it undefined keeps the JSON wire payload identical to the
         // pre-worktree shape, so an older daemon (no `CreateBody.worktree`)
@@ -327,6 +374,25 @@
       </section>
 
       <section>
+        <span class="eyebrow">Hosts</span>
+        <div class="tools servers">
+          {#each targetHosts as h (h.id)}
+            <button
+              type="button"
+              class="tool"
+              class:on={(targetHostId || '00000000-0000-0000-0000-000000000000') === h.id}
+              onclick={() => pickHost(h.kind === 'local' ? '' : h.id)}
+              title={h.kind === 'local' ? 'this machine' : `${h.user}@${h.hostname}:${h.port}`}
+            >
+              <span class="dot" style:background={h.kind === 'local' ? 'var(--green, #2ea043)' : 'var(--cta)'}></span>
+              <span class="t-name">{h.name}</span>
+              <span class="t-desc">{hostLabel(h)}</span>
+            </button>
+          {/each}
+        </div>
+      </section>
+
+      <section>
         <span class="eyebrow">Agent</span>
         <div class="tools">
           {#each TOOLS as t (t.id)}
@@ -375,12 +441,16 @@
 
       <label class="field">
         <span class="lbl">Working directory</span>
-        <DirPicker
-          bind:value={workdir}
-          onChange={(v) => (workdir = v)}
-          placeholder="~/projects/foo"
-          required
-        />
+        {#key `${targetProfileId}:${targetHostId || 'local'}`}
+          <DirPicker
+            bind:value={workdir}
+            onChange={(v) => (workdir = v)}
+            profileId={targetProfileId}
+            hostId={targetHostId || null}
+            placeholder="~/projects/foo"
+            required
+          />
+        {/key}
       </label>
 
       <section class="toggles">
@@ -402,8 +472,8 @@
             </span>
           </span>
         </label>
-        <label class="toggle">
-          <input type="checkbox" bind:checked={useWorktree} />
+        <label class="toggle" class:disabled={!!targetHostId}>
+          <input type="checkbox" bind:checked={useWorktree} disabled={!!targetHostId} />
           <span class="t-text">
             <span class="t-title">Isolate in git worktree</span>
             <span class="t-sub">

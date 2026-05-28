@@ -11,13 +11,17 @@
 //! callers that allow free-form tool input should accept anything; this
 //! endpoint only describes the curated palette.
 
+use agentum_core::{HostKind, LOCAL_HOST_ID};
 use agentum_executor::{adapter_for, binary_for, probed_tools};
 use axum::Json;
 use axum::Router;
+use axum::extract::{Query, State};
 use axum::routing::get;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::AppState;
+use crate::error::ApiError;
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/api/agents", get(list_agents))
@@ -44,7 +48,21 @@ pub struct AgentInfo {
     pub path: Option<String>,
 }
 
-async fn list_agents() -> Json<Vec<AgentInfo>> {
+#[derive(Debug, Deserialize)]
+struct AgentsQuery {
+    host_id: Option<Uuid>,
+}
+
+async fn list_agents(
+    State(state): State<AppState>,
+    Query(q): Query<AgentsQuery>,
+) -> Result<Json<Vec<AgentInfo>>, ApiError> {
+    let host_id = q.host_id.unwrap_or(LOCAL_HOST_ID);
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown host: {host_id}")))?;
     // `which` blocks on filesystem I/O, but the per-tool cost is a few
     // microseconds for cached PATH entries — keeping this synchronous
     // is simpler than spawning a blocking task and the endpoint is
@@ -52,15 +70,27 @@ async fn list_agents() -> Json<Vec<AgentInfo>> {
     let mut out = Vec::new();
     for name in probed_tools() {
         let bin = binary_for(name);
-        let resolved = which::which(bin).ok();
+        let resolved = match &host.kind {
+            HostKind::Local => which::which(bin).ok().map(|p| p.display().to_string()),
+            HostKind::Ssh { .. } => remote_command_path(&host, bin).await,
+        };
         let adapter = adapter_for(name);
         out.push(AgentInfo {
             name: name.to_string(),
             binary: bin.to_string(),
             available: resolved.is_some(),
             yolo_flag: adapter.yolo_flag().map(|s| s.to_string()),
-            path: resolved.map(|p| p.display().to_string()),
+            path: resolved,
         });
     }
-    Json(out)
+    Ok(Json(out))
+}
+
+async fn remote_command_path(host: &agentum_core::Host, bin: &str) -> Option<String> {
+    let quoted = shlex::try_quote(bin).ok()?;
+    crate::host_runtime::ssh_stdout(host, &format!("command -v {quoted}"))
+        .await
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }

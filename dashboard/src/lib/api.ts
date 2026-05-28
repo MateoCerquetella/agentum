@@ -23,6 +23,9 @@ export interface Session {
   flags: string[];
   status: Status;
   tmux_target: string | null;
+  host_id?: string | null;
+  host_label?: string | null;
+  host_kind?: string | null;
   created_at: string;
   updated_at: string;
   last_activity_at: string | null;
@@ -64,12 +67,52 @@ export interface NewSession {
   tool: string;
   model?: string | null;
   flags?: string[];
+  host_id?: string | null;
   /// Opt-in `git worktree add` request. When present, the server creates
   /// a sibling worktree at `<repo>-worktrees/<branch>` and uses it as
   /// the agent's cwd instead of `workdir`. Both inner fields are
   /// optional: `branch` defaults to a slugified session name prefixed
   /// `agentum/`; `base_ref` defaults to `HEAD`.
   worktree?: { branch?: string; base_ref?: string } | null;
+}
+
+export type Host =
+  | {
+      id: string;
+      name: string;
+      kind: 'local';
+      created_at: string;
+      updated_at: string;
+      last_seen_at: string | null;
+    }
+  | {
+      id: string;
+      name: string;
+      kind: 'ssh';
+      user: string;
+      hostname: string;
+      port: number;
+      auth: { auth: 'agent' } | { auth: 'key'; path: string };
+      created_at: string;
+      updated_at: string;
+      last_seen_at: string | null;
+    };
+
+export type NewHost = {
+  name: string;
+  kind: 'ssh';
+  user: string;
+  hostname: string;
+  port: number;
+  auth?: { auth: 'agent' } | { auth: 'key'; path: string };
+};
+
+export interface HostProbe {
+  ok: boolean;
+  message: string;
+  uname: string | null;
+  tmux: boolean;
+  git: boolean;
 }
 
 /// Mirrors `agentum_server::routes::agents::AgentInfo`. The dashboard
@@ -585,8 +628,25 @@ export const api = {
     requestOn<Session>(profileId, `/api/sessions/${encodeURIComponent(id)}/start`, {
       method: 'POST'
     }),
-  listAgentsOn: (profileId: string) =>
-    requestOn<AgentInfo[]>(profileId, '/api/agents'),
+  listAgentsOn: (profileId: string, hostId?: string | null) => {
+    const qs = hostId ? `?host_id=${encodeURIComponent(hostId)}` : '';
+    return requestOn<AgentInfo[]>(profileId, `/api/agents${qs}`);
+  },
+  listHosts: () => request<Host[]>('/api/hosts'),
+  listHostsOn: (profileId: string) => requestOn<Host[]>(profileId, '/api/hosts'),
+  createHost: (body: NewHost) =>
+    request<Host>('/api/hosts', { method: 'POST', body: JSON.stringify(body) }),
+  testHost: (id: string) =>
+    request<HostProbe>(`/api/hosts/${encodeURIComponent(id)}/test`, { method: 'POST' }),
+  deleteHost: (id: string) =>
+    request<void>(`/api/hosts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  listDirHostOn: (profileId: string, hostId: string | null | undefined, path?: string) => {
+    const qs = new URLSearchParams();
+    if (path) qs.set('path', path);
+    if (hostId) qs.set('host_id', hostId);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return requestOn<DirListing>(profileId, `/api/fs/list${suffix}`);
+  },
   sendInput: (id: string, body: SendInput) =>
     request<void>(`/api/sessions/${encodeURIComponent(id)}/send`, {
       method: 'POST',

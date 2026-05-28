@@ -14,6 +14,7 @@ pub mod fs;
 pub mod git;
 pub mod health;
 pub mod host;
+pub mod hosts;
 pub mod notes;
 pub mod preferences;
 pub mod profiles;

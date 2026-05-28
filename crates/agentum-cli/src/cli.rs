@@ -408,9 +408,25 @@ pub enum BoardCmd {
 
 #[derive(Debug, Subcommand)]
 pub enum HostsCmd {
-    /// List pinned hosts and their fingerprints.
+    /// List SSH-agentless hosts controlled by the local daemon.
     List,
-    /// Forget a pinned host (also drops its cached login token).
+    /// Add an SSH host. The remote needs sshd, tmux, git, and the agent CLIs.
+    Add {
+        name: String,
+        #[arg(long)]
+        user: String,
+        #[arg(long)]
+        hostname: String,
+        #[arg(long, default_value_t = 22)]
+        port: u16,
+        #[arg(long)]
+        key: Option<String>,
+    },
+    /// Probe an SSH host by name.
+    Test { name: String },
+    /// Remove an SSH host by name. Refuses when sessions still reference it.
+    Rm { name: String },
+    /// Forget a pinned Agentum server certificate host (legacy trust store).
     Forget { host: String },
 }
 

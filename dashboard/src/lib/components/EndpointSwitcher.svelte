@@ -24,6 +24,7 @@
     versionDrift
   } from '$stores/fleet';
   import { connStatus } from '$stores/events';
+  import { hosts, addHost, removeHost, hostLabel } from '$stores/hosts';
 
   let open = $state(false);
   let formOpen = $state(false);
@@ -31,6 +32,14 @@
   let formLabel = $state('');
   let formUrl = $state('');
   let formError = $state<string | null>(null);
+  let hostFormOpen = $state(false);
+  let hostName = $state('');
+  let hostUser = $state('');
+  let hostHostname = $state('');
+  let hostPort = $state('22');
+  let hostKey = $state('');
+  let hostError = $state<string | null>(null);
+  let deletingHostId = $state<string | null>(null);
 
   const active = $derived(
     $profiles.find((p) => p.id === $activeProfileId) ?? $profiles[0]
@@ -113,6 +122,41 @@
     formOpen = false;
   }
 
+  async function submitHost(e: SubmitEvent) {
+    e.preventDefault();
+    hostError = null;
+    try {
+      await addHost({
+        name: hostName.trim(),
+        kind: 'ssh',
+        user: hostUser.trim(),
+        hostname: hostHostname.trim(),
+        port: Number(hostPort) || 22,
+        auth: hostKey.trim() ? { auth: 'key', path: hostKey.trim() } : { auth: 'agent' }
+      });
+      hostName = '';
+      hostUser = '';
+      hostHostname = '';
+      hostPort = '22';
+      hostKey = '';
+      hostFormOpen = false;
+    } catch (e) {
+      hostError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function deleteHost(id: string) {
+    hostError = null;
+    deletingHostId = id;
+    try {
+      await removeHost(id);
+    } catch (e) {
+      hostError = e instanceof Error ? e.message : String(e);
+    } finally {
+      deletingHostId = null;
+    }
+  }
+
   function onKey(e: KeyboardEvent) {
     if (e.key === 'Escape' && open) {
       open = false;
@@ -179,6 +223,31 @@
 
       <div class="sep"></div>
 
+      <div class="menu-head">SSH hosts</div>
+      {#each $hosts as h (h.id)}
+        <div class="row">
+          <div class="row-pick static">
+            <span class="r-label">
+              <span class="r-dot {h.kind === 'local' ? 'live' : 'unknown'}"></span>
+              {h.name}
+            </span>
+            <span class="r-host">{hostLabel(h)}</span>
+          </div>
+          {#if h.kind !== 'local'}
+            <button
+              type="button"
+              class="row-rm"
+              title={`Remove host ${h.name}`}
+              disabled={deletingHostId === h.id}
+              onclick={() => deleteHost(h.id)}
+            >×</button>
+          {/if}
+        </div>
+      {/each}
+      {#if hostError && !hostFormOpen}
+        <div class="err">{hostError}</div>
+      {/if}
+
       {#if !formOpen}
         <button
           type="button"
@@ -214,6 +283,30 @@
           {/if}
           <div class="add-actions">
             <button type="button" class="ghost" onclick={() => (formOpen = false)}>Cancel</button>
+            <button type="submit" class="primary">Save</button>
+          </div>
+        </form>
+      {/if}
+
+      <div class="sep"></div>
+      {#if !hostFormOpen}
+        <button
+          type="button"
+          class="add-toggle"
+          onclick={() => (hostFormOpen = true)}
+        >+ Add SSH host</button>
+      {:else}
+        <form class="add" onsubmit={submitHost}>
+          <input type="text" bind:value={hostName} placeholder="host name (e.g. vps)" required />
+          <input type="text" bind:value={hostUser} placeholder="ssh user" required />
+          <input type="text" bind:value={hostHostname} placeholder="hostname or IP" required />
+          <input type="number" bind:value={hostPort} placeholder="22" min="1" max="65535" />
+          <input type="text" bind:value={hostKey} placeholder="key path (optional, ssh-agent default)" />
+          {#if hostError}
+            <div class="err">{hostError}</div>
+          {/if}
+          <div class="add-actions">
+            <button type="button" class="ghost" onclick={() => (hostFormOpen = false)}>Cancel</button>
             <button type="submit" class="primary">Save</button>
           </div>
         </form>
@@ -344,6 +437,8 @@
     transition: border-color var(--t-hover);
   }
   .row-pick:hover { border-color: var(--fg-3); }
+  .row-pick.static { cursor: default; }
+  .row-pick.static:hover { border-color: var(--border); }
   .r-label { font-size: 12.5px; }
   .r-host {
     font-family: var(--mono);

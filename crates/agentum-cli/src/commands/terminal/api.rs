@@ -12,7 +12,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use agentum_core::{Event, Session, transcript::AgentTaskState};
+use agentum_core::{Event, Host, NewHost, Session, WorktreeSpec, transcript::AgentTaskState};
 use anyhow::{Context, Result, anyhow, bail};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -99,6 +99,16 @@ pub struct AgentInfo {
     pub yolo_flag: Option<String>,
     #[serde(default)]
     pub path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct HostProbe {
+    pub ok: bool,
+    pub message: String,
+    #[serde(default)]
+    pub uname: Option<String>,
+    pub tmux: bool,
+    pub git: bool,
 }
 
 /// Mirrors `agentum_server::routes::uploads::UploadResponse`. Returned by
@@ -378,7 +388,15 @@ impl Client {
     /// binaries resolve on the daemon's PATH. Older daemons return 404;
     /// the TUI treats that as "fail open" and skips installation gating.
     pub async fn list_agents(&self) -> Result<Vec<AgentInfo>> {
-        let url = self.base.join("/api/agents")?;
+        self.list_agents_on(None).await
+    }
+
+    pub async fn list_agents_on(&self, host_id: Option<Uuid>) -> Result<Vec<AgentInfo>> {
+        let mut url = self.base.join("/api/agents")?;
+        if let Some(host_id) = host_id {
+            url.query_pairs_mut()
+                .append_pair("host_id", &host_id.to_string());
+        }
         let resp = self.http.get(url).bearer_auth(&self.token).send().await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(Vec::new());
@@ -387,6 +405,59 @@ impl Client {
             bail!("agents returned {}", resp.status());
         }
         Ok(resp.json::<Vec<AgentInfo>>().await.unwrap_or_default())
+    }
+
+    pub async fn list_hosts(&self) -> Result<Vec<Host>> {
+        let url = self.base.join("/api/hosts")?;
+        let resp = self.http.get(url).bearer_auth(&self.token).send().await?;
+        if !resp.status().is_success() {
+            bail!("hosts returned {}", resp.status());
+        }
+        Ok(resp.json::<Vec<Host>>().await.unwrap_or_default())
+    }
+
+    pub async fn create_host(&self, new: &NewHost) -> Result<Host> {
+        let url = self.base.join("/api/hosts")?;
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .json(new)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("{status} — {body}");
+        }
+        Ok(resp.json::<Host>().await?)
+    }
+
+    pub async fn test_host(&self, id: Uuid) -> Result<HostProbe> {
+        let url = self.base.join(&format!("/api/hosts/{id}/test"))?;
+        let resp = self.http.post(url).bearer_auth(&self.token).send().await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("{status} — {body}");
+        }
+        Ok(resp.json::<HostProbe>().await?)
+    }
+
+    pub async fn delete_host(&self, id: Uuid) -> Result<()> {
+        let url = self.base.join(&format!("/api/hosts/{id}"))?;
+        let resp = self
+            .http
+            .delete(url)
+            .bearer_auth(&self.token)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("{status} — {body}");
+        }
+        Ok(())
     }
 
     /// Probe the server's `/api/health` for advertised capabilities.
@@ -598,9 +669,23 @@ impl Client {
     /// if `path` is `None`). Mirrors the web `DirPicker`'s feed for the
     /// TUI's workdir picker overlay.
     pub async fn list_dir(&self, path: Option<&str>) -> Result<DirListing> {
+        self.list_dir_on(path, None).await
+    }
+
+    pub async fn list_dir_on(
+        &self,
+        path: Option<&str>,
+        host_id: Option<Uuid>,
+    ) -> Result<DirListing> {
         let mut url = self.base.join("/api/fs/list")?;
-        if let Some(p) = path {
-            url.query_pairs_mut().append_pair("path", p);
+        {
+            let mut qp = url.query_pairs_mut();
+            if let Some(p) = path {
+                qp.append_pair("path", p);
+            }
+            if let Some(id) = host_id {
+                qp.append_pair("host_id", &id.to_string());
+            }
         }
         let resp = self.http.get(url).bearer_auth(&self.token).send().await?;
         if !resp.status().is_success() {
@@ -621,6 +706,32 @@ impl Client {
         model: Option<&str>,
         flags: Vec<String>,
     ) -> Result<Session> {
+        self.create_session_on(name, workdir, tool, model, flags, None, false)
+            .await
+    }
+
+    /// `worktree`: when true, ask the server to `git worktree add` a
+    /// dedicated branch + checkout for this session (sibling at
+    /// `<repo>-worktrees/agentum-<name>`, forked from `HEAD`). We send an
+    /// empty `WorktreeSpec` — branch is derived from the session name and
+    /// the base ref defaults to `HEAD` server-side, matching the
+    /// dashboard's "off what" knob being the only thing worth exposing.
+    /// The key is omitted entirely when false so pre-worktree daemons
+    /// (no `CreateBody.worktree`) still accept the request.
+    // Thin request builder mirroring the `/api/sessions` body field-for-
+    // field — splitting it into a params struct would just shuffle the
+    // same fields one level up at the single call site.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_session_on(
+        &self,
+        name: &str,
+        workdir: &str,
+        tool: &str,
+        model: Option<&str>,
+        flags: Vec<String>,
+        host_id: Option<Uuid>,
+        worktree: bool,
+    ) -> Result<Session> {
         #[derive(Serialize)]
         struct Body<'a> {
             name: &'a str,
@@ -630,6 +741,10 @@ impl Client {
             model: Option<&'a str>,
             #[serde(skip_serializing_if = "Vec::is_empty")]
             flags: Vec<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            host_id: Option<Uuid>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            worktree: Option<WorktreeSpec>,
         }
         let url = self.base.join("/api/sessions")?;
         let resp = self
@@ -642,6 +757,11 @@ impl Client {
                 tool,
                 model,
                 flags,
+                host_id,
+                worktree: worktree.then_some(WorktreeSpec {
+                    branch: None,
+                    base_ref: None,
+                }),
             })
             .send()
             .await?;

@@ -15,6 +15,7 @@
   import { connect as connectEvents, disconnect as disconnectEvents } from '$stores/events';
   import { startEventBridge, stopEventBridge } from '$stores/event-bridge';
   import { startHostMetrics } from '$stores/host';
+  import { startHostsStore, stopHostsStore } from '$stores/hosts';
   import { startUsagePoll, stopUsagePoll } from '$stores/usage';
   import { startAttentionBridge } from '$stores/attention';
   import { tweaks, applyTweaks } from '$stores/tweaks';
@@ -124,6 +125,7 @@
         connectEvents();
         startEventBridge();
         startHostMetrics();
+        startHostsStore();
         startUsagePoll();
         startAttentionBridge();
         // Re-probe immediately after login so the chip refreshes the
@@ -144,7 +146,7 @@
     };
   });
 
-  onDestroy(() => { stopEventBridge(); disconnectEvents(); stopUsagePoll(); });
+  onDestroy(() => { stopEventBridge(); disconnectEvents(); stopUsagePoll(); stopHostsStore(); });
 </script>
 
 <TokenGate>

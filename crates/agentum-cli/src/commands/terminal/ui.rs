@@ -404,7 +404,7 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
             // the Tool field without taking a borrow on `app` itself
             // (the overlay's `form` is already a borrow against `app`).
             let tool_unavailable = !app.tool_available(form.tool.trim());
-            draw_new_session_overlay(f, f.area(), form, tool_unavailable, p)
+            draw_new_session_overlay(f, f.area(), form, &app.hosts, tool_unavailable, p)
         }
         Overlay::Confirm(action) => draw_confirm_overlay(f, f.area(), action, p),
         Overlay::Settings(state) => draw_settings_overlay(f, f.area(), state, &app.prefs, p),
@@ -2341,6 +2341,7 @@ fn draw_new_session_overlay(
     f: &mut Frame<'_>,
     area: Rect,
     form: &NewSessionForm,
+    hosts: &[agentum_core::Host],
     tool_unavailable: bool,
     p: &Palette,
 ) {
@@ -2378,6 +2379,24 @@ fn draw_new_session_overlay(
         form.field == NewSessionField::Profile,
         &local_label,
         Some("Tab cycles the local machine + configured servers"),
+        p,
+    );
+    let host_display = if form.host_id.trim().is_empty() {
+        "local".to_string()
+    } else {
+        hosts
+            .iter()
+            .find(|h| h.id.to_string() == form.host_id)
+            .map(|h| h.name.clone())
+            .unwrap_or_else(|| form.host_id.clone())
+    };
+    push_form_field_with_hint(
+        &mut lines,
+        "Host",
+        &host_display,
+        form.field == NewSessionField::Host,
+        "local",
+        Some("Tab cycles SSH hosts controlled by this server"),
         p,
     );
     push_form_field_with_hint(
@@ -2464,6 +2483,22 @@ fn draw_new_session_overlay(
         yolo_label,
         form.yolo,
         form.field == NewSessionField::Yolo,
+        p,
+    );
+    // Worktree isolation. Mirrors the dashboard's "Isolate in git
+    // worktree" checkbox but defaults on. When a host is selected the
+    // daemon can't honor it (SSH hosts have no worktree path yet), so
+    // the label says so and the submit path drops the request.
+    let worktree_label = if form.host_id.trim().is_empty() {
+        "Isolate in git worktree (own branch + checkout)"
+    } else {
+        "Isolate in git worktree (local hosts only)"
+    };
+    push_toggle_field(
+        &mut lines,
+        worktree_label,
+        form.use_worktree,
+        form.field == NewSessionField::Worktree,
         p,
     );
 

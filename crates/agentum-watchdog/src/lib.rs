@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agentum_core::{Event, Session, Status};
+use agentum_core::{Event, LOCAL_HOST_ID, Session, Status};
 use agentum_store::Store;
 use regex::Regex;
 use tokio::sync::{RwLock, broadcast};
@@ -105,6 +105,14 @@ impl Watchdog {
 
         // Spawn watch tasks for sessions we don't already track.
         for sess in running {
+            if sess.host_id.unwrap_or(LOCAL_HOST_ID) != LOCAL_HOST_ID {
+                tracing::debug!(
+                    name = %sess.name,
+                    id = %sess.id,
+                    "watchdog: skipping ssh-hosted session until remote pane sampling is supported"
+                );
+                continue;
+            }
             let id = sess.id;
             tasks.entry(id).or_insert_with(|| {
                 tracing::info!(name = %sess.name, %id, "watchdog: starting watch task");

@@ -402,6 +402,8 @@ pub struct NewSessionForm {
     /// submit) or triggers a soft restart that re-opens the form on
     /// the new daemon. Tab cycles through `App.profiles`.
     pub profile: String,
+    /// Host id on the target daemon. Empty means the daemon's local host.
+    pub host_id: String,
     pub name: String,
     pub tool: String,
     pub model: String,
@@ -409,6 +411,12 @@ pub struct NewSessionForm {
     pub args: String,
     pub up_after: bool,
     pub yolo: bool,
+    /// Isolate this session in a dedicated `git worktree`. Defaults on
+    /// (the user asked for worktree-by-default) but the toggle lets them
+    /// opt out — e.g. a non-git workdir, a `terminal`/`bash` pane, or a
+    /// remote host. Only sent to the server when the target is the local
+    /// host; see `worktree_requested`.
+    pub use_worktree: bool,
     pub error: Option<String>,
     pub submitting: bool,
     /// When `Some`, the directory-picker overlay is up. Field state persists
@@ -495,6 +503,7 @@ impl NewSessionForm {
         Self {
             field: NewSessionField::Profile,
             profile: default_profile,
+            host_id: String::new(),
             name: String::new(),
             tool: "claude".into(),
             model: String::new(),
@@ -502,6 +511,10 @@ impl NewSessionForm {
             args: String::new(),
             up_after: true,
             yolo: false,
+            // Worktree-by-default: spawning N agents against one repo
+            // without stomping each other's branch/stash is the common
+            // case the user optimizes for. Opt out with Space.
+            use_worktree: true,
             error: None,
             submitting: false,
             picker: None,
@@ -517,27 +530,31 @@ impl NewSessionForm {
             // makes sense if Workdir is the very next stop. Name / Tool
             // / Model trail because they're typed independently of which
             // daemon owns the session.
-            NewSessionField::Profile => NewSessionField::Workdir,
+            NewSessionField::Profile => NewSessionField::Host,
+            NewSessionField::Host => NewSessionField::Workdir,
             NewSessionField::Workdir => NewSessionField::Name,
             NewSessionField::Name => NewSessionField::Tool,
             NewSessionField::Tool => NewSessionField::Model,
             NewSessionField::Model => NewSessionField::Args,
             NewSessionField::Args => NewSessionField::UpAfter,
             NewSessionField::UpAfter => NewSessionField::Yolo,
-            NewSessionField::Yolo => NewSessionField::Profile,
+            NewSessionField::Yolo => NewSessionField::Worktree,
+            NewSessionField::Worktree => NewSessionField::Profile,
         };
     }
 
     pub fn prev_field(&mut self) {
         self.field = match self.field {
-            NewSessionField::Profile => NewSessionField::Yolo,
-            NewSessionField::Workdir => NewSessionField::Profile,
+            NewSessionField::Profile => NewSessionField::Worktree,
+            NewSessionField::Host => NewSessionField::Profile,
+            NewSessionField::Workdir => NewSessionField::Host,
             NewSessionField::Name => NewSessionField::Workdir,
             NewSessionField::Tool => NewSessionField::Name,
             NewSessionField::Model => NewSessionField::Tool,
             NewSessionField::Args => NewSessionField::Model,
             NewSessionField::UpAfter => NewSessionField::Args,
             NewSessionField::Yolo => NewSessionField::UpAfter,
+            NewSessionField::Worktree => NewSessionField::Yolo,
         };
     }
 
@@ -549,12 +566,14 @@ impl NewSessionForm {
             // Tab cycles the value; backspace clears to the empty
             // string. See `cycle_profile`.
             NewSessionField::Profile => None,
+            NewSessionField::Host => None,
             NewSessionField::Name => Some(&mut self.name),
             NewSessionField::Tool => Some(&mut self.tool),
             NewSessionField::Model => Some(&mut self.model),
             NewSessionField::Workdir => Some(&mut self.workdir),
             NewSessionField::Args => Some(&mut self.args),
-            NewSessionField::UpAfter | NewSessionField::Yolo => None, // toggles, not text
+            // toggles, not text
+            NewSessionField::UpAfter | NewSessionField::Yolo | NewSessionField::Worktree => None,
         }
     }
 
@@ -585,12 +604,34 @@ impl NewSessionForm {
         self.profile = wheel[(idx + 1) % wheel.len()].clone();
     }
 
+    pub fn cycle_host(&mut self, hosts: &[agentum_core::Host]) {
+        if hosts.len() <= 1 {
+            return;
+        }
+        let wheel: Vec<String> = hosts.iter().map(|h| h.id.to_string()).collect();
+        let idx = wheel.iter().position(|id| id == &self.host_id).unwrap_or(0);
+        self.host_id = wheel[(idx + 1) % wheel.len()].clone();
+    }
+
+    pub fn host_uuid(&self) -> Option<Uuid> {
+        Uuid::parse_str(self.host_id.trim()).ok()
+    }
+
     /// True when YOLO mode is enabled and the active tool actually supports
     /// `--dangerously-skip-permissions`. Bash and aider (and friends) ignore
     /// the toggle so the flag stays out of their argv.
     pub fn yolo_active(&self) -> bool {
         let tool = self.tool.trim();
         self.yolo && YOLO_TOOLS.contains(&tool)
+    }
+
+    /// Whether to actually ask the server for a `git worktree`. The
+    /// toggle can be on, but worktrees only work on the local host — the
+    /// daemon rejects them for SSH hosts — so a non-empty host id
+    /// suppresses the request. The UI mirrors this by greying the toggle
+    /// out when a host is picked.
+    pub fn worktree_requested(&self) -> bool {
+        self.use_worktree && self.host_id.trim().is_empty()
     }
 
     /// Cycle the tool field through `TOOL_SUGGESTIONS`. Triggered by
@@ -655,12 +696,13 @@ pub fn parse_args_field(input: &str) -> Vec<String> {
     out
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NewSessionField {
     /// Server profile this session targets. New first field — see
     /// `NewSessionForm::with_profile`. Tab cycles through configured
     /// profiles + an empty entry meaning "current connection".
     Profile,
+    Host,
     Name,
     Tool,
     Model,
@@ -668,6 +710,12 @@ pub enum NewSessionField {
     Args,
     UpAfter,
     Yolo,
+    /// Isolate the session in a dedicated `git worktree` (own branch +
+    /// checkout). Defaults on — see `NewSessionForm::with_profile`. Only
+    /// meaningful when targeting the local host (the server rejects
+    /// worktrees on SSH hosts), so the submit path gates on an empty
+    /// host id.
+    Worktree,
 }
 
 /// A destructive session action waiting on user confirmation. Carries the
@@ -1204,6 +1252,10 @@ pub struct App {
     /// on every frame. Refreshed via `reload_profiles` after add /
     /// remove from any surface (overlay, sidebar action, CLI).
     pub profiles: Vec<ProfileEntry>,
+    /// Hosts controlled by the active daemon. Empty on older daemons or
+    /// while the startup probe is pending; the New Session Host field
+    /// treats empty as "local".
+    pub hosts: Vec<agentum_core::Host>,
     /// Which sidebar section the cursor is on. Two sections share one
     /// pane: an Servers list at the top, then the Sessions tree.
     /// `j`/`k` flips between them at the boundaries.
@@ -1396,6 +1448,7 @@ impl App {
             pending_after_switch: None,
             active_profile: None,
             profiles: Vec::new(),
+            hosts: Vec::new(),
             tree_section: TreeSection::Sessions,
             servers_cursor: 0,
             clients: HashMap::new(),
@@ -2569,6 +2622,7 @@ pub async fn run_loop(
         }
         _ => {}
     }
+    app.hosts = client.list_hosts().await.unwrap_or_default();
 
     let (term_tx, mut term_rx) = mpsc::unbounded_channel::<TerminalMsg>();
     let (term_tx_right, mut term_rx_right) = mpsc::unbounded_channel::<TerminalMsg>();
@@ -5217,6 +5271,15 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
                             match tc.list_dir(None).await {
                                 Ok(listing) => {
                                     form.workdir = listing.path;
+                                    form.host_id.clear();
+                                    app.hosts = tc.list_hosts().await.unwrap_or_default();
+                                    app.agent_availability =
+                                        tc.list_agents_on(None).await.ok().map(|list| {
+                                            list.into_iter()
+                                                .filter(|a| a.available)
+                                                .map(|a| a.name)
+                                                .collect()
+                                        });
                                     // Clear any prior error: the new
                                     // refetch succeeded, so the
                                     // workdir field is authoritative.
@@ -5237,6 +5300,35 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
                                 "{} isn't connected — try Ctrl-S to re-add",
                                 profile_label(&form.profile)
                             ));
+                        }
+                    }
+                }
+            }
+            NewSessionField::Host => {
+                if app.hosts.len() <= 1 {
+                    form.next_field();
+                } else {
+                    form.cycle_host(&app.hosts);
+                    let host_id = Uuid::parse_str(&form.host_id).ok();
+                    let target_client = app
+                        .clients
+                        .get(form.profile.as_str())
+                        .and_then(|e| e.client.clone());
+                    let target_ref = target_client.as_ref().unwrap_or(client);
+                    app.agent_availability =
+                        target_ref.list_agents_on(host_id).await.ok().map(|list| {
+                            list.into_iter()
+                                .filter(|a| a.available)
+                                .map(|a| a.name)
+                                .collect()
+                        });
+                    match target_ref.list_dir_on(None, host_id).await {
+                        Ok(listing) => {
+                            form.workdir = listing.path;
+                            form.error = None;
+                        }
+                        Err(e) => {
+                            form.error = Some(format!("couldn't list host home: {e}"));
                         }
                     }
                 }
@@ -5282,12 +5374,15 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
         KeyCode::Char(' ') if matches!(form.field, NewSessionField::Yolo) => {
             form.yolo = !form.yolo;
         }
+        KeyCode::Char(' ') if matches!(form.field, NewSessionField::Worktree) => {
+            form.use_worktree = !form.use_worktree;
+        }
 
         // Enter while on the workdir field opens the dir picker
         // (mirrors clicking the picker's chevron in the web UI).
-        // Enter on up-after still flips it. Enter on YOLO submits —
-        // YOLO is the last field, so the natural next move is to spawn,
-        // not to keep toggling. Use Space if you need to flip YOLO.
+        // Enter on up-after still flips it. Enter on YOLO or Worktree
+        // submits — Worktree is the last field, so the natural next move
+        // is to spawn, not to keep toggling. Use Space to flip either.
         KeyCode::Enter if matches!(form.field, NewSessionField::Workdir) => {
             let seed = if form.workdir.trim().is_empty() {
                 None
@@ -5303,7 +5398,7 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
                 .get(form.profile.as_str())
                 .and_then(|e| e.client.clone());
             let target_ref = target_client.as_ref().unwrap_or(client);
-            let picker = open_dir_picker(seed.as_deref(), target_ref).await;
+            let picker = open_dir_picker(seed.as_deref(), target_ref, form.host_uuid()).await;
             if target_client.is_none() && !form.profile.is_empty() {
                 form.error = Some(format!(
                     "{} isn't connected — listing local fs",
@@ -5394,12 +5489,14 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
                 return;
             };
             match target_client
-                .create_session(
+                .create_session_on(
                     form.name.trim(),
                     form.workdir.trim(),
                     form.tool.trim(),
                     model.as_deref(),
                     flags,
+                    form.host_uuid(),
+                    form.worktree_requested(),
                 )
                 .await
             {
@@ -5584,7 +5681,11 @@ async fn handle_goal_key(app: &mut App, key: KeyEvent, client: &Client) {
 /// stale workdir (project deleted, repo moved, typo) never traps the
 /// user in a dead-end picker with no `parent` to back out of — they
 /// land at the nearest real directory and can navigate from there.
-async fn open_dir_picker(seed: Option<&str>, client: &Client) -> DirPickerState {
+async fn open_dir_picker(
+    seed: Option<&str>,
+    client: &Client,
+    host_id: Option<Uuid>,
+) -> DirPickerState {
     let original = seed
         .map(|s| s.trim().trim_end_matches('/').to_string())
         .filter(|s| !s.is_empty());
@@ -5593,7 +5694,7 @@ async fn open_dir_picker(seed: Option<&str>, client: &Client) -> DirPickerState 
 
     loop {
         let attempt = current.as_deref();
-        match client.list_dir(attempt).await {
+        match client.list_dir_on(attempt, host_id).await {
             Ok(listing) => {
                 let fell_back = current != original;
                 let error = if fell_back {
@@ -5679,7 +5780,7 @@ async fn autocomplete_workdir(form: &mut NewSessionForm, client: &Client) -> boo
         let q = dir_part.trim_end_matches('/');
         if q.is_empty() { None } else { Some(q) }
     };
-    let listing = match client.list_dir(dir_query).await {
+    let listing = match client.list_dir_on(dir_query, form.host_uuid()).await {
         Ok(l) => l,
         Err(_) => return false,
     };
@@ -5858,13 +5959,13 @@ async fn handle_dir_picker_key(form: &mut NewSessionForm, key: KeyEvent, client:
             let Some(entry) = picker.entries.get(picker.cursor).cloned() else {
                 return;
             };
-            let next = open_dir_picker(Some(&entry.path), client).await;
+            let next = open_dir_picker(Some(&entry.path), client, form.host_uuid()).await;
             form.picker = Some(next);
         }
         // Left / Backspace: pop up one level.
         KeyCode::Left | KeyCode::Backspace => {
             if let Some(parent) = picker.parent.clone() {
-                let next = open_dir_picker(Some(&parent), client).await;
+                let next = open_dir_picker(Some(&parent), client, form.host_uuid()).await;
                 form.picker = Some(next);
             }
         }
@@ -8256,6 +8357,9 @@ mod merge_dedup_tests {
             flags: Vec::new(),
             status: Status::Idle,
             tmux_target: None,
+            host_id: None,
+            host_label: None,
+            host_kind: None,
             created_at: now,
             updated_at: now,
             last_activity_at: None,
@@ -8434,6 +8538,55 @@ mod cycle_profile_tests {
         form.cycle_profile(&["vps1".to_string()], true);
         // wheel = ["", "vps1"]; unknown → idx 0; (0+1) % 2 → "vps1"
         assert_eq!(form.profile, "vps1");
+    }
+}
+
+#[cfg(test)]
+mod worktree_tests {
+    //! Worktree-by-default contract: the New-Session form opens with the
+    //! worktree toggle ON, and the request is only sent for local-host
+    //! spawns (the daemon rejects worktrees on SSH hosts).
+    use super::*;
+
+    #[test]
+    fn defaults_to_on() {
+        let form = NewSessionForm::with_profile(String::new(), String::new());
+        assert!(form.use_worktree, "worktree should default on");
+        assert!(
+            form.worktree_requested(),
+            "default form targets the local host, so a worktree is requested"
+        );
+    }
+
+    #[test]
+    fn opt_out_suppresses_request() {
+        let mut form = NewSessionForm::with_profile(String::new(), String::new());
+        form.use_worktree = false;
+        assert!(!form.worktree_requested());
+    }
+
+    #[test]
+    fn selecting_a_host_suppresses_request() {
+        // A non-empty host id means a (possibly SSH) host was picked;
+        // the toggle stays visually on but we don't send the spec.
+        let mut form = NewSessionForm::with_profile(String::new(), String::new());
+        form.host_id = "11111111-1111-1111-1111-111111111111".into();
+        assert!(form.use_worktree);
+        assert!(!form.worktree_requested());
+    }
+
+    #[test]
+    fn worktree_is_the_last_field_in_the_cycle() {
+        let mut form = NewSessionForm::with_profile(String::new(), String::new());
+        form.field = NewSessionField::Yolo;
+        form.next_field();
+        assert_eq!(form.field, NewSessionField::Worktree);
+        // Last field wraps back to the top of the form.
+        form.next_field();
+        assert_eq!(form.field, NewSessionField::Profile);
+        // And it's reachable going backwards from the top.
+        form.prev_field();
+        assert_eq!(form.field, NewSessionField::Worktree);
     }
 }
 

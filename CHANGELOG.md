@@ -4,6 +4,27 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.13] — 2026-05-28
+
+### Added
+- **SSH-agentless hosts.** The local daemon can now drive sessions on
+  remote machines over SSH without installing an `agentum` binary on the
+  remote — it runs `tmux`/`git`/the agent CLIs there directly. New
+  `hosts` table (migration `0018_hosts.sql`, with a default `local`
+  host), `/api/hosts` CRUD + `/api/hosts/{id}/test` probe routes, the
+  `host_runtime` SSH executor, an `agentum hosts list/add/test/rm` CLI,
+  a Host field on the TUI's New-session form, and host selection +
+  agent-availability probing in the dashboard's New-session dialog.
+- **Worktree-by-default in the New-session form.** The TUI New-session
+  form gained an "Isolate in git worktree" toggle that defaults **on**:
+  each session spins up its own `git worktree` (own branch + checkout at
+  `<repo>-worktrees/agentum-<name>`) so several agents can run against
+  one repo in parallel without stomping each other's branch/stash.
+  Toggle off with Space for a non-git workdir; it's forced off when an
+  explicit remote host is selected (worktrees are local-host only for
+  now). The dashboard's equivalent checkbox now also defaults on, for
+  parity.
+
 ## [0.8.11] — 2026-05-26
 
 ### Fixed

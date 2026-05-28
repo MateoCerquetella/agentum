@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use agentum_core::{
-    BoardComment, BoardItem, BoardLink, BoardPatch, Channel, Event, LinkKind, Message,
-    NewBoardComment, NewBoardItem, NewChannel, NewMessage, NewNote, NewSession, Note, NotePatch,
-    ReorderEntry, RequiredField, Session, Status, User,
+    BoardComment, BoardItem, BoardLink, BoardPatch, Channel, Event, Host, HostKind, LOCAL_HOST_ID,
+    LinkKind, Message, NewBoardComment, NewBoardItem, NewChannel, NewHost, NewMessage, NewNote,
+    NewSession, Note, NotePatch, ReorderEntry, RequiredField, Session, SshAuth, Status, User,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{FromRow, SqlitePool};
@@ -84,7 +84,103 @@ impl Store {
         &self.pool
     }
 
+    pub async fn list_hosts(&self) -> Result<Vec<Host>> {
+        let rows: Vec<HostRow> =
+            sqlx::query_as("SELECT * FROM hosts ORDER BY kind = 'local' DESC, name ASC")
+                .fetch_all(&self.pool)
+                .await?;
+        rows.into_iter().map(Host::try_from).collect()
+    }
+
+    pub async fn get_host(&self, id: Uuid) -> Result<Option<Host>> {
+        let row = sqlx::query_as::<_, HostRow>("SELECT * FROM hosts WHERE id = ?")
+            .bind(id.to_string())
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(Host::try_from).transpose()
+    }
+
+    pub async fn create_host(&self, new: NewHost) -> Result<Host> {
+        let id = Uuid::new_v4();
+        let now = OffsetDateTime::now_utc();
+        let now_s = now.format(&Rfc3339)?;
+        let parts = host_kind_parts(&new.kind);
+        let res = sqlx::query(
+            r#"
+            INSERT INTO hosts
+                (id, name, kind, user, hostname, port, auth_kind, key_path, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(id.to_string())
+        .bind(&new.name)
+        .bind(parts.kind)
+        .bind(parts.user)
+        .bind(parts.hostname)
+        .bind(parts.port.map(i64::from))
+        .bind(parts.auth_kind)
+        .bind(parts.key_path)
+        .bind(&now_s)
+        .bind(&now_s)
+        .execute(&self.pool)
+        .await;
+        if let Err(sqlx::Error::Database(db)) = &res {
+            if db.is_unique_violation() {
+                return Err(StoreError::AlreadyExists(new.name));
+            }
+        }
+        res?;
+        Ok(Host {
+            id,
+            name: new.name,
+            kind: new.kind,
+            created_at: now,
+            updated_at: now,
+            last_seen_at: None,
+        })
+    }
+
+    pub async fn update_host_seen(&self, id: Uuid) -> Result<()> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        sqlx::query("UPDATE hosts SET last_seen_at = ?, updated_at = ? WHERE id = ?")
+            .bind(&now_s)
+            .bind(&now_s)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn delete_host(&self, id: Uuid) -> Result<bool> {
+        if id == LOCAL_HOST_ID {
+            return Ok(false);
+        }
+        let in_use: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE host_id = ?")
+            .bind(id.to_string())
+            .fetch_one(&self.pool)
+            .await?;
+        if in_use > 0 {
+            return Err(StoreError::AlreadyExists(format!(
+                "host has {in_use} session(s)"
+            )));
+        }
+        let affected = sqlx::query("DELETE FROM hosts WHERE id = ?")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        Ok(affected > 0)
+    }
+
     pub async fn create_session(&self, new: NewSession) -> Result<Session> {
+        self.create_session_on_host(new, None).await
+    }
+
+    pub async fn create_session_on_host(
+        &self,
+        new: NewSession,
+        host_id: Option<Uuid>,
+    ) -> Result<Session> {
         agentum_core::validate_name(&new.name)?;
 
         let id = Uuid::new_v4();
@@ -92,6 +188,7 @@ impl Store {
         let now_s = now.format(&Rfc3339)?;
         let flags = serde_json::to_string(&new.flags)?;
         let status = Status::Idle;
+        let host_id = host_id.unwrap_or(LOCAL_HOST_ID);
 
         // Worktree fields are resolved by the server *before* calling
         // create_session: by the time we hit the store, they're either
@@ -105,8 +202,8 @@ impl Store {
             r#"
             INSERT INTO sessions
                 (id, name, workdir, tool, model, flags, status, created_at, updated_at, card_id,
-                 worktree_path, worktree_branch, worktree_base_ref)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 worktree_path, worktree_branch, worktree_base_ref, host_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(id.to_string())
@@ -122,6 +219,7 @@ impl Store {
         .bind(wt_path.as_deref())
         .bind(wt_branch.as_deref())
         .bind(wt_base.as_deref())
+        .bind(host_id.to_string())
         .execute(&self.pool)
         .await;
 
@@ -141,6 +239,9 @@ impl Store {
             flags: new.flags,
             status,
             tmux_target: None,
+            host_id: Some(host_id),
+            host_label: None,
+            host_kind: None,
             created_at: now,
             updated_at: now,
             last_activity_at: None,
@@ -179,8 +280,10 @@ impl Store {
         let rows: Vec<SessionRow> = match status {
             Some(s) => {
                 sqlx::query_as::<_, SessionRow>(
-                    "SELECT * FROM sessions WHERE status = ? \
-                     ORDER BY pinned DESC, created_at DESC",
+                    "SELECT s.*, h.name AS host_label, h.kind AS host_kind \
+                     FROM sessions s LEFT JOIN hosts h ON h.id = s.host_id \
+                     WHERE s.status = ? \
+                     ORDER BY s.pinned DESC, s.created_at DESC",
                 )
                 .bind(s.as_str())
                 .fetch_all(&self.pool)
@@ -188,7 +291,9 @@ impl Store {
             }
             None => {
                 sqlx::query_as::<_, SessionRow>(
-                    "SELECT * FROM sessions ORDER BY pinned DESC, created_at DESC",
+                    "SELECT s.*, h.name AS host_label, h.kind AS host_kind \
+                     FROM sessions s LEFT JOIN hosts h ON h.id = s.host_id \
+                     ORDER BY s.pinned DESC, s.created_at DESC",
                 )
                 .fetch_all(&self.pool)
                 .await?
@@ -217,18 +322,26 @@ impl Store {
     }
 
     pub async fn get_session_by_name(&self, name: &str) -> Result<Option<Session>> {
-        let row = sqlx::query_as::<_, SessionRow>("SELECT * FROM sessions WHERE name = ?")
-            .bind(name)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row = sqlx::query_as::<_, SessionRow>(
+            "SELECT s.*, h.name AS host_label, h.kind AS host_kind \
+             FROM sessions s LEFT JOIN hosts h ON h.id = s.host_id \
+             WHERE s.name = ?",
+        )
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await?;
         row.map(Session::try_from).transpose()
     }
 
     pub async fn get_session_by_id(&self, id: Uuid) -> Result<Option<Session>> {
-        let row = sqlx::query_as::<_, SessionRow>("SELECT * FROM sessions WHERE id = ?")
-            .bind(id.to_string())
-            .fetch_optional(&self.pool)
-            .await?;
+        let row = sqlx::query_as::<_, SessionRow>(
+            "SELECT s.*, h.name AS host_label, h.kind AS host_kind \
+             FROM sessions s LEFT JOIN hosts h ON h.id = s.host_id \
+             WHERE s.id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
         row.map(Session::try_from).transpose()
     }
 
@@ -237,10 +350,14 @@ impl Store {
     /// `None` when none do. Used by the goal-status reconciler (plan 01-04)
     /// to find the planner session to auto-stop on first child arrival (D-07).
     pub async fn get_session_by_card_id(&self, card_id: i64) -> Result<Option<Session>> {
-        let row = sqlx::query_as::<_, SessionRow>("SELECT * FROM sessions WHERE card_id = ?")
-            .bind(card_id)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row = sqlx::query_as::<_, SessionRow>(
+            "SELECT s.*, h.name AS host_label, h.kind AS host_kind \
+             FROM sessions s LEFT JOIN hosts h ON h.id = s.host_id \
+             WHERE s.card_id = ?",
+        )
+        .bind(card_id)
+        .fetch_optional(&self.pool)
+        .await?;
         row.map(Session::try_from).transpose()
     }
 
@@ -1623,6 +1740,102 @@ fn restrict_db_perms(db_path: &Path) {
 #[cfg(not(unix))]
 fn restrict_db_perms(_db_path: &Path) {}
 
+struct HostKindParts<'a> {
+    kind: &'static str,
+    user: Option<&'a str>,
+    hostname: Option<&'a str>,
+    port: Option<u16>,
+    auth_kind: Option<&'static str>,
+    key_path: Option<&'a str>,
+}
+
+fn host_kind_parts(kind: &HostKind) -> HostKindParts<'_> {
+    match kind {
+        HostKind::Local => HostKindParts {
+            kind: "local",
+            user: None,
+            hostname: None,
+            port: None,
+            auth_kind: None,
+            key_path: None,
+        },
+        HostKind::Ssh {
+            user,
+            hostname,
+            port,
+            auth,
+        } => match auth {
+            SshAuth::Agent => HostKindParts {
+                kind: "ssh",
+                user: Some(user.as_str()),
+                hostname: Some(hostname.as_str()),
+                port: Some(*port),
+                auth_kind: Some("agent"),
+                key_path: None,
+            },
+            SshAuth::Key { path } => HostKindParts {
+                kind: "ssh",
+                user: Some(user.as_str()),
+                hostname: Some(hostname.as_str()),
+                port: Some(*port),
+                auth_kind: Some("key"),
+                key_path: Some(path.as_str()),
+            },
+        },
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct HostRow {
+    id: String,
+    name: String,
+    kind: String,
+    user: Option<String>,
+    hostname: Option<String>,
+    port: Option<i64>,
+    auth_kind: Option<String>,
+    key_path: Option<String>,
+    created_at: String,
+    updated_at: String,
+    last_seen_at: Option<String>,
+}
+
+impl TryFrom<HostRow> for Host {
+    type Error = StoreError;
+    fn try_from(r: HostRow) -> Result<Self> {
+        let kind = match r.kind.as_str() {
+            "local" => HostKind::Local,
+            "ssh" => {
+                let auth = match r.auth_kind.as_deref() {
+                    Some("key") => SshAuth::Key {
+                        path: r.key_path.unwrap_or_default(),
+                    },
+                    _ => SshAuth::Agent,
+                };
+                HostKind::Ssh {
+                    user: r.user.unwrap_or_default(),
+                    hostname: r.hostname.unwrap_or_default(),
+                    port: r.port.unwrap_or(22) as u16,
+                    auth,
+                }
+            }
+            other => return Err(StoreError::NotFound(format!("unknown host kind: {other}"))),
+        };
+        Ok(Host {
+            id: Uuid::parse_str(&r.id)?,
+            name: r.name,
+            kind,
+            created_at: OffsetDateTime::parse(&r.created_at, &Rfc3339)?,
+            updated_at: OffsetDateTime::parse(&r.updated_at, &Rfc3339)?,
+            last_seen_at: r
+                .last_seen_at
+                .as_deref()
+                .map(|s| OffsetDateTime::parse(s, &Rfc3339))
+                .transpose()?,
+        })
+    }
+}
+
 #[derive(Debug, FromRow)]
 struct SessionRow {
     id: String,
@@ -1633,6 +1846,12 @@ struct SessionRow {
     flags: String,
     status: String,
     tmux_target: Option<String>,
+    #[sqlx(default)]
+    host_id: Option<String>,
+    #[sqlx(default)]
+    host_label: Option<String>,
+    #[sqlx(default)]
+    host_kind: Option<String>,
     created_at: String,
     updated_at: String,
     last_activity_at: Option<String>,
@@ -1845,6 +2064,9 @@ impl TryFrom<SessionRow> for Session {
             flags: serde_json::from_str(&r.flags)?,
             status: Status::from_str(&r.status)?,
             tmux_target: r.tmux_target,
+            host_id: r.host_id.as_deref().map(Uuid::parse_str).transpose()?,
+            host_label: r.host_label,
+            host_kind: r.host_kind,
             created_at: OffsetDateTime::parse(&r.created_at, &Rfc3339)?,
             updated_at: OffsetDateTime::parse(&r.updated_at, &Rfc3339)?,
             last_activity_at: r
