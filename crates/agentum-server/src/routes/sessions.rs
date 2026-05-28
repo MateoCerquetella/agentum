@@ -3,7 +3,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use agentum_core::{Event, NewSession, Session, Status, WorktreeSpec};
+use agentum_core::{
+    Event, Host, HostKind, LOCAL_HOST_ID, NewSession, Session, Status, WorktreeSpec,
+};
 use agentum_store::paths;
 use axum::Json;
 use axum::Router;
@@ -54,6 +56,8 @@ pub fn router() -> Router<AppState> {
 struct CreateBody {
     #[serde(flatten)]
     new: NewSession,
+    #[serde(default)]
+    host_id: Option<Uuid>,
     #[serde(default)]
     worktree: Option<WorktreeSpec>,
 }
@@ -110,18 +114,39 @@ async fn create(
     State(state): State<AppState>,
     Json(body): Json<CreateBody>,
 ) -> Result<(StatusCode, Json<Session>), ApiError> {
-    let CreateBody { mut new, worktree } = body;
+    let CreateBody {
+        mut new,
+        host_id,
+        worktree,
+    } = body;
+    let host_id = host_id.unwrap_or(LOCAL_HOST_ID);
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown host: {host_id}")))?;
 
-    let workdir = super::util::expand_workdir(&new.workdir)?;
-    if !workdir.exists() {
-        return Err(ApiError::BadRequest(format!(
-            "workdir does not exist: {}",
-            workdir.display()
-        )));
-    }
-    // Persist the expanded form so `start` doesn't need to re-resolve and
-    // the dashboard displays the actual path the daemon will spawn in.
-    new.workdir = workdir.to_string_lossy().into_owned();
+    let workdir = match &host.kind {
+        HostKind::Local => {
+            let workdir = super::util::expand_workdir(&new.workdir)?;
+            if !workdir.exists() {
+                return Err(ApiError::BadRequest(format!(
+                    "workdir does not exist: {}",
+                    workdir.display()
+                )));
+            }
+            new.workdir = workdir.to_string_lossy().into_owned();
+            workdir
+        }
+        HostKind::Ssh { .. } => {
+            if worktree.is_some() {
+                return Err(ApiError::BadRequest(
+                    "worktree isolation is not available on SSH hosts yet".into(),
+                ));
+            }
+            PathBuf::from(new.workdir.trim())
+        }
+    };
 
     // Worktree isolation: if the user asked for it, run `git worktree
     // add` *before* persisting so the session row records the resolved
@@ -143,7 +168,10 @@ async fn create(
         new.worktree_base_ref = Some(resolved.base_ref);
     }
 
-    let s = state.store.create_session(new).await?;
+    let s = state
+        .store
+        .create_session_on_host(new, Some(host_id))
+        .await?;
     Ok((StatusCode::CREATED, Json(s)))
 }
 
@@ -365,6 +393,7 @@ async fn delete(
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
     let session = load(&state, id).await?;
+    let host = load_host_for_session(&state, &session).await?;
     if matches!(session.status, Status::Running) {
         if !q.force {
             return Err(ApiError::BadRequest(
@@ -372,7 +401,7 @@ async fn delete(
             ));
         }
         let target = tmux_target(&session);
-        agentum_tmux::kill_session(&target)
+        crate::host_runtime::kill_session(&host, &target)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
@@ -386,9 +415,10 @@ async fn start(
 ) -> Result<Json<Session>, ApiError> {
     let id = parse_uuid(&id)?;
     let session = load(&state, id).await?;
+    let host = load_host_for_session(&state, &session).await?;
     let target = agentum_tmux::target_for(&session.name);
 
-    let already = agentum_tmux::has_session(&target)
+    let already = crate::host_runtime::has_session(&host, &target)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -403,7 +433,7 @@ async fn start(
             target = %target,
             "orphaned tmux session found; killing before respawn"
         );
-        agentum_tmux::kill_session(&target)
+        crate::host_runtime::kill_session(&host, &target)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
@@ -415,54 +445,57 @@ async fn start(
     // When the session has an isolated worktree, that takes precedence
     // over `workdir` — `effective_cwd()` encapsulates the precedence
     // so adapters/callers never have to think about it.
-    let workdir = super::util::expand_workdir(session.effective_cwd())?;
-    if !workdir.exists() {
-        return Err(ApiError::BadRequest(format!(
-            "workdir does not exist: {}",
-            workdir.display()
-        )));
-    }
+    let workdir = match &host.kind {
+        HostKind::Local => {
+            let workdir = super::util::expand_workdir(session.effective_cwd())?;
+            if !workdir.exists() {
+                return Err(ApiError::BadRequest(format!(
+                    "workdir does not exist: {}",
+                    workdir.display()
+                )));
+            }
+            workdir
+        }
+        HostKind::Ssh { .. } => PathBuf::from(session.effective_cwd()),
+    };
 
     let adapter = agentum_executor::adapter_for(&session.tool);
     let mut launch = adapter.launch(&session);
 
-    // Generate an ephemeral hook token for this launch and expose it to the
-    // agent process via env vars. The hook endpoint validates against the
-    // in-memory map, so tokens survive only as long as the daemon is running.
-    let hook_token = crate::auth::new_token();
-    let hook_url = format!("http://127.0.0.1:8822/api/sessions/{}/hook", session.id);
-    launch
-        .env
-        .push(("AGENTUM_HOOK_URL".into(), hook_url.clone()));
-    launch
-        .env
-        .push(("AGENTUM_HOOK_TOKEN".into(), hook_token.clone()));
+    if matches!(host.kind, HostKind::Local) {
+        // Loopback hook URLs only work for local panes. SSH-hosted agents
+        // run on another machine, where 127.0.0.1 points at the VPS.
+        let hook_token = crate::auth::new_token();
+        let hook_url = format!("http://127.0.0.1:8822/api/sessions/{}/hook", session.id);
+        launch
+            .env
+            .push(("AGENTUM_HOOK_URL".into(), hook_url.clone()));
+        launch
+            .env
+            .push(("AGENTUM_HOOK_TOKEN".into(), hook_token.clone()));
 
-    // Claude Code supports --hook-post-tool-use: inject a curl one-liner so
-    // every tool completion posts back to the hook endpoint automatically.
-    if session.tool == "claude" {
-        let hook_cmd = "curl -s -X POST \"$AGENTUM_HOOK_URL\" \
-             -H \"X-Agentum-Hook-Token: $AGENTUM_HOOK_TOKEN\" \
-             -H \"Content-Type: application/json\" \
-             -d '{\"kind\":\"tool_done\",\"payload\":{}}'"
-            .to_string();
-        launch.argv.push("--hook-post-tool-use".into());
-        launch.argv.push(hook_cmd);
-    }
+        if session.tool == "claude" {
+            let hook_cmd = "curl -s -X POST \"$AGENTUM_HOOK_URL\" \
+                 -H \"X-Agentum-Hook-Token: $AGENTUM_HOOK_TOKEN\" \
+                 -H \"Content-Type: application/json\" \
+                 -d '{\"kind\":\"tool_done\",\"payload\":{}}'"
+                .to_string();
+            launch.argv.push("--hook-post-tool-use".into());
+            launch.argv.push(hook_cmd);
+        }
 
-    {
         let mut map = state.hook_tokens.lock().unwrap();
         map.insert(session.id, hook_token);
     }
 
-    agentum_tmux::new_session(&target, &workdir, &launch.argv, &launch.env)
+    crate::host_runtime::new_session(&host, &target, &workdir, &launch.argv, &launch.env)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     let log =
         paths::pane_log(&session.id.to_string()).map_err(|e| ApiError::Internal(e.to_string()))?;
-    if let Err(e) = agentum_tmux::pipe_pane(&target, &log).await {
-        let _ = agentum_tmux::kill_session(&target).await;
+    if let Err(e) = crate::host_runtime::pipe_pane(&host, &target, &log).await {
+        let _ = crate::host_runtime::kill_session(&host, &target).await;
         return Err(ApiError::Internal(e.to_string()));
     }
 
@@ -479,8 +512,9 @@ async fn stop(
 ) -> Result<Json<Session>, ApiError> {
     let id = parse_uuid(&id)?;
     let session = load(&state, id).await?;
+    let host = load_host_for_session(&state, &session).await?;
     let target = tmux_target(&session);
-    agentum_tmux::graceful_stop(&target, GRACEFUL_STOP_TIMEOUT)
+    crate::host_runtime::graceful_stop(&host, &target, GRACEFUL_STOP_TIMEOUT)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     state
@@ -498,8 +532,9 @@ async fn kill(
 ) -> Result<Json<Session>, ApiError> {
     let id = parse_uuid(&id)?;
     let session = load(&state, id).await?;
+    let host = load_host_for_session(&state, &session).await?;
     let target = tmux_target(&session);
-    agentum_tmux::kill_session(&target)
+    crate::host_runtime::kill_session(&host, &target)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     state
@@ -535,6 +570,15 @@ async fn load(state: &AppState, id: Uuid) -> Result<Session, ApiError> {
         .ok_or_else(|| ApiError::NotFound(id.to_string()))
 }
 
+async fn load_host_for_session(state: &AppState, session: &Session) -> Result<Host, ApiError> {
+    let host_id = session.host_id.unwrap_or(LOCAL_HOST_ID);
+    state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest(format!("session host is missing: {host_id}")))
+}
+
 fn tmux_target(session: &Session) -> String {
     session
         .tmux_target
@@ -568,6 +612,7 @@ async fn send(
         .get_session_by_id(id)
         .await?
         .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
+    let host = load_host_for_session(&state, &session).await?;
     let target = session
         .tmux_target
         .as_deref()
@@ -579,7 +624,7 @@ async fn send(
         .or(body.keys.as_deref())
         .ok_or_else(|| ApiError::BadRequest("must provide `text` or `keys`".into()))?;
 
-    if !agentum_tmux::has_session(target)
+    if !crate::host_runtime::has_session(&host, target)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
     {
@@ -588,7 +633,7 @@ async fn send(
         ));
     }
 
-    agentum_tmux::send_keys(target, payload, body.append_enter)
+    crate::host_runtime::send_keys(&host, target, payload, body.append_enter)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -621,10 +666,17 @@ async fn stream(
         .get_session_by_id(id)
         .await?
         .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
+    let host = load_host_for_session(&state, &session).await?;
     let target = tmux_target(&session);
     let positions = state.stream_positions.clone();
     let resume = q.resume;
-    Ok(ws.on_upgrade(move |socket| stream_session(socket, id, target, positions, resume)))
+    Ok(ws.on_upgrade(move |socket| async move {
+        if matches!(host.kind, HostKind::Local) {
+            stream_session(socket, id, target, positions, resume).await;
+        } else {
+            stream_remote_session(socket, host, target).await;
+        }
+    }))
 }
 
 const BACKFILL_BYTES: u64 = 4096;
@@ -1069,6 +1121,60 @@ async fn stream_session(
     );
 }
 
+async fn stream_remote_session(mut socket: WebSocket, host: Host, target: String) {
+    let mut ticker = tokio::time::interval(Duration::from_millis(700));
+    let mut last_snapshot: Vec<u8> = Vec::new();
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {
+                match crate::host_runtime::capture_pane_ansi(&host, &target).await {
+                    Ok(snap) if snap != last_snapshot => {
+                        last_snapshot = snap.clone();
+                        let mut payload = Vec::with_capacity(snap.len() + 4);
+                        payload.extend_from_slice(b"\x1bc");
+                        payload.extend_from_slice(&snap);
+                        if socket.send(Message::Binary(Bytes::from(payload))).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        if socket.send(Message::Text(format!("[remote pane error: {e}]").into())).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+            msg = socket.recv() => match msg {
+                Some(Ok(Message::Binary(b))) if !b.is_empty() => {
+                    if let Err(e) = crate::host_runtime::send_bytes(&host, &target, &b).await
+                        && socket.send(Message::Text(format!("[input dropped: {e}]").into())).await.is_err()
+                    {
+                        break;
+                    }
+                }
+                Some(Ok(Message::Text(t))) => {
+                    if let Some((cols, rows)) = parse_resize(&t) {
+                        if let Err(e) = crate::host_runtime::resize_window(&host, &target, cols, rows).await
+                            && socket.send(Message::Text(format!("[resize dropped: {e}]").into())).await.is_err()
+                        {
+                            break;
+                        }
+                    } else if parse_refresh(&t) {
+                        last_snapshot.clear();
+                    } else if let Err(e) = crate::host_runtime::send_bytes(&host, &target, t.as_bytes()).await
+                        && socket.send(Message::Text(format!("[input dropped: {e}]").into())).await.is_err()
+                    {
+                        break;
+                    }
+                }
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                _ => {}
+            },
+        }
+    }
+}
+
 // ---------- GET /api/sessions/{id}/pane ----------
 
 /// Returns a plain-text snapshot of the last N lines of the session's tmux
@@ -1087,6 +1193,7 @@ async fn pane(
         .get_session_by_id(id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("session {id}")))?;
+    let host = load_host_for_session(&state, &session).await?;
 
     let n = clamp_lines(q.lines);
 
@@ -1096,7 +1203,7 @@ async fn pane(
 
     let lines: Vec<String> = match session.tmux_target.as_deref() {
         Some(target) => {
-            let text = agentum_tmux::capture_pane_visible(target)
+            let text = crate::host_runtime::capture_pane_visible(&host, target)
                 .await
                 .map_err(|e| ApiError::Internal(e.to_string()))?;
             // Lines reversed/truncated/un-reversed so the last N lines preserve chronological order.

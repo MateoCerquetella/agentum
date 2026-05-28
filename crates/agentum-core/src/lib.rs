@@ -67,6 +67,123 @@ impl FromStr for Status {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Host {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(flatten)]
+    pub kind: HostKind,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub last_seen_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum HostKind {
+    Local,
+    Ssh {
+        user: String,
+        hostname: String,
+        #[serde(default = "default_ssh_port")]
+        port: u16,
+        #[serde(default)]
+        auth: SshAuth,
+    },
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "auth", rename_all = "lowercase")]
+pub enum SshAuth {
+    #[default]
+    Agent,
+    Key {
+        path: String,
+    },
+}
+
+fn default_ssh_port() -> u16 {
+    22
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewHost {
+    pub name: String,
+    #[serde(flatten)]
+    pub kind: HostKind,
+}
+
+pub const LOCAL_HOST_ID: Uuid = Uuid::nil();
+
+/// Structured readiness report for a host, produced by a single
+/// preflight (one SSH round trip for `HostKind::Ssh`, local `which`
+/// checks for `HostKind::Local`). Replaces the coarse boolean
+/// [`Host`]-probe with a per-dependency breakdown the TUI and CLI can
+/// render with install hints. See `docs/plans/SSH_HOST_READINESS_PRD.md`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostReadiness {
+    /// `true` only when every required dependency is installed and the
+    /// host was reachable. Drives the spawn gate — a session may not be
+    /// created on a host whose `ok` is `false`.
+    pub ok: bool,
+    /// Human-readable one-line summary (e.g. "ssh host ready",
+    /// "1 required dependency missing", or an SSH error string).
+    pub message: String,
+    pub system: HostSystemInfo,
+    /// Required dependencies (`tmux`, `git`). Any missing entry forces
+    /// `ok = false`.
+    pub required: Vec<DepCheck>,
+    /// Optional agent CLIs from `agentum_executor::probed_tools()`. A
+    /// missing agent only blocks if the user picks that specific tool.
+    pub agents: Vec<AgentDepCheck>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSystemInfo {
+    /// `uname -sr` output (e.g. "Linux 6.12.1"), when the probe succeeded.
+    pub uname: Option<String>,
+    /// Detected package manager: `apt` | `dnf` | `pacman` | `brew` |
+    /// `unknown`. Drives the bootstrap command template and required-dep
+    /// install hints.
+    pub pkg_manager: String,
+}
+
+/// A required system dependency (`tmux`, `git`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DepCheck {
+    /// Stable id, e.g. "tmux", "git".
+    pub id: String,
+    /// Display label.
+    pub label: String,
+    pub installed: bool,
+    /// Suggested install command, filled server-side from the detected
+    /// package manager. `None` once installed.
+    pub install_hint: Option<String>,
+    /// Whether `agentum hosts bootstrap` can install this (phase 2).
+    /// `true` for `tmux`/`git`; never for agent CLIs.
+    pub bootstrapable: bool,
+}
+
+/// An optional agent CLI dependency, one per `probed_tools()` entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentDepCheck {
+    /// Tool id used by `Session::tool` / `--tool`.
+    pub id: String,
+    /// Binary actually probed on `PATH` (e.g. `cursor` ⇒ `cursor-agent`).
+    pub binary: String,
+    pub installed: bool,
+    /// Resolved absolute path when installed.
+    pub path: Option<String>,
+    /// Static per-agent install pointer (URL / one-liner). Never
+    /// auto-run.
+    pub install_hint: Option<String>,
+    /// Always `false`: agentum never auto-installs agent CLIs.
+    pub bootstrapable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: Uuid,
     pub name: String,
@@ -76,6 +193,12 @@ pub struct Session {
     pub flags: Vec<String>,
     pub status: Status,
     pub tmux_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_kind: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -706,6 +829,9 @@ mod tests {
             flags: vec![],
             status: Status::Idle,
             tmux_target: None,
+            host_id: None,
+            host_label: None,
+            host_kind: None,
             created_at: OffsetDateTime::UNIX_EPOCH,
             updated_at: OffsetDateTime::UNIX_EPOCH,
             last_activity_at: None,
