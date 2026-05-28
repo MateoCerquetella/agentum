@@ -188,11 +188,11 @@ pub fn default_log_path() -> Result<PathBuf> {
     {
         let home = std::env::var_os("HOME")
             .ok_or_else(|| anyhow::anyhow!("HOME is not set; cannot resolve log path"))?;
-        return Ok(PathBuf::from(home)
+        Ok(PathBuf::from(home)
             .join("Library")
             .join("Logs")
             .join("agentum")
-            .join("clip-agent.log"));
+            .join("clip-agent.log"))
     }
     #[cfg(not(target_os = "macos"))]
     {
