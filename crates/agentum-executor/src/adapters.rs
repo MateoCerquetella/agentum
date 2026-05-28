@@ -379,7 +379,7 @@ mod tests {
     fn claude_argv() {
         let s = fixture(
             "claude",
-            Some("opus-4-7"),
+            Some("opus-4-8"),
             &["--dangerously-skip-permissions"],
         );
         let cmd = ClaudeAdapter.launch(&s);
@@ -387,7 +387,7 @@ mod tests {
             cmd.argv,
             vec![
                 "claude".to_string(),
-                "--model=opus-4-7".to_string(),
+                "--model=opus-4-8".to_string(),
                 "--session-id".to_string(),
                 s.id.to_string(),
                 "--dangerously-skip-permissions".to_string(),

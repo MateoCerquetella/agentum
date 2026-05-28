@@ -483,7 +483,7 @@ pub struct BoardItem {
     /// validate that it exists (the agent itself will surface that).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
-    /// Optional model hint (e.g. `claude-opus-4-7`, `gpt-5`). Passes
+    /// Optional model hint (e.g. `claude-opus-4-8`, `gpt-5`). Passes
     /// through to the spawned session's `--model` flag when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,

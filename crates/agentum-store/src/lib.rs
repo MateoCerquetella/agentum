@@ -2529,7 +2529,7 @@ mod tests {
                 lbl: None,
                 tool: Some("claude".into()),
                 workdir: Some("/home/me/projects/foo".into()),
-                model: Some("claude-opus-4-7".into()),
+                model: Some("claude-opus-4-8".into()),
                 session_id: None,
                 priority: None,
                 parent_goal_id: None,
@@ -2537,13 +2537,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(item.workdir.as_deref(), Some("/home/me/projects/foo"));
-        assert_eq!(item.model.as_deref(), Some("claude-opus-4-7"));
+        assert_eq!(item.model.as_deref(), Some("claude-opus-4-8"));
 
         // Re-listing carries them through the BoardItemRow → BoardItem
         // conversion — guards against a forgotten field mapping.
         let all = s.list_board_items().await.unwrap();
         assert_eq!(all[0].workdir.as_deref(), Some("/home/me/projects/foo"));
-        assert_eq!(all[0].model.as_deref(), Some("claude-opus-4-7"));
+        assert_eq!(all[0].model.as_deref(), Some("claude-opus-4-8"));
 
         // Patch can swap workdir and clear model.
         let patched = s

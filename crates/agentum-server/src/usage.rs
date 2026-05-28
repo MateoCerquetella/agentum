@@ -51,7 +51,7 @@ pub struct ClaudeUsageSnapshot {
     /// Useful for the detail popover; not used for the % chip.
     pub all_time_tokens: u64,
     /// Per-model breakdown within the window. Keyed by the
-    /// `message.model` string (e.g. `claude-opus-4-7`). Models the
+    /// `message.model` string (e.g. `claude-opus-4-8`). Models the
     /// user hasn't touched in 5h are omitted.
     pub by_model: std::collections::BTreeMap<String, u64>,
     /// `true` when `~/.claude/projects` exists. False means the user
