@@ -475,13 +475,31 @@ async fn start(
             .push(("AGENTUM_HOOK_TOKEN".into(), hook_token.clone()));
 
         if session.tool == "claude" {
+            // Claude Code has no `--hook-post-tool-use` flag; hooks are
+            // registered through settings. Inject a PostToolUse command
+            // hook via `--settings` (which *adds* to the user's settings
+            // rather than replacing them). The curl command is stored
+            // verbatim by Claude and runs in a shell on each tool call —
+            // the AGENTUM_HOOK_* refs resolve from the pane env exported
+            // above, so they must stay unexpanded here.
             let hook_cmd = "curl -s -X POST \"$AGENTUM_HOOK_URL\" \
                  -H \"X-Agentum-Hook-Token: $AGENTUM_HOOK_TOKEN\" \
                  -H \"Content-Type: application/json\" \
-                 -d '{\"kind\":\"tool_done\",\"payload\":{}}'"
-                .to_string();
-            launch.argv.push("--hook-post-tool-use".into());
-            launch.argv.push(hook_cmd);
+                 -d '{\"kind\":\"tool_done\",\"payload\":{}}'";
+            let settings = serde_json::json!({
+                "hooks": {
+                    "PostToolUse": [
+                        {
+                            "matcher": "*",
+                            "hooks": [
+                                { "type": "command", "command": hook_cmd }
+                            ]
+                        }
+                    ]
+                }
+            });
+            launch.argv.push("--settings".into());
+            launch.argv.push(settings.to_string());
         }
 
         let mut map = state.hook_tokens.lock().unwrap();
