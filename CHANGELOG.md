@@ -4,6 +4,15 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3] — 2026-05-29
+
+### Fixed
+- **Claude sessions failed to spawn.** Every Claude session aborted with `error: unknown option '--hook-post-tool-use'` — Claude Code has no such CLI flag; hooks are configured through settings. The daemon now registers the `tool_done` PostToolUse hook via `--settings` (which *adds* to the user's settings rather than replacing them). Verified end-to-end. (`agentum-server`)
+
+### Security
+- **Bootstrap password now uses the OS CSPRNG.** The loopback `local` user's password was generated from a `SystemTime`/pid/stack-address-seeded splitmix64 PRNG — predictable to a local attacker. Replaced with `getrandom` (OS CSPRNG). (`agentum-cli`)
+- **`--insecure` confined to loopback.** Disabling TLS certificate verification (`--insecure` flag or a profile's `insecure = true`) is now refused for non-loopback hosts; remote daemons must pin a certificate with `--fingerprint` instead. Prevents silently accepting any cert on a MITM-exposed network path. (`agentum-cli`)
+
 ## [0.9.2] — 2026-05-29
 
 ### Fixed
