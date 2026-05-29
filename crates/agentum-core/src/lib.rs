@@ -148,6 +148,13 @@ pub struct HostSystemInfo {
     /// `unknown`. Drives the bootstrap command template and required-dep
     /// install hints.
     pub pkg_manager: String,
+    /// Whether `sudo -n true` succeeds on the remote (passwordless sudo /
+    /// root). `Some(false)` means `bootstrap` will fail with a password
+    /// prompt it can't answer over `BatchMode` SSH; `None` when not probed
+    /// (older daemon, or the probe couldn't determine it). `#[serde(default)]`
+    /// keeps older daemons' payloads parseable.
+    #[serde(default)]
+    pub sudo_nopasswd: Option<bool>,
 }
 
 /// A required system dependency (`tmux`, `git`).

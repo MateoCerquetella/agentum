@@ -39,6 +39,11 @@ notify         = "8"
 sysinfo        = { version = "0.32", default-features = false, features = ["system"] }
 which          = "7"
 shlex          = "1"
+# Used by usage::claude_oauth to fetch `GET /api/oauth/usage` from
+# Anthropic (spec 001). rustls (no native-tls) so release binaries
+# don't need system OpenSSL — mirrors the feature set agentum-cli
+# already pins, so the lockfile carries no new transitive deps.
+reqwest        = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # Used by planner.rs to deserialise $XDG_CONFIG_HOME/agentum/planner.toml.
 # Already a workspace dep (profiles.toml, credentials.toml read by agentum-cli).
 toml           = { workspace = true }

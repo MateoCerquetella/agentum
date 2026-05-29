@@ -23,26 +23,36 @@ use agentum_core::HostReadiness;
 /// packages, only the two required deps.
 pub const BOOTSTRAPABLE: &[&str] = &["tmux", "git"];
 
-/// Static per-agent install pointer. Returns a URL or short one-liner the
-/// user can follow by hand. Unknown tools fall back to a generic line so
-/// the table never renders a bare missing entry with no guidance.
-pub fn agent_install_hint(tool: &str) -> &'static str {
-    match tool {
-        "claude" => {
-            "npm install -g @anthropic-ai/claude-code  ·  https://docs.claude.com/en/docs/claude-code"
-        }
-        "codex" => "npm install -g @openai/codex  ·  https://github.com/openai/codex",
-        // Cursor ships its headless CLI as `cursor-agent`. Both the
+/// Runnable one-liner that installs `tool`'s CLI on a host. `None` for
+/// tools we don't have a verified installer for (the caller then shows a
+/// generic hint and won't offer one-key install). Commands are the
+/// official installers, verified May 2026:
+/// - npm: `claude`, `codex`, `gemini`
+/// - `curl … | bash`: `cursor`/`agent` (installs `cursor-agent`),
+///   `opencode`, `hermes` (NousResearch)
+/// - pip: `aider`
+pub fn agent_install_command(tool: &str) -> Option<&'static str> {
+    Some(match tool {
+        "claude" => "npm install -g @anthropic-ai/claude-code",
+        "codex" => "npm install -g @openai/codex",
+        "gemini" => "npm install -g @google/gemini-cli",
+        // Cursor's headless CLI installs as `cursor-agent`; both the
         // `cursor` and `agent` tool ids resolve to it.
-        "cursor" | "agent" => "https://cursor.com/cli",
-        "gemini" => {
-            "npm install -g @google/gemini-cli  ·  https://github.com/google-gemini/gemini-cli"
+        "cursor" | "agent" => "curl https://cursor.com/install -fsS | bash",
+        "opencode" => "curl -fsSL https://opencode.ai/install | bash",
+        "hermes" => {
+            "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash"
         }
-        "hermes" => "https://github.com/anthropics/hermes",
-        "opencode" => "npm install -g opencode-ai  ·  https://github.com/sst/opencode",
-        "aider" => "python -m pip install aider-install && aider-install  ·  https://aider.chat",
-        _ => "install the agent CLI and ensure its binary is on PATH",
-    }
+        "aider" => "python -m pip install aider-install && aider-install",
+        _ => return None,
+    })
+}
+
+/// Display hint for a missing agent: the runnable install command, or a
+/// generic line for tools we don't have a verified installer for. Never a
+/// bare missing entry with no guidance.
+pub fn agent_install_hint(tool: &str) -> &'static str {
+    agent_install_command(tool).unwrap_or("install the agent CLI and ensure its binary is on PATH")
 }
 
 /// Build a package-install command for the detected package manager.
@@ -105,6 +115,7 @@ mod tests {
             system: HostSystemInfo {
                 uname: Some("Linux 6.12".into()),
                 pkg_manager: pkg.into(),
+                sudo_nopasswd: Some(true),
             },
             required: vec![
                 DepCheck {

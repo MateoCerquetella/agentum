@@ -58,6 +58,33 @@ pub struct ClaudeUsageSnapshot {
     /// has never run Claude Code on this host; the UI hides the chip
     /// in that case.
     pub claude_installed: bool,
+
+    // ---- spec 001: real plan-limit + estimated cost ------------------
+    // All fields below are additive `Option`s populated by the
+    // `/api/usage/claude` route after merging the OAuth usage fetch.
+    // They MUST stay optional so older daemons (which never set them)
+    // and older clients (which never read them) both round-trip JSON
+    // without breaking — see the `Helper` Deserialize below.
+    /// Headline plan-limit utilization, `max(five_hour, seven_day)`,
+    /// clamped 0..=100. `None` when no OAuth token was available or the
+    /// fetch failed — the UI must show "unavailable", never a guess.
+    pub limit_pct: Option<f64>,
+    /// 5-hour rolling-window utilization (0..=100) from `/api/oauth/usage`.
+    pub five_hour_pct: Option<f64>,
+    /// 7-day rolling-window utilization (0..=100) from `/api/oauth/usage`.
+    pub seven_day_pct: Option<f64>,
+    /// Unix-ms reset time of whichever window drove `limit_pct`. Lets the
+    /// UI render a "resets in …" hint without a second roundtrip.
+    pub resets_at_ms: Option<i64>,
+    /// Estimated USD spend for the tokens in `by_model` (the 5h window),
+    /// priced with the static table in `pricing`. ESTIMATE only — there
+    /// is no billing API for subscription plans. `None` when no priced
+    /// model contributed.
+    pub est_cost_usd: Option<f64>,
+    /// Which path produced this snapshot: `"oauth"` when the plan-limit
+    /// fields came from `/api/oauth/usage`, `"scan"` when we only have
+    /// the local transcript scan (graceful degradation — no real %).
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -121,7 +148,7 @@ fn now_ms() -> i64 {
 // Hand-rolled ISO-8601 parser. Format is always
 // `YYYY-MM-DDTHH:MM:SS[.fff]Z` in both Claude and Codex JSONL — pulling
 // in chrono just for this would bloat the binary for negligible value.
-fn parse_iso8601_ms(s: &str) -> Option<i64> {
+pub(crate) fn parse_iso8601_ms(s: &str) -> Option<i64> {
     let bytes = s.as_bytes();
     if bytes.len() < 19 {
         return None;
@@ -366,6 +393,279 @@ fn parse_codex_window(v: &serde_json::Value) -> Option<CodexUsageWindow> {
     })
 }
 
+// ===========================================================================
+// spec 001: Claude account usage — real plan-limit % + estimated cost.
+//
+// Design note (deviation from architecture.md): the architecture proposed
+// `usage/claude_oauth.rs` and `usage/pricing.rs` submodules. We keep these as
+// in-module sections here because the surface is small (one fetch fn, one
+// price table) and a sibling-module split would add file churn without
+// clarifying anything. The PTY-scrape fallback (`usage/claude_cli.rs`) is
+// intentionally NOT implemented — see the graceful-degradation note in
+// `enrich_claude` and the TODO there.
+// ===========================================================================
+
+/// Anthropic's (undocumented) Claude Code usage endpoint. Returns plan-limit
+/// utilization for the 5-hour and 7-day windows of a Max/Pro subscription.
+const OAUTH_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+/// `anthropic-beta` header the Claude Code CLI sends to this endpoint.
+const OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
+/// User-Agent the CLI sends; matching it keeps us aligned with the contract.
+const CLAUDE_CODE_USER_AGENT: &str = "claude-code/2.1.0";
+/// Upstream call timeout. The usage chip is cosmetic — a slow Anthropic
+/// shouldn't stall the whole request path.
+const OAUTH_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Static per-model price table (USD per single token), sourced from
+/// Anthropic's public pricing as of 2026-05-28
+/// (<https://www.anthropic.com/pricing>). These are list prices in
+/// dollars-per-million-tokens divided by 1_000_000:
+///
+/// | model              | input $/Mtok | output $/Mtok | cache-write $/Mtok |
+/// | ------------------ | ------------ | ------------- | ------------------ |
+/// | claude-opus-4*     | 15.00        | 75.00         | 18.75              |
+/// | claude-sonnet-4*   |  3.00        | 15.00         |  3.75              |
+/// | claude-3-5-haiku*  |  0.80        |  4.00         |  1.00              |
+///
+/// The estimate uses a blended figure: the local scan only tracks a single
+/// summed token count per model (`by_model` = input + output + cache_create),
+/// so we apply the model's *input* price as a conservative lower-bound proxy.
+/// This is explicitly an ESTIMATE; the UI labels it "est.". Models not in the
+/// table are skipped (we don't guess prices for unknown models).
+fn model_input_price_per_token(model: &str) -> Option<f64> {
+    let m = model.to_ascii_lowercase();
+    // Match on family prefixes so dated point releases (…-4-8, …-4-20250514)
+    // all resolve without a table entry per build.
+    if m.contains("opus") {
+        Some(15.00 / 1_000_000.0)
+    } else if m.contains("sonnet") {
+        Some(3.00 / 1_000_000.0)
+    } else if m.contains("haiku") {
+        Some(0.80 / 1_000_000.0)
+    } else {
+        None
+    }
+}
+
+/// Estimate window spend from the per-model token breakdown. Sums
+/// `tokens * input_price` for every model we have a price for; returns
+/// `None` when no priced model contributed so the UI can fall back to an
+/// em-dash rather than render a misleading `$0.00`.
+pub(crate) fn estimate_cost_usd(by_model: &std::collections::BTreeMap<String, u64>) -> Option<f64> {
+    let mut total = 0.0;
+    let mut priced_any = false;
+    for (model, &tokens) in by_model {
+        if let Some(price) = model_input_price_per_token(model) {
+            total += tokens as f64 * price;
+            priced_any = true;
+        }
+    }
+    priced_any.then_some(total)
+}
+
+/// Pick the headline plan-limit % from the two windows. The user cares about
+/// whichever ceiling they'll hit first, so we surface the higher of the two.
+/// Both inputs are clamped 0..=100; the result is too.
+pub(crate) fn pick_limit_pct(five_hour: Option<f64>, seven_day: Option<f64>) -> Option<f64> {
+    let clamp = |v: f64| v.clamp(0.0, 100.0);
+    match (five_hour, seven_day) {
+        (Some(a), Some(b)) => Some(clamp(a.max(b))),
+        (Some(a), None) => Some(clamp(a)),
+        (None, Some(b)) => Some(clamp(b)),
+        (None, None) => None,
+    }
+}
+
+/// Read the Claude OAuth bearer token from the host, trying the canonical
+/// sources in order. Returns `None` when none is available (API-key-only
+/// users, or no Claude install). NEVER logs the token.
+///
+/// Order: env `CLAUDE_CODE_OAUTH_TOKEN` → `~/.claude/.credentials.json`
+/// (`claudeAiOauth.accessToken`) → macOS keychain (best-effort).
+fn read_claude_oauth_token() -> Option<String> {
+    // 1. Env var — the explicit override Claude Code itself honours.
+    if let Ok(tok) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
+        let tok = tok.trim();
+        if !tok.is_empty() {
+            return Some(tok.to_string());
+        }
+    }
+
+    // 2. Legacy credentials file.
+    if let Some(home) = home_dir() {
+        let cred_path = home.join(".claude").join(".credentials.json");
+        if let Ok(raw) = std::fs::read_to_string(&cred_path)
+            && let Some(tok) = token_from_credentials_json(&raw)
+        {
+            return Some(tok);
+        }
+    }
+
+    // 3. macOS keychain. Best-effort; no-op on Linux. Claude Code stores the
+    //    same `.credentials.json` JSON blob under a Keychain generic password.
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(tok) = read_macos_keychain_token() {
+            return Some(tok);
+        }
+    }
+
+    None
+}
+
+/// Extract `claudeAiOauth.accessToken` from a `.credentials.json` blob.
+fn token_from_credentials_json(raw: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let tok = v.get("claudeAiOauth")?.get("accessToken")?.as_str()?.trim();
+    (!tok.is_empty()).then(|| tok.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn read_macos_keychain_token() -> Option<String> {
+    // Claude Code 2.1 stores credentials under the generic-password service
+    // "Claude Code-credentials". `security find-generic-password -w` prints
+    // the raw secret (the same JSON shape as the file) to stdout. We never
+    // log the output. Failure (no entry, locked keychain) → None.
+    let out = std::process::Command::new("security")
+        .args([
+            "find-generic-password",
+            "-s",
+            "Claude Code-credentials",
+            "-w",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8(out.stdout).ok()?;
+    token_from_credentials_json(raw.trim())
+}
+
+/// Parsed `/api/oauth/usage` result. All fields optional — Anthropic may omit
+/// a window for an account that doesn't have it.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct OAuthUsage {
+    pub five_hour_pct: Option<f64>,
+    pub seven_day_pct: Option<f64>,
+    /// Reset time of whichever window is the binding constraint
+    /// (`max(five_hour, seven_day)`), as unix-ms.
+    pub resets_at_ms: Option<i64>,
+}
+
+/// Map one window object (`{ utilization, resets_at }`) to `(pct, resets_ms)`.
+fn parse_oauth_window(v: Option<&serde_json::Value>) -> (Option<f64>, Option<i64>) {
+    let Some(v) = v else {
+        return (None, None);
+    };
+    let pct = v
+        .get("utilization")
+        .and_then(|u| u.as_f64())
+        .map(|u| u.clamp(0.0, 100.0));
+    let resets = v
+        .get("resets_at")
+        .and_then(|r| r.as_str())
+        .and_then(parse_iso8601_ms);
+    (pct, resets)
+}
+
+/// Fetch + parse `/api/oauth/usage`. Errors are redacted of the token. Returns
+/// the parsed windows or an error string suitable for `tracing::debug!`.
+async fn fetch_oauth_usage(token: &str) -> Result<OAuthUsage, String> {
+    let client = reqwest::Client::builder()
+        .timeout(OAUTH_FETCH_TIMEOUT)
+        // reqwest reads HTTPS_PROXY / ALL_PROXY from the environment by
+        // default, satisfying the spec's proxy requirement with no extra code.
+        .build()
+        .map_err(|e| format!("build http client: {e}"))?;
+
+    let resp = client
+        .get(OAUTH_USAGE_URL)
+        .bearer_auth(token)
+        .header("anthropic-beta", OAUTH_BETA_HEADER)
+        .header(reqwest::header::USER_AGENT, CLAUDE_CODE_USER_AGENT)
+        .send()
+        .await
+        // The token never appears in reqwest's Display for a GET error, but
+        // be defensive: scrub anything token-shaped from the message.
+        .map_err(|e| redact_token(&e.to_string(), token))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("oauth usage returned {}", resp.status()));
+    }
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| redact_token(&e.to_string(), token))?;
+
+    let (five_hour_pct, five_resets) = parse_oauth_window(body.get("five_hour"));
+    let (seven_day_pct, seven_resets) = parse_oauth_window(body.get("seven_day"));
+
+    // resets_at follows whichever window is the binding constraint.
+    let resets_at_ms = match (five_hour_pct, seven_day_pct) {
+        (Some(a), Some(b)) if a >= b => five_resets,
+        (Some(_), Some(_)) => seven_resets,
+        (Some(_), None) => five_resets,
+        (None, Some(_)) => seven_resets,
+        (None, None) => None,
+    };
+
+    Ok(OAuthUsage {
+        five_hour_pct,
+        seven_day_pct,
+        resets_at_ms,
+    })
+}
+
+/// Redact a bearer token from a string before it can be logged or returned.
+fn redact_token(msg: &str, token: &str) -> String {
+    if token.is_empty() {
+        return msg.to_string();
+    }
+    msg.replace(token, "<redacted>")
+}
+
+/// Take a freshly-scanned [`ClaudeUsageSnapshot`] and enrich it with the
+/// real plan-limit % (from `/api/oauth/usage`) and an estimated cost. This is
+/// the async half that the route runs after `spawn_blocking(scan_claude)`.
+///
+/// Sets `source = "oauth"` when the OAuth fetch succeeds, `source = "scan"`
+/// otherwise (no token, or fetch failed). On the `scan` path `limit_pct`
+/// stays `None` so the UI shows "unavailable" rather than a wrong number —
+/// graceful degradation in place of the spec's PTY scrape.
+//
+// TODO(spec-001): optional `claude`-CLI plan-usage scrape as a richer
+// fallback. Deferred deliberately — a robust server-side PTY scrape of
+// Claude's interactive palette is high-risk and large; graceful degradation
+// (source="scan", no band) is the safer minimum.
+pub async fn enrich_claude(mut snap: ClaudeUsageSnapshot) -> ClaudeUsageSnapshot {
+    // Estimated cost is local-only; compute it regardless of OAuth success.
+    snap.est_cost_usd = estimate_cost_usd(&snap.by_model);
+
+    let Some(token) = read_claude_oauth_token() else {
+        snap.source = Some("scan".to_string());
+        return snap;
+    };
+
+    match fetch_oauth_usage(&token).await {
+        Ok(usage) => {
+            snap.five_hour_pct = usage.five_hour_pct;
+            snap.seven_day_pct = usage.seven_day_pct;
+            snap.limit_pct = pick_limit_pct(usage.five_hour_pct, usage.seven_day_pct);
+            snap.resets_at_ms = usage.resets_at_ms;
+            snap.source = Some("oauth".to_string());
+        }
+        Err(e) => {
+            // Never log the token; `e` is already redacted.
+            tracing::debug!(error = %e, "claude oauth usage fetch failed; degrading to scan");
+            snap.source = Some("scan".to_string());
+        }
+    }
+
+    snap
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct UsageBundle {
     pub claude: ClaudeUsageSnapshot,
@@ -406,6 +706,20 @@ impl<'de> Deserialize<'de> for ClaudeUsageSnapshot {
             by_model: std::collections::BTreeMap<String, u64>,
             #[serde(default)]
             claude_installed: bool,
+            // spec 001 additive fields — `default` so payloads predating
+            // them (older daemons, replayed cache fixtures) still parse.
+            #[serde(default)]
+            limit_pct: Option<f64>,
+            #[serde(default)]
+            five_hour_pct: Option<f64>,
+            #[serde(default)]
+            seven_day_pct: Option<f64>,
+            #[serde(default)]
+            resets_at_ms: Option<i64>,
+            #[serde(default)]
+            est_cost_usd: Option<f64>,
+            #[serde(default)]
+            source: Option<String>,
         }
         let h = Helper::deserialize(deserializer)?;
         Ok(ClaudeUsageSnapshot {
@@ -415,6 +729,12 @@ impl<'de> Deserialize<'de> for ClaudeUsageSnapshot {
             all_time_tokens: h.all_time_tokens,
             by_model: h.by_model,
             claude_installed: h.claude_installed,
+            limit_pct: h.limit_pct,
+            five_hour_pct: h.five_hour_pct,
+            seven_day_pct: h.seven_day_pct,
+            resets_at_ms: h.resets_at_ms,
+            est_cost_usd: h.est_cost_usd,
+            source: h.source,
         })
     }
 }
@@ -497,5 +817,105 @@ mod tests {
         assert_eq!(w.used_percent, 42.5);
         assert_eq!(w.window_minutes, 300);
         assert_eq!(w.resets_at, 1776718918);
+    }
+
+    // ---- spec 001 -----------------------------------------------------
+
+    #[test]
+    fn limit_pct_takes_max_of_windows() {
+        // Higher of the two windows wins — the binding ceiling.
+        assert_eq!(pick_limit_pct(Some(42.0), Some(81.0)), Some(81.0));
+        assert_eq!(pick_limit_pct(Some(90.0), Some(10.0)), Some(90.0));
+        // Single window present → that one.
+        assert_eq!(pick_limit_pct(Some(55.0), None), Some(55.0));
+        assert_eq!(pick_limit_pct(None, Some(55.0)), Some(55.0));
+        // Neither → none (UI shows "unavailable", not a guess).
+        assert_eq!(pick_limit_pct(None, None), None);
+    }
+
+    #[test]
+    fn limit_pct_clamps_out_of_range() {
+        assert_eq!(pick_limit_pct(Some(150.0), Some(-5.0)), Some(100.0));
+        assert_eq!(pick_limit_pct(Some(-10.0), None), Some(0.0));
+    }
+
+    #[test]
+    fn estimate_cost_prices_known_models_and_skips_unknown() {
+        let mut by_model = std::collections::BTreeMap::new();
+        // 1M opus tokens at $15/Mtok (input proxy price) = $15.00.
+        by_model.insert("claude-opus-4-8".to_string(), 1_000_000u64);
+        // An unknown model contributes nothing (we don't guess).
+        by_model.insert("some-future-model".to_string(), 5_000_000u64);
+        let cost = estimate_cost_usd(&by_model).expect("priced model present");
+        assert!((cost - 15.00).abs() < 1e-9, "expected ~$15.00, got {cost}");
+
+        // No priced model → None, so the UI can render an em-dash.
+        let mut only_unknown = std::collections::BTreeMap::new();
+        only_unknown.insert("mystery".to_string(), 9_999u64);
+        assert_eq!(estimate_cost_usd(&only_unknown), None);
+
+        // Empty breakdown → None.
+        assert_eq!(estimate_cost_usd(&std::collections::BTreeMap::new()), None);
+    }
+
+    #[test]
+    fn snapshot_deserializes_with_missing_spec001_fields() {
+        // A payload from a daemon predating spec 001 carries none of the
+        // new fields. It MUST still deserialize, with the new fields None.
+        let legacy = r#"{
+            "window_tokens": 1234,
+            "all_time_tokens": 5678,
+            "by_model": {"claude-opus-4-8": 1234},
+            "claude_installed": true
+        }"#;
+        let snap: ClaudeUsageSnapshot = serde_json::from_str(legacy).expect("legacy parses");
+        assert_eq!(snap.window_tokens, 1234);
+        assert_eq!(snap.all_time_tokens, 5678);
+        assert!(snap.claude_installed);
+        assert_eq!(snap.limit_pct, None);
+        assert_eq!(snap.five_hour_pct, None);
+        assert_eq!(snap.seven_day_pct, None);
+        assert_eq!(snap.resets_at_ms, None);
+        assert_eq!(snap.est_cost_usd, None);
+        assert_eq!(snap.source, None);
+    }
+
+    #[test]
+    fn snapshot_round_trips_with_spec001_fields() {
+        let mut snap = ClaudeUsageSnapshot {
+            limit_pct: Some(82.0),
+            five_hour_pct: Some(82.0),
+            seven_day_pct: Some(40.0),
+            resets_at_ms: Some(1_900_000_000_000),
+            est_cost_usd: Some(12.40),
+            source: Some("oauth".to_string()),
+            ..Default::default()
+        };
+        snap.window_tokens = 99;
+        let json = serde_json::to_string(&snap).unwrap();
+        let back: ClaudeUsageSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.limit_pct, Some(82.0));
+        assert_eq!(back.source.as_deref(), Some("oauth"));
+        assert_eq!(back.window_tokens, 99);
+    }
+
+    #[test]
+    fn token_extracted_from_credentials_json() {
+        let raw = r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat-xyz","refreshToken":"r"}}"#;
+        assert_eq!(
+            token_from_credentials_json(raw).as_deref(),
+            Some("sk-ant-oat-xyz")
+        );
+        // Missing / empty token → None.
+        assert_eq!(token_from_credentials_json(r#"{"claudeAiOauth":{}}"#), None);
+        assert_eq!(token_from_credentials_json("not json"), None);
+    }
+
+    #[test]
+    fn redact_token_scrubs_secret() {
+        let msg = "request to https://x failed with token sk-ant-oat-xyz in url";
+        let scrubbed = redact_token(msg, "sk-ant-oat-xyz");
+        assert!(!scrubbed.contains("sk-ant-oat-xyz"));
+        assert!(scrubbed.contains("<redacted>"));
     }
 }
