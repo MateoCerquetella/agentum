@@ -300,6 +300,17 @@ async fn establish_trust(base: &Url, opts: &Options) -> Result<TlsTrust> {
         return Ok(TlsTrust::Plain);
     }
     if opts.insecure {
+        // --insecure disables cert verification entirely, so confine it to
+        // the local machine. On a remote host an on-path attacker could MITM
+        // the connection; require an explicit pinned --fingerprint there.
+        if !is_local_loopback(base) {
+            bail!(
+                "--insecure refused for non-loopback host {}: TLS verification can only be \
+                 disabled for the local machine (127.0.0.1/localhost/::1). For a remote daemon, \
+                 pin its certificate with --fingerprint <sha256> instead.",
+                base.host_str().unwrap_or("?")
+            );
+        }
         eprintln!(
             "{}: TLS cert verification disabled (--insecure). The connection is NOT \
              protected against MITM attackers on the network path. Use only for local \
@@ -487,33 +498,18 @@ fn is_local_loopback(base: &Url) -> bool {
 /// resulting bearer token is what's cached. Re-runs of
 /// `agentum terminal` use the cached token, not this password.
 fn generate_random_password() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    // Cheap seed mix — we're not generating production crypto, just a
-    // password the user never sees and the daemon hashes anyway.
-    // SystemTime nanos + process id + addr-of-stack give a 64-bit
-    // seed plenty good for one-time bootstrap use.
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
-    let pid = std::process::id() as u64;
-    let stack_addr = &nanos as *const u64 as u64;
-    let mut state = nanos
-        .wrapping_mul(0x9E3779B97F4A7C15)
-        .wrapping_add(pid)
-        .wrapping_add(stack_addr);
+    // This password is a real credential — it's registered as the
+    // loopback `local` user's password — so it must come from the OS
+    // CSPRNG, not a time/pid-seeded PRNG (which a local attacker could
+    // predict and use to register/log in before us). The 64-char
+    // alphabet divides 256 evenly, so `byte % 64` is unbiased.
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::with_capacity(32);
-    for _ in 0..32 {
-        // splitmix64 step — short, no deps.
-        state = state.wrapping_add(0x9E3779B97F4A7C15);
-        let mut z = state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
-        z ^= z >> 31;
-        out.push(ALPHABET[(z as usize) % ALPHABET.len()] as char);
-    }
-    out
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes).expect("OS CSPRNG unavailable");
+    bytes
+        .iter()
+        .map(|b| ALPHABET[(*b as usize) % ALPHABET.len()] as char)
+        .collect()
 }
 
 async fn probe_token(base: &Url, trust_setting: &TlsTrust, token: &str) -> bool {
@@ -763,6 +759,16 @@ fn trust_for_profile(base: &Url, profile: &profiles::Profile) -> Result<api::Tls
         return Ok(api::TlsTrust::Plain);
     }
     if profile.insecure {
+        // Mirror establish_trust: an insecure profile only disables cert
+        // verification for the local machine. A remote profile must pin a
+        // fingerprint instead of blindly accepting any cert.
+        if !is_local_loopback(base) {
+            bail!(
+                "profile has insecure=true for non-loopback host {}: TLS verification can only \
+                 be disabled for the local machine. Pin a fingerprint for this profile instead.",
+                base.host_str().unwrap_or("?")
+            );
+        }
         return Ok(api::TlsTrust::AcceptAny);
     }
     if let Some(raw) = &profile.fingerprint {
