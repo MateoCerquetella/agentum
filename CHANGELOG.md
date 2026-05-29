@@ -4,6 +4,20 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-05-29
+
+### Added
+- **Claude account usage tracking.** The daemon now exposes `/api/usage` with plan quota, band colors (🟢<70% / 🟡70–90% / 🔴>90%), refresh interval, and graceful degradation when the upstream API is unavailable.
+- **Consolidated hosts install flow.** Removed the separate `hosts bootstrap` and `hosts install-agent` CLI commands + TUI b/i keys. Replaced with a single `agentum hosts setup <host>` (CLI) / `i` (TUI) that checks readiness and installs missing deps + agents in one pass. `--yes` flag for CI.
+
+### Changed
+- **TUI model placeholder** bumped from `claude-sonnet-4` to `claude-opus-4-8`.
+- **Opus model examples** bumped across CLI + dashboard to `claude-opus-4-8`.
+
+### Fixed
+- **macOS clippy:** dropped needless `return` in clip-agent log path and profiles path.
+- **CI:** pinned Rust toolchain to 1.94.1 for reproducible fmt/clippy across local and CI.
+
 ## [0.8.13] — 2026-05-28
 
 ### Added
