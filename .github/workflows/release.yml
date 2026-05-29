@@ -52,8 +52,15 @@ jobs:
       - name: Build dashboard bundle (embedded into the binary)
         run: pnpm --dir dashboard install --frozen-lockfile && pnpm --dir dashboard build
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Pin to 1.94.1 to match rust-toolchain.toml (and ci.yml). @stable sets
+      # RUSTUP_TOOLCHAIN=stable and would add the matrix target to *stable* —
+      # but rust-toolchain.toml forces 1.94.1 for the actual build, leaving the
+      # cross-target (x86_64-apple-darwin on the arm64 mac runner) without a std
+      # and failing with "can't find crate for `core`" (broke v0.9.0/v0.9.1).
+      # Installing the target onto the pinned toolchain cargo actually uses fixes it.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.94.1
           targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
