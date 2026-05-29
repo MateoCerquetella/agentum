@@ -4,6 +4,11 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] — 2026-05-29
+
+### Fixed
+- **macOS x86_64 release binaries.** `release.yml` installed the build target onto the floating `@stable` toolchain, but `rust-toolchain.toml` pins the build to 1.94.1 — so the `x86_64-apple-darwin` cross-target on the arm64 mac runner had no std and failed with `can't find crate for core`, silently blocking the GitHub Release for v0.9.0 and v0.9.1. The release workflow now pins the toolchain to 1.94.1 (matching `ci.yml`) and adds the matrix target to it. First release to actually publish the v0.9.x binaries.
+
 ## [0.9.1] — 2026-05-29
 
 ### Fixed
