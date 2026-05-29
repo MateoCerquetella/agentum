@@ -657,9 +657,30 @@ fn ssh_command(host: &Host, script: &str) -> Command {
         return Command::new("false");
     };
 
-    let mut cmd = Command::new("ssh");
+    // Password auth shells through `sshpass`, which answers ssh's password
+    // prompt. That requires BatchMode=no (BatchMode=yes suppresses the
+    // prompt entirely, so sshpass would have nothing to answer). Key/agent
+    // auth keeps BatchMode=yes so it never blocks waiting on a prompt.
+    let password = match auth {
+        SshAuth::Password { password } if !password.trim().is_empty() => Some(password.as_str()),
+        _ => None,
+    };
+
+    let mut cmd = match password {
+        Some(pw) => {
+            let mut c = Command::new("sshpass");
+            c.arg("-p").arg(pw).arg("ssh");
+            c
+        }
+        None => Command::new("ssh"),
+    };
+
     cmd.arg("-o")
-        .arg("BatchMode=yes")
+        .arg(if password.is_some() {
+            "BatchMode=no"
+        } else {
+            "BatchMode=yes"
+        })
         .arg("-o")
         .arg("ConnectTimeout=8")
         .arg("-o")
@@ -672,11 +693,22 @@ fn ssh_command(host: &Host, script: &str) -> Command {
         .arg("StrictHostKeyChecking=accept-new")
         .arg("-p")
         .arg(port.to_string());
-    if let SshAuth::Key { path } = auth {
-        if !path.trim().is_empty() {
+
+    match auth {
+        SshAuth::Key { path } if !path.trim().is_empty() => {
             cmd.arg("-i").arg(path);
         }
+        SshAuth::Password { .. } => {
+            // Force password auth so ssh doesn't silently try a key first
+            // (which would bypass sshpass and fail confusingly).
+            cmd.arg("-o")
+                .arg("PreferredAuthentications=password")
+                .arg("-o")
+                .arg("PubkeyAuthentication=no");
+        }
+        _ => {}
     }
+
     cmd.arg(format!("{user}@{hostname}")).arg(script);
     cmd
 }
@@ -741,6 +773,64 @@ mod tests {
     fn parse_probe_output_defaults_pkg_to_unknown() {
         let probe = parse_probe_output("uname\tLinux\n");
         assert_eq!(probe.pkg_manager, "unknown");
+    }
+
+    fn ssh_host(auth: SshAuth) -> Host {
+        Host {
+            id: agentum_core::LOCAL_HOST_ID,
+            name: "t".into(),
+            kind: HostKind::Ssh {
+                user: "me".into(),
+                hostname: "box.local".into(),
+                port: 2222,
+                auth,
+            },
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+            last_seen_at: None,
+        }
+    }
+
+    // `ssh_command` returns a tokio Command; `.as_std()` exposes the inner
+    // std Command for introspecting program + args.
+    fn arg_strings(cmd: &Command) -> Vec<String> {
+        cmd.as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn ssh_command_key_uses_plain_ssh_with_batchmode() {
+        let cmd = ssh_command(&ssh_host(SshAuth::Agent), "echo hi");
+        assert_eq!(cmd.as_std().get_program().to_string_lossy(), "ssh");
+        let args = arg_strings(&cmd);
+        assert!(args.contains(&"BatchMode=yes".to_string()));
+        assert!(args.iter().any(|a| a == "me@box.local"));
+        // Key/agent must never reach for sshpass options.
+        assert!(!args.contains(&"PreferredAuthentications=password".to_string()));
+    }
+
+    #[test]
+    fn ssh_command_password_shells_through_sshpass() {
+        let cmd = ssh_command(
+            &ssh_host(SshAuth::Password {
+                password: "s3cret".into(),
+            }),
+            "echo hi",
+        );
+        assert_eq!(cmd.as_std().get_program().to_string_lossy(), "sshpass");
+        let args = arg_strings(&cmd);
+        // `sshpass -p <pw> ssh …`
+        assert_eq!(args[0], "-p");
+        assert_eq!(args[1], "s3cret");
+        assert_eq!(args[2], "ssh");
+        // Password auth must NOT use BatchMode=yes (it suppresses the
+        // prompt sshpass needs to answer) and must force password auth.
+        assert!(args.contains(&"BatchMode=no".to_string()));
+        assert!(!args.contains(&"BatchMode=yes".to_string()));
+        assert!(args.contains(&"PreferredAuthentications=password".to_string()));
+        assert!(args.iter().any(|a| a == "me@box.local"));
     }
 
     #[test]
