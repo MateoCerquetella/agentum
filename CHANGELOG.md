@@ -4,6 +4,40 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] — 2026-05-29
+
+### Added
+- **Add SSH hosts from the TUI.** The Ctrl-H hosts overlay now has an
+  add-host form (`a`): Name · User · Hostname · Port · Auth · Secret. The
+  `Auth` field toggles (Space / ←→) between **key/agent** and **password**.
+  On save it `POST`s the host and drops you back on it so Enter/`t` checks
+  readiness and `i` installs the missing deps + agent CLIs — full TUI
+  parity with `agentum hosts add`. No more dropping to the CLI to register
+  a machine.
+- **SSH password auth.** New `SshAuth::Password` end to end (core enum,
+  store migration `0019` adding `hosts.secret`, and `host_runtime` shelling
+  through `sshpass`). Password hosts run ssh with `BatchMode=no` and forced
+  `PreferredAuthentications=password`; key/agent hosts are unchanged. The
+  password is stored at rest in the local SQLite DB only, never sent to
+  remotes or printed (`hosts list` shows just `password`). **Requires
+  `sshpass` on the daemon machine** — `agentum doctor` now reports whether
+  it's present (a soft check; only matters for password hosts).
+
+### Changed
+- **One install, no "mode" question.** `install.sh` no longer asks "will
+  this machine run agents? / connect to a remote" — there is only one
+  install: this machine runs the daemon. To control other machines you run
+  `agentum hosts add` (or the TUI add-host form), which SSHes in and
+  provisions them; agentum is never installed on the remote. The dead
+  `agentum update --mode server|cli|both` flag was removed (still accepted
+  and ignored by `install.sh` for back-compat).
+- **No login on a personal machine.** `agentum serve` now defaults to
+  no-auth when bound to loopback (only this machine can reach it, so a
+  username/password login is pure friction). Auth stays required when bound
+  to a LAN / `0.0.0.0` address unless you pass `--no-auth`. The installer no
+  longer runs an `agentum auth setup` prompt; LAN-exposed daemons still
+  prompt to create an admin account on first dashboard load.
+
 ## [0.9.2] — 2026-05-29
 
 ### Fixed

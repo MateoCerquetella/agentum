@@ -5,7 +5,9 @@ use std::io::Stdout;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use agentum_core::{Event, Session, Status, transcript::AgentTaskState};
+use agentum_core::{
+    Event, HostKind, NewHost, Session, SshAuth, Status, transcript::AgentTaskState,
+};
 use anyhow::Result;
 use crossterm::event::{
     Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
@@ -219,11 +221,115 @@ pub struct HostsOverlay {
     /// a background refresh — PRD phase 3 — will make this meaningful.)
     pub loading: bool,
     pub error: Option<String>,
+    /// `Some` when the user is filling the inline add-host form (`a`)
+    /// instead of browsing the list. Mirrors [`ProfilesOverlay::add_form`].
+    pub add_form: Option<AddHostForm>,
 }
 
 impl HostsOverlay {
     pub fn selected(&self) -> Option<Uuid> {
         self.host_ids.get(self.cursor).copied()
+    }
+}
+
+/// Which SSH auth the add-host form is collecting. Toggled on the `Auth`
+/// field with Space / ←→. Drives the `Secret` field's label and how the
+/// submitted [`SshAuth`] is built.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum HostAuthChoice {
+    /// SSH key / agent. The secret field holds an optional key path;
+    /// blank means "use ssh-agent".
+    Key,
+    /// Password auth (via `sshpass` on the daemon). The secret field holds
+    /// the password and is required.
+    Password,
+}
+
+/// Form state for adding an SSH host from the Ctrl-H overlay. Collects the
+/// fields SSH needs — name, user, hostname, port — plus an auth choice
+/// (key/agent or password) and its secret. On submit the handler builds a
+/// [`NewHost`] and POSTs it, then runs the provision (scan + install) flow.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AddHostForm {
+    pub field: AddHostField,
+    pub name: String,
+    pub user: String,
+    pub hostname: String,
+    /// Edited as text; parsed on submit, defaulting to 22 when blank.
+    pub port: String,
+    pub auth: HostAuthChoice,
+    /// Key path (when `auth == Key`) or password (when `auth == Password`).
+    pub secret: String,
+    pub error: Option<String>,
+    pub submitting: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AddHostField {
+    Name,
+    User,
+    Hostname,
+    Port,
+    Auth,
+    Secret,
+}
+
+impl AddHostForm {
+    pub fn new() -> Self {
+        Self {
+            field: AddHostField::Name,
+            name: String::new(),
+            user: String::new(),
+            hostname: String::new(),
+            port: "22".to_string(),
+            auth: HostAuthChoice::Key,
+            secret: String::new(),
+            error: None,
+            submitting: false,
+        }
+    }
+
+    pub fn next_field(&mut self) {
+        self.field = match self.field {
+            AddHostField::Name => AddHostField::User,
+            AddHostField::User => AddHostField::Hostname,
+            AddHostField::Hostname => AddHostField::Port,
+            AddHostField::Port => AddHostField::Auth,
+            AddHostField::Auth => AddHostField::Secret,
+            AddHostField::Secret => AddHostField::Name,
+        };
+    }
+
+    pub fn prev_field(&mut self) {
+        self.field = match self.field {
+            AddHostField::Name => AddHostField::Secret,
+            AddHostField::User => AddHostField::Name,
+            AddHostField::Hostname => AddHostField::User,
+            AddHostField::Port => AddHostField::Hostname,
+            AddHostField::Auth => AddHostField::Port,
+            AddHostField::Secret => AddHostField::Auth,
+        };
+    }
+
+    /// Mutable handle to the text field under the cursor. Returns `None`
+    /// for the `Auth` toggle (which has no free-text value).
+    pub fn field_value_mut(&mut self) -> Option<&mut String> {
+        match self.field {
+            AddHostField::Name => Some(&mut self.name),
+            AddHostField::User => Some(&mut self.user),
+            AddHostField::Hostname => Some(&mut self.hostname),
+            AddHostField::Port => Some(&mut self.port),
+            AddHostField::Secret => Some(&mut self.secret),
+            AddHostField::Auth => None,
+        }
+    }
+
+    /// Label for the secret field, which depends on the auth choice.
+    pub fn secret_label(&self) -> &'static str {
+        match self.auth {
+            HostAuthChoice::Key => "Key path (blank = ssh-agent)",
+            HostAuthChoice::Password => "Password",
+        }
     }
 }
 
@@ -5334,23 +5440,88 @@ async fn handle_key(
     }
 }
 
+/// Validate an [`AddHostForm`] and build the [`NewHost`] to POST. Returns
+/// a user-facing error string on invalid input. Port defaults to 22 when
+/// blank; an empty key path means ssh-agent; an empty password is rejected.
+fn build_new_host(form: &AddHostForm) -> std::result::Result<NewHost, String> {
+    let name = form.name.trim();
+    let user = form.user.trim();
+    let hostname = form.hostname.trim();
+    if name.is_empty() {
+        return Err("name is required".into());
+    }
+    if user.is_empty() {
+        return Err("user is required".into());
+    }
+    if hostname.is_empty() {
+        return Err("hostname is required".into());
+    }
+    let port: u16 = if form.port.trim().is_empty() {
+        22
+    } else {
+        form.port
+            .trim()
+            .parse()
+            .map_err(|_| "port must be a number 1–65535".to_string())?
+    };
+    let secret = form.secret.trim();
+    let auth = match form.auth {
+        HostAuthChoice::Key => {
+            if secret.is_empty() {
+                SshAuth::Agent
+            } else {
+                SshAuth::Key {
+                    path: secret.to_string(),
+                }
+            }
+        }
+        HostAuthChoice::Password => {
+            if secret.is_empty() {
+                return Err("password is required (or switch Auth to key/agent)".into());
+            }
+            SshAuth::Password {
+                password: secret.to_string(),
+            }
+        }
+    };
+    Ok(NewHost {
+        name: name.to_string(),
+        kind: HostKind::Ssh {
+            user: user.to_string(),
+            hostname: hostname.to_string(),
+            port,
+            auth,
+        },
+    })
+}
+
 /// Build and open the Ctrl-H hosts overlay from the current host list.
 /// Snapshots host ids so the cursor is stable; readiness is fetched
 /// lazily (Enter / `t`), not on open.
 fn open_hosts_overlay(app: &mut App) {
-    let host_ids: Vec<Uuid> = app.hosts.iter().map(|h| h.id).collect();
-    if host_ids.is_empty() {
-        app.status_msg = Some("no hosts defined — add one with `agentum hosts add …`".into());
-        return;
-    }
+    // SSH hosts are the LOCAL host (id nil) plus any SSH targets. Only SSH
+    // targets are actionable here, so filter the local pseudo-host out of
+    // the list. We open even when empty so the user can add the first one
+    // with `a` instead of being told to drop to the CLI.
+    let host_ids: Vec<Uuid> = app
+        .hosts
+        .iter()
+        .filter(|h| h.id != agentum_core::LOCAL_HOST_ID)
+        .map(|h| h.id)
+        .collect();
+    let empty = host_ids.is_empty();
     app.overlay = Overlay::Hosts(HostsOverlay {
         host_ids,
         cursor: 0,
         loading: false,
         error: None,
+        add_form: None,
     });
-    app.status_msg =
-        Some("hosts · ↑↓ move · Enter/t check · i set up (deps + agents) · Esc close".into());
+    app.status_msg = Some(if empty {
+        "no SSH hosts yet · a add a server · Esc close".into()
+    } else {
+        "hosts · ↑↓ move · Enter/t check · i set up (deps + agents) · a add · Esc close".into()
+    });
 }
 
 /// Key handling for [`Overlay::Hosts`]. ↑/↓ (or k/j) move the cursor;
@@ -5361,9 +5532,79 @@ async fn handle_hosts_key(app: &mut App, key: KeyEvent, client: &Client) {
     let Overlay::Hosts(mut overlay) = std::mem::replace(&mut app.overlay, Overlay::None) else {
         return;
     };
+
+    // ----- add-host form mode -----
+    if let Some(mut form) = overlay.add_form.take() {
+        match key.code {
+            KeyCode::Esc => {
+                // Drop the form, return to the list.
+                app.overlay = Overlay::Hosts(overlay);
+                return;
+            }
+            KeyCode::Tab | KeyCode::Down => form.next_field(),
+            KeyCode::BackTab | KeyCode::Up => form.prev_field(),
+            // On the Auth field, ←/→/Space toggle key vs password.
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ')
+                if form.field == AddHostField::Auth =>
+            {
+                form.auth = match form.auth {
+                    HostAuthChoice::Key => HostAuthChoice::Password,
+                    HostAuthChoice::Password => HostAuthChoice::Key,
+                };
+            }
+            KeyCode::Backspace => {
+                if let Some(v) = form.field_value_mut() {
+                    v.pop();
+                }
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(v) = form.field_value_mut() {
+                    v.push(c);
+                }
+            }
+            KeyCode::Enter => {
+                match build_new_host(&form) {
+                    Ok(new) => {
+                        form.error = None;
+                        form.submitting = true;
+                        match client.create_host(&new).await {
+                            Ok(created) => {
+                                // Refresh the host list so the new row shows,
+                                // then reopen the overlay positioned on it.
+                                if let Ok(hosts) = client.list_hosts().await {
+                                    app.hosts = hosts;
+                                }
+                                reopen_hosts_overlay_at(app, created.id);
+                                app.status_msg = Some(format!(
+                                    "added `{}` · Enter/t to check · i to install deps + agents",
+                                    created.name
+                                ));
+                                return;
+                            }
+                            Err(e) => {
+                                form.submitting = false;
+                                form.error = Some(e.to_string());
+                            }
+                        }
+                    }
+                    Err(msg) => form.error = Some(msg),
+                }
+            }
+            _ => {}
+        }
+        overlay.add_form = Some(form);
+        app.overlay = Overlay::Hosts(overlay);
+        return;
+    }
+
+    // ----- list mode -----
     match key.code {
         // Already swapped to `Overlay::None` above — leave it closed.
         KeyCode::Esc => return,
+        KeyCode::Char('a') => {
+            overlay.add_form = Some(AddHostForm::new());
+            overlay.error = None;
+        }
         KeyCode::Up | KeyCode::Char('k') => {
             overlay.cursor = overlay.cursor.saturating_sub(1);
             overlay.error = None;

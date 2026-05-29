@@ -17,10 +17,11 @@ use uuid::Uuid;
 
 use super::api::ClaudeUsage;
 use super::app::{
-    AddProfileField, AddProfileForm, App, ConnState, DirPickerState, ErrorEntry, Focus, GoalForm,
-    HostsOverlay, NewSessionField, NewSessionForm, NotifKind, Notification, Overlay, PendingAction,
-    ProfilesOverlay, RenameState, Row, SettingsRow, SettingsState, Side, ToolPickerState,
-    TreeSection, palette_catalog, status_dot, tool_icon,
+    AddHostField, AddHostForm, AddProfileField, AddProfileForm, App, ConnState, DirPickerState,
+    ErrorEntry, Focus, GoalForm, HostAuthChoice, HostsOverlay, NewSessionField, NewSessionForm,
+    NotifKind, Notification, Overlay, PendingAction, ProfilesOverlay, RenameState, Row,
+    SettingsRow, SettingsState, Side, ToolPickerState, TreeSection, palette_catalog, status_dot,
+    tool_icon,
 };
 use super::extensions::{self, Extension, LAZYGIT};
 use super::iometer::{fmt_bytes, fmt_rate};
@@ -2253,9 +2254,37 @@ fn draw_hosts_overlay(
     cache: &std::collections::HashMap<Uuid, (tokio::time::Instant, agentum_core::HostReadiness)>,
     p: &Palette,
 ) {
+    // Add-host form takes over the overlay when active.
+    if let Some(form) = &state.add_form {
+        draw_hosts_add_form(f, area, form, p);
+        return;
+    }
+
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(head("SSH Hosts", p));
     lines.push(Line::from(""));
+
+    if state.host_ids.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No SSH hosts yet.".to_string(),
+            Style::default().fg(p.fg),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  Press `a` to add a server — agentum will SSH in, scan it,".to_string(),
+            Style::default().fg(p.muted),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  install tmux + git, and ask which agent CLIs to install.".to_string(),
+            Style::default().fg(p.muted),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  a add · Esc close".to_string(),
+            Style::default().fg(p.muted),
+        )));
+        overlay_box(f, area, " hosts ", lines, 88, p);
+        return;
+    }
 
     if let Some(err) = state.error.as_ref() {
         lines.push(Line::from(Span::styled(
@@ -2362,11 +2391,123 @@ fn draw_hosts_overlay(
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  ↑↓ move · Enter/t check · i set up (deps + agents) · Esc close".to_string(),
+        "  ↑↓ move · Enter/t check · i set up (deps + agents) · a add · Esc close".to_string(),
         Style::default().fg(p.muted),
     )));
 
     overlay_box(f, area, " hosts ", lines, 88, p);
+}
+
+/// Render the add-host form (Ctrl-H → `a`). Collects the SSH fields plus an
+/// auth toggle (key/agent or password). The password value is masked.
+fn draw_hosts_add_form(f: &mut Frame<'_>, area: Rect, form: &AddHostForm, p: &Palette) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(head("Add a server (SSH host)", p));
+    lines.push(Line::from(""));
+    push_form_field(
+        &mut lines,
+        "Name",
+        &form.name,
+        form.field == AddHostField::Name,
+        "omarchy",
+        p,
+    );
+    push_form_field(
+        &mut lines,
+        "User",
+        &form.user,
+        form.field == AddHostField::User,
+        "me",
+        p,
+    );
+    push_form_field(
+        &mut lines,
+        "Hostname",
+        &form.hostname,
+        form.field == AddHostField::Hostname,
+        "omarchy.local",
+        p,
+    );
+    push_form_field(
+        &mut lines,
+        "Port",
+        &form.port,
+        form.field == AddHostField::Port,
+        "22",
+        p,
+    );
+
+    // Auth toggle row: highlight the active choice; Space/←→ flips it.
+    let auth_focused = form.field == AddHostField::Auth;
+    let label_color = if auth_focused { p.accent } else { p.muted };
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  Auth".to_string(),
+            Style::default()
+                .fg(label_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "  (Space / ←→ to switch)".to_string(),
+            Style::default().fg(p.muted),
+        ),
+    ]));
+    let key_sel = form.auth == HostAuthChoice::Key;
+    let pw_sel = form.auth == HostAuthChoice::Password;
+    let pick = |on: bool, text: &str| {
+        if on {
+            Span::styled(
+                format!("[{text}]"),
+                Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::styled(format!(" {text} "), Style::default().fg(p.muted))
+        }
+    };
+    lines.push(Line::from(vec![
+        Span::raw("    "),
+        pick(key_sel, "key/agent"),
+        Span::raw("  "),
+        pick(pw_sel, "password"),
+    ]));
+
+    // Secret field: masked when collecting a password.
+    let secret_focused = form.field == AddHostField::Secret;
+    let display = match form.auth {
+        HostAuthChoice::Password => "•".repeat(form.secret.chars().count()),
+        HostAuthChoice::Key => form.secret.clone(),
+    };
+    let placeholder = match form.auth {
+        HostAuthChoice::Key => "~/.ssh/id_ed25519 (blank = ssh-agent)",
+        HostAuthChoice::Password => "password",
+    };
+    push_form_field(
+        &mut lines,
+        form.secret_label(),
+        &display,
+        secret_focused,
+        placeholder,
+        p,
+    );
+
+    if let Some(err) = form.error.as_ref() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  ⚠ {err}"),
+            Style::default().fg(p.error),
+        )));
+    }
+    lines.push(Line::from(""));
+    let footer = if form.submitting {
+        "  saving…".to_string()
+    } else {
+        "  Tab next · Enter save & scan · Esc back".to_string()
+    };
+    lines.push(Line::from(Span::styled(
+        footer,
+        Style::default().fg(p.muted),
+    )));
+    overlay_box(f, area, " add server ", lines, 80, p);
 }
 
 /// Push one `[x]/[ ] label — hint` dependency row into a line buffer,

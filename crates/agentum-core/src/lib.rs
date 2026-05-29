@@ -102,6 +102,14 @@ pub enum SshAuth {
     Key {
         path: String,
     },
+    /// Password auth. The daemon shells out to `sshpass` to feed this
+    /// password to `ssh` non-interactively. Stored on the local host's
+    /// SQLite DB (`agentum-store` `hosts.secret`). Less secure than
+    /// key/agent (the secret lives at rest) — offered because users with
+    /// fresh boxes that only have password login asked for it.
+    Password {
+        password: String,
+    },
 }
 
 fn default_ssh_port() -> u16 {

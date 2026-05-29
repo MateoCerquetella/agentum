@@ -5,24 +5,7 @@ use anyhow::{Context, Result, bail};
 const INSTALL_URL: &str =
     "https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh";
 
-#[derive(Debug, Clone, Copy)]
-pub enum Mode {
-    Server,
-    Cli,
-    Both,
-}
-
-impl Mode {
-    fn flag(self) -> &'static str {
-        match self {
-            Mode::Server => "server",
-            Mode::Cli => "cli",
-            Mode::Both => "both",
-        }
-    }
-}
-
-pub async fn run(mode: Option<Mode>, force: bool, skip_clip_agent: bool) -> Result<()> {
+pub async fn run(force: bool, skip_clip_agent: bool) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
     eprintln!("agentum update — current version: v{current}");
 
@@ -36,14 +19,10 @@ pub async fn run(mode: Option<Mode>, force: bool, skip_clip_agent: bool) -> Resu
 
     let mut sh = Command::new("sh");
     sh.arg("-s").arg("--");
-    if let Some(m) = mode {
-        sh.arg("--mode").arg(m.flag());
-    } else {
-        // Re-run non-interactively when stdin is not a TTY (e.g. piped runs).
-        // The installer also auto-detects, but be explicit.
-        if !is_stdin_tty() {
-            sh.arg("--no-interactive");
-        }
+    // Re-run non-interactively when stdin is not a TTY (e.g. piped runs).
+    // The installer also auto-detects, but be explicit.
+    if !is_stdin_tty() {
+        sh.arg("--no-interactive");
     }
     if force {
         sh.env("AGENTUM_FORCE_UPDATE", "1");

@@ -40,15 +40,14 @@ One Rust binary. Spawns AI coding agents (Claude, Codex, Gemini, Cursor, Hermes,
 
 ## Quick start
 
-The installer is interactive. It asks whether you want the full **Control Plane** (server + dashboard + TLS) or just the lightweight **Terminal CLI** for managing tmux sessions. Both install the same binary; the choice tailors the post-install guidance.
+**One install, on your machine.** It runs the agentum daemon (server + dashboard + TLS + tmux). There's no "mode" to pick. To control *other* machines you don't install anything on them — you point agentum at them over SSH and it provisions them for you (see below).
 
 ```sh
-# Interactive install (recommended)
+# Install (interactive prompts for LAN exposure + autostart only)
 curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh | sh
 
-# Non-interactive
-curl -fsSL https://.../install.sh | INSTALL_MODE=server sh   # Control Plane
-curl -fsSL https://.../install.sh | INSTALL_MODE=cli    sh   # CLI only
+# Non-interactive (loopback bind; pass AGENTUM_EXPOSE=lan on a VPS)
+curl -fsSL https://.../install.sh | sh -s -- --no-interactive
 
 # From source
 cargo install --git https://github.com/mateocerquetella/agentum agentum
@@ -57,12 +56,22 @@ cargo install --git https://github.com/mateocerquetella/agentum agentum
 After install:
 
 ```sh
-# Control Plane: start the server, open the dashboard
+# Start the daemon + open the dashboard
 agentum serve
 # https://127.0.0.1:8822  (paste the bearer from `agentum auth show`)
 
-# Terminal CLI: spawn an agent session right away
+# Spawn an agent session right away
 agentum new alpha --tool claude --dir ~/Developer/my-project --up
+```
+
+### Control other machines (no second install)
+
+agentum SSHes in, scans for what's missing, installs the required deps (tmux, git), and asks which agent CLIs to install there:
+
+```sh
+agentum hosts add omarchy --user me --hostname omarchy.local
+# scans → installs tmux + git → asks which agents (claude, codex, …) to install
+agentum hosts setup omarchy   # re-run the scan/install flow anytime
 ```
 
 ## What you get

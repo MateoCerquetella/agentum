@@ -77,6 +77,13 @@ async fn create(
                     path: path.trim().to_string(),
                 },
                 SshAuth::Agent => SshAuth::Agent,
+                // Password is kept verbatim (not trimmed): passwords may
+                // legitimately contain leading/trailing spaces. Reject only
+                // an entirely empty one.
+                SshAuth::Password { password } if password.is_empty() => {
+                    return Err(ApiError::BadRequest("ssh password is required".into()));
+                }
+                SshAuth::Password { password } => SshAuth::Password { password },
             };
             HostKind::Ssh {
                 user,

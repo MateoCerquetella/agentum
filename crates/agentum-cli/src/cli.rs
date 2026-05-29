@@ -328,18 +328,12 @@ EXAMPLES:
     /// Update agentum to the latest release (re-runs install.sh).
     ///
     /// Downloads `releases/latest/download/install.sh` and pipes it to `sh`,
-    /// preserving your `INSTALL_DIR`. Pass `--mode server|cli` to skip the
-    /// interactive prompt; otherwise the installer behaves identically to a
-    /// fresh `curl … | sh` (interactive when on a TTY, defaults to `server`
-    /// when not). Pass `--skip-clip-agent` to skip the post-install
+    /// preserving your `INSTALL_DIR`. There is only one install — this
+    /// machine runs the daemon — so the installer behaves identically to a
+    /// fresh `curl … | sh` (interactive when on a TTY, non-interactive when
+    /// not). Pass `--skip-clip-agent` to skip the post-install
     /// `clip-agent --install` invocation (useful in CI / non-tty scripts).
     Update {
-        /// Install mode for the installer (`server` = full Control Plane,
-        /// `cli` = lightweight CLI, `both` = show both post-install guides).
-        /// Omit to let the installer prompt or pick its default.
-        #[arg(long, value_parser = ["server", "cli", "both"])]
-        mode: Option<String>,
-
         /// Reinstall even when already on the latest version.
         #[arg(long)]
         force: bool,
@@ -629,18 +623,9 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             .await
         }
         Cmd::Update {
-            mode,
             force,
             skip_clip_agent,
-        } => {
-            let mode = match mode.as_deref() {
-                Some("server") => Some(crate::commands::update::Mode::Server),
-                Some("cli") => Some(crate::commands::update::Mode::Cli),
-                Some("both") => Some(crate::commands::update::Mode::Both),
-                _ => None,
-            };
-            crate::commands::update::run(mode, force, skip_clip_agent).await
-        }
+        } => crate::commands::update::run(force, skip_clip_agent).await,
     }
 }
 
