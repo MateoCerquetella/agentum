@@ -25,6 +25,7 @@ dependencies = [
  "crossterm",
  "exec",
  "futures-util",
+ "getrandom 0.2.17",
  "image",
  "libc",
  "portable-pty",
