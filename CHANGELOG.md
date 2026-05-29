@@ -4,6 +4,26 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] — 2026-05-29
+
+### Fixed
+- **Local server no longer demands a login.** A loopback daemon runs
+  with `--no-auth` by default, but the TUI's *non-interactive* connect
+  paths (the sidebar fanout `try_connect_profile` and the implicit
+  `try_connect_loopback`) only looked for a cached bearer token — finding
+  none, they flagged the server "login needed" and never built a client.
+  Both now probe `/api/auth/status` first and connect with the `no-auth`
+  bearer when the server has auth disabled, matching the interactive
+  path. This also fixes **agents showing as unrecognized** on the local
+  server: with no client, `/api/agents` was never queried, so the New
+  Session form had no availability data.
+- **Installer no longer appears to hang.** The expose / autostart
+  prompts used `read` with no timeout, so a fresh `curl … | sh` install
+  could sit blocked waiting on input. `read_input` now takes a `-t`
+  timeout (default 60s, override with `AGENTUM_INSTALL_READ_TIMEOUT`) and
+  falls back to the displayed default, so the installer self-resolves to
+  the recommended choice instead of looking stuck.
+
 ## [0.10.0] — 2026-05-29
 
 ### Added

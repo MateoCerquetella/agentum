@@ -573,15 +573,30 @@ async fn try_connect_loopback() -> ProfileConnect {
             Ok(c) => c,
             Err(e) => return unreachable(format!("creds: {e}")),
         };
-        let Some(token) = creds.token(&host_key).map(str::to_string) else {
-            return ProfileConnect {
-                status: app::ServerStatus::LoginNeeded,
-                client: None,
-                sessions: Vec::new(),
-                last_error: Some("loopback daemon is up but you haven't signed in here".into()),
-                agent_availability: None,
-                version: None,
-            };
+        let token = match creds.token(&host_key).map(str::to_string) {
+            Some(t) => t,
+            None => {
+                // No cached token. A loopback daemon defaults to --no-auth
+                // (it binds 127.0.0.1, so only this machine can reach it), in
+                // which case the middleware accepts any bearer. Probe for that
+                // before declaring login-needed — otherwise the local server
+                // renders "login needed" for an auth we deliberately disabled,
+                // and its agents never load because the client is never built.
+                if api::auth_is_disabled(&base, &trust).await.unwrap_or(false) {
+                    "no-auth".to_string()
+                } else {
+                    return ProfileConnect {
+                        status: app::ServerStatus::LoginNeeded,
+                        client: None,
+                        sessions: Vec::new(),
+                        last_error: Some(
+                            "loopback daemon is up but you haven't signed in here".into(),
+                        ),
+                        agent_availability: None,
+                        version: None,
+                    };
+                }
+            }
         };
         let client = match api::Client::new(base.clone(), token, trust) {
             Ok(c) => c,
@@ -695,15 +710,27 @@ async fn try_connect_profile(profile: &profiles::Profile) -> ProfileConnect {
         Ok(c) => c,
         Err(e) => return unreachable(format!("creds: {e}")),
     };
-    let Some(token) = creds.token(&host_key).map(str::to_string) else {
-        return ProfileConnect {
-            status: app::ServerStatus::LoginNeeded,
-            client: None,
-            sessions: Vec::new(),
-            last_error: Some(format!("no cached token for {host_key}")),
-            agent_availability: None,
-            version: None,
-        };
+    let token = match creds.token(&host_key).map(str::to_string) {
+        Some(t) => t,
+        None => {
+            // No cached token. The auto-added `local` profile points at a
+            // loopback daemon, which defaults to --no-auth; remote daemons
+            // don't. Probe /api/auth/status before declaring login-needed so
+            // a no-auth server connects straight through (and its agents
+            // load) instead of stranding on a login it can never satisfy.
+            if api::auth_is_disabled(&base, &trust).await.unwrap_or(false) {
+                "no-auth".to_string()
+            } else {
+                return ProfileConnect {
+                    status: app::ServerStatus::LoginNeeded,
+                    client: None,
+                    sessions: Vec::new(),
+                    last_error: Some(format!("no cached token for {host_key}")),
+                    agent_availability: None,
+                    version: None,
+                };
+            }
+        }
     };
     let client = match api::Client::new(base, token, trust) {
         Ok(c) => c,

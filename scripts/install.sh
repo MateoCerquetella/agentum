@@ -83,9 +83,17 @@ elif [ -t 1 ] && [ -c /dev/tty ]; then
 fi
 [ -n "${CI:-}" ] && INTERACTIVE=false
 
+# Read one line into the named variable. The `-t` timeout is a
+# safety net: if no input arrives (a piped `curl | sh` install where
+# the user walks away, or a tty that never delivers a keystroke) the
+# read returns empty and the caller's `${choice:-1}` default kicks in,
+# so the installer self-resolves to the recommended choice instead of
+# hanging forever and looking stuck. Override with
+# AGENTUM_INSTALL_READ_TIMEOUT (seconds) — tests set it low.
 read_input() {
-    if [ "$HAS_TTY" = true ] && ! [ -t 0 ]; then read -r "$1" <&3
-    else read -r "$1" || true; fi
+    _t="${AGENTUM_INSTALL_READ_TIMEOUT:-60}"
+    if [ "$HAS_TTY" = true ] && ! [ -t 0 ]; then read -r -t "$_t" "$1" <&3 || true
+    else read -r -t "$_t" "$1" || true; fi
 }
 
 # ── Banner ─────────────────────────────────────────────────────
