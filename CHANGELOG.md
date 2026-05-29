@@ -4,6 +4,11 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] — 2026-05-29
+
+### Fixed
+- **Reproducible release binaries.** The `v0.9.0` tag was cut with a `Cargo.lock` still pinning the workspace crates at `0.8.13` while the manifest was already at `0.9.0`. Regenerated the lockfile so published binaries build reproducibly from a matching manifest + lock. No functional changes since `v0.9.0`.
+
 ## [0.9.0] — 2026-05-29
 
 ### Added
