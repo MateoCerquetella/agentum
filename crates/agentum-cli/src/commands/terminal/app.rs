@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::clipboard::encode_rgba_as_png;
 
-use super::api::{self, Client, EventMsg, TermOut, TerminalMsg};
+use super::api::{self, ClaudeUsage, Client, EventMsg, TermOut, TerminalMsg};
 use super::extensions::{self, LAZYGIT};
 use super::iometer::IoMeter;
 use super::palette::{ActionKind, Catalog, ViewState};
@@ -780,13 +780,15 @@ pub enum PendingAction {
         ids: Vec<Uuid>,
         names: Vec<String>,
     },
-    /// Install missing required deps (tmux/git) on a host. Opened with
-    /// `b` from the Ctrl-H hosts overlay. `items` is captured at prompt
-    /// time so the confirm text and the install agree. Phase 2.
-    BootstrapHost {
+    /// Set up a host in one flow from the Ctrl-H overlay (`i`): install
+    /// the missing required deps (`tmux`/`git`, via sudo) and the missing
+    /// agent CLIs (over SSH). `deps`/`agents` are captured at prompt time
+    /// so the confirm text and the install agree.
+    ProvisionHost {
         id: Uuid,
         name: String,
-        items: Vec<String>,
+        deps: Vec<String>,
+        agents: Vec<String>,
     },
 }
 
@@ -833,16 +835,27 @@ impl PendingAction {
                     ),
                 }
             }
-            PendingAction::BootstrapHost { name, items, .. } => format!(
-                "install {} on `{name}` via sudo? Needs passwordless sudo (or root) on the remote.",
-                items.join(" + ")
-            ),
+            PendingAction::ProvisionHost {
+                name, deps, agents, ..
+            } => {
+                let mut parts: Vec<String> = Vec::new();
+                if !deps.is_empty() {
+                    parts.push(format!("{} (sudo)", deps.join(" + ")));
+                }
+                if !agents.is_empty() {
+                    parts.push(agents.join(", "));
+                }
+                format!(
+                    "set up `{name}` — install {} over SSH? Needs passwordless sudo for tmux/git.",
+                    parts.join(" and ")
+                )
+            }
         }
     }
 
     pub fn is_destructive(&self) -> bool {
-        // Bootstrap installs packages — consequential but not destructive,
-        // so it gets the plain " confirm " framing, not the red one.
+        // Provisioning installs packages — consequential but not
+        // destructive, so it gets the plain " confirm " framing, not red.
         !matches!(
             self,
             PendingAction::Start { .. }
@@ -850,7 +863,7 @@ impl PendingAction {
                     kind: BulkKind::Start,
                     ..
                 }
-                | PendingAction::BootstrapHost { .. }
+                | PendingAction::ProvisionHost { .. }
         )
     }
 }
@@ -1353,6 +1366,22 @@ pub struct App {
     /// can't mutate `App` directly (we're behind `&mut App`), and the
     /// existing toast/status surfaces both want main-task access.
     pub upload_outcome_tx: Option<mpsc::UnboundedSender<UploadOutcome>>,
+    /// Latest Claude account-usage snapshot for the bottom-left readout
+    /// (spec 001). `None` until the first poll lands; a fetch error leaves
+    /// the previous value in place (better stale-but-flagged than blank).
+    /// The render path treats `source != "oauth"` / a stale `claude_usage_at`
+    /// as "usage unavailable" rather than showing a wrong plan %.
+    pub claude_usage: Option<ClaudeUsage>,
+    /// Wall-clock instant the latest `claude_usage` landed. Drives the
+    /// poll cadence and lets the readout flag a stale snapshot.
+    pub claude_usage_at: Option<Instant>,
+    /// Result channel for the background usage poll. The spawned task posts
+    /// one `Option<ClaudeUsage>` per poll (None on transport error); the
+    /// run-loop's `select!` arm drains it into `claude_usage`.
+    pub usage_tx: Option<mpsc::UnboundedSender<Option<ClaudeUsage>>>,
+    /// True while a usage poll is in flight, so the tick loop coalesces
+    /// rather than stacking requests if a fetch outlives the interval.
+    pub usage_inflight: bool,
 }
 
 /// One result from the Ctrl-V image-paste flow. Posted by the spawned
@@ -1521,6 +1550,10 @@ impl App {
             reconnecting: HashSet::new(),
             hint_card: None,
             upload_outcome_tx: None,
+            claude_usage: None,
+            claude_usage_at: None,
+            usage_tx: None,
+            usage_inflight: false,
         }
     }
 
@@ -2701,6 +2734,10 @@ pub async fn run_loop(
     // or error toast. Mirrors `agent_tasks_tx` exactly so the
     // surrounding code stays consistent.
     let (upload_outcome_tx, mut upload_outcome_rx) = mpsc::unbounded_channel::<UploadOutcome>();
+    // Result channel for the background Claude-usage poll (spec 001). The
+    // spawned task posts one `Option<ClaudeUsage>` per poll; the `select!`
+    // arm below stores it on `App`. Mirrors `agent_tasks_tx`.
+    let (usage_tx, mut usage_rx) = mpsc::unbounded_channel::<Option<ClaudeUsage>>();
     // Stash cheap clones on `App` so `update_selection` can pick the
     // correct sender by side without re-threading args. The lazygit
     // sender lives here too so `refresh_lazygit_for_selection` can
@@ -2711,6 +2748,10 @@ pub async fn run_loop(
     app.lg_tx = Some(lg_tx.clone());
     app.agent_tasks_tx = Some(agent_tasks_tx);
     app.upload_outcome_tx = Some(upload_outcome_tx);
+    app.usage_tx = Some(usage_tx);
+    // Kick off the first usage poll immediately so the readout populates
+    // without waiting a full interval. Subsequent polls are tick-driven.
+    spawn_usage_fetch(&mut app, &client);
 
     // Subscribe to the daemon's event bus.
     let _events_handle: JoinHandle<()> = client.open_event_stream(event_tx);
@@ -2967,6 +3008,18 @@ pub async fn run_loop(
                 }
             }
 
+            Some(maybe_usage) = usage_rx.recv() => {
+                // Background Claude-usage poll result (spec 001). On
+                // transport error the message carries `None`; we keep the
+                // previous snapshot (stale-but-flagged beats blank) and
+                // just clear the in-flight marker so the next tick retries.
+                app.usage_inflight = false;
+                if let Some(usage) = maybe_usage {
+                    app.claude_usage = Some(usage);
+                    app.claude_usage_at = Some(Instant::now());
+                }
+            }
+
             _ = tick.tick() => {
                 app.tick_count = app.tick_count.wrapping_add(1);
                 // Cheap O(MAX_NOTIFS) sweep — drops expired toasts so the
@@ -2992,6 +3045,18 @@ pub async fn run_loop(
                 // threshold yet long enough that holding j through 50
                 // sessions only spawns lazygit once at the end.
                 drive_pending_lazygit(&mut app);
+                // Claude usage readout poll (spec 001). Gated by the
+                // user's `usage_refresh` interval (≥30s) independent of
+                // the 5s session refresh — usage moves slowly and the
+                // upstream endpoint is rate-limitable. `spawn_usage_fetch`
+                // coalesces via `usage_inflight`.
+                let usage_due = app
+                    .claude_usage_at
+                    .map(|at| at.elapsed() >= app.prefs.usage_refresh())
+                    .unwrap_or(true);
+                if usage_due {
+                    spawn_usage_fetch(&mut app, &client);
+                }
                 if last_refresh.elapsed() >= REFRESH_INTERVAL {
                     last_refresh = Instant::now();
                     // Pick up out-of-band edits to profiles.toml — e.g.
@@ -5285,7 +5350,7 @@ fn open_hosts_overlay(app: &mut App) {
         error: None,
     });
     app.status_msg =
-        Some("hosts · ↑↓ move · Enter/t check · b bootstrap tmux+git · Esc close".into());
+        Some("hosts · ↑↓ move · Enter/t check · i set up (deps + agents) · Esc close".into());
 }
 
 /// Key handling for [`Overlay::Hosts`]. ↑/↓ (or k/j) move the cursor;
@@ -5323,25 +5388,33 @@ async fn handle_hosts_key(app: &mut App, key: KeyEvent, client: &Client) {
                 overlay.loading = false;
             }
         }
-        // `b` bootstraps the missing required deps (tmux/git) on the
-        // selected host. Uses the cached readiness to decide what's
-        // missing, then hands off to a Confirm overlay (phase 2). Needs a
-        // prior readiness check (Enter/t) so we know the gap.
-        KeyCode::Char('b') => {
+        // `i` sets up the selected host in one flow: install the missing
+        // required deps (tmux/git) AND the missing agent CLIs, via a
+        // single Confirm. Uses the cached readiness to decide what's
+        // missing, so it needs a prior check (Enter/t).
+        KeyCode::Char('i') => {
             if let Some(id) = overlay.selected() {
-                let missing: Vec<String> = app
+                let (deps, agents): (Vec<String>, Vec<String>) = app
                     .cached_readiness(id)
                     .map(|r| {
-                        r.required
+                        let deps = r
+                            .required
                             .iter()
                             .filter(|d| !d.installed && d.bootstrapable)
                             .map(|d| d.id.clone())
-                            .collect()
+                            .collect();
+                        let agents = r
+                            .agents
+                            .iter()
+                            .filter(|a| !a.installed)
+                            .map(|a| a.id.clone())
+                            .collect();
+                        (deps, agents)
                     })
                     .unwrap_or_default();
-                if missing.is_empty() {
+                if deps.is_empty() && agents.is_empty() {
                     overlay.error = Some(
-                        "nothing to bootstrap — press Enter/t to check, or tmux+git already present"
+                        "nothing to install — press Enter/t to check, or host already set up"
                             .into(),
                     );
                 } else {
@@ -5352,10 +5425,11 @@ async fn handle_hosts_key(app: &mut App, key: KeyEvent, client: &Client) {
                         .map(|h| h.name.clone())
                         .unwrap_or_else(|| "host".into());
                     // Hand off to the Confirm overlay; don't restore Hosts.
-                    app.overlay = Overlay::Confirm(PendingAction::BootstrapHost {
+                    app.overlay = Overlay::Confirm(PendingAction::ProvisionHost {
                         id,
                         name,
-                        items: missing,
+                        deps,
+                        agents,
                     });
                     return;
                 }
@@ -6358,34 +6432,51 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
     // daemon (which owns the host) and refreshes the readiness cache.
     // Handle it before the session-id match below (which would panic on
     // this variant).
-    if let PendingAction::BootstrapHost { id, name, items } = &action {
-        let item_refs: Vec<&str> = items.iter().map(String::as_str).collect();
-        app.status_msg = Some(format!("bootstrapping `{name}`… (sudo install)"));
-        match client.bootstrap_host(*id, &item_refs).await {
-            Ok(report) => {
-                let ok = report.ok;
-                app.host_readiness_cache
-                    .insert(*id, (Instant::now(), report));
-                let (label, kind) = if ok {
-                    (
-                        format!("`{name}` ready — installed {}", items.join(" + ")),
-                        NotifKind::Info,
-                    )
-                } else {
-                    (
-                        format!("`{name}`: install ran but host still not ready"),
-                        NotifKind::Warn,
-                    )
-                };
-                app.status_msg = Some(label.clone());
-                push_notification(app, label, None, kind);
-            }
-            Err(e) => {
-                let msg = format!("bootstrap `{name}` failed: {e}");
-                app.push_error(msg.clone());
-                app.status_msg = Some(msg);
+    if let PendingAction::ProvisionHost {
+        id,
+        name,
+        deps,
+        agents,
+    } = &action
+    {
+        app.status_msg = Some(format!("setting up `{name}`…"));
+        let mut errors: Vec<String> = Vec::new();
+        // 1) Required deps (tmux/git) over the bootstrap path (sudo).
+        if !deps.is_empty() {
+            let dep_refs: Vec<&str> = deps.iter().map(String::as_str).collect();
+            match client.bootstrap_host(*id, &dep_refs).await {
+                Ok(report) => {
+                    app.host_readiness_cache
+                        .insert(*id, (Instant::now(), report));
+                }
+                Err(e) => errors.push(format!("deps: {e}")),
             }
         }
+        // 2) Agent CLIs over SSH. Runs even if deps failed — agents
+        //    install independently of tmux/git.
+        if !agents.is_empty() {
+            let agent_refs: Vec<&str> = agents.iter().map(String::as_str).collect();
+            match client.install_agents(*id, &agent_refs).await {
+                Ok(report) => {
+                    app.host_readiness_cache
+                        .insert(*id, (Instant::now(), report));
+                }
+                Err(e) => errors.push(format!("agents: {e}")),
+            }
+        }
+        let (label, kind) = if errors.is_empty() {
+            (format!("`{name}` set up"), NotifKind::Info)
+        } else {
+            for e in &errors {
+                app.push_error(format!("provision `{name}`: {e}"));
+            }
+            (
+                format!("`{name}`: setup had errors ({})", errors.join("; ")),
+                NotifKind::Warn,
+            )
+        };
+        app.status_msg = Some(label.clone());
+        push_notification(app, label, None, kind);
         // Land the user back on the host they acted on, dot refreshed.
         reopen_hosts_overlay_at(app, *id);
         return;
@@ -6402,7 +6493,7 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         | PendingAction::Kill { id, .. } => *id,
         PendingAction::RemoveServer { .. }
         | PendingAction::Bulk { .. }
-        | PendingAction::BootstrapHost { .. } => unreachable!(),
+        | PendingAction::ProvisionHost { .. } => unreachable!(),
     };
     let owner = app.client_for_session(session_id).cloned();
     let target = owner.unwrap_or_else(|| client.clone());
@@ -6443,7 +6534,7 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         PendingAction::Kill { name, .. } => format!("killed `{name}`"),
         PendingAction::RemoveServer { .. }
         | PendingAction::Bulk { .. }
-        | PendingAction::BootstrapHost { .. } => unreachable!(),
+        | PendingAction::ProvisionHost { .. } => unreachable!(),
     };
     match result {
         Ok(()) => {
@@ -8148,6 +8239,32 @@ fn spawn_agent_tasks_fetch(app: &mut App, client: &Client, id: Uuid) {
             }
         };
         let _ = tx.send((id, payload));
+    });
+}
+
+/// Spawn a background fetch of `/api/usage/claude` (spec 001). Coalesces
+/// via `usage_inflight` so a slow fetch can't stack behind the tick. The
+/// result (or `None` on error) lands on `usage_rx` in the run-loop.
+/// Always polls the *active* daemon: usage is a host-global readout, and
+/// the active server is the one whose creds the user is reasoning about.
+fn spawn_usage_fetch(app: &mut App, client: &Client) {
+    let Some(tx) = app.usage_tx.clone() else {
+        return;
+    };
+    if app.usage_inflight {
+        return; // coalesce — a poll is already running
+    }
+    app.usage_inflight = true;
+    let target = client.clone();
+    tokio::spawn(async move {
+        let payload = match target.claude_usage().await {
+            Ok(usage) => Some(usage),
+            Err(e) => {
+                tracing::debug!(error = %e, "claude usage fetch failed");
+                None
+            }
+        };
+        let _ = tx.send(payload);
     });
 }
 

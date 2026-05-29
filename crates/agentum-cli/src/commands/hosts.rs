@@ -16,10 +16,11 @@ pub async fn run(action: HostsCmd) -> Result<()> {
             hostname,
             port,
             key,
-        } => add(name, user, hostname, port, key).await,
+            yes,
+        } => add(name, user, hostname, port, key, yes).await,
+        HostsCmd::Setup { name, yes } => setup(name, yes).await,
         HostsCmd::Test { name } => test(name).await,
         HostsCmd::Readiness { name } => readiness(name).await,
-        HostsCmd::Bootstrap { name, yes } => bootstrap(name, yes).await,
         HostsCmd::Rm { name } => remove(name).await,
         HostsCmd::Forget { host } => forget(&host).await,
     }
@@ -62,6 +63,7 @@ async fn add(
     hostname: String,
     port: u16,
     key: Option<String>,
+    yes: bool,
 ) -> Result<()> {
     let (store, _) = agentum_store::open_default().await?;
     let auth = key
@@ -81,19 +83,18 @@ async fn add(
         .await?;
     println!("saved host `{}` ({})", host.name, host.id);
     println!();
-    // Run readiness in-process: the CLI runs on the same machine as the
-    // local daemon (the box that SSHes to the host), so the user sees the
-    // full dependency report immediately on add — no running `agentum
-    // serve` required.
-    let report = agentum_server::host_runtime::readiness(&host).await;
-    print_readiness(&host, &report);
-    if report.ok {
-        let _ = store.update_host_seen(host.id).await;
-    } else {
-        // US-1: non-zero exit when a required dependency is missing.
-        std::process::exit(1);
-    }
-    Ok(())
+    // One install flow: check → install required deps → ask which agents
+    // → install → done. Runs in-process (the CLI is co-located with the
+    // local daemon that SSHes to the host), so no `agentum serve` needed.
+    provision_flow(&store, &host, yes).await
+}
+
+/// `agentum hosts setup <name> [--yes]` — re-run the install flow on an
+/// existing host.
+async fn setup(name: String, yes: bool) -> Result<()> {
+    let (store, _) = agentum_store::open_default().await?;
+    let host = find_host(&store, &name).await?;
+    provision_flow(&store, &host, yes).await
 }
 
 /// `agentum hosts test <name>` — concise, script-friendly one-line
@@ -131,58 +132,124 @@ async fn readiness(name: String) -> Result<()> {
     Ok(())
 }
 
-/// `agentum hosts bootstrap <name> [--yes]` — install the missing
-/// required deps (tmux/git) via the host's package manager. Runs the
-/// install in-process (CLI is co-located with the daemon). Prompts unless
-/// `--yes`. PRD US-4.
-async fn bootstrap(name: String, yes: bool) -> Result<()> {
-    let (store, _) = agentum_store::open_default().await?;
-    let host = find_host(&store, &name).await?;
+/// The one install flow shared by `add` and `setup`: probe → install the
+/// required deps (tmux/git) → ask which agents to install → install them →
+/// report the final readiness. `yes` installs everything missing without
+/// prompting. Runs in-process against the local daemon's host primitives.
+async fn provision_flow(store: &agentum_store::Store, host: &Host, yes: bool) -> Result<()> {
+    let report = agentum_server::host_runtime::readiness(host).await;
+    print_readiness(host, &report);
 
-    // Probe first so we only install what's actually missing — and so a
-    // fully-ready host short-circuits without a sudo round trip.
-    let pre = agentum_server::host_runtime::readiness(&host).await;
-    let missing: Vec<String> = pre
+    // Unreachable host: nothing to install. Surface and stop.
+    if report.system.uname.is_none() {
+        anyhow::bail!("host unreachable — {}", report.message);
+    }
+
+    // 1) Required deps (tmux/git) — mandatory for the host to run sessions.
+    let missing_deps: Vec<String> = report
         .required
         .iter()
         .filter(|d| !d.installed && d.bootstrapable)
         .map(|d| d.id.clone())
         .collect();
-    if missing.is_empty() {
-        println!("{}: required deps already installed", host.name);
-        return Ok(());
-    }
-
-    if !yes {
-        use std::io::Write;
-        print!(
-            "Install {} on `{}` (sudo)? [y/N] ",
-            missing.join(" + "),
-            host.name
-        );
-        std::io::stdout().flush()?;
-        let mut line = String::new();
-        std::io::stdin().read_line(&mut line)?;
-        if !matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-            println!("aborted");
-            return Ok(());
+    if !missing_deps.is_empty() {
+        let go = yes
+            || confirm(&format!(
+                "Install required {} on `{}` (sudo)?",
+                missing_deps.join(" + "),
+                host.name
+            ))?;
+        if go {
+            println!("installing {} …", missing_deps.join(" + "));
+            if let Err(e) = agentum_server::host_runtime::bootstrap(host, &missing_deps).await {
+                eprintln!("  required-deps install failed: {e}");
+            }
+        } else {
+            println!(
+                "skipped — `{}` can't run sessions until tmux + git are installed",
+                host.name
+            );
         }
     }
 
-    println!("installing {} on `{}`…", missing.join(" + "), host.name);
-    match agentum_server::host_runtime::bootstrap(&host, &missing).await {
-        Ok(report) => {
-            println!();
-            print_readiness(&host, &report);
-            if report.ok {
-                let _ = store.update_host_seen(host.id).await;
-            } else {
-                std::process::exit(1);
+    // 2) Agent CLIs — ask which to install (optional).
+    let missing_agents: Vec<String> = report
+        .agents
+        .iter()
+        .filter(|a| {
+            !a.installed
+                && agentum_server::host_install_hints::agent_install_command(&a.id).is_some()
+        })
+        .map(|a| a.id.clone())
+        .collect();
+    if !missing_agents.is_empty() {
+        let targets = if yes {
+            missing_agents.clone()
+        } else {
+            prompt_agent_pick(&missing_agents)?
+        };
+        if targets.is_empty() {
+            println!("no agents selected");
+        } else {
+            println!("installing {} …", targets.join(", "));
+            if let Err(e) = agentum_server::host_runtime::install_agents(host, &targets).await {
+                eprintln!("  agent install failed: {e}");
             }
         }
-        Err(e) => anyhow::bail!("bootstrap failed: {e}"),
+    }
+
+    // 3) Final state.
+    let after = agentum_server::host_runtime::readiness(host).await;
+    let _ = store.update_host_seen(host.id).await;
+    println!();
+    if after.ok {
+        let agents = after.agents.iter().filter(|a| a.installed).count();
+        println!(
+            "Done. `{}` ready · {agents} agent CLI(s) available.",
+            host.name
+        );
+    } else {
+        println!("Done, but `{}` not ready — {}", host.name, after.message);
     }
     Ok(())
+}
+
+/// `y/N` prompt; returns true only on `y`/`yes`.
+fn confirm(prompt: &str) -> Result<bool> {
+    use std::io::Write;
+    print!("{prompt} [y/N] ");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
+/// Prompt the user to pick which missing agents to install. Accepts
+/// `all`, `none`/empty, or a space/comma-separated subset; names not in
+/// `missing` are ignored.
+fn prompt_agent_pick(missing: &[String]) -> Result<Vec<String>> {
+    use std::io::Write;
+    println!("Missing agents: {}", missing.join(", "));
+    print!("Install which? [all / none / list]: ");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let input = line.trim().to_ascii_lowercase();
+    let picked = match input.as_str() {
+        "all" | "a" | "*" => missing.to_vec(),
+        "" | "none" | "n" => Vec::new(),
+        _ => input
+            .split([',', ' '])
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .filter(|s| missing.iter().any(|m| m == s))
+            .map(|s| s.to_string())
+            .collect(),
+    };
+    Ok(picked)
 }
 
 async fn find_host(store: &agentum_store::Store, name: &str) -> Result<Host> {
@@ -198,8 +265,15 @@ async fn find_host(store: &agentum_store::Store, name: &str) -> Result<Host> {
 fn print_readiness(host: &Host, report: &HostReadiness) {
     println!("Host: {} ({})", host.name, host_target_label(host));
     let uname = report.system.uname.as_deref().unwrap_or("unknown");
+    // Surface passwordless-sudo up front: it decides whether `bootstrap`
+    // (sudo install of tmux/git) can succeed over BatchMode SSH.
+    let sudo = match report.system.sudo_nopasswd {
+        Some(true) => "sudo: passwordless",
+        Some(false) => "sudo: password required (bootstrap will fail)",
+        None => "sudo: unknown",
+    };
     println!(
-        "System: {uname} · pkg_manager={}",
+        "System: {uname} · pkg_manager={} · {sudo}",
         report.system.pkg_manager
     );
     println!();
@@ -226,6 +300,55 @@ fn print_readiness(host: &Host, report: &HostReadiness) {
         let missing = report.required.iter().filter(|d| !d.installed).count();
         println!("Ready: no ({missing} required missing)");
     }
+
+    print_fix_block(host, report);
+}
+
+/// Hermes-`doctor`-style "here's exactly what to run" block: the deps
+/// install command (if tmux/git missing) plus each missing agent's
+/// installer, followed by the agentum shortcuts. Only shown when there's
+/// something to fix and the host was reachable.
+fn print_fix_block(host: &Host, report: &HostReadiness) {
+    if report.system.uname.is_none() {
+        return; // unreachable — nothing to suggest
+    }
+    let missing_req: Vec<&str> = report
+        .required
+        .iter()
+        .filter(|d| !d.installed)
+        .map(|d| d.id.as_str())
+        .collect();
+    let missing_agents: Vec<&str> = report
+        .agents
+        .iter()
+        .filter(|a| !a.installed && a.install_hint.is_some())
+        .map(|a| a.id.as_str())
+        .collect();
+    if missing_req.is_empty() && missing_agents.is_empty() {
+        return;
+    }
+
+    println!();
+    println!("To fix, run on {}:", host.name);
+    if !missing_req.is_empty() {
+        match agentum_server::host_install_hints::bootstrap_command(
+            &report.system.pkg_manager,
+            &missing_req,
+        ) {
+            Some(cmd) => println!("  {cmd}"),
+            None => println!(
+                "  # install {} with your package manager",
+                missing_req.join(" ")
+            ),
+        }
+    }
+    for tool in &missing_agents {
+        if let Some(cmd) = agentum_server::host_install_hints::agent_install_command(tool) {
+            println!("  {cmd}");
+        }
+    }
+    println!();
+    println!("  or let agentum do it: agentum hosts setup {}", host.name);
 }
 
 fn print_dep_row(label: &str, installed: bool, hint: Option<&str>) {

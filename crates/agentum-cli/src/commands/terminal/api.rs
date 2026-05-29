@@ -103,6 +103,34 @@ pub struct AgentInfo {
     pub path: Option<String>,
 }
 
+/// CLI-side mirror of the server's `ClaudeUsageSnapshot` (spec 001),
+/// trimmed to the fields the TUI's bottom-left readout consumes. EVERY
+/// field is `#[serde(default)]` + `Option`, so a snapshot from an older
+/// daemon (which omits the spec-001 fields entirely) still deserializes —
+/// the readout just shows "usage unavailable" for the missing parts.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct ClaudeUsage {
+    /// Sum of input+output+cache-create tokens in the 5h window.
+    #[serde(default)]
+    pub window_tokens: u64,
+    /// `true` when Claude Code has ever run on the daemon host.
+    #[serde(default)]
+    pub claude_installed: bool,
+    /// Headline plan-limit utilization, `max(5h, 7d)`, 0..=100.
+    #[serde(default)]
+    pub limit_pct: Option<f64>,
+    /// Unix-ms reset time of the binding window.
+    #[serde(default)]
+    pub resets_at_ms: Option<i64>,
+    /// Estimated USD spend for the window (labeled "est." in the UI).
+    #[serde(default)]
+    pub est_cost_usd: Option<f64>,
+    /// `"oauth"` when `limit_pct` is a real plan number, `"scan"` when we
+    /// only have the local transcript scan (no real % — degraded).
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct HostProbe {
     pub ok: bool,
@@ -409,6 +437,24 @@ impl Client {
         Ok(resp.json::<Vec<AgentInfo>>().await.unwrap_or_default())
     }
 
+    /// `GET /api/usage/claude` — the daemon's Claude account usage snapshot
+    /// (spec 001): plan-limit %, estimated $, window tokens. Daemons
+    /// predating the route return 404; we surface that as a clean error so
+    /// the caller can render "usage unavailable" rather than crash. The
+    /// daemon caches the upstream OAuth fetch, so polling this cheaply is
+    /// fine.
+    pub async fn claude_usage(&self) -> Result<ClaudeUsage> {
+        let url = self.base.join("/api/usage/claude")?;
+        let resp = self.http.get(url).bearer_auth(&self.token).send().await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            bail!("daemon does not expose /api/usage/claude — update `agentum serve`");
+        }
+        if !resp.status().is_success() {
+            bail!("usage returned {}", resp.status());
+        }
+        Ok(resp.json::<ClaudeUsage>().await?)
+    }
+
     pub async fn list_hosts(&self) -> Result<Vec<Host>> {
         let url = self.base.join("/api/hosts")?;
         let resp = self.http.get(url).bearer_auth(&self.token).send().await?;
@@ -489,6 +535,35 @@ impl Client {
             .bearer_auth(&self.token)
             .json(&BootstrapBody {
                 items,
+                confirm: true,
+            })
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("{status} — {body}");
+        }
+        Ok(resp.json::<HostReadiness>().await?)
+    }
+
+    /// `POST /api/hosts/{id}/install-agent` — install agent CLIs on the
+    /// host over SSH (phase 3). Confirmed at the call site (TUI confirm
+    /// overlay / CLI prompt), so `confirm: true` is sent here. Returns the
+    /// re-probed readiness.
+    pub async fn install_agents(&self, id: Uuid, tools: &[&str]) -> Result<HostReadiness> {
+        #[derive(Serialize)]
+        struct InstallBody<'a> {
+            tools: &'a [&'a str],
+            confirm: bool,
+        }
+        let url = self.base.join(&format!("/api/hosts/{id}/install-agent"))?;
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .json(&InstallBody {
+                tools,
                 confirm: true,
             })
             .send()

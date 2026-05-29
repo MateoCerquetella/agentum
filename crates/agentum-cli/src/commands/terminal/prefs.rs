@@ -93,6 +93,13 @@ pub const NOTIF_TTL_INFO_DEFAULT_MS: u64 = 6000;
 pub const NOTIF_TTL_WARN_DEFAULT_MS: u64 = 4000;
 pub const NOTIF_TTL_ERROR_DEFAULT_MS: u64 = 12_000;
 
+/// How often the TUI re-polls `/api/usage/claude` for the bottom-left
+/// readout (spec 001). 60s default; floored at [`USAGE_REFRESH_MIN_SECS`]
+/// at every read site because the usage endpoint is itself rate-limitable
+/// and a too-low value could self-throttle the account.
+pub const USAGE_REFRESH_DEFAULT_SECS: u64 = 60;
+pub const USAGE_REFRESH_MIN_SECS: u64 = 30;
+
 /// Mirror of the disk file. Keep field names stable — they're the TOML
 /// keys users will see if they peek at the file.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -146,6 +153,13 @@ pub struct Prefs {
     pub notif_ttl_info_ms: u64,
     pub notif_ttl_warn_ms: u64,
     pub notif_ttl_error_ms: u64,
+
+    // ---- usage readout (spec 001) --------------------------------------
+    /// Seconds between `/api/usage/claude` polls for the bottom-left
+    /// readout. Read via [`Prefs::usage_refresh`], which clamps to
+    /// [`USAGE_REFRESH_MIN_SECS`] so a hand-edited file can't drive the
+    /// poll under the safe floor.
+    pub usage_refresh_secs: u64,
 }
 
 impl Default for Prefs {
@@ -176,6 +190,8 @@ impl Default for Prefs {
             notif_ttl_info_ms: NOTIF_TTL_INFO_DEFAULT_MS,
             notif_ttl_warn_ms: NOTIF_TTL_WARN_DEFAULT_MS,
             notif_ttl_error_ms: NOTIF_TTL_ERROR_DEFAULT_MS,
+
+            usage_refresh_secs: USAGE_REFRESH_DEFAULT_SECS,
         }
     }
 }
@@ -220,6 +236,13 @@ impl Prefs {
     /// expiring (or never-expiring) toast.
     pub fn ttl_for(&self, kind: SoundKind) -> Duration {
         Duration::from_millis(self.ttl_ms(kind))
+    }
+
+    /// Effective usage-readout poll interval. Floored at
+    /// [`USAGE_REFRESH_MIN_SECS`] so a hand-edited file can't drive the
+    /// poll cadence below the rate-limit-safe minimum.
+    pub fn usage_refresh(&self) -> Duration {
+        Duration::from_secs(self.usage_refresh_secs.max(USAGE_REFRESH_MIN_SECS))
     }
 
     pub fn ttl_ms(&self, kind: SoundKind) -> u64 {
@@ -356,5 +379,28 @@ mod tests {
         p.reset();
         assert_eq!(p.tree_width, 32);
         assert!(p.sound_master);
+    }
+
+    #[test]
+    fn usage_refresh_defaults_and_clamps() {
+        let p = Prefs::default();
+        assert_eq!(p.usage_refresh_secs, USAGE_REFRESH_DEFAULT_SECS);
+        assert_eq!(p.usage_refresh().as_secs(), 60);
+
+        // Below the floor is raised to the minimum.
+        let mut low = Prefs::default();
+        low.usage_refresh_secs = 5;
+        assert_eq!(low.usage_refresh().as_secs(), USAGE_REFRESH_MIN_SECS);
+
+        // A sane higher value passes through.
+        let mut high = Prefs::default();
+        high.usage_refresh_secs = 120;
+        assert_eq!(high.usage_refresh().as_secs(), 120);
+    }
+
+    #[test]
+    fn usage_refresh_missing_key_uses_default() {
+        let r: Prefs = toml::from_str("show_workdir = true").expect("deserialize");
+        assert_eq!(r.usage_refresh_secs, USAGE_REFRESH_DEFAULT_SECS);
     }
 }

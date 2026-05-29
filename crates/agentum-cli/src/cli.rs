@@ -410,7 +410,9 @@ pub enum BoardCmd {
 pub enum HostsCmd {
     /// List SSH-agentless hosts controlled by the local daemon.
     List,
-    /// Add an SSH host. The remote needs sshd, tmux, git, and the agent CLIs.
+    /// Add an SSH host, then set it up in one flow: check what's there,
+    /// install the required deps (tmux, git), and ask which agent CLIs to
+    /// install. `--yes` installs everything missing without prompting.
     Add {
         name: String,
         #[arg(long)]
@@ -421,6 +423,17 @@ pub enum HostsCmd {
         port: u16,
         #[arg(long)]
         key: Option<String>,
+        /// Install all missing deps + agents without prompting.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Re-run the setup flow on an existing host: check, install required
+    /// deps, ask which agents to install. `--yes` installs all missing.
+    Setup {
+        name: String,
+        /// Install all missing deps + agents without prompting.
+        #[arg(long)]
+        yes: bool,
     },
     /// Probe an SSH host by name (one-line ready/not-ready summary).
     Test { name: String },
@@ -428,15 +441,6 @@ pub enum HostsCmd {
     /// CLIs, detected package manager, and install hints. Exits non-zero
     /// when a required dependency is missing.
     Readiness { name: String },
-    /// Install missing required deps (tmux, git) on a host via its package
-    /// manager. Prompts to confirm unless `--yes`. Needs passwordless sudo
-    /// (or root) on the remote — never installs agent CLIs.
-    Bootstrap {
-        name: String,
-        /// Skip the confirmation prompt.
-        #[arg(long)]
-        yes: bool,
-    },
     /// Remove an SSH host by name. Refuses when sessions still reference it.
     Rm { name: String },
     /// Forget a pinned Agentum server certificate host (legacy trust store).

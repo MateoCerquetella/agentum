@@ -135,6 +135,51 @@ pub async fn bootstrap(host: &Host, items: &[String]) -> Result<HostReadiness> {
     Ok(readiness(host).await)
 }
 
+/// Install one or more agent CLIs on a host by running each tool's
+/// official installer (see [`crate::host_install_hints::agent_install_command`])
+/// over SSH, then re-probing. Phase 3 — opt-in, confirmed by the caller.
+///
+/// Unlike [`bootstrap`], these are not `sudo` package-manager installs —
+/// they're the vendors' own `npm -g` / `curl | bash` / `pip` scripts run
+/// as the SSH user. They may still need a working node/python on the
+/// remote; a missing prerequisite surfaces as the installer's stderr.
+/// Tools without a verified installer are skipped (logged at `warn`).
+pub async fn install_agents(host: &Host, tools: &[String]) -> Result<HostReadiness> {
+    let mut unknown: Vec<&str> = Vec::new();
+    let mut cmds: Vec<&'static str> = Vec::new();
+    for t in tools {
+        match crate::host_install_hints::agent_install_command(t) {
+            Some(cmd) => cmds.push(cmd),
+            None => unknown.push(t.as_str()),
+        }
+    }
+    if !unknown.is_empty() {
+        tracing::warn!(
+            host = %host.name,
+            skipped = %unknown.join(","),
+            "skipping agent CLIs without a verified installer"
+        );
+    }
+    if cmds.is_empty() {
+        return Err(HostRuntimeError::Bootstrap(format!(
+            "no installable agent CLIs in [{}]",
+            tools.join(", ")
+        )));
+    }
+    // Chain installers with `&&` so the first failure stops the rest and
+    // its stderr is what surfaces.
+    let combined = cmds.join(" && ");
+    tracing::info!(host = %host.name, tools = %tools.join(","), "installing agent CLIs on host");
+    match &host.kind {
+        HostKind::Local => run_checked_local(&combined).await?,
+        HostKind::Ssh { .. } => {
+            let script = format!("sh -c {}", q(&combined)?);
+            run_checked_ssh(host, &script, BOOTSTRAP_TIMEOUT).await?;
+        }
+    }
+    Ok(readiness(host).await)
+}
+
 /// Run `script` over SSH with a caller-chosen timeout, surfacing remote
 /// `stderr` on a non-zero exit. (`ssh_checked` hard-codes `SSH_TIMEOUT`;
 /// bootstrap needs a longer budget.)
@@ -178,6 +223,9 @@ async fn run_checked_local(cmd: &str) -> Result<()> {
 struct ProbeOutput {
     uname: Option<String>,
     pkg_manager: String,
+    /// `Some(true)` if `sudo -n true` succeeded on the remote (passwordless
+    /// sudo / root); `Some(false)` if it failed; `None` if undetermined.
+    sudo_nopasswd: Option<bool>,
     bins: HashMap<String, String>,
 }
 
@@ -262,6 +310,7 @@ fn assemble_readiness(probe: ProbeOutput) -> HostReadiness {
         system: HostSystemInfo {
             uname: probe.uname,
             pkg_manager: probe.pkg_manager,
+            sudo_nopasswd: probe.sudo_nopasswd,
         },
         required,
         agents,
@@ -274,6 +323,7 @@ fn unreachable_readiness(message: String) -> HostReadiness {
     let mut report = assemble_readiness(ProbeOutput {
         uname: None,
         pkg_manager: "unknown".to_string(),
+        sudo_nopasswd: None,
         bins: HashMap::new(),
     });
     report.message = message;
@@ -297,9 +347,19 @@ fn probe_local() -> ProbeOutput {
             .unwrap_or_default();
         bins.insert(b, path);
     }
+    // Local passwordless-sudo check mirrors the remote `sudo -n true`.
+    let sudo_nopasswd = Some(
+        std::process::Command::new("sudo")
+            .arg("-n")
+            .arg("true")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false),
+    );
     ProbeOutput {
         uname,
         pkg_manager: detect_local_pkg_manager(),
+        sudo_nopasswd,
         bins,
     }
 }
@@ -336,6 +396,11 @@ fn build_probe_script(bins: &[String]) -> Result<String> {
         r#"pm=unknown; for c in apt-get dnf pacman brew; do if command -v "$c" >/dev/null 2>&1; then case "$c" in apt-get) pm=apt;; *) pm="$c";; esac; break; fi; done; "#,
     );
     s.push_str(r#"printf 'pkg\t%s\n' "$pm"; "#);
+    // Passwordless-sudo check: `sudo -n true` never prompts. Reports yes
+    // only when sudo runs without a password (or the user is root).
+    s.push_str(
+        r#"if sudo -n true >/dev/null 2>&1; then printf 'sudo\tyes\n'; else printf 'sudo\tno\n'; fi; "#,
+    );
     for b in bins {
         let qb = q(b)?;
         s.push_str(&format!(
@@ -351,6 +416,7 @@ fn parse_probe_output(stdout: &str) -> ProbeOutput {
     let mut out = ProbeOutput {
         uname: None,
         pkg_manager: "unknown".to_string(),
+        sudo_nopasswd: None,
         bins: HashMap::new(),
     };
     for line in stdout.lines() {
@@ -365,6 +431,7 @@ fn parse_probe_output(stdout: &str) -> ProbeOutput {
                     out.uname = Some(v.to_string());
                 }
             }
+            "sudo" => out.sudo_nopasswd = Some(rest.trim() == "yes"),
             "pkg" => {
                 let v = rest.trim();
                 out.pkg_manager = if v.is_empty() {
@@ -644,12 +711,14 @@ mod tests {
         // with a space to prove we don't split it.
         let stdout = "uname\tLinux 6.12.1-arch1-1\n\
              pkg\tpacman\n\
+             sudo\tyes\n\
              bin\ttmux\t/usr/bin/tmux\n\
              bin\tgit\t\n\
              bin\tclaude\t/home/me/my tools/claude\n";
         let probe = parse_probe_output(stdout);
         assert_eq!(probe.uname.as_deref(), Some("Linux 6.12.1-arch1-1"));
         assert_eq!(probe.pkg_manager, "pacman");
+        assert_eq!(probe.sudo_nopasswd, Some(true));
         assert_eq!(probe.bins.get("tmux").unwrap(), "/usr/bin/tmux");
         assert_eq!(probe.bins.get("git").unwrap(), "");
         assert_eq!(
@@ -683,10 +752,12 @@ mod tests {
         let r = assemble_readiness(ProbeOutput {
             uname: Some("Linux 6.12".to_string()),
             pkg_manager: "pacman".to_string(),
+            sudo_nopasswd: Some(true),
             bins,
         });
         assert!(r.ok);
         assert_eq!(r.message, "host ready");
+        assert_eq!(r.system.sudo_nopasswd, Some(true));
         assert!(r.required.iter().all(|d| d.installed));
         let claude = r.agents.iter().find(|a| a.id == "claude").unwrap();
         assert!(claude.installed);
@@ -702,6 +773,7 @@ mod tests {
         let r = assemble_readiness(ProbeOutput {
             uname: None,
             pkg_manager: "apt".to_string(),
+            sudo_nopasswd: Some(false),
             bins,
         });
         assert!(!r.ok);

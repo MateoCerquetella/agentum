@@ -15,6 +15,7 @@ use agentum_core::transcript::{AgentTaskState, TaskStatus, TodoStatus};
 
 use uuid::Uuid;
 
+use super::api::ClaudeUsage;
 use super::app::{
     AddProfileField, AddProfileForm, App, ConnState, DirPickerState, ErrorEntry, Focus, GoalForm,
     HostsOverlay, NewSessionField, NewSessionForm, NotifKind, Notification, Overlay, PendingAction,
@@ -2304,8 +2305,13 @@ fn draw_hosts_overlay(
         )));
     } else if let Some(r) = selected_report {
         let uname = r.system.uname.as_deref().unwrap_or("unknown");
+        let sudo = match r.system.sudo_nopasswd {
+            Some(true) => " · sudo: passwordless",
+            Some(false) => " · sudo: password (bootstrap fails)",
+            None => "",
+        };
         lines.push(Line::from(Span::styled(
-            format!("  {uname} · pkg={}", r.system.pkg_manager),
+            format!("  {uname} · pkg={}{sudo}", r.system.pkg_manager),
             Style::default().fg(p.subtle),
         )));
         lines.push(Line::from(Span::styled(
@@ -2356,7 +2362,7 @@ fn draw_hosts_overlay(
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  ↑↓ move · Enter/t check · b bootstrap tmux+git · Esc close".to_string(),
+        "  ↑↓ move · Enter/t check · i set up (deps + agents) · Esc close".to_string(),
         Style::default().fg(p.muted),
     )));
 
@@ -3574,9 +3580,112 @@ fn truncate_pad(s: &str, n: usize) -> String {
     }
 }
 
-/// Bottom-left "Usage" panel. Two stacked sections inside one block:
-/// top half aggregates running sessions by tool name (count + total
-/// tokens); bottom half lists each running session sorted by spend.
+/// Color band for a plan-limit utilization %: 🟢 `<70`, 🟡 `70..=90`,
+/// 🔴 `>90` (spec 001). Pure so the thresholds are unit-testable. The
+/// `>90` band is strict — exactly 90 is still yellow — matching the
+/// spec's `70–90` / `>90` boundary.
+pub(super) fn band_color(pct: f64, p: &Palette) -> Color {
+    if pct > 90.0 {
+        p.error
+    } else if pct >= 70.0 {
+        p.warning
+    } else {
+        p.success
+    }
+}
+
+/// Emoji glyph for the band, for the at-a-glance dot in the header.
+fn band_glyph(pct: f64) -> &'static str {
+    if pct > 90.0 {
+        "🔴"
+    } else if pct >= 70.0 {
+        "🟡"
+    } else {
+        "🟢"
+    }
+}
+
+/// Compact "resets in" label from a unix-ms reset time. `now_ms` is
+/// passed in so the formatting stays pure/testable. Past or missing
+/// times collapse to "now". Mirrors `format_short_age`'s grain.
+fn format_resets_in(resets_at_ms: i64, now_ms: i64) -> String {
+    let secs = ((resets_at_ms - now_ms) / 1000).max(0);
+    if secs < 60 {
+        "now".to_string()
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86_400)
+    }
+}
+
+/// Build the spec-001 usage header line for the Claude account readout.
+/// Returns `None` (caller renders nothing extra) when there's no usage
+/// snapshot at all. Otherwise yields a styled `Line`:
+///   `est $12.40 · 2.1M tok · 🟡 82% · resets 2h`
+/// When the plan-limit % is unavailable (no token / OAuth failed →
+/// `source != "oauth"` or `limit_pct == None`), the band segment becomes
+/// an explicit "usage unavailable" rather than a wrong number.
+fn usage_header_line<'a>(usage: &ClaudeUsage, p: &Palette) -> Line<'a> {
+    let now_ms = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
+    let mut spans: Vec<Span> = Vec::new();
+
+    // Estimated $ (labeled est.) — reuse the shared cost formatter.
+    spans.push(Span::styled(
+        format!("est {}", format_cost(usage.est_cost_usd)),
+        Style::default().fg(p.fg),
+    ));
+    spans.push(Span::styled("  ", Style::default().fg(p.muted)));
+
+    // Window tokens.
+    spans.push(Span::styled(
+        format!("{} tok", format_tokens(Some(usage.window_tokens as i64))),
+        Style::default().fg(p.muted),
+    ));
+
+    // Plan-limit band — only a real number when source == oauth.
+    let oauth = usage.source.as_deref() == Some("oauth");
+    match (oauth, usage.limit_pct) {
+        (true, Some(pct)) => {
+            spans.push(Span::styled("  ", Style::default().fg(p.muted)));
+            spans.push(Span::raw(band_glyph(pct)));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                format!("{:.0}%", pct),
+                Style::default()
+                    .fg(band_color(pct, p))
+                    .add_modifier(Modifier::BOLD),
+            ));
+            if let Some(reset_ms) = usage.resets_at_ms {
+                spans.push(Span::styled(
+                    format!("  resets {}", format_resets_in(reset_ms, now_ms)),
+                    Style::default().fg(p.muted),
+                ));
+            }
+        }
+        _ => {
+            // Graceful degradation: no plan % to show. Be explicit so the
+            // user never mistakes a blank for 0% headroom.
+            spans.push(Span::styled(
+                "  · plan usage unavailable",
+                Style::default().fg(p.muted),
+            ));
+        }
+    }
+
+    Line::from(spans)
+}
+
+/// Bottom-left "Usage" panel. A spec-001 header line (Claude account
+/// estimated $, window tokens, plan-limit band) sits above two stacked
+/// sections: top half aggregates running sessions by tool name (count +
+/// total tokens); bottom half lists each running session sorted by spend.
 /// Passive readout — never focused — so we render with `panel_block(..,
 /// false, ..)`. Short-circuits on zero-sized rects to match the rest of
 /// the draw_* helpers.
@@ -3591,6 +3700,26 @@ pub(super) fn draw_usage_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Pal
 
     if inner.width == 0 || inner.height == 0 {
         return;
+    }
+
+    // Carve off a 1-row header for the account-wide usage readout when we
+    // have a snapshot. This renders even with zero active agents — plan
+    // headroom is account-wide, not per-session.
+    let (header_area, inner) = if app.claude_usage.is_some() && inner.height >= 3 {
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .split(inner);
+        (Some(split[0]), split[1])
+    } else {
+        (None, inner)
+    };
+    if let (Some(hdr), Some(usage)) = (header_area, app.claude_usage.as_ref()) {
+        let line = usage_header_line(usage, p);
+        f.render_widget(
+            Paragraph::new(line).style(Style::default().bg(p.panel_bg)),
+            hdr,
+        );
     }
 
     // Collect once; both halves reuse this slice.
@@ -3731,6 +3860,48 @@ mod tests {
         assert_eq!(format_ctx(Some(42)), "42%");
         assert_eq!(format_ctx(Some(100)), "100%");
         assert_eq!(format_ctx(Some(101)), "—");
+    }
+
+    // ---- spec 001 -----------------------------------------------------
+
+    #[test]
+    fn band_color_thresholds() {
+        // Use a palette whose three band colors are distinct so the
+        // boundary assertions are unambiguous. `midnight` (BUILTINS[1])
+        // has concrete (non-Reset) success/warning/error.
+        let p = &super::super::theme::Theme::by_name("midnight").palette;
+        // 🟢 below 70
+        assert_eq!(band_color(0.0, p), p.success);
+        assert_eq!(band_color(69.0, p), p.success);
+        // 🟡 70..=90 (boundaries inclusive)
+        assert_eq!(band_color(70.0, p), p.warning);
+        assert_eq!(band_color(89.0, p), p.warning);
+        assert_eq!(band_color(90.0, p), p.warning);
+        // 🔴 strictly above 90
+        assert_eq!(band_color(91.0, p), p.error);
+        assert_eq!(band_color(100.0, p), p.error);
+    }
+
+    #[test]
+    fn band_glyph_thresholds() {
+        assert_eq!(band_glyph(69.0), "🟢");
+        assert_eq!(band_glyph(70.0), "🟡");
+        assert_eq!(band_glyph(89.0), "🟡");
+        assert_eq!(band_glyph(90.0), "🟡");
+        assert_eq!(band_glyph(91.0), "🔴");
+    }
+
+    #[test]
+    fn format_resets_in_grain() {
+        // 2h in the future.
+        assert_eq!(format_resets_in(7_200_000, 0), "2h");
+        // 30m.
+        assert_eq!(format_resets_in(1_800_000, 0), "30m");
+        // Under a minute / past → "now".
+        assert_eq!(format_resets_in(30_000, 0), "now");
+        assert_eq!(format_resets_in(0, 1_000_000), "now");
+        // 2d.
+        assert_eq!(format_resets_in(2 * 86_400_000, 0), "2d");
     }
 }
 

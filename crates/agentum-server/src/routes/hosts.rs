@@ -18,6 +18,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/hosts/{id}/test", post(test))
         .route("/api/hosts/{id}/readiness", get(readiness))
         .route("/api/hosts/{id}/bootstrap", post(bootstrap))
+        .route("/api/hosts/{id}/install-agent", post(install_agent))
 }
 
 async fn list(State(state): State<AppState>) -> Result<Json<Vec<Host>>, ApiError> {
@@ -187,6 +188,57 @@ async fn bootstrap(
     // A failed remote install (sudo password required, no network, etc.)
     // surfaces as Internal with the remote stderr in the message.
     let report = crate::host_runtime::bootstrap(&host, &req.items)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if report.ok {
+        let _ = state.store.update_host_seen(id).await;
+    }
+    Ok(Json(report))
+}
+
+/// Body for `POST /api/hosts/{id}/install-agent`. `confirm` must be `true`
+/// and every tool must have a verified installer (rejected otherwise so
+/// we never run an arbitrary command on the remote).
+#[derive(serde::Deserialize)]
+struct InstallAgentRequest {
+    #[serde(default)]
+    tools: Vec<String>,
+    #[serde(default)]
+    confirm: bool,
+}
+
+/// `POST /api/hosts/{id}/install-agent` — install one or more agent CLIs
+/// on the host by running their official installers over SSH, after
+/// explicit confirmation (phase 3). Returns the re-probed readiness.
+/// Agent CLIs never gate `ok` (only tmux/git do), so this is purely
+/// additive convenience.
+async fn install_agent(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<InstallAgentRequest>,
+) -> Result<Json<HostReadiness>, ApiError> {
+    let id = parse_uuid(&id)?;
+    if !req.confirm {
+        return Err(ApiError::BadRequest(
+            "install-agent requires explicit confirm: true".into(),
+        ));
+    }
+    if req.tools.is_empty() {
+        return Err(ApiError::BadRequest("no tools to install".into()));
+    }
+    for tool in &req.tools {
+        if crate::host_install_hints::agent_install_command(tool).is_none() {
+            return Err(ApiError::BadRequest(format!(
+                "`{tool}` has no verified installer"
+            )));
+        }
+    }
+    let host = state
+        .store
+        .get_host(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
+    let report = crate::host_runtime::install_agents(&host, &req.tools)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     if report.ok {
