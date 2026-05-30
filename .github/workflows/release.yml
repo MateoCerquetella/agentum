@@ -79,6 +79,14 @@ jobs:
         if: matrix.cross
         run: cross build --release --target ${{ matrix.target }} -p agentum-cli
 
+      # Desktop shell ships on macOS only (uses the system WKWebView; Linux
+      # would need webkit2gtk dev libs in the image, which the cross builder
+      # doesn't carry). The dashboard bundle built above is embedded via
+      # agentum-server, so the window has a UI to show.
+      - name: Build desktop app (macOS)
+        if: contains(matrix.target, 'apple-darwin')
+        run: cargo build --release --target ${{ matrix.target }} -p agentum-desktop
+
       - name: Stage release
         shell: bash
         run: |
@@ -86,6 +94,10 @@ jobs:
           OUT="dist/${BIN_NAME}-${{ github.ref_name }}-${{ matrix.target }}"
           mkdir -p "$OUT"
           cp "target/${{ matrix.target }}/release/${BIN_NAME}" "$OUT/"
+          # Bundle the desktop binary when it was built (macOS targets).
+          if [ -f "target/${{ matrix.target }}/release/agentum-desktop" ]; then
+            cp "target/${{ matrix.target }}/release/agentum-desktop" "$OUT/"
+          fi
           cp LICENSE README.md CHANGELOG.md "$OUT/"
           ( cd dist && tar -czf "${BIN_NAME}-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" "${BIN_NAME}-${{ github.ref_name }}-${{ matrix.target }}" )
           ls -la dist/
