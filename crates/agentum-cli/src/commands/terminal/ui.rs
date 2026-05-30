@@ -517,63 +517,6 @@ fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     f.render_widget(chip_para, cols[2]);
 }
 
-/// Braille spinner frames, indexed by `tick_count / 2` so the rotation
-/// runs at ~5 fps on top of the 100 ms tick. Used for the per-server
-/// status dot while a reconnect is in flight.
-const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-fn spinner_glyph(tick: u64) -> &'static str {
-    SPINNER_FRAMES[((tick / 2) as usize) % SPINNER_FRAMES.len()]
-}
-
-/// Decide the (glyph, colour) pair for one server row's status dot.
-/// Centralised so the loopback row, the named-profile rows, and the
-/// detail panel agree on the encoding — including the reconnect
-/// spinner overlay.
-/// Format a `v0.7.61`-style chip + pick a color based on whether the
-/// daemon's version matches the local CLI. Matching versions read as
-/// muted/informational; a mismatch flips to the warning color so the
-/// user can spot fleet drift at a glance. `None` returns an empty
-/// Option so the caller can skip rendering when the probe hasn't
-/// landed yet.
-fn server_version_chip(version: Option<&str>, p: &Palette) -> Option<(String, Color)> {
-    let v = version?;
-    if v.is_empty() {
-        return None;
-    }
-    let local = env!("CARGO_PKG_VERSION");
-    let color = if v == local { p.muted } else { p.warning };
-    Some((format!("v{v}"), color))
-}
-
-fn server_dot(
-    status: Option<super::app::ServerStatus>,
-    is_active: bool,
-    is_reconnecting: bool,
-    tick: u64,
-    p: &Palette,
-) -> (String, Color) {
-    use super::app::ServerStatus;
-    if is_reconnecting {
-        return (spinner_glyph(tick).to_string(), p.accent);
-    }
-    // Encode reachability via *color*, never glyph fill: a connected
-    // peer reads as a solid green dot whether or not it's the active
-    // target, so a user with 3+ servers can scan the sidebar and see
-    // "all live" at a glance. Active vs inactive is already conveyed
-    // by the bold label + cursor highlight in the row above us; the
-    // dot's job is health, not focus.
-    let (g, c) = match status {
-        Some(ServerStatus::Live) => ("●", p.success),
-        Some(ServerStatus::Unreachable) => ("●", p.error),
-        Some(ServerStatus::LoginNeeded) => ("●", p.warning),
-        // Unprobed: gray dot for inactive (we genuinely don't know),
-        // green for active (we wouldn't be talking to it otherwise).
-        None if is_active => ("●", p.success),
-        None => ("●", p.muted),
-    };
-    (g.to_string(), c)
-}
 
 fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Tree;
@@ -593,22 +536,16 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let block = panel_block(&title, focused, p);
 
     let mut items: Vec<ListItem> = Vec::new();
-    use super::app::ServerStatus;
-    let tick = app.tick_count;
 
-    // Servers section leads the sidebar as a compact status strip.
-    // Header shows a `▶ N` chip when collapsed so the user always
-    // sees there's something folded away. When the synthetic loopback
-    // row is rendered, cursor 0 is "this machine" and cursors
-    // 1..=N map to `app.profiles`; when it isn't, cursors 0..N-1 map
-    // directly to `app.profiles`. `synthetic_loopback_visible()`
-    // encapsulates both checks.
-    let synthetic_loopback = app.synthetic_loopback_visible();
+    // Hosts section leads the sidebar as a compact status strip: the
+    // local machine first, then each SSH host the daemon drives. The
+    // header shows a `▶ N` chip when collapsed. Cursors map 1:1 onto
+    // `app.hosts`.
     let server_count = app.servers_row_count();
     let header_label = if app.servers_collapsed {
-        format!(" SERVERS  ▶ {server_count}  (Ctrl-K V)")
+        format!(" HOSTS  ▶ {server_count}  (Ctrl-K V)")
     } else {
-        " SERVERS".to_string()
+        " HOSTS".to_string()
     };
     items.push(ListItem::new(Line::from(Span::styled(
         header_label,
@@ -616,18 +553,8 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     ))));
 
     if !app.servers_collapsed {
-        // Row 0 — "this machine". Only rendered when the loopback was
-        // actually probed (`clients[""]` populated) and no named
-        // profile already points at it; otherwise the row would be a
-        // phantom duplicate. Active when the active profile is None
-        // (loopback launch) or maps to the empty profile-name key.
-        if synthetic_loopback {
-            let is_active = app
-                .active_profile
-                .as_deref()
-                .map(|n| n.is_empty())
-                .unwrap_or(true);
-            let is_cursor = app.tree_section == TreeSection::Servers && app.servers_cursor == 0;
+        for (i, host) in app.hosts.iter().enumerate() {
+            let is_cursor = app.tree_section == TreeSection::Servers && i == app.servers_cursor;
             let row_style = if is_cursor {
                 Style::default()
                     .bg(p.cursor_bg)
@@ -635,109 +562,56 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
             } else {
                 Style::default().bg(p.panel_bg).fg(p.fg)
             };
-            // The local loopback is keyed by "" in `app.clients` when the
-            // user launched without `--profile`. With a `--profile` launch
-            // there's no local entry — we render the row anyway so the
-            // sidebar shape doesn't shift around launch flags.
-            //
-            // Dot color encoding: green only when this row is the
-            // *active* target. Live-but-inactive reads muted so the
-            // user never has to decode filled-vs-hollow circles to
-            // tell which daemon they're talking to. A pending reconnect
-            // swaps the dot for a braille spinner via `server_dot`.
-            let entry_ref = app.clients.get("");
-            let status = entry_ref.map(|e| e.status);
-            let version = entry_ref.and_then(|e| e.version.as_deref());
-            let reconnecting = app.reconnecting.contains("");
-            let (dot_glyph, dot_color) = server_dot(status, is_active, reconnecting, tick, p);
-            let mut spans = vec![
-                Span::raw("   "),
-                Span::styled(dot_glyph, Style::default().fg(dot_color)),
-                Span::raw(" "),
-                Span::styled(
-                    super::app::local_machine_label(),
-                    Style::default()
-                        .fg(if is_cursor && focused {
-                            p.cursor_fg
-                        } else if is_active {
-                            p.fg_strong
-                        } else {
-                            p.fg
-                        })
-                        .add_modifier(if is_cursor || is_active {
-                            Modifier::BOLD
-                        } else {
-                            Modifier::empty()
-                        }),
-                ),
-            ];
-            if let Some((label, color)) = server_version_chip(version, p) {
-                spans.push(Span::raw("  "));
-                spans.push(Span::styled(label, Style::default().fg(color)));
-            }
-            items.push(ListItem::new(Line::from(spans)).style(row_style));
-        }
-        let profile_row_offset = usize::from(synthetic_loopback);
-        for (i, entry) in app.profiles.iter().enumerate() {
-            let is_active = app.active_profile.as_deref() == Some(entry.name.as_str());
-            // Add an offset when the synthetic "this machine" row is
-            // painted above — its presence shifts every profile row by
-            // one. When the synthetic row is hidden, profile `i` sits
-            // at cursor `i` directly.
-            let is_cursor = app.tree_section == TreeSection::Servers
-                && (i + profile_row_offset) == app.servers_cursor;
-            let row_style = if is_cursor {
-                Style::default()
-                    .bg(p.cursor_bg)
-                    .fg(if focused { p.cursor_fg } else { p.fg })
+            let is_local = matches!(host.kind, agentum_core::HostKind::Local);
+            // Health dot + trailing status. The local host is the daemon's
+            // own machine (always live). SSH hosts read from the readiness
+            // cache: green when the last check passed, amber "needs setup"
+            // when it didn't, muted when never checked (Enter/`t` checks).
+            let reachable = app.host_readiness_cache.get(&host.id).map(|(_, r)| r.ok);
+            let (dot_color, trailing) = if is_local {
+                (p.success, None)
             } else {
-                Style::default().bg(p.panel_bg).fg(p.fg)
+                match reachable {
+                    Some(true) => (p.success, None),
+                    Some(false) => (p.warning, Some(("  needs setup", p.warning))),
+                    None => (p.muted, Some(("  press Enter to check", p.muted))),
+                }
             };
-            let entry_ref = app.clients.get(entry.name.as_str());
-            let status = entry_ref.map(|e| e.status);
-            let version = entry_ref.and_then(|e| e.version.as_deref());
-            // Same active-only-green encoding as the loopback row.
-            let reconnecting = app.reconnecting.contains(entry.name.as_str());
-            let (dot_glyph, dot_color) = server_dot(status, is_active, reconnecting, tick, p);
+            let label = if is_local {
+                super::app::local_machine_label()
+            } else {
+                host.name.clone()
+            };
             let mut spans = vec![
                 Span::raw("   "),
-                Span::styled(dot_glyph, Style::default().fg(dot_color)),
+                Span::styled("●", Style::default().fg(dot_color)),
                 Span::raw(" "),
                 Span::styled(
-                    entry.name.clone(),
+                    label,
                     Style::default()
                         .fg(if is_cursor && focused {
                             p.cursor_fg
-                        } else if is_active {
-                            p.fg_strong
                         } else {
-                            p.fg
+                            p.fg_strong
                         })
-                        .add_modifier(if is_cursor || is_active {
+                        .add_modifier(if is_cursor {
                             Modifier::BOLD
                         } else {
                             Modifier::empty()
                         }),
                 ),
             ];
-            if let Some((label, color)) = server_version_chip(version, p) {
+            // SSH hosts show user@hostname as a dim hint so the row is
+            // identifiable without opening the detail pane.
+            if let agentum_core::HostKind::Ssh { user, hostname, .. } = &host.kind {
                 spans.push(Span::raw("  "));
-                spans.push(Span::styled(label, Style::default().fg(color)));
+                spans.push(Span::styled(
+                    format!("{user}@{hostname}"),
+                    Style::default().fg(p.muted),
+                ));
             }
-            match status {
-                Some(ServerStatus::Unreachable) => {
-                    spans.push(Span::styled(
-                        "  unreachable".to_string(),
-                        Style::default().fg(p.error),
-                    ));
-                }
-                Some(ServerStatus::LoginNeeded) => {
-                    spans.push(Span::styled(
-                        "  login needed".to_string(),
-                        Style::default().fg(p.warning),
-                    ));
-                }
-                _ => {}
+            if let Some((text, color)) = trailing {
+                spans.push(Span::styled(text.to_string(), Style::default().fg(color)));
             }
             items.push(ListItem::new(Line::from(spans)).style(row_style));
         }
@@ -1066,85 +940,21 @@ fn draw_terminal_right(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
 /// owns. The status dot at the top mirrors the sidebar's dot (incl.
 /// the spinner overlay while a reconnect is in flight).
 fn draw_servers_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
-    use super::app::{ServerStatus, local_machine_label, profile_label};
-    let title = " servers · Enter (re)connect · a add · d remove ";
-    // The Tree pane is the one that owns the cursor here; reflect that
-    // in the focus styling so the user can see at a glance which
-    // sidebar section is active.
+    let title = " hosts · Enter manage · a add · d remove ";
+    // The Tree pane owns the cursor here; reflect that in the focus
+    // styling so the user sees which sidebar section is active.
     let focused = app.focus == Focus::Tree;
     let block = panel_block(title, focused, p);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Resolve the cursor position to a (key, label, url, fingerprint)
-    // tuple. When the synthetic loopback row is visible, cursor 0 is
-    // it (keyed by `""` in `app.clients`, no on-disk profile to read
-    // metadata from); otherwise cursors 0..N map straight to
-    // `app.profiles`.
-    let synthetic_loopback = app.synthetic_loopback_visible();
-    let cursor = app.servers_cursor;
-    let (key, label, url, fingerprint) = if synthetic_loopback && cursor == 0 {
-        (
-            String::new(),
-            local_machine_label(),
-            "http://127.0.0.1:8822 (local daemon)".to_string(),
-            None,
-        )
-    } else {
-        let idx = cursor.saturating_sub(usize::from(synthetic_loopback));
-        match app.profiles.get(idx) {
-            Some(e) => (
-                e.name.clone(),
-                profile_label(&e.name),
-                e.url.clone(),
-                e.fingerprint.clone(),
-            ),
-            None => {
-                // Cursor outside the profiles list — render an empty
-                // hint so a transient state during reload doesn't
-                // crash the pane.
-                let hint = Paragraph::new("no server selected")
-                    .style(Style::default().fg(p.muted).bg(p.panel_bg));
-                f.render_widget(hint, inner);
-                return;
-            }
-        }
+    let Some(host) = app.cursor_host() else {
+        let hint = Paragraph::new("no host selected")
+            .style(Style::default().fg(p.muted).bg(p.panel_bg));
+        f.render_widget(hint, inner);
+        return;
     };
 
-    let entry = app.clients.get(key.as_str());
-    let status = entry.map(|e| e.status);
-    let last_error = entry.and_then(|e| e.last_error.clone());
-    let is_active = app
-        .active_profile
-        .as_deref()
-        .map(|n| n == key.as_str())
-        .unwrap_or_else(|| key.is_empty());
-    let is_reconnecting = app.reconnecting.contains(key.as_str());
-
-    let (dot, dot_color) = server_dot(status, is_active, is_reconnecting, app.tick_count, p);
-    let status_text = if is_reconnecting {
-        "connecting…"
-    } else {
-        match status {
-            Some(ServerStatus::Live) => "live",
-            Some(ServerStatus::Unreachable) => "unreachable",
-            Some(ServerStatus::LoginNeeded) => "login needed",
-            None => "not connected",
-        }
-    };
-    let status_color = if is_reconnecting {
-        p.accent
-    } else {
-        match status {
-            Some(ServerStatus::Live) => p.success,
-            Some(ServerStatus::Unreachable) => p.error,
-            Some(ServerStatus::LoginNeeded) => p.warning,
-            None => p.muted,
-        }
-    };
-
-    // Two-column field rows so the values line up nicely. Width 14
-    // keeps "fingerprint" + a 2-col pad fitting without truncation.
     let label_w = 14usize;
     let field = |k: &str, value: String, value_style: Style| -> Line<'static> {
         let key = Span::styled(
@@ -1154,76 +964,91 @@ fn draw_servers_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         Line::from(vec![key, Span::styled(value, value_style)])
     };
 
+    let is_local = matches!(host.kind, agentum_core::HostKind::Local);
+    let readiness = app.host_readiness_cache.get(&host.id).map(|(_, r)| r);
+    // Local is always live (it's the daemon's own machine). SSH hosts
+    // read from the readiness cache: ready / needs-setup / not-checked.
+    let (dot_color, status_text, status_color) = if is_local {
+        (p.success, "live", p.success)
+    } else {
+        match readiness {
+            Some(r) if r.ok => (p.success, "ready", p.success),
+            Some(_) => (p.warning, "needs setup", p.warning),
+            None => (p.muted, "not checked", p.muted),
+        }
+    };
+
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from(""));
-    // Header row: spinner/dot + label + active chip.
-    let mut header: Vec<Span<'static>> = vec![
+    let label = if is_local {
+        super::app::local_machine_label()
+    } else {
+        host.name.clone()
+    };
+    lines.push(Line::from(vec![
         Span::raw(" "),
-        Span::styled(dot, Style::default().fg(dot_color)),
+        Span::styled("●", Style::default().fg(dot_color)),
         Span::raw("  "),
         Span::styled(
             label,
-            Style::default()
-                .fg(p.fg_strong)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(p.fg_strong).add_modifier(Modifier::BOLD),
         ),
-    ];
-    if is_active {
-        header.push(Span::raw("  "));
-        header.push(Span::styled(
-            "active".to_string(),
-            Style::default().fg(p.accent),
-        ));
-    }
-    lines.push(Line::from(header));
+    ]));
     lines.push(Line::from(""));
-
     lines.push(field(
         "status",
         status_text.to_string(),
-        Style::default()
-            .fg(status_color)
-            .add_modifier(Modifier::BOLD),
+        Style::default().fg(status_color).add_modifier(Modifier::BOLD),
     ));
-    lines.push(field("url", url, Style::default().fg(p.fg)));
-    if let Some(fp) = fingerprint {
-        lines.push(field("fingerprint", fp, Style::default().fg(p.fg)));
-    } else if !key.is_empty() {
-        lines.push(field(
-            "fingerprint",
-            "(none — TOFU)".to_string(),
-            Style::default().fg(p.muted),
-        ));
+    match &host.kind {
+        agentum_core::HostKind::Local => {
+            lines.push(field(
+                "kind",
+                "this machine".to_string(),
+                Style::default().fg(p.fg),
+            ));
+        }
+        agentum_core::HostKind::Ssh {
+            user,
+            hostname,
+            port,
+            ..
+        } => {
+            lines.push(field(
+                "ssh",
+                format!("{user}@{hostname}:{port}"),
+                Style::default().fg(p.fg),
+            ));
+        }
     }
-    if let Some(err) = last_error {
+    if !is_local {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            " last error",
-            Style::default().fg(p.muted),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("   {err}"),
-            Style::default().fg(p.error),
-        )));
+        match readiness {
+            Some(r) => lines.push(field("check", r.message.clone(), Style::default().fg(p.fg))),
+            None => lines.push(Line::from(Span::styled(
+                "   press Enter to check readiness (deps + agents)",
+                Style::default().fg(p.muted),
+            ))),
+        }
     }
 
     lines.push(Line::from(""));
     lines.push(Line::from(""));
-    let total = app.profiles.len() + 1;
+    let total = app.hosts.len();
     lines.push(Line::from(Span::styled(
         format!(
-            " {} server{} configured",
+            " {} host{} configured",
             total,
             if total == 1 { "" } else { "s" }
         ),
         Style::default().fg(p.muted),
     )));
     lines.push(Line::from(Span::styled(
-        " j/k move · Enter (re)connect · a add · Ctrl-D remove".to_string(),
+        " j/k move · Enter manage · a add · Ctrl-D remove".to_string(),
         Style::default().fg(p.muted),
     )));
     lines.push(Line::from(Span::styled(
-        " l / → jump to this server's sessions".to_string(),
+        " l / → jump to this host's sessions".to_string(),
         Style::default().fg(p.muted),
     )));
 
@@ -2402,7 +2227,7 @@ fn draw_hosts_overlay(
 /// auth toggle (key/agent or password). The password value is masked.
 fn draw_hosts_add_form(f: &mut Frame<'_>, area: Rect, form: &AddHostForm, p: &Palette) {
     let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(head("Add a server (SSH host)", p));
+    lines.push(head("Add an SSH host", p));
     lines.push(Line::from(""));
     push_form_field(
         &mut lines,
@@ -2507,7 +2332,7 @@ fn draw_hosts_add_form(f: &mut Frame<'_>, area: Rect, form: &AddHostForm, p: &Pa
         footer,
         Style::default().fg(p.muted),
     )));
-    overlay_box(f, area, " add server ", lines, 80, p);
+    overlay_box(f, area, " add host ", lines, 80, p);
 }
 
 /// Push one `[x]/[ ] label — hint` dependency row into a line buffer,

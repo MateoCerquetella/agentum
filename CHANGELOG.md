@@ -4,6 +4,37 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] — 2026-05-29
+
+### Changed
+- **Servers and hosts are one concept now: hosts.** The TUI no longer has
+  a separate "servers" (remote-daemon) list. There is a single local
+  daemon; every other machine is an SSH **host** the daemon drives. The
+  sidebar's top section is **HOSTS** (this machine + each SSH host),
+  sessions group by host, and the add flow (`a` / `Ctrl-S`) opens the SSH
+  host form (Name · User · Hostname · Port · Auth) — the User/Port fields
+  the old "add server" form lacked. This removes the dead-end where a
+  daemon-less remote added as a "server" sat as "unreachable — no pinned
+  fingerprint" with no in-TUI recovery. Removed the multi-daemon fanout,
+  remote-daemon TLS pinning/TOFU, per-daemon tokens, profile switching,
+  and the endpoint switcher from the TUI. The hosts overlay gained a `d`
+  key to remove an SSH host.
+
+### Added
+- **Desktop shell (`agentum-desktop`).** The placeholder Tauri crate is now
+  a real native binary: it boots `agentum-server` in-process on a free
+  loopback port (plain HTTP, auth disabled — only this machine can reach a
+  loopback bind), waits for it to start listening, then opens a native
+  webview window (wry + tao) on the embedded dashboard. GUI deps are
+  isolated to this crate so the CLI/Linux release is unaffected. macOS
+  binary ships in the release tarballs; run with `agentum-desktop`.
+
+### Removed
+- Dead remote-daemon code left over from the servers→hosts merge
+  (multi-profile connect/fanout helpers, the synthetic-loopback sidebar
+  row, the `RemoveServer` confirm action). Workspace builds with zero
+  dead-code warnings.
+
 ## [0.10.1] — 2026-05-29
 
 ### Fixed

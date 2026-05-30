@@ -6,8 +6,19 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Tauri desktop shell for agentum. Placeholder until PRD Phase 3 (docs/plans/AGENTUM_V2_PRD.md §6)."
+description = "Native desktop shell for agentum: runs the daemon in-process on a free loopback port and opens a window on the embedded dashboard."
 
-[lib]
-name = "agentum_desktop"
-path = "src/lib.rs"
+# A real binary now (was a placeholder lib). GUI deps (wry/tao) are isolated
+# to this crate so the CLI/server release matrix is unaffected — Linux CI for
+# the `agentum` binary never pulls webkit.
+[[bin]]
+name = "agentum-desktop"
+path = "src/main.rs"
+
+[dependencies]
+agentum-server = { workspace = true }
+agentum-store = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+wry = "0.45"
+tao = "0.30"

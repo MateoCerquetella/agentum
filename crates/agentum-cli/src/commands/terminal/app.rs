@@ -874,9 +874,6 @@ pub enum PendingAction {
         id: Uuid,
         name: String,
     },
-    RemoveServer {
-        name: String,
-    },
     /// Bulk variant of Start/Stop/Kill driven by the multi-select set.
     /// `names` is preserved alongside `ids` so the confirm prompt can
     /// list a few before falling back to a count, even if a session is
@@ -924,9 +921,6 @@ impl PendingAction {
             }
             PendingAction::Kill { name, .. } => {
                 format!("kill `{name}`? Stops the process and removes the session.")
-            }
-            PendingAction::RemoveServer { name } => {
-                format!("delete server `{name}`? This cannot be undone.")
             }
             PendingAction::Bulk { kind, ids, names } => {
                 let n = ids.len();
@@ -1702,47 +1696,18 @@ impl App {
             .filter_map(|(name, entry)| entry.client.as_ref().map(|c| (name.as_str(), c)))
     }
 
-    /// Whether the SERVERS section renders the synthetic "this machine"
-    /// row at cursor 0. The row only carries useful data when the user
-    /// launched without `--profile` (in which case the loopback was
-    /// probed and stored under the `""` key in `app.clients`); a
-    /// `--profile` launch never populates that key, so painting the row
-    /// anyway leaves a phantom entry above the named profiles. The
-    /// predicate also collapses the row when the user has registered a
-    /// real profile pointing at the local daemon, since the named row
-    /// already represents it.
-    pub fn synthetic_loopback_visible(&self) -> bool {
-        if !self.clients.contains_key("") {
-            return false;
-        }
-        // If a named profile points at the loopback, the synthetic row
-        // is just a duplicate of that named row — collapse it. We match
-        // on URL host so a profile recorded as `http://127.0.0.1:8822`
-        // or `https://localhost:8822` both win.
-        !self
-            .profiles
-            .iter()
-            .any(|p| profile_targets_loopback(&p.url))
-    }
 
-    /// Total rows in the visible SERVERS section, counting the
-    /// synthetic loopback row only when it's actually being painted.
+    /// Total rows in the HOSTS section — one per host. The local host is
+    /// always present (row 0); each SSH host follows.
     pub fn servers_row_count(&self) -> usize {
-        self.profiles.len() + usize::from(self.synthetic_loopback_visible())
+        self.hosts.len()
     }
 
-    /// Resolve a SERVERS-section cursor to the profile it points at.
-    /// Returns `None` when the cursor sits on the synthetic loopback
-    /// row (only possible while `synthetic_loopback_visible()`).
-    pub fn cursor_profile(&self) -> Option<&ProfileEntry> {
-        let synth = self.synthetic_loopback_visible();
-        if synth && self.servers_cursor == 0 {
-            return None;
-        }
-        let offset = usize::from(synth);
-        self.profiles
-            .get(self.servers_cursor.saturating_sub(offset))
+    /// Resolve a HOSTS-section cursor to the host it points at.
+    pub fn cursor_host(&self) -> Option<&agentum_core::Host> {
+        self.hosts.get(self.servers_cursor)
     }
+
 
     /// Load the on-disk profiles into `app.profiles`. Called once at
     /// run-loop start and again any time the user adds/removes a
@@ -1751,21 +1716,11 @@ impl App {
     /// non-fatal — they leave `profiles` empty and the sidebar
     /// renders an "no servers" hint.
     pub fn reload_profiles(&mut self) {
-        self.profiles = match super::profiles::load() {
-            Ok(store) => store
-                .list()
-                .into_iter()
-                .map(|(name, p, _is_default)| ProfileEntry {
-                    name,
-                    url: p.url,
-                    fingerprint: p.fingerprint,
-                })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        // Clamp the cursor against the new row count. `servers_row_count`
-        // already accounts for the synthetic loopback row appearing or
-        // disappearing (e.g. when the user added a 127.0.0.1 profile).
+        // The sidebar's top section shows hosts now, not remote-daemon
+        // profiles, so we no longer surface `profiles.toml` here. Kept as
+        // the clamp point for the HOSTS-section cursor after the host list
+        // changes (add/remove). `servers_row_count` counts `self.hosts`.
+        self.profiles = Vec::new();
         let max = self.servers_row_count().saturating_sub(1);
         if self.servers_cursor > max {
             self.servers_cursor = max;
@@ -1903,24 +1858,10 @@ impl App {
     /// keeps listing every profile in both modes — scoping only affects
     /// which session leaves appear under SESSIONS.
     pub fn build_scoped_tree(&self, prev: &HashMap<String, bool>) -> Tree {
-        if self.show_all_servers {
-            return Tree::build_with_profiles(&self.sessions, &self.session_profile, prev);
-        }
-        let active = self.active_profile.clone().unwrap_or_default();
-        let scoped: Vec<Session> = self
-            .sessions
-            .iter()
-            .filter(|s| {
-                let owner = self
-                    .session_profile
-                    .get(&s.id)
-                    .map(String::as_str)
-                    .unwrap_or("");
-                owner == active.as_str()
-            })
-            .cloned()
-            .collect();
-        Tree::build_with_profiles(&scoped, &self.session_profile, prev)
+        // One daemon: the tree spans every session, grouped by host
+        // (local first, then each SSH host). There's no per-server
+        // scoping anymore — that only made sense for a multi-daemon fleet.
+        Tree::build_with_profiles(&self.sessions, &self.session_profile, prev)
     }
 
     pub fn lazygit_open(&self) -> bool {
@@ -2175,20 +2116,6 @@ pub fn profile_label(profile: &str) -> String {
     }
 }
 
-/// Returns `true` when `url`'s host points at the local loopback so
-/// the sidebar can collapse the synthetic "this machine" row into a
-/// named profile that already represents it. Accepts IPv4 / IPv6
-/// loopback literals and `localhost`. Anything unparseable returns
-/// `false` — the synthetic row stays as a safety net.
-pub fn profile_targets_loopback(url: &str) -> bool {
-    let Ok(parsed) = url::Url::parse(url) else {
-        return false;
-    };
-    matches!(
-        parsed.host_str(),
-        Some("127.0.0.1") | Some("::1") | Some("[::1]") | Some("localhost")
-    )
-}
 
 /// Hostname-derived label for the loopback row. Centralised so the
 /// sidebar header, the Servers panel row, the New Session form's
@@ -2244,6 +2171,23 @@ pub fn workdir_label(workdir: &str) -> String {
     }
 }
 
+/// Sidebar group key for the host a session runs on. Local sessions key
+/// to "" so the tree renders them first under "this machine"; SSH-host
+/// sessions key to the host's display label so each remote machine is
+/// its own top-level group. This replaces the old session→daemon-profile
+/// owner key now that the TUI talks to a single daemon and the sidebar's
+/// top concept is hosts, not servers.
+pub fn host_group_key(s: &Session) -> String {
+    let is_local = s.host_id.is_none()
+        || s.host_id == Some(agentum_core::LOCAL_HOST_ID)
+        || s.host_kind.as_deref() == Some("local");
+    if is_local {
+        String::new()
+    } else {
+        s.host_label.clone().unwrap_or_default()
+    }
+}
+
 /// Snapshot key for a server-level group's collapse state. Namespaced
 /// (`server::`) so it can't collide with project keys in the same
 /// `HashMap<String, bool>` snapshot.
@@ -2289,7 +2233,9 @@ impl Tree {
     /// badge.
     pub fn build_with_profiles(
         sessions: &[Session],
-        session_profile: &HashMap<Uuid, String>,
+        // Kept for call-site compatibility; grouping is now derived from
+        // each session's host fields via `host_group_key`, not this map.
+        _session_profile: &HashMap<Uuid, String>,
         prev_expanded: &HashMap<String, bool>,
     ) -> Self {
         // Two-level bucket: profile → workdir → sessions. Normalize the
@@ -2297,7 +2243,10 @@ impl Tree {
         // double-up as two siblings.
         let mut by_profile: HashMap<String, HashMap<String, Vec<&Session>>> = HashMap::new();
         for s in sessions {
-            let profile = session_profile.get(&s.id).cloned().unwrap_or_default();
+            // Group by the host the session runs on (one daemon now;
+            // remote machines are SSH hosts). `host_group_key` keys local
+            // sessions to "" so they render first under "this machine".
+            let profile = host_group_key(s);
             let workdir = normalize_workdir(&s.workdir);
             by_profile
                 .entry(profile)
@@ -4537,9 +4486,9 @@ async fn handle_key(
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
     // Ctrl-D — delete the row under the tree cursor. Routes by
-    // section: Servers → `RemoveServer` confirmation, Sessions →
-    // `Kill` confirmation. Either way the user gets a y/N prompt
-    // (the "double check" — `handle_confirm_key` only commits on
+    // section: Hosts → open the hosts overlay on the selected SSH host
+    // (where `d` removes it), Sessions → `Kill` confirmation with a y/N
+    // prompt (the "double check" — `handle_confirm_key` only commits on
     // y/Y/Enter). When a terminal pane is focused, Ctrl-D still
     // forwards EOF (^D) to the running agent — standard Unix
     // behaviour — so this only intercepts when Focus::Tree.
@@ -4549,24 +4498,19 @@ async fn handle_key(
     {
         match app.tree_section {
             TreeSection::Servers => {
-                // The synthetic "this machine" row doesn't correspond to
-                // a persisted profile entry — there's nothing to remove.
-                match app.cursor_profile().cloned() {
-                    None => {
+                // Manage = the hosts overlay. The local host (this
+                // machine) can't be removed; for an SSH host, open the
+                // overlay positioned on it where `d` deletes it.
+                match app.cursor_host() {
+                    Some(h) if h.id != agentum_core::LOCAL_HOST_ID => {
+                        let id = h.id;
+                        reopen_hosts_overlay_at(app, id);
+                    }
+                    _ => {
                         app.status_msg = Some(format!(
-                            "can't remove {} — it's the local loopback",
+                            "{} is this machine — it can't be removed",
                             local_machine_label()
                         ));
-                    }
-                    Some(entry) => {
-                        if app.active_profile.as_deref() == Some(entry.name.as_str()) {
-                            app.status_msg =
-                                Some("can't remove the active server — switch first".into());
-                        } else {
-                            app.overlay = Overlay::Confirm(PendingAction::RemoveServer {
-                                name: entry.name.clone(),
-                            });
-                        }
                     }
                 }
                 return;
@@ -4630,14 +4574,12 @@ async fn handle_key(
         return;
     }
 
-    // Ctrl-S — open the server switcher overlay from any focus.
-    // Mnemonic: "S = Servers". Mirrors the dashboard's ServerSwitcher
-    // chip in the topbar. Available from anywhere so a user driving
-    // multiple agentum servers can hop without releasing focus; also
-    // surfaced in the command palette. Plain Shift+S still acts on the
-    // tree cursor (stop session) — the modifier disambiguates.
+    // Ctrl-S — open the hosts manager overlay from any focus. Hosts are
+    // the unified concept now (this machine + SSH targets); the old
+    // remote-daemon "server switcher" is gone. Plain Shift+S still acts
+    // on the tree cursor (stop session) — the modifier disambiguates.
     if ctrl && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S')) {
-        open_profiles_overlay(app);
+        open_hosts_overlay(app);
         return;
     }
 
@@ -5243,48 +5185,18 @@ async fn handle_key(
         KeyCode::Enter => {
             match app.tree_section {
                 TreeSection::Servers => {
-                    // Switch the active profile to whichever server the
-                    // cursor sits on. Mirrors the Ctrl-S overlay's Enter
-                    // — schedules a soft restart via `pending_switch_profile`
-                    // so the run-loop tears down and reconnects against
-                    // the new target. Cursor 0 is the synthetic
-                    // "this machine" row → empty profile name, which the
-                    // mod.rs SwitchProfile arm translates to `None` so
-                    // apply_profile takes the loopback-detection path.
-                    //
-                    // Refuse while lazygit is open: the soft restart
-                    // drops the App, which drops the lazygit PTY, which
-                    // kills the child. The user sees the pane vanish
-                    // and reads it as a crash. Symmetric to Ctrl-\\
-                    // refusing to split while lazygit is open.
-                    if app.lazygit_open() {
-                        app.status_msg = Some("close lazygit (g) before switching servers".into());
-                        return;
+                    // Enter on a host opens the hosts overlay positioned on
+                    // it — check readiness, set up deps/agents, or remove
+                    // it. The local host (this machine) has nothing to
+                    // manage, so Enter there just drops focus into the
+                    // sessions tree.
+                    match app.cursor_host() {
+                        Some(h) if h.id != agentum_core::LOCAL_HOST_ID => {
+                            let id = h.id;
+                            reopen_hosts_overlay_at(app, id);
+                        }
+                        _ => app.tree_section = TreeSection::Sessions,
                     }
-                    let target: String = match app.cursor_profile() {
-                        Some(e) => e.name.clone(),
-                        None if app.synthetic_loopback_visible() => String::new(),
-                        None => return,
-                    };
-                    let active = app.active_profile.clone().unwrap_or_default();
-                    let label = profile_label(&target);
-                    // Same-profile Enter is a re-connect, not a no-op:
-                    // useful when the daemon went away (Unreachable /
-                    // LoginNeeded) and the user wants to retry without
-                    // first switching to another server.
-                    if active == target {
-                        app.status_msg = Some(format!("reconnecting to {label}…"));
-                    } else {
-                        app.status_msg = Some(format!("switching to {label}…"));
-                    }
-                    // Mark the target as in-flight so the sidebar swaps
-                    // its status dot for a spinner glyph until the soft
-                    // restart completes (or fails). The new App starts
-                    // with an empty set, so the spinner stops naturally.
-                    app.reconnecting.insert(target.clone());
-                    app.pending_switch_profile = Some(target);
-                    app.pending_after_switch = None;
-                    app.should_quit = true;
                 }
                 TreeSection::Sessions => {
                     // Toggle the leaf under the cursor in the multi-select
@@ -5312,40 +5224,30 @@ async fn handle_key(
                 }
             }
         }
-        // Servers section actions: `a` adds, `d` removes. Only fire
-        // when the cursor is actually in the Servers section so the
-        // Sessions tree's existing `d` (delete-session) keybind, if
-        // any, doesn't get hijacked.
+        // Hosts section actions: `a` adds an SSH host, `d` manages/removes
+        // the host under the cursor. Only fire when the cursor is in the
+        // Hosts section so the Sessions tree's keybinds aren't hijacked.
         KeyCode::Char('a') if app.tree_section == TreeSection::Servers => {
-            // Reuse the same overlay the Ctrl-S switcher uses; the
-            // overlay's add-form handles validation + persistence.
-            open_profiles_overlay(app);
-            if let Overlay::Profiles(ref mut state) = app.overlay {
-                state.add_form = Some(AddProfileForm::new());
+            // Add a machine = add an SSH host. Open the hosts overlay's
+            // add form (Name·User·Hostname·Port·Auth·Secret).
+            open_hosts_overlay(app);
+            if let Overlay::Hosts(ref mut o) = app.overlay {
+                o.add_form = Some(AddHostForm::new());
             }
         }
         KeyCode::Char('d') | KeyCode::Char('D') if app.tree_section == TreeSection::Servers => {
-            // Route through the same confirmation overlay as `Ctrl-D`
-            // so an accidental keypress doesn't silently nuke the
-            // profile. The previous direct-`store.remove` path was the
-            // muscle-memory landmine the user kept hitting.
-            match app.cursor_profile().cloned() {
-                None => {
-                    // Synthetic loopback row — nothing on disk to remove.
+            // Manage/remove via the hosts overlay (`d` deletes there). The
+            // local host (this machine) can't be removed.
+            match app.cursor_host() {
+                Some(h) if h.id != agentum_core::LOCAL_HOST_ID => {
+                    let id = h.id;
+                    reopen_hosts_overlay_at(app, id);
+                }
+                _ => {
                     app.status_msg = Some(format!(
-                        "can't remove {} — it's the local loopback",
+                        "{} is this machine — it can't be removed",
                         local_machine_label()
                     ));
-                }
-                Some(entry) => {
-                    if app.active_profile.as_deref() == Some(entry.name.as_str()) {
-                        app.status_msg =
-                            Some("can't remove the active server — switch first".into());
-                    } else {
-                        app.overlay = Overlay::Confirm(PendingAction::RemoveServer {
-                            name: entry.name.clone(),
-                        });
-                    }
                 }
             }
         }
@@ -5518,7 +5420,7 @@ fn open_hosts_overlay(app: &mut App) {
         add_form: None,
     });
     app.status_msg = Some(if empty {
-        "no SSH hosts yet · a add a server · Esc close".into()
+        "no SSH hosts yet · a add a host · Esc close".into()
     } else {
         "hosts · ↑↓ move · Enter/t check · i set up (deps + agents) · a add · Esc close".into()
     });
@@ -5673,6 +5575,31 @@ async fn handle_hosts_key(app: &mut App, key: KeyEvent, client: &Client) {
                         agents,
                     });
                     return;
+                }
+            }
+        }
+        // `d` removes the selected SSH host. Only SSH hosts are in
+        // `host_ids` (the local host is filtered out), so this can never
+        // delete "this machine". The remote box is untouched — we just
+        // drop the connection entry from the daemon's host list.
+        KeyCode::Char('d') | KeyCode::Char('D') => {
+            if let Some(id) = overlay.selected() {
+                match client.delete_host(id).await {
+                    Ok(()) => {
+                        app.hosts = client.list_hosts().await.unwrap_or_default();
+                        app.host_readiness_cache.remove(&id);
+                        overlay.host_ids = app
+                            .hosts
+                            .iter()
+                            .filter(|h| h.id != agentum_core::LOCAL_HOST_ID)
+                            .map(|h| h.id)
+                            .collect();
+                        if overlay.cursor >= overlay.host_ids.len() {
+                            overlay.cursor = overlay.host_ids.len().saturating_sub(1);
+                        }
+                        overlay.error = None;
+                    }
+                    Err(e) => overlay.error = Some(format!("delete failed: {e}")),
                 }
             }
         }
@@ -6598,25 +6525,6 @@ fn bulk_action_from_checks(app: &App, kind: BulkKind) -> Option<PendingAction> {
 }
 
 async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
-    // Server removal is purely local — it touches profiles.toml
-    // and the app's in-memory profile list without a daemon round trip.
-    if let PendingAction::RemoveServer { name } = &action {
-        let label = format!("removed server `{name}`");
-        match super::profiles::load() {
-            Ok(mut store) => {
-                let _ = store.remove(name);
-                app.reload_profiles();
-                app.status_msg = Some(label.clone());
-                push_notification(app, label, None, NotifKind::Info);
-            }
-            Err(e) => {
-                app.push_error(format!("remove server `{name}`: {e}"));
-            }
-        }
-        refresh_all(app).await;
-        return;
-    }
-
     // Bulk variant: fan out per-id, routing each to its owning client,
     // and aggregate the result into one toast. We mirror the single-id
     // path's recently_killed + selection cleanup so the watchdog
@@ -6732,7 +6640,6 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         PendingAction::Start { id, .. }
         | PendingAction::Stop { id, .. }
         | PendingAction::Kill { id, .. } => *id,
-        PendingAction::RemoveServer { .. }
         | PendingAction::Bulk { .. }
         | PendingAction::ProvisionHost { .. } => unreachable!(),
     };
@@ -6773,7 +6680,6 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         PendingAction::Start { name, .. } => format!("started `{name}`"),
         PendingAction::Stop { name, .. } => format!("stopped `{name}`"),
         PendingAction::Kill { name, .. } => format!("killed `{name}`"),
-        PendingAction::RemoveServer { .. }
         | PendingAction::Bulk { .. }
         | PendingAction::ProvisionHost { .. } => unreachable!(),
     };
@@ -7651,9 +7557,10 @@ async fn run_palette_action(
             );
         }
         ActionKind::OpenProfiles => {
-            open_profiles_overlay(app);
-            app.status_msg =
-                Some("servers (Enter switch · a add · d remove · s scope · Esc close)".into());
+            open_hosts_overlay(app);
+            app.status_msg = Some(
+                "hosts · ↑↓ move · Enter/t check · i set up · a add · d remove · Esc close".into(),
+            );
         }
         ActionKind::OpenHosts => {
             open_hosts_overlay(app);
@@ -8958,49 +8865,6 @@ pub fn tool_icon(tool: &str) -> (&'static str, ratatui::style::Color) {
         // they don't compete with agent rows for attention.
         "terminal" | "bash" => ("$", Color::DarkGray),
         _ => ("▣", Color::DarkGray),
-    }
-}
-
-#[cfg(test)]
-mod profile_targets_loopback_tests {
-    //! Pin the URL-host classifier the sidebar uses to decide whether
-    //! a registered profile already represents the local daemon — and
-    //! therefore the synthetic "MY MACHINE" row above it is redundant.
-    //! Misclassifying a remote host as loopback would *hide* the
-    //! synthetic row and leave the user without a way to navigate
-    //! back to their local daemon, so the cases below are the safety
-    //! net.
-    use super::*;
-
-    #[test]
-    fn loopback_literals_are_recognised() {
-        assert!(profile_targets_loopback("http://127.0.0.1:8822"));
-        assert!(profile_targets_loopback("https://127.0.0.1:8822"));
-        assert!(profile_targets_loopback("http://localhost:8822"));
-        assert!(profile_targets_loopback("https://localhost"));
-        assert!(profile_targets_loopback("http://[::1]:8822"));
-    }
-
-    #[test]
-    fn remote_hosts_are_not_loopback() {
-        assert!(!profile_targets_loopback("https://my-vps.example.com:8822"));
-        assert!(!profile_targets_loopback("https://100.64.0.1:8822"));
-        assert!(!profile_targets_loopback(
-            "https://mateos-macbook-pro.tail-scale.ts.net:8822"
-        ));
-        // Looks like a loopback substring but isn't:
-        assert!(!profile_targets_loopback(
-            "https://localhost.evil.example:8822"
-        ));
-    }
-
-    #[test]
-    fn unparseable_url_falls_back_to_safe_default() {
-        // An unparseable URL must NOT classify as loopback — that would
-        // hide the synthetic row and confuse the user.
-        assert!(!profile_targets_loopback(""));
-        assert!(!profile_targets_loopback("not a url"));
-        assert!(!profile_targets_loopback("127.0.0.1:8822")); // missing scheme
     }
 }
 
