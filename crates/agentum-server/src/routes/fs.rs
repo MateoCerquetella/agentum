@@ -139,7 +139,7 @@ async fn list_remote_dir(
     } else {
         " | awk -F '\\t' '$2 !~ /^\\./'"
     };
-    let script = format!(
+    let inner = format!(
         r#"base={quoted}
 if [ -z "$base" ] || [ "$base" = "~" ]; then
   base="$HOME"
@@ -152,6 +152,18 @@ parent=$(dirname -- "$base")
 if [ "$parent" != "$base" ]; then printf 'PARENT\t%s\n' "$parent"; fi
 find "$base" -mindepth 1 -maxdepth 1 -type d -printf 'DIR\t%f\t%p\n'{hidden_filter} | sort -f
 "#
+    );
+    // Force a POSIX shell on the remote. The login shell may be fish or
+    // zsh (this is common — the operator runs fish), and this script's
+    // `case` / `$(...)` / `${{#}}` syntax is bash/POSIX-only, so a fish
+    // login shell rejects it and the listing fails. Every other remote
+    // command (probe, bootstrap, install, tmux) wraps in `sh -c` for
+    // exactly this reason — this path was the one that forgot, which
+    // surfaced as "couldn't list host home: 400" in the New Session
+    // workdir field whenever the target host logged into fish.
+    let script = format!(
+        "sh -c {}",
+        shlex::try_quote(inner.as_str()).map_err(|_| ApiError::BadRequest("bad path".into()))?
     );
     let out = crate::host_runtime::ssh_stdout(host, &script)
         .await
