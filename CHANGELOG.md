@@ -4,6 +4,38 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.4] — 2026-05-30
+
+### Fixed
+- **Remote workdir listing no longer 400s on fish/zsh login shells.**
+  Opening New Session against an SSH host (or Tab-cycling onto one) fetches
+  `$HOME` on that box via `/api/fs/list`. That listing script is POSIX
+  `sh`, but it was handed straight to the remote *login* shell — so a host
+  whose user logs into **fish** or zsh rejected its `case` / `$(…)` /
+  `${#}` syntax, and the form showed `couldn't list host home: 400 Bad
+  Request — remote fs: …` even though the host reported "ready" (readiness
+  already wrapped its probe in `sh -c`; this path didn't). The script is
+  now wrapped in `sh -c`, matching every other remote command (readiness,
+  bootstrap, agent install, tmux), so the remote login shell no longer
+  matters.
+
+### Changed
+- **New Session merges "Servers" and "Host" into one picker.** The form
+  had two adjacent fields — a *Servers* (daemon) field and a *Host* (SSH)
+  field — which read as redundant now that the sidebar already folds the
+  local machine and every SSH host into one HOSTS list. They're now a
+  single **Host** field that cycles `this machine + the SSH hosts the
+  daemon drives`, mirroring the sidebar exactly. "this machine" renders as
+  the daemon's hostname and is just a peer of any SSH host in the wheel;
+  the local case keeps the worktree default. Finishes the servers→hosts
+  merge that 0.10.2 started in the sidebar.
+- **Hosts overlay: `Enter` closes a host that's already ready.** Once a
+  host checks out green, `Enter` dismisses the overlay instead of
+  re-running the probe — the common "added it, watched the checks pass,
+  done" flow. `t` still forces a re-check, and a not-yet-checked or
+  not-ready host still probes on `Enter`. The detail pane shows a `press
+  Enter to close` hint when the host is ready.
+
 ## [0.10.3] — 2026-05-30
 
 ### Added

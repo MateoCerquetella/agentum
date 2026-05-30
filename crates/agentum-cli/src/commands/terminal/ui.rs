@@ -2215,6 +2215,13 @@ fn draw_hosts_overlay(
             format!("  {verdict}"),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         )));
+        // Host's green — the work is done, so Enter is now "close".
+        if r.ok {
+            lines.push(Line::from(Span::styled(
+                "  press Enter to close".to_string(),
+                Style::default().fg(p.success),
+            )));
+        }
     } else {
         lines.push(Line::from(Span::styled(
             "  press Enter/t to run a readiness check".to_string(),
@@ -2224,7 +2231,8 @@ fn draw_hosts_overlay(
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  ↑↓ move · Enter/t check · i set up (deps + agents) · a add · Esc close".to_string(),
+        "  ↑↓ move · Enter check (again to close) · t recheck · i set up · a add · Esc close"
+            .to_string(),
         Style::default().fg(p.muted),
     )));
 
@@ -2539,26 +2547,17 @@ fn draw_new_session_overlay(
     // keep the box title (set at the `overlay_box` call below) and drop
     // the inner heading so the form starts straight on its first field.
 
-    // Servers pick comes first — same order as the user's mental
-    // model ("which agentum, then which folder, then which agent").
-    // The empty string renders as the local-machine label so the
-    // loopback is a peer of any named remote profile in the cycle
-    // (pre-v0.7.9 said "(current connection)" which a user reported
-    // as confusing — they wanted the local case to look like just
-    // another server entry).
+    // Host leads the form — one merged "where does this run" picker.
+    // Servers and Host used to be two separate fields, which read as
+    // redundant: the local machine and the SSH boxes are all just
+    // "places a session can run." This now mirrors the sidebar's HOSTS
+    // strip exactly — Tab cycles `app.hosts` (this machine + every SSH
+    // host the daemon drives). An empty id renders as the machine's own
+    // hostname ("this machine"), so the local case is a peer of any
+    // named remote, not a separate concept.
     let local_label = super::app::local_machine_label();
-    let profile_display = super::app::profile_label(form.profile.trim());
-    push_form_field_with_hint(
-        &mut lines,
-        "Servers",
-        &profile_display,
-        form.field == NewSessionField::Profile,
-        &local_label,
-        Some("Tab cycles the local machine + configured servers"),
-        p,
-    );
     let host_display = if form.host_id.trim().is_empty() {
-        "local".to_string()
+        local_label.clone()
     } else {
         hosts
             .iter()
@@ -2571,8 +2570,8 @@ fn draw_new_session_overlay(
         "Host",
         &host_display,
         form.field == NewSessionField::Host,
-        "local",
-        Some("Tab cycles SSH hosts controlled by this server"),
+        &local_label,
+        Some("Tab cycles this machine + the SSH hosts it drives"),
         p,
     );
     push_form_field_with_hint(

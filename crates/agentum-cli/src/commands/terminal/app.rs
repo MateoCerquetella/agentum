@@ -646,7 +646,7 @@ impl NewSessionForm {
     /// when the user opens it from any sidebar / palette / key path.
     pub fn with_profile(default_profile: String, default_workdir: String) -> Self {
         Self {
-            field: NewSessionField::Profile,
+            field: NewSessionField::Host,
             profile: default_profile,
             host_id: String::new(),
             name: String::new(),
@@ -669,13 +669,11 @@ impl NewSessionForm {
 
     pub fn next_field(&mut self) {
         self.field = match self.field {
-            // Workdir lives directly under the Servers field — the
-            // user's mental model is "which agentum, then which folder"
-            // — and re-fetching `$HOME` when the server changes only
-            // makes sense if Workdir is the very next stop. Name / Tool
-            // / Model trail because they're typed independently of which
-            // daemon owns the session.
-            NewSessionField::Profile => NewSessionField::Host,
+            // Host leads the form — it's the merged "where does this run"
+            // picker (this machine + SSH hosts). Workdir follows directly
+            // so re-fetching `$HOME` when the host changes lands on the
+            // very next stop. Name / Tool / Model trail because they're
+            // typed independently of which host owns the session.
             NewSessionField::Host => NewSessionField::Workdir,
             NewSessionField::Workdir => NewSessionField::Name,
             NewSessionField::Name => NewSessionField::Tool,
@@ -684,14 +682,13 @@ impl NewSessionForm {
             NewSessionField::Args => NewSessionField::UpAfter,
             NewSessionField::UpAfter => NewSessionField::Yolo,
             NewSessionField::Yolo => NewSessionField::Worktree,
-            NewSessionField::Worktree => NewSessionField::Profile,
+            NewSessionField::Worktree => NewSessionField::Host,
         };
     }
 
     pub fn prev_field(&mut self) {
         self.field = match self.field {
-            NewSessionField::Profile => NewSessionField::Worktree,
-            NewSessionField::Host => NewSessionField::Profile,
+            NewSessionField::Host => NewSessionField::Worktree,
             NewSessionField::Workdir => NewSessionField::Host,
             NewSessionField::Name => NewSessionField::Workdir,
             NewSessionField::Tool => NewSessionField::Name,
@@ -705,12 +702,10 @@ impl NewSessionForm {
 
     pub fn field_value_mut(&mut self) -> Option<&mut String> {
         match self.field {
-            // Profile is cycle-only — typing a free-form name is
-            // unreliable since the value has to match an entry in
-            // `App.profiles` (or be empty for "current connection").
-            // Tab cycles the value; backspace clears to the empty
-            // string. See `cycle_profile`.
-            NewSessionField::Profile => None,
+            // Host is cycle-only — the value has to be a real host id
+            // (empty for "this machine", or an SSH host's UUID), so
+            // Tab cycles through `app.hosts` rather than accepting
+            // free-form text. See `cycle_host`.
             NewSessionField::Host => None,
             NewSessionField::Name => Some(&mut self.name),
             NewSessionField::Tool => Some(&mut self.tool),
@@ -722,38 +717,30 @@ impl NewSessionForm {
         }
     }
 
-    /// Cycle the profile field through `available` plus optionally the
-    /// empty string (which represents the local loopback, rendered as
-    /// "this machine"). Wraps; preserves order. Used by Tab on the
-    /// Profile field.
+    /// Cycle the merged Host field through `hosts` — the same list the
+    /// sidebar's HOSTS strip shows: the daemon's own machine ("this
+    /// machine") plus every SSH host it drives. Wraps; preserves order.
     ///
-    /// `has_local` is `true` iff `app.clients` has a `""` key — i.e.
-    /// a real local-loopback connection is wired up. When `false`
-    /// (the user launched with `--profile vps1` and the local daemon
-    /// isn't connected), the empty entry is omitted so Tab doesn't
-    /// drop the form into a "this machine" state that has no client
-    /// behind it — that's the trap that made the workdir field look
-    /// like it wasn't following the cycle: target resolution would
-    /// silently fall back to the active server's `$HOME`, which is
-    /// the same path the field already had.
-    pub fn cycle_profile(&mut self, available: &[String], has_local: bool) {
-        let mut wheel: Vec<String> = Vec::new();
-        if has_local {
-            wheel.push(String::new());
-        }
-        wheel.extend(available.iter().cloned());
-        if wheel.len() <= 1 {
-            return; // nothing to cycle through
-        }
-        let idx = wheel.iter().position(|n| n == &self.profile).unwrap_or(0);
-        self.profile = wheel[(idx + 1) % wheel.len()].clone();
-    }
-
+    /// The local host is normalised to the empty id, not its real
+    /// `LOCAL_HOST_ID` UUID, because the rest of the form keys "this
+    /// machine" off an empty `host_id`: the worktree toggle only fires
+    /// on the local host (`worktree_requested`), and the Host label
+    /// renders "this machine" for the empty case. Emitting the UUID
+    /// instead would silently disable worktrees on the local host.
     pub fn cycle_host(&mut self, hosts: &[agentum_core::Host]) {
         if hosts.len() <= 1 {
             return;
         }
-        let wheel: Vec<String> = hosts.iter().map(|h| h.id.to_string()).collect();
+        let wheel: Vec<String> = hosts
+            .iter()
+            .map(|h| {
+                if h.id == agentum_core::LOCAL_HOST_ID {
+                    String::new()
+                } else {
+                    h.id.to_string()
+                }
+            })
+            .collect();
         let idx = wheel.iter().position(|id| id == &self.host_id).unwrap_or(0);
         self.host_id = wheel[(idx + 1) % wheel.len()].clone();
     }
@@ -843,10 +830,10 @@ pub fn parse_args_field(input: &str) -> Vec<String> {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NewSessionField {
-    /// Server profile this session targets. New first field — see
-    /// `NewSessionForm::with_profile`. Tab cycles through configured
-    /// profiles + an empty entry meaning "current connection".
-    Profile,
+    /// Where the session runs. Leads the form. Merged picker over the
+    /// daemon's own machine ("this machine") plus every SSH host it
+    /// drives — the same list the sidebar's HOSTS strip shows. Tab
+    /// cycles; an empty `host_id` means "this machine". See `cycle_host`.
     Host,
     Name,
     Tool,
@@ -5452,7 +5439,8 @@ fn open_hosts_overlay(app: &mut App) {
     app.status_msg = Some(if empty {
         "no SSH hosts yet · a add a host · Esc close".into()
     } else {
-        "hosts · ↑↓ move · Enter/t check · i set up (deps + agents) · a add · Esc close".into()
+        "hosts · ↑↓ move · Enter check (again to close) · t recheck · i set up · a add · Esc close"
+            .into()
     });
 }
 
@@ -5579,6 +5567,17 @@ async fn handle_hosts_key(app: &mut App, key: KeyEvent, client: &Client) {
         }
         KeyCode::Enter | KeyCode::Char('t') => {
             if let Some(id) = overlay.selected() {
+                // Once a host checks out green, Enter is "I'm done —
+                // close." The user added the host, watched the checks
+                // pass, and just wants out; re-probing a host that's
+                // already ready is busywork. `t` always re-checks; only
+                // a not-yet-checked or not-ready host makes Enter probe.
+                // (`overlay` was already swapped to `Overlay::None` at
+                // the top of the fn, so returning leaves it closed.)
+                let ready = app.cached_readiness(id).map(|r| r.ok).unwrap_or(false);
+                if key.code == KeyCode::Enter && ready {
+                    return;
+                }
                 overlay.loading = true;
                 overlay.error = None;
                 match client.host_readiness(id).await {
@@ -5726,75 +5725,6 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
         //     full match) it falls through to next_field so Tab still
         //     advances the form when the path is empty / done.
         KeyCode::Tab => match form.field {
-            NewSessionField::Profile => {
-                // Cycle through configured profiles plus an empty
-                // entry meaning the local loopback ("this machine").
-                // The empty entry is only offered when a real local
-                // client is connected — otherwise cycling to "" would
-                // silently fall back to the active server's `$HOME`
-                // and the workdir field wouldn't appear to change.
-                let names: Vec<String> = app.profiles.iter().map(|p| p.name.clone()).collect();
-                let has_local = app.clients.contains_key("");
-                // Wheel size is what `cycle_profile` would build:
-                // configured peers + optional empty entry for local.
-                // If that has zero or one entry there's nothing to
-                // cycle through, so Tab should advance to the next
-                // field instead of trapping the cursor here.
-                let wheel_size = names.len() + if has_local { 1 } else { 0 };
-                if wheel_size <= 1 {
-                    form.next_field();
-                } else {
-                    let old_profile = form.profile.clone();
-                    form.cycle_profile(&names, has_local);
-                    // When the profile changes, fetch the new server's
-                    // `$HOME` and use it as the workdir. We resolve
-                    // strictly through `app.clients` now — no fallback
-                    // to the run-loop's client for the empty case,
-                    // because that fallback used to mask the
-                    // "no local connected" state by returning the
-                    // active server's `$HOME` (the bug the user hit).
-                    if form.profile != old_profile {
-                        let target_client = app
-                            .clients
-                            .get(form.profile.as_str())
-                            .and_then(|e| e.client.clone());
-                        if let Some(tc) = target_client {
-                            match tc.list_dir(None).await {
-                                Ok(listing) => {
-                                    form.workdir = listing.path;
-                                    form.host_id.clear();
-                                    app.hosts = tc.list_hosts().await.unwrap_or_default();
-                                    app.agent_availability =
-                                        tc.list_agents_on(None).await.ok().map(|list| {
-                                            list.into_iter()
-                                                .filter(|a| a.available)
-                                                .map(|a| a.name)
-                                                .collect()
-                                        });
-                                    // Clear any prior error: the new
-                                    // refetch succeeded, so the
-                                    // workdir field is authoritative.
-                                    form.error = None;
-                                }
-                                Err(e) => {
-                                    // Surface the failure inline so the
-                                    // user understands why the workdir
-                                    // didn't move with the cycle.
-                                    form.error = Some(format!(
-                                        "couldn't reach {}: {e}",
-                                        profile_label(&form.profile)
-                                    ));
-                                }
-                            }
-                        } else {
-                            form.error = Some(format!(
-                                "{} isn't connected — try Ctrl-S to re-add",
-                                profile_label(&form.profile)
-                            ));
-                        }
-                    }
-                }
-            }
             NewSessionField::Host => {
                 if app.hosts.len() <= 1 {
                     form.next_field();
@@ -7640,7 +7570,8 @@ async fn run_palette_action(
         ActionKind::OpenProfiles => {
             open_hosts_overlay(app);
             app.status_msg = Some(
-                "hosts · ↑↓ move · Enter/t check · i set up · a add · d remove · Esc close".into(),
+                "hosts · ↑↓ move · Enter check (again to close) · t recheck · i set up · a add · d remove · Esc close"
+                    .into(),
             );
         }
         ActionKind::OpenHosts => {
@@ -9096,75 +9027,63 @@ mod merge_dedup_tests {
 }
 
 #[cfg(test)]
-mod cycle_profile_tests {
-    //! These tests lock the new contract: the empty "" entry only
-    //! appears in the cycle wheel when a real local-loopback client
-    //! is connected. Pre-fix, the wheel always included "" and
-    //! cycling to it would silently leave the workdir on the active
-    //! server's `$HOME` — which read as "workdir not following the
-    //! server switch."
+mod cycle_host_tests {
+    //! The merged Host picker cycles `app.hosts` — the same list the
+    //! sidebar shows (this machine + the SSH hosts the daemon drives).
+    //! The contract that matters: the local host normalises to the
+    //! empty id, never its `LOCAL_HOST_ID` UUID, so the worktree toggle
+    //! and the "this machine" label keep keying off an empty `host_id`.
     use super::*;
+    use time::OffsetDateTime;
 
-    fn new_form(profile: &str) -> NewSessionForm {
-        NewSessionForm::with_profile(profile.to_string(), String::new())
+    fn host(id: Uuid, kind: agentum_core::HostKind) -> agentum_core::Host {
+        agentum_core::Host {
+            id,
+            name: "host".into(),
+            kind,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            last_seen_at: None,
+        }
+    }
+
+    fn ssh(id: Uuid) -> agentum_core::Host {
+        host(
+            id,
+            agentum_core::HostKind::Ssh {
+                user: "me".into(),
+                hostname: "box".into(),
+                port: 22,
+                auth: agentum_core::SshAuth::default(),
+            },
+        )
     }
 
     #[test]
-    fn cycle_with_local_includes_this_machine() {
-        // Loopback launch: one peer profile + a connected local
-        // client. Wheel = ["", "vps1"]. Tab from "" → "vps1" →
-        // back to "".
-        let mut form = new_form("");
-        form.cycle_profile(&["vps1".to_string()], true);
-        assert_eq!(form.profile, "vps1");
-        form.cycle_profile(&["vps1".to_string()], true);
-        assert_eq!(form.profile, "");
+    fn single_host_does_not_cycle() {
+        // Just "this machine" — nothing to move to, so the id stays "".
+        let hosts = vec![host(agentum_core::LOCAL_HOST_ID, agentum_core::HostKind::Local)];
+        let mut form = NewSessionForm::with_profile(String::new(), String::new());
+        form.cycle_host(&hosts);
+        assert_eq!(form.host_id, "");
     }
 
     #[test]
-    fn cycle_without_local_skips_this_machine() {
-        // `--profile vps1` launch with no local loopback. Wheel is
-        // just ["vps1"]; cycling does nothing (form is trapped on
-        // the only reachable server, which is fine — there's no
-        // "this machine" to cycle to).
-        let mut form = new_form("vps1");
-        form.cycle_profile(&["vps1".to_string()], false);
-        assert_eq!(form.profile, "vps1");
-    }
-
-    #[test]
-    fn cycle_without_local_walks_multiple_peers() {
-        // `--profile vps1` launch with two peers and no local.
-        // Wheel = ["vps1", "vps2"]; Tab walks between them.
-        let mut form = new_form("vps1");
-        form.cycle_profile(&["vps1".to_string(), "vps2".to_string()], false);
-        assert_eq!(form.profile, "vps2");
-        form.cycle_profile(&["vps1".to_string(), "vps2".to_string()], false);
-        assert_eq!(form.profile, "vps1");
-    }
-
-    #[test]
-    fn cycle_with_local_walks_full_wheel() {
-        // Loopback + two peers. Wheel = ["", "vps1", "vps2"].
-        let mut form = new_form("");
-        let peers = vec!["vps1".to_string(), "vps2".to_string()];
-        form.cycle_profile(&peers, true);
-        assert_eq!(form.profile, "vps1");
-        form.cycle_profile(&peers, true);
-        assert_eq!(form.profile, "vps2");
-        form.cycle_profile(&peers, true);
-        assert_eq!(form.profile, "");
-    }
-
-    #[test]
-    fn cycle_with_unknown_starting_profile_lands_on_first() {
-        // Defensive: if the form's profile field somehow doesn't
-        // match anything in the wheel, treat that as index 0 so
-        // Tab still produces a sensible next step.
-        let mut form = new_form("ghost");
-        form.cycle_profile(&["vps1".to_string()], true);
-        // wheel = ["", "vps1"]; unknown → idx 0; (0+1) % 2 → "vps1"
-        assert_eq!(form.profile, "vps1");
+    fn local_normalises_to_empty_id_and_keeps_worktree() {
+        // Wheel = [local→"", ssh]. "" → ssh uuid → back to "".
+        let ssh_id = Uuid::from_u128(1);
+        let hosts = vec![
+            host(agentum_core::LOCAL_HOST_ID, agentum_core::HostKind::Local),
+            ssh(ssh_id),
+        ];
+        let mut form = NewSessionForm::with_profile(String::new(), String::new());
+        form.cycle_host(&hosts);
+        assert_eq!(form.host_id, ssh_id.to_string());
+        // Wrapping back to the local host yields "" — not the nil UUID —
+        // so a worktree is still requested on "this machine".
+        form.cycle_host(&hosts);
+        assert_eq!(form.host_id, "");
+        assert!(form.worktree_requested());
     }
 }
 
@@ -9208,9 +9127,10 @@ mod worktree_tests {
         form.field = NewSessionField::Yolo;
         form.next_field();
         assert_eq!(form.field, NewSessionField::Worktree);
-        // Last field wraps back to the top of the form.
+        // Last field wraps back to the top of the form — now the Host
+        // picker, since Servers was merged into it.
         form.next_field();
-        assert_eq!(form.field, NewSessionField::Profile);
+        assert_eq!(form.field, NewSessionField::Host);
         // And it's reachable going backwards from the top.
         form.prev_field();
         assert_eq!(form.field, NewSessionField::Worktree);
