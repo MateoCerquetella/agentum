@@ -262,6 +262,11 @@ pub struct AddHostForm {
     pub secret: String,
     pub error: Option<String>,
     pub submitting: bool,
+    /// When `Some`, the folder picker is browsing the daemon's filesystem
+    /// for the SSH key path (key auth only). Mirrors
+    /// [`NewSessionForm::picker`]; held on the form so closing the picker
+    /// restores the rest of the fields.
+    pub picker: Option<DirPickerState>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -286,6 +291,7 @@ impl AddHostForm {
             secret: String::new(),
             error: None,
             submitting: false,
+            picker: None,
         }
     }
 
@@ -1696,7 +1702,6 @@ impl App {
             .filter_map(|(name, entry)| entry.client.as_ref().map(|c| (name.as_str(), c)))
     }
 
-
     /// Total rows in the HOSTS section — one per host. The local host is
     /// always present (row 0); each SSH host follows.
     pub fn servers_row_count(&self) -> usize {
@@ -1707,7 +1712,6 @@ impl App {
     pub fn cursor_host(&self) -> Option<&agentum_core::Host> {
         self.hosts.get(self.servers_cursor)
     }
-
 
     /// Load the on-disk profiles into `app.profiles`. Called once at
     /// run-loop start and again any time the user adds/removes a
@@ -2115,7 +2119,6 @@ pub fn profile_label(profile: &str) -> String {
         format!("@{profile}")
     }
 }
-
 
 /// Hostname-derived label for the loopback row. Centralised so the
 /// sidebar header, the Servers panel row, the New Session form's
@@ -5272,19 +5275,46 @@ async fn handle_key(
             // ask the daemon for its `$HOME`. If the network hiccups
             // we use the laptop's `$HOME` as a last resort so the
             // form still opens with something editable.
-            let (profile, workdir) = if let Some(s) = app.selected_session() {
+            let (profile, workdir, host_id) = if let Some(s) = app.selected_session() {
                 let owning_profile = app.profile_for_session(s.id).to_string();
-                (owning_profile, s.workdir.clone())
+                // Carry the selected session's own host so a new session
+                // spawned from a remote session lands on the same box, not
+                // silently on the local daemon. Local host → empty string
+                // (which keeps the worktree default and "local" label).
+                let host_id = s
+                    .host_id
+                    .filter(|id| *id != agentum_core::LOCAL_HOST_ID)
+                    .map(|id| id.to_string())
+                    .unwrap_or_default();
+                (owning_profile, s.workdir.clone(), host_id)
             } else {
                 let active = app.active_profile.clone().unwrap_or_default();
-                let home = match client.list_dir(None).await {
+                // No session selected: seed the host from the sidebar
+                // cursor when the user is in the Hosts section, so opening
+                // New Session with a host highlighted (e.g. `omarchy`)
+                // targets that host instead of defaulting to local.
+                let host_id = if app.tree_section == TreeSection::Servers {
+                    app.cursor_host()
+                        .filter(|h| h.id != agentum_core::LOCAL_HOST_ID)
+                        .map(|h| h.id.to_string())
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                // Resolve `$HOME` on the *target* host so the seeded
+                // workdir is a real path there (the SSH box's home, not
+                // the laptop's). `list_dir_on(_, None)` is the plain
+                // local listing, so this is unchanged when no host is set.
+                let host_uuid = Uuid::parse_str(host_id.trim()).ok();
+                let home = match client.list_dir_on(None, host_uuid).await {
                     Ok(listing) => listing.path,
                     Err(_) => std::env::var("HOME").unwrap_or_default(),
                 };
-                (active, home)
+                (active, home, host_id)
             };
-            app.overlay =
-                Overlay::NewSession(Box::new(NewSessionForm::with_profile(profile, workdir)));
+            let mut form = NewSessionForm::with_profile(profile, workdir);
+            form.host_id = host_id;
+            app.overlay = Overlay::NewSession(Box::new(form));
         }
         KeyCode::Char('u') => {
             if let Some(bulk) = bulk_action_from_checks(app, BulkKind::Start) {
@@ -5437,6 +5467,23 @@ async fn handle_hosts_key(app: &mut App, key: KeyEvent, client: &Client) {
 
     // ----- add-host form mode -----
     if let Some(mut form) = overlay.add_form.take() {
+        // Folder picker owns input while it's open (mirrors the New
+        // Session workdir picker). The SSH key lives on the daemon's own
+        // filesystem — the daemon is what connects out with it — so the
+        // picker browses the local daemon (host_id = None).
+        if let Some(picker) = form.picker.as_mut() {
+            match dir_picker_step(picker, key, client, None).await {
+                PickerNav::Stay => {}
+                PickerNav::Close => form.picker = None,
+                PickerNav::Accept(path) => {
+                    form.secret = path;
+                    form.picker = None;
+                }
+            }
+            overlay.add_form = Some(form);
+            app.overlay = Overlay::Hosts(overlay);
+            return;
+        }
         match key.code {
             KeyCode::Esc => {
                 // Drop the form, return to the list.
@@ -5463,6 +5510,19 @@ async fn handle_hosts_key(app: &mut App, key: KeyEvent, client: &Client) {
                 if let Some(v) = form.field_value_mut() {
                     v.push(c);
                 }
+            }
+            // Enter on the key-path field opens the folder picker — same
+            // gesture as Enter on the New Session workdir field. Only in
+            // key mode; password auth has no file to browse for.
+            KeyCode::Enter
+                if form.field == AddHostField::Secret && form.auth == HostAuthChoice::Key =>
+            {
+                let seed = if form.secret.trim().is_empty() {
+                    None
+                } else {
+                    Some(form.secret.trim().to_string())
+                };
+                form.picker = Some(open_dir_picker(seed.as_deref(), client, None).await);
             }
             KeyCode::Enter => {
                 match build_new_host(&form) {
@@ -6443,43 +6503,66 @@ fn handle_tool_picker_key(form: &mut NewSessionForm, key: KeyEvent) {
     }
 }
 
-async fn handle_dir_picker_key(form: &mut NewSessionForm, key: KeyEvent, client: &Client) {
-    let Some(picker) = form.picker.as_mut() else {
-        return;
-    };
+/// What a single dir-picker keypress resolves to, independent of which
+/// form owns the picker. Lets the same tree-walk drive the New Session
+/// workdir field and the Add-host key-path field without duplicating the
+/// navigation logic.
+enum PickerNav {
+    /// Stay in the picker (navigation/cursor move).
+    Stay,
+    /// Close the picker without committing (Esc).
+    Close,
+    /// Commit this directory path and close the picker.
+    Accept(String),
+}
 
+/// Run one keypress against a directory picker on `host_id`'s filesystem,
+/// mutating the picker in place for navigation and reporting whether the
+/// caller should close or accept. The accepted value is the path the
+/// picker is currently *listing* (the directory itself), matching the
+/// previous "accept current dir" behaviour.
+async fn dir_picker_step(
+    picker: &mut DirPickerState,
+    key: KeyEvent,
+    client: &Client,
+    host_id: Option<Uuid>,
+) -> PickerNav {
     match key.code {
-        KeyCode::Esc => {
-            form.picker = None;
-        }
-        KeyCode::Up => {
-            picker.cursor = picker.cursor.saturating_sub(1);
-        }
-        KeyCode::Down if picker.cursor + 1 < picker.entries.len() => {
-            picker.cursor += 1;
-        }
+        KeyCode::Esc => return PickerNav::Close,
+        KeyCode::Up => picker.cursor = picker.cursor.saturating_sub(1),
+        KeyCode::Down if picker.cursor + 1 < picker.entries.len() => picker.cursor += 1,
         // Right / Enter: descend into the highlighted entry.
         KeyCode::Right | KeyCode::Enter => {
-            let Some(entry) = picker.entries.get(picker.cursor).cloned() else {
-                return;
-            };
-            let next = open_dir_picker(Some(&entry.path), client, form.host_uuid()).await;
-            form.picker = Some(next);
+            if let Some(entry) = picker.entries.get(picker.cursor).cloned() {
+                *picker = open_dir_picker(Some(&entry.path), client, host_id).await;
+            }
         }
         // Left / Backspace: pop up one level.
         KeyCode::Left | KeyCode::Backspace => {
             if let Some(parent) = picker.parent.clone() {
-                let next = open_dir_picker(Some(&parent), client, form.host_uuid()).await;
-                form.picker = Some(next);
+                *picker = open_dir_picker(Some(&parent), client, host_id).await;
             }
         }
-        // 'a' (accept): commit the *current directory* (the path being
-        // listed) as the workdir, and close the picker.
-        KeyCode::Char('a') | KeyCode::Char('s') => {
-            form.workdir = picker.path.clone();
+        // 'a'/'s' (accept): commit the *current directory* (the path being
+        // listed) and close the picker.
+        KeyCode::Char('a') | KeyCode::Char('s') => return PickerNav::Accept(picker.path.clone()),
+        _ => {}
+    }
+    PickerNav::Stay
+}
+
+async fn handle_dir_picker_key(form: &mut NewSessionForm, key: KeyEvent, client: &Client) {
+    let host_id = form.host_uuid();
+    let Some(picker) = form.picker.as_mut() else {
+        return;
+    };
+    match dir_picker_step(picker, key, client, host_id).await {
+        PickerNav::Stay => {}
+        PickerNav::Close => form.picker = None,
+        PickerNav::Accept(path) => {
+            form.workdir = path;
             form.picker = None;
         }
-        _ => {}
     }
 }
 
@@ -6640,8 +6723,7 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         PendingAction::Start { id, .. }
         | PendingAction::Stop { id, .. }
         | PendingAction::Kill { id, .. } => *id,
-        | PendingAction::Bulk { .. }
-        | PendingAction::ProvisionHost { .. } => unreachable!(),
+        PendingAction::Bulk { .. } | PendingAction::ProvisionHost { .. } => unreachable!(),
     };
     let owner = app.client_for_session(session_id).cloned();
     let target = owner.unwrap_or_else(|| client.clone());
@@ -6680,8 +6762,7 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         PendingAction::Start { name, .. } => format!("started `{name}`"),
         PendingAction::Stop { name, .. } => format!("stopped `{name}`"),
         PendingAction::Kill { name, .. } => format!("killed `{name}`"),
-        | PendingAction::Bulk { .. }
-        | PendingAction::ProvisionHost { .. } => unreachable!(),
+        PendingAction::Bulk { .. } | PendingAction::ProvisionHost { .. } => unreachable!(),
     };
     match result {
         Ok(()) => {
@@ -7593,19 +7674,37 @@ async fn run_palette_action(
 
         // ── Session CRUD from palette ─────────────────────────────
         ActionKind::NewSession => {
-            let (profile, workdir) = if let Some(s) = app.selected_session() {
+            // Mirror the tree `n` handler: seed the target host from the
+            // selected session, or from the highlighted sidebar host when
+            // the cursor is in the Hosts section.
+            let (profile, workdir, host_id) = if let Some(s) = app.selected_session() {
                 let owning_profile = app.profile_for_session(s.id).to_string();
-                (owning_profile, s.workdir.clone())
+                let host_id = s
+                    .host_id
+                    .filter(|id| *id != agentum_core::LOCAL_HOST_ID)
+                    .map(|id| id.to_string())
+                    .unwrap_or_default();
+                (owning_profile, s.workdir.clone(), host_id)
             } else {
                 let active = app.active_profile.clone().unwrap_or_default();
-                let home = match client.list_dir(None).await {
+                let host_id = if app.tree_section == TreeSection::Servers {
+                    app.cursor_host()
+                        .filter(|h| h.id != agentum_core::LOCAL_HOST_ID)
+                        .map(|h| h.id.to_string())
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                let host_uuid = Uuid::parse_str(host_id.trim()).ok();
+                let home = match client.list_dir_on(None, host_uuid).await {
                     Ok(listing) => listing.path,
                     Err(_) => std::env::var("HOME").unwrap_or_default(),
                 };
-                (active, home)
+                (active, home, host_id)
             };
-            app.overlay =
-                Overlay::NewSession(Box::new(NewSessionForm::with_profile(profile, workdir)));
+            let mut form = NewSessionForm::with_profile(profile, workdir);
+            form.host_id = host_id;
+            app.overlay = Overlay::NewSession(Box::new(form));
         }
         ActionKind::RenameSession(id) => {
             if let Some(s) = app.sessions.iter().find(|s| s.id == id) {

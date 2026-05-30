@@ -4,6 +4,24 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.3] — 2026-05-30
+
+### Added
+- **Folder picker for the SSH key path.** In the add-host form (Host
+  Manager → `a`), pressing `Enter` on the **Key path** field (key/agent
+  auth) opens the same directory picker the New Session "Working
+  directory" field uses, browsing the daemon's filesystem — navigate with
+  ↑/↓ and →/Enter, ←/Backspace to go up, `a`/`s` to accept. Shares one
+  `dir_picker_step` tree-walker with the workdir picker.
+
+### Fixed
+- **New Session no longer defaults to the wrong host.** Opening the form
+  now seeds the **Host** field from the current context — the selected
+  session's host, or the host highlighted in the sidebar (e.g. `omarchy`)
+  — instead of always falling back to the local daemon. The seeded
+  working directory is resolved as `$HOME` on the *target* host so it's a
+  real path there.
+
 ## [0.10.2] — 2026-05-29
 
 ### Changed

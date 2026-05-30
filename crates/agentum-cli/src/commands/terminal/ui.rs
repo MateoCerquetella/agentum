@@ -517,7 +517,6 @@ fn draw_title(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     f.render_widget(chip_para, cols[2]);
 }
 
-
 fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     let focused = app.focus == Focus::Tree;
     // Title shows the active filter so the user always sees what's
@@ -949,8 +948,8 @@ fn draw_servers_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     f.render_widget(block, area);
 
     let Some(host) = app.cursor_host() else {
-        let hint = Paragraph::new("no host selected")
-            .style(Style::default().fg(p.muted).bg(p.panel_bg));
+        let hint =
+            Paragraph::new("no host selected").style(Style::default().fg(p.muted).bg(p.panel_bg));
         f.render_widget(hint, inner);
         return;
     };
@@ -991,14 +990,18 @@ fn draw_servers_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         Span::raw("  "),
         Span::styled(
             label,
-            Style::default().fg(p.fg_strong).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(p.fg_strong)
+                .add_modifier(Modifier::BOLD),
         ),
     ]));
     lines.push(Line::from(""));
     lines.push(field(
         "status",
         status_text.to_string(),
-        Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(status_color)
+            .add_modifier(Modifier::BOLD),
     ));
     match &host.kind {
         agentum_core::HostKind::Local => {
@@ -2079,9 +2082,14 @@ fn draw_hosts_overlay(
     cache: &std::collections::HashMap<Uuid, (tokio::time::Instant, agentum_core::HostReadiness)>,
     p: &Palette,
 ) {
-    // Add-host form takes over the overlay when active.
+    // Add-host form takes over the overlay when active; its folder picker
+    // (for the SSH key path) takes over in turn while it's open.
     if let Some(form) = &state.add_form {
-        draw_hosts_add_form(f, area, form, p);
+        if let Some(picker) = &form.picker {
+            draw_dir_picker_overlay(f, area, picker, p);
+        } else {
+            draw_hosts_add_form(f, area, form, p);
+        }
         return;
     }
 
@@ -2306,12 +2314,19 @@ fn draw_hosts_add_form(f: &mut Frame<'_>, area: Rect, form: &AddHostForm, p: &Pa
         HostAuthChoice::Key => "~/.ssh/id_ed25519 (blank = ssh-agent)",
         HostAuthChoice::Password => "password",
     };
-    push_form_field(
+    // In key mode the secret is a path, so offer the same folder-picker
+    // gesture as the New Session workdir field. Password mode has no file.
+    let secret_hint = match form.auth {
+        HostAuthChoice::Key => Some("Enter opens the folder picker"),
+        HostAuthChoice::Password => None,
+    };
+    push_form_field_with_hint(
         &mut lines,
         form.secret_label(),
         &display,
         secret_focused,
         placeholder,
+        secret_hint,
         p,
     );
 

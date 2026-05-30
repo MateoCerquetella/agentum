@@ -432,7 +432,6 @@ async fn probe_token(base: &Url, trust_setting: &TlsTrust, token: &str) -> bool 
     client.me().await.is_ok()
 }
 
-
 /// Result of attempting a non-interactive connect to one named
 /// profile. Used by the multi-profile fanout in [`run`] so the
 /// sidebar can render every server with a coherent status (live,
@@ -450,7 +449,6 @@ pub struct ProfileConnect {
     /// version drift so the user can spot peers behind the local CLI.
     pub version: Option<String>,
 }
-
 
 /// Layer profile defaults under any explicit CLI flags. Returns the
 /// merged `Options` so the rest of `run()` reads from one source. A
@@ -800,4 +798,3 @@ fn prompt_unreachable_menu(opts: &Options, err: &anyhow::Error) -> Result<Unreac
         }
     }
 }
-
