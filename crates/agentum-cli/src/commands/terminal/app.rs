@@ -5276,28 +5276,21 @@ async fn handle_key(
                 (owning_profile, s.workdir.clone(), host_id)
             } else {
                 let active = app.active_profile.clone().unwrap_or_default();
-                // No session selected: seed the host from the sidebar
-                // cursor when the user is in the Hosts section, so opening
-                // New Session with a host highlighted (e.g. `omarchy`)
-                // targets that host instead of defaulting to local.
-                let host_id = if app.tree_section == TreeSection::Servers {
-                    app.cursor_host()
-                        .filter(|h| h.id != agentum_core::LOCAL_HOST_ID)
-                        .map(|h| h.id.to_string())
-                        .unwrap_or_default()
-                } else {
-                    String::new()
-                };
-                // Resolve `$HOME` on the *target* host so the seeded
-                // workdir is a real path there (the SSH box's home, not
-                // the laptop's). `list_dir_on(_, None)` is the plain
-                // local listing, so this is unchanged when no host is set.
-                let host_uuid = Uuid::parse_str(host_id.trim()).ok();
-                let home = match client.list_dir_on(None, host_uuid).await {
+                // No session selected → default to the local machine.
+                // agentum is local-first: a fresh install has to let you
+                // spawn a session on *this box* without touching SSH at
+                // all — you add hosts later. We deliberately do NOT seed
+                // the host from the sidebar cursor: hovering `omarchy` and
+                // pressing `n` used to strand the form on a remote host
+                // while the workdir fell back to the laptop's `$HOME`, so
+                // the folder picker then tried to list a Mac path on the
+                // SSH box and 400'd. Targeting a host is one explicit Tab
+                // away in the merged Host field instead.
+                let home = match client.list_dir_on(None, None).await {
                     Ok(listing) => listing.path,
                     Err(_) => std::env::var("HOME").unwrap_or_default(),
                 };
-                (active, home, host_id)
+                (active, home, String::new())
             };
             let mut form = NewSessionForm::with_profile(profile, workdir);
             form.host_id = host_id;

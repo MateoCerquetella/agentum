@@ -4,6 +4,21 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.5] — 2026-05-30
+
+### Fixed
+- **New Session is local-first again — it no longer strands you on a
+  remote host.** Pressing `n` while the sidebar cursor sat on an SSH host
+  (e.g. `omarchy`) seeded the form's Host to that remote box, but the
+  working directory fell back to the laptop's `$HOME`. The folder picker
+  then tried to list a Mac path *on the SSH host* and failed with `400 Bad
+  Request — remote fs: ssh/tmux exited with status …`, so you couldn't
+  start a local session at all. New Session now defaults to **this
+  machine** (local host, local `$HOME`) whenever no session is selected;
+  targeting a host is one explicit `Tab` away in the merged Host field.
+  Opening New Session from a *selected* remote session still inherits that
+  session's host and workdir (which are consistent), as before.
+
 ## [0.10.4] — 2026-05-30
 
 ### Fixed
