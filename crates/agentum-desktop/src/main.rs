@@ -457,7 +457,7 @@ fn detect_lan_ip() -> String {
     {
         for iface in &["en0", "en1"] {
             if let Ok(ip) = std::process::Command::new("ipconfig")
-                .args(&["getifaddr", iface])
+                .args(["getifaddr", iface])
                 .output()
             {
                 let s = String::from_utf8_lossy(&ip.stdout).trim().to_string();
