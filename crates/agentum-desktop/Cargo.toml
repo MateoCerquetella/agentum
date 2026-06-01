@@ -29,4 +29,7 @@ tokio = { workspace = true }
 # Tauri replaces the previous raw wry+tao shell. Tray icon, native menu,
 # notifications and the updater are added in Phase D; Phase A is the bare
 # window-over-in-process-daemon migration.
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-updater = "2"
+tauri-plugin-window-state = "2"
+serde_json = { workspace = true }

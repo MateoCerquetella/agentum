@@ -1,6 +1,18 @@
 {
   "identifier": "default",
-  "description": "Core capability for the main window. The dashboard talks to the daemon over HTTP/WS, not the Tauri IPC bridge, so only the default core permissions are granted here. Phase D (tray/menu/notifications/updater) extends this.",
+  "description": "Core capability for the main window. Grants permissions for tray icon, native menus, updater check, window state persistence, and basic IPC.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:tray:default",
+    "core:menu:default",
+    "updater:default",
+    "updater:allow-check",
+    "updater:allow-download-and-install",
+    "window-state:default"
+  ]
 }

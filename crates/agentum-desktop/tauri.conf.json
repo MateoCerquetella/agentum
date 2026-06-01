@@ -22,5 +22,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/mateocerquetella/agentum/releases/latest/download/latest.json"
+      ],
+      "dangerousInsecureTransportProtocol": true
+    }
   }
 }
