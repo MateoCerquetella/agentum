@@ -4,13 +4,21 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.10.8] — 2026-06-01
+## [0.10.9] — 2026-06-01
+
+### Fixed
+- **Linux desktop release builds link again.** Tauri's `tray-icon` feature
+  needs `libayatana-appindicator3-dev` at link time; the runner didn't have
+  it, so the v0.10.8 Linux desktop build aborted with "Can't detect any
+  appindicator library". Added the dep, set `APPIMAGE_EXTRACT_AND_RUN` for the
+  (FUSE-less) AppImage tooling, and made AppImage best-effort so the release
+  can't be blocked by it.
 
 ### Added
 - **Installable desktop apps.** Releases now ship native installers built
-  with Tauri: a macOS `.dmg` (Intel + Apple Silicon) and a Linux `.AppImage`
-  and `.deb` (x86_64), alongside the existing CLI tarballs. No more
-  extract-the-binary-by-hand for the GUI.
+  with Tauri: a macOS `.dmg` (Intel + Apple Silicon), a Linux `.deb` and a
+  best-effort `.AppImage`, plus the **raw Linux desktop binary** (the artifact
+  that runs on Arch and other non-deb distros), alongside the CLI tarballs.
 - **`install.sh` asks what you want.** The installer now offers a choice —
   **CLI + terminal UI** (default) or the **desktop app** — and installs the
   right artifact for your platform (`.dmg` → /Applications on macOS,
