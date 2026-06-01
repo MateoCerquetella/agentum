@@ -4,6 +4,19 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8] — 2026-06-01
+
+### Added
+- **Installable desktop apps.** Releases now ship native installers built
+  with Tauri: a macOS `.dmg` (Intel + Apple Silicon) and a Linux `.AppImage`
+  and `.deb` (x86_64), alongside the existing CLI tarballs. No more
+  extract-the-binary-by-hand for the GUI.
+- **`install.sh` asks what you want.** The installer now offers a choice —
+  **CLI + terminal UI** (default) or the **desktop app** — and installs the
+  right artifact for your platform (`.dmg` → /Applications on macOS,
+  `.AppImage` → PATH or `.deb` → dpkg on Linux). Skip the prompt with
+  `--cli` / `--desktop` or `AGENTUM_INSTALL_KIND`.
+
 ## [0.10.7] — 2026-06-01
 
 ### Fixed

@@ -32,18 +32,24 @@ jobs:
           # runs on Debian 12, Ubuntu 22.04, and similarly aged
           # distros. ubuntu-latest is 24.04 (glibc 2.39), which made
           # older systems refuse to load the executable.
+          # `desktop` lists the Tauri bundle formats for that target (absent =
+          # CLI only). aarch64-linux is cross-compiled and can't carry the
+          # target's webkit libs, so it ships the CLI only.
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
             cross: false
+            desktop: deb,appimage
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04
             cross: true
           - target: x86_64-apple-darwin
             runner: macos-14
             cross: false
+            desktop: dmg
           - target: aarch64-apple-darwin
             runner: macos-14
             cross: false
+            desktop: dmg
     steps:
       - uses: actions/checkout@v4
 
@@ -86,13 +92,29 @@ jobs:
         if: matrix.cross
         run: cross build --release --target ${{ matrix.target }} -p agentum-cli
 
-      # Desktop shell ships on macOS only (uses the system WKWebView; Linux
-      # would need webkit2gtk dev libs in the image, which the cross builder
-      # doesn't carry). The dashboard bundle built above is embedded via
-      # agentum-server, so the window has a UI to show.
-      - name: Build desktop app (macOS)
-        if: contains(matrix.target, 'apple-darwin')
-        run: cargo build --release --target ${{ matrix.target }} -p agentum-desktop
+      # --- Desktop installers (Tauri 2) -------------------------------------
+      # cargo tauri build produces native installers (.dmg on macOS, .deb +
+      # .AppImage on Linux x86_64). The dashboard built above is embedded via
+      # agentum-server, so the window has a UI. Only runs for targets whose
+      # matrix entry sets `desktop`.
+      - name: Install desktop build deps (Linux)
+        if: ${{ matrix.desktop != '' && contains(matrix.target, 'linux') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+            libgtk-3-dev librsvg2-dev patchelf libfuse2 file
+      - name: Install tauri-cli
+        if: ${{ matrix.desktop != '' }}
+        uses: taiki-e/install-action@v2
+        with:
+          tool: tauri-cli
+      - name: Build desktop installers
+        if: ${{ matrix.desktop != '' }}
+        working-directory: crates/agentum-desktop
+        # Workspace target dir resolves at the repo root → bundles land in
+        # target/<triple>/release/bundle/ (consumed by the staging step).
+        run: cargo tauri build --target ${{ matrix.target }} --bundles ${{ matrix.desktop }}
 
       - name: Stage release
         shell: bash
@@ -101,18 +123,31 @@ jobs:
           OUT="dist/${BIN_NAME}-${{ github.ref_name }}-${{ matrix.target }}"
           mkdir -p "$OUT"
           cp "target/${{ matrix.target }}/release/${BIN_NAME}" "$OUT/"
-          # Bundle the desktop binary when it was built (macOS targets).
-          if [ -f "target/${{ matrix.target }}/release/agentum-desktop" ]; then
-            cp "target/${{ matrix.target }}/release/agentum-desktop" "$OUT/"
-          fi
           cp LICENSE README.md CHANGELOG.md "$OUT/"
           ( cd dist && tar -czf "${BIN_NAME}-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" "${BIN_NAME}-${{ github.ref_name }}-${{ matrix.target }}" )
+          # Desktop installers (.dmg/.deb/.AppImage) ship as standalone assets,
+          # suffixed with the target triple so they don't collide when the
+          # release job merges every target's artifacts into one dir.
+          BUNDLE_DIR="target/${{ matrix.target }}/release/bundle"
+          if [ -d "$BUNDLE_DIR" ]; then
+            find "$BUNDLE_DIR" -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) -print0 \
+              | while IFS= read -r -d '' f; do
+                  base="$(basename "$f")"
+                  cp "$f" "dist/${base%.*}-${{ matrix.target }}.${base##*.}"
+                done
+          fi
           ls -la dist/
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: dist/*.tar.gz
+          # tar.gz is always present; installer globs match only on targets
+          # that built them. The combined set is never empty, so `error` is safe.
+          path: |
+            dist/*.tar.gz
+            dist/*.dmg
+            dist/*.deb
+            dist/*.AppImage
           if-no-files-found: error
           retention-days: 7
 
@@ -133,7 +168,7 @@ jobs:
       - name: Generate sha256 sums
         run: |
           set -eux
-          ( cd dist && sha256sum *.tar.gz > SHA256SUMS )
+          ( cd dist && sha256sum $(ls *.tar.gz *.dmg *.deb *.AppImage 2>/dev/null) > SHA256SUMS )
           cat dist/SHA256SUMS
 
       - name: Stage installer + uninstaller
@@ -168,6 +203,9 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             dist/*.tar.gz
+            dist/*.dmg
+            dist/*.deb
+            dist/*.AppImage
             dist/SHA256SUMS
             dist/install.sh
             dist/uninstall.sh

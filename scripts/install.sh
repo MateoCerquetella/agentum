@@ -36,6 +36,10 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 PLATFORM=""; VERSION=""; INTERACTIVE=false; HAS_TTY=false
 EXPOSE="${AGENTUM_EXPOSE:-}"
 IS_UPDATE=false
+# Which flavor to install: "cli" (the agentum binary → serve + terminal TUI)
+# or "desktop" (the native windowed app). Empty = ask interactively, default
+# cli. Preset with --cli / --desktop or AGENTUM_INSTALL_KIND=cli|desktop.
+INSTALL_KIND="${AGENTUM_INSTALL_KIND:-}"
 
 # ── Colors (agentum: dark bg + gold/amber accents) ────────────
 # Use actual ESC char so `printf '%s'` substitutes a real escape sequence.
@@ -66,9 +70,11 @@ while [ $# -gt 0 ]; do
         --mode) shift 2 ;;
         --mode=*) shift ;;
         --no-interactive) INTERACTIVE=false; shift ;;
+        --cli) INSTALL_KIND="cli"; shift ;;
+        --desktop|--app) INSTALL_KIND="desktop"; shift ;;
         --expose) EXPOSE="$2"; shift 2 ;;
         --expose=*) EXPOSE="${1#*=}"; shift ;;
-        -h|--help) printf 'Usage: install.sh [--expose lan|loopback] [--no-interactive]\nEnv: AGENTUM_EXPOSE=lan|loopback, INSTALL_DIR=path\n'; exit 0 ;;
+        -h|--help) printf 'Usage: install.sh [--cli|--desktop] [--expose lan|loopback] [--no-interactive]\nEnv: AGENTUM_INSTALL_KIND=cli|desktop, AGENTUM_EXPOSE=lan|loopback, INSTALL_DIR=path\n'; exit 0 ;;
         *) shift ;;
     esac
 done
@@ -700,6 +706,99 @@ post_install() {
     control_other_machines_tip
 }
 
+# ── Desktop app install ────────────────────────────────────────
+# Ask whether to install the CLI (daemon + terminal TUI) or the native
+# desktop app. Honors --cli/--desktop/AGENTUM_INSTALL_KIND; defaults to
+# cli when non-interactive. Echoes "cli" or "desktop".
+ask_install_kind() {
+    if [ -n "$INSTALL_KIND" ]; then echo "$INSTALL_KIND"; return 0; fi
+    if [ "$INTERACTIVE" != true ]; then echo "cli"; return 0; fi
+    printf '\n  %sWhat do you want to install?%s\n\n' "${C_Y}" "${C_R}" >&2
+    printf '  %s⌨️   [1] %sCLI + terminal UI%s %s(recommended)%s\n' "${C_B}" "${C_G}" "${C_R}" "${C_D}" "${C_R}" >&2
+    printf '       %sThe agentum daemon + dashboard + "agentum terminal" TUI.%s\n\n' "${C_D}" "${C_R}" >&2
+    printf '  %s🖥️   [2] %sDesktop app%s\n' "${C_B}" "${C_BL}" "${C_R}" >&2
+    printf '       %sA native window (Tauri). Bundles the daemon — no terminal needed.%s\n\n' "${C_D}" "${C_R}" >&2
+    while true; do
+        printf '  %sChoice [1-2] (1):%s ' "${C_D}" "${C_R}" >&2
+        choice=""; read_input choice; choice="${choice:-1}"
+        case "$choice" in
+            1|c|C|cli|CLI) echo "cli"; return 0 ;;
+            2|d|D|desktop|app) echo "desktop"; return 0 ;;
+            *) printf '  %sEnter 1 or 2.%s\n' "${C_RED}" "${C_R}" >&2 ;;
+        esac
+    done
+}
+
+# Find a release asset's download URL by extension for the current platform.
+# Matches assets named "…-${PLATFORM}.${ext}" (the suffix the release workflow
+# adds), querying the GitHub API for the latest release.
+find_asset_url() {
+    _ext="$1"
+    if command -v curl >/dev/null 2>&1; then _json="$(curl -fsSL "$GH_API" 2>/dev/null)"
+    elif command -v wget >/dev/null 2>&1; then _json="$(wget -qO- "$GH_API" 2>/dev/null)"
+    else e "curl or wget is required"; fi
+    printf '%s\n' "$_json" \
+        | grep -o '"browser_download_url": *"[^"]*"' \
+        | sed 's/.*"browser_download_url": *"//;s/"$//' \
+        | grep -- "-${PLATFORM}\.${_ext}\$" \
+        | head -1
+}
+
+# Download + install the native desktop app for this platform: a .dmg copied
+# into /Applications on macOS, a .AppImage dropped on PATH (or a .deb via dpkg)
+# on Linux.
+install_desktop() {
+    TMPDIR="$(mktemp -d)"; trap 'rm -rf "$TMPDIR"' EXIT
+    case "$(uname -s)" in
+        Darwin)
+            url="$(find_asset_url dmg)"
+            [ -n "$url" ] || e "no desktop (.dmg) asset for ${PLATFORM} in ${VERSION}"
+            s "Downloading" "${C_D}desktop app · ${PLATFORM} (.dmg)${C_R}"
+            fetch "$url" "$TMPDIR/agentum.dmg" & spin $! "fetching .dmg"; printf '\n'
+            MP="$(mktemp -d)"
+            hdiutil attach "$TMPDIR/agentum.dmg" -nobrowse -quiet -mountpoint "$MP" \
+                || e "could not mount the .dmg"
+            app="$(find "$MP" -maxdepth 1 -name '*.app' | head -1)"
+            if [ -n "$app" ]; then
+                rm -rf "/Applications/$(basename "$app")"
+                cp -R "$app" /Applications/ \
+                    && o "installed" "/Applications/$(basename "$app")"
+            else
+                w "no .app inside the dmg — opening it for manual install"
+                open "$TMPDIR/agentum.dmg"
+            fi
+            hdiutil detach "$MP" -quiet 2>/dev/null || true
+            h "Launch it from Applications (or Spotlight: 'agentum')."
+            ;;
+        Linux)
+            url="$(find_asset_url AppImage)"; kind="appimage"
+            if [ -z "$url" ]; then url="$(find_asset_url deb)"; kind="deb"; fi
+            [ -n "$url" ] || e "no Linux desktop installer for ${PLATFORM} in ${VERSION}"
+            if [ "$kind" = "appimage" ]; then
+                s "Downloading" "${C_D}desktop app · ${PLATFORM} (.AppImage)${C_R}"
+                fetch "$url" "$TMPDIR/agentum.AppImage" & spin $! "fetching .AppImage"; printf '\n'
+                mkdir -p "$INSTALL_DIR"
+                mv "$TMPDIR/agentum.AppImage" "$INSTALL_DIR/agentum-desktop"
+                chmod +x "$INSTALL_DIR/agentum-desktop"
+                o "installed" "$INSTALL_DIR/agentum-desktop"
+                check_path
+                h "Launch: ${C_C}agentum-desktop${C_R}"
+            else
+                s "Downloading" "${C_D}desktop app · ${PLATFORM} (.deb)${C_R}"
+                fetch "$url" "$TMPDIR/agentum.deb" & spin $! "fetching .deb"; printf '\n'
+                if command -v sudo >/dev/null 2>&1; then
+                    sudo dpkg -i "$TMPDIR/agentum.deb" 2>/dev/null || sudo apt-get -f install -y
+                else
+                    dpkg -i "$TMPDIR/agentum.deb" || e "dpkg install failed (try with sudo)"
+                fi
+                o "installed" "agentum-desktop (.deb)"
+                h "Launch: ${C_C}agentum-desktop${C_R}  (or from your app launcher)"
+            fi
+            ;;
+        *) e "desktop install is not supported on $(uname -s)" ;;
+    esac
+}
+
 # ── Source-only guard ─────────────────────────────────────────
 # When sourced with `AGENTUM_INSTALL_SOURCE_ONLY=1`, return without
 # running the main flow so tests can `source` the script just to get
@@ -716,6 +815,16 @@ detect_platform
 i "platform" "${C_D}${PLATFORM}${C_R}"
 detect_version
 i "version"  "${C_D}${VERSION}${C_R}"
+
+# CLI or desktop app? Desktop has its own download/install path and exits.
+KIND="$(ask_install_kind)"
+if [ "$KIND" = "desktop" ]; then
+    s "Installing" "${C_G}agentum desktop${C_R} — the native app (daemon bundled in)"
+    install_desktop
+    printf '\n  %s%s✨  agentum desktop is ready!%s\n\n' "${C_Y}" "${C_B}" "${C_R}"
+    exit 0
+fi
+
 i "install"  "${C_D}${INSTALL_DIR}${C_R}"
 
 detect_existing
