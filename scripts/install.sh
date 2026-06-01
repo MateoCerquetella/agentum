@@ -771,29 +771,56 @@ install_desktop() {
             h "Launch it from Applications (or Spotlight: 'agentum')."
             ;;
         Linux)
-            url="$(find_asset_url AppImage)"; kind="appimage"
-            if [ -z "$url" ]; then url="$(find_asset_url deb)"; kind="deb"; fi
-            [ -n "$url" ] || e "no Linux desktop installer for ${PLATFORM} in ${VERSION}"
-            if [ "$kind" = "appimage" ]; then
-                s "Downloading" "${C_D}desktop app · ${PLATFORM} (.AppImage)${C_R}"
-                fetch "$url" "$TMPDIR/agentum.AppImage" & spin $! "fetching .AppImage"; printf '\n'
-                mkdir -p "$INSTALL_DIR"
-                mv "$TMPDIR/agentum.AppImage" "$INSTALL_DIR/agentum-desktop"
-                chmod +x "$INSTALL_DIR/agentum-desktop"
-                o "installed" "$INSTALL_DIR/agentum-desktop"
-                check_path
-                h "Launch: ${C_C}agentum-desktop${C_R}"
-            else
-                s "Downloading" "${C_D}desktop app · ${PLATFORM} (.deb)${C_R}"
-                fetch "$url" "$TMPDIR/agentum.deb" & spin $! "fetching .deb"; printf '\n'
-                if command -v sudo >/dev/null 2>&1; then
-                    sudo dpkg -i "$TMPDIR/agentum.deb" 2>/dev/null || sudo apt-get -f install -y
-                else
-                    dpkg -i "$TMPDIR/agentum.deb" || e "dpkg install failed (try with sudo)"
+            # Prefer AppImage (universal), then the raw binary (runs on any
+            # distro with webkit2gtk — the right call on Arch and friends),
+            # then .deb (Debian/Ubuntu only). The raw binary asset has no
+            # extension, so we probe its deterministic URL directly.
+            kind=""; url=""
+            url="$(find_asset_url AppImage)"; [ -n "$url" ] && kind="appimage"
+            if [ -z "$kind" ]; then
+                raw="${GH_DL}/${VERSION}/agentum-desktop-${VERSION}-${PLATFORM}"
+                if fetch "$raw" "$TMPDIR/agentum-desktop" 2>/dev/null && [ -s "$TMPDIR/agentum-desktop" ]; then
+                    kind="binary"; url="$raw"
                 fi
-                o "installed" "agentum-desktop (.deb)"
-                h "Launch: ${C_C}agentum-desktop${C_R}  (or from your app launcher)"
             fi
+            if [ -z "$kind" ]; then
+                url="$(find_asset_url deb)"; [ -n "$url" ] && kind="deb"
+            fi
+            [ -n "$kind" ] || e "no Linux desktop artifact for ${PLATFORM} in ${VERSION}"
+            case "$kind" in
+                appimage)
+                    s "Downloading" "${C_D}desktop app · ${PLATFORM} (.AppImage)${C_R}"
+                    fetch "$url" "$TMPDIR/agentum.AppImage" & spin $! "fetching .AppImage"; printf '\n'
+                    mkdir -p "$INSTALL_DIR"
+                    mv "$TMPDIR/agentum.AppImage" "$INSTALL_DIR/agentum-desktop"
+                    chmod +x "$INSTALL_DIR/agentum-desktop"
+                    o "installed" "$INSTALL_DIR/agentum-desktop"
+                    check_path
+                    h "Launch: ${C_C}agentum-desktop${C_R}"
+                    ;;
+                binary)
+                    # Already fetched during detection above.
+                    s "Installing" "${C_D}desktop app · ${PLATFORM} (binary)${C_R}"
+                    mkdir -p "$INSTALL_DIR"
+                    mv "$TMPDIR/agentum-desktop" "$INSTALL_DIR/agentum-desktop"
+                    chmod +x "$INSTALL_DIR/agentum-desktop"
+                    o "installed" "$INSTALL_DIR/agentum-desktop"
+                    check_path
+                    h "Launch: ${C_C}agentum-desktop${C_R}"
+                    h "Needs webkit2gtk on your system (preinstalled on most Linux desktops)."
+                    ;;
+                deb)
+                    s "Downloading" "${C_D}desktop app · ${PLATFORM} (.deb)${C_R}"
+                    fetch "$url" "$TMPDIR/agentum.deb" & spin $! "fetching .deb"; printf '\n'
+                    if command -v sudo >/dev/null 2>&1; then
+                        sudo dpkg -i "$TMPDIR/agentum.deb" 2>/dev/null || sudo apt-get -f install -y
+                    else
+                        dpkg -i "$TMPDIR/agentum.deb" || e "dpkg install failed (try with sudo)"
+                    fi
+                    o "installed" "agentum-desktop (.deb)"
+                    h "Launch: ${C_C}agentum-desktop${C_R}  (or from your app launcher)"
+                    ;;
+            esac
             ;;
         *) e "desktop install is not supported on $(uname -s)" ;;
     esac
