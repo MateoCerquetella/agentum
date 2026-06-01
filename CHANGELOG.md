@@ -4,6 +4,20 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.10] — 2026-06-01
+
+### Fixed
+- **macOS desktop app no longer opens to a blank/unresponsive window.** The
+  window loads the dashboard from the in-process daemon over
+  `http://127.0.0.1:<port>`, but macOS App Transport Security blocks plain
+  http in WKWebView — so the webview loaded nothing and the app looked hung.
+  The macOS bundle now ships an Info.plist that allows local/loopback http
+  loads (`bundle.macOS.infoPlist` + `exceptionDomain`).
+- **macOS daemon finds tmux/git when launched from Finder.** A Finder-launched
+  `.app` inherits a minimal PATH without Homebrew; the desktop binary now
+  prepends `/opt/homebrew/bin` and `/usr/local/bin` so the bundled daemon can
+  spawn agent sessions.
+
 ## [0.10.9] — 2026-06-01
 
 ### Fixed

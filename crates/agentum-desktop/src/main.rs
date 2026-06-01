@@ -71,6 +71,19 @@ fn main() -> Result<()> {
         }
     }
 
+    // A macOS app launched from Finder/LaunchServices inherits a minimal PATH
+    // (/usr/bin:/bin:/usr/sbin:/sbin) that omits Homebrew — so the bundled
+    // daemon can't find tmux/git/agent CLIs. Prepend the usual locations.
+    #[cfg(target_os = "macos")]
+    {
+        let extra = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin";
+        let cur = std::env::var("PATH").unwrap_or_default();
+        if !cur.split(':').any(|p| p == "/opt/homebrew/bin") {
+            // SAFETY: single-threaded init, before any daemon thread reads PATH.
+            unsafe { std::env::set_var("PATH", format!("{extra}:{cur}")); }
+        }
+    }
+
     // Reserve the port (0 = auto-assign a free one).
     let port = if cli.port == 0 {
         let l = TcpListener::bind("127.0.0.1:0")

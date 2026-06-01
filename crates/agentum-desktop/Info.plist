@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged into the macOS app's Info.plist by Tauri (bundle.macOS.infoPlist).
+
+  The desktop shell loads its embedded dashboard from the in-process daemon at
+  http://127.0.0.1:<port>. macOS App Transport Security blocks plain http in
+  WKWebView by default, which left the window blank ("app didn't respond").
+  NSAllowsLocalNetworking permits http to loopback/.local hosts; we also set
+  NSAllowsArbitraryLoads so a numeric 127.0.0.1 URL is covered regardless of
+  how ATS classifies it. This only affects this app's own loopback server.
+-->
+<plist version="1.0">
+<dict>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <true/>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
+</dict>
+</plist>
