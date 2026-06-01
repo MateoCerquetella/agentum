@@ -6,6 +6,7 @@
   import Terminal from '$components/Terminal.svelte';
   import SessionRail from '$components/dashboard/SessionRail.svelte';
   import SessionGitPanel from '$components/SessionGitPanel.svelte';
+  import ForgePanel from '$components/ForgePanel.svelte';
   import { ctxOf, fmtUptime } from '$lib/dashboard';
 
   /* -- session state ------------------------------------------------- */
@@ -292,6 +293,7 @@
 
   {#if session}
     <SessionGitPanel session={session} />
+    <ForgePanel session={session} />
   {/if}
 
   {#if error}

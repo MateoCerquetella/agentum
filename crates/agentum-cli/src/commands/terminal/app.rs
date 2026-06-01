@@ -9055,7 +9055,10 @@ mod cycle_host_tests {
     #[test]
     fn single_host_does_not_cycle() {
         // Just "this machine" — nothing to move to, so the id stays "".
-        let hosts = vec![host(agentum_core::LOCAL_HOST_ID, agentum_core::HostKind::Local)];
+        let hosts = vec![host(
+            agentum_core::LOCAL_HOST_ID,
+            agentum_core::HostKind::Local,
+        )];
         let mut form = NewSessionForm::with_profile(String::new(), String::new());
         form.cycle_host(&hosts);
         assert_eq!(form.host_id, "");

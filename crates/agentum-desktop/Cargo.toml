@@ -29,8 +29,18 @@ tokio = { workspace = true }
 # Tauri replaces the previous raw wry+tao shell. Tray icon, native menu,
 # notifications and the updater are added in Phase D; Phase A is the bare
 # window-over-in-process-daemon migration.
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# `devtools` keeps WebviewWindow::{open,close,is}_devtools available in
+# release builds (they're cfg'd to debug_assertions OR this feature). Without
+# it the "Toggle DevTools" menu item fails to compile under --release — which
+# is what broke the v0.10.6 release on the macOS runner.
+tauri = { version = "2", features = ["tray-icon", "image-png", "devtools"] }
 tauri-plugin-updater = "2"
 tauri-plugin-window-state = "2"
+# Native OS notifications + a WS subscriber to the daemon's /api/events bus
+# (Phase D notification bridge). tokio-tungstenite is pinned to match the
+# version agentum-server already pulls in, avoiding a duplicate in the tree.
+tauri-plugin-notification = "2"
+tokio-tungstenite = "0.29"
+futures-util = "0.3"
 clap = { workspace = true }
 serde_json = { workspace = true }

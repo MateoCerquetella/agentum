@@ -1,29 +1,28 @@
 <script lang="ts">
   /**
-   * SessionGitPanel — ORCA §3 (P1) diff viewer + commit UI.
+   * SessionGitPanel — ORCA §2/§3 diff viewer + staging + commit UI.
    *
    * Renders `git status` for a session's worktree in three groups
-   * (Staged · Changes · Untracked), lets the user click a path to
-   * preview its unified diff inline, toggle inclusion in the next
-   * commit with Stage/Unstage buttons, and ship a commit by typing a
-   * message + clicking Commit. Backed by the three routes added in
+   * (Staged · Changes · Untracked), lets the user click a path to preview
+   * its diff in a CodeMirror side-by-side view (see DiffView.svelte), move
+   * files in/out of the index with Stage/Unstage, and commit the staged set
+   * with a message. Backed by the routes in
    * `crates/agentum-server/src/routes/git.rs`:
    *
    *   GET  /api/sessions/{id}/git/status
-   *   GET  /api/sessions/{id}/git/diff?path=&staged=
-   *   POST /api/sessions/{id}/git/commit
+   *   GET  /api/sessions/{id}/git/file?path=&rev=head|index|worktree
+   *   POST /api/sessions/{id}/git/stage      { paths, unstage }
+   *   POST /api/sessions/{id}/git/commit     { message, paths }
    *
-   * State model: server-side "Staged" files are pre-included in the
-   * commit set; unstaged + untracked default to excluded. The commit
-   * POST sends only the paths the user explicitly opted in, and the
-   * server uses `git commit -- <paths>` so siblings staged outside
-   * agentum don't get pulled in by surprise.
+   * Model: the three groups mirror git's real index. "Stage"/"Unstage" call
+   * `/git/stage` to move a path between index and worktree; "Commit" ships
+   * exactly what's staged (`status.staged`), so what you see is what commits.
    *
-   * Polls `/git/status` every 5 s while expanded; pauses when the
-   * <details> is closed to keep the panel zero-cost when idle.
+   * Polls `/git/status` every 5 s while expanded; pauses when collapsed.
    */
   import { onDestroy } from 'svelte';
   import { api, ApiError, type GitStatus, type Session } from '$lib/api';
+  import DiffView from './DiffView.svelte';
 
   interface Props { session: Session; }
   let { session }: Props = $props();
@@ -31,44 +30,26 @@
   let status = $state<GitStatus | null>(null);
   let error = $state<string | null>(null);
 
-  /** Set of paths the user wants in the next commit. Staged paths
-   *  auto-populate on each refresh (see syncSelection). */
-  let selected = $state<Set<string>>(new Set());
-
-  /** Currently previewed file. `staged` decides which side of the
-   *  diff to ask for (worktree vs index, or index vs HEAD). */
+  /** Currently previewed file. `staged` decides which two revisions to
+   *  diff: staged → HEAD ↔ index; otherwise index ↔ working tree. */
   let viewing = $state<{ path: string; staged: boolean } | null>(null);
-  let diffText = $state<string>('');
+  let orig = $state('');
+  let modified = $state('');
+  let truncated = $state(false);
   let diffLoading = $state(false);
 
   let message = $state('');
   let committing = $state(false);
+  let busy = $state(false);
 
   let pollId: ReturnType<typeof setInterval> | null = null;
 
-  /** Auto-include freshly-discovered staged files in the next commit
-   *  set, but leave the user's manual toggles alone. Removes paths
-   *  from `selected` that no longer exist anywhere in the status so
-   *  the count stays accurate after a commit. */
-  function syncSelection(s: GitStatus) {
-    const next = new Set(selected);
-    for (const p of s.staged) next.add(p);
-    const live = new Set([...s.staged, ...s.unstaged, ...s.untracked]);
-    for (const p of next) {
-      if (!live.has(p)) next.delete(p);
-    }
-    selected = next;
-  }
-
   async function refresh() {
     try {
-      const s = await api.gitStatus(session.id);
-      status = s;
+      status = await api.gitStatus(session.id);
       error = null;
-      syncSelection(s);
     } catch (e) {
       if (e instanceof ApiError && e.status === 400) {
-        // "not a git repository" — surface plainly and bail.
         error = e.message.replace(/^HTTP \d+:\s*/, '');
         status = null;
       } else {
@@ -87,46 +68,70 @@
 
   function onToggle(e: Event) {
     const open = (e.currentTarget as HTMLDetailsElement).open;
-    if (open) {
-      refresh();
-      startPolling();
-    } else {
-      stopPolling();
-    }
+    if (open) { refresh(); startPolling(); }
+    else { stopPolling(); }
   }
 
   async function view(path: string, staged: boolean) {
     viewing = { path, staged };
     diffLoading = true;
-    diffText = '';
+    orig = '';
+    modified = '';
+    truncated = false;
     try {
-      diffText = await api.gitDiff(session.id, path, staged);
+      // staged view diffs HEAD↔index; unstaged/untracked diffs index↔worktree.
+      // (Untracked files have no index/HEAD blob → that side returns empty,
+      // rendering as an all-added file.)
+      const [a, b] = staged
+        ? await Promise.all([
+            api.gitFile(session.id, path, 'head'),
+            api.gitFile(session.id, path, 'index')
+          ])
+        : await Promise.all([
+            api.gitFile(session.id, path, 'index'),
+            api.gitFile(session.id, path, 'worktree')
+          ]);
+      orig = a.content;
+      modified = b.content;
+      truncated = a.truncated || b.truncated;
     } catch (e) {
-      diffText = `error: ${e instanceof Error ? e.message : String(e)}`;
+      error = e instanceof Error ? e.message : String(e);
+      viewing = null;
     } finally {
       diffLoading = false;
     }
   }
 
-  function toggleSelection(path: string) {
-    const next = new Set(selected);
-    if (next.has(path)) next.delete(path);
-    else next.add(path);
-    selected = next;
+  function closeDiff() {
+    viewing = null;
+    orig = '';
+    modified = '';
+  }
+
+  async function setStaged(path: string, unstage: boolean) {
+    if (busy) return;
+    busy = true;
+    try {
+      status = await api.gitStage(session.id, [path], unstage);
+      error = null;
+      // If the previewed file moved sides, re-fetch the diff for the new side.
+      if (viewing?.path === path) await view(path, !unstage);
+    } catch (e) {
+      error = e instanceof Error ? e.message.replace(/^HTTP \d+:\s*/, '') : String(e);
+    } finally {
+      busy = false;
+    }
   }
 
   async function commit() {
-    if (!message.trim()) return;
-    const paths = Array.from(selected);
-    if (paths.length === 0) return;
+    const paths = status?.staged ?? [];
+    if (!message.trim() || paths.length === 0) return;
     committing = true;
     error = null;
     try {
       await api.gitCommit(session.id, message.trim(), paths);
       message = '';
-      selected = new Set();
-      viewing = null;
-      diffText = '';
+      closeDiff();
       await refresh();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -135,31 +140,8 @@
     }
   }
 
-  /** Classify a unified-diff line for inline coloring. Keeps the
-   *  renderer in this file so the panel ships as a single component —
-   *  the prompt left syntax highlighting optional and prismjs would
-   *  pull in a non-trivial bundle for this lightweight surface. */
-  type DiffLineKind = 'add' | 'del' | 'hunk' | 'meta' | 'ctx';
-  function classify(line: string): DiffLineKind {
-    if (line.startsWith('@@')) return 'hunk';
-    if (line.startsWith('diff ') ||
-        line.startsWith('index ') ||
-        line.startsWith('--- ') ||
-        line.startsWith('+++ ') ||
-        line.startsWith('new file') ||
-        line.startsWith('deleted file') ||
-        line.startsWith('similarity ') ||
-        line.startsWith('rename ')) return 'meta';
-    if (line.startsWith('+')) return 'add';
-    if (line.startsWith('-')) return 'del';
-    return 'ctx';
-  }
-
-  const diffLines = $derived(diffText ? diffText.split('\n') : []);
-  const totalSelected = $derived(selected.size);
-  const canCommit = $derived(
-    !committing && totalSelected > 0 && message.trim().length > 0
-  );
+  const stagedCount = $derived(status?.staged.length ?? 0);
+  const canCommit = $derived(!committing && stagedCount > 0 && message.trim().length > 0);
   const summary = $derived.by(() => {
     if (!status) return 'Git';
     const s = status.staged.length;
@@ -196,12 +178,9 @@
                   <span class="sigil add">+</span>
                   <span class="path mono">{path}</span>
                 </button>
-                <button type="button"
-                        class="act"
-                        title={selected.has(path) ? 'Exclude from next commit' : 'Include in next commit'}
-                        onclick={() => toggleSelection(path)}>
-                  {selected.has(path) ? 'Unstage' : 'Stage'}
-                </button>
+                <button type="button" class="act" disabled={busy}
+                        title="Unstage (git restore --staged)"
+                        onclick={() => setStaged(path, true)}>Unstage</button>
               </li>
             {/each}
           </ul>
@@ -220,11 +199,9 @@
                   <span class="sigil mod">~</span>
                   <span class="path mono">{path}</span>
                 </button>
-                <button type="button"
-                        class="act"
-                        onclick={() => toggleSelection(path)}>
-                  {selected.has(path) ? 'Unstage' : 'Stage'}
-                </button>
+                <button type="button" class="act" disabled={busy}
+                        title="Stage (git add)"
+                        onclick={() => setStaged(path, false)}>Stage</button>
               </li>
             {/each}
           </ul>
@@ -243,11 +220,9 @@
                   <span class="sigil new">?</span>
                   <span class="path mono">{path}</span>
                 </button>
-                <button type="button"
-                        class="act"
-                        onclick={() => toggleSelection(path)}>
-                  {selected.has(path) ? 'Unstage' : 'Stage'}
-                </button>
+                <button type="button" class="act" disabled={busy}
+                        title="Stage (git add)"
+                        onclick={() => setStaged(path, false)}>Stage</button>
               </li>
             {/each}
           </ul>
@@ -258,21 +233,16 @@
         <section class="diff">
           <header>
             <span class="mono">{viewing.path}</span>
-            <span class="side">{viewing.staged ? '(staged)' : '(working tree)'}</span>
+            <span class="side">{viewing.staged ? '(HEAD ↔ index)' : '(index ↔ working tree)'}</span>
             <span class="spacer"></span>
-            <button type="button" class="act" onclick={() => { viewing = null; diffText = ''; }}>close</button>
+            {#if truncated}<span class="side">truncated</span>{/if}
+            <button type="button" class="act" onclick={closeDiff}>close</button>
           </header>
-          <div class="diff-body mono">
-            {#if diffLoading}
-              <div class="empty">loading…</div>
-            {:else if !diffText}
-              <div class="empty">no diff</div>
-            {:else}
-              {#each diffLines as line, i (i)}
-                <div class="dl {classify(line)}">{line || ' '}</div>
-              {/each}
-            {/if}
-          </div>
+          {#if diffLoading}
+            <div class="loading empty">loading…</div>
+          {:else}
+            <DiffView original={orig} modified={modified} filename={viewing.path} />
+          {/if}
         </section>
       {/if}
 
@@ -284,7 +254,7 @@
         <button type="button" class="tb-btn primary"
                 disabled={!canCommit}
                 onclick={commit}>
-          {committing ? 'committing…' : `Commit (${totalSelected})`}
+          {committing ? 'committing…' : `Commit (${stagedCount})`}
         </button>
       </section>
     {/if}
@@ -349,11 +319,12 @@
     font-variant-numeric: tabular-nums;
     color: var(--fg-2);
   }
-  .group .empty {
+  .empty {
     font-size: 11px;
     color: var(--fg-3);
     padding-left: 14px;
   }
+  .loading { padding: 8px 10px; }
   .group ul {
     list-style: none;
     margin: 0;
@@ -420,6 +391,7 @@
     font-family: var(--mono);
   }
   .act:hover { color: var(--fg); border-color: var(--fg-3); }
+  .act:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .diff {
     border: 1px solid var(--border);
@@ -438,22 +410,6 @@
   }
   .diff header .side { color: var(--fg-3); font-size: 10.5px; }
   .diff header .spacer { flex: 1; }
-  .diff-body {
-    max-height: 360px;
-    overflow: auto;
-    padding: 6px 0;
-    font-size: 11.5px;
-    line-height: 1.45;
-  }
-  .dl {
-    padding: 0 10px;
-    white-space: pre;
-  }
-  .dl.add  { background: rgba(25,214,0,0.08); color: var(--green); }
-  .dl.del  { background: rgba(221,0,0,0.10);  color: var(--crash); }
-  .dl.hunk { background: rgba(99,149,255,0.08); color: var(--link); }
-  .dl.meta { color: var(--fg-3); }
-  .dl.ctx  { color: var(--fg-2); }
 
   .commit {
     display: flex;

@@ -4,6 +4,37 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.7] — 2026-06-01
+
+### Fixed
+- **Desktop release builds compile again.** The `Toggle DevTools` menu item
+  called `WebviewWindow::{open,close,is}_devtools`, which are gated to
+  `debug_assertions` or Tauri's `devtools` feature — so the `--release`
+  build of `agentum-desktop` failed on the macOS runner and broke the
+  v0.10.6 release. The `devtools` feature is now enabled, keeping the menu
+  item working in shipped builds.
+
+### Added
+- **Desktop shell on Tauri 2.** `agentum-desktop` now boots the daemon
+  in-process on a free loopback port and opens a native Tauri window on the
+  embedded dashboard, with a system tray (hide-to-tray on close), a native
+  menu bar (File/View/Help), the updater plugin, window-state persistence,
+  and a `--headless` mode that runs the daemon with no window.
+- **Native notifications.** The desktop app subscribes to the daemon's
+  `/api/events` bus and raises OS notifications when an agent finishes, is
+  awaiting input, or crashes — even while hidden to the tray.
+- **GitHub/GitLab integration.** A per-session panel lists open PRs/MRs,
+  issues, and CI checks for the session's branch, and can open a PR/MR from
+  the current branch. Backed by `/api/sessions/{id}/forge/*` (origin
+  detection + GitHub/GitLab REST). A personal access token is stored
+  locally on the daemon (`<data_dir>/forge.json`, 0600) and never sent to
+  clients.
+- **Richer diff viewer.** The session git panel now renders a CodeMirror 6
+  side-by-side diff with per-language syntax highlighting (replacing the
+  plain-text unified diff), and supports staging/unstaging files against
+  the real index before committing, via new
+  `/api/sessions/{id}/git/{file,stage}` endpoints.
+
 ## [0.10.5] — 2026-05-30
 
 ### Fixed

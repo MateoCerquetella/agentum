@@ -16,7 +16,7 @@
 //!   → Tauri window with embedded dashboard, tray icon, native menus.
 //! - **Headless:** `agentum-desktop --headless [--port PORT]`
 //!   → Daemon only, no window. Useful for VPS/server deployments where
-//!     you want the same binary but no GUI.
+//!   you want the same binary but no GUI.
 
 // Hide the extra console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -31,7 +31,11 @@ use clap::Parser;
 // ── CLI ──────────────────────────────────────────────────────────────────
 
 #[derive(Parser, Debug)]
-#[command(name = "agentum-desktop", about = "Native desktop shell for agentum", version)]
+#[command(
+    name = "agentum-desktop",
+    about = "Native desktop shell for agentum",
+    version
+)]
 struct Cli {
     /// Run in headless mode (daemon only, no GUI window)
     #[arg(long, env = "AGENTUM_HEADLESS")]
@@ -62,7 +66,9 @@ fn main() -> Result<()> {
     if let Some(data_dir) = data_dir() {
         std::fs::create_dir_all(&data_dir).ok();
         // SAFETY: set_var before any threads read it, during single-threaded init.
-        unsafe { std::env::set_var("AGENTUM_DATA_DIR", &data_dir); }
+        unsafe {
+            std::env::set_var("AGENTUM_DATA_DIR", &data_dir);
+        }
     }
 
     // Reserve the port (0 = auto-assign a free one).
@@ -99,7 +105,9 @@ fn main() -> Result<()> {
              Check that tmux is installed and the database directory is writable:\n  \
              data dir: {}\n  \
              Try: agentum-desktop --headless for verbose daemon output.",
-            data_dir().unwrap_or_else(|| PathBuf::from("unknown")).display()
+            data_dir()
+                .unwrap_or_else(|| PathBuf::from("unknown"))
+                .display()
         );
     }
 
@@ -117,15 +125,17 @@ fn main() -> Result<()> {
         eprintln!("agentum-desktop: Press Ctrl+C to stop");
 
         // Block until Ctrl+C, then graceful shutdown.
-        let _ = rt.block_on(async {
+        rt.block_on(async {
             tokio::signal::ctrl_c().await.ok();
         });
         rt.shutdown_timeout(Duration::from_secs(3));
-        let _ = tokio::runtime::Builder::new_current_thread()
+        tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
             .unwrap()
-            .block_on(async { let _ = daemon_handle.await; });
+            .block_on(async {
+                let _ = daemon_handle.await;
+            });
         return Ok(());
     }
 
@@ -135,6 +145,7 @@ fn main() -> Result<()> {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
             use tauri::{
                 menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder},
@@ -241,11 +252,18 @@ fn main() -> Result<()> {
                                 "A new version is available: {} → {}.\\nVisit the releases page to download.",
                                 update.current_version, update.version
                             );
-                            let _ = w.eval(&format!("alert({:?})", msg));
+                            let _ = w.eval(format!("alert({:?})", msg));
                         }
                     }
                 }
             });
+
+            // --------------- Native notifications bridge -----------------
+            // Subscribe to the daemon's event bus and raise OS notifications
+            // for agent-lifecycle events (finished / awaiting input / crashed)
+            // so the user is alerted even when the window is hidden to tray.
+            let notif_handle = app.handle().clone();
+            tauri::async_runtime::spawn(notification_bridge(notif_handle, port));
 
             Ok(())
         })
@@ -262,9 +280,13 @@ fn main() -> Result<()> {
     });
 
     // Wait for daemon task to finish after runtime shutdown.
-    let _ = tokio::runtime::Builder::new_current_thread()
-        .enable_time().build().unwrap()
-        .block_on(async { let _ = daemon_handle.await; });
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let _ = daemon_handle.await;
+        });
 
     Ok(())
 }
@@ -273,19 +295,25 @@ fn main() -> Result<()> {
 
 /// Open the local store and serve the API + dashboard on the given bind.
 async fn run_daemon(port: u16, bind: IpAddr) -> Result<()> {
-    let (store, _db_path) = agentum_store::open_default()
-        .await
-        .context("Failed to open or create the agentum database.\n\
-                  Check that the data directory is writable and not on a read-only filesystem.")?;
+    let (store, _db_path) = agentum_store::open_default().await.context(
+        "Failed to open or create the agentum database.\n\
+                  Check that the data directory is writable and not on a read-only filesystem.",
+    )?;
 
     let addr = SocketAddr::new(bind, port);
     // cert_addr unused when tls=false; bind ephemeral.
     let cert_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
 
     agentum_server::serve(
-        agentum_server::ServeOptions { addr, cert_addr, tls: false, no_auth: true },
+        agentum_server::ServeOptions {
+            addr,
+            cert_addr,
+            tls: false,
+            no_auth: true,
+        },
         store,
-    ).await
+    )
+    .await
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -296,8 +324,12 @@ fn wait_for_listener(rt: &tokio::runtime::Runtime, addr: SocketAddr, budget: Dur
     let deadline = Instant::now() + budget;
     rt.block_on(async move {
         loop {
-            if Instant::now() >= deadline { return false; }
-            if tokio::net::TcpStream::connect(addr).await.is_ok() { return true; }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            if tokio::net::TcpStream::connect(addr).await.is_ok() {
+                return true;
+            }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     })
@@ -309,19 +341,23 @@ fn data_dir() -> Option<PathBuf> {
     {
         if let Ok(dir) = std::env::var("XDG_DATA_HOME") {
             Some(PathBuf::from(dir).join("agentum"))
-        } else if let Some(home) = home_dir() {
-            Some(home.join(".local").join("share").join("agentum"))
         } else {
-            None
+            home_dir().map(|home| home.join(".local").join("share").join("agentum"))
         }
     }
     #[cfg(target_os = "macos")]
     {
-        home_dir().map(|h| h.join("Library").join("Application Support").join("agentum"))
+        home_dir().map(|h| {
+            h.join("Library")
+                .join("Application Support")
+                .join("agentum")
+        })
     }
     #[cfg(target_os = "windows")]
     {
-        std::env::var("APPDATA").ok().map(|d| PathBuf::from(d).join("agentum"))
+        std::env::var("APPDATA")
+            .ok()
+            .map(|d| PathBuf::from(d).join("agentum"))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
@@ -330,19 +366,78 @@ fn data_dir() -> Option<PathBuf> {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).ok().map(PathBuf::from)
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+        .map(PathBuf::from)
+}
+
+/// Subscribe to the daemon's `/api/events` WS and raise native OS
+/// notifications for the agent-lifecycle events worth interrupting the user
+/// for. Runs for the app's lifetime, reconnecting with a short backoff if the
+/// socket drops (e.g. during the daemon's startup window). The daemon is a
+/// no-auth loopback bind, so the events stream needs no token.
+async fn notification_bridge(app: tauri::AppHandle, port: u16) {
+    use futures_util::StreamExt;
+    use tauri_plugin_notification::NotificationExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let url = format!("ws://127.0.0.1:{port}/api/events");
+    loop {
+        if let Ok((mut ws, _)) = tokio_tungstenite::connect_async(&url).await {
+            while let Some(Ok(msg)) = ws.next().await {
+                if let Message::Text(txt) = msg
+                    && let Some((title, body)) = notification_for(&txt)
+                {
+                    let _ = app.notification().builder().title(title).body(body).show();
+                }
+            }
+        }
+        // Socket closed or never connected — back off, then retry.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
+/// Map an event-bus JSON frame to a `(title, body)` when it's worth a
+/// notification. Returns `None` for everything else — including the `replay`
+/// frames the WS sends on connect, so we don't fire a burst of stale alerts.
+fn notification_for(json: &str) -> Option<(String, String)> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    if v.get("replay").and_then(|r| r.as_bool()).unwrap_or(false) {
+        return None;
+    }
+    let kind = v.get("kind")?.as_str()?;
+    let name = v
+        .get("session_name")
+        .and_then(|x| x.as_str())
+        .unwrap_or("a session");
+    let title = match kind {
+        "agent.finished" => "Agent finished",
+        "agent.awaiting_input" => "Awaiting input",
+        "session.crashed" => "Session crashed",
+        _ => return None,
+    };
+    Some((title.to_string(), name.to_string()))
 }
 
 /// Open a path in the system file manager.
 fn open_path(path: &std::path::Path) {
     #[cfg(target_os = "linux")]
-    { let _ = std::process::Command::new("xdg-open").arg(path).spawn(); }
+    {
+        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+    }
     #[cfg(target_os = "macos")]
-    { let _ = std::process::Command::new("open").arg(path).spawn(); }
+    {
+        let _ = std::process::Command::new("open").arg(path).spawn();
+    }
     #[cfg(target_os = "windows")]
-    { let _ = std::process::Command::new("explorer").arg(path).spawn(); }
+    {
+        let _ = std::process::Command::new("explorer").arg(path).spawn();
+    }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    { let _ = path; }
+    {
+        let _ = path;
+    }
 }
 
 /// Best-effort LAN IP detection for headless mode.
@@ -361,9 +456,14 @@ fn detect_lan_ip() -> String {
     #[cfg(target_os = "macos")]
     {
         for iface in &["en0", "en1"] {
-            if let Ok(ip) = std::process::Command::new("ipconfig").args(&["getifaddr", iface]).output() {
+            if let Ok(ip) = std::process::Command::new("ipconfig")
+                .args(&["getifaddr", iface])
+                .output()
+            {
                 let s = String::from_utf8_lossy(&ip.stdout).trim().to_string();
-                if !s.is_empty() { return s; }
+                if !s.is_empty() {
+                    return s;
+                }
             }
         }
     }

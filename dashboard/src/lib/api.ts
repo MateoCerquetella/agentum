@@ -498,6 +498,41 @@ export interface GitStatus {
   untracked: string[];
 }
 
+// ---------- forge (GitHub/GitLab integration, ORCA §2) ----------
+export interface ForgeInfo {
+  /** Detected forge for the session's `origin` remote, or null. */
+  forge: 'github' | 'gitlab' | null;
+  /** `owner/repo` (or GitLab project path). */
+  project: string | null;
+  branch: string | null;
+  has_token: boolean;
+}
+
+export interface ForgePr {
+  number: number;
+  title: string;
+  url: string;
+  state: string;
+  author: string | null;
+  branch: string | null;
+  draft: boolean;
+}
+
+export interface ForgeIssue {
+  number: number;
+  title: string;
+  url: string;
+  state: string;
+  author: string | null;
+}
+
+export interface ForgeCheck {
+  name: string;
+  /** Normalized: 'success' | 'failure' | 'pending' | raw. */
+  status: string;
+  url: string | null;
+}
+
 /**
  * Plan-usage snapshot returned by `/api/usage`. Backend scans
  * `~/.claude/projects` (token sum over a 5h rolling window) and
@@ -688,6 +723,60 @@ export const api = {
       `/api/sessions/${encodeURIComponent(id)}/git/commit`,
       { method: 'POST', body: JSON.stringify({ message, paths }) }
     ),
+  /** GET /api/sessions/{id}/git/file?path=&rev= — one revision of a file
+   *  (head | index | worktree) as text. Powers the CodeMirror side-by-side
+   *  diff, which fetches two revisions and diffs them client-side. */
+  gitFile: (id: string, path: string, rev: 'head' | 'index' | 'worktree') => {
+    const qs = new URLSearchParams({ path, rev }).toString();
+    return request<{ content: string; truncated: boolean }>(
+      `/api/sessions/${encodeURIComponent(id)}/git/file?${qs}`
+    );
+  },
+  /** POST /api/sessions/{id}/git/stage — stage (`git add`) or unstage
+   *  (`git restore --staged`) the given paths; returns refreshed status. */
+  gitStage: (id: string, paths: string[], unstage = false) =>
+    request<GitStatus>(`/api/sessions/${encodeURIComponent(id)}/git/stage`, {
+      method: 'POST',
+      body: JSON.stringify({ paths, unstage })
+    }),
+
+  // ---------- forge (GitHub/GitLab, ORCA §2) ----------
+  /** GET /api/sessions/{id}/forge/info — detected forge + repo + branch +
+   *  whether a token is configured. Never 500s on a non-forge repo. */
+  forgeInfo: (id: string) =>
+    request<ForgeInfo>(`/api/sessions/${encodeURIComponent(id)}/forge/info`),
+  /** GET /api/sessions/{id}/forge/prs — open PRs/MRs (normalized). */
+  forgePrs: (id: string) =>
+    request<ForgePr[]>(`/api/sessions/${encodeURIComponent(id)}/forge/prs`),
+  /** GET /api/sessions/{id}/forge/issues — open issues (normalized). */
+  forgeIssues: (id: string) =>
+    request<ForgeIssue[]>(`/api/sessions/${encodeURIComponent(id)}/forge/issues`),
+  /** GET /api/sessions/{id}/forge/checks?ref= — CI checks/pipelines for a
+   *  ref (defaults to the session's current branch). */
+  forgeChecks: (id: string, ref?: string) => {
+    const qs = ref ? `?ref=${encodeURIComponent(ref)}` : '';
+    return request<ForgeCheck[]>(
+      `/api/sessions/${encodeURIComponent(id)}/forge/checks${qs}`
+    );
+  },
+  /** POST /api/sessions/{id}/forge/pr — open a PR/MR from the session's
+   *  current branch into `base`. Returns the created URL. */
+  forgeCreatePr: (id: string, title: string, base: string, body = '') =>
+    request<{ url: string | null }>(
+      `/api/sessions/${encodeURIComponent(id)}/forge/pr`,
+      { method: 'POST', body: JSON.stringify({ title, base, body }) }
+    ),
+  /** GET /api/forge/token?forge= — whether a PAT is stored (never the token). */
+  forgeTokenStatus: (forge: 'github' | 'gitlab') =>
+    request<{ forge: string; has_token: boolean }>(
+      `/api/forge/token?forge=${encodeURIComponent(forge)}`
+    ),
+  /** PUT /api/forge/token — store (or clear, via empty token) a PAT. */
+  forgeSetToken: (forge: 'github' | 'gitlab', token: string) =>
+    request<{ forge: string; has_token: boolean }>(`/api/forge/token`, {
+      method: 'PUT',
+      body: JSON.stringify({ forge, token })
+    }),
 
   // ---------- usage (Claude/Codex plan headroom) ----------
   /** GET /api/usage — plan-usage snapshot for the sidebar chip. */
