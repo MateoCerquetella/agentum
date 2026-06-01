@@ -7,56 +7,142 @@
 //! OS thread (required on macOS).
 //!
 //! Features: system tray icon (hide-to-tray on close), native menu bar
-//! (File/View/Help), updater plugin, window state persistence, and graceful
-//! shutdown with daemon teardown.
+//! (File/View/Help), updater plugin, window state persistence, graceful
+//! shutdown with daemon teardown, and `--headless` mode for daemon-only.
+//!
+//! ## Dual-mode binary
+//!
+//! - **Windowed (default):** Double-click the app or run `agentum-desktop`
+//!   → Tauri window with embedded dashboard, tray icon, native menus.
+//! - **Headless:** `agentum-desktop --headless [--port PORT]`
+//!   → Daemon only, no window. Useful for VPS/server deployments where
+//!     you want the same binary but no GUI.
 
 // Hide the extra console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::net::TcpListener;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use tauri::{
-    menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
-};
-use tauri_plugin_updater::UpdaterExt;
+use clap::Parser;
+
+// ── CLI ──────────────────────────────────────────────────────────────────
+
+#[derive(Parser, Debug)]
+#[command(name = "agentum-desktop", about = "Native desktop shell for agentum", version)]
+struct Cli {
+    /// Run in headless mode (daemon only, no GUI window)
+    #[arg(long, env = "AGENTUM_HEADLESS")]
+    headless: bool,
+
+    /// Port for the daemon (default: auto-assign free port).
+    /// When headless, consider binding to a fixed port for scriptability.
+    #[arg(long, short = 'p', default_value_t = 0)]
+    port: u16,
+
+    /// Bind address (default: 127.0.0.1 for security).
+    /// Set to 0.0.0.0 for LAN access when headless.
+    #[arg(long, default_value = "127.0.0.1")]
+    bind: IpAddr,
+}
+
+// ── main ─────────────────────────────────────────────────────────────────
 
 fn main() -> Result<()> {
-    // Background runtime for the daemon. `enable_all` gives it the IO + timer
-    // drivers axum/tokio need; the GUI stays on the main OS thread below.
+    let cli = Cli::parse();
+
+    // Set the data directory to the platform-appropriate path before
+    // anything else touches the filesystem. agentum_store::open_default()
+    // reads AGENTUM_DATA_DIR; if unset it falls back to the platform
+    // default, which is the same logic we use here — setting it explicitly
+    // gives us ownership of the log path and makes the directory visible
+    // to "Open Data Directory" / "Open Logs" menu items.
+    if let Some(data_dir) = data_dir() {
+        std::fs::create_dir_all(&data_dir).ok();
+        // SAFETY: set_var before any threads read it, during single-threaded init.
+        unsafe { std::env::set_var("AGENTUM_DATA_DIR", &data_dir); }
+    }
+
+    // Reserve the port (0 = auto-assign a free one).
+    let port = if cli.port == 0 {
+        let l = TcpListener::bind("127.0.0.1:0")
+            .context("No free loopback port available — is another process using all ports?")?;
+        l.local_addr()?.port()
+    } else {
+        // Verify the port is free before handing off to the daemon.
+        TcpListener::bind(SocketAddr::new(cli.bind, cli.port))
+            .with_context(|| format!("Port {} is already in use", cli.port))?;
+        cli.port
+    };
+
+    // Background runtime for the daemon.
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .context("build tokio runtime")?;
+        .context("Failed to create async runtime — check system resources")?;
 
-    // Reserve a free loopback port.
-    let port = {
-        let l = TcpListener::bind("127.0.0.1:0").context("reserve free port")?;
-        l.local_addr()?.port()
-    };
-    let url = format!("http://127.0.0.1:{port}/");
-
-    // ---- Spawn the daemon ------------------------------------------------
-    // The daemon runs on the background runtime. We keep the JoinHandle so we
-    // can wait for graceful teardown on quit.
+    // Start the daemon.
     let daemon_handle = rt.spawn(async move {
-        if let Err(e) = run_daemon(port).await {
-            eprintln!("agentum-desktop: daemon exited: {e:#}");
+        if let Err(e) = run_daemon(port, cli.bind).await {
+            eprintln!("agentum-desktop: daemon exited with error: {e:#}");
+            eprintln!("Check that tmux is installed and the database is writable.");
         }
     });
 
-    // Block until the daemon is listening.
-    wait_for_listener(&rt, port, Duration::from_secs(10));
+    // Block until the daemon is listening (or timeout).
+    let bind_addr = SocketAddr::new(cli.bind, port);
+    if !wait_for_listener(&rt, bind_addr, Duration::from_secs(15)) {
+        anyhow::bail!(
+            "Daemon did not start within 15 seconds.\n\
+             Check that tmux is installed and the database directory is writable:\n  \
+             data dir: {}\n  \
+             Try: agentum-desktop --headless for verbose daemon output.",
+            data_dir().unwrap_or_else(|| PathBuf::from("unknown")).display()
+        );
+    }
 
-    // ---- Build the Tauri application -------------------------------------
+    // ── Headless mode: daemon only, no GUI ────────────────────────────
+    if cli.headless {
+        let url = if cli.bind == IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)) {
+            // When binding to all interfaces, try to show the LAN IP
+            let lan_ip = detect_lan_ip();
+            format!("http://{}:{}/", lan_ip, port)
+        } else {
+            format!("http://{}:{}/", cli.bind, port)
+        };
+        eprintln!("agentum-desktop: daemon listening on {url}");
+        eprintln!("agentum-desktop: dashboard → {url}");
+        eprintln!("agentum-desktop: Press Ctrl+C to stop");
+
+        // Block until Ctrl+C, then graceful shutdown.
+        let _ = rt.block_on(async {
+            tokio::signal::ctrl_c().await.ok();
+        });
+        rt.shutdown_timeout(Duration::from_secs(3));
+        let _ = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(async { let _ = daemon_handle.await; });
+        return Ok(());
+    }
+
+    // ── Windowed mode: Tauri GUI ──────────────────────────────────────
+    let url = format!("http://127.0.0.1:{port}/");
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(move |app| {
-            // --------------- Create the main window ------------------------
+            use tauri::{
+                menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder},
+                tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+                Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+            };
+
+            // --------------- Main window ---------------------------------
             let parsed: tauri::Url = url.parse().context("parse loopback url")?;
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(parsed))
                 .title("agentum")
@@ -66,16 +152,14 @@ fn main() -> Result<()> {
                 .build()
                 .context("create main window")?;
 
-            // --------------- System tray icon -----------------------------
+            // --------------- System tray ---------------------------------
             let tray_show = MenuItemBuilder::with_id("tray_show", "Show").build(app)?;
             let tray_hide = MenuItemBuilder::with_id("tray_hide", "Hide").build(app)?;
             let tray_quit = MenuItemBuilder::with_id("tray_quit", "Quit").build(app)?;
-            let tray_sep = PredefinedMenuItem::separator(app)?;
-
             let tray_menu = MenuBuilder::new(app)
                 .item(&tray_show)
                 .item(&tray_hide)
-                .item(&tray_sep)
+                .item(&PredefinedMenuItem::separator(app)?)
                 .item(&tray_quit)
                 .build()?;
 
@@ -84,141 +168,81 @@ fn main() -> Result<()> {
                 .tooltip("agentum")
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)
-                .on_menu_event(move |app, event| match event.id().as_ref() {
-                    "tray_show" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
-                    }
-                    "tray_hide" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.hide();
-                        }
-                    }
-                    "tray_quit" => {
-                        app.exit(0);
-                    }
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "tray_show" => { if let Some(w) = app.get_webview_window("main") { let _ = w.show(); let _ = w.set_focus(); } }
+                    "tray_hide" => { if let Some(w) = app.get_webview_window("main") { let _ = w.hide(); } }
+                    "tray_quit" => { app.exit(0); }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
+                    if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
                         let app = tray.app_handle();
                         if let Some(w) = app.get_webview_window("main") {
-                            if w.is_visible().unwrap_or(false) {
-                                let _ = w.hide();
-                            } else {
-                                let _ = w.show();
-                                let _ = w.set_focus();
-                            }
+                            if w.is_visible().unwrap_or(false) { let _ = w.hide(); }
+                            else { let _ = w.show(); let _ = w.set_focus(); }
                         }
                     }
                 })
                 .build(app)?;
 
-            // --------------- Native menu bar ------------------------------
-            let file_menu = SubmenuBuilder::new(app, "File")
-                .quit()
-                .build()?;
-
+            // --------------- Native menu bar -----------------------------
+            let file_menu = SubmenuBuilder::new(app, "File").quit().build()?;
             let view_menu = SubmenuBuilder::new(app, "View")
-                .item(&MenuItemBuilder::with_id("reload", "Reload")
-                    .accelerator("CmdOrCtrl+R")
-                    .build(app)?)
-                .item(&MenuItemBuilder::with_id("toggle_devtools", "Toggle DevTools")
-                    .accelerator("CmdOrCtrl+Shift+I")
-                    .build(app)?)
+                .item(&MenuItemBuilder::with_id("reload", "Reload").accelerator("CmdOrCtrl+R").build(app)?)
+                .item(&MenuItemBuilder::with_id("toggle_devtools", "Toggle DevTools").accelerator("CmdOrCtrl+Shift+I").build(app)?)
                 .build()?;
-
             let help_menu = SubmenuBuilder::new(app, "Help")
                 .item(&MenuItemBuilder::with_id("about", "About agentum").build(app)?)
                 .item(&MenuItemBuilder::with_id("open_data_dir", "Open Data Directory").build(app)?)
                 .item(&MenuItemBuilder::with_id("open_logs", "Open Logs").build(app)?)
                 .build()?;
+            app.set_menu(
+                MenuBuilder::new(app).item(&file_menu).item(&view_menu).item(&help_menu).build()?
+            )?;
 
-            let menu = MenuBuilder::new(app)
-                .item(&file_menu)
-                .item(&view_menu)
-                .item(&help_menu)
-                .build()?;
-
-            app.set_menu(menu)?;
-
-            // Menu event handler (on the app, not the window, for global shortcuts)
-            app.on_menu_event(move |app, event| {
+            app.on_menu_event(|app, event| {
                 match event.id().as_ref() {
-                    "reload" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.eval("location.reload()");
-                        }
-                    }
+                    "reload" => { if let Some(w) = app.get_webview_window("main") { let _ = w.eval("location.reload()"); } }
                     "toggle_devtools" => {
                         if let Some(w) = app.get_webview_window("main") {
-                            if w.is_devtools_open() {
-                                w.close_devtools();
-                            } else {
-                                w.open_devtools();
-                            }
+                            if w.is_devtools_open() { w.close_devtools(); } else { w.open_devtools(); }
                         }
                     }
                     "about" => {
-                        // Show a simple about dialog via a Tauri dialog or console
                         if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.eval(
-                                "alert('agentum — self-hosted control plane for AI coding agents\\n\\nVersion: 0.10.5\\nhttps://github.com/mateocerquetella/agentum')",
-                            );
+                            let _ = w.eval("alert('agentum — self-hosted control plane for AI coding agents\\n\\nVersion: 0.10.5\\nhttps://github.com/mateocerquetella/agentum')");
                         }
                     }
-                    "open_data_dir" => {
-                        let data_dir = dirs_next();
-                        if let Some(dir) = data_dir {
-                            open_path(&dir);
-                        }
-                    }
+                    "open_data_dir" => { if let Some(d) = data_dir() { open_path(&d); } }
                     "open_logs" => {
-                        let log_dir = dirs_next().map(|d| d.join("logs"));
-                        if let Some(dir) = log_dir {
-                            let _ = std::fs::create_dir_all(&dir);
-                            open_path(&dir);
-                        }
+                        if let Some(d) = data_dir() { let p = d.join("logs"); let _ = std::fs::create_dir_all(&p); open_path(&p); }
                     }
                     _ => {}
                 }
             });
 
-            // --------------- Window close → hide to tray ------------------
-            let window_clone = window.clone();
+            // --------------- Window close → hide to tray -----------------
+            let w = window.clone();
             window.on_window_event(move |event| {
                 if let WindowEvent::CloseRequested { api, .. } = event {
-                    // Hide to tray instead of closing
                     api.prevent_close();
-                    let _ = window_clone.hide();
+                    let _ = w.hide();
                 }
             });
 
-            // --------------- Check for updates on startup -----------------
+            // --------------- Update check on startup ---------------------
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                match handle.updater() {
-                    Ok(updater) => {
-                        if let Ok(Some(update)) = updater.check().await {
-                            if let Some(w) = handle.get_webview_window("main") {
-                                let msg = format!(
-                                    "A new version of agentum is available: {} → {}.\n\nVisit the releases page to download.",
-                                    update.current_version,
-                                    update.version
-                                );
-                                let _ = w.eval(&format!("alert({:?})", msg));
-                            }
+                use tauri_plugin_updater::UpdaterExt;
+                if let Ok(updater) = handle.updater() {
+                    if let Ok(Some(update)) = updater.check().await {
+                        if let Some(w) = handle.get_webview_window("main") {
+                            let msg = format!(
+                                "A new version is available: {} → {}.\\nVisit the releases page to download.",
+                                update.current_version, update.version
+                            );
+                            let _ = w.eval(&format!("alert({:?})", msg));
                         }
-                    }
-                    Err(e) => {
-                        eprintln!("agentum-desktop: updater check failed: {e}");
                     }
                 }
             });
@@ -227,83 +251,65 @@ fn main() -> Result<()> {
         })
         .build(tauri::generate_context!())?;
 
-    // ---- Run the event loop (blocking) -----------------------------------
+    // ---- Run event loop (blocking) ---------------------------------------
     let mut rt = Some(rt);
     app.run(move |_app_handle, event| {
-        if let RunEvent::Exit = event {
-            // The app is shutting down. Drop the Tokio runtime so the daemon
-            // task is cancelled. shutdown_timeout gives in-flight connections
-            // a brief window to finish.
+        if let tauri::RunEvent::Exit = event {
             if let Some(rt) = rt.take() {
                 rt.shutdown_timeout(Duration::from_secs(3));
             }
         }
     });
 
-    // Wait for the daemon task to actually finish after runtime shutdown.
-    // Block on a short-lived current-thread runtime so we don't need the
-    // multi-thread runtime anymore.
+    // Wait for daemon task to finish after runtime shutdown.
     let _ = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
-        .build()
-        .unwrap()
-        .block_on(async {
-            let _ = daemon_handle.await;
-        });
+        .enable_time().build().unwrap()
+        .block_on(async { let _ = daemon_handle.await; });
 
     Ok(())
 }
 
-/// Open the local store (creating + migrating the DB if needed) and serve the
-/// API + embedded dashboard on `127.0.0.1:port`, plain HTTP with auth disabled.
-async fn run_daemon(port: u16) -> Result<()> {
+// ── Daemon ───────────────────────────────────────────────────────────────
+
+/// Open the local store and serve the API + dashboard on the given bind.
+async fn run_daemon(port: u16, bind: IpAddr) -> Result<()> {
     let (store, _db_path) = agentum_store::open_default()
         .await
-        .context("open agentum database")?;
-    let addr = format!("127.0.0.1:{port}")
-        .parse()
-        .context("parse bind addr")?;
-    let cert_addr = "127.0.0.1:0".parse().context("parse cert addr")?;
+        .context("Failed to open or create the agentum database.\n\
+                  Check that the data directory is writable and not on a read-only filesystem.")?;
+
+    let addr = SocketAddr::new(bind, port);
+    // cert_addr unused when tls=false; bind ephemeral.
+    let cert_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+
     agentum_server::serve(
-        agentum_server::ServeOptions {
-            addr,
-            cert_addr,
-            tls: false,
-            no_auth: true,
-        },
+        agentum_server::ServeOptions { addr, cert_addr, tls: false, no_auth: true },
         store,
-    )
-    .await
+    ).await
 }
 
-/// Poll the loopback port until the daemon is accepting connections or the
-/// deadline passes.
-fn wait_for_listener(rt: &tokio::runtime::Runtime, port: u16, budget: Duration) {
+// ── Helpers ──────────────────────────────────────────────────────────────
+
+/// Block until the daemon is accepting connections or the deadline passes.
+/// Returns true if the daemon is up.
+fn wait_for_listener(rt: &tokio::runtime::Runtime, addr: SocketAddr, budget: Duration) -> bool {
     let deadline = Instant::now() + budget;
     rt.block_on(async move {
         loop {
-            if Instant::now() >= deadline {
-                return;
-            }
-            if tokio::net::TcpStream::connect(("127.0.0.1", port))
-                .await
-                .is_ok()
-            {
-                return;
-            }
+            if Instant::now() >= deadline { return false; }
+            if tokio::net::TcpStream::connect(addr).await.is_ok() { return true; }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-    });
+    })
 }
 
 /// Return the agentum data directory (platform-appropriate).
-fn dirs_next() -> Option<std::path::PathBuf> {
-    // Use the directories crate pattern: XDG_DATA_HOME / platform data dir
+fn data_dir() -> Option<PathBuf> {
     #[cfg(target_os = "linux")]
     {
         if let Ok(dir) = std::env::var("XDG_DATA_HOME") {
-            Some(std::path::PathBuf::from(dir).join("agentum"))
-        } else if let Some(home) = dirs_next_home() {
+            Some(PathBuf::from(dir).join("agentum"))
+        } else if let Some(home) = home_dir() {
             Some(home.join(".local").join("share").join("agentum"))
         } else {
             None
@@ -311,49 +317,55 @@ fn dirs_next() -> Option<std::path::PathBuf> {
     }
     #[cfg(target_os = "macos")]
     {
-        dirs_next_home().map(|h| {
-            h.join("Library")
-                .join("Application Support")
-                .join("agentum")
-        })
+        home_dir().map(|h| h.join("Library").join("Application Support").join("agentum"))
     }
     #[cfg(target_os = "windows")]
     {
-        if let Ok(dir) = std::env::var("APPDATA") {
-            Some(std::path::PathBuf::from(dir).join("agentum"))
-        } else {
-            None
-        }
+        std::env::var("APPDATA").ok().map(|d| PathBuf::from(d).join("agentum"))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
-        dirs_next_home().map(|h| h.join(".agentum"))
+        home_dir().map(|h| h.join(".agentum"))
     }
 }
 
-fn dirs_next_home() -> Option<std::path::PathBuf> {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .ok()
-        .map(std::path::PathBuf::from)
+fn home_dir() -> Option<PathBuf> {
+    std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).ok().map(PathBuf::from)
 }
 
-/// Open a path in the system file manager using the platform default.
+/// Open a path in the system file manager.
 fn open_path(path: &std::path::Path) {
     #[cfg(target_os = "linux")]
+    { let _ = std::process::Command::new("xdg-open").arg(path).spawn(); }
+    #[cfg(target_os = "macos")]
+    { let _ = std::process::Command::new("open").arg(path).spawn(); }
+    #[cfg(target_os = "windows")]
+    { let _ = std::process::Command::new("explorer").arg(path).spawn(); }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    { let _ = path; }
+}
+
+/// Best-effort LAN IP detection for headless mode.
+fn detect_lan_ip() -> String {
+    #[cfg(target_os = "linux")]
     {
-        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+        if let Ok(ip) = std::process::Command::new("hostname").arg("-I").output() {
+            let s = String::from_utf8_lossy(&ip.stdout);
+            if let Some(first) = s.split_whitespace().next() {
+                if first.chars().all(|c| c.is_ascii_digit() || c == '.') {
+                    return first.to_string();
+                }
+            }
+        }
     }
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open").arg(path).spawn();
+        for iface in &["en0", "en1"] {
+            if let Ok(ip) = std::process::Command::new("ipconfig").args(&["getifaddr", iface]).output() {
+                let s = String::from_utf8_lossy(&ip.stdout).trim().to_string();
+                if !s.is_empty() { return s; }
+            }
+        }
     }
-    #[cfg(target_os = "windows")]
-    {
-        let _ = std::process::Command::new("explorer").arg(path).spawn();
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        let _ = path; // no-op on unknown platforms
-    }
+    "127.0.0.1".to_string()
 }

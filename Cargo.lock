@@ -74,6 +74,7 @@ dependencies = [
  "agentum-server",
  "agentum-store",
  "anyhow",
+ "clap",
  "serde_json",
  "tauri",
  "tauri-build",

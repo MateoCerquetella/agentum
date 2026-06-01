@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  # Allow manual desktop-only builds without a full release.
+  workflow_dispatch:
+    inputs:
+      desktop-only:
+        description: 'Build desktop bundles only (skip CLI tarballs)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -108,11 +115,12 @@ jobs:
 
       # Prebuilt CLI install keeps this off the critical path (a from-source
       # `cargo install tauri-cli` adds several minutes per target).
+      # Pinned to v2.x for reproducible builds.
       - name: Install tauri-cli
         if: ${{ matrix.desktop != '' }}
         uses: taiki-e/install-action@v2
         with:
-          tool: tauri-cli
+          tool: tauri-cli@2
 
       - name: Build desktop bundles
         if: ${{ matrix.desktop != '' }}
