@@ -46,6 +46,8 @@ async fn list() -> Result<()> {
                 let auth = match auth {
                     SshAuth::Agent => "agent".to_string(),
                     SshAuth::Key { path } => format!("key={path}"),
+                    // Never print the password — just note the auth kind.
+                    SshAuth::Password { .. } => "password".to_string(),
                 };
                 println!(
                     "{:<18}  {:<7}  {}@{}:{} ({})",

@@ -17,13 +17,29 @@ pub async fn run(
         daemonize()?;
     }
 
+    // One install, one machine: when the daemon binds loopback, only this
+    // machine can reach it, so a username/password login is pure friction —
+    // default to no-auth. When bound to a non-loopback address (LAN / 0.0.0.0)
+    // the network can reach it, so auth stays required unless the operator
+    // explicitly passed `--no-auth`.
+    let loopback = addr.ip().is_loopback();
+    let no_auth = no_auth || loopback;
+
     let (store, db_path) = super::open_store().await?;
     tracing::info!(?db_path, %addr, %cert_addr, tls, no_auth, "store opened");
 
     if no_auth {
-        tracing::warn!(
-            "--no-auth: authentication disabled — do NOT expose this to untrusted networks"
-        );
+        if loopback {
+            tracing::info!(
+                "auth disabled — loopback bind, only this machine can reach the daemon \
+                 (bind to a LAN address to require login)"
+            );
+        } else {
+            tracing::warn!(
+                "--no-auth: authentication disabled on a network-reachable bind — \
+                 do NOT expose this to untrusted networks"
+            );
+        }
     } else {
         // On first boot with no users, offer/run the interactive setup wizard so
         // the operator doesn't have to separately run `agentum auth setup`.

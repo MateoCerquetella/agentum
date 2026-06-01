@@ -1,25 +1,29 @@
 #!/bin/sh
-# agentum installer — one-question wizard.
+# agentum installer — one install, no "mode" question.
 #
 # curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh | sh
 #
+# There is only ever ONE install: this machine. It runs the agentum
+# daemon. To control OTHER machines you do NOT install agentum on them —
+# you run `agentum hosts add NAME --user U --hostname H`, which SSHes in,
+# scans for what's missing, installs the required deps (tmux, git), and
+# asks which agent CLIs to install there. This script installs nothing
+# on remote machines.
+#
 # Options (passed after -- when piping):
-#   curl ... | sh -s -- --mode host          # this machine runs agents (daemon)
-#   curl ... | sh -s -- --mode client        # this machine only connects to remote daemons
-#   curl ... | sh -s -- --no-interactive     # skip prompts, default to host mode
+#   curl ... | sh -s -- --no-interactive     # skip prompts (loopback bind)
 #   curl ... | sh -s -- --expose lan         # bind daemon to 0.0.0.0 (VPS / shared box)
 #   curl ... | sh -s -- --expose loopback    # bind daemon to 127.0.0.1 (default; laptops)
 #
 # Environment:
-#   INSTALL_MODE=host|client    CI / non-interactive mode
-#   AGENTUM_EXPOSE=lan|loopback CI / non-interactive bind selection (host mode only).
+#   AGENTUM_EXPOSE=lan|loopback CI / non-interactive bind selection.
 #                               When unset and not interactive, defaults to loopback.
 #                               Pick "lan" on a VPS so the dashboard is reachable.
 #   INSTALL_DIR=$HOME/.local/bin  Override install path
 #
-# Legacy mode tokens server/cli/both are still accepted: server→host,
-# cli→client, both→host. The binary is the same; mode only affects the
-# post-install wizard.
+# Compat: a legacy `--mode <anything>` flag / INSTALL_MODE env var is
+# accepted and ignored — the installer no longer has client/host modes,
+# so `agentum update --mode …` and old automation keep working untouched.
 #
 # SPDX-License-Identifier: MIT
 set -eu
@@ -29,7 +33,7 @@ REPO="mateocerquetella/agentum"
 GH_API="https://api.github.com/repos/${REPO}/releases/latest"
 GH_DL="https://github.com/${REPO}/releases/download"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
-PLATFORM=""; VERSION=""; INSTALL_MODE="${INSTALL_MODE:-}"; INTERACTIVE=false; HAS_TTY=false
+PLATFORM=""; VERSION=""; INTERACTIVE=false; HAS_TTY=false
 EXPOSE="${AGENTUM_EXPOSE:-}"
 IS_UPDATE=false
 
@@ -57,12 +61,14 @@ div() { printf '  %s──%s%s\n' "${C_D}" "$1" "${C_R}"; }
 # ── Parse CLI args ─────────────────────────────────────────────
 while [ $# -gt 0 ]; do
     case "$1" in
-        --mode) INSTALL_MODE="$2"; shift 2 ;;
-        --mode=*) INSTALL_MODE="${1#*=}"; shift ;;
+        # --mode is a no-op kept for backwards compat (agentum update
+        # and old install one-liners still pass it). There are no modes.
+        --mode) shift 2 ;;
+        --mode=*) shift ;;
         --no-interactive) INTERACTIVE=false; shift ;;
         --expose) EXPOSE="$2"; shift 2 ;;
         --expose=*) EXPOSE="${1#*=}"; shift ;;
-        -h|--help) printf 'Usage: install.sh [--mode host|client] [--expose lan|loopback] [--no-interactive]\nEnv: INSTALL_MODE=host|client, AGENTUM_EXPOSE=lan|loopback\n'; exit 0 ;;
+        -h|--help) printf 'Usage: install.sh [--expose lan|loopback] [--no-interactive]\nEnv: AGENTUM_EXPOSE=lan|loopback, INSTALL_DIR=path\n'; exit 0 ;;
         *) shift ;;
     esac
 done
@@ -77,9 +83,17 @@ elif [ -t 1 ] && [ -c /dev/tty ]; then
 fi
 [ -n "${CI:-}" ] && INTERACTIVE=false
 
+# Read one line into the named variable. The `-t` timeout is a
+# safety net: if no input arrives (a piped `curl | sh` install where
+# the user walks away, or a tty that never delivers a keystroke) the
+# read returns empty and the caller's `${choice:-1}` default kicks in,
+# so the installer self-resolves to the recommended choice instead of
+# hanging forever and looking stuck. Override with
+# AGENTUM_INSTALL_READ_TIMEOUT (seconds) — tests set it low.
 read_input() {
-    if [ "$HAS_TTY" = true ] && ! [ -t 0 ]; then read -r "$1" <&3
-    else read -r "$1" || true; fi
+    _t="${AGENTUM_INSTALL_READ_TIMEOUT:-60}"
+    if [ "$HAS_TTY" = true ] && ! [ -t 0 ]; then read -r -t "$_t" "$1" <&3 || true
+    else read -r -t "$_t" "$1" || true; fi
 }
 
 # ── Banner ─────────────────────────────────────────────────────
@@ -92,46 +106,6 @@ banner() {
     printf '  %s██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ╚██████╔╝██║ ╚═╝ ██║%s\n' "${C_A}" "${C_R}"
     printf '  %s╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝ ╚═╝     ╚═╝%s\n' "${C_A}" "${C_R}"
     printf '               %sself-hosted AI agent control plane%s\n'              "${C_D}" "${C_R}"
-    printf '\n'
-}
-
-# ── Mode selection ─────────────────────────────────────────────
-# One binary, one question: will this machine run agents (host mode)
-# or just connect to a remote agentum (client mode)? Same artifact
-# either way — the answer only steers the post-install wizard.
-#
-# Legacy tokens server|both fold into host; cli folds into client.
-select_mode() {
-    # Normalize legacy tokens up front so the rest of the script only
-    # ever sees host|client.
-    case "${INSTALL_MODE}" in
-        server|both) INSTALL_MODE="host" ;;
-        cli)         INSTALL_MODE="client" ;;
-    esac
-    case "${INSTALL_MODE}" in host|client) return ;; esac
-
-    if [ "$INTERACTIVE" != true ]; then
-        INSTALL_MODE="host"
-        i "mode" "defaulting to ${C_B}host${C_R} (use --mode host|client to override)"
-        return
-    fi
-
-    printf '\n  %sWill this machine run agents?%s\n\n' "${C_Y}" "${C_R}"
-    printf '  %s🖥️   [1] %sYes — run agents here%s %s(recommended)%s\n' "${C_B}" "${C_G}" "${C_R}" "${C_D}" "${C_R}"
-    printf '       %sStarts a local agentum daemon. Dashboard + TUI both work.%s\n\n' "${C_D}" "${C_R}"
-    printf '  %s📡  [2] %sNo — just connect to a remote agentum%s\n' "${C_B}" "${C_BL}" "${C_R}"
-    printf '       %sUse this machine as a client only. You’ll point it at%s\n' "${C_D}" "${C_R}"
-    printf '       %sanother machine (VPS, work laptop, etc.) running agentum.%s\n\n' "${C_D}" "${C_R}"
-    while true; do
-        printf '  %sChoice [1-2] (1):%s ' "${C_D}" "${C_R}"
-        choice=""; read_input choice; choice="${choice:-1}"
-        case "$choice" in
-            1|host|Host|server|Server|both|Both) INSTALL_MODE="host";   break ;;
-            2|client|Client|cli|CLI|remote)      INSTALL_MODE="client"; break ;;
-            q|quit) printf '\n  %sCancelled.%s\n\n' "${C_D}" "${C_R}"; exit 0 ;;
-            *) printf '  %sEnter 1 or 2.%s\n' "${C_RED}" "${C_R}" ;;
-        esac
-    done
     printf '\n'
 }
 
@@ -308,39 +282,11 @@ AGENTUM_BIN() { echo "$INSTALL_DIR/agentum"; }
 # Keep it short. One ordered list per mode. No auto-running doctor
 # or --help dumps — those are one keystroke away if the user wants them.
 
-# Offer to create the first admin account right after a fresh install.
-# Skipped on updates (account already exists) and in non-interactive mode.
-# Runs `agentum auth setup` with stdin from /dev/tty so password prompts
-# reach the terminal even when the parent script has a redirected stdin.
-offer_auth_setup() {
-    [ "$INTERACTIVE" = true ] || return 0
-    [ "$IS_UPDATE" = false ]  || return 0
-    [ "$HAS_TTY" = true ]     || return 0
-
-    printf '\n'
-    printf '  %s▸%s %sCreate admin account now?%s ' "${C_A}" "${C_R}" "${C_B}" "${C_R}"
-    printf '%s[Y/n]:%s ' "${C_D}" "${C_R}"
-    choice=""; read_input choice; choice="${choice:-y}"
-    case "$choice" in
-        y|Y|yes|Yes|YES)
-            printf '\n'
-            if [ -x "$INSTALL_DIR/agentum" ]; then
-                if "$INSTALL_DIR/agentum" auth setup </dev/tty; then
-                    printf '\n'
-                    o "admin account ready"
-                else
-                    w "setup failed — run '${C_C}agentum auth setup${C_R}' manually before starting the server"
-                fi
-            else
-                w "binary not found at $INSTALL_DIR/agentum — cannot run setup"
-            fi
-            ;;
-        *)
-            h "Run '${C_C}agentum auth setup${C_R}' before starting the server"
-            h "or register via the dashboard on first load."
-            ;;
-    esac
-}
+# Auth note: there's no "create an admin account" prompt anymore. The
+# daemon defaults to no-auth when bound to loopback (the common case for a
+# personal machine — only this box can reach it), so a login would be pure
+# friction. If you expose it to your LAN (`--expose lan`), the dashboard
+# prompts you to create an admin account on first load instead.
 
 # Ask whether to auto-start agentum serve as a daemon (systemd user
 # unit when available, otherwise nohup background). Only offered for
@@ -687,20 +633,26 @@ install_clip_agent_autostart() {
     fi
 }
 
-# Final tip both paths share. Surfaces multi-machine control without
-# making first-run users learn the concept up front.
-multi_server_tip() {
+# How you control OTHER machines: you never install agentum on them.
+# `agentum hosts add` SSHes in, scans for missing deps, installs the
+# required ones (tmux/git), and asks which agent CLIs to install there.
+control_other_machines_tip() {
     printf '\n'
-    h "Tip: agentum can connect to other machines too —"
-    h "     run ${C_C}agentum profiles add NAME URL${C_R} to switch between them."
+    div " Control other machines "
+    printf '\n'
+    h "No second install needed. Point agentum at a remote box over SSH:"
+    h "  ${C_C}agentum hosts add NAME --user USER --hostname HOST${C_R}"
+    h "It scans the machine, installs tmux + git, and asks which agent"
+    h "CLIs to install there. Re-run anytime with ${C_C}agentum hosts setup NAME${C_R}."
     printf '\n'
 }
 
-# Host mode: daemon lives on this machine. Two sub-modes:
+# Post-install setup for the one + only install: the daemon lives on
+# this machine. Two bind choices:
 #
 #   workstation (default): daemon binds 127.0.0.1 only. Dashboard URL
 #       is loopback. Right for a personal laptop where agentum is
-#       just for you, even if you also point at a remote VPS profile.
+#       just for you.
 #
 #   shared: daemon binds 0.0.0.0 with --host 0.0.0.0. Dashboard URL
 #       uses the detected LAN IP so other devices/users can connect.
@@ -708,7 +660,7 @@ multi_server_tip() {
 #
 # Either way the `local` profile is loopback — it's the same-machine
 # shortcut and loopback is what works regardless of network.
-post_host() {
+post_install() {
     expose="$(ask_expose)"
     serve_args=""
     if [ "$expose" = "lan" ]; then
@@ -721,8 +673,8 @@ post_host() {
     fi
 
     # Setup steps first — the user shouldn't have to scroll past a
-    # reference card to find the actions still required of them.
-    offer_auth_setup
+    # reference card to find the actions still required of them. No auth
+    # prompt: loopback daemons default to no-auth (see note above).
     offer_auto_start "$dash_url" "$serve_args"
     register_local_profile
     # Install the clipboard agent for seamless Mac→remote Ctrl-V.
@@ -745,49 +697,7 @@ post_host() {
         w "could not detect a LAN IP — daemon is bound to 0.0.0.0 but the dashboard URL above is loopback."
         h "Other devices: run 'agentum doctor' once the daemon is up to see a reachable URL."
     fi
-    multi_server_tip
-}
-
-# Client mode: this machine never runs the daemon. We skip auth setup
-# (no local server to auth against) and autostart, and offer to add a
-# remote profile so the next command they run is `agentum terminal`.
-post_client() {
-    printf '\n'
-    div " Get started "
-    printf '\n'
-    h "1. Add a remote agentum:  ${C_C}agentum profiles add NAME URL${C_R}"
-    h "2. Open the terminal UI:  ${C_C}agentum terminal${C_R}   ${C_D}(connects to the default profile)${C_R}"
-    h "3. Create an agent:       ${C_C}agentum new my-agent --tool claude --dir . --up${C_R}"
-    printf '\n'
-
-    # Offer to register a remote profile now so the user can go
-    # straight into `agentum terminal` without a second round trip.
-    if [ "$INTERACTIVE" = true ] && [ "$IS_UPDATE" = false ]; then
-        printf '  %s▸%s %sAdd a remote agentum now?%s ' "${C_A}" "${C_R}" "${C_B}" "${C_R}"
-        printf '%s(URL like https://my-vps:8822, blank to skip)%s\n' "${C_D}" "${C_R}"
-        printf '  %sURL:%s ' "${C_D}" "${C_R}"
-        remote_url=""; read_input remote_url
-        if [ -n "$remote_url" ]; then
-            if [ -x "$INSTALL_DIR/agentum" ]; then
-                # --insecure is the safe default here: most fresh
-                # daemons issue self-signed certs and we don't have
-                # the fingerprint yet. Users can lock it down later
-                # via `agentum profiles add --fingerprint`.
-                if "$INSTALL_DIR/agentum" profiles add remote "$remote_url" --insecure --set-default >/dev/null 2>&1; then
-                    o "profile saved" "remote → ${remote_url} (default)"
-                    h "Connect: ${C_C}agentum terminal${C_R}"
-                else
-                    w "could not save profile — try manually: ${C_C}agentum profiles add remote ${remote_url}${C_R}"
-                fi
-            fi
-        else
-            h "Skipped. Run ${C_C}agentum profiles add NAME URL${C_R} when you have a daemon to point at."
-        fi
-    fi
-
-    printf '\n'
-    h "Tip: this machine can also run agents — ${C_C}agentum serve${C_R} anytime."
-    multi_server_tip
+    control_other_machines_tip
 }
 
 # ── Source-only guard ─────────────────────────────────────────
@@ -820,20 +730,12 @@ if [ -n "$EXISTING_BIN" ]; then
     fi
     i "updating" "${C_D}v${have} → v${target}${C_R}"
     IS_UPDATE=true
-    # Updates re-use the existing install — skip the mode prompt unless the
-    # user explicitly asked for a different mode. Same binary either way.
-    [ -z "$INSTALL_MODE" ] && INSTALL_MODE="host"
 fi
-
-select_mode
 
 if [ "$IS_UPDATE" = true ]; then
     s "Updating" "${C_D}v${EXISTING_VERSION#v} → ${VERSION}${C_R}"
 else
-    case "$INSTALL_MODE" in
-        host)   s "Installing" "${C_G}agentum${C_R} — this machine will run agents" ;;
-        client) s "Installing" "${C_BL}agentum${C_R} — this machine will connect to a remote daemon" ;;
-    esac
+    s "Installing" "${C_G}agentum${C_R} — the daemon runs on this machine"
 fi
 
 download
@@ -851,9 +753,6 @@ if [ "$IS_UPDATE" = true ]; then
     install_clip_agent_autostart
     printf '\n  %s%s✨  Updated to %s%s\n\n' "${C_Y}" "${C_B}" "${VERSION}" "${C_R}"
 else
-    case "$INSTALL_MODE" in
-        host)   post_host ;;
-        client) post_client ;;
-    esac
+    post_install
     printf '  %s%s✨  agentum is ready!%s\n\n' "${C_Y}" "${C_B}" "${C_R}"
 fi

@@ -89,26 +89,14 @@ pub async fn run(opts: Options) -> Result<()> {
                     return Err(e);
                 }
                 match prompt_unreachable_menu(&current_opts, &e)? {
-                    UnreachableAction::AddServer => {
-                        let new_profile = interactive_add_profile()?;
-                        // Re-resolve from a fresh base so the next attempt
-                        // honours the just-added profile (and any default
-                        // pointer it set). `--api` from the original CLI
-                        // call is preserved only when it was the explicit
-                        // override path; if the user is here it's because
-                        // that override didn't reach a daemon, so we
-                        // respect their new profile choice instead.
-                        let mut next = initial_opts.clone();
-                        next.api = None;
-                        next.fingerprint = None;
-                        next.profile = Some(new_profile);
-                        current_opts = apply_profile(next).await?;
-                    }
-                    UnreachableAction::Retry => {
-                        // No-op: just loop. Useful when the user just
-                        // ran `agentum serve` in another window.
-                    }
+                    // The only daemon is the local one; there's no "add a
+                    // remote server" path anymore (remote machines are SSH
+                    // hosts). Any non-quit choice just retries the local
+                    // daemon — handy right after `agentum serve`.
                     UnreachableAction::Quit => return Err(e),
+                    _ => {
+                        current_opts = apply_profile(initial_opts.clone()).await?;
+                    }
                 }
             }
         }
@@ -117,112 +105,36 @@ pub async fn run(opts: Options) -> Result<()> {
 
     let mut client = client;
     let mut sessions = sessions;
-    let mut active_profile_name = current_opts.profile.clone();
     let mut pending_after: Option<app::PendingAfterSwitch> = None;
     loop {
         let sound_muted =
             current_opts.no_sound || std::env::var_os("AGENTUM_TUI_NO_SOUND").is_some();
-        // Fan out to every *other* configured profile in parallel so
-        // the sidebar can show a unified, multi-server view of the
-        // user's fleet. The default profile (the one we just got a
-        // live `client` for above) is already covered; the rest go
-        // through `try_connect_profile`, which never prompts.
-        let mut extras = fanout_other_profiles(active_profile_name.as_deref().unwrap_or("")).await;
-        // Add the local loopback as a peer when the active connection
-        // isn't already loopback. Without this, a user whose default
-        // profile is a remote daemon (`omarchy`, a VPS, …) couldn't
-        // reach the "this machine" target from the New Session form's
-        // Profile field — Tab would short-circuit because the cycle
-        // wheel had only one entry. The loopback probe is non-
-        // interactive; an unreachable / login-needed result still
-        // shows up as a greyed row so the user sees it exists.
-        let active_is_loopback = active_profile_name
-            .as_deref()
-            .map(str::is_empty)
-            .unwrap_or(true);
-        let already_have_loopback = extras.iter().any(|(name, _)| name.is_empty());
-        if !active_is_loopback && !already_have_loopback {
-            let loopback = try_connect_loopback().await;
-            extras.push((String::new(), loopback));
-        }
-        // Aggregate sessions: default profile's first, then every
-        // reachable peer's. Two profiles pointing at the same daemon
-        // share session ids; dedupe by id so the sidebar can't show
-        // the same session under two servers. Active profile wins
-        // ties, otherwise named beats the loopback "" key.
-        let active_key = active_profile_name.clone().unwrap_or_default();
-        let mut per_profile: Vec<(String, Vec<agentum_core::Session>)> =
-            Vec::with_capacity(1 + extras.len());
-        per_profile.push((active_key.clone(), std::mem::take(&mut sessions)));
-        for (pname, conn) in &extras {
-            per_profile.push((pname.clone(), conn.sessions.clone()));
-        }
-        let (merged, session_profile) = app::merge_sessions_dedup(per_profile, &active_key);
-        sessions = merged;
+        // One daemon, so every session's ops (start/stop/stream) go
+        // through the single local client: the ops map is empty and
+        // `client_for_session` defaults every id to the "" (local) key.
+        // The sidebar tree groups by *host* instead — that key is derived
+        // from each session's own `host_label` inside `Tree::build`.
+        let session_profile: HashMap<uuid::Uuid, String> = HashMap::new();
         let outcome = run_tui_session(
             client,
             sessions,
             sound_muted,
-            active_profile_name.clone(),
+            None,
             pending_after.take(),
-            extras,
+            Vec::new(),
             session_profile,
         )
         .await?;
         match outcome {
             app::RunOutcome::Quit => return Ok(()),
-            app::RunOutcome::SwitchProfile { name, then } => {
-                // Re-resolve the entire connection from the chosen
-                // profile and re-enter the TUI. Errors here drop back
-                // into the same connect-or-onboard loop the cold start
-                // uses, so a misconfigured remote server is recoverable
-                // without restarting the binary.
-                let mut next = initial_opts.clone();
-                next.api = None;
-                next.fingerprint = None;
-                // Empty name = the synthetic loopback row in the
-                // sidebar. Passing `Some("")` into `apply_profile`
-                // would trip the `profile `` not found` bail at
-                // mod.rs:897 — so clear it and let the resolution
-                // rules probe the loopback daemon instead.
-                next.profile = if name.is_empty() {
-                    None
-                } else {
-                    Some(name.clone())
-                };
-                current_opts = apply_profile(next).await?;
-                let connected = match connect_once(&current_opts).await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        if !is_interactive_tty() {
-                            return Err(e);
-                        }
-                        eprintln!();
-                        eprintln!("  ✗ switch to profile `{name}` failed:");
-                        eprintln!("    {e}");
-                        eprintln!();
-                        eprintln!("  staying on the previous server.");
-                        // Pause so the user actually sees the error
-                        // before the alt-screen redraws over it. Without
-                        // this, the failure flashes by in <100ms and the
-                        // user thinks "nothing happened" after typing
-                        // their credentials.
-                        eprint!("  press Enter to continue… ");
-                        std::io::stderr().flush().ok();
-                        let mut _buf = String::new();
-                        let _ = std::io::stdin().read_line(&mut _buf);
-                        // Restore the previous profile by re-running the
-                        // initial resolution; this re-enters the connect
-                        // loop with whatever the user originally asked
-                        // for. Anything still failing there will pop the
-                        // same prompt as the cold start.
-                        current_opts = apply_profile(initial_opts.clone()).await?;
-                        connect_once(&current_opts).await?
-                    }
-                };
+            app::RunOutcome::SwitchProfile { then, .. } => {
+                // Hosts don't switch the daemon (there's only one). Treat
+                // a lingering switch/reconnect request as a reconnect to
+                // the local daemon — useful right after it restarts.
+                current_opts = apply_profile(initial_opts.clone()).await?;
+                let connected = connect_once(&current_opts).await?;
                 client = connected.0;
                 sessions = connected.2;
-                active_profile_name = current_opts.profile.clone();
                 pending_after = then;
             }
         }
@@ -300,6 +212,17 @@ async fn establish_trust(base: &Url, opts: &Options) -> Result<TlsTrust> {
         return Ok(TlsTrust::Plain);
     }
     if opts.insecure {
+        // --insecure disables cert verification entirely, so confine it to
+        // the local machine. On a remote host an on-path attacker could MITM
+        // the connection; require an explicit pinned --fingerprint there.
+        if !is_local_loopback(base) {
+            bail!(
+                "--insecure refused for non-loopback host {}: TLS verification can only be \
+                 disabled for the local machine (127.0.0.1/localhost/::1). For a remote daemon, \
+                 pin its certificate with --fingerprint <sha256> instead.",
+                base.host_str().unwrap_or("?")
+            );
+        }
         eprintln!(
             "{}: TLS cert verification disabled (--insecure). The connection is NOT \
              protected against MITM attackers on the network path. Use only for local \
@@ -487,33 +410,18 @@ fn is_local_loopback(base: &Url) -> bool {
 /// resulting bearer token is what's cached. Re-runs of
 /// `agentum terminal` use the cached token, not this password.
 fn generate_random_password() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    // Cheap seed mix — we're not generating production crypto, just a
-    // password the user never sees and the daemon hashes anyway.
-    // SystemTime nanos + process id + addr-of-stack give a 64-bit
-    // seed plenty good for one-time bootstrap use.
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
-    let pid = std::process::id() as u64;
-    let stack_addr = &nanos as *const u64 as u64;
-    let mut state = nanos
-        .wrapping_mul(0x9E3779B97F4A7C15)
-        .wrapping_add(pid)
-        .wrapping_add(stack_addr);
+    // This password is a real credential — it's registered as the
+    // loopback `local` user's password — so it must come from the OS
+    // CSPRNG, not a time/pid-seeded PRNG (which a local attacker could
+    // predict and use to register/log in before us). The 64-char
+    // alphabet divides 256 evenly, so `byte % 64` is unbiased.
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::with_capacity(32);
-    for _ in 0..32 {
-        // splitmix64 step — short, no deps.
-        state = state.wrapping_add(0x9E3779B97F4A7C15);
-        let mut z = state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
-        z ^= z >> 31;
-        out.push(ALPHABET[(z as usize) % ALPHABET.len()] as char);
-    }
-    out
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes).expect("OS CSPRNG unavailable");
+    bytes
+        .iter()
+        .map(|b| ALPHABET[(*b as usize) % ALPHABET.len()] as char)
+        .collect()
 }
 
 async fn probe_token(base: &Url, trust_setting: &TlsTrust, token: &str) -> bool {
@@ -522,130 +430,6 @@ async fn probe_token(base: &Url, trust_setting: &TlsTrust, token: &str) -> bool 
         return false;
     };
     client.me().await.is_ok()
-}
-
-/// Probe every configured profile *except* `skip_name` (the default
-/// profile we already connected synchronously in `run`). Returns a
-/// list of (profile_name, ProfileConnect) tuples in profile-order.
-/// All probes run in parallel via `join_all` so the boot path
-/// doesn't serialise on a slow / unresponsive remote server.
-/// Non-interactive probe of the local loopback daemon. Mirrors the
-/// HTTPS-then-HTTP discovery `resolve_base` does, but never blocks on
-/// user input — failures degrade into an `Unreachable` ProfileConnect
-/// so the sidebar's "this machine" row still appears (greyed out)
-/// when the user hasn't started `agentum serve` locally yet. Used by
-/// the boot fanout so the New Session form's Profile field can cycle
-/// to `""` (this machine) even when the active profile is remote.
-async fn try_connect_loopback() -> ProfileConnect {
-    let unreachable = |msg: String| ProfileConnect {
-        status: app::ServerStatus::Unreachable,
-        client: None,
-        sessions: Vec::new(),
-        last_error: Some(msg),
-        agent_availability: None,
-        version: None,
-    };
-    // HTTP-first: --no-tls is the common local-dev setup.
-    for candidate in [DEFAULT_HTTP, DEFAULT_HTTPS] {
-        let Ok(base) = Url::parse(candidate) else {
-            continue;
-        };
-        let trust = if base.scheme() == "https" {
-            // Same loopback-friendly trust path resolve_base uses:
-            // a pinned fingerprint if known_hosts has one, accept-any
-            // otherwise (we're talking to our own machine).
-            let host_key = trust::host_key(&base).unwrap_or_default();
-            trust::KnownHosts::load()
-                .ok()
-                .and_then(|kh| kh.pin(&host_key).map(|s| s.to_string()))
-                .map(TlsTrust::Pinned)
-                .unwrap_or(TlsTrust::AcceptAny)
-        } else {
-            TlsTrust::Plain
-        };
-        if api::probe_health(&base, &trust, Duration::from_millis(750))
-            .await
-            .is_err()
-        {
-            continue;
-        }
-        let host_key = match trust::host_key(&base) {
-            Ok(k) => k,
-            Err(e) => return unreachable(format!("host key: {e}")),
-        };
-        let creds = match trust::Credentials::load() {
-            Ok(c) => c,
-            Err(e) => return unreachable(format!("creds: {e}")),
-        };
-        let Some(token) = creds.token(&host_key).map(str::to_string) else {
-            return ProfileConnect {
-                status: app::ServerStatus::LoginNeeded,
-                client: None,
-                sessions: Vec::new(),
-                last_error: Some("loopback daemon is up but you haven't signed in here".into()),
-                agent_availability: None,
-                version: None,
-            };
-        };
-        let client = match api::Client::new(base.clone(), token, trust) {
-            Ok(c) => c,
-            Err(e) => return unreachable(format!("client: {e}")),
-        };
-        // Re-call health here on the authenticated client so we can
-        // capture the daemon's version. probe_health above was an
-        // unauthenticated reachability check that only returns a
-        // bool — the version comes back in the JSON body.
-        let version = client
-            .health()
-            .await
-            .ok()
-            .map(|h| h.version)
-            .filter(|v| !v.is_empty());
-        let sessions = client.list_sessions().await.unwrap_or_default();
-        let agent_availability = client.list_agents().await.ok().map(|list| {
-            list.into_iter()
-                .filter(|a| a.available)
-                .map(|a| a.name)
-                .collect::<std::collections::HashSet<_>>()
-        });
-        return ProfileConnect {
-            status: app::ServerStatus::Live,
-            client: Some(client),
-            sessions,
-            last_error: None,
-            agent_availability,
-            version,
-        };
-    }
-    unreachable("no local daemon listening on 127.0.0.1:8822".into())
-}
-
-async fn fanout_other_profiles(skip_name: &str) -> Vec<(String, ProfileConnect)> {
-    let store = match profiles::load() {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    let entries: Vec<(String, profiles::Profile)> = store
-        .list()
-        .into_iter()
-        .filter_map(|(name, profile, _is_default)| {
-            if name == skip_name {
-                None
-            } else {
-                Some((name, profile))
-            }
-        })
-        .collect();
-    if entries.is_empty() {
-        return Vec::new();
-    }
-    let probes = entries.iter().map(|(_, p)| try_connect_profile(p));
-    let results = futures_util::future::join_all(probes).await;
-    entries
-        .into_iter()
-        .zip(results)
-        .map(|((name, _), conn)| (name, conn))
-        .collect()
 }
 
 /// Result of attempting a non-interactive connect to one named
@@ -664,119 +448,6 @@ pub struct ProfileConnect {
     /// expose the field. The sidebar uses this to surface fleet
     /// version drift so the user can spot peers behind the local CLI.
     pub version: Option<String>,
-}
-
-/// Best-effort connect for a single profile. Never prompts — that's
-/// the contract that lets the fanout call this for every profile in
-/// parallel without freezing the boot path. Failures degrade
-/// gracefully into a status the sidebar can render.
-async fn try_connect_profile(profile: &profiles::Profile) -> ProfileConnect {
-    let unreachable = |msg: String| ProfileConnect {
-        status: app::ServerStatus::Unreachable,
-        client: None,
-        sessions: Vec::new(),
-        last_error: Some(msg),
-        agent_availability: None,
-        version: None,
-    };
-
-    let base = match Url::parse(&profile.url) {
-        Ok(u) => u,
-        Err(e) => return unreachable(format!("invalid URL: {e}")),
-    };
-    let trust = match trust_for_profile(&base, profile) {
-        Ok(t) => t,
-        Err(e) => return unreachable(format!("trust: {e}")),
-    };
-    // Pull a cached token from the per-host credentials cache. No
-    // cache → mark login-needed; the user can sign in via the
-    // sidebar / overlay later without restarting the TUI.
-    let host_key = match trust::host_key(&base) {
-        Ok(k) => k,
-        Err(e) => return unreachable(format!("host key: {e}")),
-    };
-    let creds = match trust::Credentials::load() {
-        Ok(c) => c,
-        Err(e) => return unreachable(format!("creds: {e}")),
-    };
-    let Some(token) = creds.token(&host_key).map(str::to_string) else {
-        return ProfileConnect {
-            status: app::ServerStatus::LoginNeeded,
-            client: None,
-            sessions: Vec::new(),
-            last_error: Some(format!("no cached token for {host_key}")),
-            agent_availability: None,
-            version: None,
-        };
-    };
-    let client = match api::Client::new(base, token, trust) {
-        Ok(c) => c,
-        Err(e) => return unreachable(format!("build client: {e}")),
-    };
-    let health = match client.health().await {
-        Ok(h) => Some(h),
-        Err(_) => return unreachable(format!("health probe failed at {}", profile.url)),
-    };
-    let version = health
-        .as_ref()
-        .map(|h| h.version.clone())
-        .filter(|v| !v.is_empty());
-    // Health passed but token rejected ⇒ login-needed. We can't
-    // prompt here; the user has to log in on this server via the
-    // overlay before its sessions appear.
-    if client.me().await.is_err() {
-        return ProfileConnect {
-            status: app::ServerStatus::LoginNeeded,
-            client: Some(client),
-            sessions: Vec::new(),
-            last_error: Some("token rejected".to_string()),
-            agent_availability: None,
-            version,
-        };
-    }
-    let sessions = client.list_sessions().await.unwrap_or_default();
-    let agent_availability = match client.list_agents().await {
-        Ok(list) if !list.is_empty() => Some(
-            list.into_iter()
-                .filter(|a| a.available)
-                .map(|a| a.name)
-                .collect(),
-        ),
-        _ => None,
-    };
-    ProfileConnect {
-        status: app::ServerStatus::Live,
-        client: Some(client),
-        sessions,
-        last_error: None,
-        agent_availability,
-        version,
-    }
-}
-
-/// Resolve TLS trust for a named profile *non-interactively*. Mirrors
-/// [`establish_trust`] but never prompts — the fanout caller treats
-/// missing pins as "unreachable" instead of asking the user to
-/// confirm every server at startup.
-fn trust_for_profile(base: &Url, profile: &profiles::Profile) -> Result<api::TlsTrust> {
-    if base.scheme() == "http" {
-        return Ok(api::TlsTrust::Plain);
-    }
-    if profile.insecure {
-        return Ok(api::TlsTrust::AcceptAny);
-    }
-    if let Some(raw) = &profile.fingerprint {
-        let fp = trust::normalize_fingerprint(raw)
-            .with_context(|| format!("invalid fingerprint for profile: {raw}"))?;
-        return Ok(api::TlsTrust::Pinned(fp));
-    }
-    let host_key = trust::host_key(base)?;
-    if let Some(pinned) = trust::KnownHosts::load()?.pin(&host_key) {
-        return Ok(api::TlsTrust::Pinned(pinned.to_string()));
-    }
-    bail!(
-        "no pinned fingerprint for {host_key} — connect once with `agentum terminal --profile <name>` interactively"
-    );
 }
 
 /// Layer profile defaults under any explicit CLI flags. Returns the
@@ -1126,67 +797,4 @@ fn prompt_unreachable_menu(opts: &Options, err: &anyhow::Error) -> Result<Unreac
             }
         }
     }
-}
-
-/// Walk the user through creating + saving a profile, returning the
-/// chosen name. Reuses [`profiles::Profiles`] so the TUI subcommand,
-/// CLI subcommand, and dashboard switcher all share one storage shape.
-fn interactive_add_profile() -> Result<String> {
-    eprintln!();
-    eprintln!("  Add a new server:");
-    let name = read_line("    name (e.g. vps): ")?;
-    if name.trim().is_empty() {
-        bail!("name is required");
-    }
-    let url = read_line("    URL (e.g. https://my-vps.example.com:8822): ")?;
-    if url.trim().is_empty() {
-        bail!("URL is required");
-    }
-    Url::parse(url.trim()).with_context(|| format!("invalid URL: {url}"))?;
-    let fp_raw = read_line("    fingerprint (optional, AB:CD:…): ")?;
-    let fingerprint = if fp_raw.trim().is_empty() {
-        None
-    } else {
-        Some(
-            trust::normalize_fingerprint(fp_raw.trim())
-                .with_context(|| format!("invalid fingerprint: {fp_raw}"))?,
-        )
-    };
-    let make_default_raw = read_line("    set as default? [y/N]: ")?;
-    let set_default = matches!(make_default_raw.trim(), "y" | "Y" | "yes");
-
-    let mut store = profiles::load().context("load profiles.toml")?;
-    store
-        .upsert(
-            name.trim().to_string(),
-            profiles::Profile {
-                url: url.trim().to_string(),
-                fingerprint,
-                insecure: false,
-            },
-        )
-        .with_context(|| format!("save profile `{}`", name.trim()))?;
-    if set_default {
-        store
-            .set_default(Some(name.trim().to_string()))
-            .with_context(|| format!("mark `{}` default", name.trim()))?;
-    }
-    eprintln!(
-        "  saved profile `{}` to {}",
-        name.trim(),
-        store.path().display()
-    );
-    eprintln!();
-    Ok(name.trim().to_string())
-}
-
-fn read_line(prompt: &str) -> Result<String> {
-    eprint!("{prompt}");
-    io::stderr().flush().ok();
-    let mut buf = String::new();
-    let n = io::stdin().lock().read_line(&mut buf)?;
-    if n == 0 {
-        bail!("unexpected EOF on stdin");
-    }
-    Ok(buf.trim_end_matches(['\r', '\n']).to_string())
 }

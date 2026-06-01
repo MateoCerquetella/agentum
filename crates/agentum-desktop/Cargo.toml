@@ -6,8 +6,27 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Tauri desktop shell for agentum. Placeholder until PRD Phase 3 (docs/plans/AGENTUM_V2_PRD.md §6)."
+description = "Native desktop shell for agentum: runs the daemon in-process on a free loopback port and opens a Tauri window on the embedded dashboard."
 
-[lib]
-name = "agentum_desktop"
-path = "src/lib.rs"
+# A real binary (was a placeholder lib). The GUI deps (tauri → wry/webkit) are
+# isolated to this crate so the CLI/server release matrix is unaffected — the
+# Linux build of the `agentum` binary never pulls webkit.
+[[bin]]
+name = "agentum-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+# Runs Tauri's compile-time codegen (reads tauri.conf.json, embeds the window
+# icon + the placeholder frontendDist). Required even though we navigate to an
+# external in-process URL at runtime.
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+agentum-server = { workspace = true }
+agentum-store = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+# Tauri replaces the previous raw wry+tao shell. Tray icon, native menu,
+# notifications and the updater are added in Phase D; Phase A is the bare
+# window-over-in-process-daemon migration.
+tauri = { version = "2", features = [] }

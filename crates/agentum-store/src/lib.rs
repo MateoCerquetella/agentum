@@ -108,8 +108,8 @@ impl Store {
         let res = sqlx::query(
             r#"
             INSERT INTO hosts
-                (id, name, kind, user, hostname, port, auth_kind, key_path, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, name, kind, user, hostname, port, auth_kind, key_path, secret, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(id.to_string())
@@ -120,6 +120,7 @@ impl Store {
         .bind(parts.port.map(i64::from))
         .bind(parts.auth_kind)
         .bind(parts.key_path)
+        .bind(parts.secret)
         .bind(&now_s)
         .bind(&now_s)
         .execute(&self.pool)
@@ -1747,6 +1748,9 @@ struct HostKindParts<'a> {
     port: Option<u16>,
     auth_kind: Option<&'static str>,
     key_path: Option<&'a str>,
+    /// SSH password, only set for `SshAuth::Password`. Persisted to the
+    /// `hosts.secret` column (migration 0019).
+    secret: Option<&'a str>,
 }
 
 fn host_kind_parts(kind: &HostKind) -> HostKindParts<'_> {
@@ -1758,30 +1762,37 @@ fn host_kind_parts(kind: &HostKind) -> HostKindParts<'_> {
             port: None,
             auth_kind: None,
             key_path: None,
+            secret: None,
         },
         HostKind::Ssh {
             user,
             hostname,
             port,
             auth,
-        } => match auth {
-            SshAuth::Agent => HostKindParts {
+        } => {
+            let base = HostKindParts {
                 kind: "ssh",
                 user: Some(user.as_str()),
                 hostname: Some(hostname.as_str()),
                 port: Some(*port),
                 auth_kind: Some("agent"),
                 key_path: None,
-            },
-            SshAuth::Key { path } => HostKindParts {
-                kind: "ssh",
-                user: Some(user.as_str()),
-                hostname: Some(hostname.as_str()),
-                port: Some(*port),
-                auth_kind: Some("key"),
-                key_path: Some(path.as_str()),
-            },
-        },
+                secret: None,
+            };
+            match auth {
+                SshAuth::Agent => base,
+                SshAuth::Key { path } => HostKindParts {
+                    auth_kind: Some("key"),
+                    key_path: Some(path.as_str()),
+                    ..base
+                },
+                SshAuth::Password { password } => HostKindParts {
+                    auth_kind: Some("password"),
+                    secret: Some(password.as_str()),
+                    ..base
+                },
+            }
+        }
     }
 }
 
@@ -1795,6 +1806,8 @@ struct HostRow {
     port: Option<i64>,
     auth_kind: Option<String>,
     key_path: Option<String>,
+    #[sqlx(default)]
+    secret: Option<String>,
     created_at: String,
     updated_at: String,
     last_seen_at: Option<String>,
@@ -1809,6 +1822,9 @@ impl TryFrom<HostRow> for Host {
                 let auth = match r.auth_kind.as_deref() {
                     Some("key") => SshAuth::Key {
                         path: r.key_path.unwrap_or_default(),
+                    },
+                    Some("password") => SshAuth::Password {
+                        password: r.secret.unwrap_or_default(),
                     },
                     _ => SshAuth::Agent,
                 };

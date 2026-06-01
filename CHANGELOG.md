@@ -4,6 +4,165 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.5] — 2026-05-30
+
+### Fixed
+- **New Session is local-first again — it no longer strands you on a
+  remote host.** Pressing `n` while the sidebar cursor sat on an SSH host
+  (e.g. `omarchy`) seeded the form's Host to that remote box, but the
+  working directory fell back to the laptop's `$HOME`. The folder picker
+  then tried to list a Mac path *on the SSH host* and failed with `400 Bad
+  Request — remote fs: ssh/tmux exited with status …`, so you couldn't
+  start a local session at all. New Session now defaults to **this
+  machine** (local host, local `$HOME`) whenever no session is selected;
+  targeting a host is one explicit `Tab` away in the merged Host field.
+  Opening New Session from a *selected* remote session still inherits that
+  session's host and workdir (which are consistent), as before.
+
+## [0.10.4] — 2026-05-30
+
+### Fixed
+- **Remote workdir listing no longer 400s on fish/zsh login shells.**
+  Opening New Session against an SSH host (or Tab-cycling onto one) fetches
+  `$HOME` on that box via `/api/fs/list`. That listing script is POSIX
+  `sh`, but it was handed straight to the remote *login* shell — so a host
+  whose user logs into **fish** or zsh rejected its `case` / `$(…)` /
+  `${#}` syntax, and the form showed `couldn't list host home: 400 Bad
+  Request — remote fs: …` even though the host reported "ready" (readiness
+  already wrapped its probe in `sh -c`; this path didn't). The script is
+  now wrapped in `sh -c`, matching every other remote command (readiness,
+  bootstrap, agent install, tmux), so the remote login shell no longer
+  matters.
+
+### Changed
+- **New Session merges "Servers" and "Host" into one picker.** The form
+  had two adjacent fields — a *Servers* (daemon) field and a *Host* (SSH)
+  field — which read as redundant now that the sidebar already folds the
+  local machine and every SSH host into one HOSTS list. They're now a
+  single **Host** field that cycles `this machine + the SSH hosts the
+  daemon drives`, mirroring the sidebar exactly. "this machine" renders as
+  the daemon's hostname and is just a peer of any SSH host in the wheel;
+  the local case keeps the worktree default. Finishes the servers→hosts
+  merge that 0.10.2 started in the sidebar.
+- **Hosts overlay: `Enter` closes a host that's already ready.** Once a
+  host checks out green, `Enter` dismisses the overlay instead of
+  re-running the probe — the common "added it, watched the checks pass,
+  done" flow. `t` still forces a re-check, and a not-yet-checked or
+  not-ready host still probes on `Enter`. The detail pane shows a `press
+  Enter to close` hint when the host is ready.
+
+## [0.10.3] — 2026-05-30
+
+### Added
+- **Folder picker for the SSH key path.** In the add-host form (Host
+  Manager → `a`), pressing `Enter` on the **Key path** field (key/agent
+  auth) opens the same directory picker the New Session "Working
+  directory" field uses, browsing the daemon's filesystem — navigate with
+  ↑/↓ and →/Enter, ←/Backspace to go up, `a`/`s` to accept. Shares one
+  `dir_picker_step` tree-walker with the workdir picker.
+
+### Fixed
+- **New Session no longer defaults to the wrong host.** Opening the form
+  now seeds the **Host** field from the current context — the selected
+  session's host, or the host highlighted in the sidebar (e.g. `omarchy`)
+  — instead of always falling back to the local daemon. The seeded
+  working directory is resolved as `$HOME` on the *target* host so it's a
+  real path there.
+
+## [0.10.2] — 2026-05-29
+
+### Changed
+- **Servers and hosts are one concept now: hosts.** The TUI no longer has
+  a separate "servers" (remote-daemon) list. There is a single local
+  daemon; every other machine is an SSH **host** the daemon drives. The
+  sidebar's top section is **HOSTS** (this machine + each SSH host),
+  sessions group by host, and the add flow (`a` / `Ctrl-S`) opens the SSH
+  host form (Name · User · Hostname · Port · Auth) — the User/Port fields
+  the old "add server" form lacked. This removes the dead-end where a
+  daemon-less remote added as a "server" sat as "unreachable — no pinned
+  fingerprint" with no in-TUI recovery. Removed the multi-daemon fanout,
+  remote-daemon TLS pinning/TOFU, per-daemon tokens, profile switching,
+  and the endpoint switcher from the TUI. The hosts overlay gained a `d`
+  key to remove an SSH host.
+
+### Added
+- **Desktop shell (`agentum-desktop`).** The placeholder Tauri crate is now
+  a real native binary: it boots `agentum-server` in-process on a free
+  loopback port (plain HTTP, auth disabled — only this machine can reach a
+  loopback bind), waits for it to start listening, then opens a native
+  webview window (wry + tao) on the embedded dashboard. GUI deps are
+  isolated to this crate so the CLI/Linux release is unaffected. macOS
+  binary ships in the release tarballs; run with `agentum-desktop`.
+
+### Removed
+- Dead remote-daemon code left over from the servers→hosts merge
+  (multi-profile connect/fanout helpers, the synthetic-loopback sidebar
+  row, the `RemoveServer` confirm action). Workspace builds with zero
+  dead-code warnings.
+
+## [0.10.1] — 2026-05-29
+
+### Fixed
+- **Local server no longer demands a login.** A loopback daemon runs
+  with `--no-auth` by default, but the TUI's *non-interactive* connect
+  paths (the sidebar fanout `try_connect_profile` and the implicit
+  `try_connect_loopback`) only looked for a cached bearer token — finding
+  none, they flagged the server "login needed" and never built a client.
+  Both now probe `/api/auth/status` first and connect with the `no-auth`
+  bearer when the server has auth disabled, matching the interactive
+  path. This also fixes **agents showing as unrecognized** on the local
+  server: with no client, `/api/agents` was never queried, so the New
+  Session form had no availability data.
+- **Installer no longer appears to hang.** The expose / autostart
+  prompts used `read` with no timeout, so a fresh `curl … | sh` install
+  could sit blocked waiting on input. `read_input` now takes a `-t`
+  timeout (default 60s, override with `AGENTUM_INSTALL_READ_TIMEOUT`) and
+  falls back to the displayed default, so the installer self-resolves to
+  the recommended choice instead of looking stuck.
+
+## [0.10.0] — 2026-05-29
+
+### Added
+- **Add SSH hosts from the TUI.** The Ctrl-H hosts overlay now has an
+  add-host form (`a`): Name · User · Hostname · Port · Auth · Secret. The
+  `Auth` field toggles (Space / ←→) between **key/agent** and **password**.
+  On save it `POST`s the host and drops you back on it so Enter/`t` checks
+  readiness and `i` installs the missing deps + agent CLIs — full TUI
+  parity with `agentum hosts add`. No more dropping to the CLI to register
+  a machine.
+- **SSH password auth.** New `SshAuth::Password` end to end (core enum,
+  store migration `0019` adding `hosts.secret`, and `host_runtime` shelling
+  through `sshpass`). Password hosts run ssh with `BatchMode=no` and forced
+  `PreferredAuthentications=password`; key/agent hosts are unchanged. The
+  password is stored at rest in the local SQLite DB only, never sent to
+  remotes or printed (`hosts list` shows just `password`). **Requires
+  `sshpass` on the daemon machine** — `agentum doctor` now reports whether
+  it's present (a soft check; only matters for password hosts).
+
+### Changed
+- **One install, no "mode" question.** `install.sh` no longer asks "will
+  this machine run agents? / connect to a remote" — there is only one
+  install: this machine runs the daemon. To control other machines you run
+  `agentum hosts add` (or the TUI add-host form), which SSHes in and
+  provisions them; agentum is never installed on the remote. The dead
+  `agentum update --mode server|cli|both` flag was removed (still accepted
+  and ignored by `install.sh` for back-compat).
+- **No login on a personal machine.** `agentum serve` now defaults to
+  no-auth when bound to loopback (only this machine can reach it, so a
+  username/password login is pure friction). Auth stays required when bound
+  to a LAN / `0.0.0.0` address unless you pass `--no-auth`. The installer no
+  longer runs an `agentum auth setup` prompt; LAN-exposed daemons still
+  prompt to create an admin account on first dashboard load.
+
+## [0.9.3] — 2026-05-29
+
+### Fixed
+- **Claude sessions failed to spawn.** Every Claude session aborted with `error: unknown option '--hook-post-tool-use'` — Claude Code has no such CLI flag; hooks are configured through settings. The daemon now registers the `tool_done` PostToolUse hook via `--settings` (which *adds* to the user's settings rather than replacing them). Verified end-to-end. (`agentum-server`)
+
+### Security
+- **Bootstrap password now uses the OS CSPRNG.** The loopback `local` user's password was generated from a `SystemTime`/pid/stack-address-seeded splitmix64 PRNG — predictable to a local attacker. Replaced with `getrandom` (OS CSPRNG). (`agentum-cli`)
+- **`--insecure` confined to loopback.** Disabling TLS certificate verification (`--insecure` flag or a profile's `insecure = true`) is now refused for non-loopback hosts; remote daemons must pin a certificate with `--fingerprint` instead. Prevents silently accepting any cert on a MITM-exposed network path. (`agentum-cli`)
+
 ## [0.9.2] — 2026-05-29
 
 ### Fixed
