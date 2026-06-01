@@ -225,6 +225,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::watchdog::router())
         .merge(routes::fs::router())
         .merge(routes::git::router())
+        .merge(routes::forge::router())
         .merge(routes::usage::router())
         .layer(axum_mw::from_fn_with_state(
             state.clone(),

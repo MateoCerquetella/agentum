@@ -10,6 +10,7 @@ pub mod channels;
 pub mod clipboard;
 pub mod doctor;
 pub mod events;
+pub mod forge;
 pub mod fs;
 pub mod git;
 pub mod health;

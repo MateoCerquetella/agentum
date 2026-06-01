@@ -13,6 +13,9 @@
 //! Endpoints:
 //!   * `GET  /api/sessions/{id}/git/status`              → JSON arrays
 //!   * `GET  /api/sessions/{id}/git/diff?path=…&staged=` → text/plain unified diff
+//!   * `GET  /api/sessions/{id}/git/file?path=…&rev=`    → one revision's text
+//!     (`head|index|worktree`), for the dashboard's CodeMirror side-by-side diff
+//!   * `POST /api/sessions/{id}/git/stage`               → `{paths,unstage}` → refreshed status
 //!   * `POST /api/sessions/{id}/git/commit`              → `{"sha": "…"}`
 //!
 //! Commits are authored as `agentum-bot <agentum@localhost>` via
@@ -38,7 +41,44 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/sessions/{id}/git/status", get(status))
         .route("/api/sessions/{id}/git/diff", get(diff))
+        .route("/api/sessions/{id}/git/file", get(file))
+        .route("/api/sessions/{id}/git/stage", post(stage))
         .route("/api/sessions/{id}/git/commit", post(commit))
+}
+
+/// One side of a side-by-side diff. The CodeMirror merge view in the
+/// dashboard fetches two of these (e.g. index + worktree) and computes the
+/// diff client-side, which gives real syntax highlighting per file type —
+/// something the old unified-diff text render couldn't do.
+const MAX_FILE_BYTES: usize = 512 * 1024;
+
+#[derive(Debug, Deserialize)]
+struct FileQuery {
+    /// Repo-relative path. Rejected if absolute or contains `..`.
+    path: String,
+    /// Which revision to read: `head` (`git show HEAD:path`), `index`
+    /// (`git show :path`, the staged blob), or `worktree` (the file on
+    /// disk). Defaults to `worktree`. A revision where the path doesn't
+    /// exist (new/untracked file at HEAD, etc.) returns empty content
+    /// rather than an error, so the diff view shows an add/delete cleanly.
+    #[serde(default)]
+    rev: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct FileResp {
+    content: String,
+    /// True when the file exceeded `MAX_FILE_BYTES` and was cut — the UI
+    /// shows a notice rather than pretending it has the whole file.
+    truncated: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct StageBody {
+    paths: Vec<String>,
+    /// `false` → `git add` (stage); `true` → `git restore --staged` (unstage).
+    #[serde(default)]
+    unstage: bool,
 }
 
 /// Result of `GET /api/sessions/{id}/git/status`. Each vec holds repo-
@@ -74,7 +114,11 @@ struct CommitResp {
     sha: String,
 }
 
-async fn cwd_for(state: &AppState, id: Uuid) -> Result<PathBuf, ApiError> {
+/// Resolve a session's working directory: its `worktree_path` when present,
+/// otherwise the raw `workdir` (same precedence as `Session::effective_cwd()`).
+/// `pub(crate)` so the forge routes can resolve the same cwd without
+/// duplicating the lookup.
+pub(crate) async fn cwd_for(state: &AppState, id: Uuid) -> Result<PathBuf, ApiError> {
     let session = state
         .store
         .get_session_by_id(id)
@@ -230,6 +274,130 @@ async fn diff(
         HeaderValue::from_static("text/plain; charset=utf-8"),
     );
     Ok((StatusCode::OK, headers, body))
+}
+
+/// `GET /api/sessions/{id}/git/file?path=…&rev=head|index|worktree`
+///
+/// Returns one revision of a file as UTF-8 text (lossy). Used by the
+/// dashboard's side-by-side diff: it fetches `index` + `worktree` (unstaged
+/// view) or `head` + `index` (staged view) and diffs them client-side. A
+/// missing path at the requested revision returns empty content, so adds and
+/// deletes render without a special case.
+async fn file(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<FileQuery>,
+) -> Result<Json<FileResp>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    ensure_safe_relative(&q.path)?;
+    let rev = q.rev.as_deref().unwrap_or("worktree");
+
+    let mut bytes: Vec<u8> = match rev {
+        // `git show HEAD:path` / `git show :path`. A non-zero exit means the
+        // path doesn't exist at that revision (new file) → empty content.
+        "head" | "index" => {
+            let spec = if rev == "head" {
+                format!("HEAD:{}", q.path)
+            } else {
+                format!(":{}", q.path)
+            };
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&cwd)
+                .args(["show", &spec])
+                .output()
+                .await
+                .map_err(|e| ApiError::Internal(format!("git show: {}", e)))?;
+            if out.status.success() {
+                out.stdout
+            } else {
+                Vec::new()
+            }
+        }
+        "worktree" => {
+            // Read straight off disk; a missing file (deleted in the worktree)
+            // is empty content, matching the head/index behavior above.
+            match tokio::fs::read(cwd.join(&q.path)).await {
+                Ok(b) => b,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(e) => return Err(ApiError::Internal(format!("read file: {}", e))),
+            }
+        }
+        other => {
+            return Err(ApiError::BadRequest(format!(
+                "unknown rev '{other}' (expected head|index|worktree)"
+            )));
+        }
+    };
+
+    let truncated = bytes.len() > MAX_FILE_BYTES;
+    if truncated {
+        bytes.truncate(MAX_FILE_BYTES);
+    }
+    Ok(Json(FileResp {
+        content: String::from_utf8_lossy(&bytes).into_owned(),
+        truncated,
+    }))
+}
+
+/// `POST /api/sessions/{id}/git/stage` — `{ "paths": [...], "unstage": bool }`
+///
+/// Stages (`git add`) or unstages (`git restore --staged`) the listed paths.
+/// Lets the dashboard move files between the staged/unstaged groups without
+/// committing, so the user can curate the index before a commit. Returns the
+/// refreshed status so the UI updates in one round trip.
+async fn stage(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<StageBody>,
+) -> Result<Json<GitStatus>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    if body.paths.is_empty() {
+        return Err(ApiError::BadRequest("paths is empty".into()));
+    }
+    for p in &body.paths {
+        ensure_safe_relative(p)?;
+    }
+
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(&cwd);
+    if body.unstage {
+        // `restore --staged` resets the index entry to HEAD without touching
+        // the worktree — the inverse of `add` for the dashboard's toggle.
+        cmd.args(["restore", "--staged", "--"]);
+    } else {
+        cmd.args(["add", "--"]);
+    }
+    for p in &body.paths {
+        cmd.arg(p);
+    }
+    let out = cmd
+        .output()
+        .await
+        .map_err(|e| ApiError::Internal(format!("git stage: {}", e)))?;
+    if !out.status.success() {
+        return Err(ApiError::BadRequest(format!(
+            "git {} failed: {}",
+            if body.unstage {
+                "restore --staged"
+            } else {
+                "add"
+            },
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+
+    // Re-read status so the caller reflects the new staged/unstaged split.
+    let st = Command::new("git")
+        .arg("-C")
+        .arg(&cwd)
+        .args(["status", "--porcelain=v1", "-z"])
+        .output()
+        .await
+        .map_err(|e| ApiError::Internal(format!("git status: {}", e)))?;
+    Ok(Json(parse_porcelain_z(&st.stdout)))
 }
 
 /// `POST /api/sessions/{id}/git/commit`
