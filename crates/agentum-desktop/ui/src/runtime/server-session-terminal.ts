@@ -11,6 +11,13 @@ export type ServerSessionTerminalBinding = {
   dispose: () => void
 }
 
+export type BindServerSessionTerminalOptions = {
+  /** A command to run once the pane is live (e.g. `claude`) — the agent launch
+   *  the desktop would otherwise type into a local shell. Sent after the stream
+   *  connects so the agent actually attaches instead of leaving a bare shell. */
+  startupCommand?: string
+}
+
 /**
  * Connect `term` to session `sessionId`'s tmux pane:
  * - pane bytes (server → client) are written into the terminal,
@@ -22,8 +29,12 @@ export type ServerSessionTerminalBinding = {
  */
 export async function bindServerSessionTerminal(
   sessionId: string,
-  term: Terminal
+  term: Terminal,
+  opts?: BindServerSessionTerminalOptions
 ): Promise<ServerSessionTerminalBinding> {
+  let disposed = false
+  let startupTimer: ReturnType<typeof setTimeout> | null = null
+
   const stream: SessionStream = await openSessionStream(
     sessionId,
     { cols: term.cols, rows: term.rows },
@@ -36,8 +47,24 @@ export async function bindServerSessionTerminal(
   const dataSub = term.onData((data) => stream.send(data))
   const resizeSub = term.onResize(({ cols, rows }) => stream.resize(cols, rows))
 
+  // Launch the agent once the shell has had a moment to come up. tmux buffers
+  // input, so an early send is harmless; the short delay just avoids racing the
+  // prompt. Trailing CR submits the command.
+  const startup = opts?.startupCommand?.trim()
+  if (startup) {
+    startupTimer = setTimeout(() => {
+      if (!disposed) {
+        stream.send(`${startup}\r`)
+      }
+    }, 500)
+  }
+
   return {
     dispose: () => {
+      disposed = true
+      if (startupTimer) {
+        clearTimeout(startupTimer)
+      }
       dataSub.dispose()
       resizeSub.dispose()
       stream.close()

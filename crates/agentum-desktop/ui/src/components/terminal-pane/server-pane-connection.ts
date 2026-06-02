@@ -64,13 +64,18 @@ export function connectPaneServerSession(
     fallBackToLocal('no workdir')
   } else {
     const tool = resolveSessionTool(deps)
+    // The desktop launches agents by typing a command into a shell (e.g.
+    // `claude`). For a shell session, forward that startup command so the agent
+    // actually attaches. For an agent-tool session the server launches it, so
+    // sending the command again would double-launch — skip it.
+    const startupCommand = tool === 'terminal' ? deps.startup?.command : undefined
     void (async () => {
       try {
         const session = await ensureWorkspaceSession({ workdir, tool })
         if (disposed) {
           return
         }
-        binding = await bindServerSessionTerminal(session.id, pane.terminal)
+        binding = await bindServerSessionTerminal(session.id, pane.terminal, { startupCommand })
         if (disposed) {
           binding.dispose()
           binding = null
