@@ -33,7 +33,8 @@ import {
   serverGitPush,
   serverGitRebase,
   serverGitAbortMerge,
-  serverGitAbortRebase
+  serverGitAbortRebase,
+  getServerGitDiff
 } from './server-git-adapter'
 
 /**
@@ -262,6 +263,9 @@ export async function getRuntimeGitDiff(
   args: { filePath: string; staged: boolean; compareAgainstHead?: boolean }
 ): Promise<GitDiffResult> {
   const target = getActiveRuntimeTarget(context.settings)
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    return getServerGitDiff(context.worktreePath, args)
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     return window.api.git.diff({
       worktreePath: context.worktreePath,

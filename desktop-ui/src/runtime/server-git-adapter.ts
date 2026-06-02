@@ -7,6 +7,7 @@ import type {
   GitStatusEntry,
   GitBranchCompareResult,
   GitCommitCompareResult,
+  GitDiffResult,
   GitUpstreamStatus as DesktopGitUpstreamStatus
 } from '../../../shared/types'
 import type { GitConflictOperation } from '../../../shared/git-status-types'
@@ -27,8 +28,10 @@ import {
   gitRebase,
   gitAbortMerge,
   gitAbortRebase,
+  gitFile,
   type GitStatusEntry as ServerStatusEntry,
-  type GitConflictOp
+  type GitConflictOp,
+  type GitFileRevision
 } from './server-git-client'
 
 function mapConflictOp(op: GitConflictOp): GitConflictOperation {
@@ -188,4 +191,44 @@ export async function serverGitAbortMerge(workdir: string): Promise<void> {
 export async function serverGitAbortRebase(workdir: string): Promise<void> {
   const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
   await gitAbortRebase(session.id)
+}
+
+/**
+ * Build the desktop's side-by-side diff for a file by fetching two revisions
+ * from the workspace's server session. The desktop diff view compares content,
+ * not unified text, so map the {staged, compareAgainstHead} flags to revisions:
+ *   - compareAgainstHead → HEAD vs worktree (the combined view)
+ *   - staged             → HEAD vs index
+ *   - else (unstaged)    → index vs worktree
+ * Returned as a text result; binary content arrives as lossy UTF-8 (a unified
+ * binary-aware diff is a follow-up if the renderer needs it).
+ */
+export async function getServerGitDiff(
+  workdir: string,
+  args: { filePath: string; staged: boolean; compareAgainstHead?: boolean }
+): Promise<GitDiffResult> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  let original: GitFileRevision
+  let modified: GitFileRevision
+  if (args.compareAgainstHead) {
+    original = 'head'
+    modified = 'worktree'
+  } else if (args.staged) {
+    original = 'head'
+    modified = 'index'
+  } else {
+    original = 'index'
+    modified = 'worktree'
+  }
+  const [orig, mod] = await Promise.all([
+    gitFile(session.id, args.filePath, original),
+    gitFile(session.id, args.filePath, modified)
+  ])
+  return {
+    kind: 'text',
+    originalContent: orig.content,
+    modifiedContent: mod.content,
+    originalIsBinary: false,
+    modifiedIsBinary: false
+  }
 }
