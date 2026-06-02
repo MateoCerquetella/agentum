@@ -135,3 +135,36 @@ export function gitAbortMerge(sessionId: string): Promise<void> {
 export function gitAbortRebase(sessionId: string): Promise<void> {
   return postJson<void>(`/api/sessions/${sessionId}/git/abort-rebase`)
 }
+
+export type GitChangeStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'copied'
+
+export type GitBranchChangeEntry = {
+  path: string
+  status: GitChangeStatus
+  oldPath?: string
+  added?: number
+  removed?: number
+}
+
+export type GitBranchCompareSummary = {
+  baseRef: string
+  baseOid: string | null
+  compareRef: string
+  headOid: string | null
+  mergeBase: string | null
+  changedFiles: number
+  commitsAhead?: number
+  status: 'ready' | 'invalid-base' | 'unborn-head' | 'no-merge-base' | 'error'
+}
+
+export type GitBranchCompare = {
+  summary: GitBranchCompareSummary
+  entries: GitBranchChangeEntry[]
+}
+
+/** Diff the worktree's HEAD against `baseRef` (3-dot), with per-file counts. */
+export function gitBranchCompare(sessionId: string, baseRef: string): Promise<GitBranchCompare> {
+  return getJson<GitBranchCompare>(
+    `/api/sessions/${sessionId}/git/branch-compare${qs({ base: baseRef })}`
+  )
+}
