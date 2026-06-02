@@ -19,7 +19,110 @@ use crate::AppState;
 use crate::error::ApiError;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/fs/list", get(list_dir))
+    Router::new()
+        .route("/api/fs/list", get(list_dir))
+        .route("/api/fs/entries", get(list_entries))
+}
+
+#[derive(Serialize)]
+struct FileEntry {
+    name: String,
+    /// Absolute resolved path of this entry.
+    path: String,
+    /// `dir` | `file` | `symlink` (symlink = dangling/non-dir-non-file target).
+    kind: &'static str,
+}
+
+#[derive(Serialize)]
+struct EntriesResp {
+    /// Resolved absolute path of the listed directory.
+    path: String,
+    /// Parent directory, or null at filesystem root.
+    parent: Option<String>,
+    /// All entries (dirs first, then files), each sorted case-insensitively.
+    entries: Vec<FileEntry>,
+}
+
+/// `GET /api/fs/entries?path=…&show_hidden=` — list a directory's dirs AND files
+/// (the workdir picker's `/list` is dirs-only). Local host only for now; an SSH
+/// variant can mirror `list_remote_dir` when a remote explorer needs it.
+async fn list_entries(
+    State(state): State<AppState>,
+    Query(q): Query<ListQuery>,
+) -> Result<Json<EntriesResp>, ApiError> {
+    let host_id = q.host_id.unwrap_or(LOCAL_HOST_ID);
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown host: {host_id}")))?;
+    if matches!(host.kind, HostKind::Ssh { .. }) {
+        return Err(ApiError::BadRequest(
+            "fs/entries is local-only; use fs/list for remote hosts".into(),
+        ));
+    }
+
+    let resolved = resolve(&q.path.unwrap_or_default())?;
+    let meta = fs::metadata(&resolved)
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("path error: {e}")))?;
+    if !meta.is_dir() {
+        return Err(ApiError::BadRequest(format!(
+            "{} is not a directory",
+            resolved.display()
+        )));
+    }
+
+    let mut rd = fs::read_dir(&resolved)
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("read_dir failed: {e}")))?;
+    let mut entries: Vec<FileEntry> = Vec::new();
+    while let Some(ent) = rd
+        .next_entry()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+    {
+        let name = ent.file_name().to_string_lossy().to_string();
+        if !q.show_hidden && name.starts_with('.') {
+            continue;
+        }
+        let ft = match ent.file_type().await {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        // Follow symlinks for the dir/file classification; dangling → 'symlink'.
+        let kind = if ft.is_symlink() {
+            match fs::metadata(ent.path()).await {
+                Ok(m) if m.is_dir() => "dir",
+                Ok(_) => "file",
+                Err(_) => "symlink",
+            }
+        } else if ft.is_dir() {
+            "dir"
+        } else {
+            "file"
+        };
+        entries.push(FileEntry {
+            name,
+            path: ent.path().to_string_lossy().to_string(),
+            kind,
+        });
+    }
+
+    // Dirs first, then files, each case-insensitive — the conventional explorer order.
+    entries.sort_by(|a, b| {
+        let rank = |k: &str| if k == "dir" { 0 } else { 1 };
+        rank(a.kind)
+            .cmp(&rank(b.kind))
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    let parent = resolved.parent().map(|p| p.to_string_lossy().to_string());
+    Ok(Json(EntriesResp {
+        path: resolved.to_string_lossy().to_string(),
+        parent,
+        entries,
+    }))
 }
 
 #[derive(Deserialize)]
