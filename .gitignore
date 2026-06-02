@@ -12,7 +12,7 @@ web/.netlify
 web/dist
 .pnpm-store
 
-# Desktop UI (React/Vite, migrated from orca) — build artifacts, not source.
+# Desktop UI (React/Vite) — build artifacts, not source.
 desktop-ui/node_modules
 desktop-ui/dist
 

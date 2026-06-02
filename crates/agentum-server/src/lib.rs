@@ -21,7 +21,6 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 
 pub mod auth;
-mod embed;
 mod error;
 pub mod git;
 mod headers;
@@ -76,7 +75,7 @@ pub struct AppState {
     pub version: &'static str,
     pub auth_limiter: Arc<ratelimit::RateLimiter>,
     /// SHA-256 fingerprint of the active TLS cert, formatted `AB:CD:…`.
-    /// Empty when running with `--no-tls`. The dashboard wizard needs
+    /// Empty when running with `--no-tls`. The client's connect wizard needs
     /// this anonymously (before login) so the user can verify it matches
     /// what `agentum serve` printed on the host TTY.
     pub cert_fingerprint: Arc<String>,
@@ -231,12 +230,13 @@ pub fn router(state: AppState) -> Router {
             state.clone(),
             auth::require_token,
         ))
-        .fallback(embed::static_handler)
+        // API-only daemon: no embedded web UI. Unmatched non-`/api` paths 404.
+        // Clients are the TUI (`agentum terminal`) and the desktop app.
         .with_state(state)
-        // Security response headers wrap everything, including the embedded
-        // SPA. See `headers.rs` for the CSP rationale.
+        // Security response headers wrap every response. See `headers.rs` for
+        // the CSP rationale.
         .layer(axum_mw::from_fn(headers::security_headers))
-        // CORS: permissive on origin so a dashboard hosted by one daemon
+        // CORS: permissive on origin so a client served by one daemon
         // can talk to another daemon (the named-profiles feature). The
         // API is still bearer-protected — an open `Allow-Origin` only
         // grants the same access an unauthenticated cross-origin call
@@ -280,7 +280,7 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
 
     if state.store.count_users().await.unwrap_or(0) == 0 {
         tracing::warn!(
-            "no users registered yet — open the dashboard to register the first one (or run `agentum auth add <name>` on the host)"
+            "no users registered yet — open the desktop app to register the first one (or run `agentum auth add <name>` on the host)"
         );
     }
 

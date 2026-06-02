@@ -1,5 +1,5 @@
 //! `/api/sessions/{id}/forge/*` + `/api/forge/token` — in-app GitHub/GitLab
-//! integration. ORCA §2 "Integración GitHub/GitLab (PRs, issues, checks)" (P1).
+//! integration for PRs, issues, and checks.
 //!
 //! Per session we detect the forge from the repo's `origin` remote, then call
 //! the forge REST API directly with `reqwest` (already a server dep). The cwd

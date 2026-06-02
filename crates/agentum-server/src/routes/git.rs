@@ -1,5 +1,5 @@
 //! `/api/sessions/{id}/git/*` — minimal git status / diff / commit surface
-//! for a session's worktree. ORCA §3 Feature #3 (P1).
+//! for a session's worktree.
 //!
 //! The cwd is the session's `worktree_path` when present, otherwise the
 //! raw `workdir` — same precedence as `Session::effective_cwd()` used by
