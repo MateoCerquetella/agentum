@@ -1118,18 +1118,7 @@ function Settings(): React.JSX.Element {
                     >
                       {isSectionMounted('ssh') ? <SshPane /> : null}
                     </SettingsSection>
-
-                    <SettingsSection
-                      id="mobile"
-                      title="Mobile"
-                      badge="Beta"
-                      description="Control terminals and agents from your phone."
-                      searchEntries={getSectionSearchEntries('mobile')}
-                    >
-                      {isSectionMounted('mobile') ? (
-                        <MobileSettingsPane settings={settings} updateSettings={updateSettings} />
-                      ) : null}
-                    </SettingsSection>
+                    {/* Agentum: mobile companion feature removed. */}
                   </>
                 ) : null}
 

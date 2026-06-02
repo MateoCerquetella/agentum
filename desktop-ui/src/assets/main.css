@@ -18,6 +18,12 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Agentum: hide the custom in-app topbar — native window decorations provide
+   the title bar, traffic lights, and window dragging. */
+.titlebar {
+  display: none !important;
+}
+
 .theme-transition-disabled *,
 .theme-transition-disabled *::before,
 .theme-transition-disabled *::after {
