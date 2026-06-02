@@ -142,10 +142,8 @@ mod tests {
     //! another's profiles.toml.
     use super::*;
     use agentum_core::profiles::{Profile, Profiles};
-    use std::sync::{Mutex, MutexGuard};
+    use std::sync::MutexGuard;
     use tempfile::TempDir;
-
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     struct TestEnv {
         _dir: TempDir,
@@ -153,10 +151,10 @@ mod tests {
     }
 
     fn isolate_xdg() -> TestEnv {
-        // `lock().unwrap_or_else(...)` recovers from a poisoned mutex —
-        // an earlier panicked test shouldn't take down the rest of the
-        // suite with a "lock poisoned" error.
-        let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Shared crate-wide lock: AGENTUM_HOME is process-global, so this must
+        // serialise against planner/board_goals too, not just this module.
+        // `unwrap_or_else` recovers from a mutex poisoned by an earlier panic.
+        let guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         // SAFETY: `set_var` is unsound under multi-threaded access.
         // `TEST_LOCK` serialises this whole module so only one thread

@@ -377,7 +377,7 @@ mod tests {
     use super::*;
     use agentum_store::Store;
     use std::sync::Arc;
-    use std::sync::{Mutex, MutexGuard};
+    use std::sync::MutexGuard;
     use tempfile::TempDir;
     use tokio::sync::broadcast;
 
@@ -407,16 +407,15 @@ mod tests {
         }
     }
 
-    // Serialise tests that mutate AGENTUM_HOME — same pattern as planner.rs.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
     struct TestEnv {
         _dir: TempDir,
         _guard: MutexGuard<'static, ()>,
     }
 
     fn isolate_xdg() -> TestEnv {
-        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Shared crate-wide lock: AGENTUM_HOME is process-global, so serialise
+        // against profiles/planner too (a per-module lock would not).
+        let guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         // SAFETY: `set_var` is unsound under concurrent access.
         // `ENV_LOCK` serialises all tests in this module so only one thread
