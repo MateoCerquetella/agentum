@@ -119,14 +119,8 @@ pub async fn load_planner_config() -> Result<PlannerConfig, ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard};
+    use std::sync::MutexGuard;
     use tempfile::TempDir;
-
-    // Serialise all tests that mutate XDG_CONFIG_HOME. Env vars are
-    // process-wide; cargo runs tests in parallel by default, so without
-    // this lock two tests would race on the variable and see each other's
-    // planner.toml. The same pattern is used in routes/profiles.rs.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     struct TestEnv {
         _dir: TempDir,
@@ -134,7 +128,9 @@ mod tests {
     }
 
     fn isolate_xdg() -> TestEnv {
-        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Shared crate-wide lock: AGENTUM_HOME is process-global, so serialise
+        // against profiles/board_goals too (a per-module lock would not).
+        let guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         // SAFETY: `set_var` is unsound under concurrent access.
         // `ENV_LOCK` serialises this whole module so only one thread

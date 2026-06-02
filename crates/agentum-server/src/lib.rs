@@ -39,6 +39,12 @@ pub use transcript_store::TranscriptStore;
 
 pub use error::ApiError;
 
+/// Process-wide lock for tests that mutate global env (`AGENTUM_HOME`, …).
+/// Env vars are shared across every test thread, so a per-module mutex can't
+/// prevent cross-module races — all such tests must take THIS one lock.
+#[cfg(test)]
+pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Resume marker for a session's WS stream. Tracks the byte offset the
 /// client last received plus the pane size that was active at that
 /// moment, so the next `?resume=true` can replay only the missed delta
