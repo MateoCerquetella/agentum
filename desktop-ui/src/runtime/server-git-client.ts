@@ -168,3 +168,24 @@ export function gitBranchCompare(sessionId: string, baseRef: string): Promise<Gi
     `/api/sessions/${sessionId}/git/branch-compare${qs({ base: baseRef })}`
   )
 }
+
+export type GitCommitCompareSummary = {
+  commitOid: string
+  parentOid: string | null
+  compareRef: string
+  baseRef: string
+  changedFiles: number
+  status: 'ready' | 'invalid-commit' | 'error'
+}
+
+export type GitCommitCompare = {
+  summary: GitCommitCompareSummary
+  entries: GitBranchChangeEntry[]
+}
+
+/** Diff a single commit against its first parent (root commit vs empty tree). */
+export function gitCommitCompare(sessionId: string, commit: string): Promise<GitCommitCompare> {
+  return getJson<GitCommitCompare>(
+    `/api/sessions/${sessionId}/git/commit-compare${qs({ commit })}`
+  )
+}
