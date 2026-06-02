@@ -195,8 +195,15 @@ async fn log(
     // \x1f (unit separator) won't appear in commit metadata — a safe field delimiter.
     let fmt_arg = "--format=%H%x1f%s%x1f%an%x1f%aI";
     let raw = run_git(&cwd, &["log", &limit_arg, fmt_arg]).await?;
-    let entries = raw
-        .lines()
+    Ok(Json(parse_log_lines(&raw)))
+}
+
+/// Parse `git log --format=%H\x1f%s\x1f%an\x1f%aI` output into entries. Each
+/// non-empty line is one commit, fields separated by the unit separator (`\x1f`),
+/// which cannot appear in commit metadata. Missing trailing fields default to
+/// empty so a malformed line never drops a commit's SHA.
+fn parse_log_lines(raw: &str) -> Vec<LogEntry> {
+    raw.lines()
         .filter(|l| !l.is_empty())
         .filter_map(|line| {
             let mut parts = line.split('\u{1f}');
@@ -207,8 +214,7 @@ async fn log(
                 timestamp: parts.next().unwrap_or_default().to_string(),
             })
         })
-        .collect();
-    Ok(Json(entries))
+        .collect()
 }
 
 /// `POST /api/sessions/{id}/git/fetch` — `git fetch --all --prune`.
@@ -715,5 +721,28 @@ mod tests {
         assert!(ensure_safe_relative("").is_err());
         assert!(ensure_safe_relative("src/lib.rs").is_ok());
         assert!(ensure_safe_relative("a/b/c.txt").is_ok());
+    }
+
+    #[test]
+    fn parse_log_lines_splits_unit_separated_fields() {
+        let raw = "abc123\u{1f}fix: thing\u{1f}Jane\u{1f}2026-06-02T10:00:00+00:00\n\
+                   def456\u{1f}feat: other\u{1f}Bob\u{1f}2026-06-01T09:00:00+00:00\n";
+        let entries = parse_log_lines(raw);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].sha, "abc123");
+        assert_eq!(entries[0].subject, "fix: thing");
+        assert_eq!(entries[0].author, "Jane");
+        assert_eq!(entries[1].sha, "def456");
+        assert_eq!(entries[1].timestamp, "2026-06-01T09:00:00+00:00");
+    }
+
+    #[test]
+    fn parse_log_lines_tolerates_missing_trailing_fields() {
+        // A subject containing nothing else still yields the SHA, never drops it.
+        let entries = parse_log_lines("sha-only\n");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].sha, "sha-only");
+        assert_eq!(entries[0].subject, "");
+        assert!(parse_log_lines("").is_empty());
     }
 }
