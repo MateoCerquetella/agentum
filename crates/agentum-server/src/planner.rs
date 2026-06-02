@@ -138,9 +138,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         // SAFETY: `set_var` is unsound under concurrent access.
         // `ENV_LOCK` serialises this whole module so only one thread
-        // mutates the env at a time.
+        // mutates the env at a time. AGENTUM_HOME isolates on every
+        // platform (XDG_CONFIG_HOME is a no-op on macOS).
         unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", dir.path());
+            std::env::set_var("AGENTUM_HOME", dir.path());
         }
         TestEnv {
             _dir: dir,
