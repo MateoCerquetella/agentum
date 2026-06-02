@@ -56,6 +56,11 @@ embeds the server in-process). State lives in one SQLite file.
 All paths honor the [XDG Base Directory spec][xdg] with sensible
 Linux/macOS fallbacks. Resolved via the `directories` crate.
 
+**`AGENTUM_HOME` override:** when set, config/data/cache/state root under
+`$AGENTUM_HOME/{config,data,cache,state}` on every platform. Unset → default
+platform behavior. Useful for a self-contained install and for cross-platform
+test isolation (`directories` ignores `XDG_*` on macOS).
+
 | Purpose       | Env var                | Default (Linux)              | Default (macOS)                                       |
 |---------------|------------------------|------------------------------|-------------------------------------------------------|
 | Config        | `XDG_CONFIG_HOME`      | `~/.config/agentum/`         | `~/Library/Application Support/agentum/config/`       |

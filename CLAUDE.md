@@ -265,12 +265,13 @@ listed in `auth.rs::is_public`. WS clients pass the bearer token as
 - **Comments**: write *why*, not *what*. Add a short comment when
   the line encodes a decision, an invariant, or a workaround. Don't
   paraphrase the code.
-- **Tests**: `cargo test --workspace --lib` covers everything.
-  Pre-existing breakage in `agentum-store`'s lib tests
-  (NewBoardItem field churn) is a known issue, unrelated to most
-  changes.
-- **Frontend tests**: `npm run check --prefix dashboard`
-  (`svelte-check` + tsc).
+- **Tests**: `cargo test --workspace --lib` covers everything and is
+  green on Linux and macOS. Tests that touch user paths
+  (profiles/board_goals/planner) isolate via `AGENTUM_HOME` (a temp
+  dir) rather than `XDG_*`, which `directories` ignores on macOS.
+- **Frontend build**: `npm run build --prefix desktop-ui` (Vite). The
+  server-facing TS runtime clients are plain (no `@/` aliases), so they
+  can also be typechecked directly with `tsc`.
 - **Clippy / fmt**: workspace runs cargo fmt; please match
   surrounding style.
 
