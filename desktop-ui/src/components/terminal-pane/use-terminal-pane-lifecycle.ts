@@ -52,6 +52,7 @@ import { installMouseHideWhileTyping } from './mouse-hide-while-typing'
 import type { EffectiveMacOptionAsAlt } from '@/lib/keyboard-layout/detect-option-as-alt'
 import { resolveEffectiveTerminalAppearance } from '@/lib/terminal-theme'
 import { connectPanePty } from './pty-connection'
+import { connectPaneServerSession, shouldUseServerTerminals } from './server-pane-connection'
 import type { PtyTransport } from './pty-transport'
 import { getRemoteRuntimePtyEnvironmentId } from '@/runtime/runtime-terminal-stream'
 import { getConnectionId } from '@/lib/connection-context'
@@ -710,7 +711,10 @@ export function useTerminalPaneLifecycle({
           }
         }
         applyAppearance(manager)
-        const panePtyBinding = connectPanePty(pane, manager, {
+        // Option A (opt-in): route new terminals through the embedded server's
+        // tmux sessions instead of a local PTY. Same PanePtyBinding contract.
+        const connectPane = shouldUseServerTerminals() ? connectPaneServerSession : connectPanePty
+        const panePtyBinding = connectPane(pane, manager, {
           ...ptyDeps,
           // Why: spread order matters — spawnHints.cwd (inherited from the
           // source pane) must override the tab-level ptyDeps.cwd (worktree
