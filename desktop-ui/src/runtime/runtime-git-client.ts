@@ -19,7 +19,11 @@ import { getCommitMessageModelDiscoveryHostKeyForScope } from '../../../shared/c
 import type { GitHistoryOptions, GitHistoryResult } from '../../../shared/git-history'
 import { getRepoIdFromWorktreeId } from '../../../shared/worktree-id'
 import { callRuntimeRpc, getActiveRuntimeTarget } from './runtime-rpc-client'
-import { getServerGitStatus } from './server-git-adapter'
+import {
+  getServerGitStatus,
+  getServerGitConflictOperation,
+  getServerGitUpstreamStatus
+} from './server-git-adapter'
 
 /**
  * Option A (opt-in): route source-control reads through the embedded server's
@@ -183,6 +187,9 @@ export async function getRuntimeGitConflictOperation(
   context: RuntimeGitContext
 ): Promise<GitConflictOperation> {
   const target = getActiveRuntimeTarget(context.settings)
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    return getServerGitConflictOperation(context.worktreePath)
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     return window.api.git.conflictOperation({
       worktreePath: context.worktreePath,
@@ -298,6 +305,10 @@ export async function getRuntimeGitUpstreamStatus(
   pushTarget?: GitPushTarget
 ): Promise<GitUpstreamStatus> {
   const target = getActiveRuntimeTarget(context.settings)
+  // Server path tracks @{u} only; defer to local when an explicit pushTarget is set.
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath && !pushTarget) {
+    return getServerGitUpstreamStatus(context.worktreePath)
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     return window.api.git.upstreamStatus({
       worktreePath: context.worktreePath,

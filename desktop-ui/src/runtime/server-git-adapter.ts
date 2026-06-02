@@ -66,3 +66,20 @@ export async function getServerGitStatus(workdir: string): Promise<GitStatusResu
     ...(upstream ? { upstreamStatus: mapUpstream(upstream) } : {})
   }
 }
+
+/** Read the in-progress conflict op for a workspace's server session. */
+export async function getServerGitConflictOperation(
+  workdir: string
+): Promise<GitConflictOperation> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  const { operation } = await gitConflict(session.id)
+  return mapConflictOp(operation)
+}
+
+/** Read tracking-branch + ahead/behind for a workspace's server session. */
+export async function getServerGitUpstreamStatus(
+  workdir: string
+): Promise<DesktopGitUpstreamStatus> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  return mapUpstream(await gitUpstream(session.id))
+}
