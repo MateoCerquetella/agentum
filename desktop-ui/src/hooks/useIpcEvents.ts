@@ -58,7 +58,6 @@ import {
   acquireBrowserAutomationVisibility,
   releaseBrowserAutomationVisibility
 } from '@/components/browser-pane/browser-automation-visibility'
-import { detectLanguage } from '@/lib/language-detect'
 import { parsePaneKey } from '../../../shared/stable-pane-id'
 import { collectLeafIdsInOrder } from '@/components/terminal-pane/layout-serialization'
 import { track } from '@/lib/telemetry'
@@ -1256,44 +1255,6 @@ export function useIpcEvents(): void {
           ...(move.kind === 'move-to-group' ? { index: move.index } : {}),
           ...(move.kind === 'split' ? { splitDirection: move.splitDirection } : {})
         })
-      })
-    )
-
-    unsubs.push(
-      window.api.ui.onOpenFileFromMobile(({ worktreeId, filePath, relativePath }) => {
-        const store = useAppStore.getState()
-        const basename = relativePath.split(/[\\/]/).pop() || relativePath
-        store.setActiveWorktree(worktreeId)
-        store.markWorktreeVisited(worktreeId)
-        store.setActiveView('terminal')
-        // Why: mobile only sends a desktop-backed path. The renderer owns
-        // editor tab creation so grouped tab order and markdown bridges update
-        // through the same store path as desktop File Explorer.
-        store.openFile({
-          filePath,
-          relativePath,
-          worktreeId,
-          language: detectLanguage(basename),
-          mode: 'edit'
-        })
-        store.setActiveTabType('editor')
-        store.revealWorktreeInSidebar(worktreeId)
-      })
-    )
-
-    unsubs.push(
-      window.api.ui.onOpenDiffFromMobile(({ worktreeId, filePath, relativePath, staged }) => {
-        const store = useAppStore.getState()
-        const language = detectLanguage(relativePath)
-        store.setActiveWorktree(worktreeId)
-        store.markWorktreeVisited(worktreeId)
-        store.setActiveView('terminal')
-        // Why: mobile renders diff tabs from diff metadata. The desktop
-        // markdown Changes-mode shortcut is editor-local and would publish
-        // plain markdown content back to mobile.
-        store.openDiff(worktreeId, filePath, relativePath, language, staged)
-        store.setActiveTabType('editor')
-        store.revealWorktreeInSidebar(worktreeId)
       })
     )
 
