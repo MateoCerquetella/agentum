@@ -546,7 +546,13 @@ export function createIpcPtyTransport(opts: IpcPtyTransportOptions = {}): PtyTra
           ...(shellOverride ? { shellOverride } : {}),
           ...(telemetry ? { telemetry } : {})
         })
-        const spawnResult = result as PtyConnectResult & { isReattach?: boolean }
+        const spawnResult = result as (PtyConnectResult & { isReattach?: boolean }) | null
+        // Why: the native pty bridge can resolve without a spawn result (e.g. the
+        // command is not yet wired). Fail loudly through the error path instead of
+        // dereferencing `null.id`, which would crash the whole terminal surface.
+        if (!spawnResult || typeof spawnResult.id !== 'string') {
+          throw new Error('terminal failed to spawn (no pty handle returned)')
+        }
 
         // If destroyed while spawn was in flight, kill the new pty and bail
         if (destroyed) {

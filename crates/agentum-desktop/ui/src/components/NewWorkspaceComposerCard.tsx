@@ -252,7 +252,7 @@ export default function NewWorkspaceComposerCard({
   const { isFileDragOver, dragHandlers } = useComposerFileDragOver()
   const openModal = useAppStore((s) => s.openModal)
   const defaultTuiAgent = useAppStore((s) => s.settings?.defaultTuiAgent ?? null)
-  const disabledTuiAgents = useAppStore((s) => s.settings?.disabledTuiAgents ?? [])
+  const disabledTuiAgents = useAppStore((s) => s.settings?.disabledTuiAgents) ?? []
   const updateSettings = useAppStore((s) => s.updateSettings)
   const nameInputFocusFrameRef = React.useRef<number | null>(null)
   const submitShortcutModifierLabel = getScreenSubmitModifierLabel()

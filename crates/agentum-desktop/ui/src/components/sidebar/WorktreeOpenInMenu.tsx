@@ -120,7 +120,11 @@ export function WorktreeOpenInMenuItems({
   labelPrefix = ''
 }: WorktreeOpenInMenuItemsProps): React.JSX.Element {
   const openInWorktreePath = useOpenInWorktreePath({ worktreePath, connectionId })
-  const openInApplications = useAppStore((s) => s.settings?.openInApplications ?? [])
+  // Why: default OUTSIDE the selector. `?? []` inside returns a fresh array each
+  // call, which Zustand's reference equality reads as a change → infinite
+  // re-render loop (React #185). Selecting the raw (possibly-undefined) value
+  // keeps the subscription stable.
+  const openInApplications = useAppStore((s) => s.settings?.openInApplications) ?? []
   const fileManagerLabel = getLocalFileManagerLabel()
   const entries = getWorktreeOpenInEntries(openInApplications, fileManagerLabel)
 

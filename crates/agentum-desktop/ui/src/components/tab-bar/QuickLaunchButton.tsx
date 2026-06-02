@@ -112,7 +112,7 @@ function QuickLaunchAgentMenuItemsInner({
   })
   const { detectedIds } = useDetectedAgents(connectionId)
   const defaultAgent = useAppStore((s) => s.settings?.defaultTuiAgent)
-  const disabledAgents = useAppStore((s) => s.settings?.disabledTuiAgents ?? [])
+  const disabledAgents = useAppStore((s) => s.settings?.disabledTuiAgents) ?? []
   const openSettingsPage = useAppStore((s) => s.openSettingsPage)
   const openSettingsTarget = useAppStore((s) => s.openSettingsTarget)
 

@@ -30,7 +30,7 @@ export function FloatingTerminalWindowControls({
   const createTab = useAppStore((s) => s.createTab)
   const setActiveTabForWorktree = useAppStore((s) => s.setActiveTabForWorktree)
 
-  const disabledTuiAgents = useAppStore((s) => s.settings?.disabledTuiAgents ?? [])
+  const disabledTuiAgents = useAppStore((s) => s.settings?.disabledTuiAgents) ?? []
   const defaultAgent =
     defaultTuiAgent &&
     defaultTuiAgent !== 'blank' &&

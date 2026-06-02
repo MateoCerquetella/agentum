@@ -22,17 +22,15 @@ function resolveSessionTool(deps: PtyConnectionDeps): string {
 }
 
 /**
- * Opt-in (default OFF) until the server terminal path is verified live. Set
- * `localStorage['agentum.serverTerminals'] = '1'` (and reload) to route new
- * terminals through the embedded server's tmux sessions — the Option A path
- * that lets SSH/remote sessions survive disconnection. Hard failures fall back
- * to the local PTY automatically.
+ * Default ON — terminals run as real tmux sessions in the embedded
+ * agentum-server (the local Tauri PTY path is a half-ported stub). Set
+ * `localStorage['agentum.serverTerminals'] = '0'` to force the local path.
  */
 export function shouldUseServerTerminals(): boolean {
   try {
-    return globalThis.localStorage?.getItem('agentum.serverTerminals') === '1'
+    return globalThis.localStorage?.getItem('agentum.serverTerminals') !== '0'
   } catch {
-    return false
+    return true
   }
 }
 
