@@ -8,7 +8,7 @@
                self-hosted AI agent control plane
 ```
 
-> Rust backend, Svelte frontend, single binary, themeable.
+> Rust control plane for AI coding agents. One binary, a fast TUI, and a native desktop app.
 
 [![release](https://img.shields.io/github/v/release/mateocerquetella/agentum?display_name=tag)](https://github.com/mateocerquetella/agentum/releases)
 [![ci](https://github.com/mateocerquetella/agentum/actions/workflows/ci.yml/badge.svg)](https://github.com/mateocerquetella/agentum/actions/workflows/ci.yml)
@@ -22,47 +22,42 @@ I had three `claude` sessions, a `codex` run, and an `opencode` review going in 
 
 I tried the obvious fixes. `caffeinate` works until you actually have to take the laptop somewhere. `tmux` survives the lid, but the agents themselves don't survive losing their TTY. They notice.
 
-So I dragged an old PC out of a closet, put Arch on it, tunnelled `tmux` through `wg` (WireGuard), set up bidirectional folder sync so any change on my Mac mirrored to the box that kept my agents alive, and wrote shell wrappers (`cc --remote`, `codex --remote`, `opencode --remote`) to spawn agents on that PC over SSH.
+So I dragged an old PC out of a closet, put Arch on it, tunnelled `tmux` through WireGuard, and wrote shell wrappers to spawn agents on that box over SSH. It worked — my agents kept running with the MacBook in my backpack. But I'd traded one problem for another: twenty tmux panes, one per agent, plus a `lazygit` pane per project to review AI-generated diffs. I was spending more time switching panes than reading what the agents had written.
 
-It worked. My agents kept running with the MacBook in my backpack on the bus.
-
-But I'd traded one problem for another. Twenty tmux panes. One per agent. One `lazygit` pane per project to review AI-generated diffs. Plus my editor, builds, and logs. I was spending more time switching tmux panes than reading what the agents had written. I'd built a homelab and put myself in charge of operating it.
-
-**agentum is the weekend hack that ate a few weekends.** One Rust binary that wires `tmux` to a Svelte PWA. Spawn Claude, Codex, Gemini, Cursor, or any CLI on a host you control. Watch their terminals over WebSocket from your phone. Kill them when they wander off. Self-hosted TLS. No subscriptions, no cloud lock-in.
-
-Then I wanted to check on my agents from my phone. Claude Code has `/remote`. OpenCode doesn't. Codex doesn't. Cursor doesn't. So I built a PWA dashboard that streams live terminals over WebSocket, installable on iOS and Android, with self-hosted TLS and zero recurring costs.
+**agentum is the weekend hack that ate a few weekends.** One Rust binary that wires `tmux` to a control plane: spawn Claude, Codex, Gemini, Cursor, or any CLI on a host you control; watch their terminals; kill them when they wander off. You drive it from a **terminal UI** (`agentum terminal`) or a **native desktop app** — both speak the same HTTP/WS API. Self-hosted, single binary, no subscriptions, no cloud lock-in.
 
 **agentum is beta software, built by one developer who just wanted his AI agents to keep working when he closed his laptop.** If that resonates, you're exactly who this is for.
 
 ## TL;DR
 
-One Rust binary. Spawns AI coding agents (Claude, Codex, Gemini, Cursor, Hermes, …) in tmux panes on a host you control, streams their terminals over WebSocket to a Svelte PWA, and gives you a kanban board, notes, and cross-session channels on top.
+One Rust binary spawns AI coding agents (Claude, Codex, Gemini, Cursor, Hermes, …) in tmux panes on a host you control and exposes an HTTP/WS API. Two clients drive it: a **TUI** (`agentum terminal`) and a **desktop app** (Tauri shell + React UI) that embeds the server in-process. On top you get a kanban board, notes, and cross-session channels.
 
 ## Quick start
 
-**One install, on your machine.** It runs the agentum daemon (server + dashboard + TLS + tmux). There's no "mode" to pick. To control *other* machines you don't install anything on them — you point agentum at them over SSH and it provisions them for you (see below).
+**One install, on your machine.** It runs the agentum daemon (API server + TLS + tmux). To control *other* machines you don't install anything on them — you point agentum at them over SSH and it provisions them for you (see below).
 
 ```sh
 # Install (interactive prompts for LAN exposure + autostart only)
 curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh | sh
 
-# Non-interactive (loopback bind; pass AGENTUM_EXPOSE=lan on a VPS)
-curl -fsSL https://.../install.sh | sh -s -- --no-interactive
-
 # From source
-cargo install --git https://github.com/mateocerquetella/agentum agentum
+cargo install --git https://github.com/mateocerquetella/agentum agentum-cli
 ```
 
 After install:
 
 ```sh
-# Start the daemon + open the dashboard
+# Start the daemon (HTTP/WS API on :8822; loopback by default)
 agentum serve
-# https://127.0.0.1:8822  (paste the bearer from `agentum auth show`)
 
-# Spawn an agent session right away
+# Drive it from the terminal UI
+agentum terminal
+
+# …or spawn a session straight from the CLI
 agentum new alpha --tool claude --dir ~/Developer/my-project --up
 ```
+
+The **desktop app** is a separate download (or `cargo tauri build` from `crates/agentum-desktop`). It boots `agentum-server` in-process, so a desktop session and a TUI session on the same machine share one SQLite store.
 
 ### Control other machines (no second install)
 
@@ -81,28 +76,29 @@ agentum hosts setup omarchy   # re-run the scan/install flow anytime
 | Sessions     | Spawn agent CLIs in tmux. Live terminal stream over WS, input bar, watchdog auto-compacts on context-low. |
 | Executors    | First-class adapters for Claude, Codex, Gemini, Hermes. Passthrough for any other binary on PATH. |
 | Board        | Atomic-claim kanban for cross-agent task handoff. Drag-drop columns, optimistic updates, 409 on contention. |
-| Notes        | Markdown notebook with CodeMirror 6, auto-save on idle/blur, persisted to SQLite. |
+| Notes        | Markdown notebook, auto-save on idle/blur, persisted to SQLite. |
 | Channels     | 1:1 inter-session message channels with live broadcast over `/api/events`. |
 | Watchdog     | Per-session monitor: `Context low.*<\s*50%` triggers `/compact`, crash signatures emit `session.crashed`. |
-| Themes       | Pure-CSS theme engine. **Terminal Dark** + **Paperlight** ship in v0.1; system theme follows OS. |
-| PWA          | Installable on iOS Safari / Chrome Android. Service worker pre-caches the SPA shell for offline read. |
-| Auth         | Single bearer token in `$XDG_DATA_HOME/agentum/auth_token` (chmod 0600). Rotate live with `agentum auth rotate`. |
-| TLS          | rustls + rcgen self-signed cert auto-generated on first boot. Plain-HTTP cert-server on `:8823` for trust-on-first-use from a phone. |
+| Clients      | A fast **TUI** (`agentum terminal`) and a native **desktop app** (Tauri + React), both over the same HTTP/WS API. |
+| Auth         | Single bearer token in `$XDG_DATA_HOME/agentum/auth_token` (chmod 0600). Rotate live with `agentum auth rotate`. Loopback binds default to no-auth. |
+| TLS          | rustls + rcgen self-signed cert auto-generated on first boot. Plain-HTTP cert-server on `:8823` for trust-on-first-use. |
 | Storage      | SQLite (WAL) at `$XDG_DATA_HOME/agentum/db.sqlite`. XDG-compliant on Linux + macOS. |
-| Distribution | Single static binary. `cargo install`, `curl \| sh`, or download tarball from GitHub Releases. |
+| Distribution | Single static binary. `cargo install`, `curl \| sh`, or download a tarball from GitHub Releases. |
 
 ## Architecture
 
+The daemon is **API-only** — it serves no web UI. Clients connect over HTTP/WS.
+
 ```
+        TUI  (agentum terminal)                Desktop app (Tauri + React)
+              │  HTTP/WS                              │  HTTP/WS
+              │                                       │  (embeds the server in-process)
+              ▼                                       ▼
 ┌────────────────────────────────────────────────────────────────┐
-│                  agentum (single binary)                       │
-│                                                                │
-│   axum HTTPS :8822  ◄──────  embedded SvelteKit (rust-embed)   │
-│   tokio runtime                                                │
-│   ├ sessions, tmux adapter, watchdog, event bus, store         │
-│   └ /api/events broadcast → UI toasts + channel messages       │
-│                                                                │
-│   plain HTTP :8823  →  /api/cert  (trust-on-first-use)         │
+│                  agentum-server (axum, tokio)                  │
+│   /api/* + /api/events (WS)  ·  TLS (rustls)                   │
+│   ├ sessions · tmux adapter · watchdog · event bus · store     │
+│   └ plain HTTP :8823 → /api/cert  (trust-on-first-use)         │
 └────────────────────────────────────────────────────────────────┘
                                 │
                   ┌─────────────▼──────────────┐
@@ -111,40 +107,42 @@ agentum hosts setup omarchy   # re-run the scan/install flow anytime
                   └────────────────────────────┘
 ```
 
-See [`docs/`](docs/) for architecture, data model, HTTP API, and CLI reference.
+See [`docs/`](docs/) for the data model, HTTP API, and CLI reference.
 
 ## Repository layout
 
 ```
 crates/
-  agentum/         # binary + clap CLI
-  agentum-server/  # axum HTTP(S) + WS + rust-embed of dashboard build
-  agentum-tmux/    # tokio process adapter for tmux
-  agentum-watchdog/# per-session pane monitor + event emitter
-  agentum-executor/# ToolAdapter trait + Claude/Codex/Gemini/Hermes adapters
-  agentum-store/   # sqlx + SQLite (WAL) + XDG paths + migrations
-  agentum-core/    # shared domain types
-dashboard/         # SvelteKit 2 + Svelte 5 SPA, embedded into binary
-docs/              # architecture, data model, API, CLI reference
+  agentum-cli/       # binary `agentum` + clap CLI; houses the TUI (commands/terminal/)
+  agentum-server/    # axum HTTP(S) + WS API (API-only; no embedded web UI)
+  agentum-desktop/   # Tauri 2 shell; embeds agentum-server in-process for the desktop app
+  agentum-tmux/      # tokio process adapter for tmux
+  agentum-watchdog/  # per-session pane monitor + event emitter
+  agentum-executor/  # ToolAdapter trait + Claude/Codex/Gemini/Hermes adapters
+  agentum-store/     # sqlx + SQLite (WAL) + XDG paths + migrations
+  agentum-core/      # shared domain types
+desktop-ui/          # React + Vite UI, loaded by the Tauri shell
+web/                 # static marketing landing page (deployed separately, not served by the daemon)
+docs/                # architecture, data model, API, CLI reference
 ```
 
 ## Development
 
 ```sh
-# Backend dev loop
-cargo run -- serve --no-tls
+# Daemon / TUI dev loop
+cargo run -p agentum-cli -- serve --no-tls
+cargo run -p agentum-cli -- terminal
 
-# Frontend dev loop (vite, proxies /api → :8822)
-npm --prefix dashboard run dev
-
-# Production bundle (frontend + cargo release)
-npm --prefix dashboard run build && cargo build --release
+# Desktop UI dev loop (Vite HMR)
+npm --prefix desktop-ui run dev
+# Desktop app (Tauri shell + embedded server)
+cargo run -p agentum-desktop
 
 # Lint + test
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all
-npm --prefix dashboard run check
+cargo test --workspace --lib
+npm --prefix desktop-ui run build
 ```
 
 The `cc` crate's compiler-detect step gets confused by some `~/.local/bin/cc` shims, so the project's `.cargo/config.toml` defaults `CC=/usr/bin/gcc`. That's a non-overriding default; set `CC` in your shell to override.
@@ -152,8 +150,8 @@ The `cc` crate's compiler-detect step gets confused by some `~/.local/bin/cc` sh
 ## Security
 
 - **Single-user**, **local-network**. No multi-tenant features. Don't expose `:8822` to the internet without a real reverse proxy + cert.
-- Bearer token is a single value at `$XDG_DATA_HOME/agentum/auth_token`, generated from `rand::rng()` (32 bytes URL-safe base64). Rotate with `agentum auth rotate`; the running server picks it up on the next request.
-- TLS cert is self-signed. Browsers will warn. The plain-HTTP cert-server on `:8823` exists so you can pull the PEM and trust it on a phone.
+- Bearer token is a single value at `$XDG_DATA_HOME/agentum/auth_token`, generated from `rand::rng()` (32 bytes URL-safe base64). Rotate with `agentum auth rotate`; the running server picks it up on the next request. Loopback binds default to no-auth since only the local machine can reach them.
+- TLS cert is self-signed. Browsers will warn. The plain-HTTP cert-server on `:8823` exists so you can pull the PEM and trust it out-of-band.
 - All tmux invocations go through `tokio::process::Command` with `.arg(...)` per argument; no shell interpolation in our process invocation.
 - WS authentication accepts both `Authorization: Bearer <token>` and a `?token=<token>` query parameter (browsers can't set custom headers on WebSocket upgrades).
 
