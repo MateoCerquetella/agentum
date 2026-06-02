@@ -304,36 +304,15 @@ function formatSelectedCount(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? '' : 's'} selected`
 }
 
-function SidebarSelectionCheckbox({
-  checked,
-  label,
-  className,
-  onClick
-}: {
+function SidebarSelectionCheckbox(_props: {
   checked: boolean
   label: string
   className?: string
   onClick: (event: React.MouseEvent<HTMLButtonElement>) => void
-}): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={checked}
-      aria-label={label}
-      data-checked={checked ? 'true' : 'false'}
-      onClick={onClick}
-      className={cn(
-        'flex size-4 shrink-0 items-center justify-center rounded-[4px] border text-[10px] transition-colors',
-        'border-sidebar-border bg-sidebar text-transparent hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
-        'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sidebar-ring',
-        'data-[checked=true]:border-sidebar-primary data-[checked=true]:bg-sidebar-primary data-[checked=true]:text-sidebar-primary-foreground',
-        className
-      )}
-    >
-      {checked ? <Check className="size-3" strokeWidth={3} /> : null}
-    </button>
-  )
+}): React.JSX.Element | null {
+  // Per-row selection checkboxes are hidden by request — keep the component as a
+  // no-op so the (still-wired) selection call sites compile without rendering UI.
+  return null
 }
 
 function SidebarBulkSelectionBar({

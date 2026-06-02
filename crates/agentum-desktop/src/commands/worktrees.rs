@@ -42,7 +42,51 @@ fn read_worktrees() -> Result<Vec<Worktree>, String> {
     }
     let raw = std::fs::read_to_string(&path).map_err(map_err)?;
     // Tolerate a corrupt registry rather than wedging the app on every call.
-    Ok(serde_json::from_str(&raw).unwrap_or_default())
+    let worktrees: Vec<Worktree> = serde_json::from_str(&raw).unwrap_or_default();
+    Ok(worktrees.into_iter().map(enrich_worktree).collect())
+}
+
+/// Backfill the GitWorktreeInfo fields the UI's `Worktree` type requires
+/// (`path`/`branch`/`head`/`isBare`/`isMainWorktree`). Persisted registry rows
+/// only carry user metadata, so without this the renderer crashes on
+/// `worktree.branch.replace(...)`. The path is encoded in the id (`repoId::path`);
+/// branch/head come from git. Missing/non-git paths degrade to safe defaults.
+fn enrich_worktree(mut wt: Worktree) -> Worktree {
+    let wt_path = wt.id.split_once("::").map(|(_, p)| p.to_string());
+    let Some(wt_path) = wt_path else {
+        return wt;
+    };
+    let git = |args: &[&str]| -> Option<String> {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&wt_path)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    if !wt.extra.contains_key("path") {
+        wt.extra
+            .insert("path".into(), Value::String(wt_path.clone()));
+    }
+    if !wt.extra.contains_key("branch") {
+        let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|| "HEAD".into());
+        wt.extra.insert("branch".into(), Value::String(branch));
+    }
+    if !wt.extra.contains_key("head") {
+        let head = git(&["rev-parse", "HEAD"]).unwrap_or_default();
+        wt.extra.insert("head".into(), Value::String(head));
+    }
+    if !wt.extra.contains_key("isBare") {
+        wt.extra.insert("isBare".into(), Value::Bool(false));
+    }
+    if !wt.extra.contains_key("isMainWorktree") {
+        wt.extra.insert("isMainWorktree".into(), Value::Bool(false));
+    }
+    wt
 }
 
 fn write_worktrees(worktrees: &[Worktree]) -> Result<(), String> {
@@ -150,7 +194,7 @@ pub async fn worktrees_create(
         "worktree".to_string(),
         "add".to_string(),
         "-b".to_string(),
-        branch,
+        branch.clone(),
         worktree_path_string.clone(),
     ];
     if let Some(base) = base_branch {
@@ -165,6 +209,26 @@ pub async fn worktrees_create(
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
 
+    // The HEAD the new branch points at (its base commit).
+    let head = tokio::process::Command::new("git")
+        .args(["-C", &worktree_path_string, "rev-parse", "HEAD"])
+        .output()
+        .await
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+
+    // Why: the UI's Worktree type is `metadata & GitWorktreeInfo`; without the
+    // git fields (branch/path/head/...) it crashes on `worktree.branch.replace`.
+    // The `extra` map is flattened, so these serialize at the top level.
+    let mut extra = Map::new();
+    extra.insert("path".into(), Value::String(worktree_path_string.clone()));
+    extra.insert("branch".into(), Value::String(branch));
+    extra.insert("head".into(), Value::String(head));
+    extra.insert("isBare".into(), Value::Bool(false));
+    extra.insert("isMainWorktree".into(), Value::Bool(false));
+
     let worktree = Worktree {
         id: format!("{repo_id}::{worktree_path_string}"),
         repo_id,
@@ -178,7 +242,7 @@ pub async fn worktrees_create(
         is_pinned: false,
         sort_order: 0,
         last_activity_at: now_millis(),
-        extra: Map::new(),
+        extra,
     };
     let mut worktrees = read_worktrees()?;
     worktrees.push(worktree.clone());
