@@ -25,7 +25,9 @@ import {
   getServerGitUpstreamStatus,
   serverGitStage,
   getServerGitBranchCompare,
-  getServerGitCommitCompare
+  getServerGitCommitCompare,
+  serverGitFetch,
+  serverGitPull
 } from './server-git-adapter'
 
 /**
@@ -338,6 +340,11 @@ export async function fetchRuntimeGit(
   pushTarget?: GitPushTarget
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
+  // Server path is `fetch --all --prune`; defer to local for a specific target.
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath && !pushTarget) {
+    await serverGitFetch(context.worktreePath)
+    return
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     await window.api.git.fetch({
       worktreePath: context.worktreePath,
@@ -359,6 +366,11 @@ export async function pullRuntimeGit(
   pushTarget?: GitPushTarget
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
+  // Server path is fast-forward-only pull; defer to local for a specific target.
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath && !pushTarget) {
+    await serverGitPull(context.worktreePath)
+    return
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     await window.api.git.pull({
       worktreePath: context.worktreePath,

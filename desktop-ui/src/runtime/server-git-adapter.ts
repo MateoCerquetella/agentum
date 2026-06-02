@@ -19,6 +19,8 @@ import {
   gitStage,
   gitBranchCompare,
   gitCommitCompare,
+  gitFetch,
+  gitPull,
   type GitStatusEntry as ServerStatusEntry,
   type GitConflictOp
 } from './server-git-client'
@@ -120,4 +122,16 @@ export async function getServerGitCommitCompare(
 ): Promise<GitCommitCompareResult> {
   const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
   return gitCommitCompare(session.id, commitId)
+}
+
+/** `git fetch --all --prune` in the workspace's server session (non-destructive). */
+export async function serverGitFetch(workdir: string): Promise<void> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  await gitFetch(session.id)
+}
+
+/** Fast-forward-only pull in the workspace's server session (won't lose work). */
+export async function serverGitPull(workdir: string): Promise<void> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  await gitPull(session.id)
 }
