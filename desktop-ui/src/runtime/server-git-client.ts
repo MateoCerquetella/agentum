@@ -113,3 +113,25 @@ export function gitDiscard(sessionId: string, paths: string[]): Promise<void> {
 export function gitUpstream(sessionId: string): Promise<GitUpstreamStatus> {
   return getJson<GitUpstreamStatus>(`/api/sessions/${sessionId}/git/upstream`)
 }
+
+export type GitConflictOp = 'merge' | 'rebase' | 'cherry-pick' | 'none'
+
+/** Which conflict operation (if any) is mid-flight in the worktree. */
+export function gitConflict(sessionId: string): Promise<{ operation: GitConflictOp }> {
+  return getJson<{ operation: GitConflictOp }>(`/api/sessions/${sessionId}/git/conflict`)
+}
+
+/** `git rebase <baseRef>`. Rejects (with git's stderr) on conflict. */
+export function gitRebase(sessionId: string, baseRef: string): Promise<void> {
+  return postJson<void>(`/api/sessions/${sessionId}/git/rebase`, { base_ref: baseRef })
+}
+
+/** `git merge --abort`. */
+export function gitAbortMerge(sessionId: string): Promise<void> {
+  return postJson<void>(`/api/sessions/${sessionId}/git/abort-merge`)
+}
+
+/** `git rebase --abort`. */
+export function gitAbortRebase(sessionId: string): Promise<void> {
+  return postJson<void>(`/api/sessions/${sessionId}/git/abort-rebase`)
+}

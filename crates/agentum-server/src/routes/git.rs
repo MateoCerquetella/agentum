@@ -51,6 +51,102 @@ pub fn router() -> Router<AppState> {
         .route("/api/sessions/{id}/git/push", post(push))
         .route("/api/sessions/{id}/git/discard", post(discard))
         .route("/api/sessions/{id}/git/upstream", get(upstream))
+        .route("/api/sessions/{id}/git/conflict", get(conflict))
+        .route("/api/sessions/{id}/git/rebase", post(rebase))
+        .route("/api/sessions/{id}/git/abort-merge", post(abort_merge))
+        .route("/api/sessions/{id}/git/abort-rebase", post(abort_rebase))
+}
+
+/// In-progress conflict operation in a worktree.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum ConflictOp {
+    Merge,
+    Rebase,
+    CherryPick,
+    None,
+}
+
+#[derive(Debug, Serialize)]
+struct ConflictResp {
+    operation: ConflictOp,
+}
+
+/// True when `git rev-parse -q --verify <rev>` resolves (the ref/state exists).
+async fn git_ref_exists(cwd: &StdPath, rev: &str) -> bool {
+    run_git(cwd, &["rev-parse", "-q", "--verify", rev]).await.is_ok()
+}
+
+/// `GET /api/sessions/{id}/git/conflict` — which conflict op (if any) is mid-flight.
+async fn conflict(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ConflictResp>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    // Rebase leaves a state dir (rebase-merge / rebase-apply) rather than a ref.
+    let rebase_dir = run_git(&cwd, &["rev-parse", "--git-path", "rebase-merge"])
+        .await
+        .map(|p| StdPath::new(cwd.as_path()).join(p.trim()).exists())
+        .unwrap_or(false)
+        || run_git(&cwd, &["rev-parse", "--git-path", "rebase-apply"])
+            .await
+            .map(|p| StdPath::new(cwd.as_path()).join(p.trim()).exists())
+            .unwrap_or(false);
+    let operation = if rebase_dir {
+        ConflictOp::Rebase
+    } else if git_ref_exists(&cwd, "MERGE_HEAD").await {
+        ConflictOp::Merge
+    } else if git_ref_exists(&cwd, "CHERRY_PICK_HEAD").await {
+        ConflictOp::CherryPick
+    } else {
+        ConflictOp::None
+    };
+    Ok(Json(ConflictResp { operation }))
+}
+
+#[derive(Debug, Deserialize)]
+struct RebaseBody {
+    base_ref: String,
+}
+
+/// `POST /api/sessions/{id}/git/rebase` — `git rebase <base_ref>`. On conflict
+/// git exits non-zero; the error carries git's stderr so the UI can prompt to
+/// resolve or abort.
+async fn rebase(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<RebaseBody>,
+) -> Result<StatusCode, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    if body.base_ref.trim().is_empty() {
+        return Err(ApiError::BadRequest("base_ref is empty".into()));
+    }
+    run_git(&cwd, &["rebase", body.base_ref.trim()]).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/sessions/{id}/git/abort-merge` — `git merge --abort`.
+async fn abort_merge(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    run_git(&cwd, &["merge", "--abort"]).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/sessions/{id}/git/abort-rebase` — `git rebase --abort`.
+async fn abort_rebase(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    run_git(&cwd, &["rebase", "--abort"]).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Deserialize)]
