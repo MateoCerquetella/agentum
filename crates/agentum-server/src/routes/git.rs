@@ -44,6 +44,128 @@ pub fn router() -> Router<AppState> {
         .route("/api/sessions/{id}/git/file", get(file))
         .route("/api/sessions/{id}/git/stage", post(stage))
         .route("/api/sessions/{id}/git/commit", post(commit))
+        .route("/api/sessions/{id}/git/branches", get(branches))
+        .route("/api/sessions/{id}/git/log", get(log))
+        .route("/api/sessions/{id}/git/fetch", post(fetch))
+        .route("/api/sessions/{id}/git/pull", post(pull))
+        .route("/api/sessions/{id}/git/push", post(push))
+}
+
+/// Run `git -C <cwd> <args...>`; return stdout (lossy UTF-8) on success.
+async fn run_git(cwd: &StdPath, args: &[&str]) -> Result<String, ApiError> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| ApiError::Internal(format!("git {}: {e}", args.join(" "))))?;
+    if !out.status.success() {
+        return Err(ApiError::Internal(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+#[derive(Debug, Serialize)]
+struct BranchesResp {
+    /// Current branch, or `None` in detached-HEAD.
+    current: Option<String>,
+    /// Local branch names (refs/heads), short form.
+    branches: Vec<String>,
+}
+
+/// `GET /api/sessions/{id}/git/branches` — local branches + the current one.
+async fn branches(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<BranchesResp>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    let current = run_git(&cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .await
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s != "HEAD");
+    let raw = run_git(&cwd, &["for-each-ref", "--format=%(refname:short)", "refs/heads"]).await?;
+    let branches = raw
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    Ok(Json(BranchesResp { current, branches }))
+}
+
+#[derive(Debug, Deserialize)]
+struct LogQuery {
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct LogEntry {
+    sha: String,
+    subject: String,
+    author: String,
+    /// Author date, ISO-8601 (`%aI`).
+    timestamp: String,
+}
+
+/// `GET /api/sessions/{id}/git/log?limit=N` — recent commits (default 50, max 500).
+async fn log(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<LogQuery>,
+) -> Result<Json<Vec<LogEntry>>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    let limit = q.limit.unwrap_or(50).clamp(1, 500);
+    let limit_arg = format!("-{limit}");
+    // \x1f (unit separator) won't appear in commit metadata — a safe field delimiter.
+    let fmt_arg = "--format=%H%x1f%s%x1f%an%x1f%aI";
+    let raw = run_git(&cwd, &["log", &limit_arg, fmt_arg]).await?;
+    let entries = raw
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter_map(|line| {
+            let mut parts = line.split('\u{1f}');
+            Some(LogEntry {
+                sha: parts.next()?.to_string(),
+                subject: parts.next().unwrap_or_default().to_string(),
+                author: parts.next().unwrap_or_default().to_string(),
+                timestamp: parts.next().unwrap_or_default().to_string(),
+            })
+        })
+        .collect();
+    Ok(Json(entries))
+}
+
+/// `POST /api/sessions/{id}/git/fetch` — `git fetch --all --prune`.
+async fn fetch(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    run_git(&cwd, &["fetch", "--all", "--prune"]).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/sessions/{id}/git/pull` — fast-forward-only pull.
+async fn pull(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    run_git(&cwd, &["pull", "--ff-only"]).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/sessions/{id}/git/push` — push the current branch, setting upstream
+/// on first push so a fresh worktree branch publishes without extra ceremony.
+async fn push(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    run_git(&cwd, &["push", "--set-upstream", "origin", "HEAD"]).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// One side of a side-by-side diff. The CodeMirror merge view in the

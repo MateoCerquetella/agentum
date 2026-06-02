@@ -56,3 +56,43 @@ export function gitCommit(
 ): Promise<GitCommitResult> {
   return postJson<GitCommitResult>(`/api/sessions/${sessionId}/git/commit`, { message, paths })
 }
+
+export type GitBranches = {
+  /** Current branch, or null in detached-HEAD. */
+  current: string | null
+  /** Local branch names (refs/heads). */
+  branches: string[]
+}
+
+export type GitLogEntry = {
+  sha: string
+  subject: string
+  author: string
+  /** Author date, ISO-8601. */
+  timestamp: string
+}
+
+/** Local branches + the current one. */
+export function gitBranches(sessionId: string): Promise<GitBranches> {
+  return getJson<GitBranches>(`/api/sessions/${sessionId}/git/branches`)
+}
+
+/** Recent commits (default 50, max 500). */
+export function gitLog(sessionId: string, limit?: number): Promise<GitLogEntry[]> {
+  return getJson<GitLogEntry[]>(`/api/sessions/${sessionId}/git/log${qs({ limit })}`)
+}
+
+/** `git fetch --all --prune`. */
+export function gitFetch(sessionId: string): Promise<void> {
+  return postJson<void>(`/api/sessions/${sessionId}/git/fetch`)
+}
+
+/** Fast-forward-only pull. */
+export function gitPull(sessionId: string): Promise<void> {
+  return postJson<void>(`/api/sessions/${sessionId}/git/pull`)
+}
+
+/** Push the current branch (sets upstream on first push). */
+export function gitPush(sessionId: string): Promise<void> {
+  return postJson<void>(`/api/sessions/${sessionId}/git/push`)
+}
