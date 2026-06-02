@@ -3,7 +3,7 @@
 // local PTY. Mirrors connectPanePty's PanePtyBinding contract so the pane
 // lifecycle treats both identically. Off by default — see shouldUseServerTerminals.
 import type { PaneManager, ManagedPane } from '@/lib/pane-manager/pane-manager'
-import type { PanePtyBinding } from './pty-connection'
+import { connectPanePty, type PanePtyBinding } from './pty-connection'
 import type { PtyConnectionDeps } from './pty-connection-types'
 import { useAppStore } from '@/store'
 import { ensureWorkspaceSession } from '@/runtime/workspace-session'
@@ -22,35 +22,48 @@ function resolveSessionTool(deps: PtyConnectionDeps): string {
 }
 
 /**
- * Off by default. Flip `localStorage['agentum.serverTerminals'] = '1'` (and
- * reload) to route new terminals through the embedded server's tmux sessions —
- * the Option A path that lets SSH/remote sessions survive disconnection.
+ * Default ON. Route new terminals through the embedded server's tmux sessions —
+ * the Option A path that lets SSH/remote sessions survive disconnection. Set
+ * `localStorage['agentum.serverTerminals'] = '0'` (and reload) to force the
+ * legacy local-PTY path. Hard failures fall back to local automatically, so
+ * defaulting on cannot break the terminal.
  */
 export function shouldUseServerTerminals(): boolean {
   try {
-    return globalThis.localStorage?.getItem('agentum.serverTerminals') === '1'
+    return globalThis.localStorage?.getItem('agentum.serverTerminals') !== '0'
   } catch {
-    return false
+    return true
   }
 }
 
 /**
  * Drop-in alternative to `connectPanePty`: ensure a server session exists for
- * this pane's workspace (workdir) and bind its tmux pane to the xterm. The
- * PTY-specific deps (restored pty ids, etc.) are intentionally ignored — the
- * server owns pane lifecycle, persistence, and reattach.
+ * this pane's workspace (workdir) and bind its tmux pane to the xterm. If the
+ * server path can't establish (no workdir, session/stream failure), it falls
+ * back to `connectPanePty` so the pane still works — the proven local path.
  */
 export function connectPaneServerSession(
   pane: ManagedPane,
-  _manager: PaneManager,
+  manager: PaneManager,
   deps: PtyConnectionDeps
 ): PanePtyBinding {
   let disposed = false
   let binding: ServerSessionTerminalBinding | null = null
-  const workdir = deps.cwd ?? ''
+  // When the server path fails, we hand the pane to connectPanePty and delegate
+  // every binding method to it — the lifecycle hook never knows the difference.
+  let localFallback: PanePtyBinding | null = null
 
+  const fallBackToLocal = (reason: string): void => {
+    if (disposed || localFallback) {
+      return
+    }
+    console.warn(`[agentum] server terminal unavailable, using local PTY: ${reason}`)
+    localFallback = connectPanePty(pane, manager, deps)
+  }
+
+  const workdir = deps.cwd ?? ''
   if (!workdir) {
-    pane.terminal.write('\r\n\x1b[31m[agentum: no workdir for server session]\x1b[0m\r\n')
+    fallBackToLocal('no workdir')
   } else {
     const tool = resolveSessionTool(deps)
     void (async () => {
@@ -65,9 +78,9 @@ export function connectPaneServerSession(
           binding = null
         }
       } catch (error) {
-        pane.terminal.write(
-          `\r\n\x1b[31m[agentum: server session failed: ${String(error)}]\x1b[0m\r\n`
-        )
+        if (!disposed) {
+          fallBackToLocal(String(error))
+        }
       }
     })()
   }
@@ -77,10 +90,12 @@ export function connectPaneServerSession(
       disposed = true
       binding?.dispose()
       binding = null
+      localFallback?.dispose()
+      localFallback = null
     },
-    // The server owns the pane; renderer-local visibility/process tracking that
-    // the local-PTY path needs are no-ops here.
-    syncRendererOutputVisibility: () => {},
-    syncProcessTracking: () => {}
+    // Delegate to the local binding when we fell back; no-ops for the server
+    // path (the server owns pane lifecycle / process tracking).
+    syncRendererOutputVisibility: () => localFallback?.syncRendererOutputVisibility(),
+    syncProcessTracking: () => localFallback?.syncProcessTracking()
   }
 }
