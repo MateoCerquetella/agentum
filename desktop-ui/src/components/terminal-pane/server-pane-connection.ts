@@ -5,11 +5,21 @@
 import type { PaneManager, ManagedPane } from '@/lib/pane-manager/pane-manager'
 import type { PanePtyBinding } from './pty-connection'
 import type { PtyConnectionDeps } from './pty-connection-types'
+import { useAppStore } from '@/store'
 import { ensureWorkspaceSession } from '@/runtime/workspace-session'
 import {
   bindServerSessionTerminal,
   type ServerSessionTerminalBinding
 } from '@/runtime/server-session-terminal'
+
+/** The tab's launch agent (claude/codex/…) drives the server session's tool;
+ *  a plain terminal tab has none, so it runs a shell. */
+function resolveSessionTool(deps: PtyConnectionDeps): string {
+  const tab = useAppStore
+    .getState()
+    .tabsByWorktree[deps.worktreeId]?.find((t) => t.id === deps.tabId)
+  return tab?.launchAgent ?? 'terminal'
+}
 
 /**
  * Off by default. Flip `localStorage['agentum.serverTerminals'] = '1'` (and
@@ -42,10 +52,10 @@ export function connectPaneServerSession(
   if (!workdir) {
     pane.terminal.write('\r\n\x1b[31m[agentum: no workdir for server session]\x1b[0m\r\n')
   } else {
+    const tool = resolveSessionTool(deps)
     void (async () => {
       try {
-        // tool 'terminal' = a plain shell pane; agent panes can pass their tool later.
-        const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+        const session = await ensureWorkspaceSession({ workdir, tool })
         if (disposed) {
           return
         }
