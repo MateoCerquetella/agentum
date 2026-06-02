@@ -1482,7 +1482,13 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         ),
         rightSidebarOpen: typeof ui.rightSidebarOpen === 'boolean' ? ui.rightSidebarOpen : true,
         rightSidebarTab: normalizePersistedRightSidebarTab(ui.rightSidebarTab),
-        groupBy: (ui.groupBy as UISlice['groupBy'] | 'parent') === 'parent' ? 'repo' : ui.groupBy,
+        // Why: persisted state predating this key has `ui.groupBy === undefined`.
+        // Fall back to the 'repo' default (the grouped "Projects" sidebar) instead
+        // of writing `undefined`, which would collapse to the flat "Workspaces" view.
+        groupBy:
+          (ui.groupBy as UISlice['groupBy'] | 'parent') === 'parent'
+            ? 'repo'
+            : ((ui.groupBy as UISlice['groupBy']) ?? 'repo'),
         sortBy,
         // Why: Active-only was retired. Force the old persisted flag off so an
         // old profile cannot invisibly keep narrowing the workspace list.
