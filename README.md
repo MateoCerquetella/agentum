@@ -115,13 +115,13 @@ See [`docs/`](docs/) for the data model, HTTP API, and CLI reference.
 crates/
   agentum-cli/       # binary `agentum` + clap CLI; houses the TUI (commands/terminal/)
   agentum-server/    # axum HTTP(S) + WS API (API-only; no embedded web UI)
-  agentum-desktop/   # Tauri 2 shell; embeds agentum-server in-process for the desktop app
+  agentum-desktop/   # the desktop app: Tauri 2 Rust shell in src/ (embeds agentum-server in-process)
+                     #   + its React/Vite UI in ui/
   agentum-tmux/      # tokio process adapter for tmux
   agentum-watchdog/  # per-session pane monitor + event emitter
   agentum-executor/  # ToolAdapter trait + Claude/Codex/Gemini/Hermes adapters
   agentum-store/     # sqlx + SQLite (WAL) + XDG paths + migrations
   agentum-core/      # shared domain types
-desktop-ui/          # React + Vite UI, loaded by the Tauri shell
 web/                 # static marketing landing page (deployed separately, not served by the daemon)
 docs/                # architecture, data model, API, CLI reference
 ```
@@ -134,7 +134,7 @@ cargo run -p agentum-cli -- serve --no-tls
 cargo run -p agentum-cli -- terminal
 
 # Desktop UI dev loop (Vite HMR)
-npm --prefix desktop-ui run dev
+npm --prefix crates/agentum-desktop/ui run dev
 # Desktop app (Tauri shell + embedded server)
 cargo run -p agentum-desktop
 
@@ -142,7 +142,7 @@ cargo run -p agentum-desktop
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --workspace --lib
-npm --prefix desktop-ui run build
+npm --prefix crates/agentum-desktop/ui run build
 ```
 
 The `cc` crate's compiler-detect step gets confused by some `~/.local/bin/cc` shims, so the project's `.cargo/config.toml` defaults `CC=/usr/bin/gcc`. That's a non-overriding default; set `CC` in your shell to override.

@@ -125,7 +125,7 @@ MSRV 1.83+, Rust 2024 edition, single workspace.
 
 The TUI is pure Rust (in `agentum-cli`, under `commands/terminal/`) and renders
 with `ratatui`/`crossterm`. The desktop app is a Tauri 2 shell (`agentum-desktop`)
-hosting a React + Vite UI (`desktop-ui/`):
+hosting a React + Vite UI (in `crates/agentum-desktop/ui/`):
 
 | Lib                                    | Why                                      |
 |----------------------------------------|------------------------------------------|
@@ -145,7 +145,7 @@ sequences correctly, accepts streamed bytes from a WebSocket.
 | Tool             | Purpose                                       |
 |------------------|-----------------------------------------------|
 | `cargo`          | Backend + TUI + Tauri shell                   |
-| `npm` (Vite)     | `desktop-ui/` build (`npm --prefix desktop-ui run build`) |
+| `npm` (Vite)     | `crates/agentum-desktop/ui/` build (`npm --prefix crates/agentum-desktop/ui run build`) |
 | `tauri` (cargo)  | Desktop app bundle                            |
 | `just`           | Task runner                                   |
 | GitHub Actions   | CI: clippy, fmt, test, release builds         |

@@ -18,8 +18,9 @@ daemon spawns the right binary into a tmux pane and streams its
 output to clients.
 
 Two clients consume that API: the **TUI** connects to a running
-`agentum serve` daemon; the **desktop app** (Tauri shell in
-`crates/agentum-desktop` + the React UI in `desktop-ui/`) boots
+`agentum serve` daemon; the **desktop app** (the Tauri crate
+`crates/agentum-desktop/`, with its Rust shell in `src/` and its
+React/Vite UI in `ui/`) boots
 `agentum-server` *in-process* on a loopback port (see
 `agentum_server::serve_embedded_loopback`) so the webview drives the
 exact same core. The daemon is API-only — there is no embedded web UI.
@@ -39,11 +40,12 @@ crates/
   agentum-executor/    # ToolAdapter trait + per-agent argv builders. Owns YOLO marker translation.
   agentum-server/      # axum HTTP+WS API + TLS + auth + routes/. API-only (no embedded web UI).
   agentum-cli/         # CLI package (binary named `agentum`). Houses the TUI under commands/terminal/.
-  agentum-desktop/     # Tauri 2 shell. Embeds agentum-server in-process (loopback) and exposes native
-                       #   commands (window, dialogs, clipboard, local PTY) to the React webview.
+  agentum-desktop/     # The desktop app, self-contained:
+    src/               #   Tauri 2 Rust shell — embeds agentum-server in-process (loopback) and exposes
+                       #   native commands (window, dialogs, clipboard, local PTY) to the webview.
+    ui/                #   React + Vite SPA the webview loads; talks to native Tauri commands and,
+                       #   increasingly, to the embedded agentum-server over HTTP/WS.
 
-desktop-ui/            # React + Vite SPA (the desktop UI). Loaded by the Tauri shell; talks to native
-                       #   Tauri commands and, increasingly, to the embedded agentum-server over HTTP/WS.
 web/                   # Static marketing landing page. Deployed to Netlify; NOT served by the daemon.
 ```
 
@@ -70,8 +72,8 @@ compile-time asset embed. The two clients build independently:
   (`pkill agentum && agentum serve` / re-run `agentum terminal`).
   There's no hot reload; rebuild after touching
   `crates/agentum-cli/src/commands/terminal/*.rs`.
-- **Desktop UI** (React/Vite): `npm run build --prefix desktop-ui`
-  (or `npm run dev --prefix desktop-ui` for HMR). The Tauri shell
+- **Desktop UI** (React/Vite): `npm run build --prefix crates/agentum-desktop/ui`
+  (or `npm run dev --prefix crates/agentum-desktop/ui` for HMR). The Tauri shell
   loads it; `cargo build` the `agentum-desktop` crate after changing
   its Rust commands or the embedded-server boot in `src/lib.rs`.
 
@@ -269,7 +271,7 @@ listed in `auth.rs::is_public`. WS clients pass the bearer token as
   green on Linux and macOS. Tests that touch user paths
   (profiles/board_goals/planner) isolate via `AGENTUM_HOME` (a temp
   dir) rather than `XDG_*`, which `directories` ignores on macOS.
-- **Frontend build**: `npm run build --prefix desktop-ui` (Vite). The
+- **Frontend build**: `npm run build --prefix crates/agentum-desktop/ui` (Vite). The
   server-facing TS runtime clients are plain (no `@/` aliases), so they
   can also be typechecked directly with `tsc`.
 - **Clippy / fmt**: workspace runs cargo fmt; please match

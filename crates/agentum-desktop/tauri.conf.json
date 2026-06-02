@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "identifier": "dev.agentum.app",
   "build": {
-    "frontendDist": "../../desktop-ui/dist",
-    "beforeDevCommand": "npm --prefix ../../desktop-ui run dev",
-    "beforeBuildCommand": "npm --prefix ../../desktop-ui run build"
+    "frontendDist": "ui/dist",
+    "beforeDevCommand": "npm --prefix ui run dev",
+    "beforeBuildCommand": "npm --prefix ui run build"
   },
   "app": {
     "windows": [

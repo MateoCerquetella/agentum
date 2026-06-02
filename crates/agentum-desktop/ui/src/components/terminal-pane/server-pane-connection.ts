@@ -22,17 +22,17 @@ function resolveSessionTool(deps: PtyConnectionDeps): string {
 }
 
 /**
- * Default ON. Route new terminals through the embedded server's tmux sessions —
- * the Option A path that lets SSH/remote sessions survive disconnection. Set
- * `localStorage['agentum.serverTerminals'] = '0'` (and reload) to force the
- * legacy local-PTY path. Hard failures fall back to local automatically, so
- * defaulting on cannot break the terminal.
+ * Opt-in (default OFF) until the server terminal path is verified live. Set
+ * `localStorage['agentum.serverTerminals'] = '1'` (and reload) to route new
+ * terminals through the embedded server's tmux sessions — the Option A path
+ * that lets SSH/remote sessions survive disconnection. Hard failures fall back
+ * to the local PTY automatically.
  */
 export function shouldUseServerTerminals(): boolean {
   try {
-    return globalThis.localStorage?.getItem('agentum.serverTerminals') !== '0'
+    return globalThis.localStorage?.getItem('agentum.serverTerminals') === '1'
   } catch {
-    return true
+    return false
   }
 }
 

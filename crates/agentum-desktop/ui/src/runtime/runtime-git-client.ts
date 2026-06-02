@@ -39,15 +39,15 @@ import {
 
 /**
  * Option A: route source-control through the embedded server's session git API.
- * Default ON; set `localStorage['agentum.serverTerminals'] = '0'` to force the
- * local preload path. Reads fall back to local on error (see `serverGitRead`),
- * so the panel can't break; writes surface errors instead of auto-retrying.
+ * Opt-in (default OFF) until verified live; set
+ * `localStorage['agentum.serverTerminals'] = '1'` to enable. Reads fall back to
+ * local on error (see `serverGitRead`); writes surface errors, no auto-retry.
  */
 function shouldUseServerGit(): boolean {
   try {
-    return globalThis.localStorage?.getItem('agentum.serverTerminals') !== '0'
+    return globalThis.localStorage?.getItem('agentum.serverTerminals') === '1'
   } catch {
-    return true
+    return false
   }
 }
 
