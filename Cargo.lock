@@ -71,6 +71,8 @@ dependencies = [
 name = "agentum-desktop"
 version = "0.10.10"
 dependencies = [
+ "agentum-server",
+ "agentum-store",
  "anyhow",
  "base64 0.22.1",
  "chrono",
