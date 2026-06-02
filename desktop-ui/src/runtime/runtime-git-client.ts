@@ -38,15 +38,32 @@ import {
 } from './server-git-adapter'
 
 /**
- * Option A (opt-in): route source-control reads through the embedded server's
- * session git API instead of the local preload. Shares the terminal flag so the
- * whole desktop-on-server path flips together. Off by default → local path.
+ * Option A: route source-control through the embedded server's session git API.
+ * Default ON; set `localStorage['agentum.serverTerminals'] = '0'` to force the
+ * local preload path. Reads fall back to local on error (see `serverGitRead`),
+ * so the panel can't break; writes surface errors instead of auto-retrying.
  */
 function shouldUseServerGit(): boolean {
   try {
-    return globalThis.localStorage?.getItem('agentum.serverTerminals') === '1'
+    return globalThis.localStorage?.getItem('agentum.serverTerminals') !== '0'
   } catch {
-    return false
+    return true
+  }
+}
+
+/**
+ * Run a server-backed git READ, falling back to `local()` if it throws — so a
+ * server hiccup degrades to the proven local path instead of breaking the
+ * source-control panel. Reads are idempotent, so retrying locally is safe.
+ * (Writes deliberately do NOT use this: re-applying a non-idempotent op after a
+ * partial server success could double-commit/double-push.)
+ */
+async function serverGitRead<T>(server: () => Promise<T>, local: () => Promise<T>): Promise<T> {
+  try {
+    return await server()
+  } catch (error) {
+    console.warn('[agentum] server git read failed, using local:', error)
+    return local()
   }
 }
 
@@ -133,16 +150,18 @@ export async function getRuntimeGitStatus(
 ): Promise<GitStatusResult> {
   const target = getActiveRuntimeTarget(context.settings)
   const includeIgnoredArgs = options?.includeIgnored ? { includeIgnored: true } : {}
-  // Option A: a local workspace's source control runs against its server session.
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
-    return getServerGitStatus(context.worktreePath)
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    return window.api.git.status({
+  const localStatus = (): Promise<GitStatusResult> =>
+    window.api.git.status({
       worktreePath: context.worktreePath,
       connectionId: context.connectionId,
       ...includeIgnoredArgs
     })
+  // Option A: a local workspace's source control runs against its server session.
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    return serverGitRead(() => getServerGitStatus(context.worktreePath), localStatus)
+  }
+  if (target.kind === 'local' || !context.worktreeId) {
+    return localStatus()
   }
   return callRuntimeRpc<GitStatusResult>(
     target,
@@ -199,14 +218,16 @@ export async function getRuntimeGitConflictOperation(
   context: RuntimeGitContext
 ): Promise<GitConflictOperation> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
-    return getServerGitConflictOperation(context.worktreePath)
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    return window.api.git.conflictOperation({
+  const localConflict = (): Promise<GitConflictOperation> =>
+    window.api.git.conflictOperation({
       worktreePath: context.worktreePath,
       connectionId: context.connectionId
     })
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    return serverGitRead(() => getServerGitConflictOperation(context.worktreePath), localConflict)
+  }
+  if (target.kind === 'local' || !context.worktreeId) {
+    return localConflict()
   }
   return callRuntimeRpc<GitConflictOperation>(
     target,
@@ -263,17 +284,19 @@ export async function getRuntimeGitDiff(
   args: { filePath: string; staged: boolean; compareAgainstHead?: boolean }
 ): Promise<GitDiffResult> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
-    return getServerGitDiff(context.worktreePath, args)
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    return window.api.git.diff({
+  const localDiff = (): Promise<GitDiffResult> =>
+    window.api.git.diff({
       worktreePath: context.worktreePath,
       filePath: args.filePath,
       staged: args.staged,
       compareAgainstHead: args.compareAgainstHead,
       connectionId: context.connectionId
     })
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    return serverGitRead(() => getServerGitDiff(context.worktreePath, args), localDiff)
+  }
+  if (target.kind === 'local' || !context.worktreeId) {
+    return localDiff()
   }
   return callRuntimeRpc<GitDiffResult>(
     target,
@@ -288,15 +311,20 @@ export async function getRuntimeGitBranchCompare(
   baseRef: string
 ): Promise<GitBranchCompareResult> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
-    return getServerGitBranchCompare(context.worktreePath, baseRef)
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    return window.api.git.branchCompare({
+  const localBranchCompare = (): Promise<GitBranchCompareResult> =>
+    window.api.git.branchCompare({
       worktreePath: context.worktreePath,
       baseRef,
       connectionId: context.connectionId
     })
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    return serverGitRead(
+      () => getServerGitBranchCompare(context.worktreePath, baseRef),
+      localBranchCompare
+    )
+  }
+  if (target.kind === 'local' || !context.worktreeId) {
+    return localBranchCompare()
   }
   return callRuntimeRpc<GitBranchCompareResult>(
     target,
@@ -311,15 +339,20 @@ export async function getRuntimeGitCommitCompare(
   commitId: string
 ): Promise<GitCommitCompareResult> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
-    return getServerGitCommitCompare(context.worktreePath, commitId)
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    return window.api.git.commitCompare({
+  const localCommitCompare = (): Promise<GitCommitCompareResult> =>
+    window.api.git.commitCompare({
       worktreePath: context.worktreePath,
       commitId,
       connectionId: context.connectionId
     })
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    return serverGitRead(
+      () => getServerGitCommitCompare(context.worktreePath, commitId),
+      localCommitCompare
+    )
+  }
+  if (target.kind === 'local' || !context.worktreeId) {
+    return localCommitCompare()
   }
   return callRuntimeRpc<GitCommitCompareResult>(
     target,
@@ -334,16 +367,18 @@ export async function getRuntimeGitUpstreamStatus(
   pushTarget?: GitPushTarget
 ): Promise<GitUpstreamStatus> {
   const target = getActiveRuntimeTarget(context.settings)
-  // Server path tracks @{u} only; defer to local when an explicit pushTarget is set.
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath && !pushTarget) {
-    return getServerGitUpstreamStatus(context.worktreePath)
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    return window.api.git.upstreamStatus({
+  const localUpstream = (): Promise<GitUpstreamStatus> =>
+    window.api.git.upstreamStatus({
       worktreePath: context.worktreePath,
       connectionId: context.connectionId,
       ...(pushTarget ? { pushTarget } : {})
     })
+  // Server path tracks @{u} only; defer to local when an explicit pushTarget is set.
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath && !pushTarget) {
+    return serverGitRead(() => getServerGitUpstreamStatus(context.worktreePath), localUpstream)
+  }
+  if (target.kind === 'local' || !context.worktreeId) {
+    return localUpstream()
   }
   return callRuntimeRpc<GitUpstreamStatus>(
     target,
