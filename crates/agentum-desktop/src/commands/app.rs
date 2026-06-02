@@ -12,7 +12,7 @@ pub struct AppIdentity {
 #[tauri::command]
 pub fn app_get_identity() -> AppIdentity {
     AppIdentity {
-        name: "Orca".to_string(),
+        name: "agentum".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         platform: app_get_platform(),
     }

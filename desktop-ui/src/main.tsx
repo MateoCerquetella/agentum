@@ -39,8 +39,8 @@ createRoot(rootElement).render(
     <RecoverableRenderErrorBoundary
       boundaryId="app.root"
       surface="app-root"
-      title="Orca hit a renderer error."
-      description="The app shell could not finish rendering. Retry to remount it, or relaunch Orca if the error persists."
+      title="agentum hit a renderer error."
+      description="The app shell could not finish rendering. Retry to remount it, or relaunch agentum if the error persists."
     >
       <App />
     </RecoverableRenderErrorBoundary>

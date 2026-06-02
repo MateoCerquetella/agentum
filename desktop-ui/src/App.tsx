@@ -1468,8 +1468,8 @@ function App(): React.JSX.Element {
             {settings?.showTitlebarAppName !== false && (
               <ContextMenu>
                 <ContextMenuTrigger asChild>
-                  <div className="titlebar-app-name" aria-label="Orca">
-                    <span className="titlebar-app-name-main">Orca</span>
+                  <div className="titlebar-app-name" aria-label="agentum">
+                    <span className="titlebar-app-name-main">agentum</span>
                   </div>
                 </ContextMenuTrigger>
                 <ContextMenuContent>
@@ -1769,7 +1769,7 @@ function App(): React.JSX.Element {
                           surface="page"
                           resetKey={`${activeView}:${activeWorktreeId ?? 'none'}`}
                           title="This page hit an error."
-                          description="Retry the page or navigate to another Orca surface."
+                          description="Retry the page or navigate to another agentum surface."
                         >
                           {activeView === 'settings' ? <Settings /> : null}
                           {activeView === 'skills' ? <SkillsPage /> : null}

@@ -51,7 +51,7 @@ pub fn notifications_dispatch(
 ) -> NotificationDispatchResult {
     let title = repo_label
         .or(worktree_label)
-        .unwrap_or_else(|| "Orca".to_string());
+        .unwrap_or_else(|| "agentum".to_string());
 
     let mut body_parts: Vec<String> = Vec::new();
     if let Some(value) = terminal_title {
