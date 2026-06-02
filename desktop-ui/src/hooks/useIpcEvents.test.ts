@@ -302,7 +302,7 @@ describe('useIpcEvents browser tab create routing', () => {
         },
         browser: {
           onGuestLoadFailed: () => () => {},
-          onOpenLinkInOrcaTab: () => () => {},
+          onOpenLinkInAgentumTab: () => () => {},
           onNavigationUpdate: () => () => {},
           onActivateView: () => () => {},
           onPaneFocus: () => () => {}
@@ -507,7 +507,7 @@ describe('useIpcEvents updater integration', () => {
         },
         browser: {
           onGuestLoadFailed: () => () => {},
-          onOpenLinkInOrcaTab: () => () => {},
+          onOpenLinkInAgentumTab: () => () => {},
           onNavigationUpdate: () => () => {},
           onActivateView: () => () => {},
           onPaneFocus: () => () => {}
@@ -741,7 +741,7 @@ describe('useIpcEvents updater integration', () => {
         },
         browser: {
           onGuestLoadFailed: () => () => {},
-          onOpenLinkInOrcaTab: () => () => {},
+          onOpenLinkInAgentumTab: () => () => {},
           onNavigationUpdate: () => () => {},
           onActivateView: () => () => {},
           onPaneFocus: () => () => {}
@@ -1157,7 +1157,7 @@ describe('useIpcEvents updater integration', () => {
         },
         browser: {
           onGuestLoadFailed: () => () => {},
-          onOpenLinkInOrcaTab: () => () => {},
+          onOpenLinkInAgentumTab: () => () => {},
           onNavigationUpdate: () => () => {},
           onActivateView: () => () => {},
           onPaneFocus: () => () => {}
@@ -1272,7 +1272,7 @@ describe('useIpcEvents updater integration', () => {
     expect(revealWorktreeInSidebar).not.toHaveBeenCalled()
     expect(dispatchEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: 'orca-background-mount-terminal-worktree',
+        type: 'agentum-background-mount-terminal-worktree',
         detail: { worktreeId: 'wt-2' }
       })
     )
@@ -1395,7 +1395,7 @@ describe('useIpcEvents updater integration', () => {
     })
     expect(dispatchEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: 'orca-split-terminal-pane',
+        type: 'agentum-split-terminal-pane',
         detail: {
           tabId: 'tab-existing',
           paneRuntimeId: -1,
@@ -1652,7 +1652,7 @@ describe('useIpcEvents browser tab close routing', () => {
         },
         browser: {
           onGuestLoadFailed: () => () => {},
-          onOpenLinkInOrcaTab: () => () => {},
+          onOpenLinkInAgentumTab: () => () => {},
           onNavigationUpdate: () => () => {},
           onActivateView: () => () => {},
           onPaneFocus: () => () => {}
@@ -1866,7 +1866,7 @@ describe('useIpcEvents browser tab close routing', () => {
         },
         browser: {
           onGuestLoadFailed: () => () => {},
-          onOpenLinkInOrcaTab: () => () => {},
+          onOpenLinkInAgentumTab: () => () => {},
           onNavigationUpdate: () => () => {},
           onActivateView: () => () => {},
           onPaneFocus: () => () => {}
@@ -2075,7 +2075,7 @@ describe('useIpcEvents browser tab close routing', () => {
         },
         browser: {
           onGuestLoadFailed: () => () => {},
-          onOpenLinkInOrcaTab: () => () => {},
+          onOpenLinkInAgentumTab: () => () => {},
           onNavigationUpdate: () => () => {},
           onActivateView: () => () => {},
           onPaneFocus: () => () => {}
@@ -2302,7 +2302,7 @@ describe('useIpcEvents CLI-created worktree activation', () => {
         },
         browser: {
           onGuestLoadFailed: () => () => {},
-          onOpenLinkInOrcaTab: () => () => {},
+          onOpenLinkInAgentumTab: () => () => {},
           onNavigationUpdate: () => () => {},
           onActivateView: () => () => {},
           onPaneFocus: () => () => {}
@@ -2540,7 +2540,7 @@ describe('useIpcEvents agent status snapshot integration', () => {
         browser: {
           onGuestLoadFailed: () => () => {},
           onPaneFocus: () => () => {},
-          onOpenLinkInOrcaTab: () => () => {},
+          onOpenLinkInAgentumTab: () => () => {},
           onNavigationUpdate: () => () => {},
           onActivateView: () => () => {}
         },

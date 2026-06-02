@@ -103,7 +103,7 @@ describe('resolveWindowShortcutAction', () => {
     ).toBeNull()
   })
 
-  it('keeps Orca-first active in terminal context but lets Terminal-first pass risky app chords', () => {
+  it('keeps Agentum-first active in terminal context but lets Terminal-first pass risky app chords', () => {
     const macWorktreePalette = {
       code: 'KeyJ',
       key: 'j',
@@ -115,7 +115,7 @@ describe('resolveWindowShortcutAction', () => {
     expect(
       resolveWindowShortcutAction(macWorktreePalette, 'darwin', undefined, {
         context: 'terminal',
-        terminalShortcutPolicy: 'orca-first'
+        terminalShortcutPolicy: 'agentum-first'
       })
     ).toEqual({ type: 'toggleWorktreePalette' })
     expect(
@@ -154,7 +154,7 @@ describe('resolveWindowShortcutAction', () => {
         { code: 'Digit3', key: '3', meta: false, control: true, alt: false, shift: false },
         'darwin',
         undefined,
-        { context: 'terminal', terminalShortcutPolicy: 'orca-first' }
+        { context: 'terminal', terminalShortcutPolicy: 'agentum-first' }
       )
     ).toEqual({ type: 'jumpToTabIndex', index: 2 })
   })

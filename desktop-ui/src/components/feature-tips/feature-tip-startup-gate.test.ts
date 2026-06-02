@@ -25,13 +25,13 @@ function makeSettings(voiceEnabled = false): Pick<GlobalSettings, 'voice'> {
 function makeCliStatus(overrides: Partial<CliInstallStatus> = {}): CliInstallStatus {
   return {
     platform: 'darwin',
-    commandName: 'orca',
+    commandName: 'agentum',
     supported: true,
     state: 'installed',
-    commandPath: '/usr/local/bin/orca',
+    commandPath: '/usr/local/bin/agentum',
     pathDirectory: '/usr/local/bin',
     pathConfigured: true,
-    launcherPath: '/Applications/Orca.app/Contents/MacOS/orca',
+    launcherPath: '/Applications/Agentum.app/Contents/MacOS/agentum',
     installMethod: 'symlink',
     currentTarget: null,
     unsupportedReason: null,
@@ -54,7 +54,7 @@ describe('feature tip startup gate', () => {
         settings: makeSettings(),
         suppressedByOnboardingThisSession: false
       })
-    ).toEqual({ kind: 'open', tipId: 'orca-cli' })
+    ).toEqual({ kind: 'open', tipId: 'agentum-cli' })
   })
 
   it('suppresses feature tips for first-time users while onboarding is showing', () => {
@@ -102,7 +102,7 @@ describe('feature tip startup gate', () => {
         settings: makeSettings(),
         suppressedByOnboardingThisSession: false
       })
-    ).toEqual({ kind: 'open', tipId: 'orca-cli' })
+    ).toEqual({ kind: 'open', tipId: 'agentum-cli' })
   })
 
   it('opens the CLI tip after voice dictation is already enabled', () => {
@@ -118,7 +118,7 @@ describe('feature tip startup gate', () => {
         settings: makeSettings(true),
         suppressedByOnboardingThisSession: false
       })
-    ).toEqual({ kind: 'open', tipId: 'orca-cli' })
+    ).toEqual({ kind: 'open', tipId: 'agentum-cli' })
   })
 
   it('does not open after every tip was marked seen', () => {
@@ -126,7 +126,7 @@ describe('feature tip startup gate', () => {
       getFeatureTipsAppOpenDecision({
         activeModal: 'none',
         cliInstalled: false,
-        featureTipsSeenIds: ['voice-dictation', 'orca-cli'],
+        featureTipsSeenIds: ['voice-dictation', 'agentum-cli'],
         featureInteractions: {},
         onboarding: existingUserOnboarding,
         persistedUIReady: true,

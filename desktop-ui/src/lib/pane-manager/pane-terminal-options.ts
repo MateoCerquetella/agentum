@@ -32,7 +32,7 @@ export function buildDefaultTerminalOptions(): ITerminalOptions {
     macOptionClickForcesSelection: true,
     drawBoldTextInBrightColors: true,
     // Why: advertise kitty keyboard protocol support so CLIs that probe
-    // (CSI ? u) know Orca accepts enhanced key reporting. Orca still writes
+    // (CSI ? u) know Agentum accepts enhanced key reporting. Agentum still writes
     // CSI-u for Shift+Enter on non-Windows platforms; programs that respect
     // the handshake otherwise fall back to legacy encodings and miss it.
     // Matches VS Code's xtermTerminal.ts.

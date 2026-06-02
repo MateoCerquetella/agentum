@@ -2,7 +2,7 @@ import type { SettingsSearchEntry } from './settings-search'
 
 export const RUNTIME_ENVIRONMENTS_SEARCH_ENTRY: SettingsSearchEntry = {
   title: 'Active Server',
-  description: 'Choose local desktop, add a saved remote Orca server, or generate a pairing URL.',
+  description: 'Choose local desktop, add a saved remote Agentum server, or generate a pairing URL.',
   keywords: [
     'runtime',
     'environment',
@@ -20,6 +20,6 @@ export const RUNTIME_ENVIRONMENTS_SEARCH_ENTRY: SettingsSearchEntry = {
 
 export const WEB_RUNTIME_ENVIRONMENTS_SEARCH_ENTRY: SettingsSearchEntry = {
   title: 'Active Server',
-  description: 'Connect this browser to a saved Orca server.',
+  description: 'Connect this browser to a saved Agentum server.',
   keywords: ['runtime', 'environment', 'server', 'client', 'remote', 'pairing code', 'cloud', 'vm']
 }

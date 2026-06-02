@@ -31,7 +31,7 @@ export const GENERAL_WORKSPACE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
 export const GENERAL_NETWORK_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   {
     title: 'HTTP Proxy',
-    description: 'Proxy URL for Orca network requests and local terminal children.',
+    description: 'Proxy URL for Agentum network requests and local terminal children.',
     keywords: ['proxy', 'http_proxy', 'https_proxy', 'network', 'dock', 'launchpad']
   },
   {
@@ -49,7 +49,7 @@ export const GENERAL_EDITOR_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   },
   {
     title: 'Auto Save Delay',
-    description: 'How long Orca waits after your last edit before saving automatically.',
+    description: 'How long Agentum waits after your last edit before saving automatically.',
     keywords: ['autosave', 'delay', 'milliseconds']
   },
   {
@@ -93,15 +93,15 @@ export const GENERAL_NAVIGATION_SEARCH_ENTRIES: SettingsSearchEntry[] = [
 
 export const GENERAL_CLI_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   {
-    title: 'Orca CLI',
-    description: 'Register or remove the Orca CLI command.',
+    title: 'Agentum CLI',
+    description: 'Register or remove the Agentum CLI command.',
     keywords: ['cli', 'path', 'terminal', 'command', 'shell command'],
     cmdJKeywords: ['cli', 'path', 'command', 'shell command'],
     targetSectionId: 'cli'
   },
   {
     title: 'Agent skill',
-    description: 'Install the Orca skill so agents know to use the Orca CLI.',
+    description: 'Install the Agentum skill so agents know to use the Agentum CLI.',
     keywords: ['skill', 'agents', 'npx']
   }
 ]
@@ -109,7 +109,7 @@ export const GENERAL_CLI_SEARCH_ENTRIES: SettingsSearchEntry[] = [
 export const GENERAL_UPDATE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   {
     title: 'Check for Updates',
-    description: 'Check for app updates and install a newer Orca version.',
+    description: 'Check for app updates and install a newer Agentum version.',
     keywords: ['update', 'version', 'release notes', 'download']
   }
 ]
@@ -146,7 +146,7 @@ export const GENERAL_AGENT_SEARCH_ENTRIES: SettingsSearchEntry[] = [
 
 export const GENERAL_SUPPORT_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   {
-    title: 'Star Orca on GitHub',
+    title: 'Star Agentum on GitHub',
     description: 'Support the project with a GitHub star via the gh CLI.',
     keywords: ['star', 'github', 'support', 'feedback', 'like']
   }

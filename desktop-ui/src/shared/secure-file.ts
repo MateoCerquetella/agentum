@@ -133,7 +133,7 @@ function bestEffortRestrictWindowsPath(targetPath: string, isDirectory: boolean)
       }
     )
   } catch {
-    // Why: credential-file hardening should not prevent Orca from starting on
+    // Why: credential-file hardening should not prevent Agentum from starting on
     // Windows machines where PowerShell ACL APIs are unavailable or locked down.
   }
 }

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import { createEditorSlice } from '@/store/slices/editor'
 import type { AppState } from '@/store'
-import { ORCA_EDITOR_SAVE_DIRTY_FILES_EVENT } from '../../../../shared/editor-save-events'
+import { AGENTUM_EDITOR_SAVE_DIRTY_FILES_EVENT } from '../../../../shared/editor-save-events'
 import { requestEditorFileSave, requestEditorSaveQuiesce } from './editor-autosave'
 import { attachEditorAutosaveController } from './editor-autosave-controller'
 import { registerPendingEditorFlush } from './editor-pending-flush'
@@ -47,7 +47,7 @@ async function requestDirtyFileSave(): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let claimed = false
     window.dispatchEvent(
-      new CustomEvent(ORCA_EDITOR_SAVE_DIRTY_FILES_EVENT, {
+      new CustomEvent(AGENTUM_EDITOR_SAVE_DIRTY_FILES_EVENT, {
         detail: {
           claim: () => {
             claimed = true

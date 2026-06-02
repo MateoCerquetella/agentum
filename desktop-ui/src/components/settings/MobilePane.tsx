@@ -237,7 +237,7 @@ export function MobilePane(): React.JSX.Element {
           </button>
           {endpoint && <span className="text-muted-foreground font-mono text-xs">{endpoint}</span>}
           <p className="text-muted-foreground max-w-xs text-center text-xs">
-            Scan this code with the Orca mobile app. Each code creates a unique device token.
+            Scan this code with the Agentum mobile app. Each code creates a unique device token.
           </p>
           {pairingUrl && (
             <div className="flex w-full max-w-lg flex-col gap-1.5 px-4">
@@ -269,7 +269,7 @@ export function MobilePane(): React.JSX.Element {
         {devices.length === 0 ? (
           <p className="text-muted-foreground text-sm">
             {qrDataUrl
-              ? 'No devices paired yet. Scan the QR code with the Orca mobile app.'
+              ? 'No devices paired yet. Scan the QR code with the Agentum mobile app.'
               : 'No devices paired yet.'}
           </p>
         ) : (
@@ -311,7 +311,7 @@ export function MobilePane(): React.JSX.Element {
           <span className="text-sm font-medium">When you leave the mobile app</span>
         </div>
         <p className="text-muted-foreground mb-3 text-xs">
-          While you&apos;re using a terminal on your phone, Orca shrinks it to fit your phone
+          While you&apos;re using a terminal on your phone, Agentum shrinks it to fit your phone
           screen. When you close the app or switch away, this controls whether it stays at phone
           size (so interactive CLI tools don&apos;t reflow) or resizes back to your desktop. You can
           always click Restore on the terminal banner to resize it manually.
@@ -343,7 +343,7 @@ export function MobilePane(): React.JSX.Element {
       <Dialog open={qrEnlarged} onOpenChange={setQrEnlarged}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Scan with Orca Mobile</DialogTitle>
+            <DialogTitle>Scan with Agentum Mobile</DialogTitle>
           </DialogHeader>
           {qrDataUrl && (
             <div className="flex flex-col items-center gap-3">

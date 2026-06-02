@@ -76,7 +76,7 @@ describe('formatBrowserAnnotationsAsMarkdown', () => {
 
     expect(markdown).toContain('## Design Feedback: /pricing')
     expect(markdown).toContain('**Browser tab id:** page-1')
-    expect(markdown).toContain('**Orca CLI:** Use `--page page-1` to target this browser tab.')
+    expect(markdown).toContain('**Agentum CLI:** Use `--page page-1` to target this browser tab.')
     expect(markdown).not.toContain('Page Feedback')
     expect(markdown).toContain('**Selector:** `main.pricing > button.primary`')
     expect(markdown).toContain('**Source:** src/components/PricingCta.tsx:42:8')

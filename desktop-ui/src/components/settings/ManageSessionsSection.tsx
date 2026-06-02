@@ -30,8 +30,8 @@ type PendingConfirm = { kind: 'killOne'; session: PtyManagementSession } | null
 
 // Why: mirror the status-bar SessionsStatusSegment label style — last two
 // path segments joined by the platform separator, no ellipsis prefix. This
-// keeps the Manage Sessions table visually consistent with how Orca labels
-// the same worktrees in the bottom status bar ("orca/Anemone").
+// keeps the Manage Sessions table visually consistent with how Agentum labels
+// the same worktrees in the bottom status bar ("agentum/Anemone").
 function shortCwd(cwd: string): string {
   if (!cwd) {
     return 'unknown'
@@ -46,7 +46,7 @@ function formatWorkspace(session: { cwd: string | null; sessionId: string }): st
     return shortCwd(session.cwd)
   }
   // Why: the daemon doesn't always populate `cwd` on listSessions (legacy
-  // revived sessions, older protocol versions). Orca's session IDs embed
+  // revived sessions, older protocol versions). Agentum's session IDs embed
   // the workspace as `<worktreeId>@@<hash>` where worktreeId is usually
   // the absolute path. Fall back to parsing the id so we don't show "—"
   // when the info is right there. Matches SessionsStatusSegment's fallback.

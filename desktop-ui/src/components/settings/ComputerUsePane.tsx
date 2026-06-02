@@ -19,7 +19,7 @@ import {
 } from '@/lib/agent-feature-install-commands'
 import {
   AGENT_SKILL_CLI_PREREQUISITE_NOTICE,
-  ensureOrcaCliAvailableForAgentSkillTerminal
+  ensureAgentumCliAvailableForAgentSkillTerminal
 } from '@/lib/agent-skill-cli-prerequisite'
 import {
   GLOBAL_AGENT_SKILL_SOURCE_KINDS,
@@ -112,7 +112,7 @@ export function ComputerUsePane(): React.JSX.Element {
         ? 'Computer Use is ready.'
         : 'Finish setup to use local apps.'
   const summaryDescription = checking
-    ? 'Orca is checking macOS privacy permissions for the Computer Use helper.'
+    ? 'Agentum is checking macOS privacy permissions for the Computer Use helper.'
     : setupUnavailable
       ? `Computer Use permissions are unavailable because ${helperUnavailableReason}.`
       : allGranted
@@ -349,7 +349,7 @@ export function ComputerUsePane(): React.JSX.Element {
         preInstallNotice={AGENT_SKILL_CLI_PREREQUISITE_NOTICE}
         onBeforeOpenTerminal={async () => {
           useAppStore.getState().recordFeatureInteraction('computer-use-setup')
-          await ensureOrcaCliAvailableForAgentSkillTerminal()
+          await ensureAgentumCliAvailableForAgentSkillTerminal()
         }}
         onRecheck={refreshComputerUseSkill}
       />

@@ -24,7 +24,7 @@ import { readRuntimeFileContent, subscribeRuntimeFileChanges } from '@/runtime/r
 // Why: atomic-write patterns (Claude Code's Edit tool, editors like vim,
 // VSCode) land as a short burst of `update` events — or `delete + create` on
 // renamers — within a few milliseconds for the same path. Dispatching an
-// `ORCA_EDITOR_EXTERNAL_FILE_CHANGE_EVENT` per raw event fan-outs into N full
+// `AGENTUM_EDITOR_EXTERNAL_FILE_CHANGE_EVENT` per raw event fan-outs into N full
 // `setContent` + `normalizeSoftBreaks` doc rebuilds per mounted EditorPanel,
 // which under split-pane + large markdown is enough to wedge the renderer
 // and black out the window (issue #826). Coalescing per (worktreeId + path)
@@ -565,7 +565,7 @@ function scheduleSelfWriteAwareExternalReload(
   const runtimeEnvironmentId = file.runtimeEnvironmentId ?? target.runtimeEnvironmentId
   // Why: a recent self-write stamp only proves the path changed recently; an
   // agent can write a newer version inside the same TTL. Compare disk content
-  // with the saved text so we suppress only the echo of Orca's own write.
+  // with the saved text so we suppress only the echo of Agentum's own write.
   void readRuntimeFileContent({
     settings: runtimeEnvironmentId ? { activeRuntimeEnvironmentId: runtimeEnvironmentId } : null,
     filePath: file.filePath,

@@ -25,18 +25,18 @@ function humanizePermission(permission: string): string {
 
 export function formatPermissionNotice(event: BrowserPermissionDeniedEvent): string {
   const target = event.origin === 'unknown' ? 'this page' : event.origin
-  return `${target} asked for ${humanizePermission(event.permission)}, and Orca denied it.`
+  return `${target} asked for ${humanizePermission(event.permission)}, and Agentum denied it.`
 }
 
 export function formatPopupNotice(event: BrowserPopupEvent): string {
   const target = event.origin === 'unknown' ? 'A site' : event.origin
-  if (event.action === 'opened-in-orca') {
-    return `${target} opened a new page in Orca.`
+  if (event.action === 'opened-in-agentum') {
+    return `${target} opened a new page in Agentum.`
   }
   if (event.action === 'opened-external') {
     return `${target} opened a new window in your default browser.`
   }
-  return `${target} tried to open a popup Orca does not support here.`
+  return `${target} tried to open a popup Agentum does not support here.`
 }
 
 export function formatDownloadFinishedNotice(event: BrowserDownloadFinishedEvent): string {

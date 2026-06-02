@@ -12,8 +12,8 @@ import {
 import { PASTE_TERMINAL_TEXT_EVENT } from '@/constants/terminal'
 import {
   AGENT_SKILL_CLI_PREREQUISITE_NOTICE,
-  ensureOrcaCliAvailableForAgentSkillTerminal,
-  isOrcaCliAvailableOnPath
+  ensureAgentumCliAvailableForAgentSkillTerminal,
+  isAgentumCliAvailableOnPath
 } from '@/lib/agent-skill-cli-prerequisite'
 import { ORCHESTRATION_SKILL_INSTALL_COMMAND } from '@/lib/orchestration-install-command'
 import {
@@ -73,18 +73,18 @@ export function FloatingTerminalOrchestrationDialog({
     }
   }, [open, refreshCliStatus])
 
-  const cliInstalled = isOrcaCliAvailableOnPath(cliStatus)
+  const cliInstalled = isAgentumCliAvailableOnPath(cliStatus)
   const cliSupported = cliStatus?.supported ?? false
   const cliLabel = cliInstalled
-    ? 'Orca CLI is on PATH'
+    ? 'Agentum CLI is on PATH'
     : cliLoading
       ? 'Checking CLI status...'
-      : (cliStatus?.detail ?? 'Register the Orca CLI so agents can call Orca from a terminal.')
+      : (cliStatus?.detail ?? 'Register the Agentum CLI so agents can call Agentum from a terminal.')
 
   const handleInstallCli = async (): Promise<void> => {
     setCliBusy(true)
     try {
-      const next = await ensureOrcaCliAvailableForAgentSkillTerminal({
+      const next = await ensureAgentumCliAvailableForAgentSkillTerminal({
         onStatusChange: setCliStatusIfMounted
       })
       if (!mountedRef.current) {
@@ -94,8 +94,8 @@ export function FloatingTerminalOrchestrationDialog({
         notifyOrchestrationSetupStateChanged()
         onSetupStateChange()
       }
-      if (isOrcaCliAvailableOnPath(next)) {
-        toast.success('Registered the Orca CLI in PATH.')
+      if (isAgentumCliAvailableOnPath(next)) {
+        toast.success('Registered the Agentum CLI in PATH.')
       }
     } finally {
       if (mountedRef.current) {
@@ -107,7 +107,7 @@ export function FloatingTerminalOrchestrationDialog({
   const handlePasteSkillCommand = async (): Promise<void> => {
     setSkillBusy(true)
     try {
-      const nextCliStatus = await ensureOrcaCliAvailableForAgentSkillTerminal({
+      const nextCliStatus = await ensureAgentumCliAvailableForAgentSkillTerminal({
         onStatusChange: setCliStatusIfMounted
       })
       if (!mountedRef.current) {
@@ -131,7 +131,7 @@ export function FloatingTerminalOrchestrationDialog({
         toast.success('Copied the skill install command.')
       }
       onSetupStateChange()
-      if (isOrcaCliAvailableOnPath(nextCliStatus ?? cliStatus)) {
+      if (isAgentumCliAvailableOnPath(nextCliStatus ?? cliStatus)) {
         onOpenChange(false)
       }
     } catch (error) {
@@ -160,7 +160,7 @@ export function FloatingTerminalOrchestrationDialog({
         <DialogHeader>
           <DialogTitle>Enable orchestration</DialogTitle>
           <DialogDescription>
-            Add the Orca CLI, then install the agent skill in this terminal.
+            Add the Agentum CLI, then install the agent skill in this terminal.
           </DialogDescription>
         </DialogHeader>
 
@@ -168,7 +168,7 @@ export function FloatingTerminalOrchestrationDialog({
           <div className="min-w-0 px-3 py-3">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0 space-y-1">
-                <p className="text-sm font-medium">Orca CLI</p>
+                <p className="text-sm font-medium">Agentum CLI</p>
                 <p className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                   <span className="shrink-0">{cliLabel}</span>
                   {cliInstalled && cliStatus?.commandPath ? (
@@ -185,7 +185,7 @@ export function FloatingTerminalOrchestrationDialog({
                     size="xs"
                     disabled
                     className="shrink-0 gap-1.5 disabled:opacity-100"
-                    aria-label="Orca CLI added to PATH"
+                    aria-label="Agentum CLI added to PATH"
                   >
                     <Check className="size-3" />
                     Added
@@ -212,7 +212,7 @@ export function FloatingTerminalOrchestrationDialog({
                 <div className="min-w-0 space-y-1">
                   <p className="text-sm font-medium">Orchestration skill</p>
                   <p className="text-xs text-muted-foreground">
-                    Paste this command into the terminal so agents can coordinate through Orca.
+                    Paste this command into the terminal so agents can coordinate through Agentum.
                   </p>
                   {!cliInstalled ? (
                     <p className="text-xs text-muted-foreground">

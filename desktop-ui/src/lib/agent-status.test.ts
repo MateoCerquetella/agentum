@@ -177,7 +177,7 @@ describe('detectAgentStatusFromTitle', () => {
 
   // --- Cursor (cursor-agent) synthesized titles ---
   // Why: cursor-agent's native OSC title stays literally "Cursor Agent" for
-  // the entire turn, so Orca synthesizes decorated titles from hook events
+  // the entire turn, so Agentum synthesizes decorated titles from hook events
   // to drive the existing spinner/unread pipeline. These tests pin the
   // contract the main-process hook listener relies on.
   it('treats the bare "Cursor Agent" native title as a no-op (not idle)', () => {

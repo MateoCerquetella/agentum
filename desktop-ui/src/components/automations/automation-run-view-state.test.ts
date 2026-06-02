@@ -178,7 +178,7 @@ describe('canRerunAutomationRun', () => {
     ).toBe(false)
   })
 
-  it('hides rerun when the automation no longer exists in the Orca list', () => {
+  it('hides rerun when the automation no longer exists in the Agentum list', () => {
     expect(
       canRerunAutomationRun({
         automation: null,

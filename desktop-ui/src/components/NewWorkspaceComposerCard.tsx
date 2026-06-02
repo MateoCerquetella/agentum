@@ -107,7 +107,7 @@ function SetupCommandPreview({
     return (
       <div className="rounded-2xl border border-border/60 bg-muted/40 shadow-inner">
         <div className="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-2.5">
-          <div className="font-mono text-[11px] text-muted-foreground">orca.yaml</div>
+          <div className="font-mono text-[11px] text-muted-foreground">agentum.yaml</div>
           {headerAction}
         </div>
         <pre className="overflow-x-auto whitespace-pre-wrap break-words px-4 py-3 font-mono text-[12px] leading-5 text-emerald-700 dark:text-emerald-300/95">
@@ -587,14 +587,14 @@ export default function NewWorkspaceComposerCard({
                     </label>
                     <span className="rounded-full border border-border/70 bg-muted/45 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-foreground/70">
                       {setupConfig.source === 'yaml'
-                        ? 'orca.yaml'
+                        ? 'agentum.yaml'
                         : setupConfig.source === 'both'
-                          ? 'orca.yaml + local'
+                          ? 'agentum.yaml + local'
                           : 'local settings'}
                     </span>
                   </div>
 
-                  {/* Why: `orca.yaml` is the committed source of truth for shared setup,
+                  {/* Why: `agentum.yaml` is the committed source of truth for shared setup,
                       so the preview reconstructs the real YAML shape instead of showing a raw
                       shell blob that hides where the command came from. */}
                   <SetupCommandPreview

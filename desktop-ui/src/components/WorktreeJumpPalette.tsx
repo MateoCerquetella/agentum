@@ -45,7 +45,7 @@ import {
   type SearchableBrowserPage
 } from '@/lib/browser-palette-search'
 import {
-  ORCA_BROWSER_FOCUS_REQUEST_EVENT,
+  AGENTUM_BROWSER_FOCUS_REQUEST_EVENT,
   queueBrowserFocusRequest
 } from '@/components/browser-pane/browser-focus'
 import { RepoBadgeMark } from '@/components/repo/RepoBadgeLabel'
@@ -710,7 +710,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
       previousBrowserFocusTargetRef.current =
         activeTabType === 'browser' &&
         document.activeElement instanceof HTMLElement &&
-        document.activeElement.closest('[data-orca-browser-address-bar="true"]')
+        document.activeElement.closest('[data-agentum-browser-address-bar="true"]')
           ? 'address-bar'
           : 'webview'
       skipRestoreFocusRef.current = false
@@ -789,7 +789,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
     (detail: { pageId: string; target: 'webview' | 'address-bar' }) => {
       queueBrowserFocusRequest(detail)
       window.dispatchEvent(
-        new CustomEvent(ORCA_BROWSER_FOCUS_REQUEST_EVENT, {
+        new CustomEvent(AGENTUM_BROWSER_FOCUS_REQUEST_EVENT, {
           detail
         })
       )
@@ -1106,7 +1106,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
     }
     return {
       title: 'No active worktrees, settings, actions, or browser tabs',
-      subtitle: 'Create a workspace or open a page in Orca to get started.'
+      subtitle: 'Create a workspace or open a page in Agentum to get started.'
     }
   })()
 

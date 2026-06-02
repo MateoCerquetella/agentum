@@ -14,9 +14,9 @@ describe('buildSetupRunnerCommand', () => {
 
     expect(
       buildSetupRunnerCommand(
-        '\\\\wsl.localhost\\Ubuntu\\home\\jin\\repo\\.git\\worktrees\\feature\\orca\\setup-runner.sh'
+        '\\\\wsl.localhost\\Ubuntu\\home\\jin\\repo\\.git\\worktrees\\feature\\agentum\\setup-runner.sh'
       )
-    ).toBe('bash /home/jin/repo/.git/worktrees/feature/orca/setup-runner.sh')
+    ).toBe('bash /home/jin/repo/.git/worktrees/feature/agentum/setup-runner.sh')
   })
 
   it('uses cmd.exe for native Windows runner scripts', () => {
@@ -24,8 +24,8 @@ describe('buildSetupRunnerCommand', () => {
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
     })
 
-    expect(buildSetupRunnerCommand('C:\\repo\\.git\\orca\\setup-runner.cmd')).toBe(
-      'cmd.exe /c "C:\\repo\\.git\\orca\\setup-runner.cmd"'
+    expect(buildSetupRunnerCommand('C:\\repo\\.git\\agentum\\setup-runner.cmd')).toBe(
+      'cmd.exe /c "C:\\repo\\.git\\agentum\\setup-runner.cmd"'
     )
   })
 
@@ -34,8 +34,8 @@ describe('buildSetupRunnerCommand', () => {
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
     })
 
-    expect(buildSetupRunnerCommand('/home/dev/repo/.git/orca/setup-runner.sh')).toBe(
-      'bash /home/dev/repo/.git/orca/setup-runner.sh'
+    expect(buildSetupRunnerCommand('/home/dev/repo/.git/agentum/setup-runner.sh')).toBe(
+      'bash /home/dev/repo/.git/agentum/setup-runner.sh'
     )
   })
 })

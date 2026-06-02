@@ -1,4 +1,4 @@
-export const ORCA_EDITOR_SAVE_DIRTY_FILES_EVENT = 'orca:editor-save-dirty-files'
+export const AGENTUM_EDITOR_SAVE_DIRTY_FILES_EVENT = 'agentum:editor-save-dirty-files'
 
 export type EditorSaveDirtyFilesDetail = {
   claim: () => void

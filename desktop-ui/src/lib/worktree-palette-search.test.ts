@@ -30,8 +30,8 @@ const repoMap = new Map<string, Repo>([
     'repo-1',
     {
       id: 'repo-1',
-      path: '/repo/orca',
-      displayName: 'stablyai/orca',
+      path: '/repo/agentum',
+      displayName: 'stablyai/agentum',
       badgeColor: '#22c55e',
       addedAt: 0
     }
@@ -112,7 +112,7 @@ describe('worktree-palette-search', () => {
       'quick jump',
       repoMap,
       {
-        '/repo/orca::feature/palette-refresh': {
+        '/repo/agentum::feature/palette-refresh': {
           data: {
             number: 426,
             title: 'Refresh the worktree quick jump palette'
@@ -152,7 +152,7 @@ describe('worktree-palette-search', () => {
       })
     ]
 
-    const results = searchWorktrees(worktrees, 'orca', repoMap, null, null)
+    const results = searchWorktrees(worktrees, 'agentum', repoMap, null, null)
 
     // All three match on the repo name, order preserved from input
     expect(results).toHaveLength(3)
@@ -175,7 +175,7 @@ describe('worktree-palette-search', () => {
       })
     ]
 
-    const results = searchWorktrees(worktrees, 'orca/main', repoMap, null, null)
+    const results = searchWorktrees(worktrees, 'agentum/main', repoMap, null, null)
 
     expect(results).toHaveLength(1)
     expect(results[0].worktreeId).toBe('wt-main')

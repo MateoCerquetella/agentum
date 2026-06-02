@@ -5,9 +5,9 @@ describe('buildSetupRunnerCommand', () => {
   it('uses bash for WSL UNC runner scripts regardless of host casing', () => {
     expect(
       buildSetupRunnerCommand(
-        '\\\\WSL.LOCALHOST\\Ubuntu\\home\\jin\\repo\\.git\\worktrees\\feature\\orca\\setup-runner.sh',
+        '\\\\WSL.LOCALHOST\\Ubuntu\\home\\jin\\repo\\.git\\worktrees\\feature\\agentum\\setup-runner.sh',
         'windows'
       )
-    ).toBe('bash /home/jin/repo/.git/worktrees/feature/orca/setup-runner.sh')
+    ).toBe('bash /home/jin/repo/.git/worktrees/feature/agentum/setup-runner.sh')
   })
 })

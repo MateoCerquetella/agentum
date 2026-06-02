@@ -22,7 +22,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 
 function expectStablePaneSpawn(): string {
   const spawnArgs = mockSpawn.mock.calls[0]?.[0]
-  const paneKey = spawnArgs?.env?.ORCA_PANE_KEY
+  const paneKey = spawnArgs?.env?.AGENTUM_PANE_KEY
   const leafId = spawnArgs?.leafId
   expect(typeof paneKey).toBe('string')
   expect(typeof leafId).toBe('string')
@@ -128,8 +128,8 @@ describe('launchAgentBackgroundSession', () => {
         cwd: '/repo/worktree',
         command: "claude 'run the automation'",
         env: expect.objectContaining({
-          ORCA_TAB_ID: 'tab-1',
-          ORCA_WORKTREE_ID: 'wt-1'
+          AGENTUM_TAB_ID: 'tab-1',
+          AGENTUM_WORKTREE_ID: 'wt-1'
         }),
         connectionId: null,
         worktreeId: 'wt-1',
@@ -308,7 +308,7 @@ describe('launchAgentBackgroundSession', () => {
 
     expect(mockSpawn).not.toHaveBeenCalled()
     const params = mockRuntimeEnvironmentCall.mock.calls[0]?.[0]?.params
-    const paneKey = params?.env?.ORCA_PANE_KEY
+    const paneKey = params?.env?.AGENTUM_PANE_KEY
     const leafId = typeof paneKey === 'string' ? paneKey.slice('tab-1:'.length) : ''
     expect(leafId).toMatch(UUID_RE)
     expect(mockSetTabLayout).toHaveBeenCalledWith(
@@ -326,9 +326,9 @@ describe('launchAgentBackgroundSession', () => {
         worktree: 'wt-1',
         command: "claude 'run the automation'",
         env: expect.objectContaining({
-          ORCA_PANE_KEY: `tab-1:${leafId}`,
-          ORCA_TAB_ID: 'tab-1',
-          ORCA_WORKTREE_ID: 'wt-1'
+          AGENTUM_PANE_KEY: `tab-1:${leafId}`,
+          AGENTUM_TAB_ID: 'tab-1',
+          AGENTUM_WORKTREE_ID: 'wt-1'
         }),
         tabId: 'tab-1',
         leafId,

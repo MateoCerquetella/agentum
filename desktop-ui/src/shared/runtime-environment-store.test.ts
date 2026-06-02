@@ -28,7 +28,7 @@ describe('runtime environment store', () => {
   })
 
   it('rejects duplicate server names instead of silently replacing the saved server', () => {
-    const userDataPath = mkdtempSync(join(tmpdir(), 'orca-runtime-env-store-'))
+    const userDataPath = mkdtempSync(join(tmpdir(), 'agentum-runtime-env-store-'))
     tempDirs.push(userDataPath)
 
     const first = addEnvironmentFromPairingCode(userDataPath, {

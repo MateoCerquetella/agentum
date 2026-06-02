@@ -27,7 +27,7 @@ export function BrowserUseSkillStep({
     <AgentSkillSetupPanel
       variant="inline"
       title="Browser Use skill"
-      description="Enables agents to navigate and verify pages in Orca's browser."
+      description="Enables agents to navigate and verify pages in Agentum's browser."
       command={command}
       terminalTitle="Browser Use setup"
       terminalAriaLabel="Browser Use skill install terminal"

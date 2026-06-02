@@ -95,7 +95,7 @@ export type Repo = {
    *  identically to `'auto'`; writers leave it undefined on creation so
    *  existing persisted records stay forward-compatible. */
   issueSourcePreference?: IssueSourcePreference
-  /** Controls whether worktrees Orca did not create appear in the sidebar. */
+  /** Controls whether worktrees Agentum did not create appear in the sidebar. */
   externalWorktreeVisibility?: ExternalWorktreeVisibility
   /** True when the repo predates hidden-by-default external worktrees. */
   externalWorktreeVisibilityLegacy?: boolean
@@ -247,12 +247,12 @@ export type Worktree = {
   /** User-authored sidebar ordering. Higher values render earlier in Manual sort. */
   manualOrder?: number
   lastActivityAt: number
-  /** Set once when Orca creates the worktree. Absent for worktrees discovered
+  /** Set once when Agentum creates the worktree. Absent for worktrees discovered
    *  on disk or persisted before this field existed. Used by the sidebar to
    *  grant newly-created worktrees a short grace window at the top of Recent,
    *  immune to ambient PTY-bump reordering in other worktrees. */
   createdAt?: number
-  /** Agent selected when Orca originally created the worktree. Used only to
+  /** Agent selected when Agentum originally created the worktree. Used only to
    *  seed a replacement terminal if the user later reopens the worktree after
    *  closing every visible surface. */
   createdWithAgent?: TuiAgent
@@ -263,7 +263,7 @@ export type Worktree = {
   sparsePresetId?: string
   /** Intended create base for stale-base probes. Persisted metadata, not UI drift state. */
   baseRef?: string
-  /** Remote/branch Orca should publish review commits to when it created this worktree. */
+  /** Remote/branch Agentum should publish review commits to when it created this worktree. */
   pushTarget?: GitPushTarget
   workspaceStatus?: WorkspaceStatus
   diffComments?: DiffComment[]
@@ -273,7 +273,7 @@ export type GitPushTarget = {
   remoteName: string
   branchName: string
   remoteUrl?: string
-  /** True when Orca added this remote while preparing a fork-PR worktree. */
+  /** True when Agentum added this remote while preparing a fork-PR worktree. */
   remoteCreated?: boolean
 }
 
@@ -306,30 +306,30 @@ export type WorktreeMeta = {
   /** User-authored sidebar ordering. Higher values render earlier in Manual sort. */
   manualOrder?: number
   lastActivityAt: number
-  /** See {@link Worktree.createdAt}. Persisted to orca-data.json. */
+  /** See {@link Worktree.createdAt}. Persisted to agentum-data.json. */
   createdAt?: number
-  /** See {@link Worktree.createdWithAgent}. Persisted to orca-data.json. */
+  /** See {@link Worktree.createdWithAgent}. Persisted to agentum-data.json. */
   createdWithAgent?: TuiAgent
   sparseDirectories?: string[]
   sparseBaseRef?: string
   sparsePresetId?: string
   /** Intended create base for stale-base probes. Persisted metadata, not UI drift state. */
   baseRef?: string
-  /** True when Orca checked out a pre-existing local branch that delete must not prune. */
+  /** True when Agentum checked out a pre-existing local branch that delete must not prune. */
   preserveBranchOnDelete?: boolean
   /** See {@link Worktree.pushTarget}. Persisted so refreshed worktree lists keep the target. */
   pushTarget?: GitPushTarget
-  /** Explicit marker stamped when Orca creates the worktree. */
-  orcaCreatedAt?: number
-  orcaCreationSource?: 'desktop' | 'runtime' | 'cli' | 'ssh'
-  /** Workspace layout active when Orca created the worktree. */
-  orcaCreationWorkspaceLayout?: OrcaWorkspaceLayout
+  /** Explicit marker stamped when Agentum creates the worktree. */
+  agentumCreatedAt?: number
+  agentumCreationSource?: 'desktop' | 'runtime' | 'cli' | 'ssh'
+  /** Workspace layout active when Agentum created the worktree. */
+  agentumCreationWorkspaceLayout?: AgentumWorkspaceLayout
   /** User-assigned workspace board status for manual sidebar organization. */
   workspaceStatus?: WorkspaceStatus
   diffComments?: DiffComment[]
 }
 
-export type WorktreeOwnership = 'orca-managed' | 'external' | 'unknown-legacy'
+export type WorktreeOwnership = 'agentum-managed' | 'external' | 'unknown-legacy'
 
 export type DetectedWorktreeListSource = 'git' | 'metadata-fallback' | 'session-fallback'
 
@@ -389,7 +389,7 @@ export type WorktreeLineageWarning = {
 // Why: users leave review notes on specific lines of the modified side of
 // a diff so they can be handed back to an AI agent (pasted into a terminal
 // or used to bootstrap a new agent session). Stored on WorktreeMeta so the
-// existing persistence layer writes them to orca-data.json automatically.
+// existing persistence layer writes them to agentum-data.json automatically.
 export type DiffCommentSource = 'diff' | 'markdown'
 
 export type DiffComment = {
@@ -468,7 +468,7 @@ export type TerminalTab = {
   worktreeId: string
   title: string
   /** Stable fallback label for default-named terminals ("Terminal 1", etc.).
-   *  Why: agent CLIs overwrite the live title via OSC updates, but Orca still
+   *  Why: agent CLIs overwrite the live title via OSC updates, but Agentum still
    *  needs the original terminal label for numbering and reset behavior. */
   defaultTitle?: string
   /** Stable opt-in label derived from the first known agent prompt. */
@@ -483,7 +483,7 @@ export type TerminalTab = {
    *  PTY and tab icon stay stable even if the default shell setting changes
    *  later. Older persisted tabs may omit this field. */
   shellOverride?: string
-  /** Why: the coding-harness agent Orca launched in this tab. Lets the tab bar
+  /** Why: the coding-harness agent Agentum launched in this tab. Lets the tab bar
    *  show the provider icon immediately, before the agent emits its first hook
    *  event (a freshly-launched, idle agent reports no live status yet). Live
    *  hook status overrides this once the agent does anything. Plain terminals
@@ -552,7 +552,7 @@ export type BrowserPage = {
 export type BrowserWorkspace = {
   id: string
   worktreeId: string
-  /** Stable display label for the outer Orca tab ("Browser 1", "Browser 2", …).
+  /** Stable display label for the outer Agentum tab ("Browser 1", "Browser 2", …).
    *  Optional so sessions persisted before this field was added fall back
    *  gracefully to the URL-derived label in getBrowserTabLabel. */
   label?: string
@@ -565,7 +565,7 @@ export type BrowserWorkspace = {
   activePageId?: string | null
   pageIds?: string[]
   // Why: the active page owns real browser chrome state now, but the top-level
-  // Orca tab strip still renders one workspace entry. Mirror the active page's
+  // Agentum tab strip still renders one workspace entry. Mirror the active page's
   // title/url/loading metadata here so existing workspace-level UI can stay
   // stable while Phase 2 introduces nested browser pages.
   url: string
@@ -1058,7 +1058,7 @@ export type GitHubPRReviewCommentInput = {
 }
 
 export type GitHubWorkItemDetails = {
-  // Why: main-process doesn't know Orca's Repo.id, so this inner item omits
+  // Why: main-process doesn't know Agentum's Repo.id, so this inner item omits
   // repoId. The renderer stamps it when routing the details through the store.
   item: Omit<GitHubWorkItem, 'repoId'>
   body: string
@@ -1462,17 +1462,17 @@ export type LinearTeam = {
   url?: string
 }
 
-// ─── Hooks (orca.yaml) ──────────────────────────────────────────────
-export type OrcaHooks = {
+// ─── Hooks (agentum.yaml) ──────────────────────────────────────────────
+export type AgentumHooks = {
   scripts: {
     setup?: string // Runs after worktree is created
     archive?: string // Runs before worktree is archived
   }
   issueCommand?: string // Shared default command for linked GitHub issues
-  defaultTabs?: OrcaDefaultTabTemplate[] // Terminal tabs to create once for a new worktree
+  defaultTabs?: AgentumDefaultTabTemplate[] // Terminal tabs to create once for a new worktree
 }
 
-export type OrcaDefaultTabTemplate = {
+export type AgentumDefaultTabTemplate = {
   title?: string
   color?: string
   command?: string
@@ -1501,7 +1501,7 @@ export type WorktreeStartupLaunch = {
 }
 
 export type WorktreeDefaultTabsLaunch = {
-  tabs: OrcaDefaultTabTemplate[]
+  tabs: AgentumDefaultTabTemplate[]
   runCommands: boolean
 }
 
@@ -1757,7 +1757,7 @@ export type ClaudeManagedAccountRuntimeSelection = {
   wsl: Record<string, string | null>
 }
 
-/** All AI coding agents Orca knows how to launch. Used for the agent picker in the new-workspace
+/** All AI coding agents Agentum knows how to launch. Used for the agent picker in the new-workspace
  *  flow and for the default-agent setting. Extend this union as new agents are added. */
 export type TuiAgent =
   | 'claude' // Claude Code
@@ -1878,9 +1878,9 @@ export type FloatingTerminalCwdRequest = {
 export type GlobalSettings = {
   workspaceDir: string
   nestWorkspaces: boolean
-  workspaceDirHistory?: OrcaWorkspaceLayout[]
+  workspaceDirHistory?: AgentumWorkspaceLayout[]
   refreshLocalBaseRefOnWorktreeCreate: boolean
-  /** When enabled, Orca renames a workspace's auto-generated creature branch to
+  /** When enabled, Agentum renames a workspace's auto-generated creature branch to
    *  a short name derived from the first prompt once work begins. Opt-in;
    *  uses the same agent configured for AI commit messages. */
   autoRenameBranchFromWork: boolean
@@ -1952,7 +1952,7 @@ export type GlobalSettings = {
    *  modern choice for an IDE context. Only consulted on Windows. */
   terminalWindowsShell: string
   /** Why: when WSL is the Windows default shell, users with multiple distros
-   *  need Orca to launch terminals and scan agents in the same chosen distro
+   *  need Agentum to launch terminals and scan agents in the same chosen distro
    *  instead of whatever WSL currently marks as its global default. */
   terminalWindowsWslDistro?: string | null
   /** Why: account/auth location is independent from the user's preferred
@@ -1992,7 +1992,7 @@ export type GlobalSettings = {
   httpProxyUrl?: string
   /** Optional semicolon/comma/newline-separated bypass rules for httpProxyUrl. */
   httpProxyBypassRules?: string
-  /** Why: opening arbitrary links inside Orca uses an isolated guest browser surface.
+  /** Why: opening arbitrary links inside Agentum uses an isolated guest browser surface.
    *  The setting stays opt-in so existing workflows continue to use the system browser
    *  until the user explicitly wants worktree-scoped in-app browsing. */
   openLinksInApp: boolean
@@ -2003,19 +2003,19 @@ export type GlobalSettings = {
   showGitIgnoredFiles?: boolean
   /** Preferred Source Control changes layout. Per-user, not per-workspace. */
   sourceControlViewMode: SourceControlViewMode
-  /** Whether to show the Orca app name in the titlebar. */
+  /** Whether to show the Agentum app name in the titlebar. */
   showTitlebarAppName: boolean
   /** Why: some users do not use the Tasks feature and prefer to keep the
    *  left sidebar free of its button entirely. Hiding the button here also
    *  removes it from keyboard navigation. */
   showTasksButton: boolean
-  /** Why: Orca Mobile remains reachable from the toolbox; this only controls
+  /** Why: Agentum Mobile remains reachable from the toolbox; this only controls
    *  whether the top-level sidebar shortcut is shown. */
   showMobileButton?: boolean
   /** Controls how Ctrl+Tab chooses the next visible tab. Optional for
    *  profiles saved before this setting existed; readers default to MRU. */
   ctrlTabOrderMode?: CtrlTabOrderMode
-  /** Why: Orca-first preserves fast workspace/app control from agent TUIs.
+  /** Why: Agentum-first preserves fast workspace/app control from agent TUIs.
    *  Terminal-first is opt-in for users who want shell/TUI bindings to win. */
   terminalShortcutPolicy?: TerminalShortcutPolicy
   /** Why: Floating Workspace is the default global surface so users can
@@ -2026,7 +2026,7 @@ export type GlobalSettings = {
    *  that inherited false. Once migrated, an explicit off choice sticks. */
   floatingTerminalDefaultedForAllUsers?: boolean
   /** Where new Floating Workspace terminal tabs start. Empty or '~' means
-   *  the user's home directory; markdown notes use Orca's app-owned
+   *  the user's home directory; markdown notes use Agentum's app-owned
    *  floating workspace under Electron userData. */
   floatingTerminalCwd: string
   /** Picker-approved Floating Workspace directories that may be reauthorized
@@ -2038,7 +2038,7 @@ export type GlobalSettings = {
    *  button for discoverability. */
   floatingTerminalTriggerLocation: FloatingTerminalTriggerLocation
   /** Legacy pre-file-backed keyboard shortcut overrides. New writes go to
-   *  ~/.orca/keybindings.json; main migrates this once when present. */
+   *  ~/.agentum/keybindings.json; main migrates this once when present. */
   keybindings?: KeybindingOverrides
   diffDefaultView: 'inline' | 'side-by-side'
   combinedDiffFileTreeVisibleByDefault: boolean
@@ -2052,13 +2052,13 @@ export type GlobalSettings = {
   promptCacheTtlMs: number
   /** Why: Codex rate-limit account routing is a durable app preference owned by
    *  the main process, not transient UI state. Persisting the selected managed
-   *  auth here lets Orca prepare shared ~/.codex before the renderer hydrates,
+   *  auth here lets Agentum prepare shared ~/.codex before the renderer hydrates,
    *  while keeping this scope explicitly separate from Codex usage analytics
    *  and external terminal sessions. */
   codexManagedAccounts: CodexManagedAccount[]
   activeCodexManagedAccountId: string | null
   activeCodexManagedAccountIdsByRuntime?: CodexManagedAccountRuntimeSelection
-  /** Why: Claude Code keeps conversations under one shared config root. Orca
+  /** Why: Claude Code keeps conversations under one shared config root. Agentum
    *  persists only per-account auth material here so switching accounts does
    *  not fork prior chat/session context the way CLAUDE_CONFIG_DIR swapping would. */
   claudeManagedAccounts: ClaudeManagedAccount[]
@@ -2077,7 +2077,7 @@ export type GlobalSettings = {
    *  remains a raw PATH capability snapshot. */
   disabledTuiAgents: TuiAgent[]
   /** Why: worktree deletion is destructive (git worktree remove + rm -rf of the
-   *  working directory), so Orca shows a confirmation dialog by default. Users
+   *  working directory), so Agentum shows a confirmation dialog by default. Users
    *  who delete frequently can opt into skipping the dialog via a "Don't ask
    *  again" checkbox inside it or from the General settings pane. We keep this
    *  defaulted to false so first-time behavior stays safe. */
@@ -2122,7 +2122,7 @@ export type GlobalSettings = {
   /** Why: generated tab titles are semantic but subjective, so they stay opt-in
    *  and manual renames remain the stronger user intent. */
   tabAutoGenerateTitle: boolean
-  /** When true, Orca requests local awake assertions while hook-reported agents are working. */
+  /** When true, Agentum requests local awake assertions while hook-reported agents are working. */
   keepComputerAwakeWhileAgentsRun: boolean
   /** Why: macOS terminals must choose between letting Option compose layout
    *  characters (@ on German, € on French) or treating Option as Meta/Esc for
@@ -2239,7 +2239,7 @@ export type GlobalSettings = {
   voice?: VoiceSettings
 }
 
-export type OrcaWorkspaceLayout = {
+export type AgentumWorkspaceLayout = {
   path: string
   nestWorkspaces: boolean
 }
@@ -2495,7 +2495,7 @@ export type PersistedUIState = {
   lastUpdateCheckAt: number | null
   pendingUpdateNudgeId?: string | null
   dismissedUpdateNudgeId?: string | null
-  /** Whether Orca has already attempted to trigger the macOS notification
+  /** Whether Agentum has already attempted to trigger the macOS notification
    *  permission dialog via a startup notification. Prevents re-firing on
    *  every launch. */
   notificationPermissionRequested?: boolean
@@ -2561,10 +2561,10 @@ export type PersistedUIState = {
    *  notification should fire. Starts at 50 and doubles each time the user
    *  dismisses the notification without starring. */
   starNagNextThreshold?: number
-  /** Once the user has starred Orca (from any entry point) we permanently
+  /** Once the user has starred Agentum (from any entry point) we permanently
    *  suppress the nag — no further thresholds, no notifications. */
   starNagCompleted?: boolean
-  trustedOrcaHooks?: PersistedTrustedOrcaHooks
+  trustedAgentumHooks?: PersistedTrustedAgentumHooks
   setupScriptPromptDismissedRepoIds?: string[]
   /** Whether the experimental pet overlay is currently visible. Separate
    *  from the experimentalPet settings flag so "Hide pet" from the
@@ -2651,21 +2651,21 @@ export type SpriteAnimation = {
   frames: number
 }
 
-export type PersistedTrustedOrcaHookEntry = {
+export type PersistedTrustedAgentumHookEntry = {
   contentHash: string
   approvedAt: number
 }
 
-export type PersistedTrustedOrcaHookRepo = {
+export type PersistedTrustedAgentumHookRepo = {
   all?: {
     approvedAt: number
   }
-  setup?: PersistedTrustedOrcaHookEntry
-  archive?: PersistedTrustedOrcaHookEntry
-  issueCommand?: PersistedTrustedOrcaHookEntry
+  setup?: PersistedTrustedAgentumHookEntry
+  archive?: PersistedTrustedAgentumHookEntry
+  issueCommand?: PersistedTrustedAgentumHookEntry
 }
 
-export type PersistedTrustedOrcaHooks = Record<string, PersistedTrustedOrcaHookRepo>
+export type PersistedTrustedAgentumHooks = Record<string, PersistedTrustedAgentumHookRepo>
 
 export type LegacyPaneKeyAliasEntry = {
   ptyId: string
@@ -2854,7 +2854,7 @@ export type AppMemory = UsageValues & {
   main: UsageValues
   renderer: UsageValues
   other: UsageValues
-  /** Oldest-first memory samples (bytes) for the whole Orca app, one per
+  /** Oldest-first memory samples (bytes) for the whole Agentum app, one per
    *  successful collection. Used to render the sparkline in the dashboard.
    *  Empty before the first snapshot is recorded. */
   history: number[]

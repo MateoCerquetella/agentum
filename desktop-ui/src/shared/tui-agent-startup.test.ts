@@ -36,7 +36,7 @@ describe('tui agent startup plans', () => {
     expect(plan?.launchCommand).toBe('claude "fix ^"quoted^" ^& ^%PATH^%"')
   })
 
-  it('does not launch Codex with the Orca profile when agent status hooks are enabled', () => {
+  it('does not launch Codex with the Agentum profile when agent status hooks are enabled', () => {
     const plan = buildAgentStartupPlan({
       agent: 'codex',
       prompt: 'fix it',
@@ -47,7 +47,7 @@ describe('tui agent startup plans', () => {
     expect(plan?.launchCommand).toBe("codex 'fix it'")
   })
 
-  it('launches Claude without Orca settings injection', () => {
+  it('launches Claude without Agentum settings injection', () => {
     const plan = buildAgentStartupPlan({
       agent: 'claude',
       prompt: 'fix it',
@@ -105,7 +105,7 @@ describe('tui agent startup plans', () => {
         cmdOverrides: {},
         platform: 'win32'
       })?.launchCommand
-    ).toBe('pi; Remove-Item Env:ORCA_PI_PREFILL -ErrorAction SilentlyContinue')
+    ).toBe('pi; Remove-Item Env:AGENTUM_PI_PREFILL -ErrorAction SilentlyContinue')
 
     expect(
       buildAgentDraftLaunchPlan({
@@ -115,13 +115,13 @@ describe('tui agent startup plans', () => {
         platform: 'win32',
         shell: 'cmd'
       })?.launchCommand
-    ).toBe('pi & set "ORCA_PI_PREFILL="')
+    ).toBe('pi & set "AGENTUM_PI_PREFILL="')
   })
 
-  it('returns an OMP draft plan with ORCA_OMP_PREFILL (OMP-scoped, not Pi-shared)', () => {
+  it('returns an OMP draft plan with AGENTUM_OMP_PREFILL (OMP-scoped, not Pi-shared)', () => {
     // Why: OMP owns its own overlay tree, bundled prefill extension, and
-    // prefill env var. The OMP overlay's orca-prefill.ts reads
-    // ORCA_OMP_PREFILL — see src/main/pi/titlebar-extension-service.ts —
+    // prefill env var. The OMP overlay's agentum-prefill.ts reads
+    // AGENTUM_OMP_PREFILL — see src/main/pi/titlebar-extension-service.ts —
     // so a draft plan for OMP MUST emit that name. A regression here would
     // either silently drop the draft (Pi var ignored by OMP overlay) or
     // honor a stale Pi-PTY draft from a previous launch.
@@ -133,8 +133,8 @@ describe('tui agent startup plans', () => {
     })
 
     expect(plan).not.toBeNull()
-    expect(plan?.env).toEqual({ ORCA_OMP_PREFILL: 'fix the omp regression' })
+    expect(plan?.env).toEqual({ AGENTUM_OMP_PREFILL: 'fix the omp regression' })
     expect(plan?.expectedProcess).toBe('omp')
-    expect(plan?.launchCommand).toBe('omp; unset ORCA_OMP_PREFILL')
+    expect(plan?.launchCommand).toBe('omp; unset AGENTUM_OMP_PREFILL')
   })
 })

@@ -95,7 +95,7 @@ import type { FetchExternalAutomationRuns } from './ExternalAutomationRunTable'
 
 const AGENTS = AGENT_CATALOG.map((agent) => agent.id)
 const DEFAULT_TIME = '09:00'
-const AUTOMATIONS_CHANGED_EVENT = 'orca:automations-changed'
+const AUTOMATIONS_CHANGED_EVENT = 'agentum:automations-changed'
 type AutomationPaneTab = 'overview' | 'runs'
 
 type ExternalAutomationListEntry =
@@ -294,7 +294,7 @@ export default function AutomationsPage(): React.JSX.Element {
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
-  const [createTarget, setCreateTarget] = useState<AutomationCreateTarget>('orca')
+  const [createTarget, setCreateTarget] = useState<AutomationCreateTarget>('agentum')
   const [editingAutomationId, setEditingAutomationId] = useState<string | null>(null)
   const [relativeNow, setRelativeNow] = useState(Date.now())
   const [activePaneTab, setActivePaneTab] = useState<AutomationPaneTab>('overview')
@@ -717,7 +717,7 @@ export default function AutomationsPage(): React.JSX.Element {
     const target = getDefaultTarget()
     setEditingAutomationId(null)
     setEditingExternalTarget(null)
-    setCreateTarget('orca')
+    setCreateTarget('agentum')
     const baseDraft: AutomationDraft = {
       name: '',
       prompt: '',
@@ -757,7 +757,7 @@ export default function AutomationsPage(): React.JSX.Element {
   const openEditDialog = async (automation: Automation): Promise<void> => {
     const requestId = (editRequestRef.current += 1)
     setEditingExternalTarget(null)
-    setCreateTarget('orca')
+    setCreateTarget('agentum')
     let latest = automation
     try {
       latest =
@@ -1970,7 +1970,7 @@ export default function AutomationsPage(): React.JSX.Element {
                         selectedAutomationRunPage.scheduledFor,
                         relativeNow
                       ),
-                      'Orca',
+                      'Agentum',
                       selectedAutomationRunPageWorkspaceDisplay?.detailLabel ?? 'No workspace'
                     ]}
                     detail={

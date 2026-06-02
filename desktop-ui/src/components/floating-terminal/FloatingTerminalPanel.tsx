@@ -36,7 +36,7 @@ import { getConnectionId } from '@/lib/connection-context'
 import { createUntitledMarkdownFileWithTemplateSelection } from '@/lib/create-untitled-markdown'
 import { detectLanguage } from '@/lib/language-detect'
 import { focusTerminalTabSurface } from '@/lib/focus-terminal-tab-surface'
-import { isOrcaCliAvailableOnPath } from '@/lib/agent-skill-cli-prerequisite'
+import { isAgentumCliAvailableOnPath } from '@/lib/agent-skill-cli-prerequisite'
 import {
   isFloatingWorkspacePanelShortcut,
   isFloatingWorkspaceTerminalInputTarget,
@@ -528,7 +528,7 @@ export function FloatingTerminalPanel({
     try {
       const status = await window.api.cli.getInstallStatus()
       if (mountedRef.current) {
-        setShowOrchestrationSetup(!isOrcaCliAvailableOnPath(status))
+        setShowOrchestrationSetup(!isAgentumCliAvailableOnPath(status))
       }
     } catch {
       if (mountedRef.current) {
@@ -1404,7 +1404,7 @@ export function FloatingTerminalPanel({
             <div className="space-y-0.5">
               <p className="text-sm font-medium">Enable orchestration</p>
               <p className="text-xs leading-5 text-muted-foreground">
-                Set up the Orca CLI and agent skill so agents can coordinate through Orca.
+                Set up the Agentum CLI and agent skill so agents can coordinate through Agentum.
               </p>
             </div>
             <div className="flex items-center gap-2">

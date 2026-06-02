@@ -2,19 +2,19 @@ import type { SettingsSearchEntry } from './settings-search'
 
 export const BROWSER_USE_PANE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   {
-    title: 'Enable Orca CLI',
-    description: 'Register the Orca CLI so agents can drive the browser.',
-    keywords: ['browser use', 'cli', 'orca', 'path', 'command', 'shell', 'enable', 'setup']
+    title: 'Enable Agentum CLI',
+    description: 'Register the Agentum CLI so agents can drive the browser.',
+    keywords: ['browser use', 'cli', 'agentum', 'path', 'command', 'shell', 'enable', 'setup']
   },
   {
     title: 'Install Browser Use Skill',
-    description: "Install the Browser Use skill so agents can operate Orca's browser.",
+    description: "Install the Browser Use skill so agents can operate Agentum's browser.",
     keywords: [
       'browser use',
       'skill',
       'agent',
       'install',
-      'orca-cli',
+      'agentum-cli',
       'npx',
       'agent-browser',
       'automation'

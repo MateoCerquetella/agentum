@@ -32,7 +32,7 @@ afterEach(() => {
 })
 
 describe('openHttpLink', () => {
-  it('routes into Orca when openLinksInApp is on and a worktree is known', () => {
+  it('routes into Agentum when openLinksInApp is on and a worktree is known', () => {
     storeState.settings = { openLinksInApp: true }
 
     openHttpLink('https://example.com/', { worktreeId: 'wt-1' })
@@ -44,7 +44,7 @@ describe('openHttpLink', () => {
     expect(openUrlMock).not.toHaveBeenCalled()
   })
 
-  it('defaults to Orca routing when settings have not hydrated', () => {
+  it('defaults to Agentum routing when settings have not hydrated', () => {
     storeState.settings = undefined
 
     openHttpLink('https://example.com/', { worktreeId: 'wt-1' })
@@ -53,7 +53,7 @@ describe('openHttpLink', () => {
     expect(openUrlMock).not.toHaveBeenCalled()
   })
 
-  it('routes floating workspace links into Orca without changing the active repo worktree', () => {
+  it('routes floating workspace links into Agentum without changing the active repo worktree', () => {
     storeState.settings = { openLinksInApp: true }
 
     openHttpLink('https://example.com/', { worktreeId: FLOATING_TERMINAL_WORKTREE_ID })

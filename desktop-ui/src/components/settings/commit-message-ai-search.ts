@@ -54,7 +54,7 @@ export const COMMIT_MESSAGE_AI_PANE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   },
   {
     title: 'Custom command',
-    description: 'Command line Orca runs to generate the commit message.',
+    description: 'Command line Agentum runs to generate the commit message.',
     keywords: ['custom', 'command', 'cli', 'binary', 'prompt', 'placeholder', 'ollama']
   }
 ]

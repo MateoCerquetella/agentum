@@ -31,7 +31,7 @@ export const createClaudeUsageSlice: StateCreator<AppState, [], [], ClaudeUsageS
   set,
   get
 ) => ({
-  claudeUsageScope: 'orca',
+  claudeUsageScope: 'agentum',
   claudeUsageRange: '30d',
   claudeUsageScanState: null,
   claudeUsageSummary: null,

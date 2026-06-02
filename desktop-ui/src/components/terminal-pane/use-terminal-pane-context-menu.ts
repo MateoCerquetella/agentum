@@ -17,7 +17,7 @@ import {
   type PreparedAgentSessionFork
 } from './terminal-agent-session-fork'
 
-const CLOSE_ALL_CONTEXT_MENUS_EVENT = 'orca-close-all-context-menus'
+const CLOSE_ALL_CONTEXT_MENUS_EVENT = 'agentum-close-all-context-menus'
 
 type UseTerminalPaneContextMenuDeps = {
   managerRef: React.RefObject<PaneManager | null>
@@ -124,7 +124,7 @@ export function useTerminalPaneContextMenu({
     if (!pane) {
       return
     }
-    // Why: orchestration targets use ORCA_PANE_KEY, which survives renderer
+    // Why: orchestration targets use AGENTUM_PANE_KEY, which survives renderer
     // remounts; the numeric PaneManager id is only a local runtime handle.
     await window.api.ui.writeClipboardText(makePaneKey(tabId, pane.leafId))
     toast.success('Pane ID copied')

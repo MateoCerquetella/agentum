@@ -5,13 +5,13 @@ import type {
 } from '../../../../shared/computer-use-permissions-types'
 import {
   COMPUTER_USE_SKILL_NAME,
-  ORCA_CLI_SKILL_NAME,
+  AGENTUM_CLI_SKILL_NAME,
   ORCHESTRATION_SKILL_NAME,
   buildAgentFeatureSkillInstallCommand
 } from '@/lib/agent-feature-install-commands'
 import { BROWSER_USE_ENABLED_STORAGE_KEY } from '@/lib/browser-use-setup-state'
 import { e2eConfig } from '@/lib/e2e-config'
-import { showOrcaCliRegistrationPromptToast } from '@/lib/agent-skill-cli-prerequisite'
+import { showAgentumCliRegistrationPromptToast } from '@/lib/agent-skill-cli-prerequisite'
 import {
   ORCHESTRATION_ENABLED_STORAGE_KEY,
   ORCHESTRATION_SETUP_DISMISSED_STORAGE_KEY,
@@ -36,7 +36,7 @@ export const ONBOARDING_FEATURE_SETUP_IDS: readonly OnboardingFeatureSetupId[] =
 ]
 
 const FEATURE_SKILL_NAMES: Record<OnboardingFeatureSetupId, string> = {
-  browserUse: ORCA_CLI_SKILL_NAME,
+  browserUse: AGENTUM_CLI_SKILL_NAME,
   computerUse: COMPUTER_USE_SKILL_NAME,
   orchestration: ORCHESTRATION_SKILL_NAME
 }
@@ -145,7 +145,7 @@ export function createOnboardingFeatureSetupDeps(): OnboardingFeatureSetupDeps {
 
   return {
     getCliStatus: () => window.api.cli.getInstallStatus(),
-    showCliRegistrationPrompt: showOrcaCliRegistrationPromptToast,
+    showCliRegistrationPrompt: showAgentumCliRegistrationPromptToast,
     installCli: () => window.api.cli.install(),
     writeClipboardText: (text) => window.api.ui.writeClipboardText(text),
     getComputerUsePermissionStatus: () => window.api.computerUsePermissions.getStatus(),
@@ -200,7 +200,7 @@ export async function runOnboardingFeatureSetup(
     if (!status.supported) {
       warnings.push({
         featureId: 'cli',
-        message: status.detail ?? 'Orca CLI registration is not available on this platform.'
+        message: status.detail ?? 'Agentum CLI registration is not available on this platform.'
       })
     } else if (status.state !== 'installed' || !status.pathConfigured) {
       await deps.showCliRegistrationPrompt?.()
@@ -209,7 +209,7 @@ export async function runOnboardingFeatureSetup(
       if (next.state !== 'installed') {
         warnings.push({
           featureId: 'cli',
-          message: next.detail ?? 'Orca CLI registration needs attention.'
+          message: next.detail ?? 'Agentum CLI registration needs attention.'
         })
       } else if (!next.pathConfigured && next.detail) {
         warnings.push({ featureId: 'cli', message: next.detail })

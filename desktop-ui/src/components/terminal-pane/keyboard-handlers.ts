@@ -80,7 +80,7 @@ export function matchFileSearchShortcut(
   e: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'repeat'>,
   platform: KeybindingPlatform,
   keybindings?: KeybindingOverrides,
-  terminalShortcutPolicy: TerminalShortcutPolicy = 'orca-first'
+  terminalShortcutPolicy: TerminalShortcutPolicy = 'agentum-first'
 ): boolean {
   if (e.repeat) {
     return false
@@ -135,7 +135,7 @@ export function useTerminalKeyboardShortcuts({
   searchStateRef,
   macOptionAsAltRef,
   keybindings,
-  terminalShortcutPolicy = 'orca-first'
+  terminalShortcutPolicy = 'agentum-first'
 }: KeyboardHandlersDeps): void {
   useEffect(() => {
     if (!isActive) {

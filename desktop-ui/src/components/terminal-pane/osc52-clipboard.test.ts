@@ -98,7 +98,7 @@ describe('handleOsc52ClipboardRequest', () => {
     expect(onBlockedWrite).toHaveBeenCalledTimes(1)
   })
 
-  it('does not surface blocked queries because Orca must not answer them', () => {
+  it('does not surface blocked queries because Agentum must not answer them', () => {
     const onBlockedWrite = vi.fn()
 
     handleOsc52ClipboardRequest('c;?', {

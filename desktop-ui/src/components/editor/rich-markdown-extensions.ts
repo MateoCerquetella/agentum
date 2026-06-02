@@ -17,7 +17,7 @@ import { loadLocalImageSrc, onImageCacheInvalidated } from './useLocalImageSrc'
 import type { RuntimeFileOperationArgs } from '@/runtime/runtime-file-client'
 import { RawMarkdownHtmlBlock, RawMarkdownHtmlInline } from './raw-markdown-html'
 import {
-  createOrcaDetailsExtensions,
+  createAgentumDetailsExtensions,
   getRichMarkdownPlaceholder
 } from './rich-markdown-details-extension'
 import { MarkdownDocLink } from './rich-markdown-doc-link'
@@ -35,7 +35,7 @@ export function createRichMarkdownExtensions({
 } = {}): AnyExtension[] {
   const extensions: AnyExtension[] = [
     // Why: rich-mode detection must use the exact same markdown extension set as
-    // the live editor. If these drift, Orca can claim a document is editable in
+    // the live editor. If these drift, Agentum can claim a document is editable in
     // preview and then still lose syntax on save.
     StarterKit.configure({
       link: false,
@@ -143,7 +143,7 @@ export function createRichMarkdownExtensions({
     TaskItem.configure({
       nested: true
     }),
-    ...createOrcaDetailsExtensions(),
+    ...createAgentumDetailsExtensions(),
     Table.configure({
       resizable: false
     }),

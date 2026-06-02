@@ -27,7 +27,7 @@ export function ShortcutKeyCombo({
       {keys.map((key, index) => (
         <React.Fragment key={`${key}-${index}`}>
           <KeyCap label={key} />
-          {/* Why: Orca renders Mac shortcuts as adjacent glyphs, but Windows/Linux
+          {/* Why: Agentum renders Mac shortcuts as adjacent glyphs, but Windows/Linux
               shortcuts read more naturally with explicit "+" separators. */}
           {!isMac && index < keys.length - 1 ? (
             <span className={separatorClassName ?? 'mx-0.5 text-xs text-muted-foreground'}>+</span>

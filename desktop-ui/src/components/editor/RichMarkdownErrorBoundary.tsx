@@ -14,7 +14,7 @@ type State = {
 // Why: a thrown exception inside the TipTap/ProseMirror render or in the
 // effect that runs `setContent` + `normalizeSoftBreaks` on external-reload
 // would escape to the React root and — without this boundary — cause React
-// 18 to unmount the entire renderer subtree, blacking out the whole Orca
+// 18 to unmount the entire renderer subtree, blacking out the whole Agentum
 // window (see issue #826). Scoping the boundary to the rich-markdown editor
 // contains the failure to the affected pane so the rest of the workspace
 // stays usable. Re-keying on `fileId` resets the boundary when the user
@@ -54,7 +54,7 @@ export class RichMarkdownErrorBoundary extends React.Component<Props, State> {
       return (
         <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
           <div>
-            The rich markdown editor hit an unexpected error and was reset to keep the rest of Orca
+            The rich markdown editor hit an unexpected error and was reset to keep the rest of Agentum
             responsive.
           </div>
           <div className="text-xs opacity-70">

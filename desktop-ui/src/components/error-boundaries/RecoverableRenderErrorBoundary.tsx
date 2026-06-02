@@ -82,7 +82,7 @@ export class RecoverableRenderErrorBoundary extends React.Component<Props, State
         </div>
         <div className="space-y-1">
           <div className="font-medium text-foreground">
-            {this.props.title ?? 'This part of Orca hit an error.'}
+            {this.props.title ?? 'This part of Agentum hit an error.'}
           </div>
           <div className="max-w-md text-xs">
             {this.props.description ??

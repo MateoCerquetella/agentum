@@ -6,7 +6,7 @@ import { activateAndRevealWorktree } from './worktree-activation'
 const initialAppStoreState = useAppStore.getState()
 
 afterEach(() => {
-  delete (globalThis as { __ORCA_WEB_CLIENT__?: boolean }).__ORCA_WEB_CLIENT__
+  delete (globalThis as { __AGENTUM_WEB_CLIENT__?: boolean }).__AGENTUM_WEB_CLIENT__
   vi.unstubAllGlobals()
   useAppStore.setState(initialAppStoreState, true)
 })
@@ -144,7 +144,7 @@ describe('activateAndRevealWorktree created agent reopen', () => {
       ok: true,
       result: { repoId: worktree.repoId, worktreeId: worktree.id, activated: true }
     })
-    ;(globalThis as { __ORCA_WEB_CLIENT__?: boolean }).__ORCA_WEB_CLIENT__ = true
+    ;(globalThis as { __AGENTUM_WEB_CLIENT__?: boolean }).__AGENTUM_WEB_CLIENT__ = true
     vi.stubGlobal('window', {
       api: {
         runtimeEnvironments: {

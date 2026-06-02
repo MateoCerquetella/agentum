@@ -52,7 +52,7 @@ export async function refreshGitStatusForWorktree({
   })
   if (pushTarget) {
     // Why: porcelain status reports Git's configured upstream. Source Control
-    // actions for PR-created worktrees must instead reconcile with Orca's
+    // actions for PR-created worktrees must instead reconcile with Agentum's
     // explicit publish target.
     await deps.fetchUpstreamStatus(worktreeId, worktreePath, connectionId, pushTarget)
     return

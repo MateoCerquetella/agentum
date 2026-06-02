@@ -116,12 +116,12 @@ describe('parsePathInput', () => {
     })
   })
 
-  it('`Documents/orca` commits `Documents` and filters by `orca`', () => {
-    expect(parsePathInput('Documents/orca')).toEqual({
+  it('`Documents/agentum` commits `Documents` and filters by `agentum`', () => {
+    expect(parsePathInput('Documents/agentum')).toEqual({
       mode: 'path',
       base: 'cwd',
       committedSegments: ['Documents'],
-      trailingFilter: 'orca'
+      trailingFilter: 'agentum'
     })
   })
 
@@ -204,7 +204,7 @@ describe('resolveSegmentStep', () => {
   const listing: DirEntry[] = [
     { name: 'Documents', isDirectory: true },
     { name: 'Downloads', isDirectory: true },
-    { name: 'orca-internal', isDirectory: true },
+    { name: 'agentum-internal', isDirectory: true },
     { name: 'notes.txt', isDirectory: false }
   ]
 
@@ -216,9 +216,9 @@ describe('resolveSegmentStep', () => {
   })
 
   it('unique prefix descends', () => {
-    expect(resolveSegmentStep('orca', '/home/neil', listing)).toEqual({
+    expect(resolveSegmentStep('agentum', '/home/neil', listing)).toEqual({
       type: 'descend',
-      name: 'orca-internal'
+      name: 'agentum-internal'
     })
   })
 

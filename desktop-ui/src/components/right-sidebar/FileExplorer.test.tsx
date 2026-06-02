@@ -200,8 +200,8 @@ function makeRefreshState(
 
 function makeToolbar(overrides: Partial<Parameters<typeof FileExplorerToolbar>[0]> = {}) {
   return FileExplorerToolbar({
-    repoName: 'orca',
-    worktreePath: '/tmp/orca',
+    repoName: 'agentum',
+    worktreePath: '/tmp/agentum',
     connectionId: null,
     refresh: makeRefreshState(),
     canCollapseAll: false,
@@ -304,7 +304,7 @@ describe('FileExplorerToolbar', () => {
     const element = makeToolbar({ connectionId: 'ssh-1' })
 
     const openInItems = findOpenInMenuItems(element)
-    expect(openInItems.props.worktreePath).toBe('/tmp/orca')
+    expect(openInItems.props.worktreePath).toBe('/tmp/agentum')
     expect(openInItems.props.connectionId).toBe('ssh-1')
     expect(openInItems.props.labelPrefix).toBe('Open in ')
   })

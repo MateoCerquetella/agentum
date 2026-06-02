@@ -35,7 +35,7 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
 
-export function shouldOpenWorkspacePortInOrcaBrowser(
+export function shouldOpenWorkspacePortInAgentumBrowser(
   settings: { openLinksInApp?: boolean } | null | undefined
 ): boolean {
   return settings?.openLinksInApp !== false
@@ -56,10 +56,10 @@ export async function openWorkspacePortInBrowser(args: {
   runtimeTarget: RuntimeClientTarget
   createBrowserTab: BrowserTabCreator
   setRemoteBrowserPageHandle: RemoteBrowserPageHandleSetter
-  openInOrcaBrowser?: boolean
+  openInAgentumBrowser?: boolean
 }): Promise<{ ok: true } | { ok: false; reason: string }> {
   const url = browserUrlForPort(args.port)
-  if (args.openInOrcaBrowser === false && args.runtimeTarget.kind === 'local') {
+  if (args.openInAgentumBrowser === false && args.runtimeTarget.kind === 'local') {
     try {
       await window.api.shell.openUrl(url)
       return { ok: true }

@@ -28,7 +28,7 @@ import { showOnboardingFromRenderer } from '../onboarding/show-onboarding-event'
 import { SidebarFeedbackDialog } from './SidebarFeedbackDialog'
 import { ScrollToCurrentWorkspaceToolbarButton } from './ScrollToCurrentWorkspaceToolbarButton'
 
-const DOCS_URL = 'https://www.onorca.dev/docs'
+const DOCS_URL = 'https://www.onagentum.dev/docs'
 
 function openExternalUrl(url: string): void {
   void window.api.shell.openUrl(url)
@@ -43,7 +43,7 @@ const SidebarToolbar = React.memo(function SidebarToolbar() {
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [helpMenuOpen, setHelpMenuOpen] = useState(false)
   const [showAdminHelpOptions, setShowAdminHelpOptions] = useState(false)
-  const [isRestartingOrca, setIsRestartingOrca] = useState(false)
+  const [isRestartingAgentum, setIsRestartingAgentum] = useState(false)
   const lastShowOnboardingAtRef = React.useRef(0)
   const mountedRef = useMountedRef()
 
@@ -70,16 +70,16 @@ const SidebarToolbar = React.memo(function SidebarToolbar() {
     setShowAdminHelpOptions(altKey)
   }
 
-  const handleRestartOrca = (): void => {
-    if (isRestartingOrca) {
+  const handleRestartAgentum = (): void => {
+    if (isRestartingAgentum) {
       return
     }
-    setIsRestartingOrca(true)
-    toast.info('Restarting Orca…')
+    setIsRestartingAgentum(true)
+    toast.info('Restarting Agentum…')
     void window.api.app.restart().catch((error) => {
       if (mountedRef.current) {
-        setIsRestartingOrca(false)
-        toast.error('Couldn’t restart Orca.', {
+        setIsRestartingAgentum(false)
+        toast.error('Couldn’t restart Agentum.', {
           description: error instanceof Error ? error.message : undefined
         })
       }
@@ -137,7 +137,7 @@ const SidebarToolbar = React.memo(function SidebarToolbar() {
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={openMobilePage}>
                 <Smartphone className="size-3.5" />
-                Orca Mobile
+                Agentum Mobile
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -182,9 +182,9 @@ const SidebarToolbar = React.memo(function SidebarToolbar() {
               {showAdminHelpOptions ? (
                 <>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onSelect={handleRestartOrca} disabled={isRestartingOrca}>
+                  <DropdownMenuItem onSelect={handleRestartAgentum} disabled={isRestartingAgentum}>
                     <RotateCw className="size-3.5" />
-                    Restart Orca
+                    Restart Agentum
                   </DropdownMenuItem>
                 </>
               ) : null}

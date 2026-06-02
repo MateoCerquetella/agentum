@@ -65,17 +65,17 @@ function table(rows: GitHubProjectRow[]): GitHubProjectTable {
 
 describe('filterProjectTableRowsByOpenRepos', () => {
   it('keeps rows whose repository slug resolves to at least one live repo', () => {
-    const rows = [row('visible', 'acme/orca'), row('missing', 'acme/removed')]
+    const rows = [row('visible', 'acme/agentum'), row('missing', 'acme/removed')]
     const filtered = filterProjectTableRowsByOpenRepos(table(rows), (slug) =>
-      slug?.toLowerCase() === 'acme/orca' ? [repo('repo-1')] : []
+      slug?.toLowerCase() === 'acme/agentum' ? [repo('repo-1')] : []
     )
 
     expect(filtered.rows.map((r) => r.id)).toEqual(['visible'])
     expect(filtered.totalCount).toBe(1)
   })
 
-  it('keeps rows while any of multiple Orca repos map to the slug', () => {
-    const rows = [row('visible', 'acme/orca')]
+  it('keeps rows while any of multiple Agentum repos map to the slug', () => {
+    const rows = [row('visible', 'acme/agentum')]
     const filtered = filterProjectTableRowsByOpenRepos(table(rows), () => [
       repo('repo-1'),
       repo('repo-2')
@@ -85,7 +85,7 @@ describe('filterProjectTableRowsByOpenRepos', () => {
   })
 
   it('filters missing or unresolved repository slugs', () => {
-    const rows = [row('missing-slug', null), row('unresolved', 'gitlab/orca')]
+    const rows = [row('missing-slug', null), row('unresolved', 'gitlab/agentum')]
     const filtered = filterProjectTableRowsByOpenRepos(table(rows), () => [])
 
     expect(filtered.rows).toEqual([])

@@ -11,12 +11,12 @@ describe('feature tips', () => {
   it('orders new unseen tips before older unseen tips', () => {
     const tips = getOrderedUnseenFeatureTips({ seenTipIds: new Set<FeatureTipId>() })
 
-    expect(tips.map((tip) => tip.id)).toEqual(['orca-cli', 'voice-dictation'])
+    expect(tips.map((tip) => tip.id)).toEqual(['agentum-cli', 'voice-dictation'])
   })
 
   it('skips tips the user has already seen', () => {
     const tips = getOrderedUnseenFeatureTips({
-      seenTipIds: new Set<FeatureTipId>(['voice-dictation', 'orca-cli'])
+      seenTipIds: new Set<FeatureTipId>(['voice-dictation', 'agentum-cli'])
     })
 
     expect(tips.map((tip) => tip.id)).toEqual([])
@@ -58,21 +58,21 @@ describe('feature tips', () => {
       })
     })
 
-    expect(tips.map((tip) => tip.id)).toEqual(['orca-cli'])
+    expect(tips.map((tip) => tip.id)).toEqual(['agentum-cli'])
   })
 
   it('normalizes persisted tip ids', () => {
     expect(
-      normalizeFeatureTipIds(['feature-tour', 'orca-cli', 'bogus', 'voice-dictation'])
-    ).toEqual(['orca-cli', 'voice-dictation'])
+      normalizeFeatureTipIds(['feature-tour', 'agentum-cli', 'bogus', 'voice-dictation'])
+    ).toEqual(['agentum-cli', 'voice-dictation'])
   })
 
   it('describes the CLI tip as an install action with concrete workflows', () => {
-    const cliTip = FEATURE_TIPS.find((tip) => tip.id === 'orca-cli')
+    const cliTip = FEATURE_TIPS.find((tip) => tip.id === 'agentum-cli')
 
     expect(cliTip).toMatchObject({
       action: 'setup-cli',
-      title: 'Let agents drive Orca with the Orca CLI',
+      title: 'Let agents drive Agentum with the Agentum CLI',
       ctaLabel: 'Install CLI & Skills'
     })
     expect(cliTip?.description).toContain('coordinate child worktrees')

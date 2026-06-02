@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { eventSchemas } from './telemetry-events'
 
-describe('orca cli feature tip schemas', () => {
+describe('agentum cli feature tip schemas', () => {
   it('accepts the shown event for app-open exposure', () => {
-    const parsed = eventSchemas.orca_cli_feature_tip_shown.safeParse({
+    const parsed = eventSchemas.agentum_cli_feature_tip_shown.safeParse({
       source: 'app_open'
     })
 
@@ -12,12 +12,12 @@ describe('orca cli feature tip schemas', () => {
 
   it('accepts setup click and setup result events', () => {
     expect(
-      eventSchemas.orca_cli_feature_tip_setup_clicked.safeParse({
+      eventSchemas.agentum_cli_feature_tip_setup_clicked.safeParse({
         source: 'app_open'
       }).success
     ).toBe(true)
     expect(
-      eventSchemas.orca_cli_feature_tip_setup_result.safeParse({
+      eventSchemas.agentum_cli_feature_tip_setup_result.safeParse({
         source: 'app_open',
         result: 'installed'
       }).success
@@ -26,14 +26,14 @@ describe('orca cli feature tip schemas', () => {
 
   it('rejects raw CLI details and unknown result values', () => {
     expect(
-      eventSchemas.orca_cli_feature_tip_setup_result.safeParse({
+      eventSchemas.agentum_cli_feature_tip_setup_result.safeParse({
         source: 'app_open',
         result: 'installed',
-        command_path: '/Users/alice/bin/orca'
+        command_path: '/Users/alice/bin/agentum'
       }).success
     ).toBe(false)
     expect(
-      eventSchemas.orca_cli_feature_tip_setup_result.safeParse({
+      eventSchemas.agentum_cli_feature_tip_setup_result.safeParse({
         source: 'app_open',
         result: 'installed_after_retry'
       }).success

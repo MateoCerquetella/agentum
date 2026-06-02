@@ -48,7 +48,7 @@ export function openRemoteRuntimeWebSocket(
   const onError = (): void => {
     callbacks.onError(
       ws,
-      remoteRuntimeUnavailableError('Could not connect to the remote Orca runtime.')
+      remoteRuntimeUnavailableError('Could not connect to the remote Agentum runtime.')
     )
   }
   const onClose = (): void => callbacks.onClose(ws)
@@ -57,7 +57,7 @@ export function openRemoteRuntimeWebSocket(
       callbacks.onError(
         ws,
         invalidRemoteRuntimeResponseError(
-          'Remote Orca runtime returned an unexpected binary frame.'
+          'Remote Agentum runtime returned an unexpected binary frame.'
         )
       )
       return
@@ -74,7 +74,7 @@ export function openRemoteRuntimeWebSocket(
     ws.off('close', onClose)
     ws.off('message', onMessage)
     // Why: a manually closed ws can still emit a late transport error; keep
-    // that from becoming an unhandled EventEmitter error after detaching Orca.
+    // that from becoming an unhandled EventEmitter error after detaching Agentum.
     if (ws.readyState !== WebSocket.CLOSED) {
       ws.on('error', ignoreLateSocketError)
     }

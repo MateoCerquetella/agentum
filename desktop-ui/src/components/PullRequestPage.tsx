@@ -5653,7 +5653,7 @@ export default function PullRequestPage({
             <span className="ml-2 font-light text-muted-foreground">#{workItem.number}</span>
           </h1>
           <div className="flex shrink-0 items-center gap-2">
-            {/* Why: Orca's signature affordance — keep this primary so it stands out
+            {/* Why: Agentum's signature affordance — keep this primary so it stands out
                 against GitHub's familiar surface. */}
             <DropdownMenu modal={false}>
               <ButtonGroup>

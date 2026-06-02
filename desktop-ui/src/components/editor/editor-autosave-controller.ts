@@ -12,11 +12,11 @@ import {
   canAutoSaveOpenFile,
   getOpenFilesForExternalFileChange,
   normalizeAutoSaveDelayMs,
-  ORCA_EDITOR_EXTERNAL_FILE_CHANGE_EVENT,
-  ORCA_EDITOR_FILE_SAVED_EVENT,
-  ORCA_EDITOR_QUIESCE_FILE_SAVES_EVENT,
-  ORCA_EDITOR_SAVE_AND_CLOSE_EVENT,
-  ORCA_EDITOR_SAVE_FILE_EVENT,
+  AGENTUM_EDITOR_EXTERNAL_FILE_CHANGE_EVENT,
+  AGENTUM_EDITOR_FILE_SAVED_EVENT,
+  AGENTUM_EDITOR_QUIESCE_FILE_SAVES_EVENT,
+  AGENTUM_EDITOR_SAVE_AND_CLOSE_EVENT,
+  AGENTUM_EDITOR_SAVE_FILE_EVENT,
   type EditorFileSavedDetail,
   type EditorPathMutationTarget,
   type EditorSaveFileDetail,
@@ -30,7 +30,7 @@ import {
   getDuplicateDirtySavePaths
 } from './editor-autosave-state-projections'
 import {
-  ORCA_EDITOR_SAVE_DIRTY_FILES_EVENT,
+  AGENTUM_EDITOR_SAVE_DIRTY_FILES_EVENT,
   type EditorSaveDirtyFilesDetail
 } from '../../../../shared/editor-save-events'
 
@@ -116,7 +116,7 @@ export function attachEditorAutosaveController(store: AppStoreApi): () => void {
         }
 
         window.dispatchEvent(
-          new CustomEvent<EditorFileSavedDetail>(ORCA_EDITOR_FILE_SAVED_EVENT, {
+          new CustomEvent<EditorFileSavedDetail>(AGENTUM_EDITOR_FILE_SAVED_EVENT, {
             detail: { fileId: file.id, content: contentToSave }
           })
         )
@@ -341,29 +341,29 @@ export function attachEditorAutosaveController(store: AppStoreApi): () => void {
   })
   syncAutoSave()
 
-  window.addEventListener(ORCA_EDITOR_SAVE_DIRTY_FILES_EVENT, handleSaveDirtyFiles as EventListener)
-  window.addEventListener(ORCA_EDITOR_SAVE_AND_CLOSE_EVENT, handleSaveAndClose as EventListener)
-  window.addEventListener(ORCA_EDITOR_SAVE_FILE_EVENT, handleSaveFile as EventListener)
-  window.addEventListener(ORCA_EDITOR_QUIESCE_FILE_SAVES_EVENT, handleQuiesce as EventListener)
+  window.addEventListener(AGENTUM_EDITOR_SAVE_DIRTY_FILES_EVENT, handleSaveDirtyFiles as EventListener)
+  window.addEventListener(AGENTUM_EDITOR_SAVE_AND_CLOSE_EVENT, handleSaveAndClose as EventListener)
+  window.addEventListener(AGENTUM_EDITOR_SAVE_FILE_EVENT, handleSaveFile as EventListener)
+  window.addEventListener(AGENTUM_EDITOR_QUIESCE_FILE_SAVES_EVENT, handleQuiesce as EventListener)
   window.addEventListener(
-    ORCA_EDITOR_EXTERNAL_FILE_CHANGE_EVENT,
+    AGENTUM_EDITOR_EXTERNAL_FILE_CHANGE_EVENT,
     handleExternalFileChange as EventListener
   )
 
   return () => {
     unsubscribe()
     window.removeEventListener(
-      ORCA_EDITOR_SAVE_DIRTY_FILES_EVENT,
+      AGENTUM_EDITOR_SAVE_DIRTY_FILES_EVENT,
       handleSaveDirtyFiles as EventListener
     )
     window.removeEventListener(
-      ORCA_EDITOR_SAVE_AND_CLOSE_EVENT,
+      AGENTUM_EDITOR_SAVE_AND_CLOSE_EVENT,
       handleSaveAndClose as EventListener
     )
-    window.removeEventListener(ORCA_EDITOR_SAVE_FILE_EVENT, handleSaveFile as EventListener)
-    window.removeEventListener(ORCA_EDITOR_QUIESCE_FILE_SAVES_EVENT, handleQuiesce as EventListener)
+    window.removeEventListener(AGENTUM_EDITOR_SAVE_FILE_EVENT, handleSaveFile as EventListener)
+    window.removeEventListener(AGENTUM_EDITOR_QUIESCE_FILE_SAVES_EVENT, handleQuiesce as EventListener)
     window.removeEventListener(
-      ORCA_EDITOR_EXTERNAL_FILE_CHANGE_EVENT,
+      AGENTUM_EDITOR_EXTERNAL_FILE_CHANGE_EVENT,
       handleExternalFileChange as EventListener
     )
     for (const timerId of autoSaveTimers.values()) {

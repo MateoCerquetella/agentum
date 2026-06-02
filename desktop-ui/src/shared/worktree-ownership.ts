@@ -12,7 +12,7 @@ import type {
   DetectedWorktree,
   ExternalWorktreeVisibility,
   GlobalSettings,
-  OrcaWorkspaceLayout,
+  AgentumWorkspaceLayout,
   Repo,
   Worktree,
   WorktreeMeta,
@@ -44,11 +44,11 @@ export function effectiveExternalWorktreeVisibility(
   return isLegacyRepoForVisibility ? 'show' : 'hide'
 }
 
-export function buildKnownOrcaWorkspaceLayouts(
+export function buildKnownAgentumWorkspaceLayouts(
   settings: Pick<GlobalSettings, 'workspaceDir' | 'nestWorkspaces' | 'workspaceDirHistory'>,
   repo?: Pick<Repo, 'path' | 'connectionId' | 'worktreeBasePath'>
-): OrcaWorkspaceLayout[] {
-  const layouts: OrcaWorkspaceLayout[] = []
+): AgentumWorkspaceLayout[] {
+  const layouts: AgentumWorkspaceLayout[] = []
   const repoBasePath = getRepoWorktreeBasePath(repo)
   if (repo && repoBasePath) {
     layouts.push({
@@ -89,8 +89,8 @@ export function buildKnownOrcaWorkspaceLayouts(
 }
 
 function appendWorkspaceLayouts(
-  target: OrcaWorkspaceLayout[],
-  source: readonly OrcaWorkspaceLayout[]
+  target: AgentumWorkspaceLayout[],
+  source: readonly AgentumWorkspaceLayout[]
 ): void {
   // Why: workspace history is persisted user data and can grow large enough
   // for `push(...source)` to exceed the JavaScript call argument limit.
@@ -130,7 +130,7 @@ function shouldIncludeWorkspaceLayout(
 function buildWslWorkspaceLayouts(
   repoPath: string,
   settings: Pick<GlobalSettings, 'nestWorkspaces' | 'workspaceDirHistory'>
-): OrcaWorkspaceLayout[] {
+): AgentumWorkspaceLayout[] {
   const parsed = parseWslUncPath(repoPath)
   if (!parsed) {
     return []
@@ -140,7 +140,7 @@ function buildWslWorkspaceLayouts(
   if (!linuxHome) {
     return []
   }
-  const root = `//wsl.localhost/${parsed.distro}${linuxHome}/orca/workspaces`
+  const root = `//wsl.localhost/${parsed.distro}${linuxHome}/agentum/workspaces`
   const historicalModes = (settings.workspaceDirHistory ?? []).map(
     (layout) => layout.nestWorkspaces
   )
@@ -153,21 +153,21 @@ export function classifyWorktreeOwnership(args: {
   worktree: Pick<Worktree, 'path' | 'isMainWorktree'>
   meta?: WorktreeMeta
   settings: Pick<GlobalSettings, 'workspaceDir' | 'nestWorkspaces' | 'workspaceDirHistory'>
-  knownOrcaLayouts: OrcaWorkspaceLayout[]
+  knownAgentumLayouts: AgentumWorkspaceLayout[]
 }): WorktreeOwnership {
-  if (hasStrongOrcaMetadata(args.meta)) {
-    return 'orca-managed'
+  if (hasStrongAgentumMetadata(args.meta)) {
+    return 'agentum-managed'
   }
 
-  if (matchesStrongOrcaCreatePath(args.worktree.path, args.knownOrcaLayouts, args.repo)) {
-    return 'orca-managed'
+  if (matchesStrongAgentumCreatePath(args.worktree.path, args.knownAgentumLayouts, args.repo)) {
+    return 'agentum-managed'
   }
 
-  if (isUnderFlatOrUntrustedOrcaRoot(args.worktree.path, args.knownOrcaLayouts)) {
+  if (isUnderFlatOrUntrustedAgentumRoot(args.worktree.path, args.knownAgentumLayouts)) {
     return 'unknown-legacy'
   }
 
-  if (canClassifyAsExternal(args.worktree.path, args.knownOrcaLayouts)) {
+  if (canClassifyAsExternal(args.worktree.path, args.knownAgentumLayouts)) {
     return 'external'
   }
 
@@ -179,7 +179,7 @@ export function toDetectedWorktree(args: {
   worktree: Worktree
   meta?: WorktreeMeta
   settings: Pick<GlobalSettings, 'workspaceDir' | 'nestWorkspaces' | 'workspaceDirHistory'>
-  knownOrcaLayouts: OrcaWorkspaceLayout[]
+  knownAgentumLayouts: AgentumWorkspaceLayout[]
   isLegacyRepoForVisibility?: boolean
 }): DetectedWorktree {
   const ownership = classifyWorktreeOwnership(args)
@@ -212,7 +212,7 @@ export function shouldShowWorktree(args: {
   if (args.isSelectedCheckout) {
     return true
   }
-  if (args.ownership === 'orca-managed') {
+  if (args.ownership === 'agentum-managed') {
     return true
   }
   if (args.ownership === 'unknown-legacy' && args.isLegacyRepoForVisibility) {
@@ -227,9 +227,9 @@ export function areRuntimePathsEqual(leftPath: string, rightPath: string): boole
   )
 }
 
-function hasStrongOrcaMetadata(meta: WorktreeMeta | undefined): boolean {
+function hasStrongAgentumMetadata(meta: WorktreeMeta | undefined): boolean {
   return Boolean(
-    meta?.orcaCreatedAt ||
+    meta?.agentumCreatedAt ||
     meta?.createdAt ||
     meta?.createdWithAgent ||
     meta?.pushTarget ||
@@ -239,16 +239,16 @@ function hasStrongOrcaMetadata(meta: WorktreeMeta | undefined): boolean {
   )
 }
 
-export function matchesStrongOrcaCreatePath(
+export function matchesStrongAgentumCreatePath(
   worktreePath: string,
-  knownOrcaLayouts: readonly OrcaWorkspaceLayout[],
+  knownAgentumLayouts: readonly AgentumWorkspaceLayout[],
   repo: Pick<Repo, 'path'>
 ): boolean {
   const repoName = getRuntimePathBasename(repo.path).replace(/\.git$/i, '')
   if (!repoName) {
     return false
   }
-  for (const layout of knownOrcaLayouts) {
+  for (const layout of knownAgentumLayouts) {
     if (!layout.nestWorkspaces) {
       continue
     }
@@ -271,11 +271,11 @@ export function matchesStrongOrcaCreatePath(
   return false
 }
 
-function isUnderFlatOrUntrustedOrcaRoot(
+function isUnderFlatOrUntrustedAgentumRoot(
   worktreePath: string,
-  knownOrcaLayouts: OrcaWorkspaceLayout[]
+  knownAgentumLayouts: AgentumWorkspaceLayout[]
 ): boolean {
-  for (const layout of knownOrcaLayouts) {
+  for (const layout of knownAgentumLayouts) {
     const relative = relativePathInsideRoot(layout.path, worktreePath)
     if (relative === null) {
       continue
@@ -289,12 +289,12 @@ function isUnderFlatOrUntrustedOrcaRoot(
 
 function canClassifyAsExternal(
   worktreePath: string,
-  knownOrcaLayouts: OrcaWorkspaceLayout[]
+  knownAgentumLayouts: AgentumWorkspaceLayout[]
 ): boolean {
-  if (knownOrcaLayouts.length === 0) {
+  if (knownAgentumLayouts.length === 0) {
     return false
   }
-  for (const layout of knownOrcaLayouts) {
+  for (const layout of knownAgentumLayouts) {
     const relative = relativePathInsideRoot(layout.path, worktreePath)
     if (relative === null) {
       continue

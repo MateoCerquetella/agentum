@@ -260,7 +260,7 @@ export function launchAgentInNewTab(args: LaunchAgentInNewTabArgs): LaunchAgentI
     }).then((delivered) => {
       if (delivered) {
         if (agent === 'command-code' && submitPastedPrompt) {
-          // Why: Command Code has no prompt-submit hook; when Orca submits a
+          // Why: Command Code has no prompt-submit hook; when Agentum submits a
           // generated prompt after readiness, seed working at delivery time.
           seedCommandCodeSubmittedPromptStatus(tabId, pasteDraftAfterLaunch)
         }

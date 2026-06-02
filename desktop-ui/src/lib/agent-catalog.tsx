@@ -30,7 +30,7 @@ export const AGENT_CATALOG: AgentCatalogEntry[] = [
     id: 'openclaude',
     label: 'OpenClaude',
     cmd: 'openclaude',
-    // Why: OpenClaude's published favicon has a padded 500px canvas; Orca
+    // Why: OpenClaude's published favicon has a padded 500px canvas; Agentum
     // uses a cropped derivative of that official asset so 12px tab icons stay legible.
     iconUrl: openClaudeLogoUrl,
     homepageUrl: 'https://openclaude.gitlawb.com/'
@@ -119,7 +119,7 @@ export const AGENT_CATALOG: AgentCatalogEntry[] = [
     label: 'Kiro',
     // Why: the Kiro installer (https://cli.kiro.dev/install) ships a binary
     // named `kiro-cli`, not `kiro`. Match TUI_AGENT_CONFIG.kiro.detectCmd so
-    // the settings pane's "default command" hint aligns with what Orca
+    // the settings pane's "default command" hint aligns with what Agentum
     // actually looks for on PATH.
     cmd: 'kiro-cli',
     faviconDomain: 'kiro.dev',
@@ -166,7 +166,7 @@ export const AGENT_CATALOG: AgentCatalogEntry[] = [
     // Why: `npm i -g command-code` installs both `command-code` and the
     // shorter alias `cmd`. Show the full name in the settings hint so it
     // matches TUI_AGENT_CONFIG['command-code'].detectCmd and avoids any
-    // suggestion that Orca is looking for Windows' built-in `cmd.exe`.
+    // suggestion that Agentum is looking for Windows' built-in `cmd.exe`.
     cmd: 'command-code',
     faviconDomain: 'commandcode.ai',
     homepageUrl: 'https://commandcode.ai/docs/quickstart'

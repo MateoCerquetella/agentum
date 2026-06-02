@@ -250,7 +250,7 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
         <div className="space-y-0.5">
           <p className="text-sm font-medium">Targets</p>
           <p className="text-xs text-muted-foreground">
-            Add a remote host to connect to it in Orca.
+            Add a remote host to connect to it in Agentum.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">

@@ -1,6 +1,6 @@
-export const ORCA_SKILLS_REPOSITORY_URL = 'https://github.com/stablyai/orca'
+export const AGENTUM_SKILLS_REPOSITORY_URL = 'https://github.com/stablyai/agentum'
 
-export const ORCA_CLI_SKILL_NAME = 'orca-cli'
+export const AGENTUM_CLI_SKILL_NAME = 'agentum-cli'
 export const COMPUTER_USE_SKILL_NAME = 'computer-use'
 export const ORCHESTRATION_SKILL_NAME = 'orchestration'
 
@@ -8,11 +8,11 @@ export function buildAgentFeatureSkillInstallCommand(skillNames: readonly string
   if (skillNames.length === 0) {
     throw new Error('At least one skill name is required.')
   }
-  return `npx skills add ${ORCA_SKILLS_REPOSITORY_URL} --skill ${skillNames.join(' ')} --global`
+  return `npx skills add ${AGENTUM_SKILLS_REPOSITORY_URL} --skill ${skillNames.join(' ')} --global`
 }
 
-export const ORCA_CLI_SKILL_INSTALL_COMMAND = buildAgentFeatureSkillInstallCommand([
-  ORCA_CLI_SKILL_NAME
+export const AGENTUM_CLI_SKILL_INSTALL_COMMAND = buildAgentFeatureSkillInstallCommand([
+  AGENTUM_CLI_SKILL_NAME
 ])
 
 export const COMPUTER_USE_SKILL_INSTALL_COMMAND = buildAgentFeatureSkillInstallCommand([
@@ -23,7 +23,7 @@ export const ORCHESTRATION_SKILL_INSTALL_COMMAND = buildAgentFeatureSkillInstall
   ORCHESTRATION_SKILL_NAME
 ])
 
-export const ORCA_CLI_ORCHESTRATION_SKILL_INSTALL_COMMAND = buildAgentFeatureSkillInstallCommand([
-  ORCA_CLI_SKILL_NAME,
+export const AGENTUM_CLI_ORCHESTRATION_SKILL_INSTALL_COMMAND = buildAgentFeatureSkillInstallCommand([
+  AGENTUM_CLI_SKILL_NAME,
   ORCHESTRATION_SKILL_NAME
 ])

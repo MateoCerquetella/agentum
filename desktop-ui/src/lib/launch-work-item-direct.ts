@@ -23,7 +23,7 @@ import { track, tuiAgentToAgentKind } from '@/lib/telemetry'
 import type {
   GitPushTarget,
   GitHubPrStartPoint,
-  OrcaHooks,
+  AgentumHooks,
   RepoHookSettings,
   SetupDecision,
   TuiAgent,
@@ -100,10 +100,10 @@ async function resolveSetupDecision(
   repoId: string,
   repo: { hookSettings?: RepoHookSettings }
 ): Promise<{ kind: 'decided'; decision: SetupDecision } | { kind: 'needs-modal' }> {
-  let yamlHooks: OrcaHooks | null = null
+  let yamlHooks: AgentumHooks | null = null
   try {
     const result = await checkRuntimeHooks(useAppStore.getState().settings, repoId)
-    yamlHooks = (result.hooks as OrcaHooks | null) ?? null
+    yamlHooks = (result.hooks as AgentumHooks | null) ?? null
   } catch {
     yamlHooks = null
   }

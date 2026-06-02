@@ -129,7 +129,7 @@ export function SetupScriptPromptBody({
   if (sharedSetupIgnored) {
     return (
       <>
-        This repo is set to ignore <code>orca.yaml</code> setup scripts. Configure a local setup
+        This repo is set to ignore <code>agentum.yaml</code> setup scripts. Configure a local setup
         command or change the script source in Settings.
       </>
     )
@@ -147,14 +147,14 @@ export function SetupScriptPromptBody({
       <>
         Detected setup config from <span className="break-words">{candidateSource}</span>. Save it
         locally so every workspace starts ready automatically. You can move it to{' '}
-        <code>orca.yaml</code> later to share it.
+        <code>agentum.yaml</code> later to share it.
       </>
     )
   }
   return (
     <>
       Add a local setup command so each new workspace starts ready automatically. You can move it to{' '}
-      <code>orca.yaml</code> later to share it for{' '}
+      <code>agentum.yaml</code> later to share it for{' '}
       <span className="inline-flex items-center gap-1.5 align-baseline px-1.5 py-0.5 rounded-[4px] bg-accent border border-border dark:bg-accent/50 dark:border-border/60">
         <RepoBadgeMark color={repo.badgeColor} />
         <span className="text-[10px] font-semibold text-foreground truncate max-w-[8rem] leading-none lowercase">

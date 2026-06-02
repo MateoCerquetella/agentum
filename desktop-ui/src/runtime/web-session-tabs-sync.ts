@@ -114,7 +114,7 @@ export type WebSessionTabsSyncState = Pick<
 >
 
 function isWebClient(): boolean {
-  return Boolean((window as unknown as { __ORCA_WEB_CLIENT__?: boolean }).__ORCA_WEB_CLIENT__)
+  return Boolean((window as unknown as { __AGENTUM_WEB_CLIENT__?: boolean }).__AGENTUM_WEB_CLIENT__)
 }
 
 function isSessionTabsListAllResult(value: unknown): value is SessionTabsListAllResult {

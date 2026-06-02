@@ -20,7 +20,7 @@ describe('agent session fork context', () => {
       agentLabel: 'codex'
     })
 
-    expect(prompt).toContain('fork of an existing Orca agent session')
+    expect(prompt).toContain('fork of an existing Agentum agent session')
     expect(prompt).toContain('Source: tab-1:leaf-1')
     expect(prompt).toContain('Original agent: codex')
     expect(prompt).toContain('User: implement auth')

@@ -4,7 +4,7 @@ export const STATS_PANE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   {
     title: 'Stats & Usage',
     description:
-      'Orca stats plus combined Claude, Codex, and OpenCode usage analytics, tokens, cache, models, and sessions.',
+      'Agentum stats plus combined Claude, Codex, and OpenCode usage analytics, tokens, cache, models, and sessions.',
     keywords: [
       'stats',
       'usage',

@@ -15,7 +15,7 @@ export type KeybindingContext = 'app' | 'terminal' | 'browser'
 
 export type KeybindingPlatform = 'darwin' | 'linux' | 'win32'
 
-export type TerminalShortcutPolicy = 'orca-first' | 'terminal-first'
+export type TerminalShortcutPolicy = 'agentum-first' | 'terminal-first'
 
 export type KeybindingMatchOptions = {
   context?: KeybindingContext
@@ -1214,7 +1214,7 @@ export function getKeybindingDefinition(actionId: KeybindingActionId): Keybindin
 export function normalizeTerminalShortcutPolicy(
   policy: TerminalShortcutPolicy | null | undefined
 ): TerminalShortcutPolicy {
-  return policy === 'terminal-first' ? 'terminal-first' : 'orca-first'
+  return policy === 'terminal-first' ? 'terminal-first' : 'agentum-first'
 }
 
 export function isKeybindingAllowedInTerminal(definition: KeybindingDefinition): boolean {
@@ -1232,9 +1232,9 @@ export function keybindingIsActiveInContext(
   if (options.context !== 'terminal') {
     return true
   }
-  // Why: Orca-first preserves existing app shortcut behavior inside terminals.
+  // Why: Agentum-first preserves existing app shortcut behavior inside terminals.
   // Terminal-first is the explicit escape hatch for shells and TUIs.
-  if (normalizeTerminalShortcutPolicy(options.terminalShortcutPolicy) === 'orca-first') {
+  if (normalizeTerminalShortcutPolicy(options.terminalShortcutPolicy) === 'agentum-first') {
     return true
   }
   return isKeybindingAllowedInTerminal(definition)

@@ -36,7 +36,7 @@ export function TerminalSessionStateSaveFailureDialog({
             <DialogTitle className="text-base">Disk space is unavailable</DialogTitle>
           </div>
           <DialogDescription className="text-xs leading-5">
-            Orca could not save this terminal session because local storage is full or not writable.
+            Agentum could not save this terminal session because local storage is full or not writable.
             Open the disk space analyzer to find workspace storage you can clean up.
           </DialogDescription>
         </DialogHeader>

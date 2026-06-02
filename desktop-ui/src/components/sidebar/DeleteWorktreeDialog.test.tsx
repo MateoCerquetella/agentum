@@ -132,7 +132,7 @@ describe('DeleteWorktreeDialog lineage copy', () => {
     const markup = renderToStaticMarkup(<DeleteWorktreeDialog />)
 
     expect(markup).toContain('Child workspaces won')
-    expect(markup).toContain('1 child workspace will stay in Orca and on disk.')
+    expect(markup).toContain('1 child workspace will stay in Agentum and on disk.')
     expect(markup).toContain('Child workspace')
     expect(markup).toContain('Delete All 2')
     expect(markup).toContain('Delete Parent Only')
@@ -183,7 +183,7 @@ describe('DeleteWorktreeDialog lineage copy', () => {
     const { default: DeleteWorktreeDialog } = await import('./DeleteWorktreeDialog')
     const markup = renderToStaticMarkup(<DeleteWorktreeDialog />)
 
-    expect(markup).toContain('from Orca. The project folder on disk will not be deleted.')
+    expect(markup).toContain('from Agentum. The project folder on disk will not be deleted.')
     expect(markup).not.toContain('from git and delete its workspace folder.')
   })
 

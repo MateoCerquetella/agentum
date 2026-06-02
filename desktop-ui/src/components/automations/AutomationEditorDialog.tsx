@@ -59,7 +59,7 @@ export type AutomationDraft = {
   scheduleWarning: string | null
 }
 
-export type AutomationCreateTarget = 'orca' | 'hermes'
+export type AutomationCreateTarget = 'agentum' | 'hermes'
 
 type AutomationEditorDialogProps = {
   open: boolean
@@ -178,8 +178,8 @@ export function AutomationEditorDialog({
                   size="sm"
                   className="grid grid-cols-2"
                 >
-                  <ToggleGroupItem value="orca" className={MODE_TOGGLE_ITEM_CLASS}>
-                    Orca
+                  <ToggleGroupItem value="agentum" className={MODE_TOGGLE_ITEM_CLASS}>
+                    Agentum
                   </ToggleGroupItem>
                   <ToggleGroupItem value="hermes" className={MODE_TOGGLE_ITEM_CLASS}>
                     Hermes
@@ -423,7 +423,7 @@ export function AutomationEditorDialog({
                         </button>
                       </TooltipTrigger>
                       <TooltipContent side="top" sideOffset={6} className="max-w-72">
-                        If Orca or the execution host was unavailable at the scheduled time, Orca
+                        If Agentum or the execution host was unavailable at the scheduled time, Agentum
                         runs one missed occurrence when it becomes available within this window.
                         Older missed runs are skipped.
                       </TooltipContent>

@@ -90,7 +90,7 @@ function formatSparseDirectoryPreview(directories: string[]): string {
 }
 
 function isWebClient(): boolean {
-  return Boolean((window as unknown as { __ORCA_WEB_CLIENT__?: boolean }).__ORCA_WEB_CLIENT__)
+  return Boolean((window as unknown as { __AGENTUM_WEB_CLIENT__?: boolean }).__AGENTUM_WEB_CLIENT__)
 }
 
 const WorktreeCard = React.memo(function WorktreeCard({
@@ -499,7 +499,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
   const metaLinearIssue = showLinearIssue ? linearIssueDisplay : null
   const metaReview = showPR ? prDisplay : null
   const metaComment = showComment ? worktree.comment : null
-  const handleOpenGitHubIssueInOrca = useCallback(
+  const handleOpenGitHubIssueInAgentum = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
       const issueUrl = metaIssue && 'url' in metaIssue ? metaIssue.url : undefined
@@ -522,7 +522,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
     },
     [metaIssue, openTaskPage, repo]
   )
-  const handleOpenReviewInOrca = useCallback(
+  const handleOpenReviewInAgentum = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
       if (!repo || !metaReview?.url || metaReview.provider !== 'github') {
@@ -545,7 +545,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
     },
     [metaReview, openTaskPage, repo]
   )
-  const handleOpenLinearIssueInOrca = useCallback(
+  const handleOpenLinearIssueInAgentum = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
       if (!linearIssue) {
@@ -623,12 +623,12 @@ const WorktreeCard = React.memo(function WorktreeCard({
         detailsAfter={hasPorts ? <WorktreeCardPortsDetails ports={workspacePorts} /> : null}
         onEditIssue={handleEditIssue}
         onEditComment={handleEditComment}
-        onOpenGitHubIssueInOrca={
-          metaIssue && 'url' in metaIssue && metaIssue.url ? handleOpenGitHubIssueInOrca : undefined
+        onOpenGitHubIssueInAgentum={
+          metaIssue && 'url' in metaIssue && metaIssue.url ? handleOpenGitHubIssueInAgentum : undefined
         }
-        onOpenLinearIssueInOrca={linearIssue?.url ? handleOpenLinearIssueInOrca : undefined}
-        onOpenReviewInOrca={
-          metaReview?.url && metaReview.provider === 'github' ? handleOpenReviewInOrca : undefined
+        onOpenLinearIssueInAgentum={linearIssue?.url ? handleOpenLinearIssueInAgentum : undefined}
+        onOpenReviewInAgentum={
+          metaReview?.url && metaReview.provider === 'github' ? handleOpenReviewInAgentum : undefined
         }
       >
         <div className="flex shrink-0 items-center gap-1">

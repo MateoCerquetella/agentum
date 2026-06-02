@@ -14,12 +14,12 @@ describe('getInitialProjectAddedWorktreeName', () => {
   })
 
   it('preserves caller-provided defaults', () => {
-    expect(getInitialProjectAddedWorktreeName('orca-worktree-1')).toBe('orca-worktree-1')
+    expect(getInitialProjectAddedWorktreeName('agentum-worktree-1')).toBe('agentum-worktree-1')
   })
 })
 
 describe('getInitialProjectAddedChoice', () => {
-  it('defaults to creating a worktree when Orca found linked worktrees', () => {
+  it('defaults to creating a worktree when Agentum found linked worktrees', () => {
     expect(getInitialProjectAddedChoice(1)).toBe('create')
   })
 

@@ -76,8 +76,8 @@ vi.mock('./SshDisconnectedDialog', () => ({
 
 vi.mock('./WorktreeContextMenu', () => ({
   default: ({ children }: { children: ReactNode }) => <>{children}</>,
-  CLOSE_ALL_CONTEXT_MENUS_EVENT: 'orca:test-close-context-menus',
-  WORKTREE_CONTEXT_MENU_SCOPE_ATTR: 'data-orca-context-menu-scope',
+  CLOSE_ALL_CONTEXT_MENUS_EVENT: 'agentum:test-close-context-menus',
+  WORKTREE_CONTEXT_MENU_SCOPE_ATTR: 'data-agentum-context-menu-scope',
   WORKTREE_NATIVE_CONTEXT_MENU_ATTR: 'data-worktree-native-context-menu'
 }))
 
@@ -93,7 +93,7 @@ function makeRepo(): Repo {
   return {
     id: 'repo-1',
     path: '/repo',
-    displayName: 'orca',
+    displayName: 'agentum',
     badgeColor: '#999999',
     addedAt: 1
   }
@@ -152,8 +152,8 @@ describe('WorktreeCard quick actions', () => {
       <WorktreeCard worktree={makeWorktree()} repo={makeRepo()} isActive={false} />
     )
 
-    expect(markup).not.toContain('aria-label="Project orca"')
-    expect(markup).toContain('>orca</span>')
+    expect(markup).not.toContain('aria-label="Project agentum"')
+    expect(markup).toContain('>agentum</span>')
     expect(markup).toContain('data-worktree-card-meta-row=""')
   })
 

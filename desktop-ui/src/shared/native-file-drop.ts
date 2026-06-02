@@ -1,4 +1,4 @@
-export const ORCA_INTERNAL_FILE_DRAG_TYPE = 'text/x-orca-file-path'
+export const AGENTUM_INTERNAL_FILE_DRAG_TYPE = 'text/x-agentum-file-path'
 
 export const NATIVE_FILE_DROP_TARGET = {
   editor: 'editor',
@@ -43,7 +43,7 @@ export function hasNativeFileDragTypes(
   types: Iterable<string> | ArrayLike<string> | null | undefined
 ): boolean {
   const values = getDataTransferTypes(types)
-  return values.includes('Files') && !values.includes(ORCA_INTERNAL_FILE_DRAG_TYPE)
+  return values.includes('Files') && !values.includes(AGENTUM_INTERNAL_FILE_DRAG_TYPE)
 }
 
 export function resolveNativeFileDropPath(

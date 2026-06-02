@@ -137,27 +137,27 @@ export function DiffCommentCard({
   }
 
   return (
-    <div className="orca-diff-comment-card">
-      <div className="orca-diff-comment-content-col">
+    <div className="agentum-diff-comment-card">
+      <div className="agentum-diff-comment-content-col">
         {/* Header Row */}
-        <div className="orca-diff-comment-header">
-          <div className="orca-diff-comment-meta-group">{metaText}</div>
+        <div className="agentum-diff-comment-header">
+          <div className="agentum-diff-comment-meta-group">{metaText}</div>
 
           {/* Action buttons pill (only shown if not editing) */}
           {!editing && (
             <div
-              className="orca-diff-comment-actions-pill"
+              className="agentum-diff-comment-actions-pill"
               onMouseDown={(ev) => ev.stopPropagation()}
             >
               {headerActions}
               {headerActions && (url || onSubmitEdit || onDelete) && (
-                <span className="orca-diff-comment-pill-divider" />
+                <span className="agentum-diff-comment-pill-divider" />
               )}
               {url && (
                 <>
                   <button
                     type="button"
-                    className="orca-diff-comment-pill-btn"
+                    className="agentum-diff-comment-pill-btn"
                     title="Open in browser"
                     aria-label="Open in browser"
                     onClick={(ev) => {
@@ -169,7 +169,7 @@ export function DiffCommentCard({
                     Open
                   </button>
                   {(onSubmitEdit || onDelete) && (
-                    <span className="orca-diff-comment-pill-divider" />
+                    <span className="agentum-diff-comment-pill-divider" />
                   )}
                 </>
               )}
@@ -177,7 +177,7 @@ export function DiffCommentCard({
                 <>
                   <button
                     type="button"
-                    className="orca-diff-comment-pill-btn"
+                    className="agentum-diff-comment-pill-btn"
                     title="Edit note"
                     aria-label="Edit note"
                     onClick={(ev) => {
@@ -188,13 +188,13 @@ export function DiffCommentCard({
                   >
                     <Pencil className="size-3" />
                   </button>
-                  {onDelete && <span className="orca-diff-comment-pill-divider" />}
+                  {onDelete && <span className="agentum-diff-comment-pill-divider" />}
                 </>
               )}
               {onDelete && (
                 <button
                   type="button"
-                  className="orca-diff-comment-pill-btn orca-diff-comment-pill-btn-danger"
+                  className="agentum-diff-comment-pill-btn agentum-diff-comment-pill-btn-danger"
                   title="Delete note"
                   aria-label="Delete note"
                   onClick={(ev) => {
@@ -212,9 +212,9 @@ export function DiffCommentCard({
 
         {/* Quote Block */}
         {quote ? (
-          <div className="orca-diff-comment-quote">
+          <div className="agentum-diff-comment-quote">
             <FileText className="size-3.5 flex-shrink-0 text-amber-500 mt-0.5" />
-            <div className="orca-diff-comment-quote-text">{quote}</div>
+            <div className="agentum-diff-comment-quote-text">{quote}</div>
           </div>
         ) : null}
 
@@ -223,7 +223,7 @@ export function DiffCommentCard({
           <div className="flex flex-col gap-2 mt-1">
             <textarea
               ref={textareaRef}
-              className="orca-diff-comment-popover-textarea"
+              className="agentum-diff-comment-popover-textarea"
               value={draft}
               onChange={(e) => {
                 setDraft(e.target.value)
@@ -248,7 +248,7 @@ export function DiffCommentCard({
               }}
               rows={3}
             />
-            <div className="orca-diff-comment-popover-footer">
+            <div className="agentum-diff-comment-popover-footer">
               <Button variant="ghost" size="sm" onClick={handleCancel} disabled={submitting}>
                 Cancel
               </Button>
@@ -264,7 +264,7 @@ export function DiffCommentCard({
             </div>
           </div>
         ) : (
-          <div className="orca-diff-comment-body">{body}</div>
+          <div className="agentum-diff-comment-body">{body}</div>
         )}
       </div>
     </div>

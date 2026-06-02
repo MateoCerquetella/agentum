@@ -19,7 +19,7 @@ export function handleOscLink(
     return
   }
 
-  // Why: xterm renders URL links as clickable anchors. Once Orca decides to
+  // Why: xterm renders URL links as clickable anchors. Once Agentum decides to
   // handle a modified click itself, we must suppress the browser's default
   // anchor navigation or Electron will still launch the system browser.
   // Note: we intentionally do NOT stopPropagation here — xterm's
@@ -73,7 +73,7 @@ export function handleOscLink(
   }
 
   if (parsed.protocol === 'file:') {
-    // Why: file:// URIs should open inside Orca, not via the OS default editor
+    // Why: file:// URIs should open inside Agentum, not via the OS default editor
     // (shell.openPath). We extract the path from the URI and route it through
     // the same openDetectedFilePath logic used for detected file-path links.
     // Remote file hosts stay rejected; Windows local network shares are the

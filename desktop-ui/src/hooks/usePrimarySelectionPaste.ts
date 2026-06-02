@@ -65,7 +65,7 @@ export function usePrimarySelectionPaste(enabled: boolean): void {
       if (options?.allowNativeLinuxPaste && isLinuxUserAgent()) {
         // Why: Chromium already implements X11 primary paste for editable DOM
         // controls. Suppressing that native path can turn a working OS paste
-        // into a no-op before Orca's async fallback runs.
+        // into a no-op before Agentum's async fallback runs.
         return false
       }
       pendingMiddleTarget = target

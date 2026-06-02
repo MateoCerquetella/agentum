@@ -61,7 +61,7 @@ export function WslCliRegistration({
 
   const isEnabled = status?.state === 'installed'
   const isSupported = status?.supported ?? false
-  const commandName = status?.commandName ?? 'orca-ide'
+  const commandName = status?.commandName ?? 'agentum-ide'
 
   const handleInstall = async (): Promise<void> => {
     setBusyAction('install')
@@ -118,7 +118,7 @@ export function WslCliRegistration({
             <p className="text-xs text-muted-foreground">
               {loading
                 ? 'Checking WSL CLI registration...'
-                : (status?.detail ?? 'Register `orca-ide` in ~/.local/bin inside WSL.')}
+                : (status?.detail ?? 'Register `agentum-ide` in ~/.local/bin inside WSL.')}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -182,8 +182,8 @@ export function WslCliRegistration({
             </DialogTitle>
             <DialogDescription>
               {isEnabled
-                ? 'This removes the WSL shell command. Orca itself remains installed on Windows.'
-                : `Orca will register ${status?.commandPath ?? commandName} so the command works from WSL terminals.`}
+                ? 'This removes the WSL shell command. Agentum itself remains installed on Windows.'
+                : `Agentum will register ${status?.commandPath ?? commandName} so the command works from WSL terminals.`}
             </DialogDescription>
           </DialogHeader>
           {status?.commandPath ? (

@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-// Mirrors CliInstallStatus in orca/src/shared/cli-install-types.ts. camelCase so
+// Mirrors CliInstallStatus in agentum/src/shared/cli-install-types.ts. camelCase so
 // the proxied invoke() result deserializes into the exact object the renderer reads.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,7 +29,7 @@ fn platform_label() -> String {
     }
 }
 
-// Why: the Tauri build does not yet bundle an `orca` CLI launcher binary, so
+// Why: the Tauri build does not yet bundle an `agentum` CLI launcher binary, so
 // install is impossible and the honest, contract-defined state is
 // unsupported/launcher_missing for every cli method. Detection of a stray PATH
 // entry is intentionally skipped — it would point at the Electron launcher, not
@@ -37,7 +37,7 @@ fn platform_label() -> String {
 fn launcher_missing_status(reason: &str) -> CliInstallStatus {
     CliInstallStatus {
         platform: platform_label(),
-        command_name: "orca".to_string(),
+        command_name: "agentum".to_string(),
         command_path: None,
         path_directory: None,
         path_configured: false,

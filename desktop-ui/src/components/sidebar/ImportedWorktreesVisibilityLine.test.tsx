@@ -29,7 +29,7 @@ const hiddenWorktrees = [
   {
     id: 'hidden-4',
     displayName: 'ssh-worktree',
-    path: '/srv/repos/orca/ssh-worktree',
+    path: '/srv/repos/agentum/ssh-worktree',
     branch: 'refs/heads/ssh-worktree'
   }
 ]
@@ -40,7 +40,7 @@ function renderLine(
   return renderToStaticMarkup(
     <TooltipProvider>
       <ImportedWorktreesVisibilityLine
-        repoDisplayName="orca"
+        repoDisplayName="agentum"
         hiddenWorktrees={hiddenWorktrees}
         placement="repo-group"
         pending={false}
@@ -59,13 +59,13 @@ describe('ImportedWorktreesVisibilityLine', () => {
 
     expect(markup).toContain('Hiding 4 discovered worktrees')
     expect(markup).toContain('Show all')
-    expect(markup).toContain('Show all 4 discovered worktrees for orca')
+    expect(markup).toContain('Show all 4 discovered worktrees for agentum')
     expect(markup).toContain(
-      'Keep 4 discovered worktrees hidden for orca; recover from the repo menu'
+      'Keep 4 discovered worktrees hidden for agentum; recover from the repo menu'
     )
     expect(markup).toContain('aria-expanded="false"')
     expect(markup).not.toContain('Imported 4 existing worktrees')
-    expect(markup).not.toContain('Orca found 4 worktrees')
+    expect(markup).not.toContain('Agentum found 4 worktrees')
     expect(markup).not.toContain('repo options')
     expect(markup).not.toContain('payments-refactor')
     expect(markup).not.toContain('/worktrees/demo-project')
@@ -74,7 +74,7 @@ describe('ImportedWorktreesVisibilityLine', () => {
   it('scopes pinned fallback copy to the repo name without a dismiss action', () => {
     const markup = renderLine({ placement: 'pinned-fallback', onKeepHidden: undefined })
 
-    expect(markup).toContain('Hiding 4 discovered worktrees in orca')
+    expect(markup).toContain('Hiding 4 discovered worktrees in agentum')
     expect(markup).toContain('Show all')
     expect(markup).not.toContain('Keep hidden - recover from the repo menu')
   })
@@ -84,12 +84,12 @@ describe('ImportedWorktreesVisibilityLine', () => {
       {
         id: 'windows-hidden',
         displayName: 'FeatureX',
-        path: 'C:\\Repos\\Orca\\FeatureX'
+        path: 'C:\\Repos\\Agentum\\FeatureX'
       }
     ])
 
-    expect(groups).toMatchObject([{ path: 'C:\\Repos\\Orca' }])
-    expect(groups[0]?.path).not.toBe('C:/Repos/Orca')
+    expect(groups).toMatchObject([{ path: 'C:\\Repos\\Agentum' }])
+    expect(groups[0]?.path).not.toBe('C:/Repos/Agentum')
   })
 
   it('disables actions while pending and renders inline errors', () => {

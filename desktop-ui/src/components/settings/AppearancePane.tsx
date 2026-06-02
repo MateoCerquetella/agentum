@@ -88,12 +88,12 @@ export function AppearancePane({
         {matchesSettingsSearch(searchQuery, THEME_ENTRIES) ? (
           <SearchableSetting
             title="Theme"
-            description="Choose how Orca looks in the app window."
+            description="Choose how Agentum looks in the app window."
             keywords={['dark', 'light', 'system']}
           >
             <SettingsRow
               label="Theme"
-              description="Choose how Orca looks in the app window."
+              description="Choose how Agentum looks in the app window."
               control={
                 <SettingsSegmentedControl
                   ariaLabel="Theme"
@@ -136,13 +136,13 @@ export function AppearancePane({
         {matchesSettingsSearch(searchQuery, TYPOGRAPHY_ENTRIES) ? (
           <SearchableSetting
             title="IDE Font"
-            description="Choose the font used by the Orca interface."
-            keywords={['font', 'typeface', 'typography', 'ide', 'orca', 'interface', 'app', 'ui']}
+            description="Choose the font used by the Agentum interface."
+            keywords={['font', 'typeface', 'typography', 'ide', 'agentum', 'interface', 'app', 'ui']}
           >
             <SettingsRow
               alignTop
               label="IDE Font"
-              description="Choose the font used by the Orca interface."
+              description="Choose the font used by the Agentum interface."
               control={
                 <FontAutocomplete
                   value={settings.appFontFamily}
@@ -200,12 +200,12 @@ export function AppearancePane({
         <div className="divide-y divide-border/40">
           <SearchableSetting
             title="Titlebar App Name"
-            description="Show Orca in the titlebar."
-            keywords={['titlebar', 'orca', 'app', 'name', 'brand']}
+            description="Show Agentum in the titlebar."
+            keywords={['titlebar', 'agentum', 'app', 'name', 'brand']}
           >
             <SettingsSwitchRow
               label="Titlebar App Name"
-              description="Show Orca in the titlebar."
+              description="Show Agentum in the titlebar."
               checked={settings.showTitlebarAppName}
               onChange={() =>
                 updateSettings({ showTitlebarAppName: !settings.showTitlebarAppName })
@@ -280,13 +280,13 @@ export function AppearancePane({
           </SearchableSetting>
 
           <SearchableSetting
-            title="Show Orca Mobile Button"
-            description="Show the Orca Mobile button at the top of the left sidebar."
+            title="Show Agentum Mobile Button"
+            description="Show the Agentum Mobile button at the top of the left sidebar."
             keywords={['mobile', 'phone', 'sidebar', 'button', 'hide', 'show', 'toolbox']}
           >
             <SettingsSwitchRow
-              label="Show Orca Mobile Button"
-              description="Show the Orca Mobile shortcut in the sidebar. It remains available from Toolbox."
+              label="Show Agentum Mobile Button"
+              description="Show the Agentum Mobile shortcut in the sidebar. It remains available from Toolbox."
               checked={settings.showMobileButton !== false}
               onChange={() =>
                 updateSettings({ showMobileButton: !(settings.showMobileButton !== false) })

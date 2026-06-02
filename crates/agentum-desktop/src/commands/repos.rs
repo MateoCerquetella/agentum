@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use tauri_plugin_dialog::DialogExt;
 
 // Keystone of the repo/worktree registry (see SUBSYSTEMS.md). Mirrors Repo in
-// orca/src/shared/types.ts; `extra` round-trips fields this layer doesn't manage
+// agentum/src/shared/types.ts; `extra` round-trips fields this layer doesn't manage
 // yet so nothing is lost on rewrite.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -221,10 +221,10 @@ describe('buildAgentDraftLaunchPlan', () => {
     ).toBeNull()
   })
 
-  it('uses ORCA_PI_PREFILL env var for pi (no CLI flag exists)', () => {
+  it('uses AGENTUM_PI_PREFILL env var for pi (no CLI flag exists)', () => {
     // Why: pi has no `--prefill` flag, and bracketed-paste-after-ready races
-    // against pi's lengthy startup output. The Orca overlay installs an
-    // `orca-prefill` extension that reads ORCA_PI_PREFILL on session_start
+    // against pi's lengthy startup output. The Agentum overlay installs an
+    // `agentum-prefill` extension that reads AGENTUM_PI_PREFILL on session_start
     // and seeds the editor. Plan plumbs the env var without polluting the
     // shell command (no `FOO='...' pi` prefix typed into the terminal).
     expect(
@@ -236,9 +236,9 @@ describe('buildAgentDraftLaunchPlan', () => {
       })
     ).toEqual({
       agent: 'pi',
-      launchCommand: 'pi; unset ORCA_PI_PREFILL',
+      launchCommand: 'pi; unset AGENTUM_PI_PREFILL',
       expectedProcess: 'pi',
-      env: { ORCA_PI_PREFILL: 'https://github.com/acme/repo/issues/42' }
+      env: { AGENTUM_PI_PREFILL: 'https://github.com/acme/repo/issues/42' }
     })
   })
 

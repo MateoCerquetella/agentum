@@ -15,7 +15,7 @@ export function getBrowserLinkRoutingShortcutLabel(platform: BrowserShortcutPlat
 }
 
 export function getBrowserLinkRoutingDescription(platform: BrowserShortcutPlatform): string {
-  return `Open http(s) links in Orca's built-in browser — from the terminal, markdown, and the editor. ${getBrowserLinkRoutingShortcutLabel(platform)} always uses your system browser.`
+  return `Open http(s) links in Agentum's built-in browser — from the terminal, markdown, and the editor. ${getBrowserLinkRoutingShortcutLabel(platform)} always uses your system browser.`
 }
 
 export function getBrowserPaneSearchEntries(
@@ -64,7 +64,7 @@ export function getBrowserPaneSearchEntries(
     {
       title: 'Session & Cookies',
       description:
-        'Import cookies from Chrome, Edge, or other browsers to use existing logins inside Orca.',
+        'Import cookies from Chrome, Edge, or other browsers to use existing logins inside Agentum.',
       keywords: [
         'browser',
         'cookies',

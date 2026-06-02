@@ -23,7 +23,7 @@ export const EMPTY_LAYOUT: TerminalLayoutSnapshot = {
 // Why: xterm's SerializeAddon captures display state by emitting mode-setting
 // bytes (e.g. `\e[?1004h` for focus reporting) so a re-fed emulator lands in
 // the same mode as the snapshot source. That's correct for tmux-style
-// "attach to a still-running TUI" — but Orca restores scrollback against a
+// "attach to a still-running TUI" — but Agentum restores scrollback against a
 // *fresh* shell, with no TUI to consume those modes. A stale focus-reporting
 // bit causes xterm to emit `\e[I`/`\e[O` on every pane click, which the
 // fresh zsh treats as unbound key input and rings the bell for.

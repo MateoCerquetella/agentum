@@ -382,7 +382,7 @@ export const createAgentStatusSlice: StateCreator<AppState, [], [], AgentStatusS
       queueMicrotask(() => freshness.schedule())
       if (completionRefreshWorktreeId) {
         const worktreeId = completionRefreshWorktreeId
-        // Why: agents can create a PR via `gh pr create`, bypassing Orca's
+        // Why: agents can create a PR via `gh pr create`, bypassing Agentum's
         // create-PR flow and leaving a fresh "no PR" cache entry in place.
         queueMicrotask(() => get().refreshGitHubForWorktreeIfStale(worktreeId))
       }

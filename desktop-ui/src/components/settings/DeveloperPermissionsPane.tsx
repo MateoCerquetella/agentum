@@ -171,7 +171,7 @@ export function DeveloperPermissionsPane(): React.JSX.Element {
   }, [refresh])
 
   // Why: after the user flips a permission in System Settings and switches
-  // back to Orca, the chip should reflect the new status without a manual
+  // back to Agentum, the chip should reflect the new status without a manual
   // Refresh click. Tied to window focus rather than a polling interval so
   // we don't keep hammering `systemPreferences` while the pane is idle.
   useEffect(() => {
@@ -217,11 +217,11 @@ export function DeveloperPermissionsPane(): React.JSX.Element {
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-sm font-medium">
             <ShieldCheck className="size-4" />
-            Terminal tools inherit Orca&apos;s macOS privacy envelope.
+            Terminal tools inherit Agentum&apos;s macOS privacy envelope.
           </div>
           <p className="text-xs text-muted-foreground">
             Use these controls when a CLI, local app, or automation tool needs macOS privacy access.
-            Orca does not ask at startup.
+            Agentum does not ask at startup.
           </p>
         </div>
         <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void refresh()}>

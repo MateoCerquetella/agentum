@@ -262,7 +262,7 @@ export type TerminalSlice = {
   defaultTerminalTabsAppliedByWorktreeId: Record<string, true>
   markDefaultTerminalTabsApplied: (worktreeId: string) => void
   /** True only after hydrateWorkspaceSession ran from a real load of
-   *  orca-data.json. Guards the debounced session writer so that a crash
+   *  agentum-data.json. Guards the debounced session writer so that a crash
    *  during early startup (fetchRepos / fetchAllWorktrees / session.get /
    *  hydrateWorkspaceSession itself) cannot cause an empty in-memory state
    *  to be serialized back over the user's good data on disk.
@@ -708,8 +708,8 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
     if (!worktreeId) {
       return
     }
-    const pairedWebRuntimeEnvironmentId = (globalThis as { __ORCA_WEB_CLIENT__?: boolean })
-      .__ORCA_WEB_CLIENT__
+    const pairedWebRuntimeEnvironmentId = (globalThis as { __AGENTUM_WEB_CLIENT__?: boolean })
+      .__AGENTUM_WEB_CLIENT__
       ? state.settings?.activeRuntimeEnvironmentId?.trim()
       : null
     if (pairedWebRuntimeEnvironmentId) {

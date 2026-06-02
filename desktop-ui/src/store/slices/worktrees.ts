@@ -85,7 +85,7 @@ function showLocalBaseRefRefreshToast(result: LocalBaseRefRefreshResult | undefi
   }
 
   toast.warning(`Local ${result.localBranch} was not refreshed`, {
-    description: `Workspace created from ${result.baseRef}, but Orca could not fast-forward local ${result.localBranch} because ${reason}`
+    description: `Workspace created from ${result.baseRef}, but Agentum could not fast-forward local ${result.localBranch} because ${reason}`
   })
 }
 
@@ -106,7 +106,7 @@ function showPreservedBranchToast(
       }
     : undefined
   toast.warning('Workspace deleted, branch kept', {
-    description: `Git could not safely delete "${branch}", so Orca kept it to avoid losing local commits.`,
+    description: `Git could not safely delete "${branch}", so Agentum kept it to avoid losing local commits.`,
     ...(action ? { action } : {})
   })
 }
@@ -372,7 +372,7 @@ function toLegacyDetectedWorktreeResult(
     source: 'session-fallback',
     worktrees: result.worktrees.map((worktree) => ({
       ...worktree,
-      ownership: 'orca-managed',
+      ownership: 'agentum-managed',
       selectedCheckout: false,
       visible: true
     }))

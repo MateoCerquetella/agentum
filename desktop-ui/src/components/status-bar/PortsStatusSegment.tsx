@@ -25,7 +25,7 @@ import {
   openWorkspacePortInBrowser,
   refreshWorkspacePortScanAfterStop,
   scanWorkspacePortsForTarget,
-  shouldOpenWorkspacePortInOrcaBrowser,
+  shouldOpenWorkspacePortInAgentumBrowser,
   workspacePortRuntimeTargetKey
 } from '@/lib/workspace-port-actions'
 import {
@@ -103,8 +103,8 @@ function PortRow({
   const recordFeatureInteraction = useAppStore((s) => s.recordFeatureInteraction)
   const runtimeTarget = useMemo(() => getActiveRuntimeTarget(settings), [settings])
   const processLabel = port.processName ?? (port.pid ? `PID ${port.pid}` : 'Unknown process')
-  const openInOrcaBrowser = shouldOpenWorkspacePortInOrcaBrowser(settings)
-  const canOpen = !openInOrcaBrowser || port.kind === 'workspace' || Boolean(activeWorktreeId)
+  const openInAgentumBrowser = shouldOpenWorkspacePortInAgentumBrowser(settings)
+  const canOpen = !openInAgentumBrowser || port.kind === 'workspace' || Boolean(activeWorktreeId)
   const canStop = canStopWorkspacePort(port)
 
   const handleOpen = useCallback(
@@ -117,7 +117,7 @@ function PortRow({
         runtimeTarget,
         createBrowserTab,
         setRemoteBrowserPageHandle,
-        openInOrcaBrowser
+        openInAgentumBrowser
       }).then((result) => {
         if (!result.ok) {
           toast.error('Failed to open browser', { description: result.reason })
@@ -127,7 +127,7 @@ function PortRow({
     [
       activeWorktreeId,
       createBrowserTab,
-      openInOrcaBrowser,
+      openInAgentumBrowser,
       port,
       recordFeatureInteraction,
       runtimeTarget,

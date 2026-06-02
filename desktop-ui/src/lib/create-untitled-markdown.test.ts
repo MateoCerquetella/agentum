@@ -118,10 +118,10 @@ describe('createUntitledMarkdownFile', () => {
       createUntitledMarkdownFile('/repo', 'wt-1', undefined, undefined, {
         now: new Date(2026, 4, 29, 7, 5),
         template: {
-          id: '.orca/templates/daily.md',
+          id: '.agentum/templates/daily.md',
           name: 'Daily',
-          filePath: '/repo/.orca/templates/daily.md',
-          relativePath: '.orca/templates/daily.md',
+          filePath: '/repo/.agentum/templates/daily.md',
+          relativePath: '.agentum/templates/daily.md',
           templateRelativePath: 'daily.md',
           basename: 'daily.md'
         }
@@ -133,7 +133,7 @@ describe('createUntitledMarkdownFile', () => {
     })
 
     expect(readFile).toHaveBeenCalledWith(
-      expect.objectContaining({ filePath: '/repo/.orca/templates/daily.md' })
+      expect.objectContaining({ filePath: '/repo/.agentum/templates/daily.md' })
     )
     expect(createFile).toHaveBeenCalledWith(
       expect.objectContaining({ filePath: '/repo/untitled.md' })
@@ -186,7 +186,7 @@ describe('createUntitledMarkdownFile', () => {
     }
 
     expect(readDir).toHaveBeenCalledWith(
-      expect.objectContaining({ dirPath: '/repo/.orca/templates' })
+      expect.objectContaining({ dirPath: '/repo/.agentum/templates' })
     )
     expect(writeFile).toHaveBeenCalledWith(
       expect.objectContaining({ filePath: '/repo/untitled.md', content: '# Untitled\n' })

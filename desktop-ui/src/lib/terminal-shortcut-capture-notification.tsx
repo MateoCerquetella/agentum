@@ -10,7 +10,7 @@ import {
 } from '../../../shared/keybindings'
 import { useAppStore } from '../store'
 
-const STORAGE_PREFIX = 'orca.terminalShortcutCapturedNotice.'
+const STORAGE_PREFIX = 'agentum.terminalShortcutCapturedNotice.'
 const NOTICE_DURATION_MS = 20_000
 
 function hasShownNotice(actionId: KeybindingActionId): boolean {

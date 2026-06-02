@@ -112,7 +112,7 @@ describe('CommitMessageAiPane', () => {
     expect(markup).toContain('Source Control AI')
     expect(markup).toContain('Enable Source Control AI')
     expect(markup).toContain('aria-checked="false"')
-    expect(markup).not.toContain('Orca invokes this CLI')
+    expect(markup).not.toContain('Agentum invokes this CLI')
     expect(markup).not.toContain('Thinking effort')
   })
 
@@ -131,7 +131,7 @@ describe('CommitMessageAiPane', () => {
     )
 
     expect(markup).toContain('aria-checked="true"')
-    expect(markup).toContain('Orca invokes this CLI')
+    expect(markup).toContain('Agentum invokes this CLI')
     expect(markup).toContain('Default model')
     expect(markup).toContain('Thinking effort')
     expect(markup).toContain('Commit message model')

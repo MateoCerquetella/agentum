@@ -6,7 +6,7 @@ import { useAppStore } from '../store'
 import { useMountedRef } from '@/hooks/useMountedRef'
 
 /**
- * Persistent "star Orca on GitHub" notification card.
+ * Persistent "star Agentum on GitHub" notification card.
  *
  * Rendered at the bottom-right of the app (alongside UpdateCard). It is
  * intentionally non-auto-dismissing: the user must either click Star or the
@@ -68,7 +68,7 @@ export function StarNagCard(): React.JSX.Element | null {
     }
     setBusy(true)
     setError(false)
-    const ok = await window.api.gh.starOrca('star_nag')
+    const ok = await window.api.gh.starAgentum('star_nag')
     if (mountedRef.current) {
       setBusy(false)
     }
@@ -100,7 +100,7 @@ export function StarNagCard(): React.JSX.Element | null {
             <div className="flex items-center gap-2">
               <Star className="size-4 fill-amber-400/60 text-amber-400/80" />
               <h3 id="star-nag-heading" className="text-sm font-semibold">
-                Enjoying Orca?
+                Enjoying Agentum?
               </h3>
             </div>
             <Button
@@ -115,7 +115,7 @@ export function StarNagCard(): React.JSX.Element | null {
           </div>
 
           <p className="text-sm text-muted-foreground">
-            If Orca has saved you time, a GitHub star goes a long way. It helps other developers
+            If Agentum has saved you time, a GitHub star goes a long way. It helps other developers
             discover the project and keeps the team motivated to ship improvements.
           </p>
 

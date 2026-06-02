@@ -25,7 +25,7 @@ const mocks = vi.hoisted(() => ({
     detectedWorktreesByRepo: {},
     hideDefaultBranchWorkspace: false,
     setHideDefaultBranchWorkspace: vi.fn(),
-    clearOrcaHookTrustForRepo: vi.fn(),
+    clearAgentumHookTrustForRepo: vi.fn(),
     repos: [] as Repo[]
   },
   addRemote: vi.fn(),

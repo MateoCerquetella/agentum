@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 // Registry-backed Worktree (see SUBSYSTEMS.md). Mirrors Worktree in
-// orca/src/shared/types.ts; required+nullable fields stay Option (serialize as
+// agentum/src/shared/types.ts; required+nullable fields stay Option (serialize as
 // null), and `extra` round-trips fields not yet managed here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -279,7 +279,7 @@ pub async fn worktrees_force_delete_preserved_branch(
     }
 }
 
-// Detected (on-disk but not Orca-tracked) worktree scanning isn't ported; report
+// Detected (on-disk but not Agentum-tracked) worktree scanning isn't ported; report
 // none via the metadata fallback. resolvePrBase needs the GitHub API; lineage
 // updates need the not-yet-ported lineage store.
 #[tauri::command]

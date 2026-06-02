@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   NATIVE_FILE_DROP_TARGET,
-  ORCA_INTERNAL_FILE_DRAG_TYPE,
+  AGENTUM_INTERNAL_FILE_DRAG_TYPE,
   hasNativeFileDragTypes,
   resolveNativeFileDropPath
 } from './native-file-drop'
@@ -11,8 +11,8 @@ describe('hasNativeFileDragTypes', () => {
     expect(hasNativeFileDragTypes(['Files'])).toBe(true)
   })
 
-  it('rejects internal Orca file moves and URL/text drags', () => {
-    expect(hasNativeFileDragTypes(['Files', ORCA_INTERNAL_FILE_DRAG_TYPE])).toBe(false)
+  it('rejects internal Agentum file moves and URL/text drags', () => {
+    expect(hasNativeFileDragTypes(['Files', AGENTUM_INTERNAL_FILE_DRAG_TYPE])).toBe(false)
     expect(hasNativeFileDragTypes(['text/uri-list'])).toBe(false)
     expect(hasNativeFileDragTypes(['text/plain'])).toBe(false)
   })

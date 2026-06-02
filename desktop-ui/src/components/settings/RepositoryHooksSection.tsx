@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   HookCommandSourcePolicy,
-  OrcaHooks,
+  AgentumHooks,
   Repo,
   RepoHookSettings,
   SetupRunPolicy
@@ -21,7 +21,7 @@ import { matchesSettingsSearch } from './settings-search'
 
 type RepositoryHooksSectionProps = {
   repo: Repo
-  yamlHooks: OrcaHooks | null
+  yamlHooks: AgentumHooks | null
   hasHooksFile: boolean
   hooksInspectionReady: boolean
   mayNeedUpdate: boolean
@@ -51,23 +51,23 @@ const SETUP_RUN_POLICY_OPTIONS: PolicyOption<SetupRunPolicy>[] = [
 const COMMAND_SOURCE_POLICY_OPTIONS: PolicyOption<HookCommandSourcePolicy>[] = [
   {
     policy: 'shared-only',
-    label: 'orca.yaml only',
+    label: 'agentum.yaml only',
     description: 'Run only committed repo commands; ignore local commands.'
   },
   {
     policy: 'local-only',
     label: 'Local only',
-    description: 'Ignore orca.yaml; run only your local commands.'
+    description: 'Ignore agentum.yaml; run only your local commands.'
   },
   {
     policy: 'run-both',
     label: 'Run both',
-    description: 'orca.yaml first, then your local commands.'
+    description: 'agentum.yaml first, then your local commands.'
   }
 ]
 
 const COMMAND_SOURCE_LABEL: Record<HookCommandSourcePolicy, string> = {
-  'shared-only': 'orca.yaml only',
+  'shared-only': 'agentum.yaml only',
   'local-only': 'Local only',
   'run-both': 'Run both'
 }
@@ -85,28 +85,28 @@ const LOCAL_HOOK_FIELDS: LocalHookField[] = [
     label: 'Setup Script',
     description:
       'Runs after a new worktree is created; install deps, copy env files, run migrations.',
-    placeholder: '# e.g.\npnpm install\ncp "$ORCA_ROOT_PATH/.env" "$ORCA_WORKTREE_PATH/.env"'
+    placeholder: '# e.g.\npnpm install\ncp "$AGENTUM_ROOT_PATH/.env" "$AGENTUM_WORKTREE_PATH/.env"'
   },
   {
     name: 'archive',
     label: 'Archive Script',
     description: 'Runs before a worktree is archived or removed.',
-    placeholder: '# e.g.\necho "Cleaning up $ORCA_WORKSPACE_NAME"'
+    placeholder: '# e.g.\necho "Cleaning up $AGENTUM_WORKSPACE_NAME"'
   }
 ]
 
 const ENV_VARS: readonly { name: string; description: string }[] = [
   {
-    name: '$ORCA_ROOT_PATH',
+    name: '$AGENTUM_ROOT_PATH',
     description:
       'Path to the main repo checkout. Useful for copying shared files, like .env, into a worktree.'
   },
   {
-    name: '$ORCA_WORKTREE_PATH',
+    name: '$AGENTUM_WORKTREE_PATH',
     description: 'Path to the worktree being created. Setup commands run from this directory.'
   },
   {
-    name: '$ORCA_WORKSPACE_NAME',
+    name: '$AGENTUM_WORKSPACE_NAME',
     description: 'Name of the workspace, usually based on the branch name.'
   }
 ]
@@ -178,30 +178,30 @@ const YAML_STATE_STYLES: Record<
   loaded: {
     card: 'border-emerald-500/20 bg-emerald-500/5',
     title: 'text-emerald-700 dark:text-emerald-300',
-    heading: 'Using `orca.yaml`',
+    heading: 'Using `agentum.yaml`',
     description:
       'Shared hook and issue-automation defaults are defined in the repo and available to everyone who uses it.'
   },
   'update-available': {
     card: 'border-amber-500/20 bg-amber-500/5',
     title: 'text-amber-700 dark:text-amber-300',
-    heading: '`orca.yaml` could not be parsed',
+    heading: '`agentum.yaml` could not be parsed',
     description:
-      'The file contains configuration keys that this version of Orca does not recognize. You may need to update Orca, or check the file for typos.'
+      'The file contains configuration keys that this version of Agentum does not recognize. You may need to update Agentum, or check the file for typos.'
   },
   invalid: {
     card: 'border-amber-500/20 bg-amber-500/5',
     title: 'text-amber-700 dark:text-amber-300',
-    heading: '`orca.yaml` could not be parsed',
+    heading: '`agentum.yaml` could not be parsed',
     description:
-      'The core configuration file exists in the repo root, but Orca could not parse the supported hook definitions yet.'
+      'The core configuration file exists in the repo root, but Agentum could not parse the supported hook definitions yet.'
   },
   missing: {
     card: 'border-border/50 bg-muted/20',
     title: 'text-foreground',
-    heading: 'No `orca.yaml` detected',
+    heading: 'No `agentum.yaml` detected',
     description:
-      'Add an `orca.yaml` file to enable shared setup, archive, or issue-automation defaults for this repo. Example template:'
+      'Add an `agentum.yaml` file to enable shared setup, archive, or issue-automation defaults for this repo. Example template:'
   }
 }
 
@@ -289,7 +289,7 @@ function ExampleTemplateCard({
   return (
     <div className="space-y-2">
       <p className="text-[10px] tracking-[0.18em] text-muted-foreground">
-        Example <code className="rounded bg-muted px-1 py-0.5">orca.yaml</code> template
+        Example <code className="rounded bg-muted px-1 py-0.5">agentum.yaml</code> template
       </p>
       <div className="relative rounded-lg border border-border/50 bg-background/70">
         <Button
@@ -388,8 +388,8 @@ function LocalCommandSourceNotice({
           </p>
           <p className="text-xs leading-5 text-muted-foreground">
             {isChecking
-              ? 'Local scripts are saved. Orca is still checking orca.yaml before it can recommend which script source to use.'
-              : 'Local scripts are saved, but Script Source is set to orca.yaml only.'}
+              ? 'Local scripts are saved. Agentum is still checking agentum.yaml before it can recommend which script source to use.'
+              : 'Local scripts are saved, but Script Source is set to agentum.yaml only.'}
           </p>
         </div>
       </div>
@@ -482,13 +482,13 @@ function ScriptEditor({
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-2">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
-              orca.yaml
+              agentum.yaml
               <span className="font-normal text-emerald-700/80 dark:text-emerald-300/80">
                 - shared with your team
               </span>
             </span>
             <span className="text-[11px] text-muted-foreground">
-              Edit <code className="rounded bg-muted px-1 py-0.5">orca.yaml</code> to change.
+              Edit <code className="rounded bg-muted px-1 py-0.5">agentum.yaml</code> to change.
             </span>
           </div>
           <YamlScriptBlock content={sharedScript ?? ''} />
@@ -763,11 +763,11 @@ export function RepositoryHooksSection({
     settingsSearchQuery.trim() !== '' &&
     matchesSettingsSearch(settingsSearchQuery, {
       title: 'Advanced',
-      description: 'Command source and orca.yaml details.',
+      description: 'Command source and agentum.yaml details.',
       keywords: [
         'advanced',
         'command source',
-        'orca.yaml',
+        'agentum.yaml',
         'shared',
         'local',
         'both',
@@ -782,7 +782,7 @@ export function RepositoryHooksSection({
         <h2 className="text-sm font-semibold">Worktree Hooks</h2>
         <p className="text-xs text-muted-foreground">
           Scripts that run when worktrees are created or archived. Local scripts are stored on this
-          machine; `orca.yaml` scripts are shared with your team.
+          machine; `agentum.yaml` scripts are shared with your team.
         </p>
       </div>
 
@@ -796,8 +796,8 @@ export function RepositoryHooksSection({
           'command',
           'local',
           'local settings scripts',
-          'orca.yaml',
-          'orca.yaml hooks',
+          'agentum.yaml',
+          'agentum.yaml hooks',
           'hook'
         ]}
       >
@@ -844,8 +844,8 @@ export function RepositoryHooksSection({
           'command',
           'local',
           'local settings scripts',
-          'orca.yaml',
-          'orca.yaml hooks',
+          'agentum.yaml',
+          'agentum.yaml hooks',
           'hook'
         ]}
       >
@@ -896,7 +896,7 @@ export function RepositoryHooksSection({
           />
           <p className="text-[11px] text-muted-foreground">
             Leave blank to use the repo default from{' '}
-            <code className="rounded bg-muted px-1 py-0.5">orca.yaml</code>
+            <code className="rounded bg-muted px-1 py-0.5">agentum.yaml</code>
             {hasSharedIssueCommand ? '.' : ' when one exists.'}
           </p>
           {issueCommandSaveError ? (
@@ -907,12 +907,12 @@ export function RepositoryHooksSection({
 
       <SearchableSetting
         title="Advanced"
-        description="Command source and orca.yaml details."
+        description="Command source and agentum.yaml details."
         forceVisible={forceVisible}
         keywords={[
           'advanced',
           'command source',
-          'orca.yaml',
+          'agentum.yaml',
           'shared',
           'local',
           'both',
@@ -941,7 +941,7 @@ export function RepositoryHooksSection({
             <div className="flex items-center gap-2">
               <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
               <h5 className="text-sm font-semibold">Advanced</h5>
-              <span className="text-xs text-muted-foreground">Command source &amp; orca.yaml</span>
+              <span className="text-xs text-muted-foreground">Command source &amp; agentum.yaml</span>
             </div>
             <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-foreground">
               {COMMAND_SOURCE_LABEL[selectedCommandSourcePolicy]}
@@ -953,7 +953,7 @@ export function RepositoryHooksSection({
               <div className="space-y-1">
                 <p className="text-sm font-medium">Command Source</p>
                 <p className="text-[11px] text-muted-foreground">
-                  When both <code className="rounded bg-muted px-1 py-0.5">orca.yaml</code> and
+                  When both <code className="rounded bg-muted px-1 py-0.5">agentum.yaml</code> and
                   local commands exist, choose which run.
                 </p>
               </div>
@@ -987,7 +987,7 @@ export function RepositoryHooksSection({
                     <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-300" />
                     <div className="space-y-2 text-xs text-muted-foreground">
                       <p>
-                        The file is present, but Orca could not find valid `scripts` or
+                        The file is present, but Agentum could not find valid `scripts` or
                         `issueCommand` definitions.
                       </p>
                       <ol className="space-y-1.5 pl-4 text-[11.5px]">
@@ -1024,7 +1024,7 @@ const PARSE_ERROR_FIXES = [
   'Compare your file against the working template below and copy that shape if needed.'
 ]
 
-function renderYamlScriptPreview(hooks: OrcaHooks | null): string {
+function renderYamlScriptPreview(hooks: AgentumHooks | null): string {
   const fmt = (key: string, cmd?: string): string =>
     cmd ? `\n  ${key}: |\n${cmd.replace(/^/gm, '    ')}` : ''
   const issueCommand = hooks?.issueCommand

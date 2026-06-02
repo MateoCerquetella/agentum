@@ -373,7 +373,7 @@ describe('TabBar PowerShell launch wiring', () => {
 
   it('uses the paired host platform to show Windows shell rows in a Mac browser', async () => {
     vi.stubGlobal('navigator', { userAgent: 'Macintosh' })
-    vi.stubGlobal('__ORCA_WEB_CLIENT__', true)
+    vi.stubGlobal('__AGENTUM_WEB_CLIENT__', true)
     vi.stubGlobal('window', {
       api: {
         wsl: {

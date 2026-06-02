@@ -64,7 +64,7 @@ function makeRepo(overrides: Partial<Repo> = {}): Repo {
   return {
     id: 'repo-1',
     path: '/repo',
-    displayName: 'orca',
+    displayName: 'agentum',
     badgeColor: '#999999',
     addedAt: 1,
     ...overrides
@@ -86,7 +86,7 @@ describe('ProjectAddedDialog', () => {
 
     const markup = renderToStaticMarkup(<ProjectAddedDialog />)
 
-    expect(markup).toContain('setup:orca')
+    expect(markup).toContain('setup:agentum')
     expect(mocks.state.closeModal).not.toHaveBeenCalled()
   })
 
@@ -118,7 +118,7 @@ describe('ProjectAddedDialog', () => {
 
     const markup = renderToStaticMarkup(<ProjectAddedDialog />)
 
-    expect(markup).toContain('setup:orca:main')
+    expect(markup).toContain('setup:agentum:main')
   })
 
   it('closes without rendering Git setup for folder repos', async () => {

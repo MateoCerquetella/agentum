@@ -31,7 +31,7 @@ export const createOpenCodeUsageSlice: StateCreator<AppState, [], [], OpenCodeUs
   set,
   get
 ) => ({
-  openCodeUsageScope: 'orca',
+  openCodeUsageScope: 'agentum',
   openCodeUsageRange: '30d',
   openCodeUsageScanState: null,
   openCodeUsageSummary: null,

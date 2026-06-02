@@ -29,11 +29,11 @@ export function HeroIntro({ onStart }: { onStart: () => void }): React.JSX.Eleme
   return (
     <div className="mp-intro-shell">
       <div className="mp-eyebrow-row">
-        <span className="mp-eyebrow">Orca Mobile</span>
+        <span className="mp-eyebrow">Agentum Mobile</span>
       </div>
       <h1 className="mp-h1">Your workspaces, in your pocket.</h1>
       <p className="mp-lead">
-        Control Orca from your phone. Check on agents, review changes, and kick off tasks while
+        Control Agentum from your phone. Check on agents, review changes, and kick off tasks while
         you&apos;re away from your desk.
       </p>
       <div className="mp-platform-badges" aria-label="Supported mobile platforms">
@@ -77,13 +77,13 @@ export function HeroPaired({
   return (
     <div>
       <div className="mp-eyebrow-row">
-        <span className="mp-eyebrow">Orca Mobile</span>
+        <span className="mp-eyebrow">Agentum Mobile</span>
       </div>
       <h1 className="mp-h1">
         {devices.length === 1 ? 'Your phone is paired.' : 'Your phones are paired.'}
       </h1>
       <p className="mp-lead-sm">
-        Open Orca Mobile to pick up where you left off, or pair another device.
+        Open Agentum Mobile to pick up where you left off, or pair another device.
       </p>
       <ul className="mp-paired-list">
         {devices.map((device) => {
@@ -183,7 +183,7 @@ export function HeroFlow({
               </div>
               <h2 className="mp-h2">Get the app.</h2>
               <p className="mp-lead-sm">
-                Scan the QR with your phone or open the install link to grab Orca Mobile.
+                Scan the QR with your phone or open the install link to grab Agentum Mobile.
               </p>
               <div className="mp-tab-toggle">
                 <button
@@ -230,7 +230,7 @@ export function HeroFlow({
               </div>
               <h2 className="mp-h2">Pair this {getDeviceLabel()}.</h2>
               <p className="mp-lead-sm">
-                Open Orca Mobile, tap <strong>Pair Desktop</strong>, and scan the code.
+                Open Agentum Mobile, tap <strong>Pair Desktop</strong>, and scan the code.
               </p>
 
               <div className="mp-network-row">

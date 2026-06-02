@@ -55,7 +55,7 @@ export function AgentStep({ selectedAgent, onSelect, detectedSet, isDetecting }:
         <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-400/30 bg-amber-400/10 px-4 py-2.5 text-xs text-amber-700 dark:text-amber-200/90">
           <span>
             <span className="font-medium">{selectedEntry.label}</span> isn&apos;t on your PATH yet.
-            Orca will set it as your default and you can install it any time.
+            Agentum will set it as your default and you can install it any time.
           </span>
           <button
             type="button"

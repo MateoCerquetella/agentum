@@ -38,7 +38,7 @@ describe('hardenSecurePath', () => {
   })
 
   it('rewrites Windows ACLs through the system PowerShell path', () => {
-    hardenSecurePath('C:\\Users\\me\\.orca\\secret.json', {
+    hardenSecurePath('C:\\Users\\me\\.agentum\\secret.json', {
       isDirectory: false,
       platform: 'win32'
     })
@@ -59,7 +59,7 @@ describe('hardenSecurePath', () => {
         '-NonInteractive',
         '-ExecutionPolicy',
         'Bypass',
-        'C:\\Users\\me\\.orca\\secret.json',
+        'C:\\Users\\me\\.agentum\\secret.json',
         'S-1-5-21-1000',
         '0'
       ])
@@ -74,7 +74,7 @@ describe('hardenSecurePath', () => {
   })
 
   it('adds inheritable rules when hardening a Windows directory', () => {
-    hardenSecurePath('C:\\Users\\me\\.orca', { isDirectory: true, platform: 'win32' })
+    hardenSecurePath('C:\\Users\\me\\.agentum', { isDirectory: true, platform: 'win32' })
 
     const powershellArgs = vi.mocked(execFileSync).mock.calls[1]![1] as string[]
     expect(powershellArgs.at(-1)).toBe('1')
@@ -89,7 +89,7 @@ describe('hardenSecurePath', () => {
     })
 
     expect(() =>
-      hardenSecurePath('C:\\Users\\me\\.orca\\secret.json', {
+      hardenSecurePath('C:\\Users\\me\\.agentum\\secret.json', {
         isDirectory: false,
         platform: 'win32'
       })

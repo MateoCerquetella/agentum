@@ -5,7 +5,7 @@ describe('shouldOfferDaemonRestart', () => {
   it('matches stale daemon node-pty install failures', () => {
     expect(
       shouldOfferDaemonRestart(
-        "Daemon's node-pty install is gone (worktree deleted?). Restart Orca. node-pty: posix_spawn failed: ENOENT (errno 2, No such file or directory) - helper='/Applications/Orca.app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper'"
+        "Daemon's node-pty install is gone (worktree deleted?). Restart Agentum. node-pty: posix_spawn failed: ENOENT (errno 2, No such file or directory) - helper='/Applications/Agentum.app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper'"
       )
     ).toBe(true)
   })

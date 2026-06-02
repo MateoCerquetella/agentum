@@ -66,7 +66,7 @@ import { getRepositoryPaneSearchEntries } from '@/components/settings/repository
 
 export function isWebClientLocation(): boolean {
   return (
-    Boolean((window as unknown as { __ORCA_WEB_CLIENT__?: boolean }).__ORCA_WEB_CLIENT__) ||
+    Boolean((window as unknown as { __AGENTUM_WEB_CLIENT__?: boolean }).__AGENTUM_WEB_CLIENT__) ||
     window.location.pathname.endsWith('/web-index.html')
   )
 }
@@ -115,7 +115,7 @@ export function buildSettingsNavigationMetadata({
     {
       id: 'orchestration',
       title: 'Orchestration',
-      description: 'Coordinate multiple coding agents through Orca.',
+      description: 'Coordinate multiple coding agents through Agentum.',
       icon: Network,
       searchEntries: ORCHESTRATION_PANE_SEARCH_ENTRIES,
       group: 'capabilities'
@@ -251,17 +251,17 @@ export function buildSettingsNavigationMetadata({
     {
       id: 'stats',
       title: 'Stats & Usage',
-      description: 'Orca stats plus Claude, Codex, and OpenCode usage analytics.',
+      description: 'Agentum stats plus Claude, Codex, and OpenCode usage analytics.',
       icon: BarChart3,
       searchEntries: STATS_PANE_SEARCH_ENTRIES,
       group: 'interface'
     },
     {
       id: 'servers',
-      title: 'Remote Orca Servers',
+      title: 'Remote Agentum Servers',
       description: isWebClient
-        ? 'Connect this browser to a saved Orca server.'
-        : 'Switch between local desktop mode and paired remote Orca runtimes.',
+        ? 'Connect this browser to a saved Agentum server.'
+        : 'Switch between local desktop mode and paired remote Agentum runtimes.',
       icon: Server,
       searchEntries: [runtimeEnvironmentsSearchEntry],
       group: 'remote',

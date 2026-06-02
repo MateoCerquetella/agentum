@@ -77,7 +77,7 @@ describe('resolveTabAgent', () => {
     expect(resolveCompletedTabAgent(map, 'tab-1')).toBe('openclaude')
   })
 
-  it('keeps the terminal glyph for an agent Orca has no icon for', () => {
+  it('keeps the terminal glyph for an agent Agentum has no icon for', () => {
     const map = { [`tab-1:${LEAF_A}`]: entry(`tab-1:${LEAF_A}`, 'totally-custom-agent') }
     expect(resolveTabAgent(map, layout(LEAF_A), 'tab-1')).toBeNull()
   })

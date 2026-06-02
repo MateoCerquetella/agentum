@@ -22,7 +22,7 @@ export const PRIVACY_PANE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   },
   {
     title: 'Share Anonymous Usage Data',
-    description: 'Help improve Orca by sending anonymous feature-usage events.',
+    description: 'Help improve Agentum by sending anonymous feature-usage events.',
     keywords: ['telemetry', 'usage', 'anonymous', 'opt in', 'opt out', 'share']
   },
   {
@@ -36,7 +36,7 @@ export const PRIVACY_PANE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
     keywords: [
       'do not track',
       'do_not_track',
-      'orca_telemetry_disabled',
+      'agentum_telemetry_disabled',
       'ci',
       'continuous integration',
       'env',

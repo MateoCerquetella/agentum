@@ -1457,7 +1457,7 @@ function ProviderDetailsMenu({
 // StatusBar
 // ---------------------------------------------------------------------------
 
-const CLOSE_ALL_CONTEXT_MENUS_EVENT = 'orca-close-all-context-menus'
+const CLOSE_ALL_CONTEXT_MENUS_EVENT = 'agentum-close-all-context-menus'
 
 function StatusBarInner({ floatingTerminalOpen }: StatusBarProps): React.JSX.Element | null {
   const floatingTerminalShortcut = useShortcutLabel('floatingTerminal.toggle')
@@ -1539,7 +1539,7 @@ function StatusBarInner({ floatingTerminalOpen }: StatusBarProps): React.JSX.Ele
     setIsRefreshing(true)
     try {
       // Why: also re-run PATH detection so a freshly-installed CLI's bar
-      // appears (and a removed CLI's bar hides) without restarting Orca.
+      // appears (and a removed CLI's bar hides) without restarting Agentum.
       await Promise.all([refreshRateLimits(), refreshDetectedAgents()])
     } finally {
       if (mountedRef.current) {

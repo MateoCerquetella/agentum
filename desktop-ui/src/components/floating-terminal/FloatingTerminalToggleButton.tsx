@@ -15,7 +15,7 @@ import {
 } from './floating-terminal-trigger-position'
 
 // Why: v2 resets older parked positions that sat too low over bottom bars.
-const FLOATING_TERMINAL_TRIGGER_POSITION_STORAGE_KEY = 'orca-floating-terminal-trigger-position-v2'
+const FLOATING_TERMINAL_TRIGGER_POSITION_STORAGE_KEY = 'agentum-floating-terminal-trigger-position-v2'
 const FLOATING_TERMINAL_TRIGGER_DRAG_THRESHOLD = 4
 
 type FloatingTerminalTriggerPositionState = {

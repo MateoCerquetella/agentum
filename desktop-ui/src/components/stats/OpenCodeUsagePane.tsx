@@ -31,7 +31,7 @@ import { StatCard } from './StatCard'
 
 const RANGE_OPTIONS: OpenCodeUsageRange[] = ['7d', '30d', '90d', 'all']
 const SCOPE_OPTIONS: { value: OpenCodeUsageScope; label: string }[] = [
-  { value: 'orca', label: 'Orca worktrees only' },
+  { value: 'agentum', label: 'Agentum worktrees only' },
   { value: 'all', label: 'All local OpenCode usage' }
 ]
 const RANGE_LABELS: Record<OpenCodeUsageRange, string> = {

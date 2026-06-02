@@ -143,7 +143,7 @@ export function GitLabRateLimitPanel({ className }: { className?: string }): Rea
             <Gauge className="size-4" />
             GitLab API Budget
           </div>
-          <p className="text-xs text-muted-foreground">Orca uses REST through the GitLab CLI.</p>
+          <p className="text-xs text-muted-foreground">Agentum uses REST through the GitLab CLI.</p>
         </div>
         <Button
           type="button"

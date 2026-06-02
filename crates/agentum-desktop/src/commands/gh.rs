@@ -97,7 +97,7 @@ pub fn gh_rate_limit() -> Value {
 }
 
 #[tauri::command]
-pub fn gh_star_orca() -> bool {
+pub fn gh_star_agentum() -> bool {
     false
 }
 
@@ -112,7 +112,7 @@ pub fn gh_update_pr_title() -> bool {
 }
 
 #[tauri::command]
-pub fn gh_check_orca_starred() -> Option<Value> {
+pub fn gh_check_agentum_starred() -> Option<Value> {
     None
 }
 

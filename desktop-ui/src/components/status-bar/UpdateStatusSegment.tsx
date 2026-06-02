@@ -26,7 +26,7 @@ export function UpdateStatusSegment({
       return {
         icon: <Download className="size-3 text-muted-foreground" />,
         label: `${pct}%`,
-        tooltip: `Orca v${status.version} downloading… ${pct}%`,
+        tooltip: `Agentum v${status.version} downloading… ${pct}%`,
         ariaLabel: `Update downloading, ${pct} percent. Click to expand.`
       }
     }
@@ -34,7 +34,7 @@ export function UpdateStatusSegment({
       return {
         icon: <CheckCircle2 className="size-3 text-emerald-500" />,
         label: 'Update ready',
-        tooltip: `Orca v${status.version} ready to install`,
+        tooltip: `Agentum v${status.version} ready to install`,
         ariaLabel: 'Update ready to install. Click to expand.'
       }
     }

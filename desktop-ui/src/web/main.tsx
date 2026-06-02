@@ -24,7 +24,7 @@ function WebRoot(): React.JSX.Element {
     const offer = initialPairingInput ? parseWebPairingInput(initialPairingInput) : null
     if (offer) {
       saveStoredWebRuntimeEnvironment(
-        createStoredWebRuntimeEnvironment({ name: 'Orca Server', offer })
+        createStoredWebRuntimeEnvironment({ name: 'Agentum Server', offer })
       )
       clearPairingInputFromAddressBar()
       return true
@@ -53,7 +53,7 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <RecoverableRenderErrorBoundary
     boundaryId="web.root"
     surface="web-root"
-    title="Orca web hit a renderer error."
+    title="Agentum web hit a renderer error."
     description="Retry the web client or reconnect to the paired runtime."
   >
     <WebRoot />

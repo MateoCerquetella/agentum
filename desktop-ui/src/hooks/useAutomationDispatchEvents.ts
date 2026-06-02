@@ -21,7 +21,7 @@ import {
   selectAutomationRunOutputSnapshot
 } from '@/components/automations/automation-run-output-snapshot'
 
-const AUTOMATIONS_CHANGED_EVENT = 'orca:automations-changed'
+const AUTOMATIONS_CHANGED_EVENT = 'agentum:automations-changed'
 const activeReuseDispatchTabIds = new Set<string>()
 
 function acquireReuseDispatchTab(tabId: string): (() => void) | null {

@@ -134,12 +134,12 @@ export function LightTerminalThemeSection({
 
               <SearchableSetting
                 title="Light Theme"
-                description="Choose the theme used when Orca is in light mode."
+                description="Choose the theme used when Agentum is in light mode."
                 keywords={['terminal', 'theme', 'light', 'preview']}
               >
                 <ThemePicker
                   label="Light Theme"
-                  description="Choose the theme used when Orca is in light mode."
+                  description="Choose the theme used when Agentum is in light mode."
                   selectedTheme={settings.terminalThemeLight}
                   query={themeSearchLight}
                   onQueryChange={setThemeSearchLight}

@@ -9,7 +9,7 @@ fn map_err(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-// Mirrors SshTarget in orca/src/shared/ssh-types.ts. `extra` round-trips fields
+// Mirrors SshTarget in agentum/src/shared/ssh-types.ts. `extra` round-trips fields
 // this layer doesn't manage yet (jumpHost, proxyCommand, portForwards, etc.).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -234,7 +234,7 @@ pub fn ssh_needs_passphrase_prompt(target_id: String) -> Result<bool, String> {
     Ok(false)
 }
 
-// Mirrors PortForwardEntry in orca/src/shared/ssh-types.ts. `connectionId` is the
+// Mirrors PortForwardEntry in agentum/src/shared/ssh-types.ts. `connectionId` is the
 // owning target id. Forwards persist so they auto-restore on (future) reconnect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

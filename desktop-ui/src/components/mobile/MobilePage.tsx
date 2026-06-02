@@ -42,12 +42,12 @@ export const PLATFORM_COPY: Record<
   ios: {
     description: 'Scan with your iPhone camera to open the App Store.',
     ctaLabel: 'Open App Store',
-    url: 'https://apps.apple.com/app/orca-ide/id6766130217'
+    url: 'https://apps.apple.com/app/agentum-ide/id6766130217'
   },
   android: {
     description: 'Scan with your Android camera to download the latest APK from GitHub Releases.',
     ctaLabel: 'Download APK',
-    url: 'https://github.com/stablyai/orca/releases/download/mobile-v0.0.10/app-release.apk'
+    url: 'https://github.com/stablyai/agentum/releases/download/mobile-v0.0.10/app-release.apk'
   }
 }
 
@@ -436,7 +436,7 @@ export default function MobilePage(): React.JSX.Element {
               size="icon"
               className="size-7 rounded-full"
               onClick={closeMobilePage}
-              aria-label="Close Orca Mobile"
+              aria-label="Close Agentum Mobile"
             >
               <X className="size-4" />
             </Button>

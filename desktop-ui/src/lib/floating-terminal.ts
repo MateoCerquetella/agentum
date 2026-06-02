@@ -1,1 +1,1 @@
-export const TOGGLE_FLOATING_TERMINAL_EVENT = 'orca-toggle-floating-terminal'
+export const TOGGLE_FLOATING_TERMINAL_EVENT = 'agentum-toggle-floating-terminal'

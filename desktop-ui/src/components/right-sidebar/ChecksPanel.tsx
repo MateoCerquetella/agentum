@@ -1341,7 +1341,7 @@ export default function ChecksPanel(): React.JSX.Element {
   )
 
   // Why: force a freshness check on each "entry" into the Checks tab so PRs
-  // opened outside Orca, externally force-pushed heads, and stale checks/comments
+  // opened outside Agentum, externally force-pushed heads, and stale checks/comments
   // appear without waiting for the cache TTL. The grace window suppresses
   // duplicate fetches from rapid show/hide toggles. See
   // docs/refresh-on-checks-tab.md.

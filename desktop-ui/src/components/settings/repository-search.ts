@@ -61,7 +61,7 @@ export function getRepositoryPaneSearchEntries(repo: Repo): SettingsSearchEntry[
         ]),
     {
       title: 'Remove Project',
-      description: 'Remove this project from Orca.',
+      description: 'Remove this project from Agentum.',
       keywords: [repo.displayName, 'delete', 'project', 'repository']
     },
     ...(isFolder
@@ -120,7 +120,7 @@ export function getRepositoryPaneSearchEntries(repo: Repo): SettingsSearchEntry[
               'setup script',
               'setup command',
               'local settings scripts',
-              'orca.yaml hooks',
+              'agentum.yaml hooks',
               'yaml'
             ]
           },
@@ -134,19 +134,19 @@ export function getRepositoryPaneSearchEntries(repo: Repo): SettingsSearchEntry[
               'archive script',
               'archive command',
               'local settings scripts',
-              'orca.yaml hooks',
+              'agentum.yaml hooks',
               'yaml'
             ]
           },
           {
             title: 'Advanced',
-            description: 'Command source and orca.yaml details.',
+            description: 'Command source and agentum.yaml details.',
             keywords: [
               repo.displayName,
               'advanced',
               'command source',
               'local',
-              'orca.yaml',
+              'agentum.yaml',
               'shared',
               'both',
               'source',
@@ -167,15 +167,15 @@ export function getRepositoryPaneSearchEntries(repo: Repo): SettingsSearchEntry[
           {
             title: 'Custom GitHub Issue Command',
             description:
-              'File-based linked-issue command configured via orca.yaml and optional local override.',
+              'File-based linked-issue command configured via agentum.yaml and optional local override.',
             keywords: [
               repo.displayName,
               'github issue command',
               'issue command',
               'workflow',
               'github',
-              'orca.yaml',
-              '.orca/issue-command'
+              'agentum.yaml',
+              '.agentum/issue-command'
             ]
           }
         ])

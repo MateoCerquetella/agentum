@@ -2,9 +2,9 @@ import { Node, mergeAttributes } from '@tiptap/core'
 import { isEditableDetailsHtmlBlock, matchDetailsHtmlBlock } from './details-markdown-html'
 import { formatMarkdownDocLinkBody, parseMarkdownDocLink } from './markdown-doc-links'
 
-const INLINE_PLACEHOLDER_PREFIX = '[[ORCA_RAW_HTML_INLINE:'
-const BLOCK_PLACEHOLDER_PREFIX = '[[ORCA_RAW_HTML_BLOCK:'
-const DOC_LINK_PLACEHOLDER_PREFIX = '[[ORCA_DOC_LINK:'
+const INLINE_PLACEHOLDER_PREFIX = '[[AGENTUM_RAW_HTML_INLINE:'
+const BLOCK_PLACEHOLDER_PREFIX = '[[AGENTUM_RAW_HTML_BLOCK:'
+const DOC_LINK_PLACEHOLDER_PREFIX = '[[AGENTUM_DOC_LINK:'
 const PLACEHOLDER_SUFFIX = ']]'
 
 const INLINE_HTML_PATTERN = /^<!--[\s\S]*?-->|^<\/?[A-Za-z][\w.:-]*(?:\s[^<>]*?)?\/?>/
@@ -192,12 +192,12 @@ export function encodeRawMarkdownHtmlForRichEditor(content: string): string {
 
     // Why: doc link encoding runs inside the same while loop (not a separate
     // pre-pass) so that fenced code blocks and backtick code spans are already
-    // skipped by the guards above. The [[ORCA_ prefix check prevents re-encoding
+    // skipped by the guards above. The [[AGENTUM_ prefix check prevents re-encoding
     // sibling placeholders that were already emitted earlier in this pass.
     if (
       content[index] === '[' &&
       content[index + 1] === '[' &&
-      !content.startsWith('[[ORCA_', index) &&
+      !content.startsWith('[[AGENTUM_', index) &&
       !isEscaped(content, index)
     ) {
       const closingIndex = content.indexOf(']]', index + 2)
@@ -241,7 +241,7 @@ export const RawMarkdownHtmlInline = Node.create({
 
   // Why: converting embedded HTML tags into placeholder tokens before the
   // markdown parser runs keeps marked's built-in paragraph tokenization intact
-  // while still letting Orca round-trip the raw markup verbatim.
+  // while still letting Agentum round-trip the raw markup verbatim.
   markdownTokenName: 'rawMarkdownHtmlInline',
   markdownTokenizer: {
     name: 'rawMarkdownHtmlInline',

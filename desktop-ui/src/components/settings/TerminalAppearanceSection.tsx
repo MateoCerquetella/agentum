@@ -273,18 +273,18 @@ export function TerminalAppearanceSection({
       <section key="cursor" className="space-y-3">
         <SettingsSubsectionHeader
           title="Terminal Cursor"
-          description="Default cursor appearance for Orca terminal panes."
+          description="Default cursor appearance for Agentum terminal panes."
         />
 
         <div className="divide-y divide-border/40">
           <SearchableSetting
             title="Cursor Shape"
-            description="Default cursor appearance for Orca terminal panes."
+            description="Default cursor appearance for Agentum terminal panes."
             keywords={['terminal', 'cursor', 'bar', 'block', 'underline']}
           >
             <SettingsRow
               label="Cursor Shape"
-              description="Default cursor appearance for Orca terminal panes."
+              description="Default cursor appearance for Agentum terminal panes."
               control={
                 <SettingsSegmentedControl
                   ariaLabel="Cursor Shape"

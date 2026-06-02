@@ -57,7 +57,7 @@ const AddProjectFromFolderDialog = React.memo(function AddProjectFromFolderDialo
   const hiddenWorktreeCount =
     detectedResult?.authoritative === true
       ? detectedResult.worktrees.filter(
-          (worktree) => !worktree.selectedCheckout && worktree.ownership !== 'orca-managed'
+          (worktree) => !worktree.selectedCheckout && worktree.ownership !== 'agentum-managed'
         ).length
       : 0
   const otherWorktreesVisible = addedRepo
@@ -119,7 +119,7 @@ const AddProjectFromFolderDialog = React.memo(function AddProjectFromFolderDialo
         const state = useAppStore.getState()
         const existingIdx = state.repos.findIndex((r) => r.id === repo?.id)
         if (existingIdx !== -1) {
-          state.clearOrcaHookTrustForRepo(repo.id)
+          state.clearAgentumHookTrustForRepo(repo.id)
           const updated = [...state.repos]
           updated[existingIdx] = repo
           useAppStore.setState({ repos: updated })
@@ -269,7 +269,7 @@ const AddProjectFromFolderDialog = React.memo(function AddProjectFromFolderDialo
           <>
             <DialogHeader>
               <DialogTitle>Add Project</DialogTitle>
-              <DialogDescription>Add this folder as a separate Orca project.</DialogDescription>
+              <DialogDescription>Add this folder as a separate Agentum project.</DialogDescription>
             </DialogHeader>
 
             {folderPath && (

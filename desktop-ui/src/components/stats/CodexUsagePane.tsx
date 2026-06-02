@@ -29,7 +29,7 @@ import { StatCard } from './StatCard'
 
 const RANGE_OPTIONS: CodexUsageRange[] = ['7d', '30d', '90d', 'all']
 const SCOPE_OPTIONS: { value: CodexUsageScope; label: string }[] = [
-  { value: 'orca', label: 'Orca worktrees only' },
+  { value: 'agentum', label: 'Agentum worktrees only' },
   { value: 'all', label: 'All local Codex usage' }
 ]
 const RANGE_LABELS: Record<CodexUsageRange, string> = {

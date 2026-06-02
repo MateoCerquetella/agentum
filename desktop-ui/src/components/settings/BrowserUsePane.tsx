@@ -4,13 +4,13 @@ import { Import, Loader2, MousePointerClick } from 'lucide-react'
 import { toast } from 'sonner'
 import type { CliInstallStatus } from '../../../../shared/cli-install-types'
 import {
-  ORCA_CLI_SKILL_INSTALL_COMMAND,
-  ORCA_CLI_SKILL_NAME
+  AGENTUM_CLI_SKILL_INSTALL_COMMAND,
+  AGENTUM_CLI_SKILL_NAME
 } from '@/lib/agent-feature-install-commands'
 import {
   AGENT_SKILL_CLI_PREREQUISITE_NOTICE,
-  ensureOrcaCliAvailableForAgentSkillTerminal,
-  isOrcaCliAvailableOnPath
+  ensureAgentumCliAvailableForAgentSkillTerminal,
+  isAgentumCliAvailableOnPath
 } from '@/lib/agent-skill-cli-prerequisite'
 import { BROWSER_USE_ENABLED_STORAGE_KEY } from '@/lib/browser-use-setup-state'
 import {
@@ -118,7 +118,7 @@ export function BrowserUseSetup({
   // when the default profile — the one agents use — is still empty.
   const cookiesImported = !!defaultProfile?.source
 
-  const cliEnabled = isOrcaCliAvailableOnPath(cliStatus)
+  const cliEnabled = isAgentumCliAvailableOnPath(cliStatus)
   const cliPathNeedsAttention = cliStatus?.state === 'installed' && !cliStatus.pathConfigured
   const cliSupported = cliStatus?.supported ?? false
 
@@ -127,7 +127,7 @@ export function BrowserUseSetup({
     loading: skillLoading,
     error: skillError,
     refresh: refreshSkill
-  } = useInstalledAgentSkill(ORCA_CLI_SKILL_NAME, {
+  } = useInstalledAgentSkill(AGENTUM_CLI_SKILL_NAME, {
     enabled: browserUseEnabled,
     sourceKinds: GLOBAL_AGENT_SKILL_SOURCE_KINDS
   })
@@ -135,11 +135,11 @@ export function BrowserUseSetup({
   const handleEnableCli = async (): Promise<void> => {
     setCliBusy(true)
     try {
-      const next = await ensureOrcaCliAvailableForAgentSkillTerminal({
+      const next = await ensureAgentumCliAvailableForAgentSkillTerminal({
         onStatusChange: handleCliStatusChange
       })
-      if (mountedRef.current && isOrcaCliAvailableOnPath(next)) {
-        toast.success('Registered the Orca CLI in PATH.')
+      if (mountedRef.current && isAgentumCliAvailableOnPath(next)) {
+        toast.success('Registered the Agentum CLI in PATH.')
       }
     } finally {
       if (mountedRef.current) {
@@ -270,8 +270,8 @@ export function BrowserUseSetup({
 
       {showStep1 ? (
         <SearchableSetting
-          title="Enable Orca CLI"
-          description="Register the Orca CLI so agents can drive the browser."
+          title="Enable Agentum CLI"
+          description="Register the Agentum CLI so agents can drive the browser."
           keywords={BROWSER_USE_PANE_SEARCH_ENTRIES[0].keywords}
           className="rounded-xl border border-border/60 bg-card/50 p-4"
         >
@@ -281,9 +281,9 @@ export function BrowserUseSetup({
               state={cliEnabled ? 'done' : cliBusy ? 'in-progress' : 'pending'}
             />
             <div className="min-w-0 flex-1 space-y-1">
-              <p className="text-sm font-medium">Enable Orca CLI</p>
+              <p className="text-sm font-medium">Enable Agentum CLI</p>
               <p className="text-xs text-muted-foreground">
-                Registers the Orca CLI command so agents can orchestrate the browser from their
+                Registers the Agentum CLI command so agents can orchestrate the browser from their
                 shell.
               </p>
               {cliStatus?.commandPath && cliEnabled ? (
@@ -330,14 +330,14 @@ export function BrowserUseSetup({
       {showStep2 ? (
         <SearchableSetting
           title="Install Browser Use Skill"
-          description="Install the Browser Use skill so agents can operate Orca's browser."
+          description="Install the Browser Use skill so agents can operate Agentum's browser."
           keywords={BROWSER_USE_PANE_SEARCH_ENTRIES[1].keywords}
           className={`rounded-xl border border-border/60 bg-card/50 p-4 ${
             cliEnabled ? '' : 'opacity-60'
           }`}
         >
           <BrowserUseSkillStep
-            command={ORCA_CLI_SKILL_INSTALL_COMMAND}
+            command={AGENTUM_CLI_SKILL_INSTALL_COMMAND}
             skillDetected={skillDetected}
             skillLoading={skillLoading}
             skillError={skillError}
@@ -345,7 +345,7 @@ export function BrowserUseSetup({
             preInstallNotice={AGENT_SKILL_CLI_PREREQUISITE_NOTICE}
             onBeforeOpenTerminal={async () => {
               useAppStore.getState().recordFeatureInteraction('agent-browser-setup')
-              await ensureOrcaCliAvailableForAgentSkillTerminal({
+              await ensureAgentumCliAvailableForAgentSkillTerminal({
                 onStatusChange: handleCliStatusChange
               })
             }}
@@ -371,7 +371,7 @@ export function BrowserUseSetup({
             <div className="min-w-0 flex-1 space-y-1">
               <p className="text-sm font-medium">Import Browser Cookies</p>
               <p className="text-xs text-muted-foreground">
-                Bring your existing logins into Orca so agents can reach authenticated pages.
+                Bring your existing logins into Agentum so agents can reach authenticated pages.
                 Imports into the default profile.
               </p>
               {sourceLabel ? (

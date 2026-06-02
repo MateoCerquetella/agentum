@@ -34,7 +34,7 @@ describe('feature tip modal state', () => {
       settings: makeSettings()
     })
 
-    expect(tip?.id).toBe('orca-cli')
+    expect(tip?.id).toBe('agentum-cli')
   })
 
   it('falls back to the CLI tip when voice was already seen and the CLI is not installed', () => {
@@ -46,14 +46,14 @@ describe('feature tip modal state', () => {
       settings: makeSettings()
     })
 
-    expect(tip?.id).toBe('orca-cli')
+    expect(tip?.id).toBe('agentum-cli')
   })
 
   it('returns no tip when every tip is already seen and no modal tip id is pinned', () => {
     const tip = getFeatureTipForModal({
       cliInstalled: false,
       modalData: {},
-      seenTipIds: ['voice-dictation', 'orca-cli'],
+      seenTipIds: ['voice-dictation', 'agentum-cli'],
       featureInteractions: {},
       settings: makeSettings()
     })

@@ -374,12 +374,12 @@
   margin-top: 8px;
 }
 
-.markdown-annotation-card.is-active > .orca-diff-comment-card {
+.markdown-annotation-card.is-active > .agentum-diff-comment-card {
   border-color: color-mix(in srgb, var(--foreground) 32%, transparent);
   background: color-mix(in srgb, var(--foreground) 8%, var(--editor-surface));
 }
 
-.markdown-annotation-card.is-attention > .orca-diff-comment-card {
+.markdown-annotation-card.is-attention > .agentum-diff-comment-card {
   animation: markdown-note-attention 900ms ease-out;
 }
 
@@ -466,12 +466,12 @@
   margin: 0.75em 0;
 }
 
-.markdown-body details.orca-details {
+.markdown-body details.agentum-details {
   margin: 0.85em 0;
   padding-left: 0.75em;
 }
 
-.markdown-body details.orca-details > summary {
+.markdown-body details.agentum-details > summary {
   position: relative;
   list-style: none;
   min-height: 1.6em;
@@ -481,7 +481,7 @@
   line-height: 1.35;
 }
 
-.markdown-body details.orca-details > summary::before {
+.markdown-body details.agentum-details > summary::before {
   position: absolute;
   top: 0.12em;
   left: 0;
@@ -492,22 +492,22 @@
   transition: transform 120ms ease;
 }
 
-.markdown-body details.orca-details[open] > summary::before {
+.markdown-body details.agentum-details[open] > summary::before {
   transform: rotate(90deg);
 }
 
-.markdown-body details.orca-details > summary::-webkit-details-marker {
+.markdown-body details.agentum-details > summary::-webkit-details-marker {
   display: none;
 }
 
-.markdown-body details.orca-details[data-orca-toggle='heading-1'] > summary {
+.markdown-body details.agentum-details[data-agentum-toggle='heading-1'] > summary {
   font-size: 1.85em;
   font-weight: 700;
   letter-spacing: 0;
   line-height: 1.3;
 }
 
-.markdown-body details.orca-details > :not(summary) {
+.markdown-body details.agentum-details > :not(summary) {
   margin-left: 0.15em;
 }
 

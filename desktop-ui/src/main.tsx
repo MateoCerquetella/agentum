@@ -26,7 +26,7 @@ if (
   void import('react-grab/styles.css')
 }
 
-applyDocumentTheme('system', { disableTransitions: false })
+applyDocumentTheme('dark', { disableTransitions: false })
 
 const rootElement = document.getElementById('root')
 if (!rootElement) {

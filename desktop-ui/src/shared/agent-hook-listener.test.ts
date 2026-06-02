@@ -197,7 +197,7 @@ describe('shared agent-hook-listener', () => {
   })
 
   it('normalizes Command Code hooks and reads turn text from the transcript', () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), 'orca-command-code-transcript-'))
+    const tmpDir = mkdtempSync(join(tmpdir(), 'agentum-command-code-transcript-'))
     const transcriptPath = join(tmpDir, 'transcript.jsonl')
     try {
       writeFileSync(
@@ -547,7 +547,7 @@ describe('shared agent-hook-listener', () => {
   })
 
   it('reads Antigravity user requests from the transcript', () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), 'orca-antigravity-prompt-'))
+    const tmpDir = mkdtempSync(join(tmpdir(), 'agentum-antigravity-prompt-'))
     const transcriptPath = join(tmpDir, 'transcript.jsonl')
     try {
       writeFileSync(
@@ -583,7 +583,7 @@ describe('shared agent-hook-listener', () => {
   })
 
   it('keeps the cached Antigravity prompt instead of rescanning the transcript', () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), 'orca-antigravity-cached-prompt-'))
+    const tmpDir = mkdtempSync(join(tmpdir(), 'agentum-antigravity-cached-prompt-'))
     const transcriptPath = join(tmpDir, 'transcript.jsonl')
     try {
       writeFileSync(
@@ -715,7 +715,7 @@ describe('shared agent-hook-listener', () => {
   })
 
   it('normalizes Antigravity Stop hooks and reads final text from the transcript', () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), 'orca-antigravity-transcript-'))
+    const tmpDir = mkdtempSync(join(tmpdir(), 'agentum-antigravity-transcript-'))
     const transcriptPath = join(tmpDir, 'transcript.jsonl')
     try {
       writeFileSync(
@@ -975,7 +975,7 @@ describe('shared agent-hook-listener', () => {
   })
 
   it('reads Grok final assistant text from chat history on Stop', () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), 'orca-grok-session-'))
+    const tmpDir = mkdtempSync(join(tmpdir(), 'agentum-grok-session-'))
     const sessionId = '019e37f4-5135-7b63-a4ab-6d13aa6bf528'
     const cwd = join(tmpDir, 'workspace')
     const sessionDir = join(tmpDir, '.grok', 'sessions', encodeURIComponent(cwd), sessionId)
@@ -1016,7 +1016,7 @@ describe('shared agent-hook-listener', () => {
   })
 
   it('does not let Grok sessionId escape the chat-history directory', () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), 'orca-grok-session-escape-'))
+    const tmpDir = mkdtempSync(join(tmpdir(), 'agentum-grok-session-escape-'))
     const cwd = join(tmpDir, 'workspace')
     const escapedDir = join(tmpDir, '.grok', 'sessions', 'escaped')
     try {
@@ -1278,9 +1278,9 @@ describe('shared agent-hook-listener', () => {
       })
       expect(ok).toBe(true)
       const text = readFileSync(finalPath, 'utf8')
-      expect(text).toContain('ORCA_AGENT_HOOK_PORT=12345')
-      expect(text).toContain('ORCA_AGENT_HOOK_TOKEN=abcdef-0123')
-      expect(text).toContain('ORCA_AGENT_HOOK_VERSION=1')
+      expect(text).toContain('AGENTUM_AGENT_HOOK_PORT=12345')
+      expect(text).toContain('AGENTUM_AGENT_HOOK_TOKEN=abcdef-0123')
+      expect(text).toContain('AGENTUM_AGENT_HOOK_VERSION=1')
       // POSIX 0o600 — owner read/write only.
       if (process.platform !== 'win32') {
         const mode = statSync(finalPath).mode & 0o777

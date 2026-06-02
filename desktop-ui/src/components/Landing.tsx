@@ -42,7 +42,7 @@ function getPreflightIssues(status: {
     issues.push({
       id: 'gh',
       title: 'GitHub CLI is not installed',
-      description: 'Orca uses the GitHub CLI (gh) to show pull requests, issues, and checks.',
+      description: 'Agentum uses the GitHub CLI (gh) to show pull requests, issues, and checks.',
       fixLabel: 'Install GitHub CLI',
       fixUrl: 'https://cli.github.com'
     })
@@ -69,7 +69,7 @@ function GitHubStarButton({ hasRepos }: { hasRepos: boolean }): React.JSX.Elemen
 
   useEffect(() => {
     let cancelled = false
-    void window.api.gh.checkOrcaStarred().then((result) => {
+    void window.api.gh.checkAgentumStarred().then((result) => {
       if (cancelled) {
         return
       }
@@ -106,7 +106,7 @@ function GitHubStarButton({ hasRepos }: { hasRepos: boolean }): React.JSX.Elemen
       return
     }
     setState('starred') // optimistic
-    const ok = await window.api.gh.starOrca('landing')
+    const ok = await window.api.gh.starAgentum('landing')
     if (!ok) {
       if (mountedRef.current) {
         setState('not-starred')
@@ -216,7 +216,7 @@ export default function Landing(): React.JSX.Element {
 
     refreshPreflight()
 
-    // Why: users often install/authenticate gh outside Orca. Re-check when the
+    // Why: users often install/authenticate gh outside Agentum. Re-check when the
     // window becomes active again so the landing warning clears without relaunch.
     const handleWindowActive = (): void => {
       if (document.visibilityState === 'visible') {
@@ -240,7 +240,7 @@ export default function Landing(): React.JSX.Element {
     }
 
     let cancelled = false
-    // Why: some users complete `gh auth login` without ever leaving the Orca
+    // Why: some users complete `gh auth login` without ever leaving the Agentum
     // window. Poll only while a warning is visible so the banner self-clears.
     const intervalId = window.setInterval(() => {
       void window.api.preflight.check({ force: true }).then((status) => {
@@ -280,9 +280,9 @@ export default function Landing(): React.JSX.Element {
             className="flex items-center justify-center size-20 rounded-2xl border border-border/80 shadow-lg shadow-black/40"
             style={{ backgroundColor: '#12181e' }}
           >
-            <img src={logo} alt="Orca logo" className="size-12" />
+            <img src={logo} alt="Agentum logo" className="size-12" />
           </div>
-          <h1 className="text-4xl font-bold text-foreground tracking-tight">ORCA</h1>
+          <h1 className="text-4xl font-bold text-foreground tracking-tight">AGENTUM</h1>
 
           {preflightIssues.length > 0 && <PreflightBanner issues={preflightIssues} />}
 

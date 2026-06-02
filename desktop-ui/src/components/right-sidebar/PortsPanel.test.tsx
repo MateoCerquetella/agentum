@@ -274,7 +274,7 @@ describe('PortsPanel runtime routing', () => {
         runtimeTarget: { kind: 'local' },
         createBrowserTab: createBrowserTab as never,
         setRemoteBrowserPageHandle: setRemoteBrowserPageHandle as never,
-        openInOrcaBrowser: false
+        openInAgentumBrowser: false
       })
     ).resolves.toEqual({ ok: true })
 
@@ -371,7 +371,7 @@ describe('PortsPanel runtime routing', () => {
         runtimeTarget: { kind: 'environment', environmentId: 'env-1' },
         createBrowserTab: createBrowserTab as never,
         setRemoteBrowserPageHandle: setRemoteBrowserPageHandle as never,
-        openInOrcaBrowser: false
+        openInAgentumBrowser: false
       })
     ).resolves.toEqual({ ok: true })
 

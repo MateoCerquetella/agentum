@@ -33,7 +33,7 @@ export function AutomationSessionField({
             </TooltipTrigger>
             <TooltipContent side="top" sideOffset={6} className="max-w-72">
               Reuse sends future runs to the previous live automation session. If that session is
-              gone, Orca starts a fresh one.
+              gone, Agentum starts a fresh one.
             </TooltipContent>
           </Tooltip>
         </span>

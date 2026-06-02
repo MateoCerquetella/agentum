@@ -34,8 +34,8 @@ function formatSummary(report: CrashReportRecord): string {
 
 function getDialogTitle(report: CrashReportRecord | null): string {
   return report && isReactErrorBoundaryReport(report)
-    ? 'Orca hit a recoverable UI error'
-    : 'Orca closed unexpectedly'
+    ? 'Agentum hit a recoverable UI error'
+    : 'Agentum closed unexpectedly'
 }
 
 function getDialogDescription(report: CrashReportRecord | null): string {
@@ -47,7 +47,7 @@ function getDialogDescription(report: CrashReportRecord | null): string {
 function getNotesPlaceholder(report: CrashReportRecord | null): string {
   return report && isReactErrorBoundaryReport(report)
     ? 'Optional: what were you doing before this UI error?'
-    : 'Optional: what were you doing before Orca closed?'
+    : 'Optional: what were you doing before Agentum closed?'
 }
 
 export function CrashReportDialog(): React.JSX.Element {
@@ -284,7 +284,7 @@ export function CrashReportDialog(): React.JSX.Element {
               <div className="font-medium text-foreground">{formatSummary(report)}</div>
               <div className="mt-1 text-muted-foreground">
                 {new Date(report.createdAt).toLocaleString()} · {report.platform} {report.arch} ·
-                Orca {report.appVersion}
+                Agentum {report.appVersion}
               </div>
             </div>
             <textarea

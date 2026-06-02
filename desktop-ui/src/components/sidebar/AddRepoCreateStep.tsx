@@ -1,4 +1,4 @@
-// Step for AddRepoDialog (orca#763), split out so create-project state stays scoped.
+// Step for AddRepoDialog (agentum#763), split out so create-project state stays scoped.
 import React, { useCallback, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Folder, GitBranch, Home, Pencil } from 'lucide-react'
@@ -329,7 +329,7 @@ export function CreateStep({
       <DialogHeader>
         <DialogTitle>Start a new project</DialogTitle>
         <DialogDescription>
-          Create a Git repository or a plain folder and open it in Orca.
+          Create a Git repository or a plain folder and open it in Agentum.
         </DialogDescription>
       </DialogHeader>
 

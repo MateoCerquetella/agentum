@@ -4,7 +4,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 // Mirrors GitStatusResult/GitUncommittedEntry/GitUpstreamStatus in
-// orca/src/shared/git-status-types.ts. A file can appear in both staging areas,
+// agentum/src/shared/git-status-types.ts. A file can appear in both staging areas,
 // so one git2 entry can yield multiple GitStatusEntry rows (one per area).
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

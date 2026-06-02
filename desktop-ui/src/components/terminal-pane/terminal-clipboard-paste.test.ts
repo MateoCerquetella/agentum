@@ -15,13 +15,13 @@ describe('terminal clipboard paste', () => {
       saveClipboardImageAsTempFile: vi
         .fn()
         .mockResolvedValue(
-          '/var/folders/3l/b7w02vh17tg5r5s3nhhdf3kh0000gn/T/orca-paste-1760000000000-id.png'
+          '/var/folders/3l/b7w02vh17tg5r5s3nhhdf3kh0000gn/T/agentum-paste-1760000000000-id.png'
         ),
       pasteText
     })
 
     expect(pasteText).toHaveBeenCalledWith(
-      '/var/folders/3l/b7w02vh17tg5r5s3nhhdf3kh0000gn/T/orca-paste-1760000000000-id.png',
+      '/var/folders/3l/b7w02vh17tg5r5s3nhhdf3kh0000gn/T/agentum-paste-1760000000000-id.png',
       { forceBracketedPaste: true }
     )
   })
@@ -41,12 +41,12 @@ describe('terminal clipboard paste', () => {
       readClipboardText: vi.fn().mockResolvedValue(''),
       saveClipboardImageAsTempFile: vi
         .fn()
-        .mockResolvedValue('/tmp/orca-paste-1760000000000-id.png'),
+        .mockResolvedValue('/tmp/agentum-paste-1760000000000-id.png'),
       pasteText: (text, options) => pasteTerminalText(terminal, text, options)
     })
 
     expect(terminal.paste).toHaveBeenCalledWith(
-      '\x1b[200~/tmp/orca-paste-1760000000000-id.png\x1b[201~'
+      '\x1b[200~/tmp/agentum-paste-1760000000000-id.png\x1b[201~'
     )
     expect(observedIgnoreBracketedPasteMode).toEqual([true])
     expect(terminal.options.ignoreBracketedPasteMode).toBe(false)
@@ -66,12 +66,12 @@ describe('terminal clipboard paste', () => {
       readClipboardText: vi.fn().mockResolvedValue(''),
       saveClipboardImageAsTempFile: vi
         .fn()
-        .mockResolvedValue('/tmp/orca-paste-1760000000000-id.png'),
+        .mockResolvedValue('/tmp/agentum-paste-1760000000000-id.png'),
       pasteText: (text, options) => pasteTerminalText(terminal, text, options)
     })
 
     expect(terminal.paste).toHaveBeenCalledWith(
-      '\x1b[200~/tmp/orca-paste-1760000000000-id.png\x1b[201~'
+      '\x1b[200~/tmp/agentum-paste-1760000000000-id.png\x1b[201~'
     )
     expect(observedIgnoreBracketedPasteMode).toEqual([true])
     expect(terminal.options.ignoreBracketedPasteMode).toBe(false)
@@ -81,7 +81,7 @@ describe('terminal clipboard paste', () => {
     const pasteText = vi.fn()
     const saveClipboardImageAsTempFile = vi
       .fn()
-      .mockResolvedValue('/var/tmp/orca-paste-1760000000000-id.png')
+      .mockResolvedValue('/var/tmp/agentum-paste-1760000000000-id.png')
 
     await pasteTerminalClipboard({
       readClipboardText: vi.fn().mockResolvedValue(''),
@@ -91,7 +91,7 @@ describe('terminal clipboard paste', () => {
     })
 
     expect(saveClipboardImageAsTempFile).toHaveBeenCalledWith({ connectionId: 'ssh-1' })
-    expect(pasteText).toHaveBeenCalledWith('/var/tmp/orca-paste-1760000000000-id.png', {
+    expect(pasteText).toHaveBeenCalledWith('/var/tmp/agentum-paste-1760000000000-id.png', {
       forceBracketedPaste: true
     })
   })
@@ -103,11 +103,11 @@ describe('terminal clipboard paste', () => {
       readClipboardText: vi.fn().mockResolvedValue(''),
       saveClipboardImageAsTempFile: vi
         .fn()
-        .mockResolvedValue('/tmp/orca-paste-1760000000000-id.png'),
+        .mockResolvedValue('/tmp/agentum-paste-1760000000000-id.png'),
       pasteText
     })
 
-    expect(pasteText).toHaveBeenCalledWith('/tmp/orca-paste-1760000000000-id.png', {
+    expect(pasteText).toHaveBeenCalledWith('/tmp/agentum-paste-1760000000000-id.png', {
       forceBracketedPaste: true
     })
   })
@@ -116,7 +116,7 @@ describe('terminal clipboard paste', () => {
     const pasteText = vi.fn()
     const saveClipboardImageAsTempFile = vi
       .fn()
-      .mockResolvedValue('/tmp/orca-paste-1760000000000-id.png')
+      .mockResolvedValue('/tmp/agentum-paste-1760000000000-id.png')
 
     await pasteTerminalClipboard({
       readClipboardText: vi.fn().mockRejectedValue(new Error('No text clipboard permission')),
@@ -125,7 +125,7 @@ describe('terminal clipboard paste', () => {
     })
 
     expect(saveClipboardImageAsTempFile).toHaveBeenCalledWith({ connectionId: undefined })
-    expect(pasteText).toHaveBeenCalledWith('/tmp/orca-paste-1760000000000-id.png', {
+    expect(pasteText).toHaveBeenCalledWith('/tmp/agentum-paste-1760000000000-id.png', {
       forceBracketedPaste: true
     })
   })

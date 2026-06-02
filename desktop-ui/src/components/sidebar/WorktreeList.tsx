@@ -297,7 +297,7 @@ function getWorktreeVisibilityMenuLabel(repo: Repo): string {
     repo,
     isLegacyRepoForExternalWorktreeVisibility(repo)
   )
-  return visibility === 'show' ? 'Hide non-Orca worktrees' : 'Show hidden worktrees'
+  return visibility === 'show' ? 'Hide non-Agentum worktrees' : 'Show hidden worktrees'
 }
 
 function formatSelectedCount(count: number, singular: string): string {

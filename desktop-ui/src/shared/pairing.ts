@@ -22,13 +22,13 @@ export function encodePairingOffer(offer: PairingOffer): string {
     .replace(/=+$/, '')
   // Why: Android camera intents and Expo Router preserve query params more
   // reliably than URL fragments when launching a custom-scheme app.
-  return `orca://pair?code=${base64url}`
+  return `agentum://pair?code=${base64url}`
 }
 
 export function decodePairingOffer(url: string): PairingOffer {
   const code = extractPairingCodeFromUrl(url)
   if (!code) {
-    throw new Error('Invalid pairing URL: must start with orca://pair and include a pairing code')
+    throw new Error('Invalid pairing URL: must start with agentum://pair and include a pairing code')
   }
   return decodePairingBase64(code)
 }
@@ -40,9 +40,9 @@ function extractPairingCodeFromUrl(url: string): string | null {
   } catch {
     return null
   }
-  // Why: prefix checks accepted routes like `orca://pairing?...`; only the
+  // Why: prefix checks accepted routes like `agentum://pairing?...`; only the
   // pairing deep-link host may carry runtime auth material.
-  if (parsed.protocol !== 'orca:' || parsed.hostname !== 'pair') {
+  if (parsed.protocol !== 'agentum:' || parsed.hostname !== 'pair') {
     return null
   }
   if (parsed.pathname !== '' && parsed.pathname !== '/') {
@@ -55,7 +55,7 @@ function extractPairingCodeFromUrl(url: string): string | null {
   return parsed.hash ? parsed.hash.slice(1) || null : null
 }
 
-// Why: accept either an `orca://pair?...` URL or the bare base64
+// Why: accept either an `agentum://pair?...` URL or the bare base64
 // string so the mobile paste-pair flow can take whichever the user
 // actually copied from desktop.
 export function parsePairingCode(input: string): PairingOffer | null {
@@ -64,7 +64,7 @@ export function parsePairingCode(input: string): PairingOffer | null {
     return null
   }
   try {
-    if (trimmed.toLowerCase().startsWith('orca://')) {
+    if (trimmed.toLowerCase().startsWith('agentum://')) {
       return decodePairingOffer(trimmed)
     }
     return decodePairingBase64(trimmed)

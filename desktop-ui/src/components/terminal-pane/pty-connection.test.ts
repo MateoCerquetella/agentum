@@ -425,7 +425,7 @@ describe('connectPanePty', () => {
       worktreesByRepo: {
         repo1: [{ id: 'wt-1', repoId: 'repo1', path: '/tmp/wt-1', displayName: 'feat/notis' }]
       },
-      repos: [{ id: 'repo1', connectionId: null, displayName: 'orca' }],
+      repos: [{ id: 'repo1', connectionId: null, displayName: 'agentum' }],
       sshConnectionStates: new Map(),
       cacheTimerByKey: {},
       settings: { promptCacheTimerEnabled: true, experimentalTerminalAttention: true },
@@ -544,13 +544,13 @@ describe('connectPanePty', () => {
     connectPanePty(createPane(1) as never, createManager(1) as never, createDeps() as never)
     await flushAsyncTicks()
 
-    capturedDataCallback.current?.('Created https://github.com/acme/orca/pull/42\r\n')
+    capturedDataCallback.current?.('Created https://github.com/acme/agentum/pull/42\r\n')
 
     expect(mockStoreState.observeTerminalGitHubPullRequestLink).toHaveBeenCalledWith(
       'wt-1',
       expect.objectContaining({
-        url: 'https://github.com/acme/orca/pull/42',
-        slug: { owner: 'acme', repo: 'orca' },
+        url: 'https://github.com/acme/agentum/pull/42',
+        slug: { owner: 'acme', repo: 'agentum' },
         number: 42
       })
     )
@@ -5119,7 +5119,7 @@ describe('connectPanePty', () => {
       expect.objectContaining({
         source: 'agent-task-complete',
         worktreeId: 'wt-1',
-        repoLabel: 'orca',
+        repoLabel: 'agentum',
         worktreeLabel: 'feat/notis',
         hasMultipleActiveRepos: true,
         terminalTitle: '* Claude done',

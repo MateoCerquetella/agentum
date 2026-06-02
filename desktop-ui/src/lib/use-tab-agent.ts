@@ -111,7 +111,7 @@ export function resolveTabAgentFromSignals(args: {
  * 2. Title — catches agents whose process name isn't self-identifying (Claude
  *    runs as `node`; its "✳ Claude Code" title still identifies it).
  * 3. Hook status — accurate but only updates on the agent's hook events.
- * 4. launchAgent — what Orca launched here; instant bootstrap before any check.
+ * 4. launchAgent — what Agentum launched here; instant bootstrap before any check.
  */
 export function useTabAgent(tab: TerminalTab): TuiAgent | null {
   const hookAgent = useAppStore((s) =>

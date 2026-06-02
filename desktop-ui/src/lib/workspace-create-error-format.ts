@@ -12,7 +12,7 @@ export function formatWorkspaceCreateError(error: unknown): WorkspaceCreateError
   if (message.toLowerCase().includes(MISSING_BASE_REF_ANCHOR)) {
     return {
       title: 'No base branch found',
-      message: 'Orca could not resolve a usable base ref for this workspace.',
+      message: 'Agentum could not resolve a usable base ref for this workspace.',
       help: 'Create an initial commit (for example on main), or select an existing branch in Create From, then try again.'
     }
   }

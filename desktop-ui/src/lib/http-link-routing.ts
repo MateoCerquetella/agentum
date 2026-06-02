@@ -31,13 +31,13 @@ export function openHttpLink(url: string, opts: OpenHttpLinkOptions = {}): void 
   const { worktreeId, forceSystemBrowser } = opts
   const state = storeAccessor?.()
   const remoteRuntimeActive = Boolean(state?.settings?.activeRuntimeEnvironmentId?.trim())
-  const routeToOrca =
+  const routeToAgentum =
     !remoteRuntimeActive &&
     !forceSystemBrowser &&
     Boolean(worktreeId) &&
     state?.settings?.openLinksInApp !== false
 
-  if (routeToOrca && worktreeId && state) {
+  if (routeToAgentum && worktreeId && state) {
     // Why: http clicks from inside a worktree should not push a worktree-switch
     // history entry — the user isn't changing worktrees, they're opening a tab
     // in the one they're already in. activateAndRevealWorktree is reserved for

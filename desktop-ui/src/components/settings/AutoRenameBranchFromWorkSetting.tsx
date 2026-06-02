@@ -310,8 +310,8 @@ export function AutoRenameBranchFromWorkSetting({
         <div className="space-y-0.5">
           <Label>Auto-Rename Branch</Label>
           <p className="text-xs text-muted-foreground">
-            When an agent starts working in a new workspace, Orca renames its auto-generated branch
-            (e.g. <code>Nautilus</code>) to a short name summarizing the task. Only branches Orca
+            When an agent starts working in a new workspace, Agentum renames its auto-generated branch
+            (e.g. <code>Nautilus</code>) to a short name summarizing the task. Only branches Agentum
             named itself are renamed, and never after they have been pushed.
           </p>
         </div>
@@ -355,7 +355,7 @@ export function AutoRenameBranchFromWorkSetting({
               <div className="space-y-0.5">
                 <Label htmlFor="git-auto-rename-branch-name-prompt">Branch name prompt</Label>
                 <p className="text-xs text-muted-foreground">
-                  Appended to Orca&apos;s{' '}
+                  Appended to Agentum&apos;s{' '}
                   <Popover>
                     <PopoverTrigger asChild>
                       <button
@@ -377,7 +377,7 @@ export function AutoRenameBranchFromWorkSetting({
                       </div>
                     </PopoverContent>
                   </Popover>
-                  . Orca generates only the final segment, like{' '}
+                  . Agentum generates only the final segment, like{' '}
                   <code className="font-mono">fix-login-flow</code>; your branch prefix setting
                   still applies.
                 </p>

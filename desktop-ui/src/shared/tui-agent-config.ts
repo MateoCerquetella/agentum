@@ -25,8 +25,8 @@ export type TuiAgentConfig = {
   draftPromptFlag?: string
   /** Why: agents that don't expose a `--prefill <text>`-style CLI flag but
    * CAN read an env var on startup to seed their input box without
-   * submitting. Today only pi uses this (via Orca's overlay-installed
-   * `orca-prefill` extension reading `ORCA_PI_PREFILL`). Equivalent in
+   * submitting. Today only pi uses this (via Agentum's overlay-installed
+   * `agentum-prefill` extension reading `AGENTUM_PI_PREFILL`). Equivalent in
    * effect to `draftPromptFlag`: avoids the bracketed-paste-after-ready
    * race when the agent's startup output is long (pi prints banner,
    * skills, and extensions for several seconds, which keeps the
@@ -44,13 +44,13 @@ export type TuiAgentConfig = {
   /** Why: most TUIs need both bracketed-paste enablement and a quiet render
    * window before pasted bytes reliably land in the composer. Codex can use
    * a stronger signal from its own renderer: chat_composer.rs writes the
-   * `›` prompt only when the composer row exists, so Orca can paste as soon
+   * `›` prompt only when the composer row exists, so Agentum can paste as soon
    * as that prompt appears after bracketed paste is enabled. */
   draftPasteReadySignal?: DraftPasteReadySignal
 }
 
 // Why: the new-workspace handoff depends on three pieces of per-agent
-// knowledge staying in sync: how Orca detects the agent on PATH, which binary
+// knowledge staying in sync: how Agentum detects the agent on PATH, which binary
 // it actually launches, and whether the initial prompt should be passed as an
 // argv flag/argument or typed into the interactive session after startup.
 // Centralizing that metadata prevents the picker, launcher, and preflight
@@ -64,7 +64,7 @@ export const TUI_AGENT_CONFIG: Record<TuiAgent, TuiAgentConfig> = {
     // Why: `claude --prefill <text>` lands the TUI with `<text>` in the
     // input box, nothing submitted. Strictly better than the paste-after-
     // ready fallback because it eliminates the readiness race entirely.
-    // See PR https://github.com/stablyai/orca/pull/926 for context.
+    // See PR https://github.com/stablyai/agentum/pull/926 for context.
     draftPromptFlag: '--prefill'
   },
   openclaude: {
@@ -79,7 +79,7 @@ export const TUI_AGENT_CONFIG: Record<TuiAgent, TuiAgentConfig> = {
     launchCmd: 'codex',
     expectedProcess: 'codex',
     promptInjectionMode: 'argv',
-    // Why: Codex's positional prompt auto-submits the first turn, so Orca
+    // Why: Codex's positional prompt auto-submits the first turn, so Agentum
     // must still paste a draft. The Codex TUI enables bracketed paste before
     // the first render, then chat_composer.rs emits `›` when the composer row
     // is visible. Waiting for that prompt skips the generic quiet timer while
@@ -106,19 +106,19 @@ export const TUI_AGENT_CONFIG: Record<TuiAgent, TuiAgentConfig> = {
     promptInjectionMode: 'argv',
     // Why: pi has no `--prefill` flag, and bracketed-paste-after-ready
     // races against its multi-second startup output (banner + skills +
-    // extensions list) so the paste frequently never lands. Orca's
-    // overlay installs an `orca-prefill` pi extension (see
+    // extensions list) so the paste frequently never lands. Agentum's
+    // overlay installs an `agentum-prefill` pi extension (see
     // src/main/pi/titlebar-extension-service.ts) that reads this env var
     // on session_start and calls `pi.ui.setEditorText(text)`. Same
     // user-visible behavior as `claude --prefill <text>`.
-    draftPromptEnvVar: 'ORCA_PI_PREFILL'
+    draftPromptEnvVar: 'AGENTUM_PI_PREFILL'
   },
   omp: {
     // Why: OMP (omp.sh) is a Pi fork with its own binary (`omp`), brand,
     // default config dir (~/.omp/agent), and overlay tree. It re-uses
     // Pi's argv prompt-injection contract because the OMP binary inherits
-    // Pi's command-line parser, but every Orca-owned env var (overlay
-    // shadow, prefill) is scoped to OMP - see ORCA_OMP_* in
+    // Pi's command-line parser, but every Agentum-owned env var (overlay
+    // shadow, prefill) is scoped to OMP - see AGENTUM_OMP_* in
     // src/main/pi/titlebar-extension-service.ts. The one var that MUST
     // stay shared is `PI_CODING_AGENT_DIR`: OMP's CHANGELOG documents
     // the deliberate rename of `OMP_CODING_AGENT_DIR` -> `PI_CODING_AGENT_DIR`
@@ -128,7 +128,7 @@ export const TUI_AGENT_CONFIG: Record<TuiAgent, TuiAgentConfig> = {
     launchCmd: 'omp',
     expectedProcess: 'omp',
     promptInjectionMode: 'argv',
-    draftPromptEnvVar: 'ORCA_OMP_PREFILL'
+    draftPromptEnvVar: 'AGENTUM_OMP_PREFILL'
   },
   gemini: {
     detectCmd: 'gemini',
@@ -211,7 +211,7 @@ export const TUI_AGENT_CONFIG: Record<TuiAgent, TuiAgentConfig> = {
     detectCmd: 'command-code',
     // Why: Command Code's documented positional prompt starts the turn, while
     // paste-after-start can leave the prompt sitting in the composer. `--trust`
-    // mirrors the preflight trust behavior Orca applies to other first-run
+    // mirrors the preflight trust behavior Agentum applies to other first-run
     // TUIs so launch prompts do not consume the task text.
     launchCmd: 'command-code --trust',
     expectedProcess: 'command-code',
@@ -268,7 +268,7 @@ export const TUI_AGENT_CONFIG: Record<TuiAgent, TuiAgentConfig> = {
   hermes: {
     detectCmd: 'hermes',
     // Why: bare `hermes` opens the classic REPL in recent Hermes releases;
-    // `--tui` starts the full-screen agent UI Orca is designed to host.
+    // `--tui` starts the full-screen agent UI Agentum is designed to host.
     launchCmd: 'hermes --tui',
     expectedProcess: 'hermes',
     promptInjectionMode: 'stdin-after-start'
@@ -284,9 +284,9 @@ export const TUI_AGENT_CONFIG: Record<TuiAgent, TuiAgentConfig> = {
     launchCmd: 'copilot',
     expectedProcess: 'copilot',
     // Why: `copilot --prompt <text>` runs non-interactively and exits on
-    // completion, which would kill the TUI session Orca is hosting.
+    // completion, which would kill the TUI session Agentum is hosting.
     // `-i/--interactive <prompt>` starts an interactive session with the
-    // initial prompt pre-executed — the behavior Orca needs.
+    // initial prompt pre-executed — the behavior Agentum needs.
     promptInjectionMode: 'flag-interactive',
     // Why: Copilot's first-launch trust menu used to swallow our bracketed
     // paste. Pre-appending the workspace path to `trustedFolders` in

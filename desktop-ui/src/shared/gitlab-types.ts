@@ -239,7 +239,7 @@ export type GitLabProjectSettings = {
 // notifications — assigned items, mentions, build failures, review
 // requests, etc. The action_name field is open-ended in the API; we
 // keep it as a string so new GitLab versions don't break the type.
-// target_type narrows to the four shapes Orca renders meaningfully —
+// target_type narrows to the four shapes Agentum renders meaningfully —
 // other values (DesignManagement::Design, AlertManagement::Alert)
 // fall back to a generic "open URL" treatment in the UI.
 export type GitLabTodoTargetType = 'MergeRequest' | 'Issue' | 'Commit' | 'Note'
@@ -270,7 +270,7 @@ export type GitLabTodo = {
 }
 
 // Why: per-job pipeline status — surfaces in the GitLab dialog Pipeline
-// tab so users can see which job failed and where without leaving Orca.
+// tab so users can see which job failed and where without leaving Agentum.
 // Mirrors PRCheckDetail's "single row per check" shape so the rendering
 // component is reusable.
 export type GitLabPipelineJob = {
@@ -294,7 +294,7 @@ export type GitLabPipelineJob = {
 // "read description + conversation + pipeline + act on it".
 export type GitLabWorkItemDetails = {
   /** repoId is stamped by the renderer from the dialog's caller (TaskPage,
-   *  picker) — main-process doesn't know Orca's Repo.id. */
+   *  picker) — main-process doesn't know Agentum's Repo.id. */
   item: Omit<GitLabWorkItem, 'repoId'>
   body: string
   comments: MRComment[]

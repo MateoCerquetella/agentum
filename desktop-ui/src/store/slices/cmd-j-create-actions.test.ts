@@ -14,7 +14,7 @@ vi.mock('@/lib/focus-terminal-tab-surface', () => ({
   focusTerminalTabSurface: vi.fn()
 }))
 
-const pairedWebFlag = globalThis as { __ORCA_WEB_CLIENT__?: boolean }
+const pairedWebFlag = globalThis as { __AGENTUM_WEB_CLIENT__?: boolean }
 
 function seedActiveWorkspace(store: ReturnType<typeof createTestStore>): void {
   seedStore(store, {
@@ -32,13 +32,13 @@ function seedActiveWorkspace(store: ReturnType<typeof createTestStore>): void {
 
 describe('Cmd+J lifted creation actions', () => {
   beforeEach(() => {
-    pairedWebFlag.__ORCA_WEB_CLIENT__ = true
+    pairedWebFlag.__AGENTUM_WEB_CLIENT__ = true
     createWebRuntimeSessionBrowserTabMock.mockReset()
     createWebRuntimeSessionTerminalMock.mockReset()
   })
 
   afterEach(() => {
-    delete pairedWebFlag.__ORCA_WEB_CLIENT__
+    delete pairedWebFlag.__AGENTUM_WEB_CLIENT__
   })
 
   it('does not fall back to a local browser tab when paired-web creation fails', async () => {

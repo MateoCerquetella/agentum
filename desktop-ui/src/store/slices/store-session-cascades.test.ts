@@ -115,7 +115,7 @@ function makeDetectedWorktreeResult(
     source: authoritative ? 'git' : 'metadata-fallback',
     worktrees: worktrees.map((worktree) => ({
       ...worktree,
-      ownership: 'orca-managed',
+      ownership: 'agentum-managed',
       selectedCheckout: false,
       visible: true
     }))
@@ -1811,7 +1811,7 @@ describe('hydrateEditorSession', () => {
 
   it('restores floating workspace markdown files without a repo worktree', () => {
     const store = createTestStore()
-    const filePath = '/orca/userData/floating-workspace/note.md'
+    const filePath = '/agentum/userData/floating-workspace/note.md'
     const fileId = ownedEditorFileId(filePath, FLOATING_TERMINAL_WORKTREE_ID, null)
 
     store.setState({ activeWorktreeId: FLOATING_TERMINAL_WORKTREE_ID })
@@ -1834,7 +1834,7 @@ describe('hydrateEditorSession', () => {
         ]
       },
       activeFileIdByWorktree: {
-        [FLOATING_TERMINAL_WORKTREE_ID]: '/orca/userData/floating-workspace/note.md'
+        [FLOATING_TERMINAL_WORKTREE_ID]: '/agentum/userData/floating-workspace/note.md'
       },
       activeTabTypeByWorktree: { [FLOATING_TERMINAL_WORKTREE_ID]: 'editor' }
     })
@@ -2120,7 +2120,7 @@ describe('hydrateEditorSession', () => {
 
   it('migrates legacy floating unified tab file-path references to the hydrated owner id', () => {
     const store = createTestStore()
-    const filePath = '/orca/userData/floating-workspace/README.md'
+    const filePath = '/agentum/userData/floating-workspace/README.md'
     const fileId = ownedEditorFileId(filePath, FLOATING_TERMINAL_WORKTREE_ID, null)
     const groupId = 'floating-group-legacy'
 

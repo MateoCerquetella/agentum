@@ -9,7 +9,7 @@ type SlugProjectDialogState = {
   }
 }
 
-type RepoNotInOrcaDialogState = {
+type RepoNotInAgentumDialogState = {
   owner: string
   repo: string
 }
@@ -32,28 +32,28 @@ export function resolveRepoBackedProjectDialogState<T extends RepoBackedProjectD
 
 export function resolveMissingRepoProjectDialogState<
   TSlugDialog extends SlugProjectDialogState,
-  TRepoNotInOrca extends RepoNotInOrcaDialogState
+  TRepoNotInAgentum extends RepoNotInAgentumDialogState
 >(args: {
   slugIndexReady: boolean
   slugDialog: TSlugDialog | null
-  repoNotInOrca: TRepoNotInOrca | null
+  repoNotInAgentum: TRepoNotInAgentum | null
   lookupSlug: LookupSlug
 }): {
   slugDialog: TSlugDialog | null
-  repoNotInOrca: TRepoNotInOrca | null
+  repoNotInAgentum: TRepoNotInAgentum | null
 } {
-  const { lookupSlug, repoNotInOrca, slugDialog, slugIndexReady } = args
+  const { lookupSlug, repoNotInAgentum, slugDialog, slugIndexReady } = args
   if (!slugIndexReady) {
-    return { slugDialog, repoNotInOrca }
+    return { slugDialog, repoNotInAgentum }
   }
   return {
     slugDialog:
       slugDialog && hasRepoMatch(lookupSlug, slugDialog.origin.owner, slugDialog.origin.repo)
         ? null
         : slugDialog,
-    repoNotInOrca:
-      repoNotInOrca && hasRepoMatch(lookupSlug, repoNotInOrca.owner, repoNotInOrca.repo)
+    repoNotInAgentum:
+      repoNotInAgentum && hasRepoMatch(lookupSlug, repoNotInAgentum.owner, repoNotInAgentum.repo)
         ? null
-        : repoNotInOrca
+        : repoNotInAgentum
   }
 }

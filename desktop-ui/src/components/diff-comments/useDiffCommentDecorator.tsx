@@ -192,7 +192,7 @@ export function useDiffCommentDecorator({
     const zones = zonesRef.current
     const plus = document.createElement('button')
     plus.type = 'button'
-    plus.className = 'orca-diff-comment-add-btn'
+    plus.className = 'agentum-diff-comment-add-btn'
     plus.title = addButtonLabel
     plus.setAttribute('aria-label', addButtonLabel)
     plus.innerHTML =
@@ -243,7 +243,7 @@ export function useDiffCommentDecorator({
           range: new monaco.Range(from, 1, to, 1),
           options: {
             isWholeLine: true,
-            className: 'orca-diff-comment-range-highlight'
+            className: 'agentum-diff-comment-range-highlight'
           }
         }
       ])
@@ -546,7 +546,7 @@ export function useDiffCommentDecorator({
                   modeIdParts={['diff-comment-note', worktreeId, filePath, comment.id]}
                   scopes={getSingleCommentSendScopes(comment, formatCommentPrompt)}
                   targetModeLabel="This note"
-                  triggerClassName="orca-diff-comment-edit"
+                  triggerClassName="agentum-diff-comment-edit"
                   disabledTooltip="Note already sent"
                   onDelivered={(notes) => void clearDeliveredDiffComments(worktreeId, notes)}
                 />
@@ -582,7 +582,7 @@ export function useDiffCommentDecorator({
           continue
         }
         const dom = document.createElement('div')
-        dom.className = 'orca-diff-comment-inline'
+        dom.className = 'agentum-diff-comment-inline'
         // Why: swallow mousedown on the whole zone so the editor does not
         // steal focus (or start a selection drag) when the user interacts
         // with anything inside the card. Delete still fires because click is

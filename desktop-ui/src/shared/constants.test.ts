@@ -3,9 +3,9 @@ import { getDefaultPrimarySelectionMiddleClickPaste, getDefaultSettings } from '
 
 describe('getDefaultSettings', () => {
   it('uses platform-consistent separators for the default workspace directory', () => {
-    expect(getDefaultSettings('/Users/alice').workspaceDir).toBe('/Users/alice/orca/workspaces')
+    expect(getDefaultSettings('/Users/alice').workspaceDir).toBe('/Users/alice/agentum/workspaces')
     expect(getDefaultSettings('C:\\Users\\alice').workspaceDir).toBe(
-      'C:\\Users\\alice\\orca\\workspaces'
+      'C:\\Users\\alice\\agentum\\workspaces'
     )
   })
 

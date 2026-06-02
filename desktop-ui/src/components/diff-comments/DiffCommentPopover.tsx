@@ -116,7 +116,7 @@ export function DiffCommentPopover({
   return (
     <div
       ref={popoverRef}
-      className="orca-diff-comment-popover"
+      className="agentum-diff-comment-popover"
       style={{ top: `${top}px`, ...(left == null ? {} : { left: `${left}px` }) }}
       role="dialog"
       aria-modal="true"
@@ -125,14 +125,14 @@ export function DiffCommentPopover({
       onClick={(ev) => ev.stopPropagation()}
     >
       {/* Left Column: Avatar */}
-      <div className="orca-diff-comment-avatar-col">
-        <span className="orca-diff-comment-avatar orca-diff-comment-avatar-local">
+      <div className="agentum-diff-comment-avatar-col">
+        <span className="agentum-diff-comment-avatar agentum-diff-comment-avatar-local">
           <User className="size-3" />
         </span>
       </div>
       {/* Right Column: Content */}
-      <div className="orca-diff-comment-content-col" style={{ gap: '8px' }}>
-        <div id={labelId} className="orca-diff-comment-popover-label">
+      <div className="agentum-diff-comment-content-col" style={{ gap: '8px' }}>
+        <div id={labelId} className="agentum-diff-comment-popover-label">
           {title ??
             (startLine && startLine !== lineNumber
               ? `Lines ${startLine}-${lineNumber}`
@@ -140,7 +140,7 @@ export function DiffCommentPopover({
         </div>
         <textarea
           ref={focusTextareaRef}
-          className="orca-diff-comment-popover-textarea"
+          className="agentum-diff-comment-popover-textarea"
           placeholder={placeholder}
           value={body}
           onChange={(e) => {
@@ -173,7 +173,7 @@ export function DiffCommentPopover({
           }}
           rows={3}
         />
-        <div className="orca-diff-comment-popover-footer">
+        <div className="agentum-diff-comment-popover-footer">
           <Button variant="ghost" size="sm" onClick={onCancel}>
             Cancel
           </Button>

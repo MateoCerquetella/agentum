@@ -58,7 +58,7 @@ export function MobileNetworkInterfaceSection({
             </SelectContent>
           </Select>
           {/* Why: VPN/tailnet interfaces can appear after this pane mounts.
-              Re-enumerating OS state here avoids requiring an Orca restart. */}
+              Re-enumerating OS state here avoids requiring an Agentum restart. */}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -101,7 +101,7 @@ export function MobileNetworkInterfaceSection({
           </AccordionTrigger>
           <AccordionContent className="space-y-3 text-xs text-muted-foreground">
             <p>
-              Orca Mobile connects directly to this computer. To use it away from the same local
+              Agentum Mobile connects directly to this computer. To use it away from the same local
               network, put your computer and phone on the same private overlay network, then
               generate the QR code with that network address selected.
             </p>
@@ -123,7 +123,7 @@ export function MobileNetworkInterfaceSection({
                 In this Network Interface menu, choose the Tailscale address, usually a 100.x.y.z
                 IP.
               </li>
-              <li>Regenerate the QR code and scan it from the Orca mobile app.</li>
+              <li>Regenerate the QR code and scan it from the Agentum mobile app.</li>
             </ol>
           </AccordionContent>
         </AccordionItem>

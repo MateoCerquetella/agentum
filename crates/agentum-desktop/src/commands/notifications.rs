@@ -1,7 +1,7 @@
 use serde::Serialize;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 
-// Result shapes mirror the renderer contract in orca/src/shared/types.ts so the
+// Result shapes mirror the renderer contract in agentum/src/shared/types.ts so the
 // proxied invoke() calls deserialize into the exact objects callers expect.
 #[derive(Debug, Serialize)]
 pub struct NotificationDispatchResult {

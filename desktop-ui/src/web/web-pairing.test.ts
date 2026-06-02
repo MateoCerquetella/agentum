@@ -18,15 +18,15 @@ describe('web pairing input', () => {
   }
 
   it('parses query-form pairing URLs', () => {
-    expect(parseWebPairingInput(`orca://pair?code=${encodeOffer()}`)).toEqual(offer)
+    expect(parseWebPairingInput(`agentum://pair?code=${encodeOffer()}`)).toEqual(offer)
   })
 
   it('still parses legacy hash-form pairing URLs', () => {
-    expect(parseWebPairingInput(`orca://pair#${encodeOffer()}`)).toEqual(offer)
+    expect(parseWebPairingInput(`agentum://pair#${encodeOffer()}`)).toEqual(offer)
   })
 
-  it('rejects orca URLs outside the exact pairing route', () => {
-    expect(parseWebPairingInput(`orca://pairing?code=${encodeOffer()}`)).toBeNull()
-    expect(parseWebPairingInput(`orca://pair-extra?code=${encodeOffer()}`)).toBeNull()
+  it('rejects agentum URLs outside the exact pairing route', () => {
+    expect(parseWebPairingInput(`agentum://pairing?code=${encodeOffer()}`)).toBeNull()
+    expect(parseWebPairingInput(`agentum://pair-extra?code=${encodeOffer()}`)).toBeNull()
   })
 })

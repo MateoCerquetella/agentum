@@ -23,8 +23,8 @@ export function DeleteWorktreeLineageNotice({
           <div className="mt-1 text-muted-foreground">
             Deleting this workspace only removes the parent.{' '}
             {childWorkspaceCount === 1
-              ? '1 child workspace will stay in Orca and on disk.'
-              : `${childWorkspaceCount} child workspaces will stay in Orca and on disk.`}
+              ? '1 child workspace will stay in Agentum and on disk.'
+              : `${childWorkspaceCount} child workspaces will stay in Agentum and on disk.`}
           </div>
           {/* Why: long nowrap paths can otherwise give this grid child an
              intrinsic width wider than the modal. */}

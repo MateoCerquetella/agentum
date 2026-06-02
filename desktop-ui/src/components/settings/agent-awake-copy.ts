@@ -7,7 +7,7 @@ export function getAgentAwakeDescription(
     return "Keeps this computer and display awake while agents are working. Lid-close behavior follows this device's power settings."
   }
 
-  return 'Keeps this computer and display awake while agents are working. Orca also asks this device to stay awake when the lid is closed, subject to its power policy.'
+  return 'Keeps this computer and display awake while agents are working. Agentum also asks this device to stay awake when the lid is closed, subject to its power policy.'
 }
 
 export function getAgentAwakeSearchKeywords(

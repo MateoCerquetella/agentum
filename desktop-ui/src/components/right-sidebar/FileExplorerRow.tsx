@@ -348,7 +348,7 @@ export function FileExplorerRow({
       onNativeDragExpandDir,
       onMoveDrop
     })
-  const handleOpenInOrcaBrowser = useCallback(() => {
+  const handleOpenInAgentumBrowser = useCallback(() => {
     if (!activeWorktreeId) {
       return
     }
@@ -543,9 +543,9 @@ export function FileExplorerRow({
           </ContextMenuItem>
         )}
         {!node.isDirectory && activeWorktreeId && (
-          <ContextMenuItem onSelect={handleOpenInOrcaBrowser}>
+          <ContextMenuItem onSelect={handleOpenInAgentumBrowser}>
             <Globe />
-            Open in Orca Browser
+            Open in Agentum Browser
           </ContextMenuItem>
         )}
         {!node.isDirectory && activeWorktreeId && detectLanguage(node.path) === 'markdown' && (

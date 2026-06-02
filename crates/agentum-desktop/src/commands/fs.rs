@@ -27,7 +27,7 @@ pub struct FileStat {
     mtime: u64,
 }
 
-// Mirrors FsChangeEvent/FsChangedPayload in orca/src/shared/types.ts. Emitted on
+// Mirrors FsChangeEvent/FsChangedPayload in agentum/src/shared/types.ts. Emitted on
 // the `fs-fs-changed` event that the renderer's fs.onFsChanged subscribes to.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

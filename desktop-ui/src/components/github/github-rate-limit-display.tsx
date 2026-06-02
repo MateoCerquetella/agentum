@@ -147,7 +147,7 @@ export function GitHubRateLimitPanel({ className }: { className?: string }): Rea
             GitHub API Budget
           </div>
           <p className="text-xs text-muted-foreground">
-            Orca uses REST, Search, and GraphQL through the GitHub CLI.
+            Agentum uses REST, Search, and GraphQL through the GitHub CLI.
           </p>
         </div>
         <button

@@ -3,12 +3,12 @@ import { FolderOpen, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import type { CliInstallStatus } from '../../../../shared/cli-install-types'
 import {
-  ORCA_CLI_SKILL_INSTALL_COMMAND,
-  ORCA_CLI_SKILL_NAME
+  AGENTUM_CLI_SKILL_INSTALL_COMMAND,
+  AGENTUM_CLI_SKILL_NAME
 } from '@/lib/agent-feature-install-commands'
 import {
   AGENT_SKILL_CLI_PREREQUISITE_NOTICE,
-  ensureOrcaCliAvailableForAgentSkillTerminal
+  ensureAgentumCliAvailableForAgentSkillTerminal
 } from '@/lib/agent-skill-cli-prerequisite'
 import {
   GLOBAL_AGENT_SKILL_SOURCE_KINDS,
@@ -45,19 +45,19 @@ function getRevealLabel(platform: string): string {
 
 function getInstallDescription(platform: string): string {
   if (platform === 'darwin') {
-    return 'Register `orca` in /usr/local/bin.'
+    return 'Register `agentum` in /usr/local/bin.'
   }
   if (platform === 'linux') {
-    return 'Register `orca-ide` in ~/.local/bin.'
+    return 'Register `agentum-ide` in ~/.local/bin.'
   }
   if (platform === 'win32') {
-    return 'Register `orca` in your user PATH.'
+    return 'Register `agentum` in your user PATH.'
   }
   return 'CLI registration is not yet available on this platform.'
 }
 
 function getFallbackCommandName(platform: string): string {
-  return platform === 'linux' ? 'orca-ide' : 'orca'
+  return platform === 'linux' ? 'agentum-ide' : 'agentum'
 }
 
 export function CliSection({ currentPlatform }: CliSectionProps): React.JSX.Element {
@@ -71,7 +71,7 @@ export function CliSection({ currentPlatform }: CliSectionProps): React.JSX.Elem
     loading: cliSkillLoading,
     error: cliSkillError,
     refresh: refreshCliSkill
-  } = useInstalledAgentSkill(ORCA_CLI_SKILL_NAME, {
+  } = useInstalledAgentSkill(AGENTUM_CLI_SKILL_NAME, {
     sourceKinds: GLOBAL_AGENT_SKILL_SOURCE_KINDS
   })
 
@@ -158,9 +158,9 @@ export function CliSection({ currentPlatform }: CliSectionProps): React.JSX.Elem
   return (
     <section className="space-y-4" data-settings-section="cli">
       <div className="space-y-1">
-        <h2 className="text-sm font-semibold">Orca CLI</h2>
+        <h2 className="text-sm font-semibold">Agentum CLI</h2>
         <p className="text-xs text-muted-foreground">
-          Use Orca from your terminal to open the app, manage worktrees, and interact with Orca
+          Use Agentum from your terminal to open the app, manage worktrees, and interact with Agentum
           terminals.
         </p>
       </div>
@@ -257,7 +257,7 @@ export function CliSection({ currentPlatform }: CliSectionProps): React.JSX.Elem
             <div className="space-y-0.5">
               <Label>Agent skills</Label>
               <p className="text-xs text-muted-foreground">
-                Give agents Orca-aware workspace, terminal, and progress workflows.
+                Give agents Agentum-aware workspace, terminal, and progress workflows.
               </p>
             </div>
 
@@ -265,8 +265,8 @@ export function CliSection({ currentPlatform }: CliSectionProps): React.JSX.Elem
               className="mt-3"
               variant="inline"
               title="CLI skill"
-              description="Enables agents to use Orca workspace, terminal, and progress commands."
-              command={ORCA_CLI_SKILL_INSTALL_COMMAND}
+              description="Enables agents to use Agentum workspace, terminal, and progress commands."
+              command={AGENTUM_CLI_SKILL_INSTALL_COMMAND}
               terminalTitle="CLI skill setup"
               terminalAriaLabel="CLI skill install terminal"
               terminalWorktreeId="settings-cli-skill-terminal"
@@ -275,7 +275,7 @@ export function CliSection({ currentPlatform }: CliSectionProps): React.JSX.Elem
               error={cliSkillError}
               preInstallNotice={AGENT_SKILL_CLI_PREREQUISITE_NOTICE}
               onBeforeOpenTerminal={async () => {
-                await ensureOrcaCliAvailableForAgentSkillTerminal({
+                await ensureAgentumCliAvailableForAgentSkillTerminal({
                   onStatusChange: handleStatusChange
                 })
               }}
@@ -297,8 +297,8 @@ export function CliSection({ currentPlatform }: CliSectionProps): React.JSX.Elem
             </DialogTitle>
             <DialogDescription>
               {isEnabled
-                ? 'This removes the shell command symlink. Orca itself remains installed.'
-                : `Orca will register ${status?.commandPath ?? commandName} so the command works from your terminal.`}
+                ? 'This removes the shell command symlink. Agentum itself remains installed.'
+                : `Agentum will register ${status?.commandPath ?? commandName} so the command works from your terminal.`}
             </DialogDescription>
           </DialogHeader>
           {status?.commandPath ? (

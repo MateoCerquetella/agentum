@@ -186,7 +186,7 @@ function countReposNeedingNotificationDisambiguation(
   return Math.max(activeRepoIds.size, countReposWithWorktrees(state))
 }
 
-function isOrcaWindowForegroundFocused(): boolean {
+function isAgentumWindowForegroundFocused(): boolean {
   if (typeof document === 'undefined') {
     return true
   }
@@ -234,8 +234,8 @@ export function dispatchTerminalNotification(
       state.markWorktreeUnread(worktreeId)
       state.markTerminalTabUnread(tabId)
       state.markTerminalPaneUnread(event.paneKey)
-    } else if (state.activeWorktreeId !== worktreeId || !isOrcaWindowForegroundFocused()) {
-      // Why: activeWorktreeId is only in-app selection. If Orca is backgrounded,
+    } else if (state.activeWorktreeId !== worktreeId || !isAgentumWindowForegroundFocused()) {
+      // Why: activeWorktreeId is only in-app selection. If Agentum is backgrounded,
       // a selected chat finishing still needs unread/Dock attention.
       state.markWorktreeUnread(worktreeId)
     }

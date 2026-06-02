@@ -10,9 +10,9 @@ import {
 } from './mobile-settings-search'
 export { MOBILE_SETTINGS_PANE_SEARCH_ENTRIES }
 
-const ORCA_IOS_APP_STORE_URL = 'https://apps.apple.com/app/orca-ide/id6766130217'
-const ORCA_ANDROID_APK_URL =
-  'https://github.com/stablyai/orca/releases/download/mobile-v0.0.10/app-release.apk'
+const AGENTUM_IOS_APP_STORE_URL = 'https://apps.apple.com/app/agentum-ide/id6766130217'
+const AGENTUM_ANDROID_APK_URL =
+  'https://github.com/stablyai/agentum/releases/download/mobile-v0.0.10/app-release.apk'
 
 type MobileSettingsPaneProps = {
   settings: GlobalSettings
@@ -40,11 +40,11 @@ export function MobileSettingsPane({
             <div className="min-w-0 shrink space-y-1.5">
               <Label>Mobile</Label>
               <p className="text-xs text-muted-foreground">
-                Control Orca from your phone by scanning a QR code. Beta / early preview &mdash;
+                Control Agentum from your phone by scanning a QR code. Beta / early preview &mdash;
                 expect bugs and breaking changes. Get the iOS app from the{' '}
                 <button
                   type="button"
-                  onClick={() => void window.api.shell.openUrl(ORCA_IOS_APP_STORE_URL)}
+                  onClick={() => void window.api.shell.openUrl(AGENTUM_IOS_APP_STORE_URL)}
                   className="cursor-pointer underline underline-offset-2 hover:text-foreground"
                 >
                   App Store
@@ -54,7 +54,7 @@ export function MobileSettingsPane({
                   type="button"
                   // Why: Android is moving to Google Play soon, but until then
                   // link directly to the pinned APK asset for the current mobile release.
-                  onClick={() => void window.api.shell.openUrl(ORCA_ANDROID_APK_URL)}
+                  onClick={() => void window.api.shell.openUrl(AGENTUM_ANDROID_APK_URL)}
                   className="cursor-pointer underline underline-offset-2 hover:text-foreground"
                 >
                   GitHub Releases

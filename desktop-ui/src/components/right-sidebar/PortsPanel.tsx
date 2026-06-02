@@ -24,7 +24,7 @@ import {
   openWorkspacePortInBrowser,
   refreshWorkspacePortScanAfterStop,
   scanWorkspacePortsForTarget,
-  shouldOpenWorkspacePortInOrcaBrowser,
+  shouldOpenWorkspacePortInAgentumBrowser,
   workspacePortRuntimeTargetKey
 } from '@/lib/workspace-port-actions'
 import {
@@ -238,7 +238,7 @@ function LocalWorkspacePortsPanel({ isVisible }: { isVisible: boolean }): React.
         runtimeTarget,
         createBrowserTab,
         setRemoteBrowserPageHandle,
-        openInOrcaBrowser: shouldOpenWorkspacePortInOrcaBrowser(settings)
+        openInAgentumBrowser: shouldOpenWorkspacePortInAgentumBrowser(settings)
       })
       if (!result.ok) {
         toast.error('Failed to open browser', { description: result.reason })
@@ -712,7 +712,7 @@ function SshPortsPanel(): React.JSX.Element {
   const handleOpenForwardInBrowser = useCallback(
     (entry: PortForwardEntry) => {
       const url = browserUrlForPortForwardEntry(entry)
-      if (!shouldOpenWorkspacePortInOrcaBrowser(settings)) {
+      if (!shouldOpenWorkspacePortInAgentumBrowser(settings)) {
         void window.api.shell.openUrl(url)
         return
       }

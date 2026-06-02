@@ -25,7 +25,7 @@ const LOGIN_CMD = 'gh auth login'
 // macOS/Linux vs PowerShell on Windows.
 const IS_WINDOWS = typeof navigator !== 'undefined' && /Win(dows|32|64)/i.test(navigator.userAgent)
 
-function reloadOrcaRenderer(): void {
+function reloadAgentumRenderer(): void {
   const reload = window.api.app.reload
   if (typeof reload !== 'function') {
     window.location.reload()
@@ -52,7 +52,7 @@ function findEnvVarCommand(varName: string): { label: string; command: string } 
 function unsetEnvVarCommand(varName: string): { label: string; command: string } {
   if (IS_WINDOWS) {
     // Persistent removal at the user scope; the user still needs a fresh
-    // shell/Orca relaunch for the change to take effect.
+    // shell/Agentum relaunch for the change to take effect.
     return {
       label: 'Unset (PowerShell, persistent)',
       command: `Remove-Item Env:${varName}; [Environment]::SetEnvironmentVariable('${varName}', $null, 'User')`
@@ -108,7 +108,7 @@ function buildRemediation(
     return {
       summary: 'GitHub CLI (`gh`) is not installed or not on PATH.',
       detail:
-        'Orca uses `gh` to talk to GitHub Projects. Install it from cli.github.com, then sign in.',
+        'Agentum uses `gh` to talk to GitHub Projects. Install it from cli.github.com, then sign in.',
       commands: [{ label: 'Copy login command', command: LOGIN_CMD }],
       docsUrl: 'https://cli.github.com/'
     }
@@ -126,8 +126,8 @@ function buildRemediation(
     return {
       summary: `\`${varName}\` is set in your environment, so \`gh\` is using that token instead of your keyring login. \`gh auth refresh\` cannot modify env-supplied tokens — that's why running it didn't help.`,
       detail: IS_WINDOWS
-        ? `Find where \`${varName}\` is set (System or User environment variables, or your PowerShell profile), remove it, then restart Orca so the new environment is picked up.${fallback}`
-        : `Find where \`${varName}\` is exported (commonly \`~/.zshrc\`, \`~/.zshenv\`, \`~/.bashrc\`, \`~/.profile\`, or your shell's secrets manager), remove it, then restart Orca so the new environment is picked up.${fallback}`,
+        ? `Find where \`${varName}\` is set (System or User environment variables, or your PowerShell profile), remove it, then restart Agentum so the new environment is picked up.${fallback}`
+        : `Find where \`${varName}\` is exported (commonly \`~/.zshrc\`, \`~/.zshenv\`, \`~/.bashrc\`, \`~/.profile\`, or your shell's secrets manager), remove it, then restart Agentum so the new environment is picked up.${fallback}`,
       commands: [findEnvVarCommand(varName), unsetEnvVarCommand(varName)],
       docsUrl: 'https://cli.github.com/manual/gh_help_environment'
     }
@@ -135,14 +135,14 @@ function buildRemediation(
 
   // gh is not the problem, but the Electron process inherited GITHUB_TOKEN
   // from the parent shell. Even after the user runs `gh auth refresh` in a
-  // separate terminal, Orca's gh subprocess sees the env var and uses it.
+  // separate terminal, Agentum's gh subprocess sees the env var and uses it.
   if (diag.envTokenInProcess && (!active || diag.missingScopes.length > 0)) {
     const varName = diag.envTokenInProcess
     return {
-      summary: `Orca inherited \`${varName}\` from your shell, and \`gh\` is using that token. \`gh auth refresh\` doesn't apply to env-supplied tokens.`,
-      detail: `Unset \`${varName}\` in the shell that launches Orca${
+      summary: `Agentum inherited \`${varName}\` from your shell, and \`gh\` is using that token. \`gh auth refresh\` doesn't apply to env-supplied tokens.`,
+      detail: `Unset \`${varName}\` in the shell that launches Agentum${
         IS_WINDOWS ? ' (or in your user environment variables)' : ' (or in your shell rc file)'
-      }, then restart Orca.`,
+      }, then restart Agentum.`,
       commands: [findEnvVarCommand(varName), unsetEnvVarCommand(varName)],
       docsUrl: 'https://cli.github.com/manual/gh_help_environment'
     }
@@ -239,7 +239,7 @@ export function GhAuthErrorHelp({
               reload the renderer to pick up the new gh token state. */}
           <button
             type="button"
-            onClick={reloadOrcaRenderer}
+            onClick={reloadAgentumRenderer}
             className="inline-flex items-center gap-1 rounded border border-amber-500/30 px-1.5 py-0.5 text-[11px] hover:bg-amber-500/20"
           >
             <RotateCw className="size-3" /> Reload
@@ -272,7 +272,7 @@ export function GhAuthErrorHelp({
         ) : null}
         {/* Why: after running the refresh command in a terminal, users need to
             reload the renderer to pick up the new gh token state. */}
-        <Button size="sm" variant="outline" onClick={reloadOrcaRenderer}>
+        <Button size="sm" variant="outline" onClick={reloadAgentumRenderer}>
           <RotateCw className="mr-1 size-3.5" /> Reload
         </Button>
       </div>

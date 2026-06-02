@@ -22,8 +22,8 @@ import type {
 
 const repo: Repo = {
   id: 'repo-1',
-  path: '/tmp/orca',
-  displayName: 'orca',
+  path: '/tmp/agentum',
+  displayName: 'agentum',
   badgeColor: '#000000',
   addedAt: 0
 }
@@ -31,7 +31,7 @@ const repo: Repo = {
 const worktree: Worktree = {
   id: 'wt-1',
   repoId: repo.id,
-  path: '/tmp/orca-feature',
+  path: '/tmp/agentum-feature',
   branch: 'refs/heads/feature/super-critical',
   head: 'abc123',
   isBare: false,
@@ -76,7 +76,7 @@ describe('getPRGroupKey', () => {
 
   it('prefers repo-scoped PR status over stale legacy path-scoped status', () => {
     const prCache = {
-      '/tmp/orca::feature/super-critical': {
+      '/tmp/agentum::feature/super-critical': {
         data: { state: 'closed' }
       },
       'repo-1::feature/super-critical': {
@@ -89,7 +89,7 @@ describe('getPRGroupKey', () => {
 
   it('falls back to legacy path-scoped PR status when no repo-scoped entry exists', () => {
     const prCache = {
-      '/tmp/orca::feature/super-critical': {
+      '/tmp/agentum::feature/super-critical': {
         data: { state: 'closed' }
       }
     }

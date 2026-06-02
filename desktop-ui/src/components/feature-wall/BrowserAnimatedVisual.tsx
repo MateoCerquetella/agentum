@@ -5,7 +5,7 @@ import { ClaudeIcon } from '@/components/status-bar/icons'
 import { useShortcutLabel } from '@/hooks/useShortcutLabel'
 import { FeatureWallClickRing } from './FeatureWallClickRing'
 
-// Why: this animation tells the full Orca story end-to-end — the user opens a
+// Why: this animation tells the full Agentum story end-to-end — the user opens a
 // new browser tab, annotates a target on the pricing page, types a change,
 // hands off to Claude in a split pane, and Claude edits + verifies the page.
 // The DOM and timing track docs/feature-wall-workbench-tile-mock.html so the

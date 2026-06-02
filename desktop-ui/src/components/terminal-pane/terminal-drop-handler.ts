@@ -46,7 +46,7 @@ export function resolveTerminalDropTargetShell({
  * Handle a native file drop targeted at a terminal pane.
  *
  * Local worktrees: paste the local absolute path (reference-in-place; no copy
- * or IPC). SSH worktrees: upload each file into `${worktreePath}/.orca/drops`
+ * or IPC). SSH worktrees: upload each file into `${worktreePath}/.agentum/drops`
  * and paste the remote path so the remote agent can read it. See
  * docs/terminal-drop-ssh.md.
  */
@@ -196,9 +196,9 @@ function resolveWorktreePath(worktreeId: string, fallbackCwd: string | undefined
 
 function joinRuntimeDropDir(worktreePath: string): string {
   if (isWindowsPathLike(worktreePath)) {
-    return `${worktreePath.replace(/[\\/]+$/, '').replace(/\//g, '\\')}\\.orca\\drops`
+    return `${worktreePath.replace(/[\\/]+$/, '').replace(/\//g, '\\')}\\.agentum\\drops`
   }
-  return `${worktreePath.replace(/[\\/]+$/, '')}/.orca/drops`
+  return `${worktreePath.replace(/[\\/]+$/, '')}/.agentum/drops`
 }
 
 function isWindowsPathLike(path: string): boolean {

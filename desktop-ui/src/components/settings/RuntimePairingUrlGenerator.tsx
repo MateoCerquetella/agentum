@@ -334,7 +334,7 @@ export function RuntimePairingUrlGenerator({
     <div ref={setContainerNode} className={containerClassName}>
       {showHeader ? (
         <div className="space-y-1">
-          <Label id="runtime-share-server-label">Share this Orca server</Label>
+          <Label id="runtime-share-server-label">Share this Agentum server</Label>
           <p className="text-xs text-muted-foreground">
             Create a revocable access grant for browser or desktop clients.
           </p>
@@ -435,14 +435,14 @@ export function RuntimePairingUrlGenerator({
           ) : runtimePairingUrl ? (
             <UnavailableUrlRow
               label="Open in browser"
-              description="Browser link unavailable in this build. The pairing URL still works for Orca clients."
+              description="Browser link unavailable in this build. The pairing URL still works for Agentum clients."
             />
           ) : null}
 
           {runtimePairingUrl ? (
             <GeneratedUrlRow
-              label="Pair another Orca client"
-              description="Paste this pairing URL into another Orca client."
+              label="Pair another Agentum client"
+              description="Paste this pairing URL into another Agentum client."
               value={runtimePairingUrl}
               copied={copiedTarget === 'pairing'}
               onCopy={() => void copyGeneratedUrl('pairing', runtimePairingUrl)}

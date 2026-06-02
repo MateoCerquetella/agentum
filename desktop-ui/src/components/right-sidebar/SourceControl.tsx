@@ -1062,7 +1062,7 @@ export function HostedReviewHeaderLink({
         className={className}
         onClick={(e) => {
           e.stopPropagation()
-          // Why: GitHub PR and GitLab MR details live in Orca's Checks tab; keep
+          // Why: GitHub PR and GitLab MR details live in Agentum's Checks tab; keep
           // the sidebar workflow in-app instead of opening the browser.
           onOpenHostedReviewInChecks()
         }}
@@ -2469,7 +2469,7 @@ function SourceControlInner(): React.JSX.Element {
           })
         ])
       } catch {
-        toast.warning(`${copy.titleLabel} created, but Orca could not refresh it yet.`, {
+        toast.warning(`${copy.titleLabel} created, but Agentum could not refresh it yet.`, {
           action: {
             label: `Open on ${copy.providerName}`,
             onClick: () => window.api.shell.openUrl(result.url)
@@ -3640,7 +3640,7 @@ function SourceControlInner(): React.JSX.Element {
     }
 
     // Why: branch compare shells out to git every tick. The panel only needs
-    // background freshness while Orca is visible; hidden-window time should not
+    // background freshness while Agentum is visible; hidden-window time should not
     // burn subprocess work or timer wakeups.
     return installWindowVisibilityInterval({
       run: () => void refreshBranchCompareRef.current(),

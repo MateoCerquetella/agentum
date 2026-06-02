@@ -77,13 +77,13 @@ const RemoveFolderDialog = React.memo(function RemoveFolderDialog() {
               <>
                 This only removes{' '}
                 <span className="font-medium text-foreground">{repoIds.length} projects</span> from
-                Orca. Their folders and git worktrees stay on disk.
+                Agentum. Their folders and git worktrees stay on disk.
               </>
             ) : (
               <>
                 This only removes{' '}
                 <span className="break-all font-medium text-foreground">{displayName}</span> from
-                Orca. It is still on your disk.
+                Agentum. It is still on your disk.
               </>
             )}
           </DialogDescription>

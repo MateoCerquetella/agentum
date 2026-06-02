@@ -11,7 +11,7 @@ import {
 } from '@/components/feature-wall/agents-orchestration/orchestration-types'
 import { usePrefersReducedMotion } from '@/components/feature-wall/feature-wall-modal-helpers'
 import { OnboardingInlineCommandTerminal } from '@/components/onboarding/OnboardingInlineCommandTerminal'
-import { ORCA_CLI_ORCHESTRATION_SKILL_INSTALL_COMMAND } from '@/lib/agent-feature-install-commands'
+import { AGENTUM_CLI_ORCHESTRATION_SKILL_INSTALL_COMMAND } from '@/lib/agent-feature-install-commands'
 import {
   ORCHESTRATION_ENABLED_STORAGE_KEY,
   ORCHESTRATION_SETUP_DISMISSED_STORAGE_KEY,
@@ -29,18 +29,18 @@ import { useAppStore } from '@/store'
 import { installCliFromFeatureTip } from './feature-tip-cli-install-action'
 import { getFeatureTipForModal } from './feature-tip-modal-state'
 import {
-  getOrcaCliFeatureTipTelemetrySource,
-  trackOrcaCliFeatureTipSetupClicked,
-  trackOrcaCliFeatureTipSetupResult
+  getAgentumCliFeatureTipTelemetrySource,
+  trackAgentumCliFeatureTipSetupClicked,
+  trackAgentumCliFeatureTipSetupResult
 } from './feature-tip-telemetry'
 import { useMountedRef } from '@/hooks/useMountedRef'
 
 const WAVEFORM_BAR_HEIGHTS = [30, 60, 90, 70, 100, 50, 80, 35, 65]
 const CLI_AGENT_COMMANDS = [
-  'orca worktree create --name auth-pr-1',
-  'orca worktree create --name auth-pr-2',
-  'orca orchestration dispatch --task pr1 --to w1',
-  'orca orchestration dispatch --task pr2 --to w2'
+  'agentum worktree create --name auth-pr-1',
+  'agentum worktree create --name auth-pr-2',
+  'agentum orchestration dispatch --task pr1 --to w1',
+  'agentum orchestration dispatch --task pr2 --to w2'
 ]
 
 function WorktreePromptTerm({ children }: { children: string }): JSX.Element {
@@ -281,38 +281,38 @@ export default function FeatureTipsModal(): JSX.Element | null {
         break
       }
       case 'setup-cli': {
-        const telemetrySource = getOrcaCliFeatureTipTelemetrySource(modalData.source)
-        trackOrcaCliFeatureTipSetupClicked(telemetrySource)
+        const telemetrySource = getAgentumCliFeatureTipTelemetrySource(modalData.source)
+        trackAgentumCliFeatureTipSetupClicked(telemetrySource)
         setPrimaryBusy(true)
         try {
           const result = await installCliFromFeatureTip(() => window.api.cli.install())
           if (result.kind === 'installed') {
-            trackOrcaCliFeatureTipSetupResult(telemetrySource, 'installed')
+            trackAgentumCliFeatureTipSetupResult(telemetrySource, 'installed')
             enableOrchestrationSkillSetup()
             if (!mountedRef.current) {
               return
             }
-            toast.success('Registered `orca` in PATH.')
+            toast.success('Registered `agentum` in PATH.')
             setSkillTerminalOpen(true)
             return
           }
 
-          trackOrcaCliFeatureTipSetupResult(telemetrySource, 'needs_attention')
+          trackAgentumCliFeatureTipSetupResult(telemetrySource, 'needs_attention')
           if (!mountedRef.current) {
             return
           }
-          toast.warning('Orca CLI needs attention', {
+          toast.warning('Agentum CLI needs attention', {
             description: result.status.detail ?? 'Open Settings to finish CLI setup.'
           })
           closeModal()
           openCliSettings()
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Failed to install Orca CLI.'
+          const message = error instanceof Error ? error.message : 'Failed to install Agentum CLI.'
           if (
             import.meta.env.DEV &&
             message.includes('Development mode uses a generated launcher for validation only')
           ) {
-            trackOrcaCliFeatureTipSetupResult(telemetrySource, 'dev_preview')
+            trackAgentumCliFeatureTipSetupResult(telemetrySource, 'dev_preview')
             enableOrchestrationSkillSetup()
             if (!mountedRef.current) {
               return
@@ -322,7 +322,7 @@ export default function FeatureTipsModal(): JSX.Element | null {
             return
           }
 
-          trackOrcaCliFeatureTipSetupResult(telemetrySource, 'failed')
+          trackAgentumCliFeatureTipSetupResult(telemetrySource, 'failed')
           if (mountedRef.current) {
             toast.error(message)
           }
@@ -368,10 +368,10 @@ export default function FeatureTipsModal(): JSX.Element | null {
               </div>
               {skillTerminalOpen ? (
                 <OnboardingInlineCommandTerminal
-                  command={ORCA_CLI_ORCHESTRATION_SKILL_INSTALL_COMMAND}
+                  command={AGENTUM_CLI_ORCHESTRATION_SKILL_INSTALL_COMMAND}
                   title="Skill setup"
-                  ariaLabel="Orca CLI and orchestration skill install terminal"
-                  description="Press Enter to install the Orca CLI and orchestration skills for your agents."
+                  ariaLabel="Agentum CLI and orchestration skill install terminal"
+                  description="Press Enter to install the Agentum CLI and orchestration skills for your agents."
                   terminalHeightPx={150}
                   terminalTopMarginPx={4}
                   descriptionPaddingClassName="px-4 py-2"

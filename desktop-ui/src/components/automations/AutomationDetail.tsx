@@ -152,7 +152,7 @@ export function AutomationDetail({
 
       {automation.executionTargetType === 'ssh' ? (
         <div className="rounded-md border border-border/50 bg-muted/50 p-3 text-sm text-muted-foreground shadow-sm">
-          This SSH automation runs only while Orca can reach the SSH host. If reconnect needs
+          This SSH automation runs only while Agentum can reach the SSH host. If reconnect needs
           interactive credentials or the host is unavailable, the run is recorded as skipped.
         </div>
       ) : null}

@@ -7,7 +7,7 @@ const pr: HostedReviewInfo = {
   number: 123,
   title: 'Ready PR',
   state: 'open',
-  url: 'https://github.com/stablyai/orca/pull/123',
+  url: 'https://github.com/stablyai/agentum/pull/123',
   status: 'success',
   updatedAt: '2026-05-13T00:00:00.000Z',
   mergeable: 'MERGEABLE'

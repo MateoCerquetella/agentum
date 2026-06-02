@@ -889,7 +889,7 @@ export function CommitMessageAiPane({
         <div className="space-y-0.5">
           <Label>Agent</Label>
           <p className="text-xs text-muted-foreground">
-            Orca invokes this CLI in the background for commit messages and pull request details. It
+            Agentum invokes this CLI in the background for commit messages and pull request details. It
             must be installed where the worktree is hosted - your computer for local worktrees, or
             the SSH host for remote ones.
           </p>
@@ -954,7 +954,7 @@ export function CommitMessageAiPane({
     isCustom &&
     matchesSettingsSearch(searchQuery, {
       title: 'Custom command',
-      description: 'Command line Orca runs to generate source-control text.',
+      description: 'Command line Agentum runs to generate source-control text.',
       keywords: ['custom', 'command', 'cli', 'binary', 'prompt', 'placeholder']
     })
   ) {
@@ -962,7 +962,7 @@ export function CommitMessageAiPane({
       <SearchableSetting
         key="custom-command"
         title="Custom command"
-        description="Command line Orca runs to generate source-control text."
+        description="Command line Agentum runs to generate source-control text."
         keywords={['custom', 'command', 'cli', 'binary', 'prompt', 'placeholder']}
         className="space-y-2 py-2"
       >
@@ -1019,7 +1019,7 @@ export function CommitMessageAiPane({
           <p className="text-xs text-muted-foreground">
             {activeCapability.modelSource === 'dynamic'
               ? 'Refreshes from the selected CLI when the CLI exposes model discovery.'
-              : 'This agent does not expose model discovery, so Orca uses a manual catalog.'}
+              : 'This agent does not expose model discovery, so Agentum uses a manual catalog.'}
           </p>
           {activeDiscovery?.status === 'error' && (
             <p className="text-xs text-destructive">{activeDiscovery.error}</p>
@@ -1423,7 +1423,7 @@ export function CommitMessageAiPane({
   }
   // Why: this pane lives nested inside the Git section, so we draw an explicit
   // sub-heading + top border to keep its toggles visually distinct from the
-  // Branch Prefix / Refresh Local Base Ref / Orca Attribution rows above.
+  // Branch Prefix / Refresh Local Base Ref / Agentum Attribution rows above.
   return (
     <div
       ref={setPaneRootRef}

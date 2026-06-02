@@ -262,7 +262,7 @@ export function RuntimeEnvironmentsPane({
           <p className="text-xs text-muted-foreground">
             {allowLocalRuntime
               ? "Local keeps today's desktop behavior. Saved servers route supported client calls through the remote runtime."
-              : 'Saved servers route this browser through a paired Orca runtime.'}
+              : 'Saved servers route this browser through a paired Agentum runtime.'}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -357,11 +357,11 @@ export function RuntimeEnvironmentsPane({
                   aria-describedby="runtime-server-pairing-code-help"
                   value={pairingCode}
                   onChange={(event) => setPairingCode(event.target.value)}
-                  placeholder="orca://pair?code=..."
+                  placeholder="agentum://pair?code=..."
                   className="h-8 min-w-0 font-mono text-xs"
                 />
                 <p id="runtime-server-pairing-code-help" className="text-xs text-muted-foreground">
-                  Run <span className="font-mono">orca serve --pairing-address &lt;host&gt;</span>{' '}
+                  Run <span className="font-mono">agentum serve --pairing-address &lt;host&gt;</span>{' '}
                   on the server and paste the printed pairing URL.
                 </p>
               </div>
@@ -428,9 +428,9 @@ export function RuntimeEnvironmentsPane({
         <div className="overflow-hidden rounded-lg border border-border/50">
           <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2.5">
             <div className="min-w-0 space-y-0.5">
-              <div className="text-sm font-medium">Share this Orca server</div>
+              <div className="text-sm font-medium">Share this Agentum server</div>
               <p className="text-xs text-muted-foreground">
-                Create a revocable access grant so a browser or another Orca client can connect.
+                Create a revocable access grant so a browser or another Agentum client can connect.
               </p>
             </div>
             <Button
@@ -467,7 +467,7 @@ export function RuntimeEnvironmentsPane({
           <DialogHeader>
             <DialogTitle className="text-sm">Switch Server</DialogTitle>
             <DialogDescription>
-              Orca will close remote terminals and browser tabs from the current server before
+              Agentum will close remote terminals and browser tabs from the current server before
               loading projects from the next server.
             </DialogDescription>
           </DialogHeader>
@@ -527,9 +527,9 @@ export function RuntimeEnvironmentsPane({
             <DialogDescription>
               {removingActiveServer
                 ? allowLocalRuntime
-                  ? 'Removing the active server first switches Orca back to Local desktop and closes remote terminals and browser tabs for that server.'
+                  ? 'Removing the active server first switches Agentum back to Local desktop and closes remote terminals and browser tabs for that server.'
                   : 'Removing the active server disconnects this browser and closes remote terminals and browser tabs for that server.'
-                : 'This removes the saved server from Orca. It does not change the active server.'}
+                : 'This removes the saved server from Agentum. It does not change the active server.'}
             </DialogDescription>
           </DialogHeader>
           {pendingRemove ? (

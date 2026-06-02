@@ -37,7 +37,7 @@ export default function ProjectAddedDialog(): React.JSX.Element | null {
   const hiddenWorktreeCount =
     detected?.authoritative === true
       ? detected.worktrees.filter(
-          (worktree) => !worktree.selectedCheckout && worktree.ownership !== 'orca-managed'
+          (worktree) => !worktree.selectedCheckout && worktree.ownership !== 'agentum-managed'
         ).length
       : 0
   const otherWorktreesVisible = repo

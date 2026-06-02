@@ -388,7 +388,7 @@ function queueSetupAndIssueCommands(
   // per-user issue automation, spawn a separate split pane to run the
   // agent command. Queued independently from setup so both can start in
   // parallel; repo bootstrap and personal issue workflows are separate
-  // concerns, so Orca should not invent a dependency between them.
+  // concerns, so Agentum should not invent a dependency between them.
   if (issueCommand) {
     // Why: WorktreeSetupLaunch carries a runner-script file (from main) and we
     // shell out to bash; the TaskPage variant is already an expanded command

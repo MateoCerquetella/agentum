@@ -1172,7 +1172,7 @@ export default function RichMarkdownEditor({
         setDocLinkMenu
       }),
       // Why: Cmd/Ctrl-click activates links via the shared classifier +
-      // dispatcher, so in-worktree .md links open in an Orca tab instead of the
+      // dispatcher, so in-worktree .md links open in an Agentum tab instead of the
       // OS default handler. Cmd/Ctrl+Shift-click is the OS escape hatch, kept
       // symmetric with MarkdownPreview. Without a modifier the click falls
       // through to TipTap's default cursor-positioning behavior.
@@ -1719,7 +1719,7 @@ export default function RichMarkdownEditor({
     }
 
     // Why: markdown files on disk remain the source of truth for rich mode in
-    // Orca. External file changes, tab replacement, and save-after-reload must
+    // Agentum. External file changes, tab replacement, and save-after-reload must
     // overwrite the editor state so the rich view never drifts from repo text.
     isApplyingProgrammaticUpdateRef.current = true
     try {
@@ -1956,7 +1956,7 @@ export default function RichMarkdownEditor({
         {annotationTarget ? (
           <button
             type="button"
-            className="orca-diff-comment-add-btn rich-markdown-comment-add-btn"
+            className="agentum-diff-comment-add-btn rich-markdown-comment-add-btn"
             style={{
               top: annotationTarget?.buttonTop ?? 56,
               left: annotationTarget?.buttonLeft ?? 16

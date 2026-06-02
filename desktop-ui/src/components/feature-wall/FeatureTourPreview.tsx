@@ -310,7 +310,7 @@ function TerminalFrame(): JSX.Element {
           <span className="size-1.5 rounded-full bg-foreground/15" />
           <span className="size-1.5 rounded-full bg-foreground/15" />
           <span className="ml-2 font-mono text-[13.5px] leading-none text-muted-foreground">
-            orca · zsh
+            agentum · zsh
           </span>
         </div>
         <div className="grid flex-1 grid-cols-2 divide-x divide-border font-mono text-[14.5px] leading-[1.4] text-foreground">

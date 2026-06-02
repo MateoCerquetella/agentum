@@ -21,7 +21,7 @@ const stepCopy = {
   agent: {
     title: 'Pick your default agent',
     subtitle:
-      "Orca works with every CLI agent. Choose the one you'll reach for most. Switch any time."
+      "Agentum works with every CLI agent. Choose the one you'll reach for most. Switch any time."
   },
   theme: {
     title: 'Make it feel like home',
@@ -29,22 +29,22 @@ const stepCopy = {
   },
   notifications: {
     title: 'Set up notifications',
-    subtitle: 'Orca will notify you know when agents are done or need help.'
+    subtitle: 'Agentum will notify you know when agents are done or need help.'
   },
   agentSetup: {
-    title: 'Set up Orca for agents',
-    subtitle: 'Turn on advanced Orca capabilities for agents.'
+    title: 'Set up Agentum for agents',
+    subtitle: 'Turn on advanced Agentum capabilities for agents.'
   },
   integrations: {
     title: 'Set up GitHub tasks',
     subtitle: 'Install the GitHub CLI to:'
   },
   tour: {
-    title: 'Explore Orca',
-    subtitle: "Take a 60-second tour of Orca's advanced features."
+    title: 'Explore Agentum',
+    subtitle: "Take a 60-second tour of Agentum's advanced features."
   },
   repo: {
-    title: 'Point Orca at some code',
+    title: 'Point Agentum at some code',
     subtitle: 'Open a folder or clone a repo to finish setup.'
   }
 } as const
@@ -55,7 +55,7 @@ const stepTooltipLabels = {
   notifications: 'Notifications',
   agentSetup: 'Agent setup',
   integrations: 'Integrations',
-  tour: 'Explore Orca',
+  tour: 'Explore Agentum',
   repo: 'Create project'
 } as const
 
@@ -187,7 +187,7 @@ export default function OnboardingFlow({
       <section
         ref={flow.setLifecycleRootRef}
         role="dialog"
-        aria-label="Orca onboarding"
+        aria-label="Agentum onboarding"
         aria-modal="true"
         data-onboarding-modal
         className={cn(
@@ -203,7 +203,7 @@ export default function OnboardingFlow({
               aria-hidden="true"
               className="h-7 w-auto shrink-0 invert dark:invert-0"
             />
-            <span>Orca</span>
+            <span>Agentum</span>
           </div>
 
           {isInlineTourRunning ? (
@@ -255,7 +255,7 @@ export default function OnboardingFlow({
             <div className="mt-8 shrink-0">
               {stepIndex === 0 && (
                 <div className="mb-2 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
-                  Welcome to Orca
+                  Welcome to Agentum
                 </div>
               )}
               <h1 className="text-[34px] font-semibold leading-[1.15] tracking-tight text-foreground">

@@ -106,7 +106,7 @@ function implicitWorktreeIndexShortcutAllowed(options: WindowShortcutResolveOpti
   if (options.context !== 'terminal') {
     return true
   }
-  return normalizeTerminalShortcutPolicy(options.terminalShortcutPolicy) === 'orca-first'
+  return normalizeTerminalShortcutPolicy(options.terminalShortcutPolicy) === 'agentum-first'
 }
 
 function implicitTabIndexShortcutAllowed(options: WindowShortcutResolveOptions): boolean {

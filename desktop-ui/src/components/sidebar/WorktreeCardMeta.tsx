@@ -61,9 +61,9 @@ type WorktreeCardDetailsHoverProps = WorktreeCardMetaBadgesProps & {
   detailsAfter?: React.ReactNode
   onEditIssue: (event: React.MouseEvent) => void
   onEditComment: (event: React.MouseEvent) => void
-  onOpenGitHubIssueInOrca?: (event: React.MouseEvent) => void
-  onOpenLinearIssueInOrca?: (event: React.MouseEvent) => void
-  onOpenReviewInOrca?: (event: React.MouseEvent) => void
+  onOpenGitHubIssueInAgentum?: (event: React.MouseEvent) => void
+  onOpenLinearIssueInAgentum?: (event: React.MouseEvent) => void
+  onOpenReviewInAgentum?: (event: React.MouseEvent) => void
 }
 
 function hasComment(comment: string | null): boolean {
@@ -273,9 +273,9 @@ export function WorktreeCardDetailsHover({
   detailsAfter,
   onEditIssue,
   onEditComment,
-  onOpenGitHubIssueInOrca,
-  onOpenLinearIssueInOrca,
-  onOpenReviewInOrca
+  onOpenGitHubIssueInAgentum,
+  onOpenLinearIssueInAgentum,
+  onOpenReviewInAgentum
 }: WorktreeCardDetailsHoverProps): React.JSX.Element {
   const [open, setOpen] = React.useState(false)
   const dismissAndRun = React.useCallback(
@@ -337,10 +337,10 @@ export function WorktreeCardDetailsHover({
                 label={`Issue #${issue.number}`}
                 actions={
                   <>
-                    {issue.url && onOpenGitHubIssueInOrca && (
+                    {issue.url && onOpenGitHubIssueInAgentum && (
                       <MetadataActionIcon
-                        label="Open in Orca"
-                        onClick={dismissAndRun(onOpenGitHubIssueInOrca)}
+                        label="Open in Agentum"
+                        onClick={dismissAndRun(onOpenGitHubIssueInAgentum)}
                       >
                         <MonitorUp className="size-3" />
                       </MetadataActionIcon>
@@ -381,10 +381,10 @@ export function WorktreeCardDetailsHover({
                 label={`Linear ${linearIssue.identifier}`}
                 actions={
                   <>
-                    {linearIssue.url && onOpenLinearIssueInOrca && (
+                    {linearIssue.url && onOpenLinearIssueInAgentum && (
                       <MetadataActionIcon
-                        label="Open in Orca"
-                        onClick={dismissAndRun(onOpenLinearIssueInOrca)}
+                        label="Open in Agentum"
+                        onClick={dismissAndRun(onOpenLinearIssueInAgentum)}
                       >
                         <MonitorUp className="size-3" />
                       </MetadataActionIcon>
@@ -425,10 +425,10 @@ export function WorktreeCardDetailsHover({
                 label={`${reviewLabel} #${review.number}`}
                 actions={
                   <>
-                    {review.url && onOpenReviewInOrca && (
+                    {review.url && onOpenReviewInAgentum && (
                       <MetadataActionIcon
-                        label="Open in Orca"
-                        onClick={dismissAndRun(onOpenReviewInOrca)}
+                        label="Open in Agentum"
+                        onClick={dismissAndRun(onOpenReviewInAgentum)}
                       >
                         <MonitorUp className="size-3" />
                       </MetadataActionIcon>

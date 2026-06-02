@@ -11,7 +11,7 @@ import type { AppState } from '../store'
 import type { OpenFile } from '../store/slices/editor'
 
 /** Why (issue #1158): the debounced + shutdown session writers share this
- *  gate so a hydration failure cannot overwrite orca-data.json with the
+ *  gate so a hydration failure cannot overwrite agentum-data.json with the
  *  empty in-memory state the error path leaves behind.
  *
  *  - workspaceSessionReady gates the UI mount; it flips true even in the

@@ -84,10 +84,10 @@ export const AGENT_KIND_VALUES = [
 export const agentKindSchema = z.enum(AGENT_KIND_VALUES)
 export type AgentKind = z.infer<typeof agentKindSchema>
 
-// Trimmed to a small set of values Orca's PTY-typed-command launch architecture
+// Trimmed to a small set of values Agentum's PTY-typed-command launch architecture
 // can emit:
 //   - `binary_not_found` — `provider.spawn` ENOENT (the *shell* binary is
-//     missing). The agent CLI being missing is invisible: Orca spawns a
+//     missing). The agent CLI being missing is invisible: Agentum spawns a
 //     healthy shell and types the command, and bash/zsh's "command not found"
 //     surfaces only as terminal output.
 //   - `paste_readiness_timeout` — bracketed-paste readiness wait timed out.
@@ -97,7 +97,7 @@ export type AgentKind = z.infer<typeof agentKindSchema>
 //     unclassifiable shell-spawn errors).
 // Provider-side errors (`auth_expired`, `rate_limited`, `network_timeout`,
 // `provider_*`) happen inside the agent CLI subprocess and are not observable
-// to Orca — see telemetry-plan.md §Decision: Defer per-incident error fields.
+// to Agentum — see telemetry-plan.md §Decision: Defer per-incident error fields.
 // Adding a new value is additive-safe; do it when the call site lands, not in
 // anticipation.
 export const errorClassSchema = z.enum(['binary_not_found', 'paste_readiness_timeout', 'unknown'])
@@ -222,8 +222,8 @@ export type OptInVia = z.infer<typeof optInViaSchema>
 // `settings_changed`. If a setting isn't in this list, we do not emit.
 //
 // Keys are camelCase to match the actual field names in `GlobalSettings`.
-// `orca_channel` is intentionally absent — it is a build-time common
-// property baked in from `ORCA_BUILD_IDENTITY`, not a user-togglable setting.
+// `agentum_channel` is intentionally absent — it is a build-time common
+// property baked in from `AGENTUM_BUILD_IDENTITY`, not a user-togglable setting.
 //
 // Intentionally does NOT include the telemetry opt-in toggle — that is
 // covered by the dedicated `telemetry_opted_in` / `telemetry_opted_out`
@@ -270,7 +270,7 @@ const repoAddedSchema = z
   .object({ method: repoMethodSchema, nth_repo_added: nthRepoAddedSchema })
   .strict()
 
-const appStarredOrcaSchema = z
+const appStarredAgentumSchema = z
   .object({
     source: appStarSourceSchema,
     nth_repo_added: nthRepoAddedSchema
@@ -325,22 +325,22 @@ const settingsChangedSchema = z
 const telemetryOptedInSchema = z.object({ via: optInViaSchema }).strict()
 const telemetryOptedOutSchema = z.object({ via: optInViaSchema }).strict()
 
-const orcaCliFeatureTipSourceSchema = z.enum(['app_open', 'manual'])
-const orcaCliFeatureTipShownSchema = z
+const agentumCliFeatureTipSourceSchema = z.enum(['app_open', 'manual'])
+const agentumCliFeatureTipShownSchema = z
   .object({
-    source: orcaCliFeatureTipSourceSchema,
+    source: agentumCliFeatureTipSourceSchema,
     nth_repo_added: nthRepoAddedSchema
   })
   .strict()
-const orcaCliFeatureTipSetupClickedSchema = z
+const agentumCliFeatureTipSetupClickedSchema = z
   .object({
-    source: orcaCliFeatureTipSourceSchema,
+    source: agentumCliFeatureTipSourceSchema,
     nth_repo_added: nthRepoAddedSchema
   })
   .strict()
-const orcaCliFeatureTipSetupResultSchema = z
+const agentumCliFeatureTipSetupResultSchema = z
   .object({
-    source: orcaCliFeatureTipSourceSchema,
+    source: agentumCliFeatureTipSourceSchema,
     result: z.enum(['installed', 'needs_attention', 'dev_preview', 'failed']),
     nth_repo_added: nthRepoAddedSchema
   })
@@ -907,7 +907,7 @@ const activationChecklistItemCompletedSchema = z
 
 // Why: see docs/agent-on-path-detection.md. Disambiguates `on_path: false`
 // rows on dashboard 1562016 — distinguishes shell-hydration failure (where
-// `on_path` is misleading because Orca's view of PATH is incomplete) from
+// `on_path` is misleading because Agentum's view of PATH is incomplete) from
 // genuinely-not-on-PATH (where the field is reporting accurately). Closed
 // enum kept in lockstep with `ShellHydrationFailureReason` via a compile-time
 // guard below.
@@ -1094,7 +1094,7 @@ const onboardingFeatureSetupTerminalInteractedSchema = z
 // which cannot be unmixed after the fact.
 export const eventSchemas = {
   app_opened: appOpenedSchema,
-  app_starred_orca: appStarredOrcaSchema,
+  app_starred_agentum: appStarredAgentumSchema,
 
   repo_added: repoAddedSchema,
   add_repo_setup_step_action: addRepoSetupStepActionEventSchema,
@@ -1118,9 +1118,9 @@ export const eventSchemas = {
   telemetry_opted_in: telemetryOptedInSchema,
   telemetry_opted_out: telemetryOptedOutSchema,
 
-  orca_cli_feature_tip_shown: orcaCliFeatureTipShownSchema,
-  orca_cli_feature_tip_setup_clicked: orcaCliFeatureTipSetupClickedSchema,
-  orca_cli_feature_tip_setup_result: orcaCliFeatureTipSetupResultSchema,
+  agentum_cli_feature_tip_shown: agentumCliFeatureTipShownSchema,
+  agentum_cli_feature_tip_setup_clicked: agentumCliFeatureTipSetupClickedSchema,
+  agentum_cli_feature_tip_setup_result: agentumCliFeatureTipSetupResultSchema,
 
   feature_wall_opened: featureWallOpenedSchema,
   feature_wall_closed: featureWallClosedSchema,
@@ -1192,7 +1192,7 @@ export const COHORT_EXTENDED: readonly EventName[] = Array.from(COHORT_EXTENDED_
 // injection set against silent schema drift.
 type _CohortExtendedRoster =
   | 'app_opened'
-  | 'app_starred_orca'
+  | 'app_starred_agentum'
   | 'repo_added'
   | 'add_repo_setup_step_action'
   | 'add_repo_existing_workspaces_detected'
@@ -1206,9 +1206,9 @@ type _CohortExtendedRoster =
   | 'agent_started'
   | 'agent_prompt_sent'
   | 'agent_error'
-  | 'orca_cli_feature_tip_shown'
-  | 'orca_cli_feature_tip_setup_clicked'
-  | 'orca_cli_feature_tip_setup_result'
+  | 'agentum_cli_feature_tip_shown'
+  | 'agentum_cli_feature_tip_setup_clicked'
+  | 'agentum_cli_feature_tip_setup_result'
 // Why: `z.object({}).strict()` infers a string index signature, which would
 // make every key appear present. Ignore index-signature-only keys here so
 // strict empty event payloads do not get pulled into keyed telemetry rosters.
@@ -1308,7 +1308,7 @@ export const commonPropsSchema = z
     // scheme is cheap to preserve).
     install_id: z.string().min(1).max(64),
     session_id: z.string().min(1).max(64),
-    orca_channel: z.enum(['stable', 'rc'])
+    agentum_channel: z.enum(['stable', 'rc'])
   })
   .strict()
 export type CommonProps = z.infer<typeof commonPropsSchema>

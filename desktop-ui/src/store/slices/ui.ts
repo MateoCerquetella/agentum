@@ -10,7 +10,7 @@ import type {
   CustomPet,
   GitHubWorkItem,
   LinearIssue,
-  PersistedTrustedOrcaHooks,
+  PersistedTrustedAgentumHooks,
   PersistedUIState,
   StatusBarItem,
   TaskProvider,
@@ -60,7 +60,7 @@ import {
   normalizeWorkspaceStatuses
 } from '../../../../shared/workspace-statuses'
 import { normalizeKagiSessionLink } from '../../../../shared/browser-url'
-import type { OrcaHookScriptKind } from '../../lib/orca-hook-trust'
+import type { AgentumHookScriptKind } from '../../lib/agentum-hook-trust'
 import {
   filterSetupScriptPromptDismissalsToValidRepos,
   getSetupScriptPromptDismissalKey
@@ -226,11 +226,11 @@ const VALID_LINEAR_MODES = new Set<NonNullable<TaskResumeState['linearMode']>>([
   'views'
 ])
 
-function filterTrustedOrcaHooksToValidRepos(
-  trust: PersistedTrustedOrcaHooks,
+function filterTrustedAgentumHooksToValidRepos(
+  trust: PersistedTrustedAgentumHooks,
   validRepoIds: Set<string>
-): PersistedTrustedOrcaHooks {
-  const next: PersistedTrustedOrcaHooks = {}
+): PersistedTrustedAgentumHooks {
+  const next: PersistedTrustedAgentumHooks = {}
   for (const [repoId, entry] of Object.entries(trust)) {
     if (validRepoIds.has(repoId)) {
       next[repoId] = entry
@@ -587,7 +587,7 @@ export type UISlice = {
     | 'feature-wall'
     | 'feature-tips'
     | 'new-workspace-composer'
-    | 'confirm-orca-yaml-hooks'
+    | 'confirm-agentum-yaml-hooks'
   modalData: Record<string, unknown>
   openModal: (modal: UISlice['activeModal'], data?: Record<string, unknown>) => void
   closeModal: () => void
@@ -595,14 +595,14 @@ export type UISlice = {
   markFeatureTipsSeen: (ids: FeatureTipId[]) => void
   featureInteractions: FeatureInteractionState
   recordFeatureInteraction: (id: FeatureInteractionId) => void
-  trustedOrcaHooks: PersistedTrustedOrcaHooks
-  markOrcaHookScriptConfirmed: (
+  trustedAgentumHooks: PersistedTrustedAgentumHooks
+  markAgentumHookScriptConfirmed: (
     repoId: string,
-    kind: OrcaHookScriptKind,
+    kind: AgentumHookScriptKind,
     contentHash: string
   ) => void
-  markOrcaHookRepoAlwaysTrusted: (repoId: string) => void
-  clearOrcaHookTrustForRepo: (repoId: string) => void
+  markAgentumHookRepoAlwaysTrusted: (repoId: string) => void
+  clearAgentumHookTrustForRepo: (repoId: string) => void
   setupScriptPromptDismissedRepoIds: string[]
   dismissSetupScriptPrompt: (repoId: string) => void
   groupBy: 'none' | 'workspace-status' | 'repo' | 'pr-status'
@@ -1190,10 +1190,10 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       }
       return { featureInteractions: next }
     }),
-  trustedOrcaHooks: {},
-  markOrcaHookScriptConfirmed: (repoId, kind, contentHash) =>
+  trustedAgentumHooks: {},
+  markAgentumHookScriptConfirmed: (repoId, kind, contentHash) =>
     set((s) => {
-      const existing = s.trustedOrcaHooks[repoId]
+      const existing = s.trustedAgentumHooks[repoId]
       const currentEntry = existing?.[kind]
       if (currentEntry?.contentHash === contentHash) {
         return s
@@ -1202,35 +1202,35 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         ...existing,
         [kind]: { contentHash, approvedAt: Date.now() }
       }
-      const next = { ...s.trustedOrcaHooks, [repoId]: nextRepo }
-      window.api.ui.set({ trustedOrcaHooks: next }).catch(console.error)
-      return { trustedOrcaHooks: next }
+      const next = { ...s.trustedAgentumHooks, [repoId]: nextRepo }
+      window.api.ui.set({ trustedAgentumHooks: next }).catch(console.error)
+      return { trustedAgentumHooks: next }
     }),
-  markOrcaHookRepoAlwaysTrusted: (repoId) =>
+  markAgentumHookRepoAlwaysTrusted: (repoId) =>
     set((s) => {
-      const existing = s.trustedOrcaHooks[repoId]
+      const existing = s.trustedAgentumHooks[repoId]
       if (existing?.all) {
         return s
       }
       const next = {
-        ...s.trustedOrcaHooks,
+        ...s.trustedAgentumHooks,
         [repoId]: {
           ...existing,
           all: { approvedAt: Date.now() }
         }
       }
-      window.api.ui.set({ trustedOrcaHooks: next }).catch(console.error)
-      return { trustedOrcaHooks: next }
+      window.api.ui.set({ trustedAgentumHooks: next }).catch(console.error)
+      return { trustedAgentumHooks: next }
     }),
-  clearOrcaHookTrustForRepo: (repoId) =>
+  clearAgentumHookTrustForRepo: (repoId) =>
     set((s) => {
-      if (!(repoId in s.trustedOrcaHooks)) {
+      if (!(repoId in s.trustedAgentumHooks)) {
         return s
       }
-      const next = { ...s.trustedOrcaHooks }
+      const next = { ...s.trustedAgentumHooks }
       delete next[repoId]
-      window.api.ui.set({ trustedOrcaHooks: next }).catch(console.error)
-      return { trustedOrcaHooks: next }
+      window.api.ui.set({ trustedAgentumHooks: next }).catch(console.error)
+      return { trustedAgentumHooks: next }
     }),
   setupScriptPromptDismissedRepoIds: [],
   dismissSetupScriptPrompt: (repoId) =>
@@ -1566,8 +1566,8 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         taskResumeState: sanitizeTaskResumeState(ui.taskResumeState),
         featureTipsSeenIds: normalizeFeatureTipIds(ui.featureTipsSeenIds),
         featureInteractions: normalizeFeatureInteractions(ui.featureInteractions),
-        trustedOrcaHooks: filterTrustedOrcaHooksToValidRepos(
-          ui.trustedOrcaHooks ?? {},
+        trustedAgentumHooks: filterTrustedAgentumHooksToValidRepos(
+          ui.trustedAgentumHooks ?? {},
           validRepoIds
         ),
         setupScriptPromptDismissedRepoIds: filterSetupScriptPromptDismissalsToValidRepos(

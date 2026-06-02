@@ -284,7 +284,7 @@ const markdownPreviewSanitizeSchema = {
   protocols: {
     ...defaultSchema.protocols,
     // Why: markdown preview owns file:// click routing and authorizes the
-    // user-selected path before opening it in Orca. Sanitization must preserve
+    // user-selected path before opening it in Agentum. Sanitization must preserve
     // the target so the click handler can make that security decision.
     href: [...(defaultSchema.protocols?.href ?? []), 'file'],
     src: [...(defaultSchema.protocols?.src ?? []), 'file']
@@ -301,8 +301,8 @@ const markdownPreviewSanitizeSchema = {
     details: [
       ...(defaultSchema.attributes?.details ?? []),
       'open',
-      ['className', 'orca-details'],
-      ['dataOrcaToggle', 'heading-1']
+      ['className', 'agentum-details'],
+      ['dataAgentumToggle', 'heading-1']
     ],
     h1: [...(defaultSchema.attributes?.h1 ?? []), 'id'],
     h2: [...(defaultSchema.attributes?.h2 ?? []), 'id'],
@@ -1067,7 +1067,7 @@ export default function MarkdownPreview({
                     <>
                       <button
                         type="button"
-                        className="orca-diff-comment-pill-btn"
+                        className="agentum-diff-comment-pill-btn"
                         title={
                           copiedReviewNoteId === comment.id ? 'Copied note' : 'Copy note for agent'
                         }
@@ -1300,7 +1300,7 @@ export default function MarkdownPreview({
           if (!targetWorktree) {
             if (sourceRoutingWorktreeId && worktreeRoot) {
               // Why: floating markdown files are owned by a synthetic workspace,
-              // so there may be no repo worktree even though Orca can stat/open
+              // so there may be no repo worktree even though Agentum can stat/open
               // links relative to the source file root.
               void activateMarkdownLink(href, {
                 sourceFilePath: filePath,
@@ -1815,7 +1815,7 @@ function MarkdownSingleNoteSendMenu({
         }
       ]}
       targetModeLabel="This note"
-      triggerClassName="orca-diff-comment-pill-btn"
+      triggerClassName="agentum-diff-comment-pill-btn"
       disabledTooltip="Note already sent"
       onDelivered={onDelivered}
     />
@@ -1865,10 +1865,10 @@ function MarkdownAnnotationComposer({
 
   return (
     <div className="markdown-annotation-composer" onClick={(event) => event.stopPropagation()}>
-      <div className="orca-diff-comment-popover-label">Selected text</div>
+      <div className="agentum-diff-comment-popover-label">Selected text</div>
       <textarea
         ref={focusTextareaRef}
-        className="orca-diff-comment-popover-textarea"
+        className="agentum-diff-comment-popover-textarea"
         placeholder="Add note for the AI"
         value={body}
         onChange={(event) => {
@@ -1890,7 +1890,7 @@ function MarkdownAnnotationComposer({
         }}
         rows={3}
       />
-      <div className="orca-diff-comment-popover-footer">
+      <div className="agentum-diff-comment-popover-footer">
         <Button variant="ghost" size="sm" onClick={onCancel} disabled={submitting}>
           Cancel
         </Button>

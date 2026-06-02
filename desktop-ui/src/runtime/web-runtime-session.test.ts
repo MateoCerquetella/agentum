@@ -49,7 +49,7 @@ function makeSnapshot(): RuntimeMobileSessionTabsResult {
 
 describe('createWebRuntimeSessionBrowserTab', () => {
   beforeEach(() => {
-    vi.stubGlobal('__ORCA_WEB_CLIENT__', true)
+    vi.stubGlobal('__AGENTUM_WEB_CLIENT__', true)
     mocks.getState.mockReturnValue({
       settings: {
         activeRuntimeEnvironmentId: ENVIRONMENT_ID
@@ -330,7 +330,7 @@ describe('createWebRuntimeSessionBrowserTab', () => {
 
 describe('createWebRuntimeSessionTerminal', () => {
   beforeEach(() => {
-    vi.stubGlobal('__ORCA_WEB_CLIENT__', true)
+    vi.stubGlobal('__AGENTUM_WEB_CLIENT__', true)
     mocks.getState.mockReturnValue({
       settings: {
         activeRuntimeEnvironmentId: ENVIRONMENT_ID
@@ -495,7 +495,7 @@ describe('createWebRuntimeSessionTerminal', () => {
 
 describe('moveWebRuntimeSessionTab', () => {
   beforeEach(() => {
-    vi.stubGlobal('__ORCA_WEB_CLIENT__', true)
+    vi.stubGlobal('__AGENTUM_WEB_CLIENT__', true)
     mocks.getState.mockReturnValue({
       settings: {
         activeRuntimeEnvironmentId: ENVIRONMENT_ID
@@ -699,7 +699,7 @@ describe('moveWebRuntimeSessionTab', () => {
 
 describe('web runtime session tab actions', () => {
   beforeEach(() => {
-    vi.stubGlobal('__ORCA_WEB_CLIENT__', true)
+    vi.stubGlobal('__AGENTUM_WEB_CLIENT__', true)
     mocks.getState.mockReturnValue({
       settings: {
         activeRuntimeEnvironmentId: ENVIRONMENT_ID
@@ -767,7 +767,7 @@ describe('web runtime session tab actions', () => {
 
 describe('closeWebRuntimeTerminal', () => {
   beforeEach(() => {
-    vi.stubGlobal('__ORCA_WEB_CLIENT__', true)
+    vi.stubGlobal('__AGENTUM_WEB_CLIENT__', true)
   })
 
   afterEach(() => {
@@ -819,7 +819,7 @@ describe('closeWebRuntimeTerminal', () => {
     })
 
     expect(closeWebRuntimeTerminal('pty-local-1')).toBe(false)
-    vi.stubGlobal('__ORCA_WEB_CLIENT__', false)
+    vi.stubGlobal('__AGENTUM_WEB_CLIENT__', false)
     expect(closeWebRuntimeTerminal('remote:web-env-1@@terminal-1')).toBe(false)
 
     expect(runtimeCall).not.toHaveBeenCalled()

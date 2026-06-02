@@ -40,7 +40,7 @@ type WindowsTerminalCapabilityHookState = {
 export function getWindowsTerminalCapabilityOwnerKey(
   activeRuntimeEnvironmentId?: string | null
 ): string {
-  const isWebClient = (globalThis as { __ORCA_WEB_CLIENT__?: boolean }).__ORCA_WEB_CLIENT__ === true
+  const isWebClient = (globalThis as { __AGENTUM_WEB_CLIENT__?: boolean }).__AGENTUM_WEB_CLIENT__ === true
   if (!isWebClient) {
     return 'local'
   }

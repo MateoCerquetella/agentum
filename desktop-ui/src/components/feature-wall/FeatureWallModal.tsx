@@ -34,11 +34,11 @@ export default function FeatureWallModal(): JSX.Element | null {
         tabIndex={-1}
       >
         <DialogHeader className="gap-1 border-b border-border px-7 py-4">
-          <DialogTitle className="text-lg">Get to know Orca</DialogTitle>
+          <DialogTitle className="text-lg">Get to know Agentum</DialogTitle>
           {/* Why: Radix requires a description for the dialog to be a11y-compliant,
               but we don't want it visible - the rail and step copy already orient users. */}
           <DialogDescription className="sr-only">
-            A short, workflow-by-workflow tour of Orca.
+            A short, workflow-by-workflow tour of Agentum.
           </DialogDescription>
         </DialogHeader>
 

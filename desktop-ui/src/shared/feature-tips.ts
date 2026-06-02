@@ -4,7 +4,7 @@ import {
   type FeatureInteractionState
 } from './feature-interactions'
 
-export type FeatureTipId = 'voice-dictation' | 'orca-cli'
+export type FeatureTipId = 'voice-dictation' | 'agentum-cli'
 
 export type FeatureTipPriority = 'new' | 'unseen'
 
@@ -30,10 +30,10 @@ export type CompletedFeatureTipState = {
 
 export const FEATURE_TIPS = [
   {
-    id: 'orca-cli',
+    id: 'agentum-cli',
     priority: 'new',
     eyebrow: 'Tip',
-    title: 'Let agents drive Orca with the Orca CLI',
+    title: 'Let agents drive Agentum with the Agentum CLI',
     description: 'Enable agents to coordinate child worktrees and communicate between worktrees.',
     action: 'setup-cli',
     ctaLabel: 'Install CLI & Skills',
@@ -45,7 +45,7 @@ export const FEATURE_TIPS = [
     eyebrow: 'Tip',
     title: 'Voice Dictation is here',
     description:
-      'Speak into any focused pane and Orca will transcribe it. Press the dictation shortcut to start and stop.',
+      'Speak into any focused pane and Agentum will transcribe it. Press the dictation shortcut to start and stop.',
     action: 'enable-voice',
     ctaLabel: 'Set Up Voice',
     completedByFeatureInteractions: ['voice-dictation']
@@ -75,7 +75,7 @@ export function normalizeFeatureTipIds(value: unknown): FeatureTipId[] {
 export function getCompletedFeatureTipIds(state: CompletedFeatureTipState): Set<FeatureTipId> {
   const completedIds = new Set<FeatureTipId>()
   if (state.cliInstalled) {
-    completedIds.add('orca-cli')
+    completedIds.add('agentum-cli')
   }
   if (state.voiceDictationEnabled) {
     completedIds.add('voice-dictation')

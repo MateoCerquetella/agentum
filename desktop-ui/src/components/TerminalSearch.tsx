@@ -22,7 +22,7 @@ export default function TerminalSearch({
   const [regex, setRegex] = useState(false)
 
   // Why: the default xterm SearchAddon highlights blend into common
-  // terminal backgrounds (see orca#612). Providing explicit decoration
+  // terminal backgrounds (see agentum#612). Providing explicit decoration
   // colors gives all matches a visible yellow background and the
   // current match a brighter orange, matching the contrast VS Code and
   // iTerm2 use for terminal search. xterm requires #RRGGBB format for

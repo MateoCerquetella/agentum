@@ -140,7 +140,7 @@ describe('setup script prompt inspection', () => {
     expect(settings.scripts.setup).toBe('pnpm install')
   })
 
-  it('detects when shared orca.yaml setup scripts are ignored by local-only settings', () => {
+  it('detects when shared agentum.yaml setup scripts are ignored by local-only settings', () => {
     expect(
       ignoresSharedSetupScripts(
         makeRepo({

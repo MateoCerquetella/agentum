@@ -58,7 +58,7 @@ export const TAB_COLORS = [
   { label: 'Gray', value: '#9ca3af' }
 ]
 
-export const CLOSE_ALL_CONTEXT_MENUS_EVENT = 'orca-close-all-context-menus'
+export const CLOSE_ALL_CONTEXT_MENUS_EVENT = 'agentum-close-all-context-menus'
 
 export default function SortableTab({
   tab,
@@ -271,9 +271,9 @@ export default function SortableTab({
       )}
       {showActivityAffordance ? (
         // Why: the activity marker sits to the LEFT of the tab title using
-        // Orca's filled bell glyph (amber-500 with a subtle drop shadow)
+        // Agentum's filled bell glyph (amber-500 with a subtle drop shadow)
         // so it matches the worktree-level bell in the sidebar — keeping
-        // every "needs your attention" surface in Orca consistent.
+        // every "needs your attention" surface in Agentum consistent.
         <span data-testid="tab-activity-bell" className="inline-flex shrink-0">
           <FilledBellIcon className="w-3 h-3 mr-1 text-amber-500 drop-shadow-sm" />
         </span>

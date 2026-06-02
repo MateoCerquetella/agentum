@@ -49,7 +49,7 @@ describe('handleTerminalFileDrop', () => {
         {
           sourcePath: '/Users/me/logo.png',
           status: 'imported',
-          destPath: '/remote/repo/.orca/drops/logo.png',
+          destPath: '/remote/repo/.agentum/drops/logo.png',
           kind: 'file',
           renamed: false
         }
@@ -78,9 +78,9 @@ describe('handleTerminalFileDrop', () => {
         worktreePath: '/remote/repo'
       },
       ['/Users/me/logo.png'],
-      '/remote/repo/.orca/drops'
+      '/remote/repo/.agentum/drops'
     )
-    expect(sendInput).toHaveBeenCalledWith('/remote/repo/.orca/drops/logo.png ')
+    expect(sendInput).toHaveBeenCalledWith('/remote/repo/.agentum/drops/logo.png ')
     expect(focus).toHaveBeenCalled()
     expect(mocks.toastError).not.toHaveBeenCalled()
     expect(mocks.toastDismiss).toHaveBeenCalledWith('toast-1')
@@ -95,7 +95,7 @@ describe('handleTerminalFileDrop', () => {
         {
           sourcePath: '/Users/me/logo.png',
           status: 'imported',
-          destPath: '//server/share/repo\\.orca\\drops\\logo.png',
+          destPath: '//server/share/repo\\.agentum\\drops\\logo.png',
           kind: 'file',
           renamed: false
         }
@@ -124,9 +124,9 @@ describe('handleTerminalFileDrop', () => {
         worktreePath: '//server/share/repo'
       },
       ['/Users/me/logo.png'],
-      '\\\\server\\share\\repo\\.orca\\drops'
+      '\\\\server\\share\\repo\\.agentum\\drops'
     )
-    expect(sendInput).toHaveBeenCalledWith('\\\\server\\share\\repo\\.orca\\drops\\logo.png ')
+    expect(sendInput).toHaveBeenCalledWith('\\\\server\\share\\repo\\.agentum\\drops\\logo.png ')
   })
 })
 
@@ -146,7 +146,7 @@ describe('resolveTerminalDropTargetShell', () => {
     expect(
       resolveTerminalDropTargetShell({
         activeRuntimeEnvironmentId: 'env-1',
-        worktreePath: '/home/orca/repo',
+        worktreePath: '/home/agentum/repo',
         connectionId: null,
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
       })

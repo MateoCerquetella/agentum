@@ -86,11 +86,11 @@ export function getTerminalFileOpenHint(): string {
     : 'Ctrl+click to open or Shift+Ctrl+click for default app'
 }
 
-export function getTerminalOrcaFileOpenHint(): string {
-  return isMacPlatform() ? '⌘+click to open in Orca' : 'Ctrl+click to open in Orca'
+export function getTerminalAgentumFileOpenHint(): string {
+  return isMacPlatform() ? '⌘+click to open in Agentum' : 'Ctrl+click to open in Agentum'
 }
 
-// Why: local .html/.htm links keep the ordinary Orca browser route, with the
+// Why: local .html/.htm links keep the ordinary Agentum browser route, with the
 // same Shift+modifier escape hatch to the system default browser as URL links.
 export function getTerminalHtmlFileOpenHint(): string {
   return isMacPlatform()
@@ -207,7 +207,7 @@ export function createFilePathLinkProvider(
                       ? isHtmlFilePath(resolved.absolutePath)
                         ? getTerminalHtmlFileOpenHint()
                         : openLinkHint
-                      : getTerminalOrcaFileOpenHint()
+                      : getTerminalAgentumFileOpenHint()
                     linkTooltip.textContent = `${resolved.absolutePath} (${hint})`
                     linkTooltip.style.display = ''
                   },

@@ -38,7 +38,7 @@ export default function WorktreeVisibilityDialog(): React.JSX.Element | null {
   const otherCount =
     detected?.authoritative === true
       ? detected.worktrees.filter(
-          (worktree) => !worktree.selectedCheckout && worktree.ownership !== 'orca-managed'
+          (worktree) => !worktree.selectedCheckout && worktree.ownership !== 'agentum-managed'
         ).length
       : 0
   const hiddenWorktreeLabel = `${hiddenCount} ${hiddenCount === 1 ? 'worktree' : 'worktrees'}`
@@ -61,7 +61,7 @@ export default function WorktreeVisibilityDialog(): React.JSX.Element | null {
     <Dialog open onOpenChange={(open) => !open && closeModal()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Non-Orca worktrees</DialogTitle>
+          <DialogTitle>Non-Agentum worktrees</DialogTitle>
           <DialogDescription>{repo.displayName}</DialogDescription>
         </DialogHeader>
 

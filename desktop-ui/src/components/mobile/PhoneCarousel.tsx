@@ -112,7 +112,7 @@ export function PhoneCarousel(): React.JSX.Element {
   return (
     <div className="mp-phone-frame">
       <div className="mp-phone-screen" ref={containerRef}>
-        <div className={slideClass(0)} role="img" aria-label="Orca Mobile home screen">
+        <div className={slideClass(0)} role="img" aria-label="Agentum Mobile home screen">
           <HomeSlide tapping={tappingSlide === 0} />
         </div>
         <div className={slideClass(1)} role="img" aria-label="Worktree list">

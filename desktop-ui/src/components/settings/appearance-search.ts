@@ -66,7 +66,7 @@ export const STATUS_BAR_TOGGLES: readonly {
 export const THEME_ENTRIES: SettingsSearchEntry[] = [
   {
     title: 'Theme',
-    description: 'Choose how Orca looks in the app window.',
+    description: 'Choose how Agentum looks in the app window.',
     keywords: ['dark', 'light', 'system']
   }
 ]
@@ -82,8 +82,8 @@ export const ZOOM_ENTRIES: SettingsSearchEntry[] = [
 export const TYPOGRAPHY_ENTRIES: SettingsSearchEntry[] = [
   {
     title: 'IDE Font',
-    description: 'Choose the font used by the Orca interface.',
-    keywords: ['font', 'typeface', 'typography', 'ide', 'orca', 'interface', 'app', 'ui']
+    description: 'Choose the font used by the Agentum interface.',
+    keywords: ['font', 'typeface', 'typography', 'ide', 'agentum', 'interface', 'app', 'ui']
   }
 ]
 
@@ -98,8 +98,8 @@ export const LAYOUT_ENTRIES: SettingsSearchEntry[] = [
 export const TITLEBAR_ENTRIES: SettingsSearchEntry[] = [
   {
     title: 'Titlebar App Name',
-    description: 'Show Orca in the titlebar.',
-    keywords: ['titlebar', 'orca', 'app', 'name', 'brand']
+    description: 'Show Agentum in the titlebar.',
+    keywords: ['titlebar', 'agentum', 'app', 'name', 'brand']
   }
 ]
 
@@ -114,8 +114,8 @@ export const SIDEBAR_ENTRIES: SettingsSearchEntry[] = [
     keywords: ['tasks', 'sidebar', 'button', 'hide', 'show', 'github', 'linear']
   },
   {
-    title: 'Show Orca Mobile Button',
-    description: 'Show the Orca Mobile button at the top of the left sidebar.',
+    title: 'Show Agentum Mobile Button',
+    description: 'Show the Agentum Mobile button at the top of the left sidebar.',
     keywords: ['mobile', 'phone', 'sidebar', 'button', 'hide', 'show', 'toolbox']
   }
 ]

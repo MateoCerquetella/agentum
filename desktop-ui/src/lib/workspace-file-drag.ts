@@ -3,8 +3,8 @@ import {
   normalizeRuntimePathForComparison
 } from '../../../shared/cross-platform-path'
 
-export const WORKSPACE_FILE_PATH_MIME = 'text/x-orca-file-path'
-export const WORKSPACE_FILE_PATHS_MIME = 'text/x-orca-file-paths'
+export const WORKSPACE_FILE_PATH_MIME = 'text/x-agentum-file-path'
+export const WORKSPACE_FILE_PATHS_MIME = 'text/x-agentum-file-paths'
 
 export function encodeWorkspaceFilePaths(paths: readonly string[]): string {
   return paths.length === 1 ? paths[0] : JSON.stringify(paths)

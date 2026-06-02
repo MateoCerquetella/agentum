@@ -43,9 +43,9 @@ describe('shouldBypassXtermKeyboardEvent — macOS', () => {
     ).toBe(false)
   })
 
-  it('does NOT bubble other Cmd chords — Orca window handlers intercept them before xterm', () => {
+  it('does NOT bubble other Cmd chords — Agentum window handlers intercept them before xterm', () => {
     // Why: this policy is narrowly scoped to Cmd+C, the one clipboard chord
-    // Orca does not intercept at the window level. Cmd+V, Cmd+F, Cmd+D, Cmd+K,
+    // Agentum does not intercept at the window level. Cmd+V, Cmd+F, Cmd+D, Cmd+K,
     // Cmd+W, Cmd+Arrow, Cmd+Backspace are all handled in keyboard-handlers.ts
     // with stopImmediatePropagation before xterm's textarea listener fires,
     // so they never reach this handler. Cmd+A flows through xterm's legacy

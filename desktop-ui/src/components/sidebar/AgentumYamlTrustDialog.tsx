@@ -9,9 +9,9 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useAppStore } from '@/store'
-import type { OrcaHookScriptKind } from '@/lib/orca-hook-trust'
+import type { AgentumHookScriptKind } from '@/lib/agentum-hook-trust'
 
-type ScriptKind = OrcaHookScriptKind
+type ScriptKind = AgentumHookScriptKind
 
 const SCRIPT_KIND_LABEL: Record<ScriptKind, string> = {
   setup: 'setup script',
@@ -25,14 +25,14 @@ const SCRIPT_KIND_TRIGGER: Record<ScriptKind, string> = {
   issueCommand: 'when this workspace launches with a linked issue'
 }
 
-const OrcaYamlTrustDialog = React.memo(function OrcaYamlTrustDialog() {
+const AgentumYamlTrustDialog = React.memo(function AgentumYamlTrustDialog() {
   const activeModal = useAppStore((s) => s.activeModal)
   const modalData = useAppStore((s) => s.modalData)
   const closeModal = useAppStore((s) => s.closeModal)
-  const markOrcaHookScriptConfirmed = useAppStore((s) => s.markOrcaHookScriptConfirmed)
-  const markOrcaHookRepoAlwaysTrusted = useAppStore((s) => s.markOrcaHookRepoAlwaysTrusted)
+  const markAgentumHookScriptConfirmed = useAppStore((s) => s.markAgentumHookScriptConfirmed)
+  const markAgentumHookRepoAlwaysTrusted = useAppStore((s) => s.markAgentumHookRepoAlwaysTrusted)
 
-  const isOpen = activeModal === 'confirm-orca-yaml-hooks'
+  const isOpen = activeModal === 'confirm-agentum-yaml-hooks'
   const [alwaysTrustState, setAlwaysTrustState] = useState(() => ({
     isOpen,
     value: false
@@ -68,9 +68,9 @@ const OrcaYamlTrustDialog = React.memo(function OrcaYamlTrustDialog() {
     (decision: 'run' | 'skip') => {
       if (decision === 'run' && repoId) {
         if (alwaysTrust) {
-          markOrcaHookRepoAlwaysTrusted(repoId)
+          markAgentumHookRepoAlwaysTrusted(repoId)
         } else if (contentHash) {
-          markOrcaHookScriptConfirmed(repoId, scriptKind, contentHash)
+          markAgentumHookScriptConfirmed(repoId, scriptKind, contentHash)
         }
       }
       onResolve?.(decision)
@@ -80,8 +80,8 @@ const OrcaYamlTrustDialog = React.memo(function OrcaYamlTrustDialog() {
       alwaysTrust,
       closeModal,
       contentHash,
-      markOrcaHookRepoAlwaysTrusted,
-      markOrcaHookScriptConfirmed,
+      markAgentumHookRepoAlwaysTrusted,
+      markAgentumHookScriptConfirmed,
       onResolve,
       repoId,
       scriptKind
@@ -109,12 +109,12 @@ const OrcaYamlTrustDialog = React.memo(function OrcaYamlTrustDialog() {
           <DialogDescription className="text-xs">
             {previouslyApproved ? (
               <>
-                <code>orca.yaml</code> changed since you last approved. Re-review before it runs{' '}
+                <code>agentum.yaml</code> changed since you last approved. Re-review before it runs{' '}
                 {SCRIPT_KIND_TRIGGER[scriptKind]}.
               </>
             ) : (
               <>
-                This repository&apos;s <code>orca.yaml</code> runs on your machine{' '}
+                This repository&apos;s <code>agentum.yaml</code> runs on your machine{' '}
                 {SCRIPT_KIND_TRIGGER[scriptKind]}. Only run if you trust {repoName}.
               </>
             )}
@@ -146,7 +146,7 @@ const OrcaYamlTrustDialog = React.memo(function OrcaYamlTrustDialog() {
             onChange={(event) => setAlwaysTrust(event.target.checked)}
           />
           <span className="text-xs font-medium text-foreground">
-            Always trust <code>orca.yaml</code> in {repoName}
+            Always trust <code>agentum.yaml</code> in {repoName}
           </span>
         </label>
 
@@ -161,4 +161,4 @@ const OrcaYamlTrustDialog = React.memo(function OrcaYamlTrustDialog() {
   )
 })
 
-export default OrcaYamlTrustDialog
+export default AgentumYamlTrustDialog

@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils'
 import { useShortcutLabel } from '@/hooks/useShortcutLabel'
 import { FeatureWallClickRing } from './FeatureWallClickRing'
 
-// Why: the right-click menu needs the same icons as the real Orca menu so the
+// Why: the right-click menu needs the same icons as the real Agentum menu so the
 // visual reads as the actual product, not a generic terminal mockup.
 function SplitRightIcon(): JSX.Element {
   return (

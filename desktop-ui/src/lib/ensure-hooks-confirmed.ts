@@ -1,10 +1,10 @@
 import type { AppState } from '@/store/types'
-import type { OrcaHooks } from '../../../shared/types'
+import type { AgentumHooks } from '../../../shared/types'
 import { resolveHookCommandSourcePolicy } from '../../../shared/hook-command-source-policy'
-import { hashOrcaHookScript, type OrcaHookScriptKind } from './orca-hook-trust'
+import { hashAgentumHookScript, type AgentumHookScriptKind } from './agentum-hook-trust'
 import { checkRuntimeHooks, readRuntimeIssueCommand } from '@/runtime/runtime-hooks-client'
 
-export type HookScriptKind = OrcaHookScriptKind
+export type HookScriptKind = AgentumHookScriptKind
 
 // Serialize the singleton modal callback so overlapping worktree actions cannot replace it.
 let trustPromptChain: Promise<unknown> = Promise.resolve()
@@ -19,7 +19,7 @@ export function __resetTrustPromptChainForTests(): void {
   trustPromptChain = Promise.resolve()
 }
 
-function getSetupTrustContent(yamlHooks: OrcaHooks | null): string {
+function getSetupTrustContent(yamlHooks: AgentumHooks | null): string {
   const defaultTabCommands = (yamlHooks?.defaultTabs ?? [])
     .map((tab, index) => {
       const command = tab.command?.trim()
@@ -39,14 +39,14 @@ export async function ensureHooksConfirmed(
   scriptKind: HookScriptKind
 ): Promise<'run' | 'skip'> {
   return enqueueTrustPrompt(async () => {
-    if (state.trustedOrcaHooks[repoId]?.all) {
+    if (state.trustedAgentumHooks[repoId]?.all) {
       return 'run'
     }
 
     let scriptContent = ''
     try {
       if (scriptKind === 'issueCommand') {
-        // Local overrides are user-owned; only shared orca.yaml commands need repo trust.
+        // Local overrides are user-owned; only shared agentum.yaml commands need repo trust.
         const result = await readRuntimeIssueCommand(state.settings, repoId)
         if (result.source === 'local') {
           return 'run'
@@ -74,7 +74,7 @@ export async function ensureHooksConfirmed(
         if (result.status === 'error') {
           return 'skip'
         }
-        const yamlHooks = (result.hooks as OrcaHooks | null) ?? null
+        const yamlHooks = (result.hooks as AgentumHooks | null) ?? null
         scriptContent =
           scriptKind === 'setup'
             ? getSetupTrustContent(yamlHooks)
@@ -89,8 +89,8 @@ export async function ensureHooksConfirmed(
       return 'run'
     }
 
-    const contentHash = await hashOrcaHookScript(scriptContent)
-    const existingHash = state.trustedOrcaHooks[repoId]?.[scriptKind]?.contentHash
+    const contentHash = await hashAgentumHookScript(scriptContent)
+    const existingHash = state.trustedAgentumHooks[repoId]?.[scriptKind]?.contentHash
     if (existingHash === contentHash) {
       return 'run'
     }
@@ -98,11 +98,11 @@ export async function ensureHooksConfirmed(
     const repo = state.repos.find((r) => r.id === repoId)
     const repoName = repo?.displayName ?? 'this repository'
     // A non-empty existingHash that didn't match means the user approved a previous
-    // version of this script; the prompt is reappearing because orca.yaml changed.
+    // version of this script; the prompt is reappearing because agentum.yaml changed.
     const previouslyApproved = Boolean(existingHash)
 
     return new Promise<'run' | 'skip'>((resolve) => {
-      state.openModal('confirm-orca-yaml-hooks', {
+      state.openModal('confirm-agentum-yaml-hooks', {
         repoId,
         repoName,
         scriptKind,

@@ -3,7 +3,7 @@ import type { SettingsSearchEntry } from './settings-search'
 
 export const TERMINAL_SHORTCUT_POLICY_SEARCH_ENTRY: SettingsSearchEntry = {
   title: 'Shortcuts in Terminal',
-  description: 'Choose whether Orca or the focused terminal wins when shortcuts overlap.',
+  description: 'Choose whether Agentum or the focused terminal wins when shortcuts overlap.',
   keywords: [
     'shortcut',
     'keyboard',
@@ -12,7 +12,7 @@ export const TERMINAL_SHORTCUT_POLICY_SEARCH_ENTRY: SettingsSearchEntry = {
     'shell',
     'agent',
     'conflict',
-    'orca first',
+    'agentum first',
     'terminal first'
   ]
 }

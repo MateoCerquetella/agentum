@@ -13,7 +13,7 @@ import {
   killWorkspacePortForTarget,
   openWorkspacePortInBrowser,
   refreshWorkspacePortScanAfterStop,
-  shouldOpenWorkspacePortInOrcaBrowser
+  shouldOpenWorkspacePortInAgentumBrowser
 } from '@/lib/workspace-port-actions'
 import { addressForPort } from '@/lib/workspace-port-urls'
 import type { WorkspacePort } from '../../../../shared/workspace-ports'
@@ -112,7 +112,7 @@ function WorktreePortRow({ port }: { port: WorkspacePort }): React.JSX.Element {
         runtimeTarget,
         createBrowserTab,
         setRemoteBrowserPageHandle,
-        openInOrcaBrowser: shouldOpenWorkspacePortInOrcaBrowser(settings)
+        openInAgentumBrowser: shouldOpenWorkspacePortInAgentumBrowser(settings)
       }).then((result) => {
         if (!result.ok) {
           toast.error('Failed to open browser', { description: result.reason })

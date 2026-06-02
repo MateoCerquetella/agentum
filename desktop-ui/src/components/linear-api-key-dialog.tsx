@@ -112,8 +112,8 @@ export function LinearApiKeyDialog({
   const resolvedDescription =
     description ??
     (workspace
-      ? `Paste a Personal API key for ${workspace.organizationName}. If this workspace is already connected, Orca replaces its stored key.`
-      : 'Paste a Personal API key for the Linear workspace you want Orca to use. If that workspace is already connected, Orca replaces its stored key.')
+      ? `Paste a Personal API key for ${workspace.organizationName}. If this workspace is already connected, Agentum replaces its stored key.`
+      : 'Paste a Personal API key for the Linear workspace you want Agentum to use. If that workspace is already connected, Agentum replaces its stored key.')
   const storageCopy =
     runtimeTarget.kind === 'environment'
       ? 'This key is stored by the active remote runtime.'
@@ -172,7 +172,7 @@ export function LinearApiKeyDialog({
                 : null}
             </p>
             <p>
-              Prefer full access when Orca should show every team the account can access in that
+              Prefer full access when Agentum should show every team the account can access in that
               workspace. Restricted keys only expose permitted teams, and private teams require the
               key owner to have access.
             </p>

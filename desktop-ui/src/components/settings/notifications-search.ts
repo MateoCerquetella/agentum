@@ -3,7 +3,7 @@ import type { SettingsSearchEntry } from './settings-search'
 export const NOTIFICATIONS_PANE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   {
     title: 'Enable Notifications',
-    description: 'Master switch for Orca desktop notifications.',
+    description: 'Master switch for Agentum desktop notifications.',
     keywords: ['notifications', 'desktop', 'system', 'native']
   },
   {
@@ -18,13 +18,13 @@ export const NOTIFICATIONS_PANE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   },
   {
     title: 'Suppress While Focused',
-    description: 'Avoid notifying when Orca is focused on the active worktree.',
+    description: 'Avoid notifying when Agentum is focused on the active worktree.',
     keywords: ['notifications', 'focused', 'suppress', 'filtering']
   },
   {
     title: 'Notification Sound',
     description:
-      'Choose the built-in, system, or local audio file Orca plays for desktop notifications.',
+      'Choose the built-in, system, or local audio file Agentum plays for desktop notifications.',
     keywords: [
       'notifications',
       'sound',

@@ -3,10 +3,10 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-// action id -> key chords. Mirrors KeybindingOverrides in orca/src/shared/keybindings.ts.
+// action id -> key chords. Mirrors KeybindingOverrides in agentum/src/shared/keybindings.ts.
 type Overrides = BTreeMap<String, Vec<String>>;
 
-// On-disk document at ~/.orca/keybindings.json. The renderer only consumes the
+// On-disk document at ~/.agentum/keybindings.json. The renderer only consumes the
 // snapshot below, so this layout just needs to round-trip with itself.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct KeybindingDocument {

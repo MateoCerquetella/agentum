@@ -421,7 +421,7 @@ type LinearIssueListRow =
   | { type: 'section'; key: string; label: string; count: number }
   | { type: 'issue'; issue: LinearIssue }
 
-const LINEAR_BOARD_DRAG_ISSUE_MIME = 'application/x-orca-linear-issue-id'
+const LINEAR_BOARD_DRAG_ISSUE_MIME = 'application/x-agentum-linear-issue-id'
 
 const LINEAR_MODE_OPTIONS: { id: LinearMode; label: string }[] = [
   { id: 'issues', label: 'Issues' },
@@ -6113,7 +6113,7 @@ export default function TaskPage(): React.JSX.Element {
                         <div
                           // Why: combine repoId with item.id because two selected repos
                           // that route issues through the same upstream (e.g. fork +
-                          // non-fork both resolving to stablyai/orca) surface the same
+                          // non-fork both resolving to stablyai/agentum) surface the same
                           // item.id under different repoIds. React treats a bare id as
                           // a collision and warns + silently drops rows otherwise.
                           key={`${item.repoId}:${item.id}`}
@@ -7408,7 +7408,7 @@ export default function TaskPage(): React.JSX.Element {
               // personal TODO against upstream/fork after #1076 changed
               // routing) is specifically about this dialog. The description
               // line doubles as the source indicator: inlining the resolved
-              // `{owner}/{repo}` slug (e.g. "stablyai/orca") means the
+              // `{owner}/{repo}` slug (e.g. "stablyai/agentum") means the
               // destination is impossible to miss before the user submits,
               // without needing a secondary chip that duplicates the info.
               // Falls back to the local displayName when the slug isn't

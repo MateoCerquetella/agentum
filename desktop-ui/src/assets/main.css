@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import '@xterm/xterm/css/xterm.css';
@@ -98,12 +99,12 @@
 /* ── Light Mode ──────────────────────────────────────── */
 
 :root {
-  --app-font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  /* Agentum design system: JetBrains Mono everywhere (UI + terminal/code). */
+  --app-font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
   --font-sans: var(--app-font-family);
-  --font-mono:
-    'SF Mono', SFMono-Regular, ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Liberation Mono',
-    monospace;
-  --radius: 0.625rem;
+  --font-mono: var(--app-font-family);
+  /* Agentum radius scale tops out at 6px (then jumps to pill). */
+  --radius: 0.375rem;
   --background: #fff;
   --editor-surface: #ffffff;
   --foreground: #0a0a0a;
@@ -174,41 +175,43 @@
 /* ── Dark Mode ───────────────────────────────────────── */
 
 .dark {
-  --background: #0a0a0a;
-  --editor-surface: #1e1e1e;
-  --foreground: #fafafa;
-  --card: #171717;
-  --card-foreground: #fafafa;
-  --popover: #171717;
-  --popover-foreground: #fafafa;
-  --primary: #e5e5e5;
-  --primary-foreground: #171717;
-  --secondary: #262626;
-  --secondary-foreground: #fafafa;
-  --muted: #262626;
-  --muted-foreground: #a1a1a1;
-  --accent: #404040;
-  --accent-foreground: #fafafa;
-  --destructive: #ff6568;
-  --destructive-foreground: #df2225;
-  --border: rgb(255 255 255 / 0.07);
-  --input: rgb(255 255 255 / 0.15);
-  --ring: #737373;
+  /* Agentum — nocturnal command center. Colorimetric depth (ground→raised),
+     coral CTA as the only warm accent, electric-blue focus/activation. */
+  --background: #0b0b0b;
+  --editor-surface: #0a0a0a;
+  --foreground: #ffffff;
+  --card: #212121;
+  --card-foreground: #ffffff;
+  --popover: #212121;
+  --popover-foreground: #ffffff;
+  --primary: #f36458;
+  --primary-foreground: #ffffff;
+  --secondary: #353535;
+  --secondary-foreground: #ffffff;
+  --muted: #212121;
+  --muted-foreground: #797979;
+  --accent: #161616;
+  --accent-foreground: #ffffff;
+  --destructive: #ff5555;
+  --destructive-foreground: #ffffff;
+  --border: #353535;
+  --input: #212121;
+  --ring: #0052ef;
   --terminal-pane-locate: var(--color-blue-400);
   --ai-action-accent: var(--color-violet-400);
-  --chart-1: var(--color-blue-300);
-  --chart-2: var(--color-blue-500);
-  --chart-3: var(--color-blue-600);
-  --chart-4: var(--color-blue-700);
-  --chart-5: var(--color-blue-800);
-  --sidebar: #171717;
-  --sidebar-foreground: #fafafa;
-  --sidebar-primary: #1447e6;
-  --sidebar-primary-foreground: #fafafa;
-  --sidebar-accent: #262626;
-  --sidebar-accent-foreground: #fafafa;
-  --sidebar-border: rgb(255 255 255 / 0.07);
-  --sidebar-ring: #525252;
+  --chart-1: #19d600;
+  --chart-2: #55beff;
+  --chart-3: #ffb454;
+  --chart-4: #f000ff;
+  --chart-5: #f36458;
+  --sidebar: #0d0d0d;
+  --sidebar-foreground: #b9b9b9;
+  --sidebar-primary: #f36458;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #161616;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #212121;
+  --sidebar-ring: #0052ef;
   --terminal-pane-title-on-dark-fg: rgb(255 255 255 / 0.52);
   --terminal-pane-title-on-dark-input-fg: rgb(255 255 255 / 0.7);
   --terminal-pane-title-on-dark-placeholder: rgb(255 255 255 / 0.38);
@@ -1358,41 +1361,41 @@
 
 /* ── Git conflict decorations ───────────────────────────────────── */
 
-.monaco-editor .orca-conflict-marker-line {
+.monaco-editor .agentum-conflict-marker-line {
   background: color-mix(in srgb, var(--destructive) 12%, transparent);
 }
 
-.monaco-editor .orca-conflict-section-line {
+.monaco-editor .agentum-conflict-section-line {
   border-left: 3px solid transparent;
 }
 
-.monaco-editor .orca-conflict-current-line {
+.monaco-editor .agentum-conflict-current-line {
   background: color-mix(in srgb, var(--git-decoration-modified) 12%, transparent);
   border-left-color: color-mix(in srgb, var(--git-decoration-modified) 72%, transparent);
 }
 
-.monaco-editor .orca-conflict-base-line {
+.monaco-editor .agentum-conflict-base-line {
   background: color-mix(in srgb, var(--muted-foreground) 7%, transparent);
   border-left-color: color-mix(in srgb, var(--muted-foreground) 36%, transparent);
 }
 
-.monaco-editor .orca-conflict-incoming-line {
+.monaco-editor .agentum-conflict-incoming-line {
   background: color-mix(in srgb, var(--git-decoration-renamed) 11%, transparent);
   border-left-color: color-mix(in srgb, var(--git-decoration-renamed) 68%, transparent);
 }
 
-.monaco-editor .orca-conflict-line-decoration {
+.monaco-editor .agentum-conflict-line-decoration {
   width: 4px !important;
   margin-left: 3px;
   background: var(--destructive);
   border-radius: 999px;
 }
 
-.monaco-editor .orca-conflict-margin {
+.monaco-editor .agentum-conflict-margin {
   background: color-mix(in srgb, var(--destructive) 8%, transparent);
 }
 
-.monaco-editor .orca-conflict-marker-label {
+.monaco-editor .agentum-conflict-marker-label {
   color: var(--destructive);
   font-family: var(--font-sans, system-ui, sans-serif);
   font-size: 11px;
@@ -2391,7 +2394,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
    useDiffCommentDecorator. Keep it visually subtle until hovered so it does
    not distract from the diff itself. Left position overlaps the glyph margin
    so the affordance reads as "add comment on this line". */
-.orca-diff-comment-add-btn {
+.agentum-diff-comment-add-btn {
   position: absolute;
   left: 4px;
   width: 18px;
@@ -2415,27 +2418,27 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
     box-shadow 100ms ease;
 }
 
-.orca-diff-comment-add-btn:hover {
+.agentum-diff-comment-add-btn:hover {
   color: var(--primary);
   border-color: color-mix(in srgb, var(--primary) 52%, var(--border));
   background: color-mix(in srgb, var(--primary) 12%, var(--background));
   box-shadow: 0 1px 4px color-mix(in srgb, var(--foreground) 16%, transparent);
 }
 
-.orca-diff-comment-add-btn:focus-visible {
+.agentum-diff-comment-add-btn:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 1px;
 }
 
-.orca-diff-comment-range-highlight {
+.agentum-diff-comment-range-highlight {
   background: rgba(59, 130, 246, 0.14);
 }
 
-.dark .orca-diff-comment-range-highlight {
+.dark .agentum-diff-comment-range-highlight {
   background: rgba(96, 165, 250, 0.18);
 }
 
-.orca-diff-comment-inline {
+.agentum-diff-comment-inline {
   width: 100%;
   /* Why: Monaco's view-zone node already starts after the diff gutter. Avoid
      adding a second left inset so saved notes sit flush with the code column. */
@@ -2443,7 +2446,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
   box-sizing: border-box;
 }
 
-.orca-diff-comment-inline > .orca-diff-comment-card {
+.agentum-diff-comment-inline > .agentum-diff-comment-card {
   max-width: 420px;
 }
 
@@ -2455,7 +2458,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
    to produce roughly the same absolute luminance delta above its editor
    surface — the foreground color is different (white vs black) so equal
    percentages would not give equal contrast. Override lives in `.dark`. */
-.orca-diff-comment-card {
+.agentum-diff-comment-card {
   position: relative;
   /* Why: Monaco's view-lines overlay (data-mprt=8) is positioned absolutely on
      top of view-zone DOM. Without an explicit z-index here, clicks on
@@ -2479,7 +2482,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
     background-color 150ms ease;
 }
 
-.dark .orca-diff-comment-card {
+.dark .agentum-diff-comment-card {
   border-color: color-mix(in srgb, var(--foreground) 12%, var(--border));
   background: color-mix(in srgb, var(--foreground) 2%, var(--editor-surface));
   box-shadow:
@@ -2488,7 +2491,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
 }
 
 /* Avatar Column */
-.orca-diff-comment-avatar-col {
+.agentum-diff-comment-avatar-col {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
@@ -2496,7 +2499,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
 }
 
 /* Content Column */
-.orca-diff-comment-content-col {
+.agentum-diff-comment-content-col {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
@@ -2505,7 +2508,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
 }
 
 /* Header Row */
-.orca-diff-comment-header {
+.agentum-diff-comment-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2514,7 +2517,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
 }
 
 /* Meta Group (Name, line, timestamp) */
-.orca-diff-comment-meta-group {
+.agentum-diff-comment-meta-group {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -2527,7 +2530,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
 }
 
 /* Action button pill: segmented control like Notion's Resolve / ... */
-.orca-diff-comment-actions-pill {
+.agentum-diff-comment-actions-pill {
   display: inline-flex;
   align-items: center;
   gap: 2px;
@@ -2539,12 +2542,12 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
 }
 
-.dark .orca-diff-comment-actions-pill {
+.dark .agentum-diff-comment-actions-pill {
   border-color: color-mix(in srgb, var(--foreground) 14%, var(--border));
   background: color-mix(in srgb, var(--foreground) 4%, var(--editor-surface));
 }
 
-.orca-diff-comment-pill-btn {
+.agentum-diff-comment-pill-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2562,24 +2565,24 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
     color 100ms ease;
 }
 
-.orca-diff-comment-edit {
+.agentum-diff-comment-edit {
   min-width: 28px;
   height: 24px;
   padding: 4px 7px;
   border-radius: 4px;
 }
 
-.orca-diff-comment-pill-btn:hover {
+.agentum-diff-comment-pill-btn:hover {
   background: color-mix(in srgb, var(--foreground) 6%, transparent);
   color: var(--foreground);
 }
 
-.orca-diff-comment-pill-btn-danger:hover {
+.agentum-diff-comment-pill-btn-danger:hover {
   background: color-mix(in srgb, var(--destructive) 10%, transparent);
   color: var(--destructive);
 }
 
-.orca-diff-comment-pill-divider {
+.agentum-diff-comment-pill-divider {
   width: 1px;
   height: 12px;
   background: color-mix(in srgb, var(--foreground) 12%, var(--border));
@@ -2587,7 +2590,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
 }
 
 /* Avatar design */
-.orca-diff-comment-avatar {
+.agentum-diff-comment-avatar {
   width: 24px;
   height: 24px;
   border-radius: 50%;
@@ -2596,8 +2599,8 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
-.orca-diff-comment-avatar-fallback,
-.orca-diff-comment-avatar-local {
+.agentum-diff-comment-avatar-fallback,
+.agentum-diff-comment-avatar-local {
   width: 24px;
   height: 24px;
   border-radius: 50%;
@@ -2611,14 +2614,14 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
   font-weight: 600;
 }
 
-.orca-diff-comment-avatar-local {
+.agentum-diff-comment-avatar-local {
   background: color-mix(in srgb, var(--foreground) 6%, var(--muted));
   border-color: color-mix(in srgb, var(--foreground) 12%, transparent);
   color: var(--muted-foreground);
 }
 
 /* Quote/Reference block: Warm, gorgeous Notion-like callout */
-.orca-diff-comment-quote {
+.agentum-diff-comment-quote {
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -2630,7 +2633,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
   line-height: 1.4;
 }
 
-.orca-diff-comment-quote-text {
+.agentum-diff-comment-quote-text {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -2642,7 +2645,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
 }
 
 /* Comment Body */
-.orca-diff-comment-body {
+.agentum-diff-comment-body {
   font-size: 13.5px;
   line-height: 1.5;
   color: var(--foreground);
@@ -2652,7 +2655,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
 }
 
 /* Popover for adding new comment */
-.orca-diff-comment-popover {
+.agentum-diff-comment-popover {
   position: absolute;
   left: 56px;
   right: 24px;
@@ -2670,7 +2673,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
   gap: 12px;
 }
 
-.dark .orca-diff-comment-popover {
+.dark .agentum-diff-comment-popover {
   border-color: color-mix(in srgb, var(--foreground) 14%, var(--border));
   background: color-mix(in srgb, var(--foreground) 2%, var(--editor-surface));
   box-shadow:
@@ -2678,7 +2681,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
     0 4px 16px rgba(0, 0, 0, 0.2);
 }
 
-.orca-diff-comment-popover-label {
+.agentum-diff-comment-popover-label {
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -2687,7 +2690,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
   margin-bottom: 2px;
 }
 
-.orca-diff-comment-popover-textarea {
+.agentum-diff-comment-popover-textarea {
   width: 100%;
   min-height: 56px;
   max-height: 240px;
@@ -2707,31 +2710,31 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
     box-shadow 150ms ease;
 }
 
-.dark .orca-diff-comment-popover-textarea {
+.dark .agentum-diff-comment-popover-textarea {
   border-color: color-mix(in srgb, var(--foreground) 16%, var(--border));
   background: color-mix(in srgb, var(--foreground) 3%, var(--editor-surface));
 }
 
-.orca-diff-comment-popover-textarea:focus {
+.agentum-diff-comment-popover-textarea:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 15%, transparent);
 }
 
-.orca-diff-comment-popover-textarea::-webkit-scrollbar {
+.agentum-diff-comment-popover-textarea::-webkit-scrollbar {
   width: 12px;
 }
 
-.orca-diff-comment-popover-textarea::-webkit-scrollbar-track {
+.agentum-diff-comment-popover-textarea::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.orca-diff-comment-popover-textarea::-webkit-scrollbar-thumb {
+.agentum-diff-comment-popover-textarea::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--muted-foreground, #737373) 28%, transparent);
   border: 3px solid transparent;
   background-clip: padding-box;
 }
 
-.orca-diff-comment-popover-footer {
+.agentum-diff-comment-popover-footer {
   display: flex;
   align-items: center;
   justify-content: flex-end;

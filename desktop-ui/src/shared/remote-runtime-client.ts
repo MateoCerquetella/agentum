@@ -72,7 +72,7 @@ export async function sendRemoteRuntimeRequest<TResult>(
       socket.off('error', onError)
       socket.off('close', onClose)
       socket.off('message', onMessage)
-      // Why: the settled one-shot no longer needs Orca callbacks, but a ws
+      // Why: the settled one-shot no longer needs Agentum callbacks, but a ws
       // can still report a late transport error after close is requested.
       if (socket.readyState !== WebSocket.CLOSED) {
         socket.on('error', ignoreSettledRemoteRuntimeSocketError)
@@ -84,7 +84,7 @@ export async function sendRemoteRuntimeRequest<TResult>(
         ok: false,
         error: new RemoteRuntimeClientError(
           'runtime_timeout',
-          'Timed out waiting for the remote Orca runtime to respond.'
+          'Timed out waiting for the remote Agentum runtime to respond.'
         )
       })
     }, timeoutMs)
@@ -138,7 +138,7 @@ export async function sendRemoteRuntimeRequest<TResult>(
         ok: false,
         error: new RemoteRuntimeClientError(
           'remote_runtime_unavailable',
-          'Could not connect to the remote Orca runtime.'
+          'Could not connect to the remote Agentum runtime.'
         )
       })
     }
@@ -149,7 +149,7 @@ export async function sendRemoteRuntimeRequest<TResult>(
           ok: false,
           error: new RemoteRuntimeClientError(
             'remote_runtime_unavailable',
-            'Remote Orca runtime closed the connection.'
+            'Remote Agentum runtime closed the connection.'
           )
         })
       }
@@ -164,7 +164,7 @@ export async function sendRemoteRuntimeRequest<TResult>(
           ok: false,
           error: new RemoteRuntimeClientError(
             'invalid_runtime_response',
-            'Remote Orca runtime returned an unexpected binary frame.'
+            'Remote Agentum runtime returned an unexpected binary frame.'
           )
         })
         return
@@ -182,7 +182,7 @@ export async function sendRemoteRuntimeRequest<TResult>(
           ok: false,
           error: new RemoteRuntimeClientError(
             'invalid_runtime_response',
-            'Remote Orca runtime returned an undecryptable frame.'
+            'Remote Agentum runtime returned an undecryptable frame.'
           )
         })
         return
@@ -210,7 +210,7 @@ export async function sendRemoteRuntimeRequest<TResult>(
           ok: false,
           error: new RemoteRuntimeClientError(
             'invalid_runtime_response',
-            'Remote Orca runtime returned an invalid E2EE handshake frame.'
+            'Remote Agentum runtime returned an invalid E2EE handshake frame.'
           )
         })
         return
@@ -224,7 +224,7 @@ export async function sendRemoteRuntimeRequest<TResult>(
           ok: false,
           error: new RemoteRuntimeClientError(
             'invalid_runtime_response',
-            'Remote Orca runtime returned an unexpected E2EE handshake frame.'
+            'Remote Agentum runtime returned an unexpected E2EE handshake frame.'
           )
         })
         return
@@ -244,7 +244,7 @@ export async function sendRemoteRuntimeRequest<TResult>(
           ok: false,
           error: new RemoteRuntimeClientError(
             'invalid_runtime_response',
-            'Remote Orca runtime returned an invalid E2EE auth frame.'
+            'Remote Agentum runtime returned an invalid E2EE auth frame.'
           )
         })
         return
@@ -261,7 +261,7 @@ export async function sendRemoteRuntimeRequest<TResult>(
           ok: false,
           error: new RemoteRuntimeClientError(
             code,
-            'Remote Orca runtime rejected the pairing token.'
+            'Remote Agentum runtime rejected the pairing token.'
           )
         })
         return
@@ -289,7 +289,7 @@ export async function sendRemoteRuntimeRequest<TResult>(
           ok: false,
           error: new RemoteRuntimeClientError(
             'invalid_runtime_response',
-            'Remote Orca runtime returned an invalid response frame.'
+            'Remote Agentum runtime returned an invalid response frame.'
           )
         })
         return
@@ -304,7 +304,7 @@ export async function sendRemoteRuntimeRequest<TResult>(
           ok: false,
           error: new RemoteRuntimeClientError(
             'invalid_runtime_response',
-            'Remote Orca runtime returned an invalid response frame.'
+            'Remote Agentum runtime returned an invalid response frame.'
           )
         })
         return
@@ -315,7 +315,7 @@ export async function sendRemoteRuntimeRequest<TResult>(
           ok: false,
           error: new RemoteRuntimeClientError(
             'invalid_runtime_response',
-            'Remote Orca runtime returned a mismatched response id.'
+            'Remote Agentum runtime returned a mismatched response id.'
           )
         })
         return
@@ -351,7 +351,7 @@ export async function subscribeRemoteRuntimeRequest<TResult>(
       socket.off('close', onClose)
       socket.off('message', onMessage)
       ws = null
-      // Why: startup failures detach Orca callbacks before closing the ws,
+      // Why: startup failures detach Agentum callbacks before closing the ws,
       // but ws can still emit a late transport error while close is in flight.
       if (socket.readyState !== WebSocket.CLOSED) {
         socket.on('error', ignoreSettledRemoteRuntimeSocketError)
@@ -372,7 +372,7 @@ export async function subscribeRemoteRuntimeRequest<TResult>(
       fail(
         new RemoteRuntimeClientError(
           'runtime_timeout',
-          'Timed out waiting for the remote Orca runtime subscription to start.'
+          'Timed out waiting for the remote Agentum runtime subscription to start.'
         )
       )
     }, timeoutMs)
@@ -439,7 +439,7 @@ export async function subscribeRemoteRuntimeRequest<TResult>(
       fail(
         new RemoteRuntimeClientError(
           'remote_runtime_unavailable',
-          'Could not connect to the remote Orca runtime.'
+          'Could not connect to the remote Agentum runtime.'
         )
       )
     }
@@ -452,7 +452,7 @@ export async function subscribeRemoteRuntimeRequest<TResult>(
         reject(
           new RemoteRuntimeClientError(
             'remote_runtime_unavailable',
-            'Remote Orca runtime closed the connection.'
+            'Remote Agentum runtime closed the connection.'
           )
         )
         return
@@ -477,7 +477,7 @@ export async function subscribeRemoteRuntimeRequest<TResult>(
         fail(
           new RemoteRuntimeClientError(
             'invalid_runtime_response',
-            'Remote Orca runtime returned an undecryptable frame.'
+            'Remote Agentum runtime returned an undecryptable frame.'
           )
         )
         return
@@ -504,7 +504,7 @@ export async function subscribeRemoteRuntimeRequest<TResult>(
         fail(
           new RemoteRuntimeClientError(
             'invalid_runtime_response',
-            'Remote Orca runtime returned an invalid E2EE handshake frame.'
+            'Remote Agentum runtime returned an invalid E2EE handshake frame.'
           )
         )
         return
@@ -517,7 +517,7 @@ export async function subscribeRemoteRuntimeRequest<TResult>(
         fail(
           new RemoteRuntimeClientError(
             'invalid_runtime_response',
-            'Remote Orca runtime returned an unexpected E2EE handshake frame.'
+            'Remote Agentum runtime returned an unexpected E2EE handshake frame.'
           )
         )
         return
@@ -536,7 +536,7 @@ export async function subscribeRemoteRuntimeRequest<TResult>(
         fail(
           new RemoteRuntimeClientError(
             'invalid_runtime_response',
-            'Remote Orca runtime returned an invalid E2EE auth frame.'
+            'Remote Agentum runtime returned an invalid E2EE auth frame.'
           )
         )
         return
@@ -549,7 +549,7 @@ export async function subscribeRemoteRuntimeRequest<TResult>(
           (authenticated as { error?: { code?: unknown } }).error?.code === 'unauthorized'
             ? 'unauthorized'
             : 'invalid_runtime_response'
-        fail(new RemoteRuntimeClientError(code, 'Remote Orca runtime rejected the pairing token.'))
+        fail(new RemoteRuntimeClientError(code, 'Remote Agentum runtime rejected the pairing token.'))
         return
       }
       state = 'ready'
@@ -575,7 +575,7 @@ export async function subscribeRemoteRuntimeRequest<TResult>(
         fail(
           new RemoteRuntimeClientError(
             'invalid_runtime_response',
-            'Remote Orca runtime returned an invalid response frame.'
+            'Remote Agentum runtime returned an invalid response frame.'
           )
         )
         return
@@ -589,7 +589,7 @@ export async function subscribeRemoteRuntimeRequest<TResult>(
         fail(
           new RemoteRuntimeClientError(
             'invalid_runtime_response',
-            'Remote Orca runtime returned a mismatched response id.'
+            'Remote Agentum runtime returned a mismatched response id.'
           )
         )
         return
@@ -602,7 +602,7 @@ export async function subscribeRemoteRuntimeRequest<TResult>(
         fail(
           new RemoteRuntimeClientError(
             'invalid_runtime_response',
-            'Remote Orca runtime returned binary data before authentication.'
+            'Remote Agentum runtime returned binary data before authentication.'
           )
         )
         return
@@ -612,7 +612,7 @@ export async function subscribeRemoteRuntimeRequest<TResult>(
         fail(
           new RemoteRuntimeClientError(
             'invalid_runtime_response',
-            'Remote Orca runtime returned an undecryptable binary frame.'
+            'Remote Agentum runtime returned an undecryptable binary frame.'
           )
         )
         return

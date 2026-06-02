@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-// Mirrors ProjectGroup in orca/src/shared/types.ts. Nullable fields stay Option
+// Mirrors ProjectGroup in agentum/src/shared/types.ts. Nullable fields stay Option
 // (serialize as null) since they are required-but-nullable in the contract.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,7 +32,7 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
-fn orca_file(name: &str) -> Result<PathBuf, String> {
+fn agentum_file(name: &str) -> Result<PathBuf, String> {
     Ok(dirs::home_dir()
         .ok_or_else(|| "no home directory".to_string())?
         .join(".agentum")
@@ -40,7 +40,7 @@ fn orca_file(name: &str) -> Result<PathBuf, String> {
 }
 
 fn read_groups() -> Result<Vec<ProjectGroup>, String> {
-    let path = orca_file("project-groups.json")?;
+    let path = agentum_file("project-groups.json")?;
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -49,7 +49,7 @@ fn read_groups() -> Result<Vec<ProjectGroup>, String> {
 }
 
 fn write_groups(groups: &[ProjectGroup]) -> Result<(), String> {
-    let path = orca_file("project-groups.json")?;
+    let path = agentum_file("project-groups.json")?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(map_err)?;
     }
@@ -134,7 +134,7 @@ pub fn project_groups_move_project(
     order: Option<i64>,
 ) -> Result<Value, String> {
     // Membership lives on the Repo (projectGroupId/projectGroupOrder) in repos.json.
-    let path = orca_file("repos.json")?;
+    let path = agentum_file("repos.json")?;
     if !path.exists() {
         return Ok(Value::Null);
     }

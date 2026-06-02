@@ -183,7 +183,7 @@ export function DictationController() {
       dictationStateRef.current = 'error'
       setDictationState('error')
       if (message.includes('Permission') || message.includes('NotAllowed')) {
-        toast.error('Microphone access denied. Grant access in system settings, then restart Orca.')
+        toast.error('Microphone access denied. Grant access in system settings, then restart Agentum.')
       } else if (message.includes('not ready')) {
         toast('Speech model not ready. Download it in Settings > Voice.')
       } else if (message.includes('Unknown model')) {

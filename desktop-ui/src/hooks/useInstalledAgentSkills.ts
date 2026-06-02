@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { DiscoveredSkill, SkillDiscoveryResult, SkillSourceKind } from '../../../shared/skills'
 import { useMountedRef } from './useMountedRef'
 
-const INSTALLED_AGENT_SKILLS_CHANGED_EVENT = 'orca:installed-agent-skills-changed'
+const INSTALLED_AGENT_SKILLS_CHANGED_EVENT = 'agentum:installed-agent-skills-changed'
 export const GLOBAL_AGENT_SKILL_SOURCE_KINDS = [
   'home'
 ] as const satisfies readonly SkillSourceKind[]

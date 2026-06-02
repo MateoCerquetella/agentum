@@ -121,7 +121,7 @@ export async function sendRuntimePtyInputVerified(
     const result = await callRuntimeRpc<{ send: RuntimeTerminalSend }>(
       target,
       'terminal.send',
-      { terminal, text: data, client: { id: 'orca-desktop', type: 'desktop' } },
+      { terminal, text: data, client: { id: 'agentum-desktop', type: 'desktop' } },
       { timeoutMs: 15_000 }
     )
     return result.send.accepted === true

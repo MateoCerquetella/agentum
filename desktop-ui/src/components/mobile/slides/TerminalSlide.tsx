@@ -39,13 +39,13 @@ export function TerminalSlide(): React.JSX.Element {
       <div className="mp-terminal">
         <span className="mp-term-line">
           <span className="mp-term-prompt">dev@mac</span>{' '}
-          <span className="mp-term-dim">orca/feat-mobile-page</span>{' '}
+          <span className="mp-term-dim">agentum/feat-mobile-page</span>{' '}
           <span className="mp-term-prompt">$</span> <span className="mp-term-cmd">claude</span>
         </span>
         <span className="mp-term-line" />
         <span className="mp-term-line">
           <span className="mp-term-tool">●</span> <span className="mp-term-mid">Read</span>{' '}
-          <span className="mp-term-dim">mobile/orca-mobile-sidebar-mock-v3.html</span>
+          <span className="mp-term-dim">mobile/agentum-mobile-sidebar-mock-v3.html</span>
         </span>
         <span className="mp-term-line">
           {'  '}
@@ -54,7 +54,7 @@ export function TerminalSlide(): React.JSX.Element {
         <span className="mp-term-line" />
         <span className="mp-term-line">
           <span className="mp-term-tool">●</span> <span className="mp-term-mid">Edit</span>{' '}
-          <span className="mp-term-dim">mobile/orca-mobile-sidebar-mock-v3.html</span>
+          <span className="mp-term-dim">mobile/agentum-mobile-sidebar-mock-v3.html</span>
         </span>
         <span className="mp-term-line">
           {'  '}

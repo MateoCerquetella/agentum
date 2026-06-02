@@ -311,7 +311,7 @@ export function PRTriageStrip({
               {pendingCount} check{pendingCount === 1 ? '' : 's'} pending
             </div>
             <div className="truncate text-[10px] text-muted-foreground">
-              Orca will refresh checks while this panel stays open.
+              Agentum will refresh checks while this panel stays open.
             </div>
           </div>
         </div>

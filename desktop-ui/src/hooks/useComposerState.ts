@@ -25,7 +25,7 @@ import type {
   GitPushTarget,
   GitLabWorkItem,
   LinearIssue,
-  OrcaHooks,
+  AgentumHooks,
   SetupDecision,
   SetupRunPolicy,
   SparsePreset,
@@ -454,7 +454,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     [detectedAgentList]
   )
 
-  const [yamlHooks, setYamlHooks] = useState<OrcaHooks | null>(null)
+  const [yamlHooks, setYamlHooks] = useState<AgentumHooks | null>(null)
   const [checkedHooksRepoId, setCheckedHooksRepoId] = useState<string | null>(null)
   const [issueCommandTemplate, setIssueCommandTemplate] = useState('')
   const [hasLoadedIssueCommand, setHasLoadedIssueCommand] = useState(false)
@@ -551,7 +551,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     return promise
   }, [])
   const commitHookCheckIfCurrent = useCallback(
-    (targetRepoId: string, hooks: OrcaHooks | null): boolean => {
+    (targetRepoId: string, hooks: AgentumHooks | null): boolean => {
       if (repoIdRef.current !== targetRepoId) {
         return false
       }
@@ -1055,7 +1055,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     let cancelled = false
     setLinkDirectLoading(true)
     // Why: Superset lets users paste a full GitHub URL or type a raw issue/PR
-    // number and still get a concrete selectable result. Orca mirrors that by
+    // number and still get a concrete selectable result. Agentum mirrors that by
     // resolving direct lookups against the selected repo instead of requiring a
     // text match in the recent-items list.
     const lookupRepoId = selectedRepo.id
@@ -1332,7 +1332,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         toast.error('No remote project path is available for attachments.')
         return { filePaths: [], folderPaths: [] }
       }
-      const destinationDir = joinPath(targetRepoPath, '.orca/drops')
+      const destinationDir = joinPath(targetRepoPath, '.agentum/drops')
       const { results } = await importExternalPathsToRuntime(
         {
           settings: targetSettings,
@@ -1541,7 +1541,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       // linkedPR state stay in a single code path.
       applyLinkedWorkItem(item, { preserveBranchNameOverride: Boolean(nextBranchNameOverride) })
       // Why: starting a worktree from a PR is a strong hint for what the
-      // worktree's comment should surface (`orca worktree current`, sidebar).
+      // worktree's comment should surface (`agentum worktree current`, sidebar).
       // Prefill the note if it's empty or still equal to a prior auto-fill, so
       // we don't overwrite anything the user has typed.
       if (item.type === 'pr') {

@@ -12,7 +12,7 @@ import {
   type RuntimeEnvironmentStore
 } from './runtime-environments'
 
-const ENVIRONMENTS_FILE = 'orca-environments.json'
+const ENVIRONMENTS_FILE = 'agentum-environments.json'
 
 export type RuntimeEnvironmentStoreErrorCode = 'invalid_argument' | 'runtime_error'
 
@@ -42,7 +42,7 @@ export function addEnvironmentFromPairingCode(
   if (!offer) {
     throw new RuntimeEnvironmentStoreError(
       'invalid_argument',
-      'Invalid pairing code. Expected an orca://pair?... URL or bare pairing payload.'
+      'Invalid pairing code. Expected an agentum://pair?... URL or bare pairing payload.'
     )
   }
   const store = readEnvironmentStore(userDataPath)
@@ -155,7 +155,7 @@ function readEnvironmentStore(userDataPath: string): RuntimeEnvironmentStore {
   } catch {
     throw new RuntimeEnvironmentStoreError(
       'runtime_error',
-      `Could not read Orca environments at ${path}; the file is invalid.`
+      `Could not read Agentum environments at ${path}; the file is invalid.`
     )
   }
 }

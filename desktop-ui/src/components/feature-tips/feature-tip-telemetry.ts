@@ -1,24 +1,24 @@
 import { track } from '@/lib/telemetry'
 import type { EventProps } from '../../../../shared/telemetry-events'
 
-export type OrcaCliFeatureTipSource = EventProps<'orca_cli_feature_tip_shown'>['source']
-export type OrcaCliFeatureTipSetupResult = EventProps<'orca_cli_feature_tip_setup_result'>['result']
+export type AgentumCliFeatureTipSource = EventProps<'agentum_cli_feature_tip_shown'>['source']
+export type AgentumCliFeatureTipSetupResult = EventProps<'agentum_cli_feature_tip_setup_result'>['result']
 
-export function getOrcaCliFeatureTipTelemetrySource(value: unknown): OrcaCliFeatureTipSource {
+export function getAgentumCliFeatureTipTelemetrySource(value: unknown): AgentumCliFeatureTipSource {
   return value === 'app_open' ? 'app_open' : 'manual'
 }
 
-export function trackOrcaCliFeatureTipShown(source: OrcaCliFeatureTipSource): void {
-  track('orca_cli_feature_tip_shown', { source })
+export function trackAgentumCliFeatureTipShown(source: AgentumCliFeatureTipSource): void {
+  track('agentum_cli_feature_tip_shown', { source })
 }
 
-export function trackOrcaCliFeatureTipSetupClicked(source: OrcaCliFeatureTipSource): void {
-  track('orca_cli_feature_tip_setup_clicked', { source })
+export function trackAgentumCliFeatureTipSetupClicked(source: AgentumCliFeatureTipSource): void {
+  track('agentum_cli_feature_tip_setup_clicked', { source })
 }
 
-export function trackOrcaCliFeatureTipSetupResult(
-  source: OrcaCliFeatureTipSource,
-  result: OrcaCliFeatureTipSetupResult
+export function trackAgentumCliFeatureTipSetupResult(
+  source: AgentumCliFeatureTipSource,
+  result: AgentumCliFeatureTipSetupResult
 ): void {
-  track('orca_cli_feature_tip_setup_result', { source, result })
+  track('agentum_cli_feature_tip_setup_result', { source, result })
 }

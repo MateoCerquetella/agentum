@@ -24,7 +24,7 @@ pub struct Checklist {
     dismissed: bool,
 }
 
-// Mirrors OnboardingState in orca/src/shared/types.ts.
+// Mirrors OnboardingState in agentum/src/shared/types.ts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct OnboardingState {

@@ -71,7 +71,7 @@ async function installApi(userAgent?: string): Promise<{
 
 function writeStoredRuntimeEnvironment(storage: Storage): void {
   storage.setItem(
-    'orca.web.runtimeEnvironment.v1',
+    'agentum.web.runtimeEnvironment.v1',
     JSON.stringify({
       id: 'web-env-1',
       name: 'Test runtime',
@@ -146,7 +146,7 @@ describe('web keybindings preload API', () => {
     })
 
     expect(updated.overrides['worktree.palette']).toEqual(['Ctrl+Alt+J'])
-    expect(storage.getItem('orca.web.keybindings.v1')).toContain('worktree.palette')
+    expect(storage.getItem('agentum.web.keybindings.v1')).toContain('worktree.palette')
 
     const disabled = await api.keybindings.setAction({
       actionId: 'worktree.palette',
@@ -236,7 +236,7 @@ describe('web UI preload API', () => {
           return Promise.resolve({
             id: `call-${runtimeCalls.length}`,
             ok: true,
-            result: 'C:\\Users\\alice\\AppData\\Local\\Temp\\orca-paste-image.png',
+            result: 'C:\\Users\\alice\\AppData\\Local\\Temp\\agentum-paste-image.png',
             _meta: { runtimeId: 'runtime-1' }
           })
         }
@@ -255,7 +255,7 @@ describe('web UI preload API', () => {
 
     await expect(
       globals.window.api.ui.saveClipboardImageAsTempFile({ connectionId: 'ssh-1' })
-    ).resolves.toBe('C:\\Users\\alice\\AppData\\Local\\Temp\\orca-paste-image.png')
+    ).resolves.toBe('C:\\Users\\alice\\AppData\\Local\\Temp\\agentum-paste-image.png')
     expect(runtimeCalls).toEqual([
       {
         method: 'clipboard.startImageUpload',
@@ -304,7 +304,7 @@ describe('web UI preload API', () => {
           return Promise.resolve({
             id: `call-${runtimeCalls.length}`,
             ok: true,
-            result: '/tmp/orca-paste-image.png',
+            result: '/tmp/agentum-paste-image.png',
             _meta: { runtimeId: 'runtime-1' }
           })
         }
@@ -321,7 +321,7 @@ describe('web UI preload API', () => {
 
     await expect(
       globals.window.api.ui.saveClipboardImageAsTempFile({ connectionId: null })
-    ).resolves.toBe('/tmp/orca-paste-image.png')
+    ).resolves.toBe('/tmp/agentum-paste-image.png')
     expect(runtimeCalls).toEqual([
       {
         method: 'clipboard.startImageUpload',
@@ -511,7 +511,7 @@ describe('web UI preload API', () => {
 
   it('keeps explicit local right sidebar visibility over the legacy default', async () => {
     const { api, storage } = await installApi('Linux')
-    storage.setItem('orca.web.ui.v1', JSON.stringify({ rightSidebarOpen: true }))
+    storage.setItem('agentum.web.ui.v1', JSON.stringify({ rightSidebarOpen: true }))
 
     const ui = await api.ui.get()
 
@@ -573,7 +573,7 @@ describe('web UI preload API', () => {
     })
     await first
 
-    const stored = JSON.parse(globals.storage.getItem('orca.web.ui.v1') ?? '{}') as {
+    const stored = JSON.parse(globals.storage.getItem('agentum.web.ui.v1') ?? '{}') as {
       featureInteractions?: FeatureInteractionState
     }
     expect(stored.featureInteractions?.tasks).toEqual({
@@ -608,7 +608,7 @@ describe('web UI preload API', () => {
     const globals = installBrowserGlobals('Linux')
     writeStoredRuntimeEnvironment(globals.storage)
     globals.storage.setItem(
-      'orca.web.ui.v1',
+      'agentum.web.ui.v1',
       JSON.stringify({
         featureInteractions: {
           tasks: { firstInteractedAt: 50, interactionCount: 3 }
@@ -619,7 +619,7 @@ describe('web UI preload API', () => {
     installWebPreloadApi()
 
     const ui = await globals.window.api.ui.get()
-    const stored = JSON.parse(globals.storage.getItem('orca.web.ui.v1') ?? '{}') as {
+    const stored = JSON.parse(globals.storage.getItem('agentum.web.ui.v1') ?? '{}') as {
       featureInteractions?: FeatureInteractionState
     }
 
@@ -710,7 +710,7 @@ describe('web worktree preload API', () => {
       repoId: 'repo-1',
       authoritative: true,
       source: 'session-fallback',
-      worktrees: [{ id: worktree.id, ownership: 'orca-managed', visible: true }]
+      worktrees: [{ id: worktree.id, ownership: 'agentum-managed', visible: true }]
     })
     expect(runtimeCalls).toEqual([
       { method: 'worktree.detectedList', params: { repo: 'repo-1' } },
@@ -738,7 +738,7 @@ describe('web GitHub preload API', () => {
         'addIssueCommentBySlug',
         'addPRReviewComment',
         'addPRReviewCommentReply',
-        'checkOrcaStarred',
+        'checkAgentumStarred',
         'clearProjectItemField',
         'countWorkItems',
         'createIssue',
@@ -776,7 +776,7 @@ describe('web GitHub preload API', () => {
         'resolveReviewThread',
         'setPRAutoMerge',
         'setPRFileViewed',
-        'starOrca',
+        'starAgentum',
         'updateIssue',
         'updateIssueBySlug',
         'updateIssueCommentBySlug',
@@ -860,12 +860,12 @@ describe('web GitHub preload API', () => {
       },
       {
         key: 'workItemByOwnerRepo',
-        args: { repoPath, owner: 'acme', repo: 'orca', number: 7, type: 'pr' },
+        args: { repoPath, owner: 'acme', repo: 'agentum', number: 7, type: 'pr' },
         expectedMethod: 'github.workItemByOwnerRepo',
         expectedParams: withRepo({
           repoPath,
           owner: 'acme',
-          ownerRepo: 'orca',
+          ownerRepo: 'agentum',
           number: 7,
           type: 'pr'
         })
@@ -1085,9 +1085,9 @@ describe('web GitHub preload API', () => {
       },
       {
         key: 'projectWorkItemDetailsBySlug',
-        args: { owner: 'acme', repo: 'orca', number: 7, type: 'issue' },
+        args: { owner: 'acme', repo: 'agentum', number: 7, type: 'issue' },
         expectedMethod: 'github.project.workItemDetailsBySlug',
-        expectedParams: { owner: 'acme', repo: 'orca', number: 7, type: 'issue' }
+        expectedParams: { owner: 'acme', repo: 'agentum', number: 7, type: 'issue' }
       },
       {
         key: 'updateProjectItemField',
@@ -1103,57 +1103,57 @@ describe('web GitHub preload API', () => {
       },
       {
         key: 'updateIssueBySlug',
-        args: { owner: 'acme', repo: 'orca', number: 7, updates: { title: 'New' } },
+        args: { owner: 'acme', repo: 'agentum', number: 7, updates: { title: 'New' } },
         expectedMethod: 'github.project.updateIssueBySlug',
-        expectedParams: { owner: 'acme', repo: 'orca', number: 7, updates: { title: 'New' } }
+        expectedParams: { owner: 'acme', repo: 'agentum', number: 7, updates: { title: 'New' } }
       },
       {
         key: 'updatePullRequestBySlug',
-        args: { owner: 'acme', repo: 'orca', number: 7, updates: { title: 'New' } },
+        args: { owner: 'acme', repo: 'agentum', number: 7, updates: { title: 'New' } },
         expectedMethod: 'github.project.updatePullRequestBySlug',
-        expectedParams: { owner: 'acme', repo: 'orca', number: 7, updates: { title: 'New' } }
+        expectedParams: { owner: 'acme', repo: 'agentum', number: 7, updates: { title: 'New' } }
       },
       {
         key: 'addIssueCommentBySlug',
-        args: { owner: 'acme', repo: 'orca', number: 7, body: 'Fixed' },
+        args: { owner: 'acme', repo: 'agentum', number: 7, body: 'Fixed' },
         expectedMethod: 'github.project.addIssueCommentBySlug',
-        expectedParams: { owner: 'acme', repo: 'orca', number: 7, body: 'Fixed' }
+        expectedParams: { owner: 'acme', repo: 'agentum', number: 7, body: 'Fixed' }
       },
       {
         key: 'updateIssueCommentBySlug',
-        args: { owner: 'acme', repo: 'orca', commentId: 9, body: 'Edited' },
+        args: { owner: 'acme', repo: 'agentum', commentId: 9, body: 'Edited' },
         expectedMethod: 'github.project.updateIssueCommentBySlug',
-        expectedParams: { owner: 'acme', repo: 'orca', commentId: 9, body: 'Edited' }
+        expectedParams: { owner: 'acme', repo: 'agentum', commentId: 9, body: 'Edited' }
       },
       {
         key: 'deleteIssueCommentBySlug',
-        args: { owner: 'acme', repo: 'orca', commentId: 9 },
+        args: { owner: 'acme', repo: 'agentum', commentId: 9 },
         expectedMethod: 'github.project.deleteIssueCommentBySlug',
-        expectedParams: { owner: 'acme', repo: 'orca', commentId: 9 }
+        expectedParams: { owner: 'acme', repo: 'agentum', commentId: 9 }
       },
       {
         key: 'listLabelsBySlug',
-        args: { owner: 'acme', repo: 'orca' },
+        args: { owner: 'acme', repo: 'agentum' },
         expectedMethod: 'github.project.listLabelsBySlug',
-        expectedParams: { owner: 'acme', repo: 'orca' }
+        expectedParams: { owner: 'acme', repo: 'agentum' }
       },
       {
         key: 'listAssignableUsersBySlug',
-        args: { owner: 'acme', repo: 'orca', seedLogins: ['alice'] },
+        args: { owner: 'acme', repo: 'agentum', seedLogins: ['alice'] },
         expectedMethod: 'github.project.listAssignableUsersBySlug',
-        expectedParams: { owner: 'acme', repo: 'orca', seedLogins: ['alice'] }
+        expectedParams: { owner: 'acme', repo: 'agentum', seedLogins: ['alice'] }
       },
       {
         key: 'listIssueTypesBySlug',
-        args: { owner: 'acme', repo: 'orca' },
+        args: { owner: 'acme', repo: 'agentum' },
         expectedMethod: 'github.project.listIssueTypesBySlug',
-        expectedParams: { owner: 'acme', repo: 'orca' }
+        expectedParams: { owner: 'acme', repo: 'agentum' }
       },
       {
         key: 'updateIssueTypeBySlug',
-        args: { owner: 'acme', repo: 'orca', number: 7, issueTypeId: 'it-1' },
+        args: { owner: 'acme', repo: 'agentum', number: 7, issueTypeId: 'it-1' },
         expectedMethod: 'github.project.updateIssueTypeBySlug',
-        expectedParams: { owner: 'acme', repo: 'orca', number: 7, issueTypeId: 'it-1' }
+        expectedParams: { owner: 'acme', repo: 'agentum', number: 7, issueTypeId: 'it-1' }
       }
     ]
 

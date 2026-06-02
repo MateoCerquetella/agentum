@@ -14,9 +14,9 @@ import { useMountedRef } from '@/hooks/useMountedRef'
 import { cn } from '@/lib/utils'
 import type { GitHubViewer } from '../../../../shared/types'
 
-const GITHUB_ISSUES_URL = 'https://github.com/stablyai/orca/issues/'
+const GITHUB_ISSUES_URL = 'https://github.com/stablyai/agentum/issues/'
 const DISCORD_URL = 'https://discord.gg/fzjDKHxv8Q'
-const X_URL = 'https://x.com/orca_build'
+const X_URL = 'https://x.com/agentum_build'
 
 type SubmitIdentity = {
   githubLogin: string | null
@@ -138,7 +138,7 @@ export function SidebarFeedbackDialog({
         <DialogHeader>
           <DialogTitle className="text-sm">Send Feedback</DialogTitle>
           <DialogDescription className="text-xs">
-            Share what&apos;s working, what&apos;s broken, or what Orca should do next.
+            Share what&apos;s working, what&apos;s broken, or what Agentum should do next.
           </DialogDescription>
         </DialogHeader>
 

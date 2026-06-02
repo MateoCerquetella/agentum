@@ -40,7 +40,7 @@ pub fn hooks_inspect_setup_script_imports() -> Vec<Value> {
     Vec::new()
 }
 
-// Real: the per-repo issue-command template at <repo>/.orca/issue-command. The
+// Real: the per-repo issue-command template at <repo>/.agentum/issue-command. The
 // shared variant isn't ported, so effective == local.
 #[tauri::command]
 pub fn hooks_read_issue_command(repo_id: String) -> Result<Value, String> {

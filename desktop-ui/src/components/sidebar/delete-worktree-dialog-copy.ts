@@ -50,12 +50,12 @@ export function getDeleteWorktreeDialogCopy(args: {
       : 'break-all font-medium text-foreground',
     descriptionSuffix: args.isBatchDelete
       ? allFolderWorkspaceDeletes
-        ? 'from Orca. Project folders on disk will not be deleted.'
+        ? 'from Agentum. Project folders on disk will not be deleted.'
         : mixedFolderWorkspaceDeletes
-          ? 'from Orca. Git worktrees will also be removed from git and disk; folder workspaces will only remove the Orca workspace entry.'
+          ? 'from Agentum. Git worktrees will also be removed from git and disk; folder workspaces will only remove the Agentum workspace entry.'
           : 'from git and delete their workspace folders.'
       : args.isFolderWorkspaceDelete
-        ? 'from Orca. The project folder on disk will not be deleted.'
+        ? 'from Agentum. The project folder on disk will not be deleted.'
         : 'from git and delete its workspace folder.',
     mainWorktreeBlocker: args.isFolderWorkspaceDelete
       ? 'Remove the folder project instead of deleting this workspace.'

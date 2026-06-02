@@ -180,7 +180,7 @@ export function exitEmptyDetailsBody(editor: Editor): boolean {
   return true
 }
 
-const OrcaDetails = Details.extend({
+const AgentumDetails = Details.extend({
   // Why: details summary Enter must run before StarterKit's generic paragraph
   // splitting so typing a toggle title then pressing Enter moves into the body.
   priority: 1000,
@@ -191,9 +191,9 @@ const OrcaDetails = Details.extend({
       variant: {
         default: null,
         parseHTML: (element) =>
-          element.getAttribute('data-orca-toggle') === 'heading-1' ? 'heading-1' : null,
+          element.getAttribute('data-agentum-toggle') === 'heading-1' ? 'heading-1' : null,
         renderHTML: ({ variant }) =>
-          variant === 'heading-1' ? { 'data-orca-toggle': 'heading-1' } : {}
+          variant === 'heading-1' ? { 'data-agentum-toggle': 'heading-1' } : {}
       }
     }
   },
@@ -267,7 +267,7 @@ const OrcaDetails = Details.extend({
   }
 })
 
-const OrcaDetailsContent = DetailsContent.extend({
+const AgentumDetailsContent = DetailsContent.extend({
   // Why: detailsContent's double-Enter escape must run before StarterKit's
   // generic paragraph split, otherwise users can get stuck inside a toggle.
   priority: 1000,
@@ -287,15 +287,15 @@ const OrcaDetailsContent = DetailsContent.extend({
   }
 })
 
-export function createOrcaDetailsExtensions(): AnyExtension[] {
+export function createAgentumDetailsExtensions(): AnyExtension[] {
   return [
-    OrcaDetails.configure({
+    AgentumDetails.configure({
       persist: true,
       HTMLAttributes: {
-        class: 'orca-details'
+        class: 'agentum-details'
       }
     }),
     DetailsSummary,
-    OrcaDetailsContent
+    AgentumDetailsContent
   ]
 }

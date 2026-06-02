@@ -175,10 +175,10 @@ export function NotificationStep({
             <div className="min-w-0 space-y-1">
               <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                 <Settings className="size-4" />
-                Allow Orca in macOS
+                Allow Agentum in macOS
               </div>
               <p className="max-w-[58ch] text-[13px] leading-relaxed text-muted-foreground">
-                Open System Settings and make sure Orca is allowed to send notifications.
+                Open System Settings and make sure Agentum is allowed to send notifications.
               </p>
             </div>
             <Button
@@ -198,7 +198,7 @@ export function NotificationStep({
         <div className="space-y-1">
           <h2 className="text-sm font-semibold text-foreground">Choose a sound</h2>
           <p className="text-[13px] leading-relaxed text-muted-foreground">
-            Pick the alert Orca plays after a desktop notification is delivered.
+            Pick the alert Agentum plays after a desktop notification is delivered.
           </p>
         </div>
 

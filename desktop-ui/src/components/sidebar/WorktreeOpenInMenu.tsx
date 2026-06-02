@@ -61,7 +61,7 @@ function showOpenFailureToast(reason: ShellOpenLocalPathFailureReason): void {
   }
   if (reason === 'not-found') {
     toast.error('Workspace folder was not found.', {
-      description: 'It may have been moved or deleted. Refresh workspaces or remove it from Orca.'
+      description: 'It may have been moved or deleted. Refresh workspaces or remove it from Agentum.'
     })
     return
   }
