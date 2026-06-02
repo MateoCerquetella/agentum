@@ -21,7 +21,6 @@ pub mod hosted_review;
 pub mod html_export;
 pub mod keybindings;
 pub mod linear;
-pub mod mobile;
 pub mod notebook;
 pub mod notifications;
 pub mod onboarding;

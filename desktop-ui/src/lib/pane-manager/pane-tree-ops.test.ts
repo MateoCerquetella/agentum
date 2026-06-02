@@ -1,7 +1,6 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { equalizePaneSplitSizes, safeFit } from './pane-tree-ops'
 import type { ManagedPaneInternal, ScrollState } from './pane-manager-types'
-import { setFitOverride, hydrateOverrides } from './mobile-fit-overrides'
 
 class MockHTMLElement {
   classList: { contains: (cls: string) => boolean }
@@ -17,10 +16,6 @@ class MockHTMLElement {
 
 beforeAll(() => {
   ;(globalThis as unknown as Record<string, unknown>).HTMLElement = MockHTMLElement
-})
-
-afterEach(() => {
-  hydrateOverrides([])
 })
 
 function createPane({
@@ -204,98 +199,6 @@ describe('safeFit', () => {
     expect(pane.fitAddon.fit).toHaveBeenCalledTimes(1)
   })
 
-  it('resizes terminal to override dimensions when mobile-fit override is active', () => {
-    const pane = createPane({
-      proposedCols: 120,
-      proposedRows: 40,
-      terminalCols: 120,
-      terminalRows: 40
-    })
-    pane.container.dataset.ptyId = 'pty-phone'
-    setFitOverride('pty-phone', 'mobile-fit', 49, 20)
-
-    safeFit(pane)
-
-    expect(pane.fitAddon.fit).not.toHaveBeenCalled()
-    expect(pane.terminal.resize).toHaveBeenCalledWith(49, 20)
-  })
-
-  it('skips resize when terminal already matches override dimensions', () => {
-    const pane = createPane({
-      proposedCols: 120,
-      proposedRows: 40,
-      terminalCols: 49,
-      terminalRows: 20
-    })
-    pane.container.dataset.ptyId = 'pty-phone'
-    setFitOverride('pty-phone', 'mobile-fit', 49, 20)
-
-    safeFit(pane)
-
-    expect(pane.fitAddon.fit).not.toHaveBeenCalled()
-    expect(pane.terminal.resize).not.toHaveBeenCalled()
-  })
-
-  it('does not apply override when pane has no data-pty-id', () => {
-    const pane = createPane({
-      proposedCols: 100,
-      proposedRows: 32,
-      terminalCols: 120,
-      terminalRows: 32
-    })
-    setFitOverride('pty-phone', 'mobile-fit', 49, 20)
-
-    safeFit(pane)
-
-    expect(pane.fitAddon.fit).toHaveBeenCalledTimes(1)
-    expect(pane.terminal.resize).not.toHaveBeenCalled()
-  })
-
-  it('falls through to normal fit when override is cleared', () => {
-    const pane = createPane({
-      proposedCols: 100,
-      proposedRows: 32,
-      terminalCols: 49,
-      terminalRows: 20
-    })
-    pane.container.dataset.ptyId = 'pty-phone'
-    setFitOverride('pty-phone', 'mobile-fit', 49, 20)
-    setFitOverride('pty-phone', 'desktop-fit', 120, 40)
-
-    safeFit(pane)
-
-    expect(pane.fitAddon.fit).toHaveBeenCalledTimes(1)
-  })
-
-  it('does not cross-contaminate overrides between different ptyIds', () => {
-    const paneA = createPane({
-      proposedCols: 120,
-      proposedRows: 40,
-      terminalCols: 120,
-      terminalRows: 40,
-      paneId: 1
-    })
-    paneA.container.dataset.ptyId = 'pty-A'
-
-    const paneB = createPane({
-      proposedCols: 100,
-      proposedRows: 32,
-      terminalCols: 120,
-      terminalRows: 40,
-      paneId: 2
-    })
-    paneB.container.dataset.ptyId = 'pty-B'
-
-    setFitOverride('pty-A', 'mobile-fit', 49, 20)
-
-    safeFit(paneA)
-    safeFit(paneB)
-
-    expect(paneA.terminal.resize).toHaveBeenCalledWith(49, 20)
-    expect(paneA.fitAddon.fit).not.toHaveBeenCalled()
-    expect(paneB.fitAddon.fit).toHaveBeenCalledTimes(1)
-    expect(paneB.terminal.resize).not.toHaveBeenCalled()
-  })
 })
 
 describe('equalizePaneSplitSizes', () => {

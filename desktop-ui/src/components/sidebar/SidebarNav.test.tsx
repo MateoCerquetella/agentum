@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { getDefaultSettings } from '../../../../shared/constants'
-import { shouldShowAgentsButton, shouldShowMobileButton } from './SidebarNav'
+import { shouldShowAgentsButton } from './SidebarNav'
 
 describe('SidebarNav', () => {
   it('hides the Agents entry while settings are loading', () => {
@@ -23,14 +23,5 @@ describe('SidebarNav', () => {
         experimentalActivity: true
       })
     ).toBe(true)
-  })
-
-  it('shows the Mobile entry by default for older settings', () => {
-    expect(shouldShowMobileButton(null)).toBe(true)
-    expect(shouldShowMobileButton({})).toBe(true)
-  })
-
-  it('hides the Mobile entry when the sidebar setting is off', () => {
-    expect(shouldShowMobileButton({ showMobileButton: false })).toBe(false)
   })
 })

@@ -6,7 +6,6 @@
 @import './rich-markdown-editor.css';
 @import './markdown-preview.css';
 @import './terminal.css';
-@import './mobile-page.css';
 
 @font-face {
   font-family: 'Geist';
@@ -17,12 +16,6 @@
 }
 
 @custom-variant dark (&:is(.dark *));
-
-/* Agentum: hide the custom in-app topbar — native window decorations provide
-   the title bar, traffic lights, and window dragging. */
-.titlebar {
-  display: none !important;
-}
 
 .theme-transition-disabled *,
 .theme-transition-disabled *::before,
@@ -181,28 +174,30 @@
 /* ── Dark Mode ───────────────────────────────────────── */
 
 .dark {
-  /* Agentum — nocturnal command center. Colorimetric depth (ground→raised),
-     coral CTA as the only warm accent, electric-blue focus/activation. */
-  --background: #0b0b0b;
-  --editor-surface: #0a0a0a;
-  --foreground: #ffffff;
-  --card: #212121;
-  --card-foreground: #ffffff;
-  --popover: #212121;
-  --popover-foreground: #ffffff;
+  /* Agentum — dark grey command center (lifted off pitch-black for visibility;
+     coral CTA as the only warm accent, electric-blue focus/activation). */
+  --background: #161619;
+  --editor-surface: #1b1b1f;
+  --foreground: #f4f4f5;
+  --card: #202024;
+  --card-foreground: #f4f4f5;
+  --popover: #202024;
+  --popover-foreground: #f4f4f5;
   --primary: #f36458;
   --primary-foreground: #ffffff;
-  --secondary: #353535;
-  --secondary-foreground: #ffffff;
-  --muted: #212121;
-  --muted-foreground: #797979;
-  --accent: #161616;
-  --accent-foreground: #ffffff;
+  --secondary: #2c2c31;
+  --secondary-foreground: #f4f4f5;
+  --muted: #202024;
+  --muted-foreground: #9a9aa3;
+  --accent: #26262b;
+  --accent-foreground: #f4f4f5;
   --destructive: #ff5555;
   --destructive-foreground: #ffffff;
-  --border: #353535;
-  --input: #212121;
+  --border: #333339;
+  --input: #26262b;
   --ring: #0052ef;
+  /* Topbar shares the sidebar surface so the top strip reads as one with it. */
+  --bg-titlebar: var(--sidebar);
   --terminal-pane-locate: var(--color-blue-400);
   --ai-action-accent: var(--color-violet-400);
   --chart-1: #19d600;
@@ -210,13 +205,13 @@
   --chart-3: #ffb454;
   --chart-4: #f000ff;
   --chart-5: #f36458;
-  --sidebar: #0d0d0d;
-  --sidebar-foreground: #b9b9b9;
+  --sidebar: #1c1c20;
+  --sidebar-foreground: #c4c4cc;
   --sidebar-primary: #f36458;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #161616;
-  --sidebar-accent-foreground: #ffffff;
-  --sidebar-border: #212121;
+  --sidebar-accent: #26262b;
+  --sidebar-accent-foreground: #f4f4f5;
+  --sidebar-border: #2a2a30;
   --sidebar-ring: #0052ef;
   --terminal-pane-title-on-dark-fg: rgb(255 255 255 / 0.52);
   --terminal-pane-title-on-dark-input-fg: rgb(255 255 255 / 0.7);
@@ -532,7 +527,9 @@
 }
 
 .titlebar-traffic-light-pad {
-  width: calc(80px / var(--ui-zoom-factor, 1));
+  /* Floor at 80px so a >1 zoom factor can't shrink the pad under the macOS
+     traffic lights (~78px) and let the app name slide beneath them. */
+  width: max(80px, calc(80px / var(--ui-zoom-factor, 1)));
   flex-shrink: 0;
 }
 

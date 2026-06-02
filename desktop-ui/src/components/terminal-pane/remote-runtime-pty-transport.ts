@@ -22,8 +22,6 @@ import {
   createRemoteRuntimePtyTextBatcher,
   createRemoteRuntimeViewportBatcher
 } from './remote-runtime-pty-batching'
-import { setFitOverride } from '@/lib/pane-manager/mobile-fit-overrides'
-import { setDriverForPty } from '@/lib/pane-manager/mobile-driver-state'
 import { isWebTerminalSurfaceTabId, toHostSessionTabId } from '@/runtime/web-terminal-surface-id'
 
 const REMOTE_TERMINAL_INPUT_FLUSH_MS = 8
@@ -329,16 +327,6 @@ export function createRemoteRuntimePtyTransport(
           }
         },
         onError: (message) => handleRemoteTerminalError(message),
-        onFitOverrideChanged: (event) => {
-          if (remotePtyId) {
-            setFitOverride(remotePtyId, event.mode, event.cols, event.rows)
-          }
-        },
-        onDriverChanged: (driver) => {
-          if (remotePtyId) {
-            setDriverForPty(remotePtyId, driver)
-          }
-        },
         onTransportClose: () => {
           multiplexedStream = null
           if (destroyed || !connected || !handle || resubscribing) {

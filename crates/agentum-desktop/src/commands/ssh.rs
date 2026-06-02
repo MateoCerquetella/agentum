@@ -372,7 +372,54 @@ pub fn ssh_browse_dir() -> Result<Vec<Value>, String> {
 #[tauri::command]
 pub fn ssh_reset_relay() {}
 
+// Non-interactive connectivity probe: `ssh -o BatchMode=yes … true`. BatchMode
+// fails fast if the host needs a password/passphrase prompt (so this tests
+// key-based reachability). Returns the renderer's {success,state}|{success,error}.
 #[tauri::command]
-pub fn ssh_test_connection() -> Value {
-    serde_json::json!({ "ok": false, "error": "SSH isn't available in this build." })
+pub fn ssh_test_connection(target_id: String) -> Value {
+    let Some(target) = read_targets()
+        .ok()
+        .and_then(|targets| targets.into_iter().find(|candidate| candidate.id == target_id))
+    else {
+        return serde_json::json!({
+            "success": false,
+            "error": format!("SSH target \"{target_id}\" not found")
+        });
+    };
+
+    let mut command = std::process::Command::new("ssh");
+    command.args([
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=8",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+    ]);
+    if let Some(identity) = &target.identity_file {
+        command.args(["-i", identity]);
+    }
+    // Prefer the ssh-config host alias when present; otherwise user@host -p port.
+    let destination = match &target.config_host {
+        Some(config_host) => config_host.clone(),
+        None => {
+            command.args(["-p", &target.port.to_string()]);
+            format!("{}@{}", target.username, target.host)
+        }
+    };
+    command.arg(destination).arg("true");
+
+    match command.output() {
+        Ok(output) if output.status.success() => {
+            serde_json::json!({ "success": true, "state": "ready" })
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            serde_json::json!({
+                "success": false,
+                "error": if stderr.is_empty() { "Connection test failed".to_string() } else { stderr }
+            })
+        }
+        Err(error) => serde_json::json!({ "success": false, "error": error.to_string() }),
+    }
 }

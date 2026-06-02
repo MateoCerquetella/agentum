@@ -1,14 +1,14 @@
 [package]
 name = "agentum-desktop"
 version.workspace = true
-# Pinned to 2021 (not the workspace 2024 default): the migrated orca Tauri backend
-# targets edition 2021, so this avoids an edition-migration pass on ~50 modules.
+# Pinned to 2021 (not the workspace 2024 default): the Tauri backend targets
+# edition 2021, so this avoids an edition-migration pass on ~50 modules.
 edition = "2021"
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "agentum desktop — the React/Tauri IDE (migrated from orca)."
+description = "agentum desktop — the React/Tauri IDE."
 
 [lib]
 name = "agentum_desktop_lib"

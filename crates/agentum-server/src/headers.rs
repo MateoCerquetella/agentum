@@ -1,9 +1,11 @@
 //! Response middleware that stamps the standard browser security headers.
 //!
-//! - `Content-Security-Policy`: same-origin everything, no framing. The
-//!   embedded SvelteKit SPA needs `'unsafe-inline'` for its bootstrap
-//!   script (per-build random `__sveltekit_<id>` suffix can't be
-//!   externalised) and for component-level inline styles.
+//! The daemon is API-only (no embedded web UI), so these headers are
+//! defense-in-depth on `/api` responses rather than a policy for served
+//! HTML. They cost nothing on JSON and harden any accidental HTML (error
+//! pages, future endpoints).
+//!
+//! - `Content-Security-Policy`: same-origin everything, no framing.
 //! - `X-Frame-Options: DENY`: belt-and-braces with the CSP `frame-ancestors`.
 //! - `X-Content-Type-Options: nosniff`: prevents MIME-sniffing tricks.
 //! - `Referrer-Policy: no-referrer`: don't leak URLs (which contain
@@ -22,19 +24,13 @@ use axum::http::{HeaderName, HeaderValue, header};
 use axum::middleware::Next;
 use axum::response::Response;
 
-// SvelteKit injects an inline bootstrap script in index.html that calls
-// `import("/_app/immutable/...")` to start the SPA. That script can't be
-// extracted to an external file (it carries a per-build random suffix on
-// `__sveltekit_<id>` and must run inline). We therefore allow
-// `'unsafe-inline'` for script-src; everything else still requires
-// same-origin. Same posture for style-src — Svelte components emit inline
-// `style` attributes for transitions/dynamic props.
 // `connect-src` allows any HTTP/HTTPS origin (plus any ws/wss) so the
-// named-profiles feature works: a dashboard hosted by one daemon can
+// named-profiles feature works: a client served by one daemon can
 // fetch /api/health, /api/auth/*, /api/sessions, etc. from another
 // daemon the user added as an endpoint. The bearer-token wall on the
-// daemon side is what actually gates access — `connect-src *` only
-// decides which origins the SPA's *own* JS is allowed to dial out to.
+// daemon side is what actually gates access. The `'unsafe-inline'`
+// allowances are retained for any HTML the daemon might emit (error
+// pages); they are inert for JSON responses.
 const CSP: &str = concat!(
     "default-src 'self'; ",
     "script-src 'self' 'unsafe-inline'; ",

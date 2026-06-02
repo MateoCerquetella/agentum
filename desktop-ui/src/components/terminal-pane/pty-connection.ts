@@ -15,8 +15,6 @@ import { createRemoteRuntimePtyTransport } from './remote-runtime-pty-transport'
 import { shouldSeedCacheTimerOnInitialTitle } from './cache-timer-seeding'
 import type { PtyConnectionDeps } from './pty-connection-types'
 import { safeFit } from '@/lib/pane-manager/pane-tree-ops'
-import { getFitOverrideForPty, bindPanePtyId } from '@/lib/pane-manager/mobile-fit-overrides'
-import { isPtyLocked } from '@/lib/pane-manager/mobile-driver-state'
 import { isPaneReplaying, replayIntoTerminal } from './replay-guard'
 import { terminalOutputPrefersDomRenderer } from '@/lib/pane-manager/terminal-complex-script'
 import {
@@ -655,14 +653,12 @@ export function connectPanePty(
     terminalKeyTarget.addEventListener('keydown', onTerminalKeyDown, { capture: true })
   }
 
-  const setPanePtyFitBinding = (ptyId: string): void => {
-    bindPanePtyId(pane.id, ptyId, deps.tabId)
+  // Why: `data-pty-id` lets other surfaces (activity view, onboarding) detect
+  // a PTY-attached pane via DOM query; teardown must clear it explicitly.
+  const setPanePtyIdAttr = (ptyId: string): void => {
     pane.container.dataset.ptyId = ptyId
   }
-  const clearPanePtyFitBinding = (): void => {
-    // Why: fit bindings live in a module-level map, so pane teardown must
-    // clear them explicitly instead of relying on DOM removal.
-    bindPanePtyId(pane.id, null, deps.tabId)
+  const clearPanePtyIdAttr = (): void => {
     delete pane.container.dataset.ptyId
   }
 
@@ -690,7 +686,7 @@ export function connectPanePty(
 
   const onExit = (ptyId: string): void => {
     agentCompletionCoordinator.dispose()
-    clearPanePtyFitBinding()
+    clearPanePtyIdAttr()
     deps.syncPanePtyLayoutBinding(pane.id, null)
     deps.clearRuntimePaneTitle(deps.tabId, pane.id)
     deps.clearTabPtyId(deps.tabId, ptyId)
@@ -851,7 +847,7 @@ export function connectPanePty(
   const observeTerminalGitHubPRLink = createTerminalGitHubPRLinkDetector()
 
   const onPtySpawn = (ptyId: string): void => {
-    setPanePtyFitBinding(ptyId)
+    setPanePtyIdAttr(ptyId)
     deps.syncPanePtyLayoutBinding(pane.id, ptyId)
     deps.updateTabPtyId(deps.tabId, ptyId)
     // Why: Command Code has no prompt-start hook. Seed the visible working row
@@ -1195,17 +1191,6 @@ export function connectPanePty(
       clearPendingTerminalInputIntent()
       return
     }
-    // Why: presence-lock input drop. While mobile is the driver for this
-    // PTY, desktop keystrokes must not reach the shell — any input would
-    // race the mobile session and is also dimensionally wrong (PTY is at
-    // phone fit). Renderer-side guard belongs here so we don't even mark
-    // the pane as "interacted" (no unread clear, no take-floor cascade).
-    // The pty:write IPC has a defense-in-depth twin. See
-    // docs/mobile-presence-lock.md.
-    if (currentPtyId && isPtyLocked(currentPtyId)) {
-      clearPendingTerminalInputIntent()
-      return
-    }
     // Why: a real keystroke into the terminal is the unambiguous "user is
     // here" signal that dismisses attention. Guarded by the replay and
     // codex-stale checks above so synthetic xterm auto-replies never count.
@@ -1259,26 +1244,7 @@ export function connectPanePty(
     }
   })
 
-  const shouldSuppressDesktopPtyResize = (): boolean => {
-    const currentPtyId = transport.getPtyId()
-    return Boolean(
-      currentPtyId && (getFitOverrideForPty(currentPtyId) || isPtyLocked(currentPtyId))
-    )
-  }
-
   const forwardPtyResize = (cols: number, rows: number): void => {
-    // Why: when a mobile-fit override is active OR mobile is currently the
-    // driver of this PTY, the PTY is already at phone dims and any desktop
-    // resize is wrong. Suppress resize forwarding to avoid spurious SIGWINCH
-    // signals (TUI flicker / wrap corruption). Both checks are needed:
-    // - getFitOverrideForPty covers the "phone-fit dims" state.
-    // - isPtyLocked covers the broader "mobile driving" state, including
-    //   transitions where override may not be set (e.g. legacy code paths).
-    // The pty:resize IPC has a defense-in-depth twin. See
-    // docs/mobile-presence-lock.md.
-    if (shouldSuppressDesktopPtyResize()) {
-      return
-    }
     transport.resize(cols, rows)
   }
 
@@ -1292,67 +1258,11 @@ export function connectPanePty(
   pane.container.addEventListener(PANE_PTY_RESIZE_HOLD_FLUSH_EVENT, onHeldPtyResizeFlush)
 
   const onResizeDisposable = pane.terminal.onResize(({ cols, rows }) => {
-    if (shouldSuppressDesktopPtyResize()) {
-      return
-    }
     if (queuePanePtyResizeIfHeld(pane.container, cols, rows)) {
       return
     }
     transport.resize(cols, rows)
   })
-
-  // Why: while a mobile-fit override is active, the onResize listener above
-  // and the matching server-side gate both correctly drop pty:resize so the
-  // PTY stays parked at phone dims. But the server still needs to learn the
-  // real desktop pane geometry — otherwise resolveDesktopRestoreTarget falls
-  // back to the PTY's spawn default (e.g. 80×24 for a hidden tab) and Take
-  // Back leaves the terminal partially restored. This observer measures the
-  // pane container as a side-channel, computes proposed cols/rows the way
-  // safeFit would, and reports it via pty:reportGeometry — a measurement-
-  // only IPC that updates lastRendererSizes and non-null subscriber
-  // baselines without resizing the PTY. We only fire while an override is
-  // active because the normal pty:resize path covers all other cases. See
-  // docs/mobile-fit-hold.md.
-  let pendingGeometryReportRaf: number | null = null
-  const reportPaneGeometry = (): void => {
-    pendingGeometryReportRaf = null
-    const currentPtyId = transport.getPtyId()
-    if (!currentPtyId) {
-      return
-    }
-    if (!getFitOverrideForPty(currentPtyId)) {
-      return
-    }
-    let proposed: { cols: number; rows: number } | undefined
-    try {
-      proposed = pane.fitAddon.proposeDimensions()
-    } catch {
-      proposed = undefined
-    }
-    if (!proposed || proposed.cols <= 0 || proposed.rows <= 0) {
-      return
-    }
-    if (!isRemoteRuntimePtyId(currentPtyId)) {
-      window.api.pty.reportGeometry(currentPtyId, proposed.cols, proposed.rows)
-    }
-  }
-  const geometryReportObserver =
-    typeof ResizeObserver === 'undefined'
-      ? null
-      : new ResizeObserver(() => {
-          if (pendingGeometryReportRaf !== null) {
-            return
-          }
-          pendingGeometryReportRaf = requestAnimationFrame(reportPaneGeometry)
-        })
-  // Why: pane.xtermContainer is created later in pane-lifecycle's
-  // attachWebgl/initial-fit path; pane.container is always present at the
-  // moment connectPanePty runs (it's the .pane element). Both report the
-  // same layout signal — when the outer pane resizes, the inner xterm
-  // container resizes too — so this is the safe element to observe.
-  if (geometryReportObserver && pane.container instanceof Element) {
-    geometryReportObserver.observe(pane.container)
-  }
   let rendererOutputPausedPtyId: string | null = null
   let syncRendererOutputVisibility = (): void => {}
   let clearHiddenStartupRendererQueryTimer = (): void => {}
@@ -1934,7 +1844,7 @@ export function connectPanePty(
       writeReplayData(POST_REPLAY_LIVE_SNAPSHOT_RESET)
       recordTerminalOutput(pane.terminal)
       const currentPtyId = transport.getPtyId()
-      if (currentPtyId && !getFitOverrideForPty(currentPtyId)) {
+      if (currentPtyId) {
         safeFit(pane)
         transport.resize(pane.terminal.cols, pane.terminal.rows)
         if (!isRemoteRuntimePtyId(currentPtyId)) {
@@ -2162,7 +2072,7 @@ export function connectPanePty(
         startFreshSpawn()
         return
       }
-      setPanePtyFitBinding(ptyId)
+      setPanePtyIdAttr(ptyId)
       deps.syncPanePtyLayoutBinding(pane.id, ptyId)
       deps.updateTabPtyId(deps.tabId, ptyId)
       agentCompletionCoordinator.startProcessTracking()
@@ -2231,12 +2141,7 @@ export function connectPanePty(
           window.api.pty.ackColdRestore(ptyId)
         }
       }
-      // Why: when a mobile-fit override is active, skip sending desktop dims
-      // to the PTY — the PTY is already at phone dimensions and must stay there.
-      const reattachPtyId = transport.getPtyId()
-      if (!reattachPtyId || !getFitOverrideForPty(reattachPtyId)) {
-        transport.resize(cols, rows)
-      }
+      transport.resize(cols, rows)
       // Why: POSIX only delivers SIGWINCH when terminal dimensions actually
       // change. Sending it explicitly guarantees restored TUIs repaint at
       // the correct cursor position after snapshot replay.
@@ -2745,7 +2650,7 @@ export function connectPanePty(
         window.api.pty.pauseOutput(rendererOutputPausedPtyId, false)
         rendererOutputPausedPtyId = null
       }
-      clearPanePtyFitBinding()
+      clearPanePtyIdAttr()
       discardTerminalOutput(pane.terminal)
       if (agentTaskCompleteSettingsUnsubscribe !== null) {
         agentTaskCompleteSettingsUnsubscribe()
@@ -2762,11 +2667,6 @@ export function connectPanePty(
       onDataDisposable.dispose()
       onResizeDisposable.dispose()
       pane.container.removeEventListener(PANE_PTY_RESIZE_HOLD_FLUSH_EVENT, onHeldPtyResizeFlush)
-      geometryReportObserver?.disconnect()
-      if (pendingGeometryReportRaf !== null) {
-        cancelAnimationFrame(pendingGeometryReportRaf)
-        pendingGeometryReportRaf = null
-      }
       commandLifecycle.dispose()
       agentCompletionCoordinator.dispose()
     }

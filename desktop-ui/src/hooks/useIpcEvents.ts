@@ -28,10 +28,6 @@ import type {
 } from '../../../shared/remote-workspace-types'
 import type { RateLimitState } from '../../../shared/rate-limit-types'
 import type { SshConnectionState } from '../../../shared/ssh-types'
-import type {
-  RuntimeBrowserDriverState,
-  RuntimeTerminalDriverState
-} from '../../../shared/runtime-types'
 import { importRemoteWorkspaceSession } from '../../../shared/remote-workspace-session-projection'
 import { zoomLevelToPercent, ZOOM_MIN, ZOOM_MAX } from '@/components/settings/SettingsConstants'
 import { dispatchZoomLevelChanged } from '@/lib/zoom-events'
@@ -57,18 +53,11 @@ import { TOGGLE_FLOATING_TERMINAL_EVENT } from '@/lib/floating-terminal'
 import { focusTerminalTabSurface } from '@/lib/focus-terminal-tab-surface'
 import { activateTabAndFocusPane } from '@/lib/activate-tab-and-focus-pane'
 import { focusRuntimeTerminalSurface } from '@/runtime/sync-runtime-graph'
-import { setFitOverride, hydrateOverrides } from '@/lib/pane-manager/mobile-fit-overrides'
-import { setDriverForPty, hydrateDrivers } from '@/lib/pane-manager/mobile-driver-state'
-import {
-  hydrateBrowserDrivers,
-  setDriverForBrowserPage
-} from '@/lib/pane-manager/browser-mobile-driver-state'
 import { destroyPersistentWebview } from '@/components/browser-pane/webview-registry'
 import {
   acquireBrowserAutomationVisibility,
   releaseBrowserAutomationVisibility
 } from '@/components/browser-pane/browser-automation-visibility'
-import { attachMobileMarkdownBridge } from '@/runtime/mobile-markdown-bridge'
 import { detectLanguage } from '@/lib/language-detect'
 import { parsePaneKey } from '../../../shared/stable-pane-id'
 import { collectLeafIdsInOrder } from '@/components/terminal-pane/layout-serialization'
@@ -167,9 +156,6 @@ const ZOOM_STEP = 0.5
 const PENDING_AGENT_STATUS_RETRY_MS = 100
 const PENDING_AGENT_STATUS_TTL_MS = 15_000
 const MAX_PENDING_AGENT_STATUS_EVENTS = 100
-// Why: mobile driver hydration is async; cap transient replay so a stuck IPC
-// snapshot cannot retain an unbounded startup buffer.
-const MAX_PENDING_MOBILE_STATE_EVENTS = 300
 let remoteWorkspaceSnapshotApplyDepth = 0
 let remoteWorkspaceSnapshotWriteSuppressUntil = 0
 const REMOTE_WORKSPACE_SNAPSHOT_WRITE_SUPPRESS_MS = 1000
@@ -601,8 +587,6 @@ export function useIpcEvents(): void {
     type AgentStatusApplyResult = 'applied' | 'pending' | 'dropped'
     const pendingAgentStatusEvents: PendingAgentStatusEvent[] = []
     let pendingAgentStatusRetryTimer: ReturnType<typeof setTimeout> | null = null
-
-    unsubs.push(attachMobileMarkdownBridge())
 
     unsubs.push(
       window.api.repos.onChanged(() => {
@@ -2381,134 +2365,11 @@ export function useIpcEvents(): void {
       })
     )
 
-    let mobileStateHydrated = isRuntimeEnvironmentActive()
-    type PendingMobileStateEvent =
-      | {
-          kind: 'fit'
-          event: {
-            ptyId: string
-            mode: 'mobile-fit' | 'desktop-fit'
-            cols: number
-            rows: number
-          }
-        }
-      | {
-          kind: 'driver'
-          event: {
-            ptyId: string
-            driver: RuntimeTerminalDriverState
-          }
-        }
-      | {
-          kind: 'browser-driver'
-          event: {
-            browserPageId: string
-            driver: RuntimeBrowserDriverState
-          }
-        }
-    const pendingMobileStateEvents: PendingMobileStateEvent[] = []
-    let mobileStateHydrationDisposed = false
-
-    const applyPendingMobileStateEvents = (): void => {
-      for (const pending of pendingMobileStateEvents) {
-        if (pending.kind === 'fit') {
-          const { ptyId, mode, cols, rows } = pending.event
-          setFitOverride(ptyId, mode, cols, rows)
-        } else if (pending.kind === 'driver') {
-          setDriverForPty(pending.event.ptyId, pending.event.driver)
-        } else {
-          setDriverForBrowserPage(pending.event.browserPageId, pending.event.driver)
-        }
-      }
-      pendingMobileStateEvents.length = 0
-    }
-
-    const enqueuePendingMobileStateEvent = (event: PendingMobileStateEvent): void => {
-      pendingMobileStateEvents.push(event)
-      while (pendingMobileStateEvents.length > MAX_PENDING_MOBILE_STATE_EVENTS) {
-        pendingMobileStateEvents.shift()
-      }
-    }
-
-    unsubs.push(
-      window.api.runtime.onTerminalFitOverrideChanged((event) => {
-        if (isRuntimeEnvironmentActive()) {
-          return
-        }
-        if (!mobileStateHydrated) {
-          enqueuePendingMobileStateEvent({ kind: 'fit', event })
-          return
-        }
-        setFitOverride(event.ptyId, event.mode, event.cols, event.rows)
-      })
-    )
-
-    unsubs.push(
-      // Why: presence-lock driver state mirror. Updates the renderer's
-      // mobile-driver-state map so TerminalPane / pty-connection guards
-      // know which PTYs are currently driven by mobile. See
-      // docs/mobile-presence-lock.md.
-      window.api.runtime.onTerminalDriverChanged((event) => {
-        if (isRuntimeEnvironmentActive()) {
-          return
-        }
-        if (!mobileStateHydrated) {
-          enqueuePendingMobileStateEvent({ kind: 'driver', event })
-          return
-        }
-        setDriverForPty(event.ptyId, event.driver)
-      })
-    )
-
-    unsubs.push(
-      window.api.runtime.onBrowserDriverChanged((event) => {
-        if (isRuntimeEnvironmentActive()) {
-          return
-        }
-        if (!mobileStateHydrated) {
-          enqueuePendingMobileStateEvent({ kind: 'browser-driver', event })
-          return
-        }
-        setDriverForBrowserPage(event.browserPageId, event.driver)
-      })
-    )
-
-    // Why: hydrate mobile-owned terminal state on renderer reload. Subscribe
-    // first and buffer live events during the snapshot round trip; otherwise an
-    // older snapshot could overwrite a newer live lock and hide the overlay.
-    if (!isRuntimeEnvironmentActive()) {
-      void Promise.all([
-        window.api.runtime.getTerminalFitOverrides(),
-        window.api.runtime.getTerminalDrivers(),
-        window.api.runtime.getBrowserDrivers()
-      ])
-        .then(([overrides, drivers, browserDrivers]) => {
-          if (mobileStateHydrationDisposed) {
-            return
-          }
-          hydrateOverrides(overrides)
-          hydrateDrivers(drivers)
-          hydrateBrowserDrivers(browserDrivers)
-          mobileStateHydrated = true
-          applyPendingMobileStateEvents()
-        })
-        .catch((error: unknown) => {
-          if (mobileStateHydrationDisposed) {
-            return
-          }
-          console.error('Failed to hydrate mobile terminal state:', error)
-          mobileStateHydrated = true
-          applyPendingMobileStateEvents()
-        })
-    }
-
     return () => {
       if (pendingAgentStatusRetryTimer !== null) {
         globalThis.clearTimeout(pendingAgentStatusRetryTimer)
       }
       pendingAgentStatusEvents.length = 0
-      mobileStateHydrationDisposed = true
-      pendingMobileStateEvents.length = 0
       unsubs.forEach((fn) => fn())
       resetAgentHookCompletionNotificationCoordinators()
     }

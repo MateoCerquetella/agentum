@@ -48,7 +48,6 @@ describe('feature interactions', () => {
       'codex-account-switching',
       'cookie-import',
       'floating-workspace',
-      'mobile-pairing',
       'notifications',
       'ports',
       'quick-commands',

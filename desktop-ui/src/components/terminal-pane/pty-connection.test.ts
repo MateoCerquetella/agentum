@@ -1645,31 +1645,6 @@ describe('connectPanePty', () => {
     expect(terminalTarget.target.removeEventListener).toHaveBeenCalledTimes(1)
   })
 
-  it('clears the mobile-fit pane binding when the pane connection is disposed', async () => {
-    const { connectPanePty } = await import('./pty-connection')
-    const { getFitOverrideForPane, setFitOverride } =
-      await import('@/lib/pane-manager/mobile-fit-overrides')
-    const transport = createMockTransport()
-    transportFactoryQueue.push(transport)
-    const pane = createPane(1)
-
-    const binding = connectPanePty(pane as never, createManager(1) as never, createDeps() as never)
-    const onPtySpawn = createdTransportOptions[0]?.onPtySpawn as
-      | ((ptyId: string) => void)
-      | undefined
-    expect(onPtySpawn).toBeTypeOf('function')
-    onPtySpawn?.('pty-fit')
-    setFitOverride('pty-fit', 'mobile-fit', 49, 20)
-
-    expect(getFitOverrideForPane(1, 'tab-1')).toEqual({ mode: 'mobile-fit', cols: 49, rows: 20 })
-    expect(pane.container.dataset.ptyId).toBe('pty-fit')
-
-    binding.dispose()
-
-    expect(getFitOverrideForPane(1, 'tab-1')).toBeNull()
-    expect(pane.container.dataset.ptyId).toBeUndefined()
-  })
-
   it('does not reuse a sibling split pane pending spawn after remount', async () => {
     const { connectPanePty } = await import('./pty-connection')
 
@@ -1943,60 +1918,6 @@ describe('connectPanePty', () => {
 
     expect(transport.sendInput).not.toHaveBeenCalled()
     expect(window.api.agentStatus.inferInterrupt).not.toHaveBeenCalled()
-  })
-
-  it('does not infer interrupts when mobile presence lock blocks terminal input', async () => {
-    const { connectPanePty } = await import('./pty-connection')
-    const { setDriverForPty } = await import('@/lib/pane-manager/mobile-driver-state')
-
-    vi.useFakeTimers()
-    vi.setSystemTime(1_100)
-    const ptyId = 'pty-mobile-locked'
-    setDriverForPty(ptyId, { kind: 'mobile', clientId: 'phone-1' })
-    try {
-      const transport = createMockTransport(ptyId)
-      transportFactoryQueue.push(transport)
-      const paneKey = makePaneKey('tab-1', LEAF_1)
-      mockStoreState = {
-        ...mockStoreState,
-        tabsByWorktree: { 'wt-1': [{ id: 'tab-1', ptyId }] },
-        ptyIdsByTabId: { 'tab-1': [ptyId] },
-        agentStatusByPaneKey: {
-          [paneKey]: {
-            paneKey,
-            state: 'working',
-            prompt: 'locked input',
-            updatedAt: 1_000,
-            stateStartedAt: 900,
-            agentType: 'codex',
-            stateHistory: []
-          }
-        }
-      }
-
-      const pane = createPane(1)
-      const terminalTarget = createKeyboardEventTarget()
-      ;(pane.terminal as { element?: unknown }).element = terminalTarget.target
-      let onDataHandler: ((data: string) => void) | null = null
-      pane.terminal.onData = vi.fn(((handler: (data: string) => void) => {
-        onDataHandler = handler
-        return { dispose: vi.fn() }
-      }) as typeof pane.terminal.onData)
-
-      connectPanePty(pane as never, createManager(1) as never, createDeps() as never)
-
-      if (!onDataHandler) {
-        throw new Error('expected onData handler to be registered')
-      }
-      terminalTarget.dispatch(keyEvent({ key: 'c', ctrlKey: true }))
-      ;(onDataHandler as unknown as (data: string) => void)('\x03')
-      vi.advanceTimersByTime(500)
-
-      expect(transport.sendInput).not.toHaveBeenCalled()
-      expect(window.api.agentStatus.inferInterrupt).not.toHaveBeenCalled()
-    } finally {
-      setDriverForPty(ptyId, { kind: 'idle' })
-    }
   })
 
   it('does not infer interrupts when the transport rejects terminal input', async () => {

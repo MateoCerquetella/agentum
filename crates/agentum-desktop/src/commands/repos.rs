@@ -337,8 +337,13 @@ async fn pick_folder(app: tauri::AppHandle) -> Option<String> {
     rx.await.ok().flatten().map(|path| path.to_string())
 }
 
-// Adding a git remote isn't ported in this layer yet; accept and no-op.
+// Remote (SSH) project add needs a live SSH connection, which isn't ported. The
+// renderer's add-project dialogs expect a `{ repo } | { error }` union and do
+// `if ('error' in result)`, so return the error variant — returning unit/null made
+// `'error' in null` throw and crashed the surface ("This part of Agentum hit an error").
 #[tauri::command]
-pub fn repos_add_remote() -> Result<(), String> {
-    Ok(())
+pub fn repos_add_remote() -> serde_json::Value {
+    serde_json::json!({
+        "error": "Remote projects require an SSH connection, which isn't available in this build yet."
+    })
 }

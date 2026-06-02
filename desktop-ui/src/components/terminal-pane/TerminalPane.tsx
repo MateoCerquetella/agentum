@@ -33,7 +33,6 @@ import type { MacOptionAsAlt } from './terminal-shortcut-policy'
 import { useEffectiveMacOptionAsAlt } from '@/lib/keyboard-layout/use-effective-mac-option-as-alt'
 import { useTerminalFontZoom } from './useTerminalFontZoom'
 import CloseTerminalDialog from './CloseTerminalDialog'
-import { MobileDriverOverlay } from './MobileDriverOverlay'
 import { TerminalErrorToast } from './TerminalErrorToast'
 import { TerminalSessionStateSaveFailureDialog } from './TerminalSessionStateSaveFailureDialog'
 import TerminalContextMenu from './TerminalContextMenu'
@@ -46,17 +45,10 @@ import type { PreparedAgentSessionFork } from './terminal-agent-session-fork'
 import { useNotificationDispatch } from './use-notification-dispatch'
 import { connectPanePty } from './pty-connection'
 import { shouldPreserveTerminalScrollbackBuffers } from '../../../../shared/workspace-session-terminal-buffers'
-import { getFitOverrideForPty, onOverrideChange } from '@/lib/pane-manager/mobile-fit-overrides'
-import { getDriverForPty, onDriverChange } from '@/lib/pane-manager/mobile-driver-state'
 import { resolvePaneKeyForManager } from '@/lib/pane-manager/pane-key-resolution'
 import { safeFit } from '@/lib/pane-manager/pane-tree-ops'
 import { captureTerminalShutdownLayout } from './terminal-shutdown-layout-capture'
 import { inspectRuntimeTerminalProcess } from '@/runtime/runtime-terminal-inspection'
-import { callRuntimeRpc } from '@/runtime/runtime-rpc-client'
-import {
-  getRemoteRuntimePtyEnvironmentId,
-  getRemoteRuntimeTerminalHandle
-} from '@/runtime/runtime-terminal-stream'
 import { closeWebRuntimeTerminal } from '@/runtime/web-runtime-session'
 import { isPrimarySelectionEnabled, readPrimarySelectionText } from '@/lib/primary-selection'
 import { WORKSPACE_FILE_PATH_MIME } from '@/lib/workspace-file-drag'
@@ -214,122 +206,6 @@ export default function TerminalPane({
   const [terminalError, setTerminalError] = useState<string | null>(null)
   const [sessionStateSaveFailureOpen, setSessionStateSaveFailureOpen] = useState(false)
   const daemonActions = useDaemonActions()
-  // Why: override state lives in a plain Map for perf (safeFit reads it on
-  // every resize). This counter forces a re-render when overrides change so
-  // the mobile-fit banner appears/disappears. When an override is cleared
-  // (desktop-fit), we also trigger safeFit on affected panes so the terminal
-  // resizes back to desktop dimensions.
-  const [, setOverrideTick] = useState(0)
-  useEffect(() => {
-    const pendingFitFrames = new Set<number>()
-    const pendingFallbackTimers = new Set<number>()
-
-    const scheduleFitFrame = (callback: () => void): void => {
-      const frameId = window.requestAnimationFrame(() => {
-        pendingFitFrames.delete(frameId)
-        callback()
-      })
-      pendingFitFrames.add(frameId)
-    }
-
-    const scheduleFallbackTimer = (callback: () => void): void => {
-      const timerId = window.setTimeout(() => {
-        pendingFallbackTimers.delete(timerId)
-        callback()
-      }, 100)
-      pendingFallbackTimers.add(timerId)
-    }
-
-    const unsubscribe = onOverrideChange((event) => {
-      setOverrideTick((n) => n + 1)
-      if (event.mode === 'desktop-fit') {
-        const manager = managerRef.current
-        if (!manager) {
-          return
-        }
-        // Why: pane IDs are per-tab, so resolve the affected PTY through this
-        // tab's live transport bindings instead of global numeric pane IDs.
-        const getAffectedPanes = (): ReturnType<typeof manager.getPanes> =>
-          manager
-            .getPanes()
-            .filter((pane) => paneTransportsRef.current.get(pane.id)?.getPtyId() === event.ptyId)
-        // Why: fitAddon.fit() measures DOM dimensions, so it must run after
-        // the browser has settled layout. Running synchronously inside the
-        // IPC callback can produce stale measurements. rAF ensures the DOM
-        // is ready. The follow-up timeout acts as a safety net: if
-        // fitAddon.fit() silently threw (its errors are caught), the timeout
-        // falls back to a direct terminal.resize() using the restored
-        // dimensions from the runtime. This guarantees xterm exits mobile
-        // dims even when the DOM-based fit path fails.
-        const fitAffectedPanes = (): void => {
-          for (const pane of getAffectedPanes()) {
-            safeFit(pane)
-          }
-        }
-        scheduleFitFrame(fitAffectedPanes)
-        // Why: belt-and-suspenders — if safeFit's fitAddon.fit() threw or
-        // was a no-op due to stale dimensions, fall back to a direct
-        // resize. ONLY fire if xterm is still parked at the prior
-        // mobile-fit dims, meaning safeFit failed to move it. Previously
-        // we also fired when xterm had moved to *any* size other than
-        // the captured baseline, which clobbered safeFit's correct
-        // DOM-measured fit when the desktop pane geometry had changed
-        // since mobile-fit started (e.g. user closed a split or resized
-        // the window while the phone was active). In that scenario the
-        // event.cols/rows is the stale baseline from the moment
-        // mobile-fit started, not the current pane geometry — applying
-        // it would shrink the terminal back to e.g. half-width.
-        scheduleFallbackTimer(() => {
-          for (const pane of getAffectedPanes()) {
-            // Why: skip the fallback for hidden/unmounted panes whose
-            // container is 0×0. Force-resizing xterm to the server's
-            // desktop dims while the DOM has no geometry leaves xterm
-            // with cols/rows that won't match when the tab is later
-            // activated (the activation refit will correct it). The
-            // fallback is for the *visible* pane that legitimately
-            // failed to refit via the rAF safeFit.
-            const rect = pane.container.getBoundingClientRect()
-            if (rect.width === 0 || rect.height === 0) {
-              continue
-            }
-            safeFit(pane)
-            const stuckAtMobile =
-              event.priorCols != null &&
-              event.priorRows != null &&
-              pane.terminal.cols === event.priorCols &&
-              pane.terminal.rows === event.priorRows
-            if (stuckAtMobile && event.cols > 0 && event.rows > 0) {
-              pane.terminal.resize(event.cols, event.rows)
-            }
-          }
-        })
-      }
-    })
-
-    return () => {
-      unsubscribe()
-      for (const frameId of pendingFitFrames) {
-        window.cancelAnimationFrame(frameId)
-      }
-      pendingFitFrames.clear()
-      for (const timerId of pendingFallbackTimers) {
-        window.clearTimeout(timerId)
-      }
-      pendingFallbackTimers.clear()
-    }
-  }, [])
-
-  // Why: presence-lock banner re-render. Driver state lives in a plain Map
-  // for perf; this counter forces a re-render when the driver flips so the
-  // lock banner appears/disappears. See docs/mobile-presence-lock.md.
-  const [, setDriverTick] = useState(0)
-  useEffect(
-    () =>
-      onDriverChange(() => {
-        setDriverTick((n) => n + 1)
-      }),
-    []
-  )
 
   // Pane title state — keyed by ephemeral paneId, persisted via titlesByLeafId
   // in the layout snapshot. Ref keeps persistLayoutSnapshot closures fresh.
@@ -1895,69 +1771,6 @@ export default function TerminalPane({
           </div>,
           pane.container,
           `pane-title-${pane.id}`
-        )
-      })}
-      {(managerRef.current?.getPanes() ?? []).map((pane) => {
-        // Why: pane IDs can collide across tabs (e.g. tab 0 pane 1 and tab 1
-        // pane 1). Using the transport's actual ptyId avoids showing banners
-        // on the wrong pane when IDs overlap.
-        const ptyId = paneTransportsRef.current.get(pane.id)?.getPtyId()
-        if (!ptyId) {
-          return null
-        }
-        // Why: two-state lock UI. (1) Driver is mobile → presence-lock,
-        // input paused (docs/mobile-presence-lock.md). (2) No mobile driver
-        // but a phone-fit override is still in place → indefinite hold
-        // (docs/mobile-fit-hold.md). MobileDriverOverlay owns the visual
-        // treatment and collapse-to-chip state; both branches share a
-        // single IPC route through restoreTerminalFit.
-        const driver = getDriverForPty(ptyId)
-        const isMobileDriving = driver.kind === 'mobile'
-        const hasFitOverride = getFitOverrideForPty(ptyId) !== null
-        if (!isMobileDriving && !hasFitOverride) {
-          return null
-        }
-        return createPortal(
-          <MobileDriverOverlay
-            key={`mobile-driver-${pane.id}-${ptyId}`}
-            driver={driver}
-            hasFitOverride={hasFitOverride}
-            rootClassName="mobile-driver-banner"
-            onAction={async () => {
-              // Why: same restore intent has two transports. Remote-runtime PTYs
-              // must call the environment RPC; local PTYs use the Electron IPC
-              // handler. Both resolve active-mobile and held-no-subscriber states.
-              const transport = paneTransportsRef.current.get(pane.id)
-              const id = transport?.getPtyId()
-              if (!id) {
-                return
-              }
-              const remoteHandle = getRemoteRuntimeTerminalHandle(id)
-              const environmentId =
-                getRemoteRuntimePtyEnvironmentId(id) ??
-                settingsRef.current?.activeRuntimeEnvironmentId ??
-                null
-              const result =
-                remoteHandle && environmentId
-                  ? await callRuntimeRpc<{ restored: boolean }>(
-                      { kind: 'environment', environmentId },
-                      'terminal.restoreFit',
-                      { terminal: remoteHandle },
-                      { timeoutMs: 15_000 }
-                    ).catch(() => ({ restored: false }))
-                  : await window.api.runtime
-                      .restoreTerminalFit(id)
-                      .catch(() => ({ restored: false }))
-              if (result.restored) {
-                // Why: after the overlay unmounts, focus would otherwise stay on
-                // the removed button/body instead of the terminal the user just
-                // reclaimed.
-                pane.terminal.focus()
-              }
-            }}
-          />,
-          pane.container,
-          `mobile-driver-banner-${pane.id}`
         )
       })}
       <CloseTerminalDialog

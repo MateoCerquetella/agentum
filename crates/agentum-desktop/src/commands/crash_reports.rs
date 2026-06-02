@@ -20,14 +20,19 @@ pub fn crash_reports_dismiss(report_id: String) -> Option<Value> {
 }
 
 #[tauri::command]
-pub fn crash_reports_record_breadcrumb() {
-    // Breadcrumb persistence isn't ported; accept and drop.
+pub fn crash_reports_record_breadcrumb(request: tauri::ipc::Request<'_>) {
+    // TEMP DIAGNOSTIC: surface renderer breadcrumbs (errors/rejections) to stderr.
+    if let tauri::ipc::InvokeBody::Json(value) = request.body() {
+        eprintln!("[breadcrumb] {value}");
+    }
 }
 
 #[tauri::command]
-pub fn crash_reports_record_renderer_error() -> Value {
-    // React error-boundary reports aren't persisted yet; acknowledge so the renderer's
-    // reporting promise resolves (it checks `result.ok`) instead of rejecting.
+pub fn crash_reports_record_renderer_error(request: tauri::ipc::Request<'_>) -> Value {
+    // TEMP DIAGNOSTIC: log the React error-boundary report (boundaryId + error).
+    if let tauri::ipc::InvokeBody::Json(value) = request.body() {
+        eprintln!("[renderer-error] {value}");
+    }
     serde_json::json!({ "ok": true })
 }
 

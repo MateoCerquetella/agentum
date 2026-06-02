@@ -24,7 +24,6 @@ import {
   Server,
   ShieldCheck,
   SlidersHorizontal,
-  Smartphone,
   SquareTerminal,
   TextCursorInput,
   UserCog
@@ -54,7 +53,6 @@ import {
   WEB_RUNTIME_ENVIRONMENTS_SEARCH_ENTRY
 } from '@/components/settings/runtime-environments-search'
 import { SSH_PANE_SEARCH_ENTRIES } from '@/components/settings/ssh-search'
-import { MOBILE_SETTINGS_PANE_SEARCH_ENTRIES } from '@/components/settings/mobile-settings-search'
 import { COMPUTER_USE_PANE_SEARCH_ENTRIES } from '@/components/settings/computer-use-search'
 import { VOICE_PANE_SEARCH_ENTRIES } from '@/components/settings/voice-pane-search'
 import { DEVELOPER_PERMISSIONS_PANE_SEARCH_ENTRIES } from '@/components/settings/developer-permissions-search'
@@ -275,14 +273,6 @@ export function buildSettingsNavigationMetadata({
             description: 'Remote SSH hosts for files, terminals, and git.',
             icon: Cable,
             searchEntries: SSH_PANE_SEARCH_ENTRIES,
-            group: 'remote'
-          },
-          {
-            id: 'mobile',
-            title: 'Mobile',
-            description: 'Control terminals and agents from your phone.',
-            icon: Smartphone,
-            searchEntries: MOBILE_SETTINGS_PANE_SEARCH_ENTRIES,
             group: 'remote'
           }
         ]

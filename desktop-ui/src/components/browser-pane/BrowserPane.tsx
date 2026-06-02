@@ -108,7 +108,6 @@ import { getBrowserPagesForWorkspace } from './browser-pane-page-selection'
 import BrowserAddressBar from './BrowserAddressBar'
 import { BrowserToolbarMenu } from './BrowserToolbarMenu'
 import BrowserFind from './BrowserFind'
-import { BrowserMobileDriverOverlay } from './BrowserMobileDriverOverlay'
 import { getShortcutPlatform, useShortcutLabel } from '@/hooks/useShortcutLabel'
 import { getRemoteBrowserFrameStyle } from './remote-browser-frame-style'
 import {
@@ -151,11 +150,6 @@ import {
   formatPermissionNotice,
   formatPopupNotice
 } from './browser-notices'
-import {
-  getDriverForBrowserPage,
-  onBrowserDriverChange,
-  type BrowserDriverState
-} from '@/lib/pane-manager/browser-mobile-driver-state'
 import { shouldPollChromiumErrorPage } from './chromium-error-page-polling'
 
 type BrowserTabPageState = Partial<
@@ -758,10 +752,6 @@ export default function BrowserPane({
     }
     return pages
   }, [activeBrowserPage, automationVisiblePageIds, browserPages])
-  const [activeBrowserDriver, setActiveBrowserDriver] = useState<BrowserDriverState>({
-    kind: 'idle'
-  })
-
   useEffect(() => {
     if (!runtimeEnvironmentActive) {
       return
@@ -770,26 +760,6 @@ export default function BrowserPane({
       destroyPersistentWebview(page.id)
     }
   }, [browserPages, runtimeEnvironmentActive])
-
-  useEffect(() => {
-    if (runtimeEnvironmentActive || !activeBrowserPageId) {
-      setActiveBrowserDriver({ kind: 'idle' })
-      return
-    }
-    setActiveBrowserDriver(getDriverForBrowserPage(activeBrowserPageId))
-    return onBrowserDriverChange((event) => {
-      if (event.browserPageId === activeBrowserPageId) {
-        setActiveBrowserDriver(event.driver)
-      }
-    })
-  }, [activeBrowserPageId, runtimeEnvironmentActive])
-
-  const reclaimActiveBrowserForDesktop = useCallback(async (): Promise<void> => {
-    if (!activeBrowserPageId) {
-      return
-    }
-    await window.api.runtime.reclaimBrowserForDesktop(activeBrowserPageId)
-  }, [activeBrowserPageId])
 
   if (runtimeEnvironmentActive) {
     return activeBrowserPage ? (
@@ -819,15 +789,10 @@ export default function BrowserPane({
               sessionProfileId={browserTab.sessionProfileId ?? null}
               isActive={isActive && page.id === activeBrowserPage?.id}
               isAutomationVisible={automationVisiblePageIds.has(page.id)}
-              inputLocked={activeBrowserDriver.kind === 'mobile'}
               onUpdatePageState={updateBrowserPageState}
               onSetUrl={setBrowserPageUrl}
             />
           ))}
-          <BrowserMobileDriverOverlay
-            driver={activeBrowserDriver}
-            onTakeBack={reclaimActiveBrowserForDesktop}
-          />
         </div>
       ) : null}
     </div>
@@ -2500,7 +2465,6 @@ function BrowserPagePane({
   sessionProfileId,
   isActive,
   isAutomationVisible,
-  inputLocked,
   onUpdatePageState,
   onSetUrl
 }: {
@@ -2510,7 +2474,6 @@ function BrowserPagePane({
   sessionProfileId: string | null
   isActive: boolean
   isAutomationVisible: boolean
-  inputLocked: boolean
   onUpdatePageState: (tabId: string, updates: BrowserTabPageState) => void
   onSetUrl: (tabId: string, url: string) => void
 }): React.JSX.Element {
@@ -2532,8 +2495,6 @@ function BrowserPagePane({
   const webviewRef = useRef<Electron.WebviewTag | null>(null)
   const browserTabIdRef = useRef(browserTab.id)
   browserTabIdRef.current = browserTab.id
-  const inputLockedRef = useRef(inputLocked)
-  inputLockedRef.current = inputLocked
   const keybindings = useAppStore((state) => state.keybindings)
   const grabElementShortcut = useShortcutLabel('browser.grabElement')
   const faviconUrlRef = useRef<string | null>(browserTab.faviconUrl)
@@ -3283,7 +3244,7 @@ function BrowserPagePane({
     if (webview) {
       container.appendChild(webview)
       parkedAtByTabId.delete(browserTab.id)
-      webview.style.pointerEvents = inputLockedRef.current ? 'none' : 'auto'
+      webview.style.pointerEvents = 'auto'
       syncNavigationState(webview)
       // Why: seed the ref with the store URL so the URL sync effect does not
       // force-navigate a reclaimed webview that is already on the right page.
@@ -3300,7 +3261,7 @@ function BrowserPagePane({
       webview.style.width = '100%'
       webview.style.height = '100%'
       webview.style.border = 'none'
-      webview.style.pointerEvents = inputLockedRef.current ? 'none' : 'auto'
+      webview.style.pointerEvents = 'auto'
       // Why: default to white so sites that don't set an html/body background
       // (e.g. httpbin.org/html) don't show through to Agentum's dark chrome. Real
       // browsers paint the viewport white by default; sites that specify their
@@ -4213,16 +4174,6 @@ function BrowserPagePane({
     }
     return received
   })()
-
-  useEffect(() => {
-    const webview = webviewRef.current
-    if (!webview) {
-      return
-    }
-    // Why: desktop reclaim uses a React overlay, but Electron webviews can
-    // keep receiving native input unless their own hit testing is disabled.
-    webview.style.pointerEvents = inputLocked ? 'none' : 'auto'
-  }, [inputLocked])
 
   useEffect(() => {
     const webview = webviewRef.current

@@ -181,9 +181,6 @@ pub fn ui_reply_tab_close() {}
 pub fn ui_reply_terminal_create() {}
 
 #[tauri::command]
-pub fn ui_respond_mobile_markdown_request() {}
-
-#[tauri::command]
 pub fn ui_sync_traffic_lights() {}
 
 #[tauri::command]

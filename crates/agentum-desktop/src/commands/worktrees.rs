@@ -279,16 +279,74 @@ pub async fn worktrees_force_delete_preserved_branch(
     }
 }
 
-// Detected (on-disk but not Agentum-tracked) worktree scanning isn't ported; report
-// none via the metadata fallback. resolvePrBase needs the GitHub API; lineage
-// updates need the not-yet-ported lineage store.
+// On-disk worktree detection via `git worktree list --porcelain`. Returns
+// DetectedWorktree objects (full Worktree shape + ownership/selectedCheckout/visible)
+// so a freshly-added repo surfaces its primary worktree instead of "No workspaces
+// found". The first entry is the primary checkout.
+fn scan_git_worktrees(repo_id: &str) -> Result<Vec<Value>, String> {
+    let repo_path = repo_path_for(repo_id)?;
+    let output = std::process::Command::new("git")
+        .args(["-C", &repo_path, "worktree", "list", "--porcelain"])
+        .output()
+        .map_err(map_err)?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    // Collect (path, branch) from each porcelain block.
+    let mut entries: Vec<(String, Option<String>)> = Vec::new();
+    for line in text.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            entries.push((path.to_string(), None));
+        } else if let Some(branch) = line.strip_prefix("branch refs/heads/") {
+            if let Some(last) = entries.last_mut() {
+                last.1 = Some(branch.to_string());
+            }
+        }
+    }
+    Ok(entries
+        .into_iter()
+        .enumerate()
+        .map(|(idx, (path, branch))| {
+            let name = branch.clone().unwrap_or_else(|| {
+                std::path::Path::new(&path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.clone())
+            });
+            let is_primary = idx == 0;
+            serde_json::json!({
+                "id": format!("{repo_id}::{path}"),
+                "repoId": repo_id,
+                "displayName": name,
+                "comment": "",
+                "linkedIssue": null,
+                "linkedPr": null,
+                "linkedLinearIssue": null,
+                "isArchived": false,
+                "isUnread": false,
+                "isPinned": is_primary,
+                "sortOrder": idx as i64,
+                "lastActivityAt": 0,
+                "path": path,
+                "branch": branch,
+                "ownership": "self",
+                "selectedCheckout": is_primary,
+                "visible": true
+            })
+        })
+        .collect())
+}
+
 #[tauri::command]
 pub fn worktrees_list_detected(repo_id: String) -> Value {
+    let worktrees = scan_git_worktrees(&repo_id).unwrap_or_default();
+    let authoritative = !worktrees.is_empty();
     serde_json::json!({
         "repoId": repo_id,
-        "authoritative": false,
-        "source": "metadata-fallback",
-        "worktrees": []
+        "authoritative": authoritative,
+        "source": if authoritative { "git" } else { "metadata-fallback" },
+        "worktrees": worktrees
     })
 }
 

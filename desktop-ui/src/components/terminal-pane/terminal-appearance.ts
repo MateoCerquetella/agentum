@@ -12,7 +12,6 @@ import {
 import { buildFontFamily } from './layout-serialization'
 import { captureScrollState, restoreScrollState, safeFit } from '@/lib/pane-manager/pane-tree-ops'
 import { resolveTerminalCursorInactiveStyle } from '@/lib/pane-manager/pane-terminal-options'
-import { getFitOverrideForPty } from '@/lib/pane-manager/mobile-fit-overrides'
 import type { PtyTransport } from './pty-transport'
 import type { EffectiveMacOptionAsAlt } from '@/lib/keyboard-layout/detect-option-as-alt'
 import { HEX_COLOR_RE } from '../../../../shared/color-validation'
@@ -245,11 +244,7 @@ export function applyTerminalAppearance(
       /* ignore */
     }
     const transport = paneTransports.get(pane.id)
-    // Why: skip PTY resize when a mobile-fit override is active — the PTY
-    // is already at the correct phone dimensions and must not be resized
-    // back to desktop dimensions by an appearance change.
-    const appearancePtyId = transport?.getPtyId()
-    if (transport?.isConnected() && (!appearancePtyId || !getFitOverrideForPty(appearancePtyId))) {
+    if (transport?.isConnected()) {
       transport.resize(pane.terminal.cols, pane.terminal.rows)
       maybePushMode2031Flip(pane.id, appearance.mode, transport, paneMode2031, paneLastThemeMode)
     }

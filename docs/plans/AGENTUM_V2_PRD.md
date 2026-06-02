@@ -11,7 +11,7 @@
 
 Agentum is a self-hosted control plane for AI coding agents (Claude Code, Codex, OpenCode, etc). It runs as a Rust binary on a host, spawns agents inside tmux panes, and exposes a Svelte PWA over WebSocket so the user can watch and interact from any device including mobile. The agents survive client disconnections, laptop lid close, and network changes because tmux holds the session on the host.
 
-**The problem this PRD solves:** today Agentum requires manually installing on every host you want to use. Setup is rustic (clone, build, configure). There is no desktop app — only a browser-accessible PWA. The main competitor (Orca by stablyai, Electron-based) ships polished installers but cannot survive SSH disconnection because it does not use tmux. We want to close the polish gap with Orca while keeping the structural advantages (tmux persistence, mobile-first PWA, single Rust binary).
+**The problem this PRD solves:** today Agentum requires manually installing on every host you want to use. Setup is rustic (clone, build, configure). There is no desktop app — only a browser-accessible PWA. Electron-based competitors ship polished installers but cannot survive SSH disconnection because they do not use tmux. We want to close the polish gap while keeping the structural advantages (tmux persistence, single Rust binary).
 
 **Three deliverables, three phases:**
 
@@ -30,7 +30,7 @@ These are explicitly out of scope for this PRD:
 - iOS / Android native apps (deferred to a future PRD; Tauri 2 supports this but it requires App Store signing infra we don't want to handle yet)
 - Cloud-hosted / managed Agentum (SaaS)
 - Replacing tmux with containers, Firecracker, or any other isolation mechanism
-- Reimplementing features that already exist in Orca (Design Mode, embedded Chromium browser, file editor with full IDE features) — Agentum stays focused on orchestration and observability, not on being an IDE
+- Reimplementing heavyweight IDE features (Design Mode, embedded Chromium browser, file editor with full IDE features) — Agentum stays focused on orchestration and observability, not on being an IDE
 - Multi-user / team features
 - Auth provider integrations (OAuth, SSO) — local auth only for now
 - A Windows-specific server build (Windows is a client-only target via Tauri; the server runs only on Linux/macOS)

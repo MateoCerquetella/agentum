@@ -1,5 +1,5 @@
 import React from 'react'
-import { Bell, CalendarClock, EyeOff, Github, Gitlab, List, Search, Smartphone } from 'lucide-react'
+import { Bell, CalendarClock, Github, Gitlab, List, Search } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { useRepoMap } from '@/store/selectors'
 import { cn } from '@/lib/utils'
@@ -14,13 +14,6 @@ import {
 } from '../../../../shared/task-providers'
 import { useActivityUnreadCount } from '@/components/activity/useActivityUnreadCount'
 import { useShortcutLabel } from '@/hooks/useShortcutLabel'
-import { useMobileSidebarOnboardingBadge } from './mobile-sidebar-onboarding-badge'
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger
-} from '@/components/ui/context-menu'
 
 export function shouldShowAgentsButton(
   settings: Pick<GlobalSettings, 'experimentalActivity'> | null | undefined
@@ -28,20 +21,12 @@ export function shouldShowAgentsButton(
   return settings?.experimentalActivity === true
 }
 
-export function shouldShowMobileButton(
-  settings: Pick<GlobalSettings, 'showMobileButton'> | null | undefined
-): boolean {
-  return settings?.showMobileButton !== false
-}
-
 const SidebarNav = React.memo(function SidebarNav() {
   const worktreePaletteShortcut = useShortcutLabel('worktree.palette')
   const openTaskPage = useAppStore((s) => s.openTaskPage)
   const openAutomationsPage = useAppStore((s) => s.openAutomationsPage)
   const openActivityPage = useAppStore((s) => s.openActivityPage)
-  const openMobilePage = useAppStore((s) => s.openMobilePage)
   const openModal = useAppStore((s) => s.openModal)
-  const updateSettings = useAppStore((s) => s.updateSettings)
   const activeView = useAppStore((s) => s.activeView)
   const repos = useAppStore((s) => s.repos)
   const repoMap = useRepoMap()
@@ -58,7 +43,6 @@ const SidebarNav = React.memo(function SidebarNav() {
   const linearStatusChecked = useAppStore((s) => s.linearStatusChecked)
   const checkLinearConnection = useAppStore((s) => s.checkLinearConnection)
   const showAgentsButton = useAppStore((s) => shouldShowAgentsButton(s.settings))
-  const showMobileButton = useAppStore((s) => shouldShowMobileButton(s.settings))
   const preferredVisibleTaskProviders = React.useMemo(
     () => normalizeVisibleTaskProviders(rawVisibleTaskProviders),
     [rawVisibleTaskProviders]
@@ -132,12 +116,7 @@ const SidebarNav = React.memo(function SidebarNav() {
   const tasksActive = activeView === 'tasks'
   const automationsActive = activeView === 'automations'
   const activityActive = activeView === 'activity'
-  const mobileActive = activeView === 'mobile'
   const activityUnreadCount = useActivityUnreadCount(showAgentsButton, 'sidebar-badge')
-  const mobileOnboardingBadge = useMobileSidebarOnboardingBadge(showMobileButton)
-  const hideMobileButton = React.useCallback(() => {
-    void updateSettings({ showMobileButton: false })
-  }, [updateSettings])
 
   return (
     <div className="flex flex-col gap-0.5 px-2 pt-2 pb-1">
@@ -262,43 +241,6 @@ const SidebarNav = React.memo(function SidebarNav() {
             </span>
           ) : null}
         </button>
-      ) : null}
-      {showMobileButton ? (
-        <ContextMenu>
-          <ContextMenuTrigger asChild>
-            <button
-              type="button"
-              onClick={() => {
-                mobileOnboardingBadge.dismiss()
-                openMobilePage()
-              }}
-              aria-current={mobileActive ? 'page' : undefined}
-              className={cn(
-                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight transition-colors',
-                mobileActive
-                  ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                  : 'text-sidebar-foreground/60 hover:bg-sidebar-foreground/8'
-              )}
-            >
-              <Smartphone
-                className={cn('size-4 shrink-0', !mobileActive && 'text-sidebar-foreground/30')}
-                strokeWidth={mobileActive ? 2.25 : 1.75}
-              />
-              <span className="flex-1">Agentum Mobile</span>
-              {mobileOnboardingBadge.visible ? (
-                <span className="rounded-full bg-primary px-1.5 py-px text-[10px] font-semibold text-primary-foreground">
-                  New
-                </span>
-              ) : null}
-            </button>
-          </ContextMenuTrigger>
-          <ContextMenuContent>
-            <ContextMenuItem onSelect={hideMobileButton}>
-              <EyeOff className="size-3.5" />
-              Hide from sidebar
-            </ContextMenuItem>
-          </ContextMenuContent>
-        </ContextMenu>
       ) : null}
       <button
         type="button"

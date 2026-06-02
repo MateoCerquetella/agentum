@@ -21,7 +21,6 @@ export type FeatureInteractionId =
   | 'codex-account-switching'
   | 'cookie-import'
   | 'floating-workspace'
-  | 'mobile-pairing'
   | 'notifications'
   | 'ports'
   | 'quick-commands'
@@ -142,10 +141,6 @@ export const FEATURE_INTERACTIONS = [
   {
     id: 'floating-workspace',
     interaction: 'Floating Workspace opened or configured'
-  },
-  {
-    id: 'mobile-pairing',
-    interaction: 'mobile pairing enabled or QR code generated'
   },
   {
     id: 'notifications',

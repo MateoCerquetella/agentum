@@ -67,7 +67,7 @@ const namespaces = [...byNamespace.entries()]
   }))
   .sort((a, b) => b.calls - a.calls)
 
-let md = `# Orca Tauri Port — Command Coverage\n\n`
+let md = `# Agentum Tauri — Command Coverage\n\n`
 md += `Generated from renderer \`window.api.*\` usage vs. registered Rust commands.\n`
 md += `Run \`node scripts/port-coverage.mjs\` to regenerate.\n\n`
 md += `## Summary\n\n`

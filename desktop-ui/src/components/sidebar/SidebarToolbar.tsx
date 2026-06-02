@@ -9,8 +9,7 @@ import {
   MessageSquareText,
   RotateCw,
   School,
-  Settings,
-  Smartphone
+  Settings
 } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Button } from '@/components/ui/button'
@@ -39,7 +38,6 @@ const SidebarToolbar = React.memo(function SidebarToolbar() {
   const openSettingsPage = useAppStore((s) => s.openSettingsPage)
   const openSkillsPage = useAppStore((s) => s.openSkillsPage)
   const openSpacePage = useAppStore((s) => s.openSpacePage)
-  const openMobilePage = useAppStore((s) => s.openMobilePage)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [helpMenuOpen, setHelpMenuOpen] = useState(false)
   const [showAdminHelpOptions, setShowAdminHelpOptions] = useState(false)
@@ -134,10 +132,6 @@ const SidebarToolbar = React.memo(function SidebarToolbar() {
               <DropdownMenuItem onSelect={openSpacePage}>
                 <HardDrive className="size-3.5" />
                 Space Analyzer
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={openMobilePage}>
-                <Smartphone className="size-3.5" />
-                Agentum Mobile
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

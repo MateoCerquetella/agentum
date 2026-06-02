@@ -7,7 +7,6 @@ import type {
   ScrollState
 } from './pane-manager-types'
 import { createDivider, disposeDivider } from './pane-divider'
-import { getFitOverrideForPty } from './mobile-fit-overrides'
 import { disposeWebgl, attachWebgl } from './pane-webgl-renderer'
 import { captureScrollState, restoreScrollStateAfterLayout } from './pane-scroll'
 
@@ -46,22 +45,6 @@ export function safeFit(pane: ManagedPane): void {
   let scrollState: ScrollState | null = null
   let shouldRestoreScroll = false
   try {
-    // Why: when a mobile client has resized this PTY to phone dimensions,
-    // the desktop must keep xterm at those dimensions instead of fitting to
-    // the desktop pane geometry. This prevents desktop auto-fit from undoing
-    // the mobile resize. Uses data-pty-id (set by bindPanePtyId) to look up
-    // the override by ptyId directly, avoiding pane ID collisions across tabs.
-    const ptyId = pane.container.dataset.ptyId
-    const override = ptyId ? getFitOverrideForPty(ptyId) : null
-    if (override) {
-      if (pane.terminal.cols !== override.cols || pane.terminal.rows !== override.rows) {
-        scrollState = captureScrollStateForFit(pane)
-        shouldRestoreScroll = true
-        pane.terminal.resize(override.cols, override.rows)
-      }
-      return
-    }
-
     const dims = getProposedDimensions(pane)
     if (dims && dims.cols === pane.terminal.cols && dims.rows === pane.terminal.rows) {
       // Why: divider drags fire refits every frame, but most frames do not

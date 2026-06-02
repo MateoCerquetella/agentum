@@ -5,7 +5,7 @@ use commands::{
     accounts, agent_status, agents, app, automations, browser, cache, claude_usage, cli, clipboard,
     codex_usage,
     crash_reports, diagnostics, feedback, fs, gh, git, gl, hooks, hosted_review, html_export,
-    keybindings, linear, mobile, notebook, notifications, onboarding, open_code_usage, permissions,
+    keybindings, linear, notebook, notifications, onboarding, open_code_usage, permissions,
     pet, project_groups, pty,
     rate_limits, remote_workspace, repos, runtime, session, settings, shell, sparse_presets, speech,
     shell_runtimes, skills, ssh, star_nag, ui, updater, window, workspace_cleanup, workspace_ports,
@@ -169,7 +169,6 @@ pub fn run() {
             ui::ui_reply_tab_set_profile,
             ui::ui_reply_tab_close,
             ui::ui_reply_terminal_create,
-            ui::ui_respond_mobile_markdown_request,
             ui::ui_sync_traffic_lights,
             ui::ui_popup_menu,
             ui::ui_confirm_window_close,
@@ -254,10 +253,6 @@ pub fn run() {
             linear::linear_get_project,
             linear::linear_get_custom_view,
             linear::linear_disconnect,
-            mobile::mobile_revoke_device,
-            mobile::mobile_revoke_runtime_access,
-            mobile::mobile_list_runtime_access_grants,
-            mobile::mobile_is_web_socket_ready,
             cache::cache_get_git_hub,
             cache::cache_set_git_hub,
             notebook::notebook_run_python_cell,
@@ -285,10 +280,6 @@ pub fn run() {
             project_groups::project_groups_move_project,
             project_groups::project_groups_scan_nested,
             project_groups::project_groups_import_nested,
-            mobile::mobile_get_pairing_qr,
-            mobile::mobile_get_runtime_pairing_url,
-            mobile::mobile_list_devices,
-            mobile::mobile_list_network_interfaces,
             speech::speech_get_catalog,
             speech::speech_get_model_states,
             speech::speech_download_model,
@@ -506,7 +497,10 @@ pub fn run() {
             stats::stats_get_summary,
             workspace_space::workspace_space_cancel,
             memory::memory_get_snapshot,
-            preflight::preflight_check
+            preflight::preflight_check,
+            preflight::preflight_detect_agents,
+            preflight::preflight_refresh_agents,
+            preflight::preflight_detect_remote_agents
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

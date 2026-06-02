@@ -17,24 +17,9 @@ import type {
   WorktreeLineageWarning
 } from './types'
 import type { TerminalPaneLayoutNode } from './types'
-import type {
-  RuntimeMarkdownReadTabResult,
-  RuntimeMarkdownSaveTabResult
-} from './mobile-markdown-document'
 import type { RuntimeCapability } from './protocol-version'
 
-export type { RuntimeMarkdownReadTabResult, RuntimeMarkdownSaveTabResult }
-
 export type RuntimeGraphStatus = 'ready' | 'reloading' | 'unavailable'
-
-// Why: presence-lock driver state crosses main/preload/renderer IPC. Keep one
-// checked source so future variants cannot drift silently across layers.
-export type RuntimeTerminalDriverState =
-  | { kind: 'idle' }
-  | { kind: 'desktop' }
-  | { kind: 'mobile'; clientId: string }
-
-export type RuntimeBrowserDriverState = RuntimeTerminalDriverState
 
 export type RuntimeStatus = {
   runtimeId: string
