@@ -80,7 +80,9 @@ fn main() -> Result<()> {
         let cur = std::env::var("PATH").unwrap_or_default();
         if !cur.split(':').any(|p| p == "/opt/homebrew/bin") {
             // SAFETY: single-threaded init, before any daemon thread reads PATH.
-            unsafe { std::env::set_var("PATH", format!("{extra}:{cur}")); }
+            unsafe {
+                std::env::set_var("PATH", format!("{extra}:{cur}"));
+            }
         }
     }
 
@@ -155,8 +157,13 @@ fn main() -> Result<()> {
     // ── Windowed mode: Tauri GUI ──────────────────────────────────────
     let url = format!("http://127.0.0.1:{port}/");
 
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_updater::Builder::new().build())
+    // NOTE: no updater plugin. Tauri's updater requires a `pubkey` in
+    // tauri.conf.json, and we have no release-signing pipeline yet. Wiring it
+    // in half-way (endpoints but no pubkey) made the plugin fail to
+    // initialize, which made `build()` return Err and the window never
+    // opened. Re-add it as a unit — plugin + config `pubkey` + CI signing —
+    // when auto-update is ready.
+    let app_result = tauri::Builder::default()
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
@@ -254,23 +261,6 @@ fn main() -> Result<()> {
                 }
             });
 
-            // --------------- Update check on startup ---------------------
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                use tauri_plugin_updater::UpdaterExt;
-                if let Ok(updater) = handle.updater() {
-                    if let Ok(Some(update)) = updater.check().await {
-                        if let Some(w) = handle.get_webview_window("main") {
-                            let msg = format!(
-                                "A new version is available: {} → {}.\\nVisit the releases page to download.",
-                                update.current_version, update.version
-                            );
-                            let _ = w.eval(format!("alert({:?})", msg));
-                        }
-                    }
-                }
-            });
-
             // --------------- Native notifications bridge -----------------
             // Subscribe to the daemon's event bus and raise OS notifications
             // for agent-lifecycle events (finished / awaiting input / crashed)
@@ -280,26 +270,34 @@ fn main() -> Result<()> {
 
             Ok(())
         })
-        .build(tauri::generate_context!())?;
+        .build(tauri::generate_context!());
 
-    // ---- Run event loop (blocking) ---------------------------------------
-    let mut rt = Some(rt);
-    app.run(move |_app_handle, event| {
-        if let tauri::RunEvent::Exit = event {
-            if let Some(rt) = rt.take() {
-                rt.shutdown_timeout(Duration::from_secs(3));
-            }
+    // Surface a build failure explicitly and exit non-zero. We deliberately
+    // don't use `?` here: returning an Err would drop the multi-thread `rt` on
+    // the way out of main, and that drop blocks forever waiting on the
+    // host-metrics `spawn_blocking` ticker (an uncancellable `loop`) — hanging
+    // the process *before* the error is ever printed. `process::exit` skips
+    // the blocking drop so the failure is actually reported.
+    let app = match app_result {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("agentum-desktop: failed to start the window: {e:#}");
+            std::process::exit(1);
         }
-    });
+    };
 
-    // Wait for daemon task to finish after runtime shutdown.
-    tokio::runtime::Builder::new_current_thread()
-        .enable_time()
-        .build()
-        .unwrap()
-        .block_on(async {
-            let _ = daemon_handle.await;
-        });
+    // ---- Run event loop (blocks until the app quits) ---------------------
+    app.run(|_app_handle, _event| {});
+
+    // The app is quitting. Tear down the daemon runtime without blocking: the
+    // host-metrics `spawn_blocking` ticker can't be cancelled, so a plain drop
+    // (or `shutdown_timeout`) would stall on quit. `shutdown_background`
+    // abandons outstanding tasks and returns immediately — fine, the process
+    // is on its way out anyway.
+    // We don't await the daemon task — the runtime is about to be abandoned.
+    // Explicit `drop` (not `let _ =`) avoids clippy's let_underscore_future.
+    drop(daemon_handle);
+    rt.shutdown_background();
 
     Ok(())
 }

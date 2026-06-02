@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Core capability for the main window. Grants permissions for tray icon, native menus, updater check, window state persistence, and basic IPC.",
+  "description": "Core capability for the main window. Grants permissions for tray icon, native menus, window state persistence, and basic IPC.",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -10,9 +10,6 @@
     "core:window:allow-set-focus",
     "core:tray:default",
     "core:menu:default",
-    "updater:default",
-    "updater:allow-check",
-    "updater:allow-download-and-install",
     "window-state:default",
     "notification:default"
   ]

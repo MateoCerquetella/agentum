@@ -27,12 +27,5 @@
       "exceptionDomain": "127.0.0.1"
     }
   },
-  "plugins": {
-    "updater": {
-      "endpoints": [
-        "https://github.com/mateocerquetella/agentum/releases/latest/download/latest.json"
-      ],
-      "dangerousInsecureTransportProtocol": true
-    }
-  }
+  "plugins": {}
 }

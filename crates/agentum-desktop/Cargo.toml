@@ -34,7 +34,10 @@ tokio = { workspace = true }
 # it the "Toggle DevTools" menu item fails to compile under --release — which
 # is what broke the v0.10.6 release on the macOS runner.
 tauri = { version = "2", features = ["tray-icon", "image-png", "devtools"] }
-tauri-plugin-updater = "2"
+# No `tauri-plugin-updater`: the updater needs a `pubkey` in tauri.conf.json
+# plus a release-signing pipeline we don't have yet. Half-configured, it made
+# the app fail to build and the window never opened. Re-add as a unit when
+# auto-update is ready (plugin + config `pubkey` + CI signing).
 tauri-plugin-window-state = "2"
 # Native OS notifications + a WS subscriber to the daemon's /api/events bus
 # (Phase D notification bridge). tokio-tungstenite is pinned to match the
