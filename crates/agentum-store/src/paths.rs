@@ -3,6 +3,12 @@
 //! Linux:    config=$XDG_CONFIG_HOME/agentum, data=$XDG_DATA_HOME/agentum,
 //!           cache=$XDG_CACHE_HOME/agentum, state=$XDG_STATE_HOME/agentum
 //! macOS:    everything under ~/Library/Application Support/agentum and ~/Library/Caches/agentum
+//!
+//! Override: when `AGENTUM_HOME` is set, all four roots live under
+//! `$AGENTUM_HOME/{config,data,cache,state}` on every platform. This is the
+//! single cross-platform isolation seam — `directories` ignores `XDG_*` on
+//! macOS, so tests (and power users who want a self-contained install) need a
+//! lever that works there too. Unset → default platform behavior, unchanged.
 
 use std::path::PathBuf;
 
@@ -14,24 +20,43 @@ pub enum PathError {
     NoHome,
 }
 
+/// `$AGENTUM_HOME`, when set and non-empty. Read per call so tests can flip it.
+fn override_home() -> Option<PathBuf> {
+    std::env::var_os("AGENTUM_HOME")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+}
+
 fn dirs() -> Result<ProjectDirs, PathError> {
     ProjectDirs::from("", "", "agentum").ok_or(PathError::NoHome)
 }
 
 pub fn data_dir() -> Result<PathBuf, PathError> {
+    if let Some(home) = override_home() {
+        return Ok(home.join("data"));
+    }
     Ok(dirs()?.data_dir().to_path_buf())
 }
 
 pub fn config_dir() -> Result<PathBuf, PathError> {
+    if let Some(home) = override_home() {
+        return Ok(home.join("config"));
+    }
     Ok(dirs()?.config_dir().to_path_buf())
 }
 
 pub fn cache_dir() -> Result<PathBuf, PathError> {
+    if let Some(home) = override_home() {
+        return Ok(home.join("cache"));
+    }
     Ok(dirs()?.cache_dir().to_path_buf())
 }
 
 /// State falls back to data on platforms where it is not defined (macOS).
 pub fn state_dir() -> Result<PathBuf, PathError> {
+    if let Some(home) = override_home() {
+        return Ok(home.join("state"));
+    }
     let d = dirs()?;
     Ok(d.state_dir()
         .map(|p| p.to_path_buf())

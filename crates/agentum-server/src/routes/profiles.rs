@@ -130,14 +130,15 @@ async fn set_default(Json(body): Json<DefaultBody>) -> Result<StatusCode, ApiErr
 #[cfg(test)]
 mod tests {
     //! Handler-level round trips driven directly through the in-process
-    //! functions. The path resolution goes through
-    //! `agentum_store::paths::config_dir()` which honours `XDG_CONFIG_HOME`,
-    //! so each test runs with that env var pointed at a temp dir.
+    //! functions. Path resolution goes through `agentum_store::paths`, which
+    //! roots everything under `$AGENTUM_HOME` when set — the cross-platform
+    //! isolation seam (`XDG_CONFIG_HOME` is ignored by `directories` on macOS,
+    //! so it alone could not isolate these tests there).
     //!
     //! Env vars are process-wide; cargo runs tests in parallel by default.
     //! `TEST_LOCK` serialises the entire module so the env mutation and
     //! the file it resolves to stay coherent across the suite. Without
-    //! this, parallel tests race on `XDG_CONFIG_HOME` and one sees
+    //! this, parallel tests race on `AGENTUM_HOME` and one sees
     //! another's profiles.toml.
     use super::*;
     use agentum_core::profiles::{Profile, Profiles};
@@ -161,9 +162,10 @@ mod tests {
         // `TEST_LOCK` serialises this whole module so only one thread
         // mutates the env at a time. The alternative — threading a
         // path through every handler — would bloat production call
-        // sites for no runtime benefit.
+        // sites for no runtime benefit. AGENTUM_HOME isolates on every
+        // platform (XDG_CONFIG_HOME is a no-op on macOS).
         unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", dir.path());
+            std::env::set_var("AGENTUM_HOME", dir.path());
         }
         TestEnv {
             _dir: dir,
