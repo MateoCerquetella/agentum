@@ -49,6 +49,74 @@ pub fn router() -> Router<AppState> {
         .route("/api/sessions/{id}/git/fetch", post(fetch))
         .route("/api/sessions/{id}/git/pull", post(pull))
         .route("/api/sessions/{id}/git/push", post(push))
+        .route("/api/sessions/{id}/git/discard", post(discard))
+        .route("/api/sessions/{id}/git/upstream", get(upstream))
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscardBody {
+    paths: Vec<String>,
+}
+
+/// `POST /api/sessions/{id}/git/discard` — restore the given tracked paths to
+/// HEAD (drops staged + worktree changes). Untracked files are left untouched.
+async fn discard(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<DiscardBody>,
+) -> Result<StatusCode, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    for p in &body.paths {
+        ensure_safe_relative(p)?;
+    }
+    if !body.paths.is_empty() {
+        let mut args = vec!["restore", "--source=HEAD", "--staged", "--worktree", "--"];
+        args.extend(body.paths.iter().map(String::as_str));
+        run_git(&cwd, &args).await?;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Serialize)]
+struct UpstreamStatus {
+    /// Upstream ref (e.g. `origin/main`), or null when none is set.
+    upstream: Option<String>,
+    ahead: u32,
+    behind: u32,
+}
+
+/// `GET /api/sessions/{id}/git/upstream` — tracking-branch + ahead/behind counts.
+async fn upstream(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<UpstreamStatus>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    let upstream = run_git(&cwd, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+        .await
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let (ahead, behind) = if upstream.is_some() {
+        // `--left-right --count @{u}...HEAD` prints "<behind>\t<ahead>".
+        match run_git(&cwd, &["rev-list", "--left-right", "--count", "@{u}...HEAD"]).await {
+            Ok(out) => {
+                let mut it = out.split_whitespace();
+                let behind = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+                let ahead = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+                (ahead, behind)
+            }
+            Err(_) => (0, 0),
+        }
+    } else {
+        (0, 0)
+    };
+    Ok(Json(UpstreamStatus {
+        upstream,
+        ahead,
+        behind,
+    }))
 }
 
 /// Run `git -C <cwd> <args...>`; return stdout (lossy UTF-8) on success.
