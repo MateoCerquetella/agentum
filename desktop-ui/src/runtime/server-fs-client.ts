@@ -24,5 +24,29 @@ export type FsListing = {
  * `~` is expanded). Set `hidden` to include dotfiles.
  */
 export function fsListDirs(path?: string, opts?: { hidden?: boolean }): Promise<FsListing> {
-  return getJson<FsListing>(`/api/fs/list${qs({ path, hidden: opts?.hidden })}`)
+  return getJson<FsListing>(`/api/fs/list${qs({ path, show_hidden: opts?.hidden })}`)
+}
+
+export type FsFileKind = 'dir' | 'file' | 'symlink'
+
+export type FsFileEntry = {
+  name: string
+  /** Absolute resolved path. */
+  path: string
+  kind: FsFileKind
+}
+
+export type FsEntries = {
+  path: string
+  parent: string | null
+  /** Dirs first, then files; each case-insensitively sorted. */
+  entries: FsFileEntry[]
+}
+
+/**
+ * `GET /api/fs/entries` — list a directory's dirs AND files (for a server-backed
+ * file explorer). Local host only. `show_hidden` includes dotfiles.
+ */
+export function fsListEntries(path?: string, opts?: { hidden?: boolean }): Promise<FsEntries> {
+  return getJson<FsEntries>(`/api/fs/entries${qs({ path, show_hidden: opts?.hidden })}`)
 }
