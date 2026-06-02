@@ -58,6 +58,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/sessions/{id}/git/branch-compare", get(branch_compare))
         .route("/api/sessions/{id}/git/commit-compare", get(commit_compare))
         .route("/api/sessions/{id}/git/status-entries", get(status_entries))
+        .route("/api/sessions/{id}/git/commit-staged", post(commit_staged))
 }
 
 /// One working-tree change with its staging area, for the desktop's
@@ -1153,6 +1154,41 @@ async fn commit(
         .map_err(|e| ApiError::Internal(format!("git rev-parse: {}", e)))?;
     let sha = String::from_utf8_lossy(&sha_out.stdout).trim().to_string();
 
+    Ok(Json(CommitResp { sha }))
+}
+
+#[derive(Debug, Deserialize)]
+struct CommitStagedBody {
+    message: String,
+}
+
+/// `POST /api/sessions/{id}/git/commit-staged` — commit whatever is currently
+/// staged in the index (no `git add`), matching the desktop's "commit staged
+/// changes" action. Uses the same `agentum-bot` author fallback as `/commit`.
+async fn commit_staged(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<CommitStagedBody>,
+) -> Result<Json<CommitResp>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    if body.message.trim().is_empty() {
+        return Err(ApiError::BadRequest("commit message is empty".into()));
+    }
+    run_git(
+        &cwd,
+        &[
+            "-c",
+            "user.name=agentum-bot",
+            "-c",
+            "user.email=agentum@localhost",
+            "commit",
+            "-m",
+            body.message.as_str(),
+        ],
+    )
+    .await?;
+    let sha = run_git(&cwd, &["rev-parse", "HEAD"]).await?.trim().to_string();
     Ok(Json(CommitResp { sha }))
 }
 

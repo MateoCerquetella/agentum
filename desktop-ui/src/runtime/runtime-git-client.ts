@@ -27,7 +27,13 @@ import {
   getServerGitBranchCompare,
   getServerGitCommitCompare,
   serverGitFetch,
-  serverGitPull
+  serverGitPull,
+  serverGitCommit,
+  serverGitDiscard,
+  serverGitPush,
+  serverGitRebase,
+  serverGitAbortMerge,
+  serverGitAbortRebase
 } from './server-git-adapter'
 
 /**
@@ -211,6 +217,10 @@ export async function getRuntimeGitConflictOperation(
 
 export async function abortRuntimeGitMerge(context: RuntimeGitContext): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    await serverGitAbortMerge(context.worktreePath)
+    return
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     await window.api.git.abortMerge({
       worktreePath: context.worktreePath,
@@ -228,6 +238,10 @@ export async function abortRuntimeGitMerge(context: RuntimeGitContext): Promise<
 
 export async function abortRuntimeGitRebase(context: RuntimeGitContext): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    await serverGitAbortRebase(context.worktreePath)
+    return
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     await window.api.git.abortRebase({
       worktreePath: context.worktreePath,
@@ -413,6 +427,10 @@ export async function rebaseRuntimeGitFromBase(
   baseRef: string
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    await serverGitRebase(context.worktreePath, baseRef)
+    return
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     await window.api.git.rebaseFromBase({
       worktreePath: context.worktreePath,
@@ -434,6 +452,18 @@ export async function pushRuntimeGit(
   args: { publish?: boolean; pushTarget?: GitPushTarget; forceWithLease?: boolean } = {}
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
+  // Server push is a plain `push --set-upstream origin HEAD`; defer to local for
+  // force-with-lease or a specific target, which it doesn't model.
+  if (
+    shouldUseServerGit() &&
+    target.kind === 'local' &&
+    context.worktreePath &&
+    !args.forceWithLease &&
+    !args.pushTarget
+  ) {
+    await serverGitPush(context.worktreePath)
+    return
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     await window.api.git.push({
       worktreePath: context.worktreePath,
@@ -516,6 +546,9 @@ export async function commitRuntimeGit(
   message: string
 ): Promise<{ success: boolean; error?: string }> {
   const target = getActiveRuntimeTarget(context.settings)
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    return serverGitCommit(context.worktreePath, message)
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     return window.api.git.commit({
       worktreePath: context.worktreePath,
@@ -747,6 +780,10 @@ export async function bulkDiscardRuntimeGitPaths(
   filePaths: string[]
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    await serverGitDiscard(context.worktreePath, filePaths)
+    return
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     await window.api.git.bulkDiscard({
       worktreePath: context.worktreePath,
@@ -768,6 +805,10 @@ export async function discardRuntimeGitPath(
   filePath: string
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    await serverGitDiscard(context.worktreePath, [filePath])
+    return
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     await window.api.git.discard({
       worktreePath: context.worktreePath,

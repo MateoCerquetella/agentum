@@ -71,6 +71,11 @@ export function gitCommit(
   return postJson<GitCommitResult>(`/api/sessions/${sessionId}/git/commit`, { message, paths })
 }
 
+/** Commit whatever is staged in the index (no add); returns the new SHA. */
+export function gitCommitStaged(sessionId: string, message: string): Promise<GitCommitResult> {
+  return postJson<GitCommitResult>(`/api/sessions/${sessionId}/git/commit-staged`, { message })
+}
+
 export type GitBranches = {
   /** Current branch, or null in detached-HEAD. */
   current: string | null

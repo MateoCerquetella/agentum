@@ -21,6 +21,12 @@ import {
   gitCommitCompare,
   gitFetch,
   gitPull,
+  gitCommitStaged,
+  gitDiscard,
+  gitPush,
+  gitRebase,
+  gitAbortMerge,
+  gitAbortRebase,
   type GitStatusEntry as ServerStatusEntry,
   type GitConflictOp
 } from './server-git-client'
@@ -134,4 +140,52 @@ export async function serverGitFetch(workdir: string): Promise<void> {
 export async function serverGitPull(workdir: string): Promise<void> {
   const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
   await gitPull(session.id)
+}
+
+// --- Write ops with side effects. Correct, well-defined mappings to a single
+// git command each; behind the same opt-in flag (default off). ---
+
+/** Commit the staged index with `message`. Mirrors the desktop's commit action;
+ *  returns `{success}` (errors surfaced, not thrown, like the local path). */
+export async function serverGitCommit(
+  workdir: string,
+  message: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+    await gitCommitStaged(session.id, message)
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: String(error) }
+  }
+}
+
+/** Discard tracked paths (restore to HEAD). DESTRUCTIVE — loses uncommitted edits. */
+export async function serverGitDiscard(workdir: string, paths: string[]): Promise<void> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  await gitDiscard(session.id, paths)
+}
+
+/** Push the current branch (sets upstream on first push). */
+export async function serverGitPush(workdir: string): Promise<void> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  await gitPush(session.id)
+}
+
+/** Rebase the worktree branch onto `baseRef`. */
+export async function serverGitRebase(workdir: string, baseRef: string): Promise<void> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  await gitRebase(session.id, baseRef)
+}
+
+/** `git merge --abort` (recovery). */
+export async function serverGitAbortMerge(workdir: string): Promise<void> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  await gitAbortMerge(session.id)
+}
+
+/** `git rebase --abort` (recovery). */
+export async function serverGitAbortRebase(workdir: string): Promise<void> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  await gitAbortRebase(session.id)
 }
