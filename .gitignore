@@ -13,8 +13,8 @@ web/dist
 .pnpm-store
 
 # Desktop UI (React/Vite) — build artifacts, not source.
-desktop-ui/node_modules
-desktop-ui/dist
+crates/agentum-desktop/ui/node_modules
+crates/agentum-desktop/ui/dist
 
 # Editors
 .DS_Store
