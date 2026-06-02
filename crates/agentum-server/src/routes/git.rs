@@ -57,6 +57,123 @@ pub fn router() -> Router<AppState> {
         .route("/api/sessions/{id}/git/abort-rebase", post(abort_rebase))
         .route("/api/sessions/{id}/git/branch-compare", get(branch_compare))
         .route("/api/sessions/{id}/git/commit-compare", get(commit_compare))
+        .route("/api/sessions/{id}/git/status-entries", get(status_entries))
+}
+
+/// One working-tree change with its staging area, for the desktop's
+/// source-control panel (richer than `/status`'s three path arrays, which the
+/// TUI consumes — kept separate so that contract is untouched).
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct StatusEntry {
+    path: String,
+    /// `modified|added|deleted|renamed|untracked|copied`.
+    status: String,
+    /// `staged|unstaged|untracked`.
+    area: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    old_path: Option<String>,
+}
+
+/// Map a porcelain XY code char to the desktop `GitFileStatus` vocabulary.
+fn map_porcelain_status(code: u8) -> &'static str {
+    match code {
+        b'A' => "added",
+        b'D' => "deleted",
+        b'R' => "renamed",
+        b'C' => "copied",
+        b'?' => "untracked",
+        _ => "modified",
+    }
+}
+
+/// Parse `git status --porcelain=v1 -z` into per-file, per-area entries.
+/// A file staged AND further modified yields two entries (staged + unstaged).
+/// Rename/copy records carry a NUL-separated source path (the staged side's
+/// `oldPath`); the follow-up record is consumed here.
+fn parse_status_entries(bytes: &[u8]) -> Vec<StatusEntry> {
+    let mut out = Vec::new();
+    let mut it = bytes
+        .split(|&b| b == 0)
+        .filter(|r| !r.is_empty())
+        .peekable();
+    while let Some(rec) = it.next() {
+        if rec.len() < 3 {
+            continue;
+        }
+        let x = rec[0];
+        let y = rec[1];
+        let path = String::from_utf8_lossy(&rec[3..]).into_owned();
+        let is_rename = x == b'R' || x == b'C' || y == b'R' || y == b'C';
+        let old_path = if is_rename {
+            it.next().map(|b| String::from_utf8_lossy(b).into_owned())
+        } else {
+            None
+        };
+        if x == b'?' && y == b'?' {
+            out.push(StatusEntry {
+                path,
+                status: "untracked".to_string(),
+                area: "untracked".to_string(),
+                old_path: None,
+            });
+            continue;
+        }
+        if x != b' ' && x != b'?' {
+            out.push(StatusEntry {
+                path: path.clone(),
+                status: map_porcelain_status(x).to_string(),
+                area: "staged".to_string(),
+                old_path: old_path.clone(),
+            });
+        }
+        if y != b' ' && y != b'?' {
+            out.push(StatusEntry {
+                path,
+                status: map_porcelain_status(y).to_string(),
+                area: "unstaged".to_string(),
+                old_path,
+            });
+        }
+    }
+    out
+}
+
+/// `GET /api/sessions/{id}/git/status-entries` — per-file working-tree changes.
+async fn status_entries(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<StatusEntry>>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    if !crate::git::is_git_repo(&cwd).await {
+        return Err(ApiError::BadRequest(format!(
+            "not a git repository: {}",
+            cwd.display()
+        )));
+    }
+    let raw = run_git_bytes(&cwd, &["status", "--porcelain=v1", "-z"]).await?;
+    Ok(Json(parse_status_entries(&raw)))
+}
+
+/// Like `run_git` but returns raw bytes (porcelain `-z` output is NUL-delimited
+/// and not guaranteed valid UTF-8 at record boundaries).
+async fn run_git_bytes(cwd: &StdPath, args: &[&str]) -> Result<Vec<u8>, ApiError> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| ApiError::Internal(format!("git {}: {e}", args.join(" "))))?;
+    if !out.status.success() {
+        return Err(ApiError::Internal(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(out.stdout)
 }
 
 #[derive(Debug, Serialize)]
@@ -1128,5 +1245,40 @@ mod tests {
         assert_eq!(map_change_status(b'C'), "copied");
         assert_eq!(map_change_status(b'M'), "modified");
         assert_eq!(map_change_status(b'T'), "modified");
+    }
+
+    #[test]
+    fn parse_status_entries_splits_areas_and_untracked() {
+        // ` M file.rs` → unstaged modify; `?? new.txt` → untracked;
+        // `M  staged.rs` → staged modify; `MM both.rs` → staged + unstaged.
+        let input: &[u8] = b" M file.rs\0?? new.txt\0M  staged.rs\0MM both.rs\0";
+        let e = parse_status_entries(input);
+        assert_eq!(e.len(), 5);
+        assert!(e.contains(&StatusEntry {
+            path: "file.rs".into(),
+            status: "modified".into(),
+            area: "unstaged".into(),
+            old_path: None
+        }));
+        assert!(e.contains(&StatusEntry {
+            path: "new.txt".into(),
+            status: "untracked".into(),
+            area: "untracked".into(),
+            old_path: None
+        }));
+        // `both.rs` appears in both staged and unstaged.
+        assert_eq!(e.iter().filter(|x| x.path == "both.rs").count(), 2);
+    }
+
+    #[test]
+    fn parse_status_entries_carries_rename_old_path() {
+        // `R  old.rs\0new.rs` — staged rename; old path is the source record.
+        let input: &[u8] = b"R  new.rs\0old.rs\0";
+        let e = parse_status_entries(input);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].status, "renamed");
+        assert_eq!(e[0].area, "staged");
+        assert_eq!(e[0].path, "new.rs");
+        assert_eq!(e[0].old_path.as_deref(), Some("old.rs"));
     }
 }

@@ -19,6 +19,20 @@ import { getCommitMessageModelDiscoveryHostKeyForScope } from '../../../shared/c
 import type { GitHistoryOptions, GitHistoryResult } from '../../../shared/git-history'
 import { getRepoIdFromWorktreeId } from '../../../shared/worktree-id'
 import { callRuntimeRpc, getActiveRuntimeTarget } from './runtime-rpc-client'
+import { getServerGitStatus } from './server-git-adapter'
+
+/**
+ * Option A (opt-in): route source-control reads through the embedded server's
+ * session git API instead of the local preload. Shares the terminal flag so the
+ * whole desktop-on-server path flips together. Off by default → local path.
+ */
+function shouldUseServerGit(): boolean {
+  try {
+    return globalThis.localStorage?.getItem('agentum.serverTerminals') === '1'
+  } catch {
+    return false
+  }
+}
 
 export type RuntimeGenerateCommitMessageResult =
   | { success: true; message: string; agentLabel?: string }
@@ -103,6 +117,10 @@ export async function getRuntimeGitStatus(
 ): Promise<GitStatusResult> {
   const target = getActiveRuntimeTarget(context.settings)
   const includeIgnoredArgs = options?.includeIgnored ? { includeIgnored: true } : {}
+  // Option A: a local workspace's source control runs against its server session.
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    return getServerGitStatus(context.worktreePath)
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     return window.api.git.status({
       worktreePath: context.worktreePath,

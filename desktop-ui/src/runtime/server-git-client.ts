@@ -25,6 +25,20 @@ export function gitStatus(sessionId: string): Promise<GitStatus> {
   return getJson<GitStatus>(`/api/sessions/${sessionId}/git/status`)
 }
 
+export type GitStatusEntry = {
+  path: string
+  /** modified|added|deleted|renamed|untracked|copied. */
+  status: GitChangeStatus | 'untracked'
+  /** staged|unstaged|untracked. */
+  area: 'staged' | 'unstaged' | 'untracked'
+  oldPath?: string
+}
+
+/** Per-file working-tree changes (richer than gitStatus's path arrays). */
+export function gitStatusEntries(sessionId: string): Promise<GitStatusEntry[]> {
+  return getJson<GitStatusEntry[]>(`/api/sessions/${sessionId}/git/status-entries`)
+}
+
 /** Unified diff (text/plain). `staged` → `git diff --cached`, else worktree vs index. */
 export function gitDiff(sessionId: string, path: string, staged = false): Promise<string> {
   return getText(`/api/sessions/${sessionId}/git/diff${qs({ path, staged })}`)
