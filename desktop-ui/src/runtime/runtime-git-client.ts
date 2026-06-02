@@ -23,7 +23,9 @@ import {
   getServerGitStatus,
   getServerGitConflictOperation,
   getServerGitUpstreamStatus,
-  serverGitStage
+  serverGitStage,
+  getServerGitBranchCompare,
+  getServerGitCommitCompare
 } from './server-git-adapter'
 
 /**
@@ -266,6 +268,9 @@ export async function getRuntimeGitBranchCompare(
   baseRef: string
 ): Promise<GitBranchCompareResult> {
   const target = getActiveRuntimeTarget(context.settings)
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    return getServerGitBranchCompare(context.worktreePath, baseRef)
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     return window.api.git.branchCompare({
       worktreePath: context.worktreePath,
@@ -286,6 +291,9 @@ export async function getRuntimeGitCommitCompare(
   commitId: string
 ): Promise<GitCommitCompareResult> {
   const target = getActiveRuntimeTarget(context.settings)
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    return getServerGitCommitCompare(context.worktreePath, commitId)
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     return window.api.git.commitCompare({
       worktreePath: context.worktreePath,

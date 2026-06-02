@@ -5,6 +5,8 @@
 import type {
   GitStatusResult,
   GitStatusEntry,
+  GitBranchCompareResult,
+  GitCommitCompareResult,
   GitUpstreamStatus as DesktopGitUpstreamStatus
 } from '../../../shared/types'
 import type { GitConflictOperation } from '../../../shared/git-status-types'
@@ -15,6 +17,8 @@ import {
   gitBranches,
   gitUpstream,
   gitStage,
+  gitBranchCompare,
+  gitCommitCompare,
   type GitStatusEntry as ServerStatusEntry,
   type GitConflictOp
 } from './server-git-client'
@@ -97,4 +101,23 @@ export async function serverGitStage(
 ): Promise<void> {
   const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
   await gitStage(session.id, paths, unstage)
+}
+
+/** Compare the workspace branch against `baseRef` (3-dot). The server response
+ *  is structurally the desktop's GitBranchCompareResult. */
+export async function getServerGitBranchCompare(
+  workdir: string,
+  baseRef: string
+): Promise<GitBranchCompareResult> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  return gitBranchCompare(session.id, baseRef)
+}
+
+/** Diff a single commit against its parent in the workspace's server session. */
+export async function getServerGitCommitCompare(
+  workdir: string,
+  commitId: string
+): Promise<GitCommitCompareResult> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  return gitCommitCompare(session.id, commitId)
 }
