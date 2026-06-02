@@ -10,12 +10,21 @@ serve`) that owns:
 
 - a SQLite database of session metadata
 - a tmux server where each session is one pane running one agent CLI
-- an HTTP/WS API the dashboard (Svelte) and TUI (`agentum terminal`)
+- an HTTP/WS API that the TUI (`agentum terminal`) and the desktop app
   drive
 
 A "session" is a `(name, workdir, tool, model, flags)` tuple. The
 daemon spawns the right binary into a tmux pane and streams its
 output to clients.
+
+Two clients consume that API: the **TUI** connects to a running
+`agentum serve` daemon; the **desktop app** (Tauri shell in
+`crates/agentum-desktop` + the React UI in `desktop-ui/`) boots
+`agentum-server` *in-process* on a loopback port (see
+`agentum_server::serve_embedded_loopback`) so the webview drives the
+exact same core. The daemon is API-only — there is no embedded web UI.
+The marketing landing page lives in `web/` and is deployed separately
+(Netlify), not served by the daemon.
 
 ---
 
@@ -28,11 +37,14 @@ crates/
   agentum-tmux/        # Thin wrapper over tmux: new-session, send-keys, capture-pane, kill.
   agentum-watchdog/    # Background loop. Tails panes, emits Event::AgentFinished/AwaitingInput/Crashed.
   agentum-executor/    # ToolAdapter trait + per-agent argv builders. Owns YOLO marker translation.
-  agentum-server/      # axum HTTP+WS API + TLS + auth + routes/. Embeds the dashboard SPA.
-  agentum-cli/         # CLI package (binary still named `agentum`). Houses the TUI under commands/terminal/.
-  agentum-desktop/     # Tauri shell placeholder. Implemented in v2 Phase 3 (docs/plans/AGENTUM_V2_PRD.md §6).
+  agentum-server/      # axum HTTP+WS API + TLS + auth + routes/. API-only (no embedded web UI).
+  agentum-cli/         # CLI package (binary named `agentum`). Houses the TUI under commands/terminal/.
+  agentum-desktop/     # Tauri 2 shell. Embeds agentum-server in-process (loopback) and exposes native
+                       #   commands (window, dialogs, clipboard, local PTY) to the React webview.
 
-dashboard/             # SvelteKit SPA. Builds to dashboard/build/, embedded into the daemon.
+desktop-ui/            # React + Vite SPA (the desktop UI). Loaded by the Tauri shell; talks to native
+                       #   Tauri commands and, increasingly, to the embedded agentum-server over HTTP/WS.
+web/                   # Static marketing landing page. Deployed to Netlify; NOT served by the daemon.
 ```
 
 Each `crates/<x>/Cargo.toml` declares its deps; the workspace root
@@ -42,30 +54,29 @@ Each `crates/<x>/Cargo.toml` declares its deps; the workspace root
 > `agentum-cli`, `agentum-desktop`) is conceptual. "agentum-core" in
 > PRD parlance = the collection of backend crates above
 > (`agentum-{core,store,tmux,watchdog,executor,server}`). The Tauri
-> shell (Phase 3) depends on `agentum-server`, which transitively
-> pulls in the rest. We kept the fine-grained split for compile-time
-> parallelism and clearer ownership; only the binary crate was
-> renamed (`agentum` → `agentum-cli` in 2026-05) and an empty
-> `agentum-desktop` placeholder was added.
+> shell (`agentum-desktop`) depends on `agentum-server`, which
+> transitively pulls in the rest. We kept the fine-grained split for
+> compile-time parallelism and clearer ownership; the binary crate was
+> renamed (`agentum` → `agentum-cli` in 2026-05).
 
 ---
 
 ## Critical: rebuild rhythm
 
-The dashboard SPA is **embedded into the daemon at compile time** via
-`rust-embed` (`crates/agentum-server/src/embed.rs`). After any change
-under `dashboard/src/`, you must:
+The daemon is **API-only** — it serves no web UI, so there is no
+compile-time asset embed. The two clients build independently:
 
-```sh
-npm run build --prefix dashboard   # writes dashboard/build/
-cargo build --release              # bakes dashboard/build/ into the binary
-pkill agentum && agentum serve     # restart whatever was running
-```
+- **Daemon / TUI** (Rust): `cargo build --release`, then restart
+  (`pkill agentum && agentum serve` / re-run `agentum terminal`).
+  There's no hot reload; rebuild after touching
+  `crates/agentum-cli/src/commands/terminal/*.rs`.
+- **Desktop UI** (React/Vite): `npm run build --prefix desktop-ui`
+  (or `npm run dev --prefix desktop-ui` for HMR). The Tauri shell
+  loads it; `cargo build` the `agentum-desktop` crate after changing
+  its Rust commands or the embedded-server boot in `src/lib.rs`.
 
-If you skip step 2, your running daemon serves the OLD bundle.
-
-The TUI binary is the same: `cargo build` again after touching
-`crates/agentum/src/commands/terminal/*.rs`. There's no hot reload.
+The desktop boots `agentum-server` in-process, so a desktop session
+and a TUI session connected to a local daemon share one SQLite store.
 
 ---
 

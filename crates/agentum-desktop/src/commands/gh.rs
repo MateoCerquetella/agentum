@@ -1,5 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use serde_json::{json, Value};
 
 // Most of the GitHub namespace is networked API work (PRs, issues, reviews) that
