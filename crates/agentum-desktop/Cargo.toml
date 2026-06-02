@@ -1,49 +1,50 @@
 [package]
 name = "agentum-desktop"
 version.workspace = true
-edition.workspace = true
+# Pinned to 2021 (not the workspace 2024 default): the migrated orca Tauri backend
+# targets edition 2021, so this avoids an edition-migration pass on ~50 modules.
+edition = "2021"
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Native desktop shell for agentum: runs the daemon in-process on a free loopback port and opens a Tauri window on the embedded dashboard."
+description = "agentum desktop — the React/Tauri IDE (migrated from orca)."
 
-# A real binary (was a placeholder lib). The GUI deps (tauri → wry/webkit) are
-# isolated to this crate so the CLI/server release matrix is unaffected — the
-# Linux build of the `agentum` binary never pulls webkit.
+[lib]
+name = "agentum_desktop_lib"
+crate-type = ["lib"]
+
 [[bin]]
 name = "agentum-desktop"
 path = "src/main.rs"
 
 [build-dependencies]
-# Runs Tauri's compile-time codegen (reads tauri.conf.json, embeds the window
-# icon + the placeholder frontendDist). Required even though we navigate to an
-# external in-process URL at runtime.
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2" }
 
 [dependencies]
-agentum-server = { workspace = true }
-agentum-store = { workspace = true }
-anyhow = { workspace = true }
-tokio = { workspace = true }
-# Tauri replaces the previous raw wry+tao shell. Tray icon, native menu,
-# notifications and the updater are added in Phase D; Phase A is the bare
-# window-over-in-process-daemon migration.
-# `devtools` keeps WebviewWindow::{open,close,is}_devtools available in
-# release builds (they're cfg'd to debug_assertions OR this feature). Without
-# it the "Toggle DevTools" menu item fails to compile under --release — which
-# is what broke the v0.10.6 release on the macOS runner.
-tauri = { version = "2", features = ["tray-icon", "image-png", "devtools"] }
-# No `tauri-plugin-updater`: the updater needs a `pubkey` in tauri.conf.json
-# plus a release-signing pipeline we don't have yet. Half-configured, it made
-# the app fail to build and the window never opened. Re-add as a unit when
-# auto-update is ready (plugin + config `pubkey` + CI signing).
-tauri-plugin-window-state = "2"
-# Native OS notifications + a WS subscriber to the daemon's /api/events bus
-# (Phase D notification bridge). tokio-tungstenite is pinned to match the
-# version agentum-server already pulls in, avoiding a duplicate in the tree.
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-log = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-process = "2"
 tauri-plugin-notification = "2"
-tokio-tungstenite = "0.29"
-futures-util = "0.3"
-clap = { workspace = true }
-serde_json = { workspace = true }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+thiserror = "2"
+portable-pty = "0.9"
+git2 = "0.20"
+base64 = "0.22"
+notify = "7"
+rusqlite = { version = "0.32", features = ["bundled"] }
+reqwest = { version = "0.12", features = ["json"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+which = "7"
+parking_lot = "0.12"
+crossbeam-channel = "0.5"

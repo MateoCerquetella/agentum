@@ -1,0 +1,687 @@
+/* eslint-disable max-lines -- Why: these small settings form primitives and controls
+co-locate shared layout and keyboard interaction logic, which keeps the settings
+panel wiring simple even though the file exceeds the default line limit. */
+import type React from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { ScrollArea } from '../ui/scroll-area'
+import { Input } from '../ui/input'
+import { Label } from '../ui/label'
+import { Check, ChevronsUpDown, CircleX } from 'lucide-react'
+import { BUILTIN_TERMINAL_THEME_NAMES, normalizeColor } from '@/lib/terminal-theme'
+import { MAX_THEME_RESULTS } from './SettingsConstants'
+import { cn } from '@/lib/utils'
+
+type SettingsSwitchProps = {
+  checked: boolean
+  onChange: () => void
+  ariaLabel?: string
+  ariaLabelledBy?: string
+  disabled?: boolean
+}
+
+export function SettingsSwitch({
+  checked,
+  onChange,
+  ariaLabel,
+  ariaLabelledBy,
+  disabled
+}: SettingsSwitchProps): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      aria-labelledby={ariaLabelledBy}
+      disabled={disabled}
+      onClick={onChange}
+      className={cn(
+        'relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50',
+        checked ? 'bg-foreground' : 'bg-muted-foreground/30'
+      )}
+    >
+      <span
+        className={cn(
+          'pointer-events-none block size-3.5 rounded-full bg-background shadow-sm transition-transform',
+          checked ? 'translate-x-4' : 'translate-x-0.5'
+        )}
+      />
+    </button>
+  )
+}
+
+type SettingsRowProps = {
+  label: React.ReactNode
+  description?: React.ReactNode
+  control: React.ReactNode
+  /** Optional id applied to the label so the control can reference it via aria-labelledby. */
+  labelId?: string
+  /** When true, top-align label/description and control. Useful for tall control columns. */
+  alignTop?: boolean
+}
+
+/** Two-column row grammar: left min-w-0 label+description, right shrink-0 control. */
+export function SettingsRow({
+  label,
+  description,
+  control,
+  labelId,
+  alignTop
+}: SettingsRowProps): React.JSX.Element {
+  return (
+    <div
+      className={cn('flex gap-4 py-2', alignTop ? 'items-start' : 'items-center justify-between')}
+    >
+      <div className="min-w-0 flex-1 space-y-0.5">
+        <Label id={labelId}>{label}</Label>
+        {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
+      </div>
+      <div className="shrink-0">{control}</div>
+    </div>
+  )
+}
+
+type SettingsSwitchRowProps = {
+  label: React.ReactNode
+  description?: React.ReactNode
+  checked: boolean
+  onChange: () => void
+  ariaLabel?: string
+}
+
+export function SettingsSwitchRow({
+  label,
+  description,
+  checked,
+  onChange,
+  ariaLabel
+}: SettingsSwitchRowProps): React.JSX.Element {
+  return (
+    <SettingsRow
+      label={label}
+      description={description}
+      control={
+        <SettingsSwitch
+          checked={checked}
+          onChange={onChange}
+          ariaLabel={ariaLabel ?? (typeof label === 'string' ? label : undefined)}
+        />
+      }
+    />
+  )
+}
+
+type SegmentedOption<T extends string | number> = {
+  value: T
+  label: React.ReactNode
+  disabled?: boolean
+  ariaLabel?: string
+}
+
+type SettingsSegmentedControlProps<T extends string | number> = {
+  value: T
+  onChange: (value: T) => void
+  options: readonly SegmentedOption<T>[]
+  ariaLabel?: string
+  size?: 'sm' | 'md'
+  equalWidth?: boolean
+}
+
+/** Canonical segmented control for theme/ligatures/cursor/shell/etc. */
+export function SettingsSegmentedControl<T extends string | number>({
+  value,
+  onChange,
+  options,
+  ariaLabel,
+  size = 'md',
+  equalWidth = false
+}: SettingsSegmentedControlProps<T>): React.JSX.Element {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      className={cn(
+        'inline-flex items-center rounded-md border border-border bg-background/50 p-0.5',
+        equalWidth && 'w-full'
+      )}
+    >
+      {options.map((opt) => {
+        const active = opt.value === value
+        return (
+          <button
+            key={String(opt.value)}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            aria-label={opt.ariaLabel}
+            disabled={opt.disabled}
+            onClick={() => {
+              if (!opt.disabled) {
+                onChange(opt.value)
+              }
+            }}
+            className={cn(
+              'rounded-sm text-center outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50',
+              size === 'sm' ? 'px-2.5 py-0.5 text-xs' : 'px-3 py-1 text-sm',
+              equalWidth && 'flex-1',
+              active
+                ? 'bg-accent font-medium text-accent-foreground'
+                : opt.disabled
+                  ? 'cursor-not-allowed text-muted-foreground/50'
+                  : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            {opt.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+type SettingsBadgeProps = {
+  tone?: 'neutral' | 'accent' | 'muted'
+  children: React.ReactNode
+  className?: string
+}
+
+/** Tokenized badge for status pills inside settings (e.g. Detected, Not installed). */
+export function SettingsBadge({
+  tone = 'neutral',
+  children,
+  className
+}: SettingsBadgeProps): React.JSX.Element {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium',
+        tone === 'accent'
+          ? 'border-foreground/20 bg-foreground/10 text-foreground'
+          : tone === 'muted'
+            ? 'border-border/40 bg-muted/30 text-muted-foreground'
+            : 'border-border/50 bg-background/50 text-foreground/80',
+        className
+      )}
+    >
+      {children}
+    </span>
+  )
+}
+
+type SettingsSubsectionHeaderProps = {
+  title: React.ReactNode
+  description?: React.ReactNode
+  action?: React.ReactNode
+}
+
+/** Consistent subsection header: h3 text-sm font-semibold + optional muted description. */
+export function SettingsSubsectionHeader({
+  title,
+  description,
+  action
+}: SettingsSubsectionHeaderProps): React.JSX.Element {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <div className="space-y-1">
+        <h3 className="text-sm font-semibold">{title}</h3>
+        {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
+      </div>
+      {action ? <div className="shrink-0">{action}</div> : null}
+    </div>
+  )
+}
+
+type ThemePickerProps = {
+  label: string
+  description: string
+  selectedTheme: string
+  query: string
+  onQueryChange: (value: string) => void
+  onSelectTheme: (theme: string) => void
+}
+
+type ColorFieldProps = {
+  label: string
+  description: string
+  value: string
+  fallback: string
+  onChange: (value: string) => void
+}
+
+type NumberFieldProps = {
+  label: string
+  description: string
+  value: number
+  defaultValue?: number
+  min: number
+  max: number
+  step?: number
+  onChange: (value: number) => void
+  suffix?: string
+}
+
+type FontAutocompleteProps = {
+  value: string
+  suggestions: string[]
+  onChange: (value: string) => void
+  placeholder?: string
+  /** Fires with whichever option the user is currently highlighting in the
+   *  dropdown (via mouse hover or keyboard arrow), or null when nothing is
+   *  highlighted / the dropdown is closed. Lets a consumer show a live
+   *  preview of the font without committing the selection. */
+  onPreviewFontFamily?: (font: string | null) => void
+}
+
+export function ThemePicker({
+  label,
+  description,
+  selectedTheme,
+  query,
+  onQueryChange,
+  onSelectTheme
+}: ThemePickerProps): React.JSX.Element {
+  const normalizedQuery = query.trim().toLowerCase()
+  const filteredThemes = BUILTIN_TERMINAL_THEME_NAMES.filter((theme) =>
+    theme.toLowerCase().includes(normalizedQuery)
+  ).slice(0, MAX_THEME_RESULTS)
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1">
+        <Label>{label}</Label>
+        <p className="text-xs text-muted-foreground">{description}</p>
+      </div>
+      <Input
+        value={query}
+        onChange={(e) => onQueryChange(e.target.value)}
+        placeholder="Search builtin themes"
+      />
+      <div className="rounded-lg border border-border/50">
+        <div className="flex items-center justify-between border-b border-border/50 px-3 py-2 text-xs text-muted-foreground">
+          <span>Selected: {selectedTheme}</span>
+          <span>
+            Showing {filteredThemes.length}
+            {normalizedQuery
+              ? ` matching "${query.trim()}"`
+              : ` of ${BUILTIN_TERMINAL_THEME_NAMES.length}`}
+          </span>
+        </div>
+        <ScrollArea className="h-64">
+          <div className="space-y-1 p-2">
+            {filteredThemes.map((theme) => (
+              <button
+                key={theme}
+                onClick={() => onSelectTheme(theme)}
+                className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm transition-colors ${
+                  selectedTheme === theme
+                    ? 'bg-accent font-medium text-accent-foreground'
+                    : 'hover:bg-muted/60'
+                }`}
+              >
+                <span className="truncate">{theme}</span>
+                {selectedTheme === theme ? (
+                  <span className="ml-3 shrink-0 text-[11px] uppercase tracking-[0.16em]">
+                    Current
+                  </span>
+                ) : null}
+              </button>
+            ))}
+            {filteredThemes.length === 0 ? (
+              <div className="px-3 py-6 text-sm text-muted-foreground">No themes found.</div>
+            ) : null}
+          </div>
+        </ScrollArea>
+      </div>
+    </div>
+  )
+}
+
+export function ColorField({
+  label,
+  description,
+  value,
+  fallback,
+  onChange
+}: ColorFieldProps): React.JSX.Element {
+  const normalized = normalizeColor(value, fallback)
+
+  return (
+    <SettingsRow
+      label={label}
+      description={description}
+      control={
+        <div className="flex items-center gap-2">
+          <input
+            type="color"
+            value={normalized}
+            onChange={(e) => onChange(e.target.value)}
+            className="h-8 w-10 rounded-md border border-input bg-transparent p-1"
+          />
+          <Input
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={fallback}
+            className="w-32 text-xs"
+          />
+        </div>
+      }
+    />
+  )
+}
+
+export function NumberField({
+  label,
+  description,
+  value,
+  defaultValue,
+  min,
+  max,
+  step = 1,
+  onChange,
+  suffix
+}: NumberFieldProps): React.JSX.Element {
+  const [draft, setDraft] = useState(Number.isFinite(value) ? String(value) : '')
+  const [prevValue, setPrevValue] = useState(value)
+
+  // Sync draft when the external value changes (e.g. from another source)
+  if (value !== prevValue) {
+    setPrevValue(value)
+    setDraft(Number.isFinite(value) ? String(value) : '')
+  }
+
+  const commit = (): void => {
+    const trimmed = draft.trim()
+    if (trimmed === '') {
+      // Empty input — reset to current value rather than committing 0
+      setDraft(Number.isFinite(value) ? String(value) : '')
+      return
+    }
+    const next = Number(trimmed)
+    if (Number.isFinite(next)) {
+      const clamped = Math.min(max, Math.max(min, next))
+      onChange(clamped)
+      setDraft(String(clamped))
+    } else {
+      // Reset to current value if input is invalid
+      setDraft(Number.isFinite(value) ? String(value) : '')
+    }
+  }
+
+  return (
+    <SettingsRow
+      label={label}
+      description={
+        <>
+          {description}
+          {defaultValue !== undefined ? (
+            <span className="ml-1 text-muted-foreground/70">· Default: {defaultValue}</span>
+          ) : null}
+        </>
+      }
+      control={
+        <div className="flex items-center gap-2">
+          <Input
+            type="number"
+            min={min}
+            max={max}
+            step={step}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                commit()
+              }
+            }}
+            className="number-input-clean w-24 tabular-nums"
+          />
+          {suffix ? <span className="shrink-0 text-xs text-muted-foreground">{suffix}</span> : null}
+        </div>
+      }
+    />
+  )
+}
+
+export function FontAutocomplete({
+  value,
+  suggestions,
+  onChange,
+  placeholder = 'SF Mono',
+  onPreviewFontFamily
+}: FontAutocompleteProps): React.JSX.Element {
+  const [query, setQuery] = useState(value)
+  const [prevValue, setPrevValue] = useState(value)
+  const [open, setOpen] = useState(false)
+  const [highlightedIndex, setHighlightedIndex] = useState(-1)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const previewFontFamilyRef = useRef(onPreviewFontFamily)
+  const listboxId = useId()
+
+  previewFontFamilyRef.current = onPreviewFontFamily
+
+  const setRootNode = useCallback((element: HTMLDivElement | null): void => {
+    rootRef.current = element
+    if (!element) {
+      // Why: settings search can unmount this control while a hover preview is
+      // active; the consumer must not keep rendering that transient font.
+      previewFontFamilyRef.current?.(null)
+    }
+  }, [])
+
+  if (value !== prevValue) {
+    setPrevValue(value)
+    setQuery(value)
+  }
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    const handlePointerDown = (event: MouseEvent): void => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => document.removeEventListener('mousedown', handlePointerDown)
+  }, [open])
+
+  const normalizedQuery = query.trim().toLowerCase()
+  const filteredSuggestions = useMemo(() => {
+    const startsWith = suggestions.filter((font) => font.toLowerCase().startsWith(normalizedQuery))
+    const includes = suggestions.filter(
+      (font) =>
+        !font.toLowerCase().startsWith(normalizedQuery) &&
+        font.toLowerCase().includes(normalizedQuery)
+    )
+    return normalizedQuery ? [...startsWith, ...includes] : suggestions
+  }, [suggestions, normalizedQuery])
+
+  // Why: sync the highlighted index during render rather than via useEffect so
+  // the correct item is highlighted on the very first paint after open/filter
+  // changes — useEffect would leave one render with the stale index visible.
+  const [prevFilteredSuggestions, setPrevFilteredSuggestions] = useState(filteredSuggestions)
+  const [prevOpen, setPrevOpen] = useState(open)
+  const [prevHighlightedValue, setPrevHighlightedValue] = useState(value)
+  if (
+    filteredSuggestions !== prevFilteredSuggestions ||
+    open !== prevOpen ||
+    value !== prevHighlightedValue
+  ) {
+    setPrevFilteredSuggestions(filteredSuggestions)
+    setPrevOpen(open)
+    setPrevHighlightedValue(value)
+    if (!open || filteredSuggestions.length === 0) {
+      setHighlightedIndex(-1)
+    } else {
+      const selectedIndex = filteredSuggestions.findIndex((font) => font === value)
+      setHighlightedIndex(Math.max(selectedIndex, 0))
+    }
+  }
+
+  // Why: notify the consumer of the currently-highlighted font so it can
+  // render a live preview. Closing the dropdown or moving past all options
+  // clears the preview back to the committed value.
+  useEffect(() => {
+    if (!onPreviewFontFamily) {
+      return
+    }
+    if (!open || highlightedIndex < 0) {
+      onPreviewFontFamily(null)
+      return
+    }
+    onPreviewFontFamily(filteredSuggestions[highlightedIndex] ?? null)
+  }, [filteredSuggestions, highlightedIndex, onPreviewFontFamily, open])
+
+  const commitValue = (nextValue: string): void => {
+    setQuery(nextValue)
+    onChange(nextValue)
+    setOpen(false)
+  }
+
+  const focusInput = (): void => {
+    inputRef.current?.focus()
+  }
+
+  return (
+    <div ref={setRootNode} className="relative max-w-sm">
+      <div className="relative">
+        <Input
+          ref={inputRef}
+          value={query}
+          onChange={(e) => {
+            const next = e.target.value
+            setQuery(next)
+            onChange(next)
+            setOpen(true)
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              if (open) {
+                e.preventDefault()
+                setOpen(false)
+              }
+              return
+            }
+
+            if (e.key === 'ArrowDown') {
+              e.preventDefault()
+              setOpen(true)
+              if (filteredSuggestions.length > 0) {
+                setHighlightedIndex((current) =>
+                  current < 0 ? 0 : Math.min(current + 1, filteredSuggestions.length - 1)
+                )
+              }
+              return
+            }
+
+            if (e.key === 'ArrowUp') {
+              e.preventDefault()
+              setOpen(true)
+              if (filteredSuggestions.length > 0) {
+                setHighlightedIndex((current) =>
+                  current < 0 ? filteredSuggestions.length - 1 : Math.max(current - 1, 0)
+                )
+              }
+              return
+            }
+
+            if (e.key === 'Enter' && open && highlightedIndex >= 0) {
+              const highlightedFont = filteredSuggestions[highlightedIndex]
+              if (highlightedFont) {
+                e.preventDefault()
+                commitValue(highlightedFont)
+              }
+            }
+          }}
+          placeholder={placeholder}
+          className="pr-18"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={open}
+          aria-controls={listboxId}
+          aria-activedescendant={
+            open && highlightedIndex >= 0 ? `${listboxId}-option-${highlightedIndex}` : undefined
+          }
+        />
+        <div className="absolute inset-y-0 right-2 flex items-center gap-1">
+          {query ? (
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                setQuery('')
+                onChange('')
+                setOpen(true)
+                focusInput()
+              }}
+              className="rounded-sm p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              aria-label="Clear font selection"
+              title="Clear"
+            >
+              <CircleX className="size-3.5" />
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              const nextOpen = !open
+              setOpen(nextOpen)
+              if (nextOpen) {
+                focusInput()
+              }
+            }}
+            className="rounded-sm p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            aria-label="Toggle font suggestions"
+            title="Fonts"
+          >
+            <ChevronsUpDown className="size-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {open ? (
+        <div className="absolute top-full z-20 mt-2 w-full overflow-hidden rounded-md border border-border/50 bg-popover shadow-md">
+          <ScrollArea className={filteredSuggestions.length > 8 ? 'h-64' : undefined}>
+            <div id={listboxId} role="listbox" className="p-1">
+              {filteredSuggestions.length > 0 ? (
+                filteredSuggestions.map((font, index) => (
+                  <button
+                    key={font}
+                    type="button"
+                    id={`${listboxId}-option-${index}`}
+                    role="option"
+                    aria-selected={index === highlightedIndex}
+                    ref={(element) => {
+                      if (element && index === highlightedIndex) {
+                        element.scrollIntoView({ block: 'nearest' })
+                      }
+                    }}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseEnter={() => setHighlightedIndex(index)}
+                    onClick={() => commitValue(font)}
+                    className={`flex w-full items-center justify-between rounded-sm px-3 py-2 text-left text-sm transition-colors ${
+                      index === highlightedIndex
+                        ? 'bg-accent text-accent-foreground'
+                        : 'hover:bg-muted/60'
+                    }`}
+                  >
+                    <span className="truncate">{font}</span>
+                    {font === value ? <Check className="ml-3 size-4 shrink-0" /> : null}
+                  </button>
+                ))
+              ) : (
+                <div className="px-3 py-3 text-sm text-muted-foreground">No matching fonts.</div>
+              )}
+            </div>
+          </ScrollArea>
+        </div>
+      ) : null}
+    </div>
+  )
+}

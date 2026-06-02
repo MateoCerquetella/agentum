@@ -1,11 +1,26 @@
 {
   "productName": "agentum",
+  "version": "0.1.0",
   "identifier": "dev.agentum.app",
   "build": {
-    "frontendDist": "./dist"
+    "frontendDist": "../../desktop-ui/dist",
+    "beforeDevCommand": "npm --prefix ../../desktop-ui run dev",
+    "beforeBuildCommand": "npm --prefix ../../desktop-ui run build"
   },
   "app": {
-    "windows": [],
+    "windows": [
+      {
+        "title": "agentum",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 800,
+        "minHeight": 500,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false
+      }
+    ],
     "security": {
       "csp": null
     }
@@ -14,7 +29,6 @@
     "active": true,
     "targets": "all",
     "category": "DeveloperTool",
-    "shortDescription": "Self-hosted control plane for AI coding agents.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -23,9 +37,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "infoPlist": "Info.plist",
-      "exceptionDomain": "127.0.0.1"
+      "infoPlist": "Info.plist"
     }
-  },
-  "plugins": {}
+  }
 }

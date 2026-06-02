@@ -1,0 +1,303 @@
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+
+// Registry-backed Worktree (see SUBSYSTEMS.md). Mirrors Worktree in
+// orca/src/shared/types.ts; required+nullable fields stay Option (serialize as
+// null), and `extra` round-trips fields not yet managed here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Worktree {
+    id: String,
+    repo_id: String,
+    display_name: String,
+    comment: String,
+    linked_issue: Option<i64>,
+    linked_pr: Option<i64>,
+    linked_linear_issue: Option<String>,
+    is_archived: bool,
+    is_unread: bool,
+    is_pinned: bool,
+    sort_order: i64,
+    last_activity_at: u64,
+    #[serde(flatten)]
+    extra: Map<String, Value>,
+}
+
+fn map_err(error: impl std::fmt::Display) -> String {
+    error.to_string()
+}
+
+fn worktrees_registry_path() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "no home directory".to_string())?;
+    Ok(home.join(".agentum").join("worktrees.json"))
+}
+
+fn read_worktrees() -> Result<Vec<Worktree>, String> {
+    let path = worktrees_registry_path()?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let raw = std::fs::read_to_string(&path).map_err(map_err)?;
+    // Tolerate a corrupt registry rather than wedging the app on every call.
+    Ok(serde_json::from_str(&raw).unwrap_or_default())
+}
+
+fn write_worktrees(worktrees: &[Worktree]) -> Result<(), String> {
+    let path = worktrees_registry_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(map_err)?;
+    }
+    let serialized = serde_json::to_string_pretty(worktrees).map_err(map_err)?;
+    std::fs::write(path, format!("{serialized}\n")).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn worktrees_list(repo_id: String) -> Result<Vec<Worktree>, String> {
+    let worktrees = read_worktrees()?;
+    Ok(worktrees
+        .into_iter()
+        .filter(|worktree| worktree.repo_id == repo_id)
+        .collect())
+}
+
+#[tauri::command]
+pub fn worktrees_list_all() -> Result<Vec<Worktree>, String> {
+    read_worktrees()
+}
+
+#[tauri::command]
+pub fn worktrees_update_meta(
+    worktree_id: String,
+    updates: Map<String, Value>,
+) -> Result<Worktree, String> {
+    let mut worktrees = read_worktrees()?;
+    let index = worktrees
+        .iter()
+        .position(|worktree| worktree.id == worktree_id)
+        .ok_or_else(|| format!("worktree not found: {worktree_id}"))?;
+
+    let mut object = serde_json::to_value(&worktrees[index])
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .ok_or_else(|| "failed to serialize worktree".to_string())?;
+    for (key, value) in updates {
+        // id encodes repoId::path; neither is user-updatable.
+        if key == "id" || key == "repoId" {
+            continue;
+        }
+        object.insert(key, value);
+    }
+    let updated: Worktree = serde_json::from_value(Value::Object(object)).map_err(map_err)?;
+    worktrees[index] = updated.clone();
+    write_worktrees(&worktrees)?;
+    Ok(updated)
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|delta| delta.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+// Resolves a repoId to its checkout path via the repos registry written by repos.rs.
+fn repo_path_for(repo_id: &str) -> Result<String, String> {
+    let home = dirs::home_dir().ok_or_else(|| "no home directory".to_string())?;
+    let path = home.join(".agentum").join("repos.json");
+    let raw = std::fs::read_to_string(&path).map_err(|_| format!("repo not found: {repo_id}"))?;
+    let repos: Value = serde_json::from_str(&raw).map_err(map_err)?;
+    repos
+        .as_array()
+        .and_then(|repos| {
+            repos
+                .iter()
+                .find(|repo| repo.get("id").and_then(Value::as_str) == Some(repo_id))
+        })
+        .and_then(|repo| repo.get("path").and_then(Value::as_str))
+        .map(str::to_string)
+        .ok_or_else(|| format!("repo not found: {repo_id}"))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateWorktreeResult {
+    worktree: Worktree,
+}
+
+#[tauri::command]
+pub async fn worktrees_create(
+    repo_id: String,
+    name: String,
+    base_branch: Option<String>,
+    branch_name_override: Option<String>,
+    display_name: Option<String>,
+) -> Result<CreateWorktreeResult, String> {
+    let repo_path = repo_path_for(&repo_id)?;
+    let parent = PathBuf::from(&repo_path)
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(&repo_path));
+    let worktree_path = parent.join(&name);
+    let worktree_path_string = worktree_path.to_string_lossy().into_owned();
+    let branch = branch_name_override.unwrap_or_else(|| name.clone());
+
+    let mut args = vec![
+        "-C".to_string(),
+        repo_path,
+        "worktree".to_string(),
+        "add".to_string(),
+        "-b".to_string(),
+        branch,
+        worktree_path_string.clone(),
+    ];
+    if let Some(base) = base_branch {
+        args.push(base);
+    }
+    let output = tokio::process::Command::new("git")
+        .args(&args)
+        .output()
+        .await
+        .map_err(map_err)?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    let worktree = Worktree {
+        id: format!("{repo_id}::{worktree_path_string}"),
+        repo_id,
+        display_name: display_name.unwrap_or(name),
+        comment: String::new(),
+        linked_issue: None,
+        linked_pr: None,
+        linked_linear_issue: None,
+        is_archived: false,
+        is_unread: false,
+        is_pinned: false,
+        sort_order: 0,
+        last_activity_at: now_millis(),
+        extra: Map::new(),
+    };
+    let mut worktrees = read_worktrees()?;
+    worktrees.push(worktree.clone());
+    write_worktrees(&worktrees)?;
+    Ok(CreateWorktreeResult { worktree })
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveWorktreeResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preserved_branch: Option<Value>,
+}
+
+#[tauri::command]
+pub async fn worktrees_remove(
+    worktree_id: String,
+    force: Option<bool>,
+    skip_archive: Option<bool>,
+) -> Result<RemoveWorktreeResult, String> {
+    let _ = skip_archive; // archival isn't ported yet; accepted for signature parity.
+    // id is `${repoId}::${path}` — split once so paths containing "::" survive.
+    let (repo_id, worktree_path) = worktree_id
+        .split_once("::")
+        .ok_or_else(|| format!("invalid worktree id: {worktree_id}"))?;
+    let repo_path = repo_path_for(repo_id)?;
+
+    let mut args = vec![
+        "-C".to_string(),
+        repo_path,
+        "worktree".to_string(),
+        "remove".to_string(),
+    ];
+    if force.unwrap_or(false) {
+        args.push("--force".to_string());
+    }
+    args.push(worktree_path.to_string());
+    let output = tokio::process::Command::new("git")
+        .args(&args)
+        .output()
+        .await
+        .map_err(map_err)?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    let mut worktrees = read_worktrees()?;
+    worktrees.retain(|worktree| worktree.id != worktree_id);
+    write_worktrees(&worktrees)?;
+    Ok(RemoveWorktreeResult {
+        preserved_branch: None,
+    })
+}
+
+// Leaf command: persists the renderer's worktree ordering by id. Independent of
+// the (not-yet-ported) repo/worktree registry — it only stores the id array.
+#[tauri::command]
+pub fn worktrees_persist_sort_order(ordered_ids: Vec<String>) -> Result<(), String> {
+    let home = dirs::home_dir().ok_or_else(|| "no home directory".to_string())?;
+    let dir = home.join(".agentum");
+    std::fs::create_dir_all(&dir).map_err(map_err)?;
+    let serialized = serde_json::to_string_pretty(&ordered_ids).map_err(map_err)?;
+    std::fs::write(dir.join("worktree-sort-order.json"), serialized).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn worktrees_list_lineage() -> Value {
+    // Lineage tracking (parent/child worktree relationships) isn't ported yet.
+    Value::Object(Map::new())
+}
+
+#[tauri::command]
+pub async fn worktrees_force_delete_preserved_branch(
+    worktree_id: String,
+    branch_name: String,
+    expected_head: String,
+) -> Result<Value, String> {
+    let _ = expected_head; // HEAD-match safety guard isn't enforced yet.
+    let repo_id = worktree_id
+        .split_once("::")
+        .map(|(repo, _)| repo)
+        .unwrap_or(&worktree_id);
+    let repo_path = repo_path_for(repo_id)?;
+    let output = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo_path)
+        .args(["branch", "-D", &branch_name])
+        .output()
+        .await
+        .map_err(map_err)?;
+    if output.status.success() {
+        Ok(serde_json::json!({ "deleted": true }))
+    } else {
+        Ok(serde_json::json!({
+            "deleted": false,
+            "error": String::from_utf8_lossy(&output.stderr).trim()
+        }))
+    }
+}
+
+// Detected (on-disk but not Orca-tracked) worktree scanning isn't ported; report
+// none via the metadata fallback. resolvePrBase needs the GitHub API; lineage
+// updates need the not-yet-ported lineage store.
+#[tauri::command]
+pub fn worktrees_list_detected(repo_id: String) -> Value {
+    serde_json::json!({
+        "repoId": repo_id,
+        "authoritative": false,
+        "source": "metadata-fallback",
+        "worktrees": []
+    })
+}
+
+#[tauri::command]
+pub fn worktrees_resolve_pr_base() -> Value {
+    serde_json::json!({ "error": "Resolving a PR base requires the GitHub API, which isn't available yet." })
+}
+
+#[tauri::command]
+pub fn worktrees_update_lineage() -> Option<Value> {
+    None
+}
