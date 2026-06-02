@@ -1,18 +1,18 @@
 # Architecture
 
-agentum is a single Rust binary that ships with an embedded Svelte UI and
-talks to a host `tmux` server. State lives in one SQLite file.
+agentum is a Rust control plane: a daemon (`agentum-server`) that talks to a
+host `tmux` server and exposes an **API-only** HTTP/WS surface. Two clients
+drive it — the TUI (`agentum terminal`) and the desktop app (Tauri shell that
+embeds the server in-process). State lives in one SQLite file.
 
 ```
+   TUI (agentum terminal)            Desktop app (Tauri + React)
+         │  HTTP/WS                        │  HTTP/WS (embeds the server)
+         ▼                                 ▼
 ┌───────────────────────────────────────────────────────────────┐
-│                   agentum (single binary)                     │
-│                                                               │
-│  ┌────────────────────┐       ┌────────────────────────────┐  │
-│  │   axum HTTP/HTTPS  │◄──────┤  embedded Svelte build     │  │
-│  │   on :8822 (TLS)   │       │  (rust-embed, gzip'd)      │  │
-│  └─────────┬──────────┘       └────────────────────────────┘  │
-│            │                                                  │
-│   ┌────────┴─────────────────────────────────────────────┐    │
+│             agentum-server  (axum, API-only)                  │
+│   /api/* + /api/events (WS) on :8822 (TLS)                    │
+│   ┌──────────────────────────────────────────────────────┐    │
 │   │   tokio async runtime                                │    │
 │   ├──────────┬──────────┬──────────┬──────────┬──────────┤    │
 │   │ session  │ executor │ tmux     │ watchdog │ events   │    │
@@ -32,14 +32,14 @@ talks to a host `tmux` server. State lives in one SQLite file.
 - Single process, single binary.
 - HTTPS on `:8822` (rustls + self-signed cert auto-generated, no Let's
   Encrypt). Cert lives in `$XDG_DATA_HOME/agentum/tls/`.
-- Plain HTTP cert-download on `:8823` for trust-on-first-use from a phone.
+- Plain HTTP cert-download on `:8823` for trust-on-first-use (out-of-band).
 - All state in SQLite at `$XDG_DATA_HOME/agentum/db.sqlite`.
 - tmux invoked as a subprocess via `tokio::process::Command`. Long-lived
   panes captured via `tmux pipe-pane` to a tail-able log per session.
 - Executor adapters translate a shared `Session` identity into the
   tool-specific command that tmux spawns. Four first-class adapters
   (Claude, Codex, Gemini, Hermes) plus a passthrough fallback.
-- WebSocket per session for live terminal stream to the browser.
+- WebSocket per session for live terminal stream to clients (TUI / desktop).
 
 ## Process model
 
@@ -106,7 +106,6 @@ for ops.
 | `sqlx`                                 | Async SQLite, compile-time SQL check     |
 | `serde` / `serde_json`                 | (de)serialization                        |
 | `rustls` + `rustls-pemfile` + `rcgen`  | TLS + self-signed cert                   |
-| `rust-embed`                           | Embed Svelte build into binary           |
 | `time`                                 | RFC3339 timestamps                       |
 | `tracing` + `tracing-subscriber`       | Structured logs                          |
 | `clap` (derive)                        | CLI args                                 |
@@ -117,36 +116,33 @@ for ops.
 
 MSRV 1.83+, Rust 2024 edition, single workspace.
 
-### Frontend (Svelte)
+### Clients
+
+The TUI is pure Rust (in `agentum-cli`, under `commands/terminal/`) and renders
+with `ratatui`/`crossterm`. The desktop app is a Tauri 2 shell (`agentum-desktop`)
+hosting a React + Vite UI (`desktop-ui/`):
 
 | Lib                                    | Why                                      |
 |----------------------------------------|------------------------------------------|
-| **SvelteKit 2 (latest)**               | App framework. Build target = static     |
-| `@sveltejs/adapter-static`             | Pre-render to static, embedded by Rust   |
+| **React 19 + Vite**                    | Desktop UI framework + bundler           |
+| **Tauri 2**                            | Native shell; embeds agentum-server      |
 | **TypeScript**                         | Type safety                              |
-| **Vanilla CSS + custom properties**    | Theme engine — no Tailwind               |
-| `lucide-svelte`                        | Icon set (terminal, kanban, etc.)        |
+| **Tailwind + CSS custom properties**   | Styling + theme tokens                   |
+| `lucide-react`                         | Icon set                                 |
 | `xterm.js`                             | Terminal renderer                        |
-| `@codemirror/*`                        | Notes editor (markdown)                  |
-| `dayjs`                                | Time formatting                          |
+| `monaco` / `@codemirror/*`             | File + markdown editors                  |
 
-**Why no Tailwind**: theming via CSS custom props is more flexible and
-theme files become drop-in. Tailwind's `dark:` variant doesn't help when
-we want 4+ themes that share component shapes.
-
-**Why xterm.js**: industry-standard browser terminal, handles
-ANSI/escape sequences correctly, accepts streamed bytes from a
-WebSocket.
+**Why xterm.js**: industry-standard terminal renderer, handles ANSI/escape
+sequences correctly, accepts streamed bytes from a WebSocket.
 
 ### Build & packaging
 
-| Tool             | Purpose                                |
-|------------------|----------------------------------------|
-| `pnpm`           | Frontend deps                          |
-| `cargo`          | Backend                                |
-| `just`           | Task runner (`just build`, `just dev`) |
-| GitHub Actions   | CI: clippy, fmt, test, release builds  |
-| `cargo-dist`     | Generate release binaries + installer  |
-| `cargo-watch`    | Hot reload during dev                  |
+| Tool             | Purpose                                       |
+|------------------|-----------------------------------------------|
+| `cargo`          | Backend + TUI + Tauri shell                   |
+| `npm` (Vite)     | `desktop-ui/` build (`npm --prefix desktop-ui run build`) |
+| `tauri` (cargo)  | Desktop app bundle                            |
+| `just`           | Task runner                                   |
+| GitHub Actions   | CI: clippy, fmt, test, release builds         |
 
 [xdg]: https://specifications.freedesktop.org/basedir-spec/
