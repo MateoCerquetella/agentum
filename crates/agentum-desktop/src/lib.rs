@@ -7,7 +7,8 @@ use commands::{
     crash_reports, diagnostics, feedback, fs, gh, git, gl, hooks, hosted_review, html_export,
     keybindings, linear, notebook, notifications, onboarding, open_code_usage, permissions,
     pet, project_groups, pty,
-    rate_limits, remote_workspace, repos, runtime, session, settings, shell, sparse_presets, speech,
+    rate_limits, remote_workspace, repos, runtime, server, session, settings, shell, sparse_presets,
+    speech,
     shell_runtimes, skills, ssh, star_nag, ui, updater, window, workspace_cleanup, workspace_ports,
     worktrees,
     e2e, memory, preflight, stats, workspace_space,
@@ -34,9 +35,26 @@ pub fn run() {
                 Box::<dyn std::error::Error>::from(std::io::Error::other(error.to_string()))
             })?;
             app.manage(state);
+
+            // Boot agentum-server in-process on a loopback port and expose its
+            // URL to the webview. Block here so the endpoint is ready before the
+            // React app asks for it; the server itself runs on background tasks.
+            let addr = tauri::async_runtime::block_on(async {
+                let (store, _db_path) = agentum_store::open_default()
+                    .await
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                agentum_server::serve_embedded_loopback(store)
+                    .await
+                    .map_err(|e| std::io::Error::other(e.to_string()))
+            })?;
+            app.manage(server::ServerEndpoint {
+                url: format!("http://{addr}"),
+                token: None,
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            server::app_get_server_endpoint,
             pty::pty_create,
             pty::pty_write,
             pty::pty_resize,

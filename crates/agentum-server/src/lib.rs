@@ -284,51 +284,7 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
         );
     }
 
-    // Sweep stale tokens once at boot, then on a slow timer.
-    let sweep_state = state.clone();
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(AUTH_SWEEP_INTERVAL);
-        // First tick fires immediately; that's fine for the boot sweep.
-        loop {
-            tick.tick().await;
-            match sweep_state.store.sweep_expired_auth_sessions().await {
-                Ok(0) => {}
-                Ok(n) => tracing::info!(rows = n, "swept expired auth sessions"),
-                Err(e) => tracing::warn!(error = %e, "auth session sweep failed"),
-            }
-        }
-    });
-
-    let watchdog = agentum_watchdog::Watchdog::new(bus.clone(), state.store.clone());
-    tokio::spawn(watchdog.run());
-
-    // Goal-status auto-progression reconciler (plan 01-04). Subscribes to the
-    // broadcast bus and enforces `goal.status = max(child statuses)` per D-03,
-    // and fires the planner auto-stop on first child arrival per D-07.
-    {
-        let store = state.store.clone();
-        let bus = bus.clone();
-        tokio::spawn(async move {
-            agentum_watchdog::run_goal_reconciler(store, bus).await;
-        });
-    }
-
-    // Watchdog → comment bridge (plan 02-04). Subscribes to the same bus
-    // as the reconciler and converts agent.*/session.crashed events into
-    // [system] comments on the bound card's thread (CONTEXT D-04..D-09).
-    {
-        let store = state.store.clone();
-        let bus = bus.clone();
-        tokio::spawn(async move {
-            agentum_watchdog::run_session_comment_bridge(store, bus).await;
-        });
-    }
-
-    // Background ticker that publishes `host.metrics` (CPU + RAM) onto
-    // the broadcast bus every couple of seconds. The /api/events WS
-    // fans these out to every connected dashboard, so a single sampler
-    // feeds N tabs without per-client polling.
-    routes::host::spawn_ticker(bus);
+    spawn_background_workers(&state, &bus);
 
     let app = router(state.clone());
 
@@ -369,6 +325,86 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
         .await
         .map_err(Into::into)
     }
+}
+
+/// Spawn the always-on background workers shared by every server boot path:
+/// the auth-session sweeper, the watchdog, the goal-status reconciler, the
+/// session→comment bridge, and the host-metrics ticker. Factored out so the
+/// in-process embedded boot (desktop) and the standalone `serve()` (TUI/daemon)
+/// stay in lockstep.
+fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
+    // Sweep stale tokens once at boot, then on a slow timer.
+    let sweep_state = state.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(AUTH_SWEEP_INTERVAL);
+        loop {
+            tick.tick().await;
+            match sweep_state.store.sweep_expired_auth_sessions().await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(rows = n, "swept expired auth sessions"),
+                Err(e) => tracing::warn!(error = %e, "auth session sweep failed"),
+            }
+        }
+    });
+
+    let watchdog = agentum_watchdog::Watchdog::new(bus.clone(), state.store.clone());
+    tokio::spawn(watchdog.run());
+
+    // Goal-status auto-progression reconciler: enforces `goal.status = max(child
+    // statuses)` and fires the planner auto-stop on first child arrival.
+    {
+        let store = state.store.clone();
+        let bus = bus.clone();
+        tokio::spawn(async move {
+            agentum_watchdog::run_goal_reconciler(store, bus).await;
+        });
+    }
+
+    // Watchdog → comment bridge: converts agent.*/session.crashed events into
+    // [system] comments on the bound card's thread.
+    {
+        let store = state.store.clone();
+        let bus = bus.clone();
+        tokio::spawn(async move {
+            agentum_watchdog::run_session_comment_bridge(store, bus).await;
+        });
+    }
+
+    // Host-metrics ticker: publishes CPU+RAM onto the bus so one sampler feeds
+    // every connected client over the events WS.
+    routes::host::spawn_ticker(bus.clone());
+}
+
+/// Boot the API server in-process on an ephemeral loopback port with auth
+/// disabled (loopback bind → only this machine can reach it). Spawns the same
+/// background workers as [`serve`] and serves on the current Tokio runtime,
+/// returning the bound `127.0.0.1:<port>` address. The desktop shell embeds the
+/// server this way so the webview drives the exact same core as the TUI.
+pub async fn serve_embedded_loopback(store: Store) -> anyhow::Result<SocketAddr> {
+    // rustls provider selection is process-global; harmless if already set.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
+    let mut state = AppState::with_fingerprint(store, bus.clone(), String::new());
+    state.no_auth = true;
+
+    spawn_background_workers(&state, &bus);
+
+    let app = router(state);
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let addr = listener.local_addr()?;
+    tracing::info!(%addr, "agentum-server listening (embedded loopback, no-auth)");
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        {
+            tracing::error!("embedded agentum-server exited: {e}");
+        }
+    });
+    Ok(addr)
 }
 
 fn cert_server_router(cert_pem: String) -> Router {

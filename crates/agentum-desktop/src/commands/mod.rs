@@ -33,6 +33,7 @@ pub mod rate_limits;
 pub mod remote_workspace;
 pub mod repos;
 pub mod runtime;
+pub mod server;
 pub mod session;
 pub mod settings;
 pub mod shell;

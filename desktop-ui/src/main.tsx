@@ -11,6 +11,11 @@ import {
 } from './lib/crash-diagnostics'
 import { applyDocumentTheme } from './lib/document-theme'
 import { shouldEnableReactGrab } from './lib/react-grab-dev-gate'
+import { probeEmbeddedServer } from './runtime/server-endpoint'
+
+// Confirm connectivity to the in-process agentum-server the Tauri shell booted.
+// Non-blocking: the embedded backend is the desktop's path to the shared core.
+void probeEmbeddedServer()
 
 recordRendererCrashBreadcrumb('renderer_bootstrap_started', { dev: import.meta.env.DEV })
 installRendererCrashDiagnostics()
