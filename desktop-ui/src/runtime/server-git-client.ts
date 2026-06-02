@@ -96,3 +96,20 @@ export function gitPull(sessionId: string): Promise<void> {
 export function gitPush(sessionId: string): Promise<void> {
   return postJson<void>(`/api/sessions/${sessionId}/git/push`)
 }
+
+export type GitUpstreamStatus = {
+  /** Upstream ref (e.g. 'origin/main'), or null when none is set. */
+  upstream: string | null
+  ahead: number
+  behind: number
+}
+
+/** Restore tracked paths to HEAD (drops staged + worktree changes). */
+export function gitDiscard(sessionId: string, paths: string[]): Promise<void> {
+  return postJson<void>(`/api/sessions/${sessionId}/git/discard`, { paths })
+}
+
+/** Tracking branch + ahead/behind counts. */
+export function gitUpstream(sessionId: string): Promise<GitUpstreamStatus> {
+  return getJson<GitUpstreamStatus>(`/api/sessions/${sessionId}/git/upstream`)
+}
