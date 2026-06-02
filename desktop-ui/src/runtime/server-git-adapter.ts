@@ -14,6 +14,7 @@ import {
   gitConflict,
   gitBranches,
   gitUpstream,
+  gitStage,
   type GitStatusEntry as ServerStatusEntry,
   type GitConflictOp
 } from './server-git-client'
@@ -82,4 +83,18 @@ export async function getServerGitUpstreamStatus(
 ): Promise<DesktopGitUpstreamStatus> {
   const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
   return mapUpstream(await gitUpstream(session.id))
+}
+
+/**
+ * Stage (`unstage=false`) or unstage (`true`) paths in a workspace's server
+ * session. Staging is fully reversible, so this is safe to route ahead of the
+ * destructive write ops (commit/discard), which await live verification.
+ */
+export async function serverGitStage(
+  workdir: string,
+  paths: string[],
+  unstage: boolean
+): Promise<void> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  await gitStage(session.id, paths, unstage)
 }

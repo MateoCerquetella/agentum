@@ -22,7 +22,8 @@ import { callRuntimeRpc, getActiveRuntimeTarget } from './runtime-rpc-client'
 import {
   getServerGitStatus,
   getServerGitConflictOperation,
-  getServerGitUpstreamStatus
+  getServerGitUpstreamStatus,
+  serverGitStage
 } from './server-git-adapter'
 
 /**
@@ -626,6 +627,10 @@ export async function stageRuntimeGitPath(
   filePath: string
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    await serverGitStage(context.worktreePath, [filePath], false)
+    return
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     await window.api.git.stage({
       worktreePath: context.worktreePath,
@@ -647,6 +652,10 @@ export async function bulkStageRuntimeGitPaths(
   filePaths: string[]
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    await serverGitStage(context.worktreePath, filePaths, false)
+    return
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     await window.api.git.bulkStage({
       worktreePath: context.worktreePath,
@@ -668,6 +677,10 @@ export async function unstageRuntimeGitPath(
   filePath: string
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    await serverGitStage(context.worktreePath, [filePath], true)
+    return
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     await window.api.git.unstage({
       worktreePath: context.worktreePath,
@@ -689,6 +702,10 @@ export async function bulkUnstageRuntimeGitPaths(
   filePaths: string[]
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
+  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+    await serverGitStage(context.worktreePath, filePaths, true)
+    return
+  }
   if (target.kind === 'local' || !context.worktreeId) {
     await window.api.git.bulkUnstage({
       worktreePath: context.worktreePath,
