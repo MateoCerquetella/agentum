@@ -11,11 +11,12 @@ import {
 } from './lib/crash-diagnostics'
 import { applyDocumentTheme } from './lib/document-theme'
 import { shouldEnableReactGrab } from './lib/react-grab-dev-gate'
-import { probeEmbeddedServer } from './runtime/server-endpoint'
+import { logEmbeddedServerSnapshot } from './runtime/agentum-server-client'
 
-// Confirm connectivity to the in-process agentum-server the Tauri shell booted.
-// Non-blocking: the embedded backend is the desktop's path to the shared core.
-void probeEmbeddedServer()
+// Exercise the embedded agentum-server over its session model (the shared core
+// the TUI uses) on boot. Non-blocking; this is the desktop's path to Option A
+// session-per-workspace.
+void logEmbeddedServerSnapshot()
 
 recordRendererCrashBreadcrumb('renderer_bootstrap_started', { dev: import.meta.env.DEV })
 installRendererCrashDiagnostics()
