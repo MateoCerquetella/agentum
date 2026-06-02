@@ -56,6 +56,97 @@ pub fn router() -> Router<AppState> {
         .route("/api/sessions/{id}/git/abort-merge", post(abort_merge))
         .route("/api/sessions/{id}/git/abort-rebase", post(abort_rebase))
         .route("/api/sessions/{id}/git/branch-compare", get(branch_compare))
+        .route("/api/sessions/{id}/git/commit-compare", get(commit_compare))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CommitCompareSummary {
+    commit_oid: String,
+    parent_oid: Option<String>,
+    compare_ref: String,
+    base_ref: String,
+    changed_files: u32,
+    /// `ready|invalid-commit|error`.
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CommitCompareResp {
+    summary: CommitCompareSummary,
+    entries: Vec<BranchChangeEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CommitCompareQuery {
+    commit: String,
+}
+
+/// `GET /api/sessions/{id}/git/commit-compare?commit=<oid>` — the diff a single
+/// commit introduced (commit vs its first parent), reusing the name-status +
+/// numstat parsing. A root commit (no parent) diffs against the empty tree.
+async fn commit_compare(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<CommitCompareQuery>,
+) -> Result<Json<CommitCompareResp>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    let commit = q.commit.trim().to_string();
+    let commit_oid = match run_git(&cwd, &["rev-parse", "--verify", &format!("{commit}^{{commit}}")])
+        .await
+    {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => {
+            return Ok(Json(CommitCompareResp {
+                summary: CommitCompareSummary {
+                    commit_oid: commit.clone(),
+                    parent_oid: None,
+                    compare_ref: commit.clone(),
+                    base_ref: String::new(),
+                    changed_files: 0,
+                    status: "invalid-commit".into(),
+                },
+                entries: Vec::new(),
+            }));
+        }
+    };
+    // First parent, if any. Root commits diff against the empty-tree object.
+    let parent_oid = run_git(&cwd, &["rev-parse", "--verify", &format!("{commit_oid}^")])
+        .await
+        .ok()
+        .map(|s| s.trim().to_string());
+    const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+    let base = parent_oid.clone().unwrap_or_else(|| EMPTY_TREE.to_string());
+
+    let range = format!("{base}..{commit_oid}");
+    let name_status = run_git(&cwd, &["diff", "--name-status", "-M", "-z", &range]).await?;
+    let mut entries = parse_name_status_z(name_status.as_bytes());
+    if let Ok(numstat) = run_git(&cwd, &["diff", "--numstat", "-z", &range]).await {
+        for rec in numstat.split('\0').filter(|r| !r.is_empty()) {
+            let mut cols = rec.splitn(3, '\t');
+            let added = cols.next().and_then(|s| s.parse::<u32>().ok());
+            let removed = cols.next().and_then(|s| s.parse::<u32>().ok());
+            if let Some(path) = cols.next() {
+                if let Some(e) = entries.iter_mut().find(|e| e.path == path) {
+                    e.added = added;
+                    e.removed = removed;
+                }
+            }
+        }
+    }
+
+    Ok(Json(CommitCompareResp {
+        summary: CommitCompareSummary {
+            changed_files: entries.len() as u32,
+            commit_oid: commit_oid.clone(),
+            parent_oid,
+            compare_ref: commit_oid,
+            base_ref: base,
+            status: "ready".into(),
+        },
+        entries,
+    }))
 }
 
 /// One changed path between two refs. Mirrors the desktop's
