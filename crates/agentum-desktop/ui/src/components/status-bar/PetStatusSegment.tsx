@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React from 'react'
 import { Check, PackageOpen, Trash2, Upload } from 'lucide-react'
 import { toast } from 'sonner'
@@ -43,13 +44,13 @@ function PetStatusSegmentInner(): React.JSX.Element {
 
   const handleImport = async (): Promise<void> => {
     console.log('[pet-overlay] upload: click')
-    if (!window.api?.pet?.import) {
-      console.warn('[pet-overlay] upload: window.api.pet.import missing — restart Agentum')
+    if (!api?.pet?.import) {
+      console.warn('[pet-overlay] upload: api.pet.import missing — restart Agentum')
       toast.error('Custom pet upload needs a full app restart (not just reload).')
       return
     }
     try {
-      const model = await window.api.pet.import()
+      const model = await api.pet.import()
       console.log('[pet-overlay] upload: result', model)
       if (!model) {
         return
@@ -66,12 +67,12 @@ function PetStatusSegmentInner(): React.JSX.Element {
   }
 
   const handleImportPetBundle = async (): Promise<void> => {
-    if (!window.api?.pet?.importPetBundle) {
+    if (!api?.pet?.importPetBundle) {
       toast.error('Pet bundle import needs a full app restart (not just reload).')
       return
     }
     try {
-      const model = await window.api.pet.importPetBundle()
+      const model = await api.pet.importPetBundle()
       if (!model) {
         return
       }

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Accessibility,
@@ -151,7 +152,7 @@ export function DeveloperPermissionsPane(): React.JSX.Element {
     refreshSequenceRef.current = refreshId
     setLoading(true)
     try {
-      const nextStates = await window.api.developerPermissions.getStatus()
+      const nextStates = await api.developerPermissions.getStatus()
       if (mountedRef.current && refreshId === refreshSequenceRef.current) {
         setStates(nextStates)
       }
@@ -185,7 +186,7 @@ export function DeveloperPermissionsPane(): React.JSX.Element {
   const request = async (id: DeveloperPermissionId): Promise<void> => {
     setPendingId(id)
     try {
-      const result = await window.api.developerPermissions.request({ id })
+      const result = await api.developerPermissions.request({ id })
       if (!mountedRef.current) {
         return
       }

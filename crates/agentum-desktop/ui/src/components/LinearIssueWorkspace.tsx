@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the Linear issue page co-locates the
    full-page layout with its hydration/comment state so the selected issue
    surface stays coherent with the existing Linear drawer behavior. */
@@ -68,7 +69,7 @@ type LinearIssueWorkspaceProps = {
 
 async function copyTextToClipboard(text: string, label: string): Promise<void> {
   try {
-    await window.api.ui.writeClipboardText(text)
+    await api.ui.writeClipboardText(text)
     toast.success(`${label} copied`)
   } catch {
     toast.error(`Failed to copy ${label.toLowerCase()}`)

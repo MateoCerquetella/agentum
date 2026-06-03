@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the editor external-watch hook co-locates
    target diffing, fs:changed dispatch, tombstone coalescing, and rename
    correlation so the end-to-end event-to-store mutation contract stays
@@ -225,7 +226,7 @@ export function useEditorExternalWatch(): void {
         remoteUnsubscribe()
         remoteWatchUnsubsRef.current.delete(key)
       } else {
-        void window.api.fs.unwatchWorktree({
+        void api.fs.unwatchWorktree({
           worktreePath: target.worktreePath,
           connectionId: target.connectionId
         })
@@ -268,7 +269,7 @@ export function useEditorExternalWatch(): void {
           })
         continue
       }
-      void window.api.fs
+      void api.fs
         .watchWorktree({
           worktreePath: target.worktreePath,
           connectionId: target.connectionId
@@ -299,7 +300,7 @@ export function useEditorExternalWatch(): void {
           normalizeRuntimePathForComparison(worktreePath)
       )
     )
-    const unsubscribe = window.api.fs.onFsChanged(handleFsChanged)
+    const unsubscribe = api.fs.onFsChanged(handleFsChanged)
     fsChangedHandlerRef.current = handleFsChanged
 
     return () => {
@@ -315,7 +316,7 @@ export function useEditorExternalWatch(): void {
         if (remoteUnsubscribe) {
           remoteUnsubscribe()
         } else {
-          void window.api.fs.unwatchWorktree({
+          void api.fs.unwatchWorktree({
             worktreePath: target.worktreePath,
             connectionId: target.connectionId
           })

@@ -1,4 +1,3 @@
-import './lib/electron-bridge'
 import './assets/main.css'
 
 import { StrictMode } from 'react'

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Gauge, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -70,7 +71,7 @@ export function useGitHubRateLimitSnapshot(options?: { autoRefresh?: boolean }):
             ? await callRuntimeRpc<GetRateLimitResult>(target, 'github.rateLimit', params ?? {}, {
                 timeoutMs: 30_000
               })
-            : ((await window.api.gh.rateLimit(params)) as GetRateLimitResult | undefined)
+            : ((await api.gh.rateLimit(params)) as GetRateLimitResult | undefined)
         if (token !== latestToken.current) {
           return
         }

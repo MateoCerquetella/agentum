@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect } from 'react'
 import { toast } from 'sonner'
 import { detectLanguage } from '@/lib/language-detect'
@@ -22,7 +23,7 @@ export function shouldUploadRemoteEditorFileDrop(
 
 export function useGlobalFileDrop(): void {
   useEffect(() => {
-    return window.api.ui.onFileDrop((data) => {
+    return api.ui.onFileDrop((data) => {
       if (data.target !== 'editor') {
         return
       }
@@ -103,7 +104,7 @@ export function useGlobalFileDrop(): void {
             const isRemoteRuntimePath = isRemoteRuntimeFileOperation(fileContext, filePath)
             // Why: remote paths don't need local auth — the relay/runtime is the security boundary.
             if (!connectionId && !isRemoteRuntimePath) {
-              await window.api.fs.authorizeExternalPath({ targetPath: filePath })
+              await api.fs.authorizeExternalPath({ targetPath: filePath })
             }
             const stat = await statRuntimePath(fileContext, filePath)
             if (stat.isDirectory) {

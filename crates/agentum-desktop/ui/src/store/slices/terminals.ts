@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
@@ -1657,7 +1658,7 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
     await Promise.allSettled(
       ptyIds
         .filter((ptyId) => !ptyId.startsWith('remote:'))
-        .map((ptyId) => window.api.pty.kill(ptyId, { keepHistory: keepIdentifiers }))
+        .map((ptyId) => api.pty.kill(ptyId, { keepHistory: keepIdentifiers }))
     )
   },
 

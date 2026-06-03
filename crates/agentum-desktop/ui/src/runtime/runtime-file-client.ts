@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: this client intentionally centralizes the
 file preload API plus remote runtime fallbacks so call sites cannot drift on
 local-vs-environment routing rules. */
@@ -132,10 +133,10 @@ export async function readRuntimeFileContent({
 }: RuntimeFileReadArgs): Promise<RuntimeReadableFileContent> {
   const target = getActiveRuntimeTarget(settings)
   if (target.kind !== 'environment') {
-    return window.api.fs.readFile({ filePath, connectionId })
+    return api.fs.readFile({ filePath, connectionId })
   }
   if (!worktreeId) {
-    return window.api.fs.readFile({ filePath, connectionId })
+    return api.fs.readFile({ filePath, connectionId })
   }
   if (!canReadRelativeRuntimeFile(relativePath)) {
     throw new Error('Remote file is outside the owning runtime worktree')
@@ -164,7 +165,7 @@ export async function readRuntimeFilePreview(
     if (hasRemoteRuntimeOwner(context)) {
       throw new Error('Remote file is outside the owning runtime worktree')
     }
-    return window.api.fs.readFile({ filePath, connectionId: context.connectionId })
+    return api.fs.readFile({ filePath, connectionId: context.connectionId })
   }
   return callRuntimeRpc<RuntimeFilePreviewResult>(
     remoteArgs.target,
@@ -181,7 +182,7 @@ export async function readRuntimeDirectory(
   const remoteArgs = getRemoteFileArgs(context, dirPath)
   if (!remoteArgs) {
     assertLocalFilesystemFallbackAllowed(context)
-    return window.api.fs.readDir({ dirPath, connectionId: context.connectionId })
+    return api.fs.readDir({ dirPath, connectionId: context.connectionId })
   }
   return callRuntimeRpc<DirEntry[]>(
     remoteArgs.target,
@@ -199,7 +200,7 @@ export async function writeRuntimeFile(
   const remoteArgs = getRemoteFileArgs(context, filePath)
   if (!remoteArgs) {
     assertLocalFilesystemFallbackAllowed(context)
-    await window.api.fs.writeFile({ filePath, content, connectionId: context.connectionId })
+    await api.fs.writeFile({ filePath, content, connectionId: context.connectionId })
     return
   }
   await callRuntimeRpc(
@@ -219,8 +220,8 @@ export async function createRuntimePath(
   if (!remoteArgs) {
     assertLocalFilesystemFallbackAllowed(context)
     await (kind === 'directory'
-      ? window.api.fs.createDir({ dirPath: path, connectionId: context.connectionId })
-      : window.api.fs.createFile({ filePath: path, connectionId: context.connectionId }))
+      ? api.fs.createDir({ dirPath: path, connectionId: context.connectionId })
+      : api.fs.createFile({ filePath: path, connectionId: context.connectionId }))
     return
   }
   await callRuntimeRpc(
@@ -240,7 +241,7 @@ export async function renameRuntimePath(
   const newRelativePath = getRelativePathInsideWorktree(context.worktreePath, newPath)
   if (!oldRemoteArgs || newRelativePath === null) {
     assertLocalFilesystemFallbackAllowed(context)
-    await window.api.fs.rename({ oldPath, newPath, connectionId: context.connectionId })
+    await api.fs.rename({ oldPath, newPath, connectionId: context.connectionId })
     return
   }
   await callRuntimeRpc(
@@ -264,7 +265,7 @@ export async function copyRuntimePath(
   const destinationArgs = getRemoteFileArgs(context, destinationPath)
   if (!sourceArgs || !destinationArgs) {
     assertLocalFilesystemFallbackAllowed(context)
-    await window.api.fs.copy({
+    await api.fs.copy({
       sourcePath,
       destinationPath,
       connectionId: context.connectionId
@@ -291,7 +292,7 @@ export async function deleteRuntimePath(
   const remoteArgs = getRemoteFileArgs(context, targetPath)
   if (!remoteArgs) {
     assertLocalFilesystemFallbackAllowed(context)
-    await window.api.fs.deletePath({
+    await api.fs.deletePath({
       targetPath,
       connectionId: context.connectionId,
       recursive
@@ -336,7 +337,7 @@ export async function importExternalPathsToRuntime(
 ): Promise<{ results: RuntimeImportResult[] }> {
   const target = getActiveRuntimeTarget(context.settings)
   if (target.kind !== 'environment' || !context.worktreeId || !context.worktreePath) {
-    return window.api.fs.importExternalPaths({
+    return api.fs.importExternalPaths({
       sourcePaths,
       destDir: destinationDir,
       connectionId: context.connectionId,
@@ -349,7 +350,7 @@ export async function importExternalPathsToRuntime(
     throw new Error('Destination is outside the active runtime worktree')
   }
 
-  const staged = await window.api.fs.stageExternalPathsForRuntimeUpload({ sourcePaths })
+  const staged = await api.fs.stageExternalPathsForRuntimeUpload({ sourcePaths })
   const results: RuntimeImportResult[] = []
   const reservedNames = new Set<string>()
 
@@ -527,7 +528,7 @@ export async function searchRuntimeFiles(
 ): Promise<SearchResult> {
   const target = getActiveRuntimeTarget(context.settings)
   if (target.kind !== 'environment' || !context.worktreeId) {
-    return window.api.fs.search({
+    return api.fs.search({
       ...options,
       connectionId: context.connectionId
     })
@@ -547,7 +548,7 @@ export async function listRuntimeFiles(
 ): Promise<string[]> {
   const target = getActiveRuntimeTarget(context.settings)
   if (target.kind !== 'environment' || !context.worktreeId) {
-    return window.api.fs.listFiles({
+    return api.fs.listFiles({
       rootPath: args.rootPath,
       connectionId: context.connectionId,
       excludePaths: args.excludePaths
@@ -567,7 +568,7 @@ export async function listRuntimeMarkdownDocuments(
 ): Promise<MarkdownDocument[]> {
   const target = getActiveRuntimeTarget(context.settings)
   if (target.kind !== 'environment' || !context.worktreeId) {
-    return window.api.fs.listMarkdownDocuments({
+    return api.fs.listMarkdownDocuments({
       rootPath,
       connectionId: context.connectionId
     })
@@ -587,7 +588,7 @@ export async function statRuntimePath(
   const remoteArgs = getRemoteFileArgs(context, absolutePath)
   if (!remoteArgs) {
     assertLocalFilesystemFallbackAllowed(context)
-    return window.api.fs.stat({
+    return api.fs.stat({
       filePath: absolutePath,
       connectionId: context.connectionId
     })
@@ -607,7 +608,7 @@ export async function subscribeRuntimeFileChanges(
 ): Promise<() => void> {
   const target = getActiveRuntimeTarget(context.settings)
   if (target.kind !== 'environment' || !context.worktreeId || !context.worktreePath) {
-    return window.api.fs.onFsChanged(onPayload)
+    return api.fs.onFsChanged(onPayload)
   }
 
   const listener: RuntimeFileWatchListener = { onPayload, onError }
@@ -659,7 +660,7 @@ function createSharedRuntimeFileWatch(
   }
   // Why: editor reloads and the Explorer can watch the same remote worktree.
   // Keep one runtime WebSocket/server watcher and fan out events in renderer.
-  shared.start = window.api.runtimeEnvironments
+  shared.start = api.runtimeEnvironments
     .subscribe(
       {
         selector: target.environmentId,

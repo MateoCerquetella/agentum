@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import type { StateCreator } from 'zustand'
 import { toast } from 'sonner'
 import type { AppState } from '../types'
@@ -48,7 +49,7 @@ export const createSparsePresetsSlice: StateCreator<AppState, [], [], SparsePres
       sparsePresetsErrorByRepo: { ...s.sparsePresetsErrorByRepo, [repoId]: undefined }
     }))
     try {
-      const presets = await window.api.sparsePresets.list({ repoId })
+      const presets = await api.sparsePresets.list({ repoId })
       set((s) => ({
         sparsePresetsByRepo: { ...s.sparsePresetsByRepo, [repoId]: presets },
         sparsePresetsLoadingByRepo: { ...s.sparsePresetsLoadingByRepo, [repoId]: false },
@@ -80,7 +81,7 @@ export const createSparsePresetsSlice: StateCreator<AppState, [], [], SparsePres
           return null
         }
       }
-      const saved = await window.api.sparsePresets.save(args)
+      const saved = await api.sparsePresets.save(args)
       set((s) => {
         const existing = s.sparsePresetsByRepo[args.repoId]
         if (existing === undefined) {
@@ -119,7 +120,7 @@ export const createSparsePresetsSlice: StateCreator<AppState, [], [], SparsePres
       }
     }))
     try {
-      await window.api.sparsePresets.remove({ repoId, presetId })
+      await api.sparsePresets.remove({ repoId, presetId })
       toast.success('Preset removed')
     } catch (err) {
       set((s) => ({

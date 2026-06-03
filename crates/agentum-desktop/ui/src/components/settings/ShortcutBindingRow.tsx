@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useEffect, useRef } from 'react'
 import { Ban, Keyboard, RotateCcw, Terminal } from 'lucide-react'
 import {
@@ -83,8 +84,8 @@ export function ShortcutBindingRow({
     if (recording) {
       recordButtonRef.current?.focus()
     }
-    window.api.ui.setShortcutRecorderFocused(recording)
-    return () => window.api.ui.setShortcutRecorderFocused(false)
+    api.ui.setShortcutRecorderFocused(recording)
+    return () => api.ui.setShortcutRecorderFocused(false)
   }, [recording])
 
   const statusMessage = error ?? (warnings.length > 0 ? warnings.join(' ') : '')

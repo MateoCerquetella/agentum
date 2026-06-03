@@ -1,5 +1,9 @@
-use std::io::{Read, Write};
+use std::{
+    io::{Read, Write},
+    sync::Arc,
+};
 
+use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Serialize;
 use serde_json::Value;
@@ -10,15 +14,104 @@ use crate::{
     state::{AppState, PtyHandle},
 };
 
+// Emitted on the channels the renderer's pty-dispatcher listens to (onData ->
+// "pty-data", onExit -> "pty-exit"). The old code emitted "pty:output", which no
+// listener matched — that is why the local terminal produced no output.
 #[derive(Debug, Clone, Serialize)]
-struct PtyOutputEvent {
+struct PtyDataEvent {
     id: String,
     data: String,
-    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PtyExitEvent {
+    id: String,
+    code: i32,
 }
 
 fn map_err(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+// What program to run in a fresh PTY and how to size/place it.
+struct SpawnConfig {
+    program: String,
+    args: Vec<String>,
+    cwd: Option<String>,
+    env: Vec<(String, String)>,
+    cols: u16,
+    rows: u16,
+}
+
+// Open a PTY, spawn the program, wire the reader thread (-> "pty-data") and the
+// exit watcher (-> "pty-exit"), and return the handle. Blocking; call via
+// spawn_blocking. Shared by pty_create and pty_spawn so the read/exit wiring
+// lives in exactly one place.
+fn open_pty(app: tauri::AppHandle, id: String, cfg: SpawnConfig) -> Result<PtyHandle, String> {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: cfg.rows,
+            cols: cfg.cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(map_err)?;
+
+    let mut command = CommandBuilder::new(&cfg.program);
+    for arg in &cfg.args {
+        command.arg(arg);
+    }
+    if let Some(cwd) = &cfg.cwd {
+        command.cwd(cwd);
+    }
+    for (key, value) in &cfg.env {
+        command.env(key, value);
+    }
+
+    let child = pair.slave.spawn_command(command).map_err(map_err)?;
+    drop(pair.slave);
+    let child = Arc::new(Mutex::new(child));
+
+    let mut reader = pair.master.try_clone_reader().map_err(map_err)?;
+    let app_reader = app.clone();
+    let id_reader = id.clone();
+    let child_reader = child.clone();
+    std::thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => {
+                    let data = String::from_utf8_lossy(&buffer[..read]).to_string();
+                    let _ = app_reader.emit(
+                        "pty-data",
+                        PtyDataEvent {
+                            id: id_reader.clone(),
+                            data,
+                        },
+                    );
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+        // EOF means the child closed the slave, so wait() returns its code at once.
+        let code = child_reader
+            .lock()
+            .wait()
+            .ok()
+            .map(|status| status.exit_code() as i32)
+            .unwrap_or(0);
+        let _ = app_reader.emit("pty-exit", PtyExitEvent { id: id_reader, code });
+    });
+
+    let writer = pair.master.take_writer().map_err(map_err)?;
+    Ok(PtyHandle {
+        master: pair.master,
+        writer,
+        child,
+    })
 }
 
 #[tauri::command]
@@ -38,74 +131,101 @@ pub async fn pty_create(
         }
     }
 
-    let shell_path = shell.unwrap_or_else(default_shell_path);
-    let id_for_reader = id.clone();
-    let app_handle = app.clone();
-
-    let handle = tokio::task::spawn_blocking(move || -> Result<PtyHandle, String> {
-        let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(PtySize {
-                rows,
+    let program = shell.unwrap_or_else(default_shell_path);
+    let ptys = state.ptys.clone();
+    let id_for_insert = id.clone();
+    let handle = tokio::task::spawn_blocking(move || {
+        open_pty(
+            app,
+            id,
+            SpawnConfig {
+                program,
+                args: Vec::new(),
+                cwd,
+                env: Vec::new(),
                 cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(map_err)?;
-
-        let mut command = CommandBuilder::new(shell_path);
-        if let Some(cwd) = cwd {
-            command.cwd(cwd);
-        }
-
-        let child = pair.slave.spawn_command(command).map_err(map_err)?;
-        drop(pair.slave);
-
-        let mut reader = pair.master.try_clone_reader().map_err(map_err)?;
-        std::thread::spawn(move || {
-            let mut buffer = [0_u8; 8192];
-            loop {
-                match reader.read(&mut buffer) {
-                    Ok(0) => break,
-                    Ok(read) => {
-                        let data = String::from_utf8_lossy(&buffer[..read]).to_string();
-                        let _ = app_handle.emit(
-                            "pty:output",
-                            PtyOutputEvent {
-                                id: id_for_reader.clone(),
-                                data,
-                                error: None,
-                            },
-                        );
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(error) => {
-                        let _ = app_handle.emit(
-                            "pty:output",
-                            PtyOutputEvent {
-                                id: id_for_reader.clone(),
-                                data: String::new(),
-                                error: Some(error.to_string()),
-                            },
-                        );
-                        break;
-                    }
-                }
-            }
-        });
-
-        let writer = pair.master.take_writer().map_err(map_err)?;
-        Ok(PtyHandle {
-            master: pair.master,
-            writer,
-            child,
-        })
+                rows,
+            },
+        )
     })
     .await
     .map_err(map_err)??;
 
-    state.ptys.lock().insert(id, handle);
+    ptys.lock().insert(id_for_insert, handle);
     Ok(())
+}
+
+// The renderer's IPC terminal transport calls `pty.spawn(options)` and expects a
+// `{ id }` back (it allocates no id itself). Options: { cols, rows, cwd, env,
+// command, shellOverride, … }. `command` is an optional startup command line; when
+// absent we launch an interactive shell. Without this the transport saw `null` and
+// threw "terminal failed to spawn (no pty handle returned)".
+#[tauri::command]
+pub async fn pty_spawn(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<Value, String> {
+    // Take an owned copy of the options before any await — Request borrows the
+    // invoke message and must not be held across the await point.
+    let opts: Value = match request.body() {
+        tauri::ipc::InvokeBody::Json(value) => value.clone(),
+        _ => Value::Null,
+    };
+    drop(request);
+
+    let cols = opts.get("cols").and_then(Value::as_u64).unwrap_or(80) as u16;
+    let rows = opts.get("rows").and_then(Value::as_u64).unwrap_or(24) as u16;
+    let cwd = opts.get("cwd").and_then(Value::as_str).map(str::to_string);
+    let command = opts
+        .get("command")
+        .and_then(Value::as_str)
+        .filter(|cmd| !cmd.is_empty())
+        .map(str::to_string);
+    let shell_override = opts
+        .get("shellOverride")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let env: Vec<(String, String)> = opts
+        .get("env")
+        .and_then(Value::as_object)
+        .map(|map| {
+            map.iter()
+                .filter_map(|(key, value)| value.as_str().map(|v| (key.clone(), v.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let program = shell_override.unwrap_or_else(default_shell_path);
+    // No command -> plain interactive shell (empty args, like pty_create). A
+    // command runs via `<shell> -c "<command>"`.
+    let args = match command {
+        Some(cmd) => vec!["-c".to_string(), cmd],
+        None => Vec::new(),
+    };
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let ptys = state.ptys.clone();
+    let id_for_open = id.clone();
+    let handle = tokio::task::spawn_blocking(move || {
+        open_pty(
+            app,
+            id_for_open,
+            SpawnConfig {
+                program,
+                args,
+                cwd,
+                env,
+                cols,
+                rows,
+            },
+        )
+    })
+    .await
+    .map_err(map_err)??;
+
+    ptys.lock().insert(id.clone(), handle);
+    Ok(serde_json::json!({ "id": id }))
 }
 
 // pty methods use positional args, so the bridge delivers them as { args: [...] }
@@ -176,12 +296,14 @@ pub fn pty_kill(
         .and_then(Value::as_str)
         .ok_or_else(|| "pty_kill: missing id".to_string())?;
     // opts (keepHistory) is accepted but not yet honored.
-    let mut handle = state
+    let handle = state
         .ptys
         .lock()
         .remove(id)
         .ok_or_else(|| format!("unknown pty: {id}"))?;
-    handle.child.kill().map_err(map_err)
+    // Bind first so the child MutexGuard drops before `handle`.
+    let result = handle.child.lock().kill().map_err(map_err);
+    result
 }
 
 #[tauri::command]
@@ -222,7 +344,9 @@ pub fn pty_has_child_processes(
         return false;
     };
     // A foreground command is running when the fg process group leader isn't the shell.
-    match (foreground_pid(handle), handle.child.process_id()) {
+    // Bind the child pid first so the MutexGuard drops before `handle`/`ptys`.
+    let shell_pid = handle.child.lock().process_id();
+    match (foreground_pid(handle), shell_pid) {
         (Some(fg), Some(shell)) => fg as u32 != shell,
         _ => false,
     }
@@ -321,6 +445,62 @@ pub fn pty_management() -> Option<Value> {
     None
 }
 
+// Manage-Sessions panel (Settings). The renderer reaches these via the nested
+// `pty.management.*` namespace, which maps to `pty_management_*` commands.
+#[tauri::command]
+pub fn pty_management_list_sessions(state: State<'_, AppState>) -> Vec<Value> {
+    state
+        .ptys
+        .lock()
+        .keys()
+        .map(|id| serde_json::json!({ "id": id, "sessionId": id, "cwd": "", "title": "" }))
+        .collect()
+}
+
+#[tauri::command]
+pub fn pty_management_kill_one(
+    state: State<'_, AppState>,
+    request: tauri::ipc::Request<'_>,
+) -> Value {
+    let opts = match request.body() {
+        tauri::ipc::InvokeBody::Json(value) => value.clone(),
+        _ => Value::Null,
+    };
+    let id = opts
+        .get("sessionId")
+        .or_else(|| opts.get("id"))
+        .and_then(Value::as_str);
+    let success = match id {
+        Some(id) => match state.ptys.lock().remove(id) {
+            Some(handle) => handle.child.lock().kill().is_ok(),
+            None => false,
+        },
+        None => false,
+    };
+    serde_json::json!({ "success": success })
+}
+
+#[tauri::command]
+pub fn pty_management_kill_all(state: State<'_, AppState>) -> Value {
+    let mut ptys = state.ptys.lock();
+    let ids: Vec<String> = ptys.keys().cloned().collect();
+    let mut killed = 0_u32;
+    for id in &ids {
+        if let Some(handle) = ptys.remove(id) {
+            if handle.child.lock().kill().is_ok() {
+                killed += 1;
+            }
+        }
+    }
+    serde_json::json!({ "killedCount": killed, "remainingCount": ptys.len() })
+}
+
+#[tauri::command]
+pub fn pty_management_restart() -> Value {
+    // Restart needs the original spawn args, which PtyHandle doesn't retain.
+    serde_json::json!({ "success": false })
+}
+
 #[tauri::command]
 pub fn pty_ack_cold_restore() {}
 
@@ -346,13 +526,13 @@ pub fn pty_get_cwd(
     // The pty's direct child is the shell; its cwd reflects `cd` (a shell builtin).
     let pid = {
         let ptys = state.ptys.lock();
-        ptys.get(id)?.child.process_id()?
-    };
+        let handle = ptys.get(id)?;
+        // Bind first so the child MutexGuard drops before `handle`/`ptys`.
+        let pid = handle.child.lock().process_id();
+        pid
+    }?;
     resolve_process_cwd(pid)
 }
-
-#[tauri::command]
-pub fn pty_spawn() {}
 
 #[tauri::command]
 pub fn pty_report_geometry() {}

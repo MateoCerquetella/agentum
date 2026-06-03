@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import type { editor } from 'monaco-editor'
 import { formatShortcutLabel } from '@/hooks/useShortcutLabel'
 import { monaco } from '@/lib/monaco-setup'
@@ -258,7 +259,7 @@ export function setupContextualCopy({
     // Why: terminal agents only receive pasted plain text. We write the
     // contextual payload at copy time so file and line metadata survives
     // once the snippet leaves Agentum and is pasted into a terminal.
-    await window.api.ui.writeClipboardText(copiedText)
+    await api.ui.writeClipboardText(copiedText)
     // Why: once the user has copied this exact selection, surfacing the
     // affordance again during the confirmation toast reads like duplicate
     // UI. We keep it suppressed until the selection actually changes.

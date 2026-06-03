@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
 import type { MouseEvent, ReactElement, ReactNode } from 'react'
 
@@ -41,7 +42,7 @@ export function DiffSectionHeader({
             event.stopPropagation()
             // Why: stop both mouse-down and click on the path affordance so
             // the parent section-toggle row cannot consume the interaction.
-            void window.api.ui.writeClipboardText(path).catch((error) => {
+            void api.ui.writeClipboardText(path).catch((error) => {
               console.error('Failed to copy diff path:', error)
             })
           }}
@@ -51,7 +52,7 @@ export function DiffSectionHeader({
             }
             event.preventDefault()
             event.stopPropagation()
-            void window.api.ui.writeClipboardText(path).catch((error) => {
+            void api.ui.writeClipboardText(path).catch((error) => {
               console.error('Failed to copy diff path:', error)
             })
           }}

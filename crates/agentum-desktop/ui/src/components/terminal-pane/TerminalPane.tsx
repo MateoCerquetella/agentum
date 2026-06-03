@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: terminal pane component co-locates title state, layout serialization, and portal rendering to keep pane lifecycle consistent. */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -971,7 +972,7 @@ export default function TerminalPane({
       return
     }
     const syncFocused = (focused: boolean): void => {
-      window.api.ui.setTerminalInputFocused?.(focused)
+      api.ui.setTerminalInputFocused?.(focused)
     }
     const onFocusIn = (event: FocusEvent): void => {
       if (isXtermHelperTextarea(event.target)) {
@@ -1032,8 +1033,8 @@ export default function TerminalPane({
     const pasteFromClipboard = (pane: ManagedPane): void => {
       const connectionId = getConnectionId(worktreeId) ?? null
       void pasteTerminalClipboard({
-        readClipboardText: window.api.ui.readClipboardText,
-        saveClipboardImageAsTempFile: window.api.ui.saveClipboardImageAsTempFile,
+        readClipboardText: api.ui.readClipboardText,
+        saveClipboardImageAsTempFile: api.ui.saveClipboardImageAsTempFile,
         connectionId,
         pasteText: (text, options) => pasteTerminalText(pane.terminal, text, options),
         onImagePasteError: (error) => setTerminalError(formatClipboardImagePasteError(error))

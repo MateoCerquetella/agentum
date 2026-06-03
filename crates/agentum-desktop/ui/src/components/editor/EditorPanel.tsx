@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppStore } from '@/store'
 import { getConnectionId } from '@/lib/connection-context'
@@ -196,7 +197,7 @@ function EditorPanelInner({
       return
     }
     try {
-      await window.api.ui.writeClipboardText(copyState.copyText)
+      await api.ui.writeClipboardText(copyState.copyText)
       if (!pathCopyMountedRef.current) {
         return
       }
@@ -295,7 +296,7 @@ function EditorPanelInner({
       showLocalPathOpenBlockedToast()
       return
     }
-    window.api.shell.openPath(activeFile.filePath)
+    api.shell.openPath(activeFile.filePath)
   }
   const disableRenameBrowse = Boolean(
     settingsForRuntimeOwner(

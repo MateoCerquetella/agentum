@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FeatureWallWorkflowId } from '../../../../shared/feature-wall-workflows'
 import type { AgentsStepId } from '../../../../shared/agents-orchestration-steps'
@@ -90,8 +91,8 @@ export function useFeatureWallCompletion(
 
   const readUsageAccountState = useCallback(async (): Promise<boolean> => {
     const [claude, codex] = await Promise.all([
-      window.api.claudeAccounts.list().catch(() => null),
-      window.api.codexAccounts.list().catch(() => null)
+      api.claudeAccounts.list().catch(() => null),
+      api.codexAccounts.list().catch(() => null)
     ])
     return hasFeatureWallUsageTracking({
       claudeManagedAccountCount: claude?.accounts.length ?? 0,

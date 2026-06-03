@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 export async function playDesktopNotificationSound(
   customSoundId: string | null | undefined,
   customSoundVolume?: number | null
@@ -7,7 +8,7 @@ export async function playDesktopNotificationSound(
   }
 
   try {
-    const result = await window.api.notifications.playSound({
+    const result = await api.notifications.playSound({
       volume: customSoundVolume ?? undefined
     })
     // Why: 'deduped' is expected when bursts of notifications coalesce — not a failure.

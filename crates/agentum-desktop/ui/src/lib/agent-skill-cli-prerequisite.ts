@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { toast } from 'sonner'
 import type { CliInstallStatus } from '../../../shared/cli-install-types'
 
@@ -22,7 +23,7 @@ export async function ensureAgentumCliAvailableForAgentSkillTerminal({
   registrationPromptDelayMs = 700
 }: EnsureAgentumCliAvailableOptions = {}): Promise<CliInstallStatus | null> {
   try {
-    const status = await window.api.cli.getInstallStatus()
+    const status = await api.cli.getInstallStatus()
     onStatusChange?.(status)
 
     if (!status.supported) {
@@ -34,7 +35,7 @@ export async function ensureAgentumCliAvailableForAgentSkillTerminal({
       // Why: macOS may immediately show a native authorization prompt, so the
       // user needs app-level context before that OS dialog appears.
       await showAgentumCliRegistrationPromptToast(registrationPromptDelayMs)
-      const next = await window.api.cli.install()
+      const next = await api.cli.install()
       onStatusChange?.(next)
       showCliPrerequisiteWarning(next)
       return next

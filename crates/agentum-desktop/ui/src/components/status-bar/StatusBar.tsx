@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the status bar keeps provider rendering,
 interaction menus, and compact-layout behavior together so the hover/click
 states stay consistent across Claude and Codex. */
@@ -624,7 +625,7 @@ function ClaudeSwitcherMenu({
   }, [])
 
   const loadAccounts = useCallback(async () => {
-    const next = await window.api.claudeAccounts.list()
+    const next = await api.claudeAccounts.list()
     if (mountedRef.current) {
       setAccounts(next)
     }
@@ -662,7 +663,7 @@ function ClaudeSwitcherMenu({
     }
     setIsSwitching(true)
     try {
-      const next = await window.api.claudeAccounts.select({
+      const next = await api.claudeAccounts.select({
         accountId,
         runtime: target.runtime,
         wslDistro: target.wslDistro
@@ -1107,7 +1108,7 @@ function CodexSwitcherMenu({
   const accountState = getCodexStatusAccountsFromSettings(settings) ?? accounts
 
   const loadAccounts = useCallback(async () => {
-    const next = await window.api.codexAccounts.list()
+    const next = await api.codexAccounts.list()
     if (mountedRef.current) {
       setAccounts(next)
     }
@@ -1144,7 +1145,7 @@ function CodexSwitcherMenu({
     const previousActiveAccountId = getCodexStatusActiveId(accountState, target)
     setIsSwitching(true)
     try {
-      const next = await window.api.codexAccounts.select({
+      const next = await api.codexAccounts.select({
         accountId,
         runtime: target.runtime,
         wslDistro: target.wslDistro
@@ -1183,7 +1184,7 @@ function CodexSwitcherMenu({
     }
     setReauthenticatingAccountId(accountId)
     try {
-      const next = await window.api.codexAccounts.reauthenticate({ accountId })
+      const next = await api.codexAccounts.reauthenticate({ accountId })
       recordFeatureInteraction('codex-account-switching')
       if (mountedRef.current) {
         setAccounts(next)

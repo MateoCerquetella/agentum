@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useMemo } from 'react'
 import { ChevronRight, Copy } from 'lucide-react'
 import { basename, dirname } from '@/lib/path'
@@ -101,7 +102,7 @@ export function FileResultRow({
             </ContextMenuTrigger>
             <ContextMenuContent>
               <ContextMenuItem
-                onClick={() => window.api.ui.writeClipboardText(fileResult.relativePath)}
+                onClick={() => api.ui.writeClipboardText(fileResult.relativePath)}
               >
                 <Copy className="size-3.5" />
                 Copy Path
@@ -197,7 +198,7 @@ export function MatchResultRow({
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem
-          onClick={() => window.api.ui.writeClipboardText(`${relativePath}#L${match.line}`)}
+          onClick={() => api.ui.writeClipboardText(`${relativePath}#L${match.line}`)}
         >
           <Copy className="size-3.5" />
           Copy Line Path

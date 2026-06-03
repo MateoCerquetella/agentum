@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: this onboarding step owns the full notification setup surface, including macOS guidance, sound choices, and upload controls. */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BellRing, FileAudio, Settings, Upload } from 'lucide-react'
@@ -67,7 +68,7 @@ export function NotificationStep({
 
   useEffect(() => {
     let cancelled = false
-    void window.api.notifications.getPermissionStatus().then((status) => {
+    void api.notifications.getPermissionStatus().then((status) => {
       if (!cancelled) {
         setPermissionStatus(status)
       }
@@ -98,11 +99,11 @@ export function NotificationStep({
     notificationSettingsRef.current?.customSoundVolume ?? 100
 
   const handleMacPermission = async (): Promise<void> => {
-    const status = await window.api.notifications.requestPermission()
+    const status = await api.notifications.requestPermission()
     if (mountedRef.current) {
       setPermissionStatus(status)
     }
-    await window.api.notifications.openSystemSettings()
+    await api.notifications.openSystemSettings()
   }
 
   const previewSound = async (
@@ -111,7 +112,7 @@ export function NotificationStep({
     if (customSoundId === 'system') {
       return
     }
-    const result = await window.api.notifications.playSound({
+    const result = await api.notifications.playSound({
       force: true,
       volume: getCustomSoundVolume()
     })
@@ -125,7 +126,7 @@ export function NotificationStep({
   const handleChooseCustomSound = async (): Promise<void> => {
     setIsPickingSound(true)
     try {
-      const soundPath = await window.api.shell.pickAudio()
+      const soundPath = await api.shell.pickAudio()
       if (soundPath) {
         await updateNotificationSettings({ customSoundId: 'custom', customSoundPath: soundPath })
         await previewSound('custom')

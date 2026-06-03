@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Gauge, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -63,7 +64,7 @@ export function useGitLabRateLimitSnapshot(options?: { autoRefresh?: boolean }):
                 params ?? {},
                 { timeoutMs: 30_000 }
               )
-            : ((await window.api.gl.rateLimit(params)) as GetGitLabRateLimitResult | undefined)
+            : ((await api.gl.rateLimit(params)) as GetGitLabRateLimitResult | undefined)
         if (token !== latestToken.current) {
           return
         }

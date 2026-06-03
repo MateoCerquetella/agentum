@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { FolderPlus, Loader2 } from 'lucide-react'
@@ -108,7 +109,7 @@ const AddProjectFromFolderDialog = React.memo(function AddProjectFromFolderDialo
     try {
       let repo: Repo | null
       if (connectionId) {
-        const result = await window.api.repos.addRemote({
+        const result = await api.repos.addRemote({
           connectionId,
           remotePath: folderPath
         })

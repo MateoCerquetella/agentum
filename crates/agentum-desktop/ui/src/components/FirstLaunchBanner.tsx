@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 // Existing-user first-launch notice. Shown to users whose cohort marker is
 // `existedBeforeTelemetryRelease === true` and whose `optedIn` is still
 // `null`, i.e. users who installed Agentum before the telemetry release and
@@ -12,14 +13,14 @@
 // Three actions, two semantics:
 //   - "Got it" and the ✕ in the corner → silent acknowledge. Both persist
 //     `optedIn: true`, fire no opt-in event, route through
-//     `window.api.telemetryAcknowledgeBanner()` to a dedicated main-side
+//     `api.telemetryAcknowledgeBanner()` to a dedicated main-side
 //     channel so no `via` derivation can tag this path. Two surfaces for
 //     the same action because the ✕ alone is easy to miss; "Got it" is
 //     the discoverable primary, ✕ is the keyboard/notification-style
 //     escape. Either way the user sees the notice, chooses not to
 //     intervene, and is opted in silently.
 //   - "Turn off" → explicit opt-out. Routes through
-//     `window.api.telemetrySetOptIn(false)`; main derives
+//     `api.telemetrySetOptIn(false)`; main derives
 //     `via = 'first_launch_banner'` from the pre-mutation state
 //     (existedBeforeTelemetryRelease=true, optedIn=null, incoming=false)
 //     and fires `telemetry_opted_out { via: 'first_launch_banner' }`
@@ -141,7 +142,7 @@ export function FirstLaunchBanner({
           <button
             type="button"
             className="underline underline-offset-2 hover:text-foreground"
-            onClick={() => void window.api.shell.openUrl(PRIVACY_URL)}
+            onClick={() => void api.shell.openUrl(PRIVACY_URL)}
           >
             Privacy policy
           </button>

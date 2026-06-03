@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type React from 'react'
 import type { TreeNode } from './file-explorer-types'
@@ -106,7 +107,7 @@ export function useFileExplorerSelection(
       selectionStateRef.current.selectedPaths,
       node
     )
-    void window.api.ui.writeClipboardText(
+    void api.ui.writeClipboardText(
       formatFileExplorerPathsForClipboard(actionNodes, pathKind)
     )
   }, [])

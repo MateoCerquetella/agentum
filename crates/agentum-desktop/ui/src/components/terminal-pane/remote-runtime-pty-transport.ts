@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: remote PTY transport keeps lifecycle, JSON fallback, and binary stream wiring together so reconnect/destroy ordering stays testable as one behavior surface. */
 import type { RuntimeRpcResponse } from '../../../../shared/runtime-rpc-envelope'
 import type {
@@ -184,7 +185,7 @@ export function createRemoteRuntimePtyTransport(
   }
 
   async function callRuntime<TResult>(method: string, params?: unknown): Promise<TResult> {
-    const response = await window.api.runtimeEnvironments.call({
+    const response = await api.runtimeEnvironments.call({
       selector: currentRuntimeEnvironmentId,
       method,
       params,

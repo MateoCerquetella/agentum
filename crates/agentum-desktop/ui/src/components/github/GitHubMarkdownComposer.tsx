@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import type { Editor } from '@tiptap/react'
@@ -244,7 +245,7 @@ export function GitHubMarkdownComposer({
 
   const handleLinkOpen = useCallback(() => {
     if (linkBubble?.href) {
-      window.api.shell.openUrl(linkBubble.href)
+      api.shell.openUrl(linkBubble.href)
     }
   }, [linkBubble?.href])
 

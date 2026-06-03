@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* oxlint-disable max-lines */
 import React, { useCallback, useDeferredValue, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Check, Copy } from 'lucide-react'
@@ -95,8 +96,8 @@ function InstallRgGuidance({
     // Why: use Electron's clipboard IPC instead of navigator.clipboard — the
     // latter often fails silently in the renderer due to focus/permission
     // quirks inside Radix dialogs. All other copy buttons in the app go
-    // through window.api.ui.writeClipboardText for consistency.
-    void window.api.ui
+    // through api.ui.writeClipboardText for consistency.
+    void api.ui
       .writeClipboardText(command)
       .then(() => {
         if (!isMountedRef.current) {

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useState, useCallback } from 'react'
 import { Button } from '../ui/button'
 import { Minus, Plus, RotateCcw } from 'lucide-react'
@@ -5,11 +6,11 @@ import { applyUIZoom } from '@/lib/ui-zoom'
 import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, zoomLevelToPercent } from './SettingsConstants'
 
 export function UIZoomControl(): React.JSX.Element {
-  const [zoomLevel, setZoomLevel] = useState(() => window.api.ui.getZoomLevel())
+  const [zoomLevel, setZoomLevel] = useState(() => api.ui.getZoomLevel())
 
   useEffect(() => {
-    return window.api.ui.onTerminalZoom(() => {
-      setZoomLevel(window.api.ui.getZoomLevel())
+    return api.ui.onTerminalZoom(() => {
+      setZoomLevel(api.ui.getZoomLevel())
     })
   }, [])
 
@@ -17,7 +18,7 @@ export function UIZoomControl(): React.JSX.Element {
     const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, level))
     applyUIZoom(clamped)
     setZoomLevel(clamped)
-    window.api.ui.set({ uiZoomLevel: clamped })
+    api.ui.set({ uiZoomLevel: clamped })
   }, [])
 
   const percent = zoomLevelToPercent(zoomLevel)

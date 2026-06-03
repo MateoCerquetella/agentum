@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the row owns dense file-tree rendering plus its context menu, drag target, and inline-input sibling contract. */
 import React, { useCallback, useRef } from 'react'
 import { basename } from '@/lib/path'
@@ -595,7 +596,7 @@ export function FileExplorerRow({
               showLocalPathOpenBlockedToast()
               return
             }
-            window.api.shell.openPath(node.path)
+            api.shell.openPath(node.path)
           }}
         >
           <ExternalLink />

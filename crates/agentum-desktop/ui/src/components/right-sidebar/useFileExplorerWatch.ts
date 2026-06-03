@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useRef } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import type { FsChangedPayload } from '../../../../shared/types'
@@ -335,7 +336,7 @@ export function useFileExplorerWatch({
           })
         })
     } else {
-      unsubscribeListener = window.api.fs.onFsChanged(handleFsChanged)
+      unsubscribeListener = api.fs.onFsChanged(handleFsChanged)
     }
 
     return () => {

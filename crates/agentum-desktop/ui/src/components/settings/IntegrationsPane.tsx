@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: this pane co-locates source-host and
    Linear integration cards so the preflight-check + status-badge +
    install/auth-prompt scaffolding lives in one place rather than fanning
@@ -172,7 +173,7 @@ export function IntegrationsPane(): React.JSX.Element {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => window.api.shell.openUrl('https://cli.github.com')}
+                    onClick={() => api.shell.openUrl('https://cli.github.com')}
                   >
                     <ExternalLink className="size-3.5 mr-1.5" />
                     Install GitHub CLI
@@ -196,7 +197,7 @@ export function IntegrationsPane(): React.JSX.Element {
                     variant="outline"
                     size="sm"
                     onClick={() =>
-                      window.api.shell.openUrl('https://cli.github.com/manual/gh_auth_login')
+                      api.shell.openUrl('https://cli.github.com/manual/gh_auth_login')
                     }
                   >
                     <ExternalLink className="size-3.5 mr-1.5" />
@@ -248,7 +249,7 @@ export function IntegrationsPane(): React.JSX.Element {
                     variant="outline"
                     size="sm"
                     onClick={() =>
-                      window.api.shell.openUrl('https://gitlab.com/gitlab-org/cli#installation')
+                      api.shell.openUrl('https://gitlab.com/gitlab-org/cli#installation')
                     }
                   >
                     <ExternalLink className="size-3.5 mr-1.5" />
@@ -273,7 +274,7 @@ export function IntegrationsPane(): React.JSX.Element {
                     variant="outline"
                     size="sm"
                     onClick={() =>
-                      window.api.shell.openUrl(
+                      api.shell.openUrl(
                         'https://gitlab.com/gitlab-org/cli/-/blob/main/docs/source/auth/login.md'
                       )
                     }
@@ -332,7 +333,7 @@ export function IntegrationsPane(): React.JSX.Element {
                     variant="outline"
                     size="sm"
                     onClick={() =>
-                      window.api.shell.openUrl(
+                      api.shell.openUrl(
                         'https://support.atlassian.com/bitbucket-cloud/docs/using-api-tokens/'
                       )
                     }
@@ -356,7 +357,7 @@ export function IntegrationsPane(): React.JSX.Element {
                     variant="outline"
                     size="sm"
                     onClick={() =>
-                      window.api.shell.openUrl(
+                      api.shell.openUrl(
                         'https://support.atlassian.com/bitbucket-cloud/docs/using-api-tokens/'
                       )
                     }
@@ -418,7 +419,7 @@ export function IntegrationsPane(): React.JSX.Element {
                     variant="outline"
                     size="sm"
                     onClick={() =>
-                      window.api.shell.openUrl(
+                      api.shell.openUrl(
                         'https://learn.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate'
                       )
                     }
@@ -443,7 +444,7 @@ export function IntegrationsPane(): React.JSX.Element {
                     variant="outline"
                     size="sm"
                     onClick={() =>
-                      window.api.shell.openUrl(
+                      api.shell.openUrl(
                         'https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-requests/get-pull-requests'
                       )
                     }
@@ -506,7 +507,7 @@ export function IntegrationsPane(): React.JSX.Element {
                     variant="outline"
                     size="sm"
                     onClick={() =>
-                      window.api.shell.openUrl('https://docs.gitea.com/next/development/api-usage')
+                      api.shell.openUrl('https://docs.gitea.com/next/development/api-usage')
                     }
                   >
                     <ExternalLink className="size-3.5 mr-1.5" />
@@ -529,7 +530,7 @@ export function IntegrationsPane(): React.JSX.Element {
                     variant="outline"
                     size="sm"
                     onClick={() =>
-                      window.api.shell.openUrl('https://docs.gitea.com/next/development/api-usage')
+                      api.shell.openUrl('https://docs.gitea.com/next/development/api-usage')
                     }
                   >
                     <ExternalLink className="size-3.5 mr-1.5" />

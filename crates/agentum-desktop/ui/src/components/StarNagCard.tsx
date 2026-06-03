@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useState } from 'react'
 import { Star, X } from 'lucide-react'
 import { Card } from './ui/card'
@@ -29,7 +30,7 @@ export function StarNagCard(): React.JSX.Element | null {
   const updateCardVisible = updateStatus.state !== 'idle' && updateStatus.state !== 'not-available'
 
   useEffect(() => {
-    return window.api.starNag.onShow(() => {
+    return api.starNag.onShow(() => {
       setError(false)
       setVisible(true)
     })
@@ -40,7 +41,7 @@ export function StarNagCard(): React.JSX.Element | null {
     // Why: fire-and-forget. If persisting the dismissal fails the worst case
     // is we re-fire the same threshold on next launch — not worth blocking
     // the close animation on.
-    void window.api.starNag.dismiss()
+    void api.starNag.dismiss()
   }
 
   useEffect(() => {
@@ -68,7 +69,7 @@ export function StarNagCard(): React.JSX.Element | null {
     }
     setBusy(true)
     setError(false)
-    const ok = await window.api.gh.starAgentum('star_nag')
+    const ok = await api.gh.starAgentum('star_nag')
     if (mountedRef.current) {
       setBusy(false)
     }
@@ -78,7 +79,7 @@ export function StarNagCard(): React.JSX.Element | null {
       }
       return
     }
-    await window.api.starNag.complete()
+    await api.starNag.complete()
     if (mountedRef.current) {
       setVisible(false)
     }

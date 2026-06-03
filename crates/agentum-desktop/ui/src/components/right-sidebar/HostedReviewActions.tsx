@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: Checks owns one compact hosted-review action bar; keeping GitHub PR and GitLab MR action branching together keeps provider parity visible. */
 import React, { useCallback, useMemo, useState } from 'react'
 import {
@@ -154,12 +155,12 @@ export default function HostedReviewActions({
       setActionError(null)
       try {
         const result = isGitLab
-          ? await window.api.gl.mergeMR({
+          ? await api.gl.mergeMR({
               repoPath: repo.path,
               iid: review.number,
               method
             })
-          : await window.api.gh.mergePR({
+          : await api.gh.mergePR({
               repoPath: repo.path,
               repoId: repo.id,
               prNumber: review.number,
@@ -196,7 +197,7 @@ export default function HostedReviewActions({
     setMerging(true)
     setActionError(null)
     try {
-      const result = await window.api.gh.setPRAutoMerge({
+      const result = await api.gh.setPRAutoMerge({
         repoPath: repo.path,
         repoId: repo.id,
         prNumber: review.number,
@@ -246,9 +247,9 @@ export default function HostedReviewActions({
       try {
         const result = isGitLab
           ? isClosing
-            ? await window.api.gl.closeMR({ repoPath: repo.path, iid: review.number })
-            : await window.api.gl.reopenMR({ repoPath: repo.path, iid: review.number })
-          : await window.api.gh.updatePRState({
+            ? await api.gl.closeMR({ repoPath: repo.path, iid: review.number })
+            : await api.gl.reopenMR({ repoPath: repo.path, iid: review.number })
+          : await api.gh.updatePRState({
               repoPath: repo.path,
               repoId: repo.id,
               prNumber: review.number,

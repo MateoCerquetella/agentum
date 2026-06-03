@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { getConnectionId } from '@/lib/connection-context'
@@ -42,7 +43,7 @@ export function useFileExplorerImport({
   setSelectedPathRef.current = setSelectedPath
 
   useEffect(() => {
-    return window.api.ui.onFileDrop((data) => {
+    return api.ui.onFileDrop((data) => {
       if (data.target !== 'file-explorer') {
         return
       }

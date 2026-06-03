@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useState } from 'react'
 
 export type WindowsTerminalCapabilities = {
@@ -118,11 +119,11 @@ export function loadWindowsTerminalCapabilities(
   const requestId = ++nextCapabilityRequestId
   latestCapabilityRequestIdByOwnerKey.set(ownerKey, requestId)
   const nextPendingCapabilities = Promise.all([
-    window.api.wsl.isAvailable().catch(() => false),
-    window.api.wsl.listDistros().catch(() => []),
-    window.api.pwsh.isAvailable().catch(() => false),
-    window.api.gitBash.isAvailable().catch(() => false),
-    window.api.runtime
+    api.wsl.isAvailable().catch(() => false),
+    api.wsl.listDistros().catch(() => []),
+    api.pwsh.isAvailable().catch(() => false),
+    api.gitBash.isAvailable().catch(() => false),
+    api.runtime
       .getStatus()
       .then((status) => status.hostPlatform ?? null)
       .catch(() => null)

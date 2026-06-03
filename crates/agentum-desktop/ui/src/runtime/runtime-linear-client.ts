@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the renderer Linear client mirrors the
    preload/RPC Linear namespace so local and remote runtime routing stays in
    one auditable boundary. */
@@ -42,7 +43,7 @@ export async function linearStatus(
     ? callRuntimeRpc<LinearConnectionStatus>(target, 'linear.status', undefined, {
         timeoutMs: 15_000
       })
-    : window.api.linear.status()
+    : api.linear.status()
 }
 
 export async function linearTestConnection(
@@ -59,7 +60,7 @@ export async function linearTestConnection(
           timeoutMs: 30_000
         }
       )
-    : window.api.linear.testConnection(workspaceId ? { workspaceId } : undefined)
+    : api.linear.testConnection(workspaceId ? { workspaceId } : undefined)
 }
 
 export async function linearConnect(
@@ -74,7 +75,7 @@ export async function linearConnect(
         { apiKey },
         { timeoutMs: 30_000 }
       )
-    : window.api.linear.connect({ apiKey })
+    : api.linear.connect({ apiKey })
 }
 
 export async function linearDisconnect(settings: RuntimeLinearSettings): Promise<void> {
@@ -97,7 +98,7 @@ export async function linearDisconnectWorkspace(
     )
     return
   }
-  await window.api.linear.disconnect(workspaceId ? { workspaceId } : undefined)
+  await api.linear.disconnect(workspaceId ? { workspaceId } : undefined)
 }
 
 export async function linearSelectWorkspace(
@@ -112,7 +113,7 @@ export async function linearSelectWorkspace(
         { workspaceId },
         { timeoutMs: 15_000 }
       )
-    : window.api.linear.selectWorkspace({ workspaceId })
+    : api.linear.selectWorkspace({ workspaceId })
 }
 
 export async function linearSearchIssues(
@@ -129,7 +130,7 @@ export async function linearSearchIssues(
         { query, limit, workspaceId: workspaceId ?? undefined },
         { timeoutMs: 30_000 }
       )
-    : window.api.linear.searchIssues({ query, limit, workspaceId: workspaceId ?? undefined })
+    : api.linear.searchIssues({ query, limit, workspaceId: workspaceId ?? undefined })
 }
 
 export async function linearListIssues(
@@ -146,7 +147,7 @@ export async function linearListIssues(
         { filter, limit, workspaceId: workspaceId ?? undefined },
         { timeoutMs: 30_000 }
       )
-    : window.api.linear.listIssues({ filter, limit, workspaceId: workspaceId ?? undefined })
+    : api.linear.listIssues({ filter, limit, workspaceId: workspaceId ?? undefined })
 }
 
 export async function linearCreateIssue(
@@ -169,7 +170,7 @@ export async function linearCreateIssue(
     ? callRuntimeRpc<LinearCreateIssueResult>(target, 'linear.createIssue', args, {
         timeoutMs: 30_000
       })
-    : window.api.linear.createIssue(args)
+    : api.linear.createIssue(args)
 }
 
 export async function linearCreateSubIssue(
@@ -199,7 +200,7 @@ export async function linearGetIssue(
         { id, workspaceId: workspaceId ?? undefined },
         { timeoutMs: 30_000 }
       )
-    : window.api.linear.getIssue({ id, workspaceId: workspaceId ?? undefined })
+    : api.linear.getIssue({ id, workspaceId: workspaceId ?? undefined })
 }
 
 export async function linearUpdateIssue(
@@ -216,7 +217,7 @@ export async function linearUpdateIssue(
         { id, updates, workspaceId: workspaceId ?? undefined },
         { timeoutMs: 30_000 }
       )
-    : window.api.linear.updateIssue({ id, updates, workspaceId: workspaceId ?? undefined })
+    : api.linear.updateIssue({ id, updates, workspaceId: workspaceId ?? undefined })
 }
 
 export async function linearAddIssueComment(
@@ -233,7 +234,7 @@ export async function linearAddIssueComment(
         { issueId, body, workspaceId: workspaceId ?? undefined },
         { timeoutMs: 30_000 }
       )
-    : window.api.linear.addIssueComment({ issueId, body, workspaceId: workspaceId ?? undefined })
+    : api.linear.addIssueComment({ issueId, body, workspaceId: workspaceId ?? undefined })
 }
 
 export async function linearIssueComments(
@@ -249,7 +250,7 @@ export async function linearIssueComments(
         { issueId, workspaceId: workspaceId ?? undefined },
         { timeoutMs: 30_000 }
       )
-    : window.api.linear.issueComments({ issueId, workspaceId: workspaceId ?? undefined })
+    : api.linear.issueComments({ issueId, workspaceId: workspaceId ?? undefined })
 }
 
 export async function linearListTeams(
@@ -264,7 +265,7 @@ export async function linearListTeams(
         workspaceId ? { workspaceId } : undefined,
         { timeoutMs: 30_000 }
       )
-    : window.api.linear.listTeams(workspaceId ? { workspaceId } : undefined)
+    : api.linear.listTeams(workspaceId ? { workspaceId } : undefined)
 }
 
 export async function linearListProjects(
@@ -281,8 +282,8 @@ export async function linearListProjects(
         { query, limit, workspaceId: workspaceId ?? undefined },
         { timeoutMs: 30_000 }
       )
-    : typeof window.api.linear.listProjects === 'function'
-      ? window.api.linear.listProjects({ query, limit, workspaceId: workspaceId ?? undefined })
+    : typeof api.linear.listProjects === 'function'
+      ? api.linear.listProjects({ query, limit, workspaceId: workspaceId ?? undefined })
       : { items: [] }
 }
 
@@ -299,7 +300,7 @@ export async function linearGetProject(
         { id, workspaceId },
         { timeoutMs: 30_000 }
       )
-    : window.api.linear.getProject({ id, workspaceId })
+    : api.linear.getProject({ id, workspaceId })
 }
 
 export async function linearListProjectIssues(
@@ -316,7 +317,7 @@ export async function linearListProjectIssues(
         { projectId, limit, workspaceId },
         { timeoutMs: 30_000 }
       )
-    : window.api.linear.listProjectIssues({ projectId, limit, workspaceId })
+    : api.linear.listProjectIssues({ projectId, limit, workspaceId })
 }
 
 export async function linearListCustomViews(
@@ -333,7 +334,7 @@ export async function linearListCustomViews(
         { model, limit, workspaceId: workspaceId ?? undefined },
         { timeoutMs: 30_000 }
       )
-    : window.api.linear.listCustomViews({ model, limit, workspaceId: workspaceId ?? undefined })
+    : api.linear.listCustomViews({ model, limit, workspaceId: workspaceId ?? undefined })
 }
 
 export async function linearGetCustomView(
@@ -350,7 +351,7 @@ export async function linearGetCustomView(
         { viewId, model, workspaceId },
         { timeoutMs: 30_000 }
       )
-    : window.api.linear.getCustomView({ viewId, model, workspaceId })
+    : api.linear.getCustomView({ viewId, model, workspaceId })
 }
 
 export async function linearListCustomViewIssues(
@@ -367,7 +368,7 @@ export async function linearListCustomViewIssues(
         { viewId, limit, workspaceId },
         { timeoutMs: 30_000 }
       )
-    : window.api.linear.listCustomViewIssues({ viewId, limit, workspaceId })
+    : api.linear.listCustomViewIssues({ viewId, limit, workspaceId })
 }
 
 export async function linearListCustomViewProjects(
@@ -384,7 +385,7 @@ export async function linearListCustomViewProjects(
         { viewId, limit, workspaceId },
         { timeoutMs: 30_000 }
       )
-    : window.api.linear.listCustomViewProjects({ viewId, limit, workspaceId })
+    : api.linear.listCustomViewProjects({ viewId, limit, workspaceId })
 }
 
 export async function linearTeamStates(
@@ -400,7 +401,7 @@ export async function linearTeamStates(
         { teamId, workspaceId: workspaceId ?? undefined },
         { timeoutMs: 30_000 }
       )
-    : window.api.linear.teamStates({ teamId, workspaceId: workspaceId ?? undefined })
+    : api.linear.teamStates({ teamId, workspaceId: workspaceId ?? undefined })
 }
 
 export async function linearTeamLabels(
@@ -416,7 +417,7 @@ export async function linearTeamLabels(
         { teamId, workspaceId: workspaceId ?? undefined },
         { timeoutMs: 30_000 }
       )
-    : window.api.linear.teamLabels({ teamId, workspaceId: workspaceId ?? undefined })
+    : api.linear.teamLabels({ teamId, workspaceId: workspaceId ?? undefined })
 }
 
 export async function linearTeamMembers(
@@ -432,5 +433,5 @@ export async function linearTeamMembers(
         { teamId, workspaceId: workspaceId ?? undefined },
         { timeoutMs: 30_000 }
       )
-    : window.api.linear.teamMembers({ teamId, workspaceId: workspaceId ?? undefined })
+    : api.linear.teamMembers({ teamId, workspaceId: workspaceId ?? undefined })
 }

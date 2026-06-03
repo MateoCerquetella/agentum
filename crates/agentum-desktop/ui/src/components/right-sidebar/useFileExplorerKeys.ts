@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useRef } from 'react'
 import type React from 'react'
 import { toast } from 'sonner'
@@ -168,7 +169,7 @@ export function useFileExplorerKeys(opts: {
       // ⌥⇧⌘C (Mac) / Ctrl+Shift+Alt+C (Win) — Copy Relative Path
       if (wantsCopyRelativePath) {
         e.preventDefault()
-        window.api.ui.writeClipboardText(
+        api.ui.writeClipboardText(
           formatFileExplorerPathsForClipboard(fallbackNodes, 'relative')
         )
         return
@@ -176,7 +177,7 @@ export function useFileExplorerKeys(opts: {
       // ⌥⌘C (Mac) / Shift+Alt+C (Win) — Copy Path
       if (wantsCopyPath) {
         e.preventDefault()
-        window.api.ui.writeClipboardText(
+        api.ui.writeClipboardText(
           formatFileExplorerPathsForClipboard(fallbackNodes, 'absolute')
         )
       }

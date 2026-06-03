@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import type { CliInstallStatus } from '../../../../shared/cli-install-types'
 import type {
   ComputerUsePermissionSetupResult,
@@ -144,12 +145,12 @@ export function createOnboardingFeatureSetupDeps(): OnboardingFeatureSetupDeps {
   }
 
   return {
-    getCliStatus: () => window.api.cli.getInstallStatus(),
+    getCliStatus: () => api.cli.getInstallStatus(),
     showCliRegistrationPrompt: showAgentumCliRegistrationPromptToast,
-    installCli: () => window.api.cli.install(),
-    writeClipboardText: (text) => window.api.ui.writeClipboardText(text),
-    getComputerUsePermissionStatus: () => window.api.computerUsePermissions.getStatus(),
-    openComputerUsePermissionSetup: () => window.api.computerUsePermissions.openSetup(),
+    installCli: () => api.cli.install(),
+    writeClipboardText: (text) => api.ui.writeClipboardText(text),
+    getComputerUsePermissionStatus: () => api.computerUsePermissions.getStatus(),
+    openComputerUsePermissionSetup: () => api.computerUsePermissions.openSetup(),
     setStorageItem: (key, value) => localStorage.setItem(key, value),
     removeStorageItem: (key) => localStorage.removeItem(key),
     notifyOrchestrationStateChanged: notifyOrchestrationSetupStateChanged

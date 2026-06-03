@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: create-review dialog keeps provider copy, base/head selection, template controls, and submit state together so GitHub PR and GitLab MR creation stay symmetric. */
 import React, { useCallback, useRef, useState } from 'react'
 import { Check, ChevronsUpDown, Loader2, Sparkles, Square, RefreshCw } from 'lucide-react'
@@ -207,7 +208,7 @@ export function CreatePullRequestDialog({
       if (result.ok) {
         await onCreated({ provider, number: result.number, url: result.url })
         if (prCreationDefaults.openAfterCreate) {
-          window.api.shell.openUrl(result.url)
+          api.shell.openUrl(result.url)
         }
         resetSubmissionState()
         onOpenChange(false)
@@ -222,7 +223,7 @@ export function CreatePullRequestDialog({
           {
             action: {
               label: `Open on ${copy.providerName}`,
-              onClick: () => window.api.shell.openUrl(result.existingReview!.url)
+              onClick: () => api.shell.openUrl(result.existingReview!.url)
             }
           }
         )

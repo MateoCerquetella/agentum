@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import type { useAppStore } from '@/store'
 import {
@@ -61,7 +62,7 @@ export async function openWorkspacePortInBrowser(args: {
   const url = browserUrlForPort(args.port)
   if (args.openInAgentumBrowser === false && args.runtimeTarget.kind === 'local') {
     try {
-      await window.api.shell.openUrl(url)
+      await api.shell.openUrl(url)
       return { ok: true }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -175,7 +176,7 @@ async function runWorkspacePortScanForTarget(
 ): Promise<WorkspacePortScanResult> {
   const params = repoId ? { repoId } : {}
   if (target.kind === 'local') {
-    return window.api.workspacePorts.scan(params)
+    return api.workspacePorts.scan(params)
   }
   try {
     return await callRuntimeRpc<WorkspacePortScanResult>(target, 'workspacePorts.scan', params, {
@@ -221,7 +222,7 @@ export async function killWorkspacePortForTarget(
   args: { repoId: string; pid: number; port: number }
 ): Promise<WorkspacePortKillResult> {
   if (target.kind === 'local') {
-    return window.api.workspacePorts.kill(args)
+    return api.workspacePorts.kill(args)
   }
   try {
     return await callRuntimeRpc<WorkspacePortKillResult>(target, 'workspacePorts.kill', args, {

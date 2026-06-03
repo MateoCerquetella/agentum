@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useState } from 'react'
 import { Send } from 'lucide-react'
 import { toast } from 'sonner'
@@ -52,7 +53,7 @@ export function CommentsList({
                     args,
                     { timeoutMs: 30_000 }
                   )
-                : await window.api.gh.deleteIssueCommentBySlug(args)
+                : await api.gh.deleteIssueCommentBySlug(args)
               if (!res.ok) {
                 toast.error(res.error.message)
                 return
@@ -74,7 +75,7 @@ export function CommentsList({
                     args,
                     { timeoutMs: 30_000 }
                   )
-                : await window.api.gh.updateIssueCommentBySlug(args)
+                : await api.gh.updateIssueCommentBySlug(args)
               if (!res.ok) {
                 toast.error(res.error.message)
                 return
@@ -192,7 +193,7 @@ export function NewCommentForm({
                     args,
                     { timeoutMs: 30_000 }
                   )
-                : await window.api.gh.addIssueCommentBySlug(args)
+                : await api.gh.addIssueCommentBySlug(args)
               if (!res.ok) {
                 toast.error(res.error.message)
                 return

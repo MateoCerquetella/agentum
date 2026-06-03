@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: this module mirrors the git preload API with
 runtime-aware routing so source-control callers have one typed boundary instead
 of reimplementing local-vs-environment branching per operation. */
@@ -152,7 +153,7 @@ export async function getRuntimeGitStatus(
   const target = getActiveRuntimeTarget(context.settings)
   const includeIgnoredArgs = options?.includeIgnored ? { includeIgnored: true } : {}
   const localStatus = (): Promise<GitStatusResult> =>
-    window.api.git.status({
+    api.git.status({
       worktreePath: context.worktreePath,
       connectionId: context.connectionId,
       ...includeIgnoredArgs
@@ -181,7 +182,7 @@ export async function getRuntimeGitIgnoredPaths(
     return []
   }
   if (target.kind === 'local' || !context.worktreeId) {
-    return window.api.git.checkIgnored({
+    return api.git.checkIgnored({
       worktreePath: context.worktreePath,
       connectionId: context.connectionId,
       paths
@@ -201,7 +202,7 @@ export async function getRuntimeGitHistory(
 ): Promise<GitHistoryResult> {
   const target = getActiveRuntimeTarget(context.settings)
   if (target.kind === 'local' || !context.worktreeId) {
-    return window.api.git.history({
+    return api.git.history({
       worktreePath: context.worktreePath,
       connectionId: context.connectionId,
       ...options
@@ -220,7 +221,7 @@ export async function getRuntimeGitConflictOperation(
 ): Promise<GitConflictOperation> {
   const target = getActiveRuntimeTarget(context.settings)
   const localConflict = (): Promise<GitConflictOperation> =>
-    window.api.git.conflictOperation({
+    api.git.conflictOperation({
       worktreePath: context.worktreePath,
       connectionId: context.connectionId
     })
@@ -245,7 +246,7 @@ export async function abortRuntimeGitMerge(context: RuntimeGitContext): Promise<
     return
   }
   if (target.kind === 'local' || !context.worktreeId) {
-    await window.api.git.abortMerge({
+    await api.git.abortMerge({
       worktreePath: context.worktreePath,
       connectionId: context.connectionId
     })
@@ -266,7 +267,7 @@ export async function abortRuntimeGitRebase(context: RuntimeGitContext): Promise
     return
   }
   if (target.kind === 'local' || !context.worktreeId) {
-    await window.api.git.abortRebase({
+    await api.git.abortRebase({
       worktreePath: context.worktreePath,
       connectionId: context.connectionId
     })
@@ -286,7 +287,7 @@ export async function getRuntimeGitDiff(
 ): Promise<GitDiffResult> {
   const target = getActiveRuntimeTarget(context.settings)
   const localDiff = (): Promise<GitDiffResult> =>
-    window.api.git.diff({
+    api.git.diff({
       worktreePath: context.worktreePath,
       filePath: args.filePath,
       staged: args.staged,
@@ -313,7 +314,7 @@ export async function getRuntimeGitBranchCompare(
 ): Promise<GitBranchCompareResult> {
   const target = getActiveRuntimeTarget(context.settings)
   const localBranchCompare = (): Promise<GitBranchCompareResult> =>
-    window.api.git.branchCompare({
+    api.git.branchCompare({
       worktreePath: context.worktreePath,
       baseRef,
       connectionId: context.connectionId
@@ -341,7 +342,7 @@ export async function getRuntimeGitCommitCompare(
 ): Promise<GitCommitCompareResult> {
   const target = getActiveRuntimeTarget(context.settings)
   const localCommitCompare = (): Promise<GitCommitCompareResult> =>
-    window.api.git.commitCompare({
+    api.git.commitCompare({
       worktreePath: context.worktreePath,
       commitId,
       connectionId: context.connectionId
@@ -369,7 +370,7 @@ export async function getRuntimeGitUpstreamStatus(
 ): Promise<GitUpstreamStatus> {
   const target = getActiveRuntimeTarget(context.settings)
   const localUpstream = (): Promise<GitUpstreamStatus> =>
-    window.api.git.upstreamStatus({
+    api.git.upstreamStatus({
       worktreePath: context.worktreePath,
       connectionId: context.connectionId,
       ...(pushTarget ? { pushTarget } : {})
@@ -400,7 +401,7 @@ export async function fetchRuntimeGit(
     return
   }
   if (target.kind === 'local' || !context.worktreeId) {
-    await window.api.git.fetch({
+    await api.git.fetch({
       worktreePath: context.worktreePath,
       connectionId: context.connectionId,
       ...(pushTarget ? { pushTarget } : {})
@@ -426,7 +427,7 @@ export async function pullRuntimeGit(
     return
   }
   if (target.kind === 'local' || !context.worktreeId) {
-    await window.api.git.pull({
+    await api.git.pull({
       worktreePath: context.worktreePath,
       connectionId: context.connectionId,
       ...(pushTarget ? { pushTarget } : {})
@@ -447,7 +448,7 @@ export async function fastForwardRuntimeGit(
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
   if (target.kind === 'local' || !context.worktreeId) {
-    await window.api.git.fastForward({
+    await api.git.fastForward({
       worktreePath: context.worktreePath,
       connectionId: context.connectionId,
       ...(pushTarget ? { pushTarget } : {})
@@ -472,7 +473,7 @@ export async function rebaseRuntimeGitFromBase(
     return
   }
   if (target.kind === 'local' || !context.worktreeId) {
-    await window.api.git.rebaseFromBase({
+    await api.git.rebaseFromBase({
       worktreePath: context.worktreePath,
       baseRef,
       connectionId: context.connectionId
@@ -505,7 +506,7 @@ export async function pushRuntimeGit(
     return
   }
   if (target.kind === 'local' || !context.worktreeId) {
-    await window.api.git.push({
+    await api.git.push({
       worktreePath: context.worktreePath,
       connectionId: context.connectionId,
       ...(args.publish !== undefined ? { publish: args.publish } : {}),
@@ -537,7 +538,7 @@ export async function getRuntimeGitBranchDiff(
 ): Promise<GitDiffResult> {
   const target = getActiveRuntimeTarget(context.settings)
   if (target.kind === 'local' || !context.worktreeId) {
-    return window.api.git.branchDiff({
+    return api.git.branchDiff({
       worktreePath: context.worktreePath,
       compare: args.compare,
       filePath: args.filePath,
@@ -564,7 +565,7 @@ export async function getRuntimeGitCommitDiff(
 ): Promise<GitDiffResult> {
   const target = getActiveRuntimeTarget(context.settings)
   if (target.kind === 'local' || !context.worktreeId) {
-    return window.api.git.commitDiff({
+    return api.git.commitDiff({
       worktreePath: context.worktreePath,
       commitOid: args.commitOid,
       parentOid: args.parentOid,
@@ -590,7 +591,7 @@ export async function commitRuntimeGit(
     return serverGitCommit(context.worktreePath, message)
   }
   if (target.kind === 'local' || !context.worktreeId) {
-    return window.api.git.commit({
+    return api.git.commit({
       worktreePath: context.worktreePath,
       message,
       connectionId: context.connectionId
@@ -609,7 +610,7 @@ export async function generateRuntimeCommitMessage(
 ): Promise<RuntimeGenerateCommitMessageResult> {
   const target = getActiveRuntimeTarget(context.settings)
   if (target.kind === 'local' || !context.worktreeId) {
-    return window.api.git.generateCommitMessage({
+    return api.git.generateCommitMessage({
       worktreePath: context.worktreePath,
       repoId: context.worktreeId ? getRepoIdFromWorktreeId(context.worktreeId) : undefined,
       connectionId: context.connectionId
@@ -632,7 +633,7 @@ export async function discoverRuntimeCommitMessageModels(
 ): Promise<RuntimeDiscoverCommitMessageModelsResult> {
   const target = getActiveRuntimeTarget(context.settings)
   if (target.kind === 'local' || !context.worktreeId) {
-    return window.api.git.discoverCommitMessageModels({
+    return api.git.discoverCommitMessageModels({
       agentId,
       worktreePath: context.worktreePath,
       connectionId: context.connectionId
@@ -657,7 +658,7 @@ export async function cancelRuntimeGenerateCommitMessage(
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
   if (target.kind === 'local' || !context.worktreeId) {
-    await window.api.git.cancelGenerateCommitMessage({
+    await api.git.cancelGenerateCommitMessage({
       worktreePath: context.worktreePath,
       connectionId: context.connectionId
     })
@@ -677,7 +678,7 @@ export async function generateRuntimePullRequestFields(
 ): Promise<RuntimeGeneratePullRequestFieldsResult> {
   const target = getActiveRuntimeTarget(context.settings)
   if (target.kind === 'local' || !context.worktreeId) {
-    return window.api.git.generatePullRequestFields({
+    return api.git.generatePullRequestFields({
       worktreePath: context.worktreePath,
       repoId: context.worktreeId ? getRepoIdFromWorktreeId(context.worktreeId) : undefined,
       connectionId: context.connectionId,
@@ -701,7 +702,7 @@ export async function cancelRuntimeGeneratePullRequestFields(
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
   if (target.kind === 'local' || !context.worktreeId) {
-    await window.api.git.cancelGeneratePullRequestFields({
+    await api.git.cancelGeneratePullRequestFields({
       worktreePath: context.worktreePath,
       connectionId: context.connectionId
     })
@@ -725,7 +726,7 @@ export async function stageRuntimeGitPath(
     return
   }
   if (target.kind === 'local' || !context.worktreeId) {
-    await window.api.git.stage({
+    await api.git.stage({
       worktreePath: context.worktreePath,
       filePath,
       connectionId: context.connectionId
@@ -750,7 +751,7 @@ export async function bulkStageRuntimeGitPaths(
     return
   }
   if (target.kind === 'local' || !context.worktreeId) {
-    await window.api.git.bulkStage({
+    await api.git.bulkStage({
       worktreePath: context.worktreePath,
       filePaths,
       connectionId: context.connectionId
@@ -775,7 +776,7 @@ export async function unstageRuntimeGitPath(
     return
   }
   if (target.kind === 'local' || !context.worktreeId) {
-    await window.api.git.unstage({
+    await api.git.unstage({
       worktreePath: context.worktreePath,
       filePath,
       connectionId: context.connectionId
@@ -800,7 +801,7 @@ export async function bulkUnstageRuntimeGitPaths(
     return
   }
   if (target.kind === 'local' || !context.worktreeId) {
-    await window.api.git.bulkUnstage({
+    await api.git.bulkUnstage({
       worktreePath: context.worktreePath,
       filePaths,
       connectionId: context.connectionId
@@ -825,7 +826,7 @@ export async function bulkDiscardRuntimeGitPaths(
     return
   }
   if (target.kind === 'local' || !context.worktreeId) {
-    await window.api.git.bulkDiscard({
+    await api.git.bulkDiscard({
       worktreePath: context.worktreePath,
       filePaths,
       connectionId: context.connectionId
@@ -850,7 +851,7 @@ export async function discardRuntimeGitPath(
     return
   }
   if (target.kind === 'local' || !context.worktreeId) {
-    await window.api.git.discard({
+    await api.git.discard({
       worktreePath: context.worktreePath,
       filePath,
       connectionId: context.connectionId
@@ -871,7 +872,7 @@ export async function getRuntimeGitRemoteFileUrl(
 ): Promise<string | null> {
   const target = getActiveRuntimeTarget(context.settings)
   if (target.kind === 'local' || !context.worktreeId) {
-    return window.api.git.remoteFileUrl({
+    return api.git.remoteFileUrl({
       worktreePath: context.worktreePath,
       relativePath: args.relativePath,
       line: args.line,

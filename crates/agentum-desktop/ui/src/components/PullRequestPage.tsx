@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: duplicated from GitHubItemDialog so the dedicated PR full-page surface can evolve its Primer-styled header without destabilizing the issue dialog; planned to refactor shared parts out later. */
 import React, {
   Suspense,
@@ -739,7 +740,7 @@ function PRReviewersPanel({
               { repo: item.repoId, prNumber: item.number, reviewers: logins },
               { timeoutMs: 30_000 }
             )
-          : await window.api.gh.requestPRReviewers({
+          : await api.gh.requestPRReviewers({
               repoPath: repoPath ?? '',
               repoId: item.repoId,
               prNumber: item.number,
@@ -799,7 +800,7 @@ function PRReviewersPanel({
               { repo: item.repoId, prNumber: item.number, reviewers: logins },
               { timeoutMs: 30_000 }
             )
-          : await window.api.gh.removePRReviewers({
+          : await api.gh.removePRReviewers({
               repoPath: repoPath ?? '',
               repoId: item.repoId,
               prNumber: item.number,
@@ -1322,8 +1323,8 @@ function patchCachedWorkItemBody(cacheKey: string, body: string): void {
 // own cache when any window's mutation lands. We track the unsubscribe so
 // Vite HMR doesn't accumulate listeners across module reloads in dev.
 let workItemMutatedUnsub: (() => void) | undefined
-if (typeof window !== 'undefined' && window.api?.gh?.onWorkItemMutated) {
-  workItemMutatedUnsub = window.api.gh.onWorkItemMutated((payload) => {
+if (typeof window !== 'undefined' && api?.gh?.onWorkItemMutated) {
+  workItemMutatedUnsub = api.gh.onWorkItemMutated((payload) => {
     invalidateWorkItemDetailsCacheByMatch({
       repoPath: payload.repoPath,
       repoId: payload.repoId,
@@ -1393,7 +1394,7 @@ function loadPRFileContents(args: {
     touchPRFileContentCache(cacheKey, cached)
     return Promise.resolve(cached)
   }
-  const request = window.api.gh
+  const request = api.gh
     .prFileContents({
       repoPath: args.repoPath,
       repoId: args.repoId,
@@ -1422,8 +1423,8 @@ function addIssueCommentForRepo(args: {
   number: number
   body: string
   type?: 'issue' | 'pr'
-}): Promise<Awaited<ReturnType<typeof window.api.gh.addIssueComment>>> {
-  return window.api.gh.addIssueComment({
+}): Promise<Awaited<ReturnType<typeof api.gh.addIssueComment>>> {
+  return api.gh.addIssueComment({
     repoPath: args.repoPath,
     repoId: args.repoId,
     number: args.number,
@@ -1441,8 +1442,8 @@ function addPRReviewCommentForRepo(args: {
   line: number
   startLine?: number
   body: string
-}): Promise<Awaited<ReturnType<typeof window.api.gh.addPRReviewComment>>> {
-  return window.api.gh.addPRReviewComment({
+}): Promise<Awaited<ReturnType<typeof api.gh.addPRReviewComment>>> {
+  return api.gh.addPRReviewComment({
     repoPath: args.repoPath,
     repoId: args.repoId,
     prNumber: args.prNumber,
@@ -1463,8 +1464,8 @@ function addPRReviewCommentReplyForRepo(args: {
   threadId?: string
   path?: string
   line?: number
-}): Promise<Awaited<ReturnType<typeof window.api.gh.addPRReviewCommentReply>>> {
-  return window.api.gh.addPRReviewCommentReply({
+}): Promise<Awaited<ReturnType<typeof api.gh.addPRReviewCommentReply>>> {
+  return api.gh.addPRReviewCommentReply({
     repoPath: args.repoPath,
     repoId: args.repoId,
     prNumber: args.prNumber,
@@ -1484,7 +1485,7 @@ function setPRFileViewedForRepo(args: {
   path: string
   viewed: boolean
 }): Promise<boolean> {
-  return window.api.gh.setPRFileViewed({
+  return api.gh.setPRFileViewed({
     repoPath: args.repoPath,
     repoId: args.repoId,
     prNumber: args.prNumber,
@@ -1500,7 +1501,7 @@ function getWorkItemDetailsForRepo(args: {
   number: number
   type: 'issue' | 'pr'
 }): Promise<GitHubWorkItemDetails | null> {
-  return window.api.gh.workItemDetails({
+  return api.gh.workItemDetails({
     repoPath: args.repoPath,
     repoId: args.repoId,
     number: args.number,
@@ -2087,7 +2088,7 @@ function PRFilesCombinedDiffViewer({
   )
 
   const openFilesOnGitHub = useCallback(() => {
-    void window.api.shell.openUrl(`${prUrl.replace(/\/$/, '')}/files`)
+    void api.shell.openUrl(`${prUrl.replace(/\/$/, '')}/files`)
   }, [prUrl])
 
   const handleAddLineComment = useCallback(
@@ -2798,7 +2799,7 @@ function ConversationTab({
                   variant="ghost"
                   size="icon-xs"
                   className="size-7"
-                  onClick={() => window.api.shell.openUrl(comment.url)}
+                  onClick={() => api.shell.openUrl(comment.url)}
                   aria-label="Open comment on GitHub"
                 >
                   <ExternalLink className="size-3.5" />
@@ -3160,7 +3161,7 @@ function PRActionsPanel({
     }
     setMergePending(true)
     try {
-      const result = await window.api.gh.mergePR({
+      const result = await api.gh.mergePR({
         repoPath,
         repoId: repoId ?? undefined,
         prNumber: item.number,
@@ -3188,7 +3189,7 @@ function PRActionsPanel({
     const enabled = mergePresentation.autoMergeAction.kind === 'enable'
     setMergePending(true)
     try {
-      const result = await window.api.gh.setPRAutoMerge({
+      const result = await api.gh.setPRAutoMerge({
         repoPath,
         repoId: repoId ?? undefined,
         prNumber: item.number,
@@ -3269,7 +3270,7 @@ function PRActionsPanel({
                 {label}
               </DropdownMenuItem>
             ))}
-            <DropdownMenuItem onSelect={() => window.api.shell.openUrl(item.url)}>
+            <DropdownMenuItem onSelect={() => api.shell.openUrl(item.url)}>
               <ExternalLink className="size-4" />
               Open GitHub merge box
             </DropdownMenuItem>
@@ -3624,7 +3625,7 @@ function ChecksTab({
     }
     setRefreshing(true)
     try {
-      const nextChecks = (await window.api.gh.prChecks({
+      const nextChecks = (await api.gh.prChecks({
         repoPath,
         repoId: repoId ?? undefined,
         prNumber: item.number,
@@ -3649,7 +3650,7 @@ function ChecksTab({
       }
       setRerunning(true)
       try {
-        const result = await window.api.gh.rerunPRChecks({
+        const result = await api.gh.rerunPRChecks({
           repoPath,
           repoId: repoId ?? undefined,
           prNumber: item.number,
@@ -3762,7 +3763,7 @@ function ChecksTab({
       setChecksState((current) =>
         updateGitHubChecksTabDetails(current, key, { loading: true, details: null, error: null })
       )
-      void window.api.gh
+      void api.gh
         .prCheckDetails({
           repoPath,
           repoId: repoId ?? undefined,
@@ -4127,7 +4128,7 @@ function ChecksTab({
                   variant="ghost"
                   size="xs"
                   className="h-7 gap-1 px-2 text-[11px]"
-                  onClick={() => window.api.shell.openUrl(openUrl)}
+                  onClick={() => api.shell.openUrl(openUrl)}
                 >
                   Open in GitHub
                   <ExternalLink className="size-3" />
@@ -4398,7 +4399,7 @@ async function runIssueUpdate(args: {
   repoId?: string | null
   projectOrigin: PullRequestPageProjectOrigin | undefined
   number: number
-  updates: Parameters<typeof window.api.gh.updateIssue>[0]['updates']
+  updates: Parameters<typeof api.gh.updateIssue>[0]['updates']
 }): Promise<void> {
   if (args.projectOrigin) {
     const target = getActiveRuntimeTarget(useAppStore.getState().settings)
@@ -4410,13 +4411,13 @@ async function runIssueUpdate(args: {
     }
     const res =
       target.kind === 'environment'
-        ? await callRuntimeRpc<Awaited<ReturnType<typeof window.api.gh.updateIssueBySlug>>>(
+        ? await callRuntimeRpc<Awaited<ReturnType<typeof api.gh.updateIssueBySlug>>>(
             target,
             'github.project.updateIssueBySlug',
             updateArgs,
             { timeoutMs: 30_000 }
           )
-        : await window.api.gh.updateIssueBySlug(updateArgs)
+        : await api.gh.updateIssueBySlug(updateArgs)
     if (!res.ok) {
       throw new Error(res.error.message)
     }
@@ -4425,7 +4426,7 @@ async function runIssueUpdate(args: {
   if (!args.repoPath) {
     throw new Error('No repo context available for this edit.')
   }
-  const res = await window.api.gh.updateIssue({
+  const res = await api.gh.updateIssue({
     repoPath: args.repoPath,
     repoId: args.repoId ?? undefined,
     number: args.number,
@@ -4459,13 +4460,13 @@ async function runWorkItemBodyUpdate(args: {
     }
     const res =
       target.kind === 'environment'
-        ? await callRuntimeRpc<Awaited<ReturnType<typeof window.api.gh.updatePullRequestBySlug>>>(
+        ? await callRuntimeRpc<Awaited<ReturnType<typeof api.gh.updatePullRequestBySlug>>>(
             target,
             'github.project.updatePullRequestBySlug',
             updateArgs,
             { timeoutMs: 30_000 }
           )
-        : await window.api.gh.updatePullRequestBySlug(updateArgs)
+        : await api.gh.updatePullRequestBySlug(updateArgs)
     if (!res.ok) {
       throw new Error(res.error.message)
     }
@@ -4498,13 +4499,13 @@ async function runPullRequestStateUpdate(args: {
     }
     const res =
       target.kind === 'environment'
-        ? await callRuntimeRpc<Awaited<ReturnType<typeof window.api.gh.updatePullRequestBySlug>>>(
+        ? await callRuntimeRpc<Awaited<ReturnType<typeof api.gh.updatePullRequestBySlug>>>(
             target,
             'github.project.updatePullRequestBySlug',
             updateArgs,
             { timeoutMs: 30_000 }
           )
-        : await window.api.gh.updatePullRequestBySlug(updateArgs)
+        : await api.gh.updatePullRequestBySlug(updateArgs)
     if (!res.ok) {
       throw new Error(res.error.message)
     }
@@ -4513,7 +4514,7 @@ async function runPullRequestStateUpdate(args: {
   if (!args.repoPath) {
     throw new Error('No repo context available for this pull request.')
   }
-  const res = await window.api.gh.updatePRState({
+  const res = await api.gh.updatePRState({
     repoPath: args.repoPath,
     repoId: args.repoId ?? undefined,
     prNumber: args.number,
@@ -5473,7 +5474,7 @@ export default function PullRequestPage({
     try {
       // Why: Electron's clipboard IPC is reliable even when browser clipboard
       // APIs lose focus/activation inside nested overlay surfaces.
-      await window.api.ui.writeClipboardText(workItem.url)
+      await api.ui.writeClipboardText(workItem.url)
       if (!linkCopyMountedRef.current) {
         return
       }
@@ -5631,7 +5632,7 @@ export default function PullRequestPage({
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  onClick={() => window.api.shell.openUrl(workItem.url)}
+                  onClick={() => api.shell.openUrl(workItem.url)}
                   aria-label="Open on GitHub"
                 >
                   <ExternalLink className="size-4" />
@@ -5684,7 +5685,7 @@ export default function PullRequestPage({
                     Start new workspace
                   </DropdownMenuItem>
                 ) : null}
-                <DropdownMenuItem onSelect={() => window.api.shell.openUrl(workItem.url)}>
+                <DropdownMenuItem onSelect={() => api.shell.openUrl(workItem.url)}>
                   <ExternalLink className="size-4" />
                   Open on GitHub
                 </DropdownMenuItem>

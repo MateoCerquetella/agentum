@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the remote terminal multiplexer owns one bridged subscription, stream lifecycle, binary frame parsing, and remote lock events as a single transport contract. */
 import type { RuntimeRpcResponse } from '../../../shared/runtime-rpc-envelope'
 import {
@@ -177,7 +178,7 @@ class RemoteRuntimeTerminalMultiplexer {
     const connectPromise = new Promise<void>((resolve, reject) => {
       this.readyResolver = resolve
       this.readyRejecter = reject
-      void window.api.runtimeEnvironments
+      void api.runtimeEnvironments
         .subscribe(
           {
             selector: this.environmentId,

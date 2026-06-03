@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: this hook is the single orchestrator for every onboarding-step transition (navigation, persistence, telemetry, ref-mirror, auto-select); splitting would force callers to coordinate ordering across multiple hooks and lose the controller-shape contract OnboardingFlow.tsx consumes. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -787,14 +788,14 @@ export function useOnboardingFlow(
         return
       }
       track('onboarding_step4_path_clicked', { path: 'open_folder' })
-      const path = await window.api.repos.pickFolder()
+      const path = await api.repos.pickFolder()
       if (!path) {
         track('onboarding_step4_path_failed', { path: 'open_folder', reason: 'cancelled' })
         return
       }
       setBusyLabel('Opening project…')
       try {
-        let result = await window.api.repos.add({ path })
+        let result = await api.repos.add({ path })
         if ('error' in result && result.error.includes('Not a valid git repository')) {
           const attemptId = createNestedRepoTelemetryAttemptId()
           const scan = await scanNestedRepos(path)
@@ -811,7 +812,7 @@ export function useOnboardingFlow(
             showNestedRepoReview(scan, path, attemptId, 'local')
             return
           }
-          result = await window.api.repos.add({ path, kind: 'folder' })
+          result = await api.repos.add({ path, kind: 'folder' })
         }
         if ('error' in result) {
           throw new Error(result.error)
@@ -1008,7 +1009,7 @@ export function useOnboardingFlow(
                 { timeoutMs: 10 * 60_000 }
               )
             ).repo
-          : await window.api.repos.clone({
+          : await api.repos.clone({
               url: trimmed,
               destination
             })

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: this menu keeps row targeting, batch actions, and ctrl-click event guards together so nested worktree menus share one event policy. */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -295,7 +296,7 @@ const WorktreeContextMenu = React.memo(function WorktreeContextMenu({
   }, [setMenuOpenState])
 
   const handleCopyPath = useCallback(() => {
-    window.api.ui.writeClipboardText(worktree.path)
+    api.ui.writeClipboardText(worktree.path)
   }, [worktree.path])
 
   const handleToggleRead = useCallback(() => {

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useState, type JSX } from 'react'
 import { Loader2, Mic } from 'lucide-react'
 import { toast } from 'sonner'
@@ -285,7 +286,7 @@ export default function FeatureTipsModal(): JSX.Element | null {
         trackAgentumCliFeatureTipSetupClicked(telemetrySource)
         setPrimaryBusy(true)
         try {
-          const result = await installCliFromFeatureTip(() => window.api.cli.install())
+          const result = await installCliFromFeatureTip(() => api.cli.install())
           if (result.kind === 'installed') {
             trackAgentumCliFeatureTipSetupResult(telemetrySource, 'installed')
             enableOrchestrationSkillSetup()

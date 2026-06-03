@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { toast } from 'sonner'
@@ -504,7 +505,7 @@ function Settings(): React.JSX.Element {
     let stale = false
     const loadFontSuggestions = async (): Promise<void> => {
       try {
-        const fonts = await window.api.settings.listFonts()
+        const fonts = await api.settings.listFonts()
         if (stale || fonts.length === 0) {
           return
         }

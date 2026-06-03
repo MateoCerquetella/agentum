@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import type { StateCreator } from 'zustand'
 import type {
   ClaudeUsageBreakdownRow,
@@ -42,7 +43,7 @@ export const createClaudeUsageSlice: StateCreator<AppState, [], [], ClaudeUsageS
 
   setClaudeUsageEnabled: async (enabled) => {
     try {
-      const nextScanState = (await window.api.claudeUsage.setEnabled({
+      const nextScanState = (await api.claudeUsage.setEnabled({
         enabled
       })) as ClaudeUsageScanState
       set({
@@ -83,7 +84,7 @@ export const createClaudeUsageSlice: StateCreator<AppState, [], [], ClaudeUsageS
 
   fetchClaudeUsage: async (opts) => {
     try {
-      const scanState = (await window.api.claudeUsage.getScanState()) as ClaudeUsageScanState
+      const scanState = (await api.claudeUsage.getScanState()) as ClaudeUsageScanState
       const currentScanState = get().claudeUsageScanState
       const shouldPreserveLoadingState =
         opts?.forceRefresh === true &&
@@ -103,31 +104,31 @@ export const createClaudeUsageSlice: StateCreator<AppState, [], [], ClaudeUsageS
         return
       }
 
-      const nextScanState = (await window.api.claudeUsage.refresh({
+      const nextScanState = (await api.claudeUsage.refresh({
         force: opts?.forceRefresh ?? false
       })) as ClaudeUsageScanState
       const { claudeUsageScope, claudeUsageRange } = get()
 
       const [summary, daily, modelBreakdown, projectBreakdown, recentSessions] = await Promise.all([
-        window.api.claudeUsage.getSummary({
+        api.claudeUsage.getSummary({
           scope: claudeUsageScope,
           range: claudeUsageRange
         }) as Promise<ClaudeUsageSummary>,
-        window.api.claudeUsage.getDaily({
+        api.claudeUsage.getDaily({
           scope: claudeUsageScope,
           range: claudeUsageRange
         }) as Promise<ClaudeUsageDailyPoint[]>,
-        window.api.claudeUsage.getBreakdown({
+        api.claudeUsage.getBreakdown({
           scope: claudeUsageScope,
           range: claudeUsageRange,
           kind: 'model'
         }) as Promise<ClaudeUsageBreakdownRow[]>,
-        window.api.claudeUsage.getBreakdown({
+        api.claudeUsage.getBreakdown({
           scope: claudeUsageScope,
           range: claudeUsageRange,
           kind: 'project'
         }) as Promise<ClaudeUsageBreakdownRow[]>,
-        window.api.claudeUsage.getRecentSessions({
+        api.claudeUsage.getRecentSessions({
           scope: claudeUsageScope,
           range: claudeUsageRange,
           limit: 10

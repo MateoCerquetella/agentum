@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { FileText, GitCompare, Globe2, TerminalSquare } from 'lucide-react'
@@ -87,10 +88,10 @@ export default function RecentTabSwitcher(): React.JSX.Element | null {
   }, [setSwitcherState])
 
   useEffect(() => {
-    const unsubscribeKeyDown = window.api.ui.onCtrlTabKeyDown(({ shiftKey }) => {
+    const unsubscribeKeyDown = api.ui.onCtrlTabKeyDown(({ shiftKey }) => {
       openOrAdvance(shiftKey ? -1 : 1)
     })
-    const unsubscribeKeyUp = window.api.ui.onCtrlTabKeyUp(commit)
+    const unsubscribeKeyUp = api.ui.onCtrlTabKeyUp(commit)
     return () => {
       unsubscribeKeyDown()
       unsubscribeKeyUp()

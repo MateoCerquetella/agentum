@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useState } from 'react'
 import { FolderOpen } from 'lucide-react'
 import type { FloatingTerminalTriggerLocation, GlobalSettings } from '../../../../shared/types'
@@ -38,7 +39,7 @@ export function FloatingWorkspacePane({
 
   useEffect(() => {
     let cancelled = false
-    void window.api.app
+    void api.app
       .getFloatingTerminalCwd({
         path: settings.floatingTerminalCwd
       })
@@ -58,7 +59,7 @@ export function FloatingWorkspacePane({
   }, [settings.floatingTerminalCwd])
 
   const pickFloatingWorkspaceDirectory = async (): Promise<void> => {
-    const path = await window.api.app.pickFloatingWorkspaceDirectory()
+    const path = await api.app.pickFloatingWorkspaceDirectory()
     if (!path) {
       return
     }

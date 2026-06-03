@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useCallback, useMemo } from 'react'
 import { Plug, Copy, ExternalLink, FolderOpen, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -134,7 +135,7 @@ function WorktreePortRow({ port }: { port: WorkspacePort }): React.JSX.Element {
       event.stopPropagation()
       recordFeatureInteraction('ports')
       const address = addressForPort(port)
-      void window.api.ui.writeClipboardText(address)
+      void api.ui.writeClipboardText(address)
       toast.success(`Copied ${address}`)
     },
     [port, recordFeatureInteraction]

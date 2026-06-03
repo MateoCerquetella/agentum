@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
@@ -972,7 +973,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   setTaskResumeState: (updates) =>
     set((s) => {
       const next = { ...s.taskResumeState, ...updates }
-      window.api.ui.set({ taskResumeState: next }).catch(console.error)
+      api.ui.set({ taskResumeState: next }).catch(console.error)
       return { taskResumeState: next }
     }),
   setGithubTaskDrawerWorkItem: (item) => set({ githubTaskDrawerWorkItem: item }),
@@ -1128,7 +1129,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         return s
       }
       const next = [...current]
-      window.api.ui.set({ featureTipsSeenIds: next }).catch(console.error)
+      api.ui.set({ featureTipsSeenIds: next }).catch(console.error)
       return { featureTipsSeenIds: next }
     }),
   featureInteractions: {},
@@ -1146,7 +1147,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         }
       }
       if (typeof window !== 'undefined') {
-        const recordInteraction = window.api.ui.recordFeatureInteraction
+        const recordInteraction = api.ui.recordFeatureInteraction
         const persist = recordInteraction
           ? recordInteraction(id).then((ui) => {
               set((current) => ({
@@ -1156,7 +1157,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
                 )
               }))
             })
-          : window.api.ui.set({ featureInteractions: next })
+          : api.ui.set({ featureInteractions: next })
         persist.catch(console.error)
       }
       return { featureInteractions: next }
@@ -1174,7 +1175,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         [kind]: { contentHash, approvedAt: Date.now() }
       }
       const next = { ...s.trustedAgentumHooks, [repoId]: nextRepo }
-      window.api.ui.set({ trustedAgentumHooks: next }).catch(console.error)
+      api.ui.set({ trustedAgentumHooks: next }).catch(console.error)
       return { trustedAgentumHooks: next }
     }),
   markAgentumHookRepoAlwaysTrusted: (repoId) =>
@@ -1190,7 +1191,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
           all: { approvedAt: Date.now() }
         }
       }
-      window.api.ui.set({ trustedAgentumHooks: next }).catch(console.error)
+      api.ui.set({ trustedAgentumHooks: next }).catch(console.error)
       return { trustedAgentumHooks: next }
     }),
   clearAgentumHookTrustForRepo: (repoId) =>
@@ -1200,7 +1201,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       }
       const next = { ...s.trustedAgentumHooks }
       delete next[repoId]
-      window.api.ui.set({ trustedAgentumHooks: next }).catch(console.error)
+      api.ui.set({ trustedAgentumHooks: next }).catch(console.error)
       return { trustedAgentumHooks: next }
     }),
   setupScriptPromptDismissedRepoIds: [],
@@ -1211,7 +1212,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         return s
       }
       const next = [...s.setupScriptPromptDismissedRepoIds, dismissalKey]
-      window.api.ui.set({ setupScriptPromptDismissedRepoIds: next }).catch(console.error)
+      api.ui.set({ setupScriptPromptDismissedRepoIds: next }).catch(console.error)
       return { setupScriptPromptDismissedRepoIds: next }
     }),
 
@@ -1220,7 +1221,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   // collapsed state from one mode is meaningless in another. Clearing
   // also prevents unbounded accumulation of stale keys across mode switches.
   setGroupBy: (g) => {
-    window.api.ui.set({ collapsedGroups: [] }).catch(console.error)
+    api.ui.set({ collapsedGroups: [] }).catch(console.error)
     set({ groupBy: g, collapsedGroups: new Set<string>() })
   },
 
@@ -1282,7 +1283,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       } else {
         next.add(key)
       }
-      window.api.ui.set({ collapsedGroups: [...next] }).catch(console.error)
+      api.ui.set({ collapsedGroups: [...next] }).catch(console.error)
       return { collapsedGroups: next }
     }),
 
@@ -1295,40 +1296,40 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       // Why: retired property toggles no longer exist, so their fields must
       // stay visible even if an older saved preference hid them.
       const updated = normalizeWorktreeCardProperties(next)
-      window.api.ui.set({ worktreeCardProperties: updated }).catch(console.error)
+      api.ui.set({ worktreeCardProperties: updated }).catch(console.error)
       return { worktreeCardProperties: updated }
     }),
   setAgentActivityDisplayMode: (mode) => {
     const normalized = normalizeAgentActivityDisplayMode(mode)
-    window.api.ui.set({ agentActivityDisplayMode: normalized }).catch(console.error)
+    api.ui.set({ agentActivityDisplayMode: normalized }).catch(console.error)
     set({ agentActivityDisplayMode: normalized })
   },
 
   workspaceStatuses: cloneDefaultWorkspaceStatuses(),
   setWorkspaceStatuses: (statuses) => {
     const normalized = normalizeWorkspaceStatuses(statuses)
-    window.api.ui.set({ workspaceStatuses: normalized }).catch(console.error)
+    api.ui.set({ workspaceStatuses: normalized }).catch(console.error)
     set({ workspaceStatuses: normalized })
   },
 
   workspaceBoardOpacity: 1,
   setWorkspaceBoardOpacity: (opacity) => {
     const clamped = clampWorkspaceBoardOpacity(opacity)
-    window.api.ui.set({ workspaceBoardOpacity: clamped }).catch(console.error)
+    api.ui.set({ workspaceBoardOpacity: clamped }).catch(console.error)
     set({ workspaceBoardOpacity: clamped })
   },
 
   workspaceBoardColumnLayout: 'full',
   setWorkspaceBoardColumnLayout: (layout) => {
     const normalized = normalizeWorkspaceBoardColumnLayout(layout)
-    window.api.ui.set({ workspaceBoardColumnLayout: normalized }).catch(console.error)
+    api.ui.set({ workspaceBoardColumnLayout: normalized }).catch(console.error)
     set({ workspaceBoardColumnLayout: normalized })
   },
 
   workspaceBoardColumnWidth: WORKSPACE_BOARD_COLUMN_WIDTH_DEFAULT,
   setWorkspaceBoardColumnWidth: (width) => {
     const clamped = clampWorkspaceBoardColumnWidth(width)
-    window.api.ui.set({ workspaceBoardColumnWidth: clamped }).catch(console.error)
+    api.ui.set({ workspaceBoardColumnWidth: clamped }).catch(console.error)
     set({ workspaceBoardColumnWidth: clamped })
   },
 
@@ -1339,13 +1340,13 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       const updated = current.includes(item)
         ? current.filter((i) => i !== item)
         : [...current, item]
-      window.api.ui.set({ statusBarItems: updated }).catch(console.error)
+      api.ui.set({ statusBarItems: updated }).catch(console.error)
       return { statusBarItems: updated }
     }),
 
   statusBarVisible: true,
   setStatusBarVisible: (v) => {
-    window.api.ui.set({ statusBarVisible: v }).catch(console.error)
+    api.ui.set({ statusBarVisible: v }).catch(console.error)
     set({ statusBarVisible: v })
   },
   workspacePortScan: null,
@@ -1358,20 +1359,20 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   // to false; the value is persisted via the standard PersistedUIState pipeline.
   petVisible: true,
   setPetVisible: (v) => {
-    window.api.ui.set({ petVisible: v }).catch(console.error)
+    api.ui.set({ petVisible: v }).catch(console.error)
     set({ petVisible: v })
   },
 
   petId: DEFAULT_PET_ID,
   setPetId: (id) => {
-    window.api.ui.set({ petId: id }).catch(console.error)
+    api.ui.set({ petId: id }).catch(console.error)
     set({ petId: id })
   },
 
   petSize: PET_SIZE_DEFAULT,
   setPetSize: (size) => {
     const clamped = clampPetSize(size)
-    window.api.ui.set({ petSize: clamped }).catch(console.error)
+    api.ui.set({ petSize: clamped }).catch(console.error)
     set({ petSize: clamped })
   },
 
@@ -1379,7 +1380,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   addCustomPet: (model) =>
     set((s) => {
       const next = [...s.customPets.filter((m) => m.id !== model.id), model]
-      window.api.ui.set({ customPets: next }).catch(console.error)
+      api.ui.set({ customPets: next }).catch(console.error)
       return { customPets: next }
     }),
   removeCustomPet: (id) =>
@@ -1400,7 +1401,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       if (fallback !== s.petId) {
         ipcPayload.petId = fallback
       }
-      window.api.ui.set(ipcPayload).catch(console.error)
+      api.ui.set(ipcPayload).catch(console.error)
       // Why: revoke the cached blob: URL so the underlying Blob is released;
       // otherwise it stays in memory for the rest of the session.
       revokeCustomPetBlobUrl(id)
@@ -1408,7 +1409,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       // fails, the orphaned image stays in userData; each import uses a fresh
       // UUID so the file won't be hit again, and the renderer's metadata
       // index no longer references it.
-      window.api.pet.delete(id, target.fileName, target.kind).catch(console.error)
+      api.pet.delete(id, target.fileName, target.kind).catch(console.error)
       const partial: Partial<UISlice> = { customPets: next }
       if (fallback !== s.petId) {
         partial.petId = fallback
@@ -1461,7 +1462,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
           ? migratedStatusBarItems
           : [...migratedStatusBarItems, 'ports' as const]
       if (!ui._portsStatusBarDefaultAdded && typeof window !== 'undefined') {
-        window.api.ui
+        api.ui
           .set({ statusBarItems, _portsStatusBarDefaultAdded: true })
           .catch(console.error)
       }
@@ -1616,12 +1617,12 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       // Why: dismissing an update is user intent, not transient view state. Persist
       // the dismissed version so relaunching the app does not immediately re-show
       // the same reminder card until a newer release appears.
-      void window.api.ui.set({ dismissedUpdateVersion }).catch(console.error)
+      void api.ui.set({ dismissedUpdateVersion }).catch(console.error)
       // Why: only dismiss the main-process nudge campaign when the visible card
       // actually came from a nudge-driven update cycle. Ordinary update dismissals
       // must not consume the active campaign state.
       if (activeNudgeId) {
-        void window.api.updater.dismissNudge().catch(console.error)
+        void api.updater.dismissNudge().catch(console.error)
       }
       return { dismissedUpdateVersion }
     }),
@@ -1629,25 +1630,25 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   setUpdateCardCollapsed: (collapsed) => set({ updateCardCollapsed: collapsed }),
   updateReassuranceSeen: false,
   markUpdateReassuranceSeen: () => {
-    void window.api.ui.set({ updateReassuranceSeen: true }).catch(console.error)
+    void api.ui.set({ updateReassuranceSeen: true }).catch(console.error)
     set({ updateReassuranceSeen: true })
   },
   isFullScreen: false,
   setIsFullScreen: (v) => set({ isFullScreen: v }),
   browserDefaultUrl: null,
   setBrowserDefaultUrl: (url) => {
-    void window.api.ui.set({ browserDefaultUrl: url }).catch(console.error)
+    void api.ui.set({ browserDefaultUrl: url }).catch(console.error)
     set({ browserDefaultUrl: url })
   },
   browserDefaultSearchEngine: null,
   setBrowserDefaultSearchEngine: (engine) => {
-    void window.api.ui.set({ browserDefaultSearchEngine: engine }).catch(console.error)
+    void api.ui.set({ browserDefaultSearchEngine: engine }).catch(console.error)
     set({ browserDefaultSearchEngine: engine })
   },
   browserKagiSessionLink: null,
   setBrowserKagiSessionLink: (link) => {
     const normalized = link ? normalizeKagiSessionLink(link) : null
-    void window.api.ui.set({ browserKagiSessionLink: normalized }).catch(console.error)
+    void api.ui.set({ browserKagiSessionLink: normalized }).catch(console.error)
     set({ browserKagiSessionLink: normalized })
   }
 })

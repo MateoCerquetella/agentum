@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { toast } from 'sonner'
 import type { ManagedPane } from '@/lib/pane-manager/pane-manager'
 import { launchAgentInNewTab } from '@/lib/launch-agent-in-new-tab'
@@ -59,7 +60,7 @@ function getUsableForkBase(
 
 async function copyForkContext(prompt: string, pane: ManagedPane): Promise<boolean> {
   try {
-    await window.api.ui.writeClipboardText(prompt)
+    await api.ui.writeClipboardText(prompt)
     toast.message('Fork context copied. Launch an agent and paste it to start the fork.')
     pane.terminal.focus()
     return true
@@ -87,11 +88,11 @@ async function preflightForkAgentTrust(args: {
 }): Promise<void> {
   const { agent, workspacePath, connectionId } = args
   const preflight = TUI_AGENT_CONFIG[agent].preflightTrust
-  if (!preflight || !workspacePath || !window.api.agentTrust?.markTrusted) {
+  if (!preflight || !workspacePath || !api.agentTrust?.markTrusted) {
     return
   }
   try {
-    await window.api.agentTrust.markTrusted({
+    await api.agentTrust.markTrusted({
       preset: preflight,
       workspacePath,
       ...(connectionId ? { connectionId } : {})

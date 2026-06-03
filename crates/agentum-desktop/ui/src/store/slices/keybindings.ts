@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
 import type {
@@ -38,11 +39,11 @@ export const createKeybindingsSlice: StateCreator<AppState, [], [], KeybindingsS
   setKeybindingSnapshot: (snapshot) => set(applySnapshot(snapshot)),
 
   ensureKeybindingsFile: async () => {
-    if (!window.api.keybindings) {
+    if (!api.keybindings) {
       return null
     }
     try {
-      const snapshot = await window.api.keybindings.ensureFile()
+      const snapshot = await api.keybindings.ensureFile()
       set(applySnapshot(snapshot))
       return snapshot
     } catch (error) {
@@ -52,11 +53,11 @@ export const createKeybindingsSlice: StateCreator<AppState, [], [], KeybindingsS
   },
 
   fetchKeybindings: async () => {
-    if (!window.api.keybindings) {
+    if (!api.keybindings) {
       return
     }
     try {
-      const snapshot = await window.api.keybindings.get()
+      const snapshot = await api.keybindings.get()
       set(applySnapshot(snapshot))
     } catch (error) {
       console.error('Failed to fetch keybindings:', error)
@@ -65,7 +66,7 @@ export const createKeybindingsSlice: StateCreator<AppState, [], [], KeybindingsS
 
   setKeybindingOverride: async (actionId, bindings) => {
     try {
-      const snapshot = await window.api.keybindings.setAction({ actionId, bindings })
+      const snapshot = await api.keybindings.setAction({ actionId, bindings })
       set(applySnapshot(snapshot))
     } catch (error) {
       console.error('Failed to update keybinding:', error)
@@ -75,7 +76,7 @@ export const createKeybindingsSlice: StateCreator<AppState, [], [], KeybindingsS
 
   resetKeybindingOverride: async (actionId) => {
     try {
-      const snapshot = await window.api.keybindings.setAction({ actionId, bindings: null })
+      const snapshot = await api.keybindings.setAction({ actionId, bindings: null })
       set(applySnapshot(snapshot))
     } catch (error) {
       console.error('Failed to reset keybinding:', error)
@@ -85,7 +86,7 @@ export const createKeybindingsSlice: StateCreator<AppState, [], [], KeybindingsS
 
   disableKeybindingAction: async (actionId) => {
     try {
-      const snapshot = await window.api.keybindings.setAction({ actionId, bindings: [] })
+      const snapshot = await api.keybindings.setAction({ actionId, bindings: [] })
       set(applySnapshot(snapshot))
     } catch (error) {
       console.error('Failed to disable keybinding:', error)
@@ -94,11 +95,11 @@ export const createKeybindingsSlice: StateCreator<AppState, [], [], KeybindingsS
   },
 
   reloadKeybindings: async () => {
-    if (!window.api.keybindings) {
+    if (!api.keybindings) {
       return
     }
     try {
-      const snapshot = await window.api.keybindings.reload()
+      const snapshot = await api.keybindings.reload()
       set(applySnapshot(snapshot))
     } catch (error) {
       console.error('Failed to reload keybindings:', error)
@@ -106,11 +107,11 @@ export const createKeybindingsSlice: StateCreator<AppState, [], [], KeybindingsS
   },
 
   openKeybindingsFile: async () => {
-    if (!window.api.keybindings) {
+    if (!api.keybindings) {
       return
     }
     try {
-      const snapshot = await window.api.keybindings.openFile()
+      const snapshot = await api.keybindings.openFile()
       set(applySnapshot(snapshot))
     } catch (error) {
       console.error('Failed to open keybindings file:', error)
@@ -118,11 +119,11 @@ export const createKeybindingsSlice: StateCreator<AppState, [], [], KeybindingsS
   },
 
   revealKeybindingsFile: async () => {
-    if (!window.api.keybindings) {
+    if (!api.keybindings) {
       return
     }
     try {
-      const snapshot = await window.api.keybindings.revealFile()
+      const snapshot = await api.keybindings.revealFile()
       set(applySnapshot(snapshot))
     } catch (error) {
       console.error('Failed to reveal keybindings file:', error)

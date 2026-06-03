@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useCallback, useRef, useState } from 'react'
 import { FolderOpen } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -77,7 +78,7 @@ export function UntitledFileRenameDialog({
   }
 
   const handleBrowse = useCallback(async () => {
-    const picked = await window.api.shell.pickDirectory({ defaultPath: dir || worktreePath })
+    const picked = await api.shell.pickDirectory({ defaultPath: dir || worktreePath })
     if (!picked) {
       return
     }

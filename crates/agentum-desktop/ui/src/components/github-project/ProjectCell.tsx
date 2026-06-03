@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: ProjectCell dispatches on field.dataType for every supported ProjectV2 field type; keeping the dispatch table and renderers colocated keeps the type-to-renderer mapping easy to audit. */
 // Why: one cell per visible column. Dispatch on `field.dataType` first (so
 // built-in ASSIGNEES/LABELS cells render their dedicated content) and fall
@@ -287,7 +288,7 @@ function IssueTypeCell({
             { owner, repo },
             { timeoutMs: 30_000 }
           )
-        : window.api.gh.listIssueTypesBySlug({ owner, repo })
+        : api.gh.listIssueTypesBySlug({ owner, repo })
     request
       .then((res) => {
         if (cancelled) {

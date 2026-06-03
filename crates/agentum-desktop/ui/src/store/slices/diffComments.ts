@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: this slice keeps optimistic note
 mutation, rollback, persistence ordering, and sent-state transitions together
 so every write follows the same queue and rollback invariants. */
@@ -100,7 +101,7 @@ async function persist(
 ): Promise<void> {
   const target = getActiveRuntimeTarget(settings)
   if (target.kind === 'local') {
-    await window.api.worktrees.updateMeta({
+    await api.worktrees.updateMeta({
       worktreeId,
       updates: { diffComments }
     })

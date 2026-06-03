@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import type { StateCreator } from 'zustand'
 import type {
   OpenCodeUsageBreakdownRow,
@@ -42,7 +43,7 @@ export const createOpenCodeUsageSlice: StateCreator<AppState, [], [], OpenCodeUs
 
   setOpenCodeUsageEnabled: async (enabled) => {
     try {
-      const nextScanState = (await window.api.openCodeUsage.setEnabled({
+      const nextScanState = (await api.openCodeUsage.setEnabled({
         enabled
       })) as OpenCodeUsageScanState
       set({
@@ -80,7 +81,7 @@ export const createOpenCodeUsageSlice: StateCreator<AppState, [], [], OpenCodeUs
 
   fetchOpenCodeUsage: async (opts) => {
     try {
-      const scanState = (await window.api.openCodeUsage.getScanState()) as OpenCodeUsageScanState
+      const scanState = (await api.openCodeUsage.getScanState()) as OpenCodeUsageScanState
       const currentScanState = get().openCodeUsageScanState
       const shouldPreserveLoadingState =
         opts?.forceRefresh === true &&
@@ -100,31 +101,31 @@ export const createOpenCodeUsageSlice: StateCreator<AppState, [], [], OpenCodeUs
         return
       }
 
-      const nextScanState = (await window.api.openCodeUsage.refresh({
+      const nextScanState = (await api.openCodeUsage.refresh({
         force: opts?.forceRefresh ?? false
       })) as OpenCodeUsageScanState
       const { openCodeUsageScope, openCodeUsageRange } = get()
 
       const [summary, daily, modelBreakdown, projectBreakdown, recentSessions] = await Promise.all([
-        window.api.openCodeUsage.getSummary({
+        api.openCodeUsage.getSummary({
           scope: openCodeUsageScope,
           range: openCodeUsageRange
         }) as Promise<OpenCodeUsageSummary>,
-        window.api.openCodeUsage.getDaily({
+        api.openCodeUsage.getDaily({
           scope: openCodeUsageScope,
           range: openCodeUsageRange
         }) as Promise<OpenCodeUsageDailyPoint[]>,
-        window.api.openCodeUsage.getBreakdown({
+        api.openCodeUsage.getBreakdown({
           scope: openCodeUsageScope,
           range: openCodeUsageRange,
           kind: 'model'
         }) as Promise<OpenCodeUsageBreakdownRow[]>,
-        window.api.openCodeUsage.getBreakdown({
+        api.openCodeUsage.getBreakdown({
           scope: openCodeUsageScope,
           range: openCodeUsageRange,
           kind: 'project'
         }) as Promise<OpenCodeUsageBreakdownRow[]>,
-        window.api.openCodeUsage.getRecentSessions({
+        api.openCodeUsage.getRecentSessions({
           scope: openCodeUsageScope,
           range: openCodeUsageRange,
           limit: 10

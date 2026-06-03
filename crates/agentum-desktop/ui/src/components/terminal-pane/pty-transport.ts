@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* oxlint-disable max-lines -- Why: the PTY transport manages lifecycle, data flow,
 agent status extraction, and title tracking for terminal panes. Splitting would
 scatter the tightly coupled IPC ↔ xterm data pipeline across files with no clear
@@ -532,7 +533,7 @@ export function createIpcPtyTransport(opts: IpcPtyTransportOptions = {}): PtyTra
       }
 
       try {
-        const result = await window.api.pty.spawn({
+        const result = await api.pty.spawn({
           cols: options.cols ?? 80,
           rows: options.rows ?? 24,
           cwd,
@@ -556,7 +557,7 @@ export function createIpcPtyTransport(opts: IpcPtyTransportOptions = {}): PtyTra
 
         // If destroyed while spawn was in flight, kill the new pty and bail
         if (destroyed) {
-          window.api.pty.kill(spawnResult.id)
+          api.pty.kill(spawnResult.id)
           return
         }
 
@@ -705,7 +706,7 @@ export function createIpcPtyTransport(opts: IpcPtyTransportOptions = {}): PtyTra
       }
 
       if (options.cols && options.rows) {
-        window.api.pty.resize(id, options.cols, options.rows)
+        api.pty.resize(id, options.cols, options.rows)
       }
 
       storedCallbacks.onConnect?.()
@@ -716,7 +717,7 @@ export function createIpcPtyTransport(opts: IpcPtyTransportOptions = {}): PtyTra
       clearAccumulatedState()
       if (ptyId) {
         const id = ptyId
-        window.api.pty.kill(id)
+        api.pty.kill(id)
         connected = false
         ptyId = null
         unregisterPtyHandlers(id)
@@ -743,7 +744,7 @@ export function createIpcPtyTransport(opts: IpcPtyTransportOptions = {}): PtyTra
       if (!connected || !ptyId) {
         return false
       }
-      window.api.pty.write(ptyId, data)
+      api.pty.write(ptyId, data)
       return true
     },
 
@@ -754,7 +755,7 @@ export function createIpcPtyTransport(opts: IpcPtyTransportOptions = {}): PtyTra
             if (!connected || !ptyId) {
               return false
             }
-            return window.api.pty.writeAccepted(ptyId, data)
+            return api.pty.writeAccepted(ptyId, data)
           }
         }),
 
@@ -762,7 +763,7 @@ export function createIpcPtyTransport(opts: IpcPtyTransportOptions = {}): PtyTra
       if (!connected || !ptyId) {
         return false
       }
-      window.api.pty.resize(ptyId, cols, rows)
+      api.pty.resize(ptyId, cols, rows)
       return true
     },
 

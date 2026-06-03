@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useCallback, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -65,7 +66,7 @@ export function SshPassphraseDialog(): React.JSX.Element | null {
     }
     setSubmitting(true)
     try {
-      await window.api.ssh.submitCredential({ requestId: request.requestId, value })
+      await api.ssh.submitCredential({ requestId: request.requestId, value })
       removeRequest(request.requestId)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to submit SSH credential')
@@ -77,7 +78,7 @@ export function SshPassphraseDialog(): React.JSX.Element | null {
     if (request) {
       setSubmitting(true)
       try {
-        await window.api.ssh.submitCredential({ requestId: request.requestId, value: null })
+        await api.ssh.submitCredential({ requestId: request.requestId, value: null })
         removeRequest(request.requestId)
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Failed to cancel SSH credential request')

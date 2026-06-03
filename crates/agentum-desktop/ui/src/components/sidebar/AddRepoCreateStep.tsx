@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 // Step for AddRepoDialog (agentum#763), split out so create-project state stays scoped.
 import React, { useCallback, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -52,7 +53,7 @@ export function useCreateRepo(
       return
     }
     const gen = createGenRef.current
-    const dir = await window.api.repos.pickDirectory()
+    const dir = await api.repos.pickDirectory()
     if (dir && gen === createGenRef.current && mountedRef.current) {
       setCreateParent(dir)
       setCreateError(null)
@@ -82,7 +83,7 @@ export function useCreateRepo(
               },
               { timeoutMs: 60_000 }
             )
-          : await window.api.repos.create({
+          : await api.repos.create({
               parentPath,
               name,
               kind: createKind

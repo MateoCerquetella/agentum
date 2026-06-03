@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { GlobalSettings } from '../../../../shared/types'
 import { getDefaultVoiceSettings } from '../../../../shared/constants'
@@ -43,7 +44,7 @@ export function VoicePane({ settings, updateSettings }: VoicePaneProps): React.J
   useEffect(() => {
     let cancelled = false
     refreshModelStates()
-    void window.api.speech
+    void api.speech
       .getCatalog()
       .then((nextCatalog) => {
         if (!cancelled) {
@@ -57,7 +58,7 @@ export function VoicePane({ settings, updateSettings }: VoicePaneProps): React.J
   }, [refreshModelStates])
 
   useEffect(() => {
-    const cleanup = window.api.speech.onDownloadProgress(() => {
+    const cleanup = api.speech.onDownloadProgress(() => {
       refreshModelStates()
     })
     return cleanup
@@ -82,7 +83,7 @@ export function VoicePane({ settings, updateSettings }: VoicePaneProps): React.J
     try {
       // Why: enabling dictation is the point where users expect the macOS
       // microphone prompt, not after their first attempted recording fails.
-      const result = await window.api.developerPermissions.request({ id: 'microphone' })
+      const result = await api.developerPermissions.request({ id: 'microphone' })
       if (result.status === 'granted' || result.status === 'unsupported') {
         updateVoiceSettings({ enabled: true })
       }
@@ -210,7 +211,7 @@ export function VoicePane({ settings, updateSettings }: VoicePaneProps): React.J
                     if (isReady) {
                       updateVoiceSettings({ sttModel: manifest.id })
                     } else if (!isDownloading) {
-                      void window.api.speech
+                      void api.speech
                         .downloadModel(manifest.id)
                         .catch(() => toast.error('Failed to download model.'))
                     }
@@ -253,7 +254,7 @@ export function VoicePane({ settings, updateSettings }: VoicePaneProps): React.J
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
-                        void window.api.speech
+                        void api.speech
                           .deleteModel(manifest.id)
                           .then(refreshModelStates)
                           .catch(() => toast.error('Failed to delete model.'))

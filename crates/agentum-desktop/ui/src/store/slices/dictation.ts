@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
 import type { DictationState, SpeechModelState } from '../../../../shared/speech-types'
@@ -27,7 +28,7 @@ export const createDictationSlice: StateCreator<AppState, [], [], DictationSlice
 
   refreshModelStates: async () => {
     try {
-      const states = await window.api.speech.getModelStates()
+      const states = await api.speech.getModelStates()
       set({ modelStates: states })
     } catch (err) {
       console.error('Failed to fetch model states:', err)

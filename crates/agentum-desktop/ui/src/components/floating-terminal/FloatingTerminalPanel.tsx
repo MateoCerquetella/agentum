@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the floating panel owns window chrome,
  * resizing, orchestration setup, and mixed terminal/browser/editor tab
  * handling in one surface so the floating worktree does not drift from the
@@ -474,7 +475,7 @@ export function FloatingTerminalPanel({
 
   useEffect(() => {
     let cancelled = false
-    void window.api.app
+    void api.app
       .getFloatingTerminalCwd({
         path: floatingTerminalCwd
       })
@@ -490,7 +491,7 @@ export function FloatingTerminalPanel({
 
   useEffect(() => {
     let cancelled = false
-    void window.api.app.getFloatingMarkdownDirectory().then((nextMarkdownCwd) => {
+    void api.app.getFloatingMarkdownDirectory().then((nextMarkdownCwd) => {
       if (!cancelled) {
         setMarkdownCwd(nextMarkdownCwd)
       }
@@ -526,7 +527,7 @@ export function FloatingTerminalPanel({
       return
     }
     try {
-      const status = await window.api.cli.getInstallStatus()
+      const status = await api.cli.getInstallStatus()
       if (mountedRef.current) {
         setShowOrchestrationSetup(!isAgentumCliAvailableOnPath(status))
       }
@@ -586,8 +587,8 @@ export function FloatingTerminalPanel({
           .browserTabsByWorktree[FLOATING_TERMINAL_WORKTREE_ID]?.find(
             (tab) => tab.id === item.entityId
           )
-        if (workspace?.activePageId && window.api?.browser) {
-          void window.api.browser.notifyActiveTabChanged({ browserPageId: workspace.activePageId })
+        if (workspace?.activePageId && api?.browser) {
+          void api.browser.notifyActiveTabChanged({ browserPageId: workspace.activePageId })
         }
       }
     },
@@ -668,7 +669,7 @@ export function FloatingTerminalPanel({
   const openFloatingMarkdownTab = useCallback(() => {
     void (async () => {
       try {
-        const document = await window.api.app.pickFloatingMarkdownDocument()
+        const document = await api.app.pickFloatingMarkdownDocument()
         if (!document) {
           return
         }
@@ -873,7 +874,7 @@ export function FloatingTerminalPanel({
   }, [cancelShortcutFocusFrame, focusPanelForShortcuts])
 
   const setFloatingTerminalInputFocused = useCallback((target: EventTarget | null): void => {
-    window.api.ui.setFloatingTerminalInputFocused(isFloatingWorkspaceTerminalInputTarget(target))
+    api.ui.setFloatingTerminalInputFocused(isFloatingWorkspaceTerminalInputTarget(target))
   }, [])
 
   const handleShortcutSurfaceKeyDown = useCallback(
@@ -1079,9 +1080,9 @@ export function FloatingTerminalPanel({
 
   useEffect(() => {
     if (!open) {
-      window.api.ui.setFloatingTerminalInputFocused(false)
+      api.ui.setFloatingTerminalInputFocused(false)
     }
-    return () => window.api.ui.setFloatingTerminalInputFocused(false)
+    return () => api.ui.setFloatingTerminalInputFocused(false)
   }, [open])
 
   useEffect(() => {
@@ -1094,7 +1095,7 @@ export function FloatingTerminalPanel({
       if (!panel || !(event.target instanceof Node) || panel.contains(event.target)) {
         return
       }
-      window.api.ui.setFloatingTerminalInputFocused(false)
+      api.ui.setFloatingTerminalInputFocused(false)
       const active = document.activeElement
       if (active instanceof HTMLElement && panel.contains(active)) {
         // Why: regular tab strip items are non-focusable, so clicking them can
@@ -1110,7 +1111,7 @@ export function FloatingTerminalPanel({
       }
       // Why: browser webviews focus out-of-process and do not emit renderer
       // pointerdown events, so release floating ownership on renderer blur too.
-      window.api.ui.setFloatingTerminalInputFocused(false)
+      api.ui.setFloatingTerminalInputFocused(false)
       active.blur()
     }
 

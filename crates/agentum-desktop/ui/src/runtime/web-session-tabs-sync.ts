@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: web session-tab sync reconciles terminal,
  * unified-tab, group, and PTY maps atomically so host-published surfaces don't
  * leave the web client in a split-brain tab state. */
@@ -2048,7 +2049,7 @@ export function useWebSessionTabsSync(): void {
     // render a paired web session before that event is applied. A one-shot
     // fetch makes initial parity deterministic; the stream remains the live
     // update path afterward.
-    void window.api.runtimeEnvironments
+    void api.runtimeEnvironments
       .call({
         selector: environmentId,
         method: 'session.tabs.listAll',
@@ -2081,7 +2082,7 @@ export function useWebSessionTabsSync(): void {
         }
       })
 
-    void window.api.runtimeEnvironments
+    void api.runtimeEnvironments
       .subscribe(
         {
           selector: environmentId,
@@ -2154,7 +2155,7 @@ export function useWebSessionTabsSync(): void {
     let disposed = false
     let requestedInitialTerminal = false
     let unsubscribe: (() => void) | null = null
-    void window.api.runtimeEnvironments
+    void api.runtimeEnvironments
       .subscribe(
         {
           selector: environmentId,

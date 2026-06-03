@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useRef, useCallback } from 'react'
 
 type BufferedAudioChunk = {
@@ -167,7 +168,7 @@ export function useAudioCapture() {
             })
             return
           }
-          void window.api.speech
+          void api.speech
             .feedAudio(samples, actualRate, sessionIdRef.current)
             .catch(() => undefined)
         }
@@ -224,7 +225,7 @@ export function useAudioCapture() {
           break
         }
         removeOldestBufferedAudioChunk()
-        await window.api.speech.feedAudio(chunk.samples, chunk.sampleRate, chunk.sessionId)
+        await api.speech.feedAudio(chunk.samples, chunk.sampleRate, chunk.sessionId)
       }
     } finally {
       if (bufferedAudioGenerationRef.current === flushGeneration) {

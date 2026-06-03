@@ -3,6 +3,8 @@
 // shared code prevents the CLI from importing main-process modules.
 import nacl from 'tweetnacl'
 
+import { base64ToBytes, bytesToBase64 } from './base64'
+
 export function generateKeyPair(): nacl.BoxKeyPair {
   return nacl.box.keyPair()
 }
@@ -12,7 +14,7 @@ export function deriveSharedKey(ourSecretKey: Uint8Array, peerPublicKey: Uint8Ar
 }
 
 export function publicKeyFromBase64(b64: string): Uint8Array {
-  const key = Uint8Array.from(Buffer.from(b64, 'base64'))
+  const key = base64ToBytes(b64)
   if (key.length !== 32) {
     throw new Error(`Invalid public key: expected 32 bytes, got ${key.length}`)
   }
@@ -20,16 +22,16 @@ export function publicKeyFromBase64(b64: string): Uint8Array {
 }
 
 export function publicKeyToBase64(key: Uint8Array): string {
-  return Buffer.from(key).toString('base64')
+  return bytesToBase64(key)
 }
 
 export function encrypt(plaintext: string, sharedKey: Uint8Array): string {
   const messageBytes = new TextEncoder().encode(plaintext)
-  return Buffer.from(encryptBytes(messageBytes, sharedKey)).toString('base64')
+  return bytesToBase64(encryptBytes(messageBytes, sharedKey))
 }
 
 export function decrypt(encrypted: string, sharedKey: Uint8Array): string | null {
-  const bundle = Uint8Array.from(Buffer.from(encrypted, 'base64'))
+  const bundle = base64ToBytes(encrypted)
   const plaintext = decryptBytes(bundle, sharedKey)
   return plaintext ? new TextDecoder().decode(plaintext) : null
 }

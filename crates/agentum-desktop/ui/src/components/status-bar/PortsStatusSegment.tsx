@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: PortsStatusSegment keeps port scanning, grouping, row actions,
    and status-bar interaction tracking together so the popover state stays coherent. */
 import React, { useCallback, useMemo, useState } from 'react'
@@ -140,7 +141,7 @@ function PortRow({
       event.stopPropagation()
       recordFeatureInteraction('ports')
       const address = addressForPort(port)
-      void window.api.ui.writeClipboardText(address)
+      void api.ui.writeClipboardText(address)
       toast.success(`Copied ${address}`)
     },
     [port, recordFeatureInteraction]

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the tasks page keeps the repo selector,
 task source controls, and GitHub task list co-located so the wiring between the
 selected repo, the task filters, and the work-item list stays readable in one
@@ -776,7 +777,7 @@ function GHStatusCell({
               { repo: repo.id, number: item.number, updates: { state: newState } },
               { timeoutMs: 30_000 }
             )
-          : window.api.gh.updateIssue({
+          : api.gh.updateIssue({
               repoPath: repo.path,
               repoId: repo.id,
               number: item.number,
@@ -1196,13 +1197,13 @@ function GHAssigneesCell({
           }
           const res =
             target.kind === 'environment'
-              ? await callRuntimeRpc<Awaited<ReturnType<typeof window.api.gh.updateIssueBySlug>>>(
+              ? await callRuntimeRpc<Awaited<ReturnType<typeof api.gh.updateIssueBySlug>>>(
                   target,
                   'github.project.updateIssueBySlug',
                   args,
                   { timeoutMs: 30_000 }
                 )
-              : await window.api.gh.updateIssueBySlug(args)
+              : await api.gh.updateIssueBySlug(args)
           if (!res.ok) {
             throw new Error(res.error.message)
           }
@@ -1215,7 +1216,7 @@ function GHAssigneesCell({
                   { repo: repo.id, number: item.number, updates },
                   { timeoutMs: 30_000 }
                 )
-              : await window.api.gh.updateIssue({
+              : await api.gh.updateIssue({
                   repoPath: repo.path,
                   repoId: repo.id,
                   number: item.number,
@@ -1658,7 +1659,7 @@ function PRReviewCell({
               { repo: repo.id, prNumber: item.number, reviewers: logins },
               { timeoutMs: 30_000 }
             )
-          : await window.api.gh.requestPRReviewers({
+          : await api.gh.requestPRReviewers({
               repoPath: repo.path,
               repoId: repo.id,
               prNumber: item.number,
@@ -1977,7 +1978,7 @@ function PRMergeCell({
     }
     setMerging(true)
     try {
-      const result = await window.api.gh.mergePR({
+      const result = await api.gh.mergePR({
         repoPath: repo.path,
         repoId: repo.id,
         prNumber: item.number,
@@ -2004,7 +2005,7 @@ function PRMergeCell({
     const enabled = mergePresentation.autoMergeAction.kind === 'enable'
     setMerging(true)
     try {
-      const result = await window.api.gh.setPRAutoMerge({
+      const result = await api.gh.setPRAutoMerge({
         repoPath: repo.path,
         repoId: repo.id,
         prNumber: item.number,
@@ -2069,7 +2070,7 @@ function PRMergeCell({
             {label}
           </DropdownMenuItem>
         ))}
-        <DropdownMenuItem onSelect={() => window.api.shell.openUrl(item.url)}>
+        <DropdownMenuItem onSelect={() => api.shell.openUrl(item.url)}>
           <ExternalLink className="size-4" />
           Open GitHub merge box
         </DropdownMenuItem>
@@ -2420,7 +2421,7 @@ export default function TaskPage(): React.JSX.Element {
   // ── GitLab task-source state ──────────────────────────────────────
   // Why: parallel to Linear's slim per-source state. Skips workItemsCache
   // and cross-repo aggregation in v1 — the GitLab list fetches directly
-  // from `window.api.gl.listMRs` / `listIssues` for the primary repo.
+  // from `api.gl.listMRs` / `listIssues` for the primary repo.
   const [gitlabFilter, setGitlabFilter] = useState<GitLabTaskFilter | GitLabIssueFilter>('opened')
   const [gitlabItems, setGitlabItems] = useState<GitLabWorkItem[]>([])
   const [gitlabLoading, setGitlabLoading] = useState(false)
@@ -3212,7 +3213,7 @@ export default function TaskPage(): React.JSX.Element {
       gitlabView === 'issues'
         ? (repo: (typeof eligibleRepos)[0]) => {
             const isAssignedToMe = activeIssueFilter === 'assigned-to-me'
-            return window.api.gl
+            return api.gl
               .listIssues({
                 repoPath: repo.path,
                 state: 'opened',
@@ -3232,7 +3233,7 @@ export default function TaskPage(): React.JSX.Element {
               })
           }
         : (repo: (typeof eligibleRepos)[0]) =>
-            window.api.gl
+            api.gl
               .listMRs({
                 repoPath: repo.path,
                 state: activeMRFilter ?? 'opened',
@@ -3301,7 +3302,7 @@ export default function TaskPage(): React.JSX.Element {
     }
     let stale = false
     setGitlabTodosLoading(true)
-    void window.api.gl
+    void api.gl
       .todos({ repoPath: primaryRepo.path })
       .then((todos) => {
         if (!stale) {
@@ -4413,7 +4414,7 @@ export default function TaskPage(): React.JSX.Element {
     setNewIssueSubmitting(true)
     try {
       const result = newIssueRuntimeTarget
-        ? await callRuntimeRpc<Awaited<ReturnType<typeof window.api.gh.createIssue>>>(
+        ? await callRuntimeRpc<Awaited<ReturnType<typeof api.gh.createIssue>>>(
             newIssueRuntimeTarget,
             'github.createIssue',
             {
@@ -4425,7 +4426,7 @@ export default function TaskPage(): React.JSX.Element {
             },
             { timeoutMs: 30_000 }
           )
-        : await window.api.gh.createIssue({
+        : await api.gh.createIssue({
             repoPath: newIssueTargetRepo.path,
             repoId: newIssueTargetRepo.id,
             title,
@@ -4472,13 +4473,13 @@ export default function TaskPage(): React.JSX.Element {
       openGitHubDetailPage(stub)
       const stubRepoId = newIssueTargetRepo.id
       const fullIssuePromise = newIssueRuntimeTarget
-        ? callRuntimeRpc<Awaited<ReturnType<typeof window.api.gh.workItem>>>(
+        ? callRuntimeRpc<Awaited<ReturnType<typeof api.gh.workItem>>>(
             newIssueRuntimeTarget,
             'github.workItem',
             { repo: newIssueTargetRepo.id, number: result.number, type: 'issue' },
             { timeoutMs: 30_000 }
           )
-        : window.api.gh.workItem({
+        : api.gh.workItem({
             repoPath: newIssueTargetRepo.path,
             repoId: newIssueTargetRepo.id,
             number: result.number,
@@ -5234,7 +5235,7 @@ export default function TaskPage(): React.JSX.Element {
                               if (!selectedLinearTeamForExternalLink?.url) {
                                 return
                               }
-                              void window.api.shell.openUrl(selectedLinearTeamForExternalLink.url)
+                              void api.shell.openUrl(selectedLinearTeamForExternalLink.url)
                             }}
                             disabled={!selectedLinearTeamForExternalLink}
                             aria-label={
@@ -5330,7 +5331,7 @@ export default function TaskPage(): React.JSX.Element {
                                 if (!selectedGitHubRepoExternalLink?.url) {
                                   return
                                 }
-                                void window.api.shell.openUrl(selectedGitHubRepoExternalLink.url)
+                                void api.shell.openUrl(selectedGitHubRepoExternalLink.url)
                               }}
                               aria-label={
                                 selectedGitHubRepoExternalLink
@@ -6298,7 +6299,7 @@ export default function TaskPage(): React.JSX.Element {
                                     </DropdownMenuItem>
                                   ) : null}
                                   <DropdownMenuItem
-                                    onSelect={() => window.api.shell.openUrl(item.url)}
+                                    onSelect={() => api.shell.openUrl(item.url)}
                                   >
                                     <ExternalLink className="size-4" />
                                     Open in browser
@@ -6346,7 +6347,7 @@ export default function TaskPage(): React.JSX.Element {
                                     </DropdownMenuItem>
                                   ) : null}
                                   <DropdownMenuItem
-                                    onSelect={() => window.api.shell.openUrl(item.url)}
+                                    onSelect={() => api.shell.openUrl(item.url)}
                                   >
                                     <ExternalLink className="size-4" />
                                     Open in browser
@@ -6425,11 +6426,11 @@ export default function TaskPage(): React.JSX.Element {
                       role="button"
                       tabIndex={0}
                       key={todo.id}
-                      onClick={() => void window.api.shell.openUrl(todo.targetUrl)}
+                      onClick={() => void api.shell.openUrl(todo.targetUrl)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault()
-                          void window.api.shell.openUrl(todo.targetUrl)
+                          void api.shell.openUrl(todo.targetUrl)
                         }
                       }}
                       className="grid w-full cursor-pointer gap-3 px-3 py-2 text-left grid-cols-[110px_minmax(0,3fr)_minmax(120px,1.2fr)_110px_50px] hover:bg-muted/50"
@@ -6570,7 +6571,7 @@ export default function TaskPage(): React.JSX.Element {
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation()
-                            void window.api.shell.openUrl(item.url)
+                            void api.shell.openUrl(item.url)
                           }}
                           aria-label="Open in GitLab"
                           className="text-muted-foreground hover:text-foreground"
@@ -6652,7 +6653,7 @@ export default function TaskPage(): React.JSX.Element {
                 }}
                 onOpenProject={(project) => {
                   if (project.url) {
-                    void window.api.shell.openUrl(project.url)
+                    void api.shell.openUrl(project.url)
                   }
                 }}
                 onRefresh={() => setLinearRefreshNonce((n) => n + 1)}
@@ -6685,7 +6686,7 @@ export default function TaskPage(): React.JSX.Element {
                   onSelectProject={openLinearProjectContext}
                   onOpenProject={(project) => {
                     if (project.url) {
-                      void window.api.shell.openUrl(project.url)
+                      void api.shell.openUrl(project.url)
                     }
                   }}
                   onUseProjectIssues={(project) => {
@@ -6726,7 +6727,7 @@ export default function TaskPage(): React.JSX.Element {
                   onSelectView={openLinearCustomViewContext}
                   onOpenView={(view) => {
                     if (view.url) {
-                      void window.api.shell.openUrl(view.url)
+                      void api.shell.openUrl(view.url)
                     }
                   }}
                 />
@@ -6765,7 +6766,7 @@ export default function TaskPage(): React.JSX.Element {
                   <Button
                     variant="outline"
                     size="xs"
-                    onClick={() => void window.api.shell.openUrl(selectedLinearCustomView.url!)}
+                    onClick={() => void api.shell.openUrl(selectedLinearCustomView.url!)}
                     className="gap-1 border-border/50 bg-background/70"
                   >
                     <ExternalLink className="size-3.5" />
@@ -6789,7 +6790,7 @@ export default function TaskPage(): React.JSX.Element {
                   }
                   onOpenProject={(project) => {
                     if (project.url) {
-                      void window.api.shell.openUrl(project.url)
+                      void api.shell.openUrl(project.url)
                     }
                   }}
                   onUseProjectIssues={(project) => {
@@ -7115,7 +7116,7 @@ export default function TaskPage(): React.JSX.Element {
                                       size="icon-xs"
                                       onClick={(event) => {
                                         event.stopPropagation()
-                                        window.api.shell.openUrl(issue.url)
+                                        api.shell.openUrl(issue.url)
                                       }}
                                       aria-label={`Open ${issue.identifier} in Linear`}
                                     >
@@ -7345,7 +7346,7 @@ export default function TaskPage(): React.JSX.Element {
                                   size="icon-xs"
                                   onClick={(event) => {
                                     event.stopPropagation()
-                                    window.api.shell.openUrl(issue.url)
+                                    api.shell.openUrl(issue.url)
                                   }}
                                   aria-label={`Open ${issue.identifier} in Linear`}
                                 >

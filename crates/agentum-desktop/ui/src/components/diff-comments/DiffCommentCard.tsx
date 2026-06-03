@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { CornerDownLeft, Pencil, Trash, FileText } from 'lucide-react'
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
@@ -163,7 +164,7 @@ export function DiffCommentCard({
                     onClick={(ev) => {
                       ev.preventDefault()
                       ev.stopPropagation()
-                      void window.api.shell.openUrl(url)
+                      void api.shell.openUrl(url)
                     }}
                   >
                     Open

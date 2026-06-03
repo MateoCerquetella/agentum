@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { toast } from 'sonner'
 import { useAppStore } from '@/store'
 import { buildAgentStartupPlan, type AgentStartupPlan } from '@/lib/tui-agent-startup'
@@ -52,9 +53,9 @@ export async function launchAgentBackgroundSession(
     throw new Error('The target workspace is no longer available.')
   }
   const preflight = TUI_AGENT_CONFIG[agent].preflightTrust
-  if (preflight && worktree.path && window.api.agentTrust?.markTrusted) {
+  if (preflight && worktree.path && api.agentTrust?.markTrusted) {
     try {
-      await window.api.agentTrust.markTrusted({
+      await api.agentTrust.markTrusted({
         preset: preflight,
         workspacePath: worktree.path
       })
@@ -138,7 +139,7 @@ export async function launchAgentBackgroundSession(
       // automation tabs must type the startup command themselves after shell output.
       const submittedCommand =
         command.endsWith('\r') || command.endsWith('\n') ? command : `${command}\r`
-      window.api.pty.write(ptyId, submittedCommand)
+      api.pty.write(ptyId, submittedCommand)
     }, 50)
   }
   const runtimeTarget = getActiveRuntimeTarget(store.settings)
@@ -163,7 +164,7 @@ export async function launchAgentBackgroundSession(
       )
       ptyId = toRemoteRuntimePtyId(created.terminal.handle, runtimeTarget.environmentId)
     } else {
-      const result = await window.api.pty.spawn({
+      const result = await api.pty.spawn({
         cols: 120,
         rows: 40,
         cwd: worktree.path,

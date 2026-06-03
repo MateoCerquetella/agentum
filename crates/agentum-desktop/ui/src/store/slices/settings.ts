@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
@@ -242,7 +243,7 @@ export const createSettingsSlice: StateCreator<AppState, [], [], SettingsSlice> 
 
   fetchSettings: async () => {
     try {
-      const settings = await window.api.settings.get()
+      const settings = await api.settings.get()
       set({ settings })
     } catch (err) {
       console.error('Failed to fetch settings:', err)
@@ -282,7 +283,7 @@ export const createSettingsSlice: StateCreator<AppState, [], [], SettingsSlice> 
       if ('disabledTuiAgents' in updates) {
         sanitizedUpdates.disabledTuiAgents = normalizeDisabledTuiAgents(updates.disabledTuiAgents)
       }
-      const nextSettings = await window.api.settings.set(sanitizedUpdates)
+      const nextSettings = await api.settings.set(sanitizedUpdates)
       set((s) => ({ settings: (nextSettings as GlobalSettings | undefined) ?? s.settings }))
     } catch (err) {
       console.error('Failed to update settings:', err)
@@ -309,7 +310,7 @@ export const createSettingsSlice: StateCreator<AppState, [], [], SettingsSlice> 
         await closeRemoteTerminalsBeforeRuntimeSwitch(get(), previousId)
         await closeRemoteBrowserPagesBeforeRuntimeSwitch(get())
       }
-      const nextSettings = await window.api.settings.set({
+      const nextSettings = await api.settings.set({
         activeRuntimeEnvironmentId: nextId
       })
       set((s) => ({

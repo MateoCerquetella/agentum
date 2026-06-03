@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* oxlint-disable max-lines */
 import type { PaneManager, ManagedPane } from '@/lib/pane-manager/pane-manager'
 import type { IDisposable } from '@xterm/xterm'
@@ -269,7 +270,7 @@ async function waitForSshConnection(connectionId: string): Promise<SshConnectRes
 
   const promise: Promise<SshConnectResult> = (async (): Promise<SshConnectResult> => {
     try {
-      await window.api.ssh.connect({ targetId: connectionId })
+      await api.ssh.connect({ targetId: connectionId })
       return { connected: true }
     } catch (err) {
       console.warn(`Deferred SSH reconnect failed for ${connectionId}:`, err)
@@ -490,7 +491,7 @@ export function connectPanePty(
       // Why: the explicit hook row is the authority for an in-flight agent turn.
       // Codex can reset its terminal title while handling Ctrl+C/Escape, so title
       // state must not veto clearing the row's working state.
-      return window.api.agentStatus
+      return api.agentStatus
         .inferInterrupt(request)
         .then((applied) => {
           if (applied) {
@@ -1363,7 +1364,7 @@ export function connectPanePty(
       // token captured here. See docs/mobile-prefer-renderer-scrollback.md.
       const preSignalPromise = runtimeEnvironmentId
         ? Promise.resolve(null)
-        : window.api.pty.declarePendingPaneSerializer(cacheKey).catch(() => null)
+        : api.pty.declarePendingPaneSerializer(cacheKey).catch(() => null)
 
       const spawnedRaw = transport.connect({
         url: '',
@@ -1385,17 +1386,17 @@ export function connectPanePty(
             if (!isRemoteRuntimePtyId(resolvedPtyId)) {
               registerPaneSerializerFor(resolvedPtyId)
               syncRendererOutputVisibility()
-              void window.api.pty.settlePaneSerializer(cacheKey, gen).catch(() => {})
+              void api.pty.settlePaneSerializer(cacheKey, gen).catch(() => {})
             }
           } else if (typeof gen === 'number') {
-            void window.api.pty.clearPendingPaneSerializer(cacheKey, gen).catch(() => {})
+            void api.pty.clearPendingPaneSerializer(cacheKey, gen).catch(() => {})
           }
           return resolvedPtyId
         })
         .catch(async () => {
           const gen = await preSignalPromise
           if (typeof gen === 'number') {
-            void window.api.pty.clearPendingPaneSerializer(cacheKey, gen).catch(() => {})
+            void api.pty.clearPendingPaneSerializer(cacheKey, gen).catch(() => {})
           }
           return null
         })
@@ -1472,11 +1473,11 @@ export function connectPanePty(
     }
 
     function canPauseRendererOutput(ptyId: string | null): ptyId is string {
-      return canUseMainBufferSnapshot(ptyId) && typeof window.api.pty.pauseOutput === 'function'
+      return canUseMainBufferSnapshot(ptyId) && typeof api.pty.pauseOutput === 'function'
     }
 
     function setRendererOutputPaused(ptyId: string, paused: boolean): void {
-      window.api.pty.pauseOutput(ptyId, paused)
+      api.pty.pauseOutput(ptyId, paused)
       rendererOutputPausedPtyId = paused ? ptyId : null
     }
 
@@ -1848,7 +1849,7 @@ export function connectPanePty(
         safeFit(pane)
         transport.resize(pane.terminal.cols, pane.terminal.rows)
         if (!isRemoteRuntimePtyId(currentPtyId)) {
-          window.api.pty.signal(currentPtyId, 'SIGWINCH')
+          api.pty.signal(currentPtyId, 'SIGWINCH')
         }
         scheduleReattachIdleAgentCursorReset()
       }
@@ -1893,7 +1894,7 @@ export function connectPanePty(
           hiddenOutputRestoreNeeded = false
           let snapshot: { data: string; cols: number; rows: number; seq?: number } | null = null
           try {
-            snapshot = await window.api.pty.getMainBufferSnapshot(currentPtyId, {
+            snapshot = await api.pty.getMainBufferSnapshot(currentPtyId, {
               scrollbackRows: HIDDEN_OUTPUT_RESTORE_SCROLLBACK_ROWS
             })
           } catch {
@@ -2105,7 +2106,7 @@ export function connectPanePty(
           // Snapshot superseded the cold-restore payload — ack it so the
           // daemon does not redeliver it on the next reattach.
           if (!isRemoteRuntimePtyId(ptyId)) {
-            window.api.pty.ackColdRestore(ptyId)
+            api.pty.ackColdRestore(ptyId)
           }
         }
       } else if (connectResult?.replay) {
@@ -2118,7 +2119,7 @@ export function connectPanePty(
         writeReplayData(POST_REPLAY_REATTACH_RESET)
         if (connectResult.coldRestore) {
           if (!isRemoteRuntimePtyId(ptyId)) {
-            window.api.pty.ackColdRestore(ptyId)
+            api.pty.ackColdRestore(ptyId)
           }
         }
       } else if (connectResult?.coldRestore) {
@@ -2138,7 +2139,7 @@ export function connectPanePty(
         // reset them to match the fresh shell's expectations.
         writeReplayData(POST_REPLAY_MODE_RESET)
         if (!isRemoteRuntimePtyId(ptyId)) {
-          window.api.pty.ackColdRestore(ptyId)
+          api.pty.ackColdRestore(ptyId)
         }
       }
       transport.resize(cols, rows)
@@ -2146,7 +2147,7 @@ export function connectPanePty(
       // change. Sending it explicitly guarantees restored TUIs repaint at
       // the correct cursor position after snapshot replay.
       if (!isRemoteRuntimePtyId(ptyId)) {
-        window.api.pty.signal(ptyId, 'SIGWINCH')
+        api.pty.signal(ptyId, 'SIGWINCH')
       }
       scheduleReattachIdleAgentCursorReset()
 
@@ -2182,7 +2183,7 @@ export function connectPanePty(
           // as before.
           let needsPrompt = false
           try {
-            needsPrompt = await window.api.ssh.needsPassphrasePrompt({
+            needsPrompt = await api.ssh.needsPassphrasePrompt({
               targetId: connectionId
             })
           } catch (err) {
@@ -2315,7 +2316,7 @@ export function connectPanePty(
             const preSignalPromise =
               runtimeEnvironmentId || isRemoteRuntimePtyId(pendingSessionId)
                 ? Promise.resolve(null)
-                : window.api.pty.declarePendingPaneSerializer(cacheKey).catch(() => null)
+                : api.pty.declarePendingPaneSerializer(cacheKey).catch(() => null)
             let expiredReattachError = false
             const reattachPromise = transport.connect({
               url: '',
@@ -2348,7 +2349,7 @@ export function connectPanePty(
                 if (!result && expiredReattachError) {
                   const gen = await preSignalPromise
                   if (typeof gen === 'number') {
-                    void window.api.pty.clearPendingPaneSerializer(cacheKey, gen).catch(() => {})
+                    void api.pty.clearPendingPaneSerializer(cacheKey, gen).catch(() => {})
                   }
                   if (disposed) {
                     return
@@ -2362,14 +2363,14 @@ export function connectPanePty(
                 const gen = await preSignalPromise
                 if (typeof gen === 'number') {
                   if (!isRemoteRuntimePtyId(pendingSessionId)) {
-                    void window.api.pty.settlePaneSerializer(cacheKey, gen).catch(() => {})
+                    void api.pty.settlePaneSerializer(cacheKey, gen).catch(() => {})
                   }
                 }
               })
               .catch(async (err) => {
                 const gen = await preSignalPromise
                 if (typeof gen === 'number') {
-                  void window.api.pty.clearPendingPaneSerializer(cacheKey, gen).catch(() => {})
+                  void api.pty.clearPendingPaneSerializer(cacheKey, gen).catch(() => {})
                 }
                 console.warn(`[pty-connection] Reattach FAILED for tab=${deps.tabId}:`, err)
                 if (disposed) {
@@ -2448,7 +2449,7 @@ export function connectPanePty(
       const preSignalPromise =
         runtimeEnvironmentId || isRemoteRuntimePtyId(deferredReattachSessionId)
           ? Promise.resolve(null)
-          : window.api.pty.declarePendingPaneSerializer(cacheKey).catch(() => null)
+          : api.pty.declarePendingPaneSerializer(cacheKey).catch(() => null)
 
       let expiredReattachError = false
       const reattachPromise = transport.connect({
@@ -2474,7 +2475,7 @@ export function connectPanePty(
           if (!result && expiredReattachError) {
             const gen = await preSignalPromise
             if (typeof gen === 'number') {
-              void window.api.pty.clearPendingPaneSerializer(cacheKey, gen).catch(() => {})
+              void api.pty.clearPendingPaneSerializer(cacheKey, gen).catch(() => {})
             }
             if (disposed) {
               return
@@ -2488,14 +2489,14 @@ export function connectPanePty(
           const gen = await preSignalPromise
           if (typeof gen === 'number') {
             if (!isRemoteRuntimePtyId(deferredReattachSessionId)) {
-              void window.api.pty.settlePaneSerializer(cacheKey, gen).catch(() => {})
+              void api.pty.settlePaneSerializer(cacheKey, gen).catch(() => {})
             }
           }
         })
         .catch(async (err) => {
           const gen = await preSignalPromise
           if (typeof gen === 'number') {
-            void window.api.pty.clearPendingPaneSerializer(cacheKey, gen).catch(() => {})
+            void api.pty.clearPendingPaneSerializer(cacheKey, gen).catch(() => {})
           }
           const message = err instanceof Error ? err.message : String(err)
           warnTerminalLifecycleAnomaly('restored PTY reattach threw', {
@@ -2523,7 +2524,7 @@ export function connectPanePty(
       recordPtyConnectDiagnostic(`pane=${pane.id} -> ATTACH detached=${attachPtyId}`)
       allowInitialIdleCacheSeed = false
       // Why: surface synchronous attach failures (e.g., the PTY died between
-      // mount and remount, so window.api.pty.resize rejects) through
+      // mount and remount, so api.pty.resize rejects) through
       // reportError so the pane shows a diagnostic instead of silently
       // leaving a blank surface. The deferred-reattach branch above uses
       // `.catch(reportError)` for the same reason. Commit the pane/tab
@@ -2647,7 +2648,7 @@ export function connectPanePty(
       unregisterDocumentVisibilityRecovery = null
       clearHiddenStartupRendererQueryTimer()
       if (rendererOutputPausedPtyId !== null) {
-        window.api.pty.pauseOutput(rendererOutputPausedPtyId, false)
+        api.pty.pauseOutput(rendererOutputPausedPtyId, false)
         rendererOutputPausedPtyId = null
       }
       clearPanePtyIdAttr()

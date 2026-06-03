@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { FileText, Folder, Globe, Trash2 } from 'lucide-react'
@@ -29,7 +30,7 @@ export function PrivacyDiagnosticsSection(): React.JSX.Element {
 
   const refreshStatus = useCallback(async (): Promise<void> => {
     try {
-      const next = await window.api.diagnostics.getStatus()
+      const next = await api.diagnostics.getStatus()
       if (mountedRef.current) {
         setStatus(next)
       }
@@ -47,14 +48,14 @@ export function PrivacyDiagnosticsSection(): React.JSX.Element {
     return () => {
       mountedRef.current = false
       if (activeBundleSubmissionIdRef.current) {
-        void window.api.diagnostics.discardBundlePreview(activeBundleSubmissionIdRef.current)
+        void api.diagnostics.discardBundlePreview(activeBundleSubmissionIdRef.current)
       }
     }
   }, [])
 
   const handleOpenFolder = useCallback(async (): Promise<void> => {
     try {
-      await window.api.diagnostics.openTraceFolder()
+      await api.diagnostics.openTraceFolder()
     } catch {
       toast.error('Could not open trace folder')
     }
@@ -62,7 +63,7 @@ export function PrivacyDiagnosticsSection(): React.JSX.Element {
 
   const handleClear = useCallback(async (): Promise<void> => {
     try {
-      await window.api.diagnostics.clearTraces()
+      await api.diagnostics.clearTraces()
       if (!mountedRef.current) {
         return
       }
@@ -82,9 +83,9 @@ export function PrivacyDiagnosticsSection(): React.JSX.Element {
   const handleCollectBundle = useCallback(async (): Promise<void> => {
     setCollecting(true)
     try {
-      const nextBundle = await window.api.diagnostics.collectBundle()
+      const nextBundle = await api.diagnostics.collectBundle()
       if (!mountedRef.current) {
-        await window.api.diagnostics.discardBundlePreview(nextBundle.bundleSubmissionId)
+        await api.diagnostics.discardBundlePreview(nextBundle.bundleSubmissionId)
         return
       }
       // Why: unmount cleanup may run before a passive ref mirror would fire;
@@ -111,7 +112,7 @@ export function PrivacyDiagnosticsSection(): React.JSX.Element {
     }
     setOpeningPreview(true)
     try {
-      await window.api.diagnostics.openBundlePreview(bundle.bundleSubmissionId)
+      await api.diagnostics.openBundlePreview(bundle.bundleSubmissionId)
       if (!mountedRef.current) {
         return
       }
@@ -134,7 +135,7 @@ export function PrivacyDiagnosticsSection(): React.JSX.Element {
     }
     setUploading(true)
     try {
-      const upload = await window.api.diagnostics.uploadBundle(bundle.bundleSubmissionId)
+      const upload = await api.diagnostics.uploadBundle(bundle.bundleSubmissionId)
       if (!mountedRef.current) {
         return
       }
@@ -160,7 +161,7 @@ export function PrivacyDiagnosticsSection(): React.JSX.Element {
     }
     setDiscarding(true)
     try {
-      await window.api.diagnostics.discardBundlePreview(bundle.bundleSubmissionId)
+      await api.diagnostics.discardBundlePreview(bundle.bundleSubmissionId)
       if (!mountedRef.current) {
         return
       }
@@ -187,7 +188,7 @@ export function PrivacyDiagnosticsSection(): React.JSX.Element {
     }
     setCopyingTicket(true)
     try {
-      await window.api.ui.writeClipboardText(ticketId)
+      await api.ui.writeClipboardText(ticketId)
       if (!mountedRef.current) {
         return
       }
@@ -209,7 +210,7 @@ export function PrivacyDiagnosticsSection(): React.JSX.Element {
     }
     setDeletingTicket(true)
     try {
-      await window.api.diagnostics.deleteBundle(ticketId)
+      await api.diagnostics.deleteBundle(ticketId)
       if (!mountedRef.current) {
         return
       }

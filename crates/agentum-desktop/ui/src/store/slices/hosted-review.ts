@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: hosted-review cache identity, runtime dispatch,
 and race protection are kept together so branch review lookup invariants stay testable. */
 import type { StateCreator } from 'zustand'
@@ -188,7 +189,7 @@ export const createHostedReviewSlice: StateCreator<AppState, [], [], HostedRevie
       )
     }
     const repo = get().repos.find((candidate) => candidate.path === args.repoPath)
-    return window.api.hostedReview.getCreationEligibility({
+    return api.hostedReview.getCreationEligibility({
       ...args,
       connectionId: repo?.connectionId ?? null
     })
@@ -212,7 +213,7 @@ export const createHostedReviewSlice: StateCreator<AppState, [], [], HostedRevie
       )
     }
     const repo = get().repos.find((candidate) => candidate.path === repoPath)
-    return window.api.hostedReview.create({
+    return api.hostedReview.create({
       repoPath,
       connectionId: repo?.connectionId ?? null,
       ...input
@@ -280,7 +281,7 @@ export const createHostedReviewSlice: StateCreator<AppState, [], [], HostedRevie
                   // timeout no longer risks a background socket stampede.
                   { timeoutMs: 30_000 }
                 )
-              : await window.api.hostedReview.forBranch({ repoPath, ...args })
+              : await api.hostedReview.forBranch({ repoPath, ...args })
           if (requestGenerations.get(cacheKey) === generation) {
             set((state) => {
               if (

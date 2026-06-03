@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 // Why: mobile terminal streaming needs the exact screen state from the
 // desktop's xterm.js instance. This module maintains a global registry of
 // serialize functions keyed by ptyId, and handles IPC requests from the
@@ -120,19 +121,19 @@ function ensureSerializerListener(): void {
   }
   listenerAttached = true
 
-  window.api.pty.onClearBufferRequest((request) => {
+  api.pty.onClearBufferRequest((request) => {
     // Why: mobile clear is a terminal action, not a PTY byte. Clearing the
     // renderer-owned xterm keeps future mobile snapshots from rehydrating
     // scrollback that the user explicitly removed.
     serializersByPtyId.get(request.ptyId)?.clear?.()
   })
 
-  window.api.pty.onSerializeBufferRequest((request) => {
+  api.pty.onSerializeBufferRequest((request) => {
     const entry = serializersByPtyId.get(request.ptyId)
     void Promise.resolve(entry?.fn(request.opts) ?? null)
       .then((result) => {
         if (!result) {
-          window.api.pty.sendSerializedBuffer(request.requestId, null)
+          api.pty.sendSerializedBuffer(request.requestId, null)
           return
         }
         const titleEntry = lastTitleByPtyId.get(request.ptyId)
@@ -147,10 +148,10 @@ function ensureSerializerListener(): void {
         } else if (result.lastTitle !== undefined) {
           payload.lastTitle = result.lastTitle
         }
-        window.api.pty.sendSerializedBuffer(request.requestId, payload)
+        api.pty.sendSerializedBuffer(request.requestId, payload)
       })
       .catch(() => {
-        window.api.pty.sendSerializedBuffer(request.requestId, null)
+        api.pty.sendSerializedBuffer(request.requestId, null)
       })
   })
 }

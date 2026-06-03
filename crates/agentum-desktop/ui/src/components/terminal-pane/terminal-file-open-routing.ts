@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { absolutePathToFileUri } from '@/components/editor/markdown-internal-links'
 import { getConnectionId } from '@/lib/connection-context'
 import { detectLanguage } from '@/lib/language-detect'
@@ -101,7 +102,7 @@ export function openDetectedFilePath(
     try {
       // Why: remote paths don't need local auth — the relay/runtime is the security boundary.
       if (canOpenWithSystemDefault) {
-        await window.api.fs.authorizeExternalPath({ targetPath: filePath })
+        await api.fs.authorizeExternalPath({ targetPath: filePath })
       }
       statResult = await statRuntimePath(fileContext, filePath)
     } catch {
@@ -115,7 +116,7 @@ export function openDetectedFilePath(
     if (openWithSystemDefault && canOpenWithSystemDefault) {
       // Why: Shift+Cmd/Ctrl mirrors URL links by escaping Agentum and honoring the
       // user's OS file associations without adding editor-specific settings.
-      const openedWithSystemDefault = await window.api.shell.openFilePath(filePath)
+      const openedWithSystemDefault = await api.shell.openFilePath(filePath)
       if (openedWithSystemDefault || statResult.isDirectory) {
         return
       }
@@ -123,7 +124,7 @@ export function openDetectedFilePath(
 
     if (statResult.isDirectory) {
       if (canOpenWithSystemDefault) {
-        await window.api.shell.openFilePath(filePath)
+        await api.shell.openFilePath(filePath)
       }
       return
     }

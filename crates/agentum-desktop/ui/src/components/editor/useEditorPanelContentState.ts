@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* oxlint-disable max-lines -- Why: content loading, retry, and external-change
    subscriptions share in-flight caches and state setters; splitting them would
    make the hook coordination harder to audit. */
@@ -105,7 +106,7 @@ export function useEditorPanelContentState({
           }
           // Why: restored external-file tabs need their main-process path grant
           // refreshed because that authorization is only held in memory.
-          await window.api.fs.authorizeExternalPath({ targetPath: filePath })
+          await api.fs.authorizeExternalPath({ targetPath: filePath })
         }
         const readScope = getRuntimeFileReadScope(readSettings, connectionId)
         const key = inFlightReadKey(readScope, filePath)

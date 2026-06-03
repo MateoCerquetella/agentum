@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import type { RuntimeRpcResponse } from '../../../shared/runtime-rpc-envelope'
 import type {
@@ -53,7 +54,7 @@ export async function createWebRuntimeSessionTerminal(args: {
     selectWebRuntimeSessionWorktree(args.worktreeId)
   }
   try {
-    const response = await window.api.runtimeEnvironments.call({
+    const response = await api.runtimeEnvironments.call({
       selector: environmentId,
       method: 'session.tabs.createTerminal',
       params: {
@@ -99,7 +100,7 @@ export async function createWebRuntimeSessionBrowserTab(args: {
     selectWebRuntimeSessionWorktree(args.worktreeId)
   }
   try {
-    const response = await window.api.runtimeEnvironments.call({
+    const response = await api.runtimeEnvironments.call({
       selector: environmentId,
       method: 'browser.tabCreate',
       params: {
@@ -213,7 +214,7 @@ async function refreshWebRuntimeSessionTabsSnapshot(
   worktreeId: string
 ): Promise<void> {
   try {
-    const response = await window.api.runtimeEnvironments.call({
+    const response = await api.runtimeEnvironments.call({
       selector: environmentId,
       method: 'session.tabs.list',
       params: {
@@ -254,7 +255,7 @@ export async function activateWebRuntimeSessionWorktree(args: {
   }
 
   try {
-    const response = await window.api.runtimeEnvironments.call({
+    const response = await api.runtimeEnvironments.call({
       selector: environmentId,
       method: 'worktree.activate',
       params: {
@@ -365,7 +366,7 @@ export async function moveWebRuntimeSessionTab(
               // indexes must be counted in the filtered host-backed order.
               index: targetHostIndex
             }
-    const response = await window.api.runtimeEnvironments.call({
+    const response = await api.runtimeEnvironments.call({
       selector: environmentId,
       method: 'session.tabs.move',
       params: move,
@@ -407,7 +408,7 @@ async function callWebRuntimeSessionTabMethod(
         worktreeId: args.worktreeId,
         tabId: args.tabId
       }) ?? toHostSessionTabId(args.tabId)
-    const response = await window.api.runtimeEnvironments.call({
+    const response = await api.runtimeEnvironments.call({
       selector: environmentId,
       method,
       params: {
@@ -443,7 +444,7 @@ export function splitWebRuntimeTerminal(
   // Why: split requests from the paired web client must run on the host pane.
   // A local split would mint a web-only pane and the host would mirror it back
   // as a separate tab instead of preserving the terminal split layout.
-  void window.api.runtimeEnvironments
+  void api.runtimeEnvironments
     .call({
       selector: environmentId,
       method: 'terminal.split',
@@ -478,7 +479,7 @@ export function closeWebRuntimeTerminal(ptyId: string | null | undefined): boole
   // Why: host-session mirror panes are detached locally in the browser, but
   // the host owns the real pane graph. Close the host terminal first so later
   // session snapshots cannot resurrect the locally removed pane.
-  void window.api.runtimeEnvironments
+  void api.runtimeEnvironments
     .call({
       selector: environmentId,
       method: 'terminal.close',

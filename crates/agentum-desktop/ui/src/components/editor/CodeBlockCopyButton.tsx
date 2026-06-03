@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useCallback, useRef, useState } from 'react'
 import { Copy, Check } from 'lucide-react'
 
@@ -46,7 +47,7 @@ export default function CodeBlockCopyButton({
       }
     })
 
-    void window.api.ui
+    void api.ui
       .writeClipboardText(text)
       .then(() => {
         if (!isMountedRef.current) {

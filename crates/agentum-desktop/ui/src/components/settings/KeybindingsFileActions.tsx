@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React from 'react'
 import { ChevronDown, Code2, ExternalLink, FileText, FolderOpen, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
@@ -114,7 +115,7 @@ export function KeybindingsFileActions(): React.JSX.Element {
         toast.error('Keybindings file is not available.')
         return
       }
-      const result = await window.api.shell.openInExternalEditor(filePath, command)
+      const result = await api.shell.openInExternalEditor(filePath, command)
       if (!result.ok) {
         toast.error(openFailureMessage(result.reason))
       }

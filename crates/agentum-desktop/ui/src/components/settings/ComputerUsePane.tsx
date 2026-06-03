@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Accessibility,
@@ -137,7 +138,7 @@ export function ComputerUsePane(): React.JSX.Element {
     const operationId = ++permissionOperationSequence.current
     setLoading(true)
     try {
-      const result = await window.api.computerUsePermissions.getStatus()
+      const result = await api.computerUsePermissions.getStatus()
       if (operationId !== permissionOperationSequence.current) {
         return
       }
@@ -179,7 +180,7 @@ export function ComputerUsePane(): React.JSX.Element {
     useAppStore.getState().recordFeatureInteraction('computer-use-setup')
     setPendingId(id)
     try {
-      const result = await window.api.computerUsePermissions.openSetup({ id })
+      const result = await api.computerUsePermissions.openSetup({ id })
       if (!mountedRef.current) {
         return
       }
@@ -214,7 +215,7 @@ export function ComputerUsePane(): React.JSX.Element {
     const operationId = ++permissionOperationSequence.current
     setResetting(true)
     try {
-      const result = await window.api.computerUsePermissions.reset()
+      const result = await api.computerUsePermissions.reset()
       if (operationId !== permissionOperationSequence.current) {
         return
       }

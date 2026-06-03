@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: consolidating memory + sessions into one
    surface deliberately co-locates the sparkline, worktree tree, session list,
    daemon actions, and kill-confirm dialog so the popover body and badge stay
@@ -738,7 +739,7 @@ export function ResourceUsageStatusSegment({
       return
     }
     try {
-      const result = await window.api.pty.listSessions()
+      const result = await api.pty.listSessions()
       if (!mountedRef.current) {
         return
       }
@@ -1030,7 +1031,7 @@ export function ResourceUsageStatusSegment({
         // kill lands and re-adds the row that was just removed.
         void (async () => {
           try {
-            await window.api.pty.kill(session.sessionId)
+            await api.pty.kill(session.sessionId)
           } catch {
             /* already dead */
           }
@@ -1063,7 +1064,7 @@ export function ResourceUsageStatusSegment({
     // lingering up to SESSIONS_POLL_MS while the daemon-side list reconciles.
     const orphanIds = new Set(orphans.map((s) => s.id))
     setSessions((prev) => prev.filter((s) => !orphanIds.has(s.id)))
-    await Promise.allSettled(orphans.map((s) => window.api.pty.kill(s.id)))
+    await Promise.allSettled(orphans.map((s) => api.pty.kill(s.id)))
     void refreshSessions()
   }, [sessions, ptyIdsByTabId, workspaceSessionReady, refreshSessions])
 
@@ -1078,7 +1079,7 @@ export function ResourceUsageStatusSegment({
     // dialog closes but the killed row stays for up to 10s.
     setSessions((prev) => prev.filter((s) => s.id !== target.sessionId))
     try {
-      await window.api.pty.kill(target.sessionId)
+      await api.pty.kill(target.sessionId)
     } catch {
       /* already dead — fall through */
     } finally {

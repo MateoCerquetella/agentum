@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useState } from 'react'
 import { ShieldCheck } from 'lucide-react'
 import { useMountedRef } from '@/hooks/useMountedRef'
@@ -96,7 +97,7 @@ export function PrivacyPane({ settings }: PrivacyPaneProps): React.JSX.Element {
             <button
               type="button"
               className="underline underline-offset-2 hover:text-foreground"
-              onClick={() => void window.api.shell.openUrl(PRIVACY_URL)}
+              onClick={() => void api.shell.openUrl(PRIVACY_URL)}
             >
               Privacy policy
             </button>

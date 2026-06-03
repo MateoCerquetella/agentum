@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import type { StateCreator } from 'zustand'
 import type {
   WorkspaceSpaceAnalysis,
@@ -86,7 +87,7 @@ export const createWorkspaceSpaceSlice: StateCreator<AppState, [], [], Workspace
       }
     }),
   cancelWorkspaceSpaceScan: async () => {
-    const cancelled = await window.api.workspaceSpace.cancel()
+    const cancelled = await api.workspaceSpace.cancel()
     if (cancelled) {
       get().recordFeatureInteraction?.('workspace-cleanup')
     }
@@ -117,7 +118,7 @@ export const createWorkspaceSpaceSlice: StateCreator<AppState, [], [], Workspace
     })
     // Why: the compact Resource Manager card and the full Space page share
     // one manual scan result; duplicate button presses should join the same IO.
-    inFlightScan = window.api.workspaceSpace
+    inFlightScan = api.workspaceSpace
       .analyze()
       .then((result) => {
         if (!result.ok) {

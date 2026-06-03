@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ExternalLink, FolderPlus, GitBranchPlus, Star } from 'lucide-react'
 import { cn } from '../lib/utils'
@@ -69,7 +70,7 @@ function GitHubStarButton({ hasRepos }: { hasRepos: boolean }): React.JSX.Elemen
 
   useEffect(() => {
     let cancelled = false
-    void window.api.gh.checkAgentumStarred().then((result) => {
+    void api.gh.checkAgentumStarred().then((result) => {
       if (cancelled) {
         return
       }
@@ -106,7 +107,7 @@ function GitHubStarButton({ hasRepos }: { hasRepos: boolean }): React.JSX.Elemen
       return
     }
     setState('starred') // optimistic
-    const ok = await window.api.gh.starAgentum('landing')
+    const ok = await api.gh.starAgentum('landing')
     if (!ok) {
       if (mountedRef.current) {
         setState('not-starred')
@@ -116,7 +117,7 @@ function GitHubStarButton({ hasRepos }: { hasRepos: boolean }): React.JSX.Elemen
     // Why: starring from any entry point mutes the threshold-based nag.
     // Without this the background notification could still fire on the next
     // threshold crossing, which would feel like a bug to the user.
-    await window.api.starNag.complete()
+    await api.starNag.complete()
   }
 
   // Hide if gh CLI is unavailable, or if the user has already starred and added a repo
@@ -181,7 +182,7 @@ function PreflightBanner({ issues }: { issues: PreflightIssue[] }): React.JSX.El
             </div>
             <button
               className="inline-flex items-center gap-1 shrink-0 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors cursor-pointer"
-              onClick={() => window.api.shell.openUrl(issue.fixUrl)}
+              onClick={() => api.shell.openUrl(issue.fixUrl)}
             >
               {issue.fixLabel}
               <ExternalLink className="size-3" />
@@ -206,7 +207,7 @@ export default function Landing(): React.JSX.Element {
   useEffect(() => {
     let cancelled = false
     const refreshPreflight = (force = false): void => {
-      void window.api.preflight.check(force ? { force: true } : undefined).then((status) => {
+      void api.preflight.check(force ? { force: true } : undefined).then((status) => {
         if (cancelled) {
           return
         }
@@ -243,7 +244,7 @@ export default function Landing(): React.JSX.Element {
     // Why: some users complete `gh auth login` without ever leaving the Agentum
     // window. Poll only while a warning is visible so the banner self-clears.
     const intervalId = window.setInterval(() => {
-      void window.api.preflight.check({ force: true }).then((status) => {
+      void api.preflight.check({ force: true }).then((status) => {
         if (cancelled) {
           return
         }

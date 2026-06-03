@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React from 'react'
 import { Copy, ExternalLink } from 'lucide-react'
 import {
@@ -41,14 +42,14 @@ export function MonacoGutterContextMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent sideOffset={0} align="start">
         <DropdownMenuItem
-          onSelect={() => window.api.ui.writeClipboardText(formatPathLineReference(filePath, line))}
+          onSelect={() => api.ui.writeClipboardText(formatPathLineReference(filePath, line))}
         >
           <Copy className="w-3.5 h-3.5 mr-1.5" />
           Copy Path to Line
         </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() =>
-            window.api.ui.writeClipboardText(formatPathLineReference(relativePath, line))
+            api.ui.writeClipboardText(formatPathLineReference(relativePath, line))
           }
         >
           <Copy className="w-3.5 h-3.5 mr-1.5" />
@@ -76,7 +77,7 @@ export function MonacoGutterContextMenu({
               { relativePath, line }
             )
             if (url) {
-              window.api.ui.writeClipboardText(url)
+              api.ui.writeClipboardText(url)
             }
           }}
         >

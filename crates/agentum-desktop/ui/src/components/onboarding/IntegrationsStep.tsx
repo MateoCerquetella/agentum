@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useState } from 'react'
 import { ExternalLink, Github, Terminal } from 'lucide-react'
 import { LinearIcon } from '@/components/icons/LinearIcon'
@@ -63,7 +64,7 @@ export function GitHubRow(props: { compact?: boolean } = {}): React.JSX.Element 
             <Button
               variant="outline"
               size="sm"
-              onClick={() => window.api.shell.openUrl('https://cli.github.com')}
+              onClick={() => api.shell.openUrl('https://cli.github.com')}
             >
               <ExternalLink className="size-3.5" />
               Install gh

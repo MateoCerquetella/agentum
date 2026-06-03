@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: notification settings keeps delivery toggles, system test feedback, and sound selection on one settings merge path. */
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -89,13 +90,13 @@ export async function sendNotificationSettingsTestNotification(
   notificationSettings: GlobalSettings['notifications'],
   volumeDraft: number
 ): Promise<void> {
-  const permissionStatus = await window.api.notifications.getPermissionStatus()
+  const permissionStatus = await api.notifications.getPermissionStatus()
   if (!permissionStatus.supported) {
     toast.error('Notifications are not supported on this system')
     return
   }
 
-  const result = await window.api.notifications.dispatch({
+  const result = await api.notifications.dispatch({
     source: 'test',
     requireDisplayConfirmation: true
   })
@@ -105,7 +106,7 @@ export async function sendNotificationSettingsTestNotification(
     // bursts of real notifications, not for an explicit user action.
     const soundResult =
       notificationSettings.customSoundId !== 'system'
-        ? await window.api.notifications.playSound({
+        ? await api.notifications.playSound({
             force: true,
             volume: volumeDraft
           })
@@ -123,7 +124,7 @@ export async function sendNotificationSettingsTestNotification(
         action: {
           label: 'Open Settings',
           onClick: () => {
-            void window.api.notifications.openSystemSettings()
+            void api.notifications.openSystemSettings()
           }
         }
       })
@@ -141,7 +142,7 @@ export async function sendNotificationSettingsTestNotification(
         action: {
           label: 'Open Settings',
           onClick: () => {
-            void window.api.notifications.openSystemSettings()
+            void api.notifications.openSystemSettings()
           }
         }
       })
@@ -227,7 +228,7 @@ export function NotificationsPane({
     if (customSoundId === 'system') {
       return
     }
-    const result = await window.api.notifications.playSound({
+    const result = await api.notifications.playSound({
       force: true,
       volume: volumeDraft
     })
@@ -239,7 +240,7 @@ export function NotificationsPane({
   const handleChooseCustomSound = async (): Promise<void> => {
     setIsPickingSound(true)
     try {
-      const soundPath = await window.api.shell.pickAudio()
+      const soundPath = await api.shell.pickAudio()
       if (soundPath) {
         await updateNotificationSettings({ customSoundId: 'custom', customSoundPath: soundPath })
         await previewSound('custom')

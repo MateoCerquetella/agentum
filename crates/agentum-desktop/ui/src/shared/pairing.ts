@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { base64ToUtf8, utf8ToBase64 } from './base64'
+
 export const PAIRING_OFFER_VERSION = 2
 
 export const PairingOfferSchema = z.object({
@@ -15,8 +17,7 @@ export type PairingOffer = z.infer<typeof PairingOfferSchema>
 
 export function encodePairingOffer(offer: PairingOffer): string {
   const json = JSON.stringify(offer)
-  const base64url = Buffer.from(json, 'utf-8')
-    .toString('base64')
+  const base64url = utf8ToBase64(json)
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '')
@@ -75,6 +76,6 @@ export function parsePairingCode(input: string): PairingOffer | null {
 
 function decodePairingBase64(base64url: string): PairingOffer {
   const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/')
-  const json = Buffer.from(base64, 'base64').toString('utf-8')
+  const json = base64ToUtf8(base64)
   return PairingOfferSchema.parse(JSON.parse(json))
 }

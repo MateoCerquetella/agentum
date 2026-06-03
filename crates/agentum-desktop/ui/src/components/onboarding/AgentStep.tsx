@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useState } from 'react'
 import { Check, ExternalLink } from 'lucide-react'
 import { AGENT_CATALOG, AgentIcon } from '@/lib/agent-catalog'
@@ -60,7 +61,7 @@ export function AgentStep({ selectedAgent, onSelect, detectedSet, isDetecting }:
           <button
             type="button"
             className="inline-flex shrink-0 items-center gap-1 rounded-md border border-amber-400/40 bg-amber-400/10 px-2 py-1 font-medium text-amber-800 hover:bg-amber-400/20 dark:text-amber-100"
-            onClick={() => void window.api.shell.openUrl(selectedEntry.homepageUrl)}
+            onClick={() => void api.shell.openUrl(selectedEntry.homepageUrl)}
           >
             Install instructions
             <ExternalLink className="size-3" />

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the Linear drawer co-locates read-only preview, edit controls, and comment input so the full issue surface stays in one file. */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -1288,7 +1289,7 @@ export default function LinearItemDrawer({
                         variant="ghost"
                         size="icon"
                         className="size-7"
-                        onClick={() => window.api.shell.openUrl(displayed.url)}
+                        onClick={() => api.shell.openUrl(displayed.url)}
                         aria-label="Open on Linear"
                       >
                         <ExternalLink className="size-4" />

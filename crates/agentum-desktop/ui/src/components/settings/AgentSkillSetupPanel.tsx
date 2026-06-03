@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useState, type ReactNode } from 'react'
 import { RefreshCw, Terminal } from 'lucide-react'
 import { IntegrationStatusPill } from '../integration-status-pill'
@@ -65,7 +66,7 @@ export function AgentSkillSetupPanel({
     let canceled = false
     const refreshCliNotice = async (): Promise<void> => {
       try {
-        const status = await window.api.cli.getInstallStatus()
+        const status = await api.cli.getInstallStatus()
         if (!canceled) {
           setPreInstallNoticeVisible(!isAgentumCliAvailableOnPath(status))
         }
@@ -89,7 +90,7 @@ export function AgentSkillSetupPanel({
       return
     }
     try {
-      const status = await window.api.cli.getInstallStatus()
+      const status = await api.cli.getInstallStatus()
       if (mountedRef.current) {
         setPreInstallNoticeVisible(!isAgentumCliAvailableOnPath(status))
       }

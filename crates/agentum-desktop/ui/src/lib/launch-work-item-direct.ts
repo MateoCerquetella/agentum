@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { toast } from 'sonner'
 import { useAppStore, type AppState } from '@/store'
 import { pasteDraftWhenAgentReady } from '@/lib/agent-paste-draft'
@@ -83,7 +84,7 @@ async function resolveDirectPrStartPoint(
   const target = getActiveRuntimeTarget(settings)
   const result =
     target.kind === 'local'
-      ? await window.api.worktrees.resolvePrBase({ repoId, prNumber })
+      ? await api.worktrees.resolvePrBase({ repoId, prNumber })
       : await callRuntimeRpc<GitHubPrStartPoint | { error: string }>(
           target,
           'worktree.resolvePrBase',
@@ -286,11 +287,11 @@ export async function launchWorkItemDirect(args: LaunchWorkItemDirectArgs): Prom
     // and we guard the IPC presence so a stale preload bundle (which can
     // ship a renderer that's ahead of the loaded preload) doesn't crash the
     // launch with "Cannot read properties of undefined".
-    if (effectiveAgent && worktreePath && window.api.agentTrust?.markTrusted) {
+    if (effectiveAgent && worktreePath && api.agentTrust?.markTrusted) {
       const preflight = TUI_AGENT_CONFIG[effectiveAgent].preflightTrust
       if (preflight) {
         try {
-          await window.api.agentTrust.markTrusted({
+          await api.agentTrust.markTrusted({
             preset: preflight,
             workspacePath: worktreePath
           })

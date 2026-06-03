@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
@@ -34,7 +35,7 @@ export function WslCliRegistration({
   const refreshStatus = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
-      const next = await window.api.cli.getWslInstallStatus()
+      const next = await api.cli.getWslInstallStatus()
       if (mountedRef.current) {
         setStatus(next)
       }
@@ -66,7 +67,7 @@ export function WslCliRegistration({
   const handleInstall = async (): Promise<void> => {
     setBusyAction('install')
     try {
-      const next = await window.api.cli.installWsl()
+      const next = await api.cli.installWsl()
       if (!mountedRef.current) {
         return
       }
@@ -89,7 +90,7 @@ export function WslCliRegistration({
   const handleRemove = async (): Promise<void> => {
     setBusyAction('remove')
     try {
-      const next = await window.api.cli.removeWsl()
+      const next = await api.cli.removeWsl()
       if (!mountedRef.current) {
         return
       }

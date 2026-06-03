@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: notebook editing, output rendering, and cell
 controls share one parsed document/update path for this first notebook editor
 slice; splitting before the model stabilizes would make save/run mutations
@@ -799,7 +800,7 @@ export default function IpynbViewer({
     setRunningCellIndex(index)
     try {
       await onSave(latestContent)
-      const result = await window.api.notebook.runPythonCell({
+      const result = await api.notebook.runPythonCell({
         filePath,
         code: cell.source,
         preamble: latestNotebook.cells

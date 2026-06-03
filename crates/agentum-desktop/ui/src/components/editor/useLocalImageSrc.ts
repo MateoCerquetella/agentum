@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useState } from 'react'
 import { resolveImageAbsolutePath } from './markdown-preview-links'
 import type { RuntimeFileOperationArgs } from '@/runtime/runtime-file-client'
@@ -294,7 +295,7 @@ function readImagePreview(
   runtimeContext?: Omit<RuntimeFileOperationArgs, 'connectionId'> & { connectionId?: string | null }
 ) {
   if (!runtimeContext) {
-    return window.api.fs.readFile({
+    return api.fs.readFile({
       filePath: absolutePath,
       connectionId: connectionId ?? undefined
     })

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback } from 'react'
 import { toast } from 'sonner'
 import type { Editor } from '@tiptap/react'
@@ -24,7 +25,7 @@ export function useLocalImagePick(
     // intended, not at whatever position focus() falls back to afterward.
     const insertPos = editor.state.selection.from
     try {
-      const srcPath = await window.api.shell.pickImage()
+      const srcPath = await api.shell.pickImage()
       if (!srcPath) {
         return
       }
@@ -71,7 +72,7 @@ export function useLocalImagePick(
       // so the markdown stays portable and doesn't bloat with base64 data.
       const { imageName, destPath } = await getImageCopyDestination(filePath, srcPath)
       if (srcPath !== destPath) {
-        await window.api.shell.copyFile({ srcPath, destPath })
+        await api.shell.copyFile({ srcPath, destPath })
       }
       // Why: insertContentAt places the image at the exact saved position
       // regardless of where focus lands after the native file dialog closes,

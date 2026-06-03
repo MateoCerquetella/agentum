@@ -1,9 +1,10 @@
+import { api } from '@/tauri'
 import { useEffect } from 'react'
 import { getUnreadBadgeCount } from '@/lib/unread-badge-count'
 import { useAppStore } from '@/store'
 
 function setUnreadDockBadgeCountBestEffort(count: number): void {
-  void window.api.app.setUnreadDockBadgeCount(count).catch(() => {
+  void api.app.setUnreadDockBadgeCount(count).catch(() => {
     // Dock sync is best-effort chrome; stale badge state should not affect app use.
   })
 }

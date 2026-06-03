@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useState } from 'react'
 import { Check, Monitor, Moon, Settings2, Sun } from 'lucide-react'
 import { toast } from 'sonner'
@@ -79,7 +80,7 @@ export function ThemeStep({ theme, onThemeChange, settings, updateSettings }: Th
     }
     let cancelled = false
     setDiscovery({ status: 'detecting' })
-    void window.api.settings
+    void api.settings
       .previewGhosttyImport()
       .then((preview) => {
         if (cancelled) {
@@ -129,7 +130,7 @@ export function ThemeStep({ theme, onThemeChange, settings, updateSettings }: Th
     track('onboarding_ghostty_import_clicked', {})
     setImporting(true)
     try {
-      const resolved = preview.found ? preview : await window.api.settings.previewGhosttyImport()
+      const resolved = preview.found ? preview : await api.settings.previewGhosttyImport()
       if (!resolved.found || Object.keys(resolved.diff).length === 0) {
         if (mountedRef.current) {
           toast.info('No Ghostty settings found to import')

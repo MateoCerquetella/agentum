@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { clearLiveBrowserUrl } from './browser-runtime'
 
 // Why: the webview registry is shared coordination state between BrowserPane
@@ -202,7 +203,7 @@ export function destroyPersistentWebview(browserTabId: string): void {
     clearLiveBrowserUrl(browserTabId)
     return
   }
-  void window.api.browser.unregisterGuest({ browserPageId: browserTabId })
+  void api.browser.unregisterGuest({ browserPageId: browserTabId })
   moveFocusToRendererBeforeWebviewDetach(webview)
   webview.remove()
   unregisterPersistentWebview(browserTabId)

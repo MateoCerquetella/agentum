@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /**
  * Inline guidance for `auth_required` / `scope_missing` errors from gh.
  *
@@ -26,7 +27,7 @@ const LOGIN_CMD = 'gh auth login'
 const IS_WINDOWS = typeof navigator !== 'undefined' && /Win(dows|32|64)/i.test(navigator.userAgent)
 
 function reloadAgentumRenderer(): void {
-  const reload = window.api.app.reload
+  const reload = api.app.reload
   if (typeof reload !== 'function') {
     window.location.reload()
     return
@@ -65,12 +66,12 @@ function openExternal(url: string): void {
   // In Electron renderers, raw `window.open` doesn't reliably route to the
   // user's default browser. Use the same shell IPC the rest of the app
   // uses (see SidebarToolbar.openExternalUrl).
-  void window.api.shell.openUrl(url)
+  void api.shell.openUrl(url)
 }
 
 async function copyToClipboard(text: string): Promise<void> {
   try {
-    await window.api.ui.writeClipboardText(text)
+    await api.ui.writeClipboardText(text)
     toast.success('Copied to clipboard')
   } catch {
     toast.error('Failed to copy')
@@ -192,7 +193,7 @@ export function GhAuthErrorHelp({
   const [diag, setDiag] = useState<GhAuthDiagnostic | null>(null)
   useEffect(() => {
     let cancelled = false
-    window.api.gh
+    api.gh
       .diagnoseAuth()
       .then((d) => {
         if (!cancelled) {

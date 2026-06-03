@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines */
 
 import React, { useEffect, useCallback, useMemo, useRef, useState, lazy, Suspense } from 'react'
@@ -339,19 +340,19 @@ function Terminal(): React.JSX.Element | null {
         }
       )
       if (localPtyIds.length > 0) {
-        void Promise.all(localPtyIds.map((id) => window.api.pty.hasChildProcesses(id))).then(
+        void Promise.all(localPtyIds.map((id) => api.pty.hasChildProcesses(id))).then(
           (results) => {
             if (results.some(Boolean)) {
               setWindowCloseDialogOpen(true)
             } else {
-              window.api.ui.confirmWindowClose()
+              api.ui.confirmWindowClose()
             }
           }
         )
         return
       }
     }
-    window.api.ui.confirmWindowClose()
+    api.ui.confirmWindowClose()
   }, [])
 
   const waitForFileClosed = useCallback((fileId: string, timeoutMs: number): Promise<boolean> => {
@@ -1479,9 +1480,9 @@ function Terminal(): React.JSX.Element | null {
   // detached by the daemon/SSH lifecycle; only dirty editor files should block
   // close here. Explicit destructive terminal actions keep their own confirms.
   useEffect(() => {
-    return window.api.ui.onWindowCloseRequested(({ isQuitting }) => {
+    return api.ui.onWindowCloseRequested(({ isQuitting }) => {
       if (isIntentionalAppRestartInProgress()) {
-        window.api.ui.confirmWindowClose()
+        api.ui.confirmWindowClose()
         return
       }
 
@@ -1879,7 +1880,7 @@ function Terminal(): React.JSX.Element | null {
               autoFocus
               onClick={() => {
                 setWindowCloseDialogOpen(false)
-                window.api.ui.confirmWindowClose()
+                api.ui.confirmWindowClose()
               }}
             >
               Close

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useState } from 'react'
 import type { JSX, ReactNode } from 'react'
 import { Loader2, Plus } from 'lucide-react'
@@ -107,7 +108,7 @@ export function UsageAccountsCard(props: {
     void fetchRateLimits()
     void (async () => {
       try {
-        const next = await window.api.claudeAccounts.list()
+        const next = await api.claudeAccounts.list()
         if (!stale) {
           setClaudeAccounts(next)
         }
@@ -117,7 +118,7 @@ export function UsageAccountsCard(props: {
     })()
     void (async () => {
       try {
-        const next = await window.api.codexAccounts.list()
+        const next = await api.codexAccounts.list()
         if (!stale) {
           setCodexAccounts(next)
         }
@@ -145,7 +146,7 @@ export function UsageAccountsCard(props: {
     }
     setClaudeAction('adding')
     try {
-      const next = await window.api.claudeAccounts.add()
+      const next = await api.claudeAccounts.add()
       if (mountedRef.current) {
         setClaudeAccounts(next)
       }
@@ -175,7 +176,7 @@ export function UsageAccountsCard(props: {
     }
     setCodexAction('adding')
     try {
-      const next = await window.api.codexAccounts.add()
+      const next = await api.codexAccounts.add()
       if (mountedRef.current) {
         setCodexAccounts(next)
       }

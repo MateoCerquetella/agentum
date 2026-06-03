@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { toast } from 'sonner'
 import { getConnectionId } from '@/lib/connection-context'
 import { extractIpcErrorMessage } from '@/lib/ipc-error'
@@ -141,7 +142,7 @@ export async function handleTerminalFileDrop(args: Args): Promise<void> {
     `Uploading ${data.paths.length} file${data.paths.length === 1 ? '' : 's'} to remote…`
   )
   try {
-    const { resolvedPaths, skipped, failed } = await window.api.fs.resolveDroppedPathsForAgent({
+    const { resolvedPaths, skipped, failed } = await api.fs.resolveDroppedPathsForAgent({
       paths: data.paths,
       worktreePath,
       connectionId

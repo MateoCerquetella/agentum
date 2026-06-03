@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: this hook co-locates every piece of state
 the NewWorkspaceComposerCard reads or mutates, so both the full-page composer
 and the global quick-composer modal can consume a single unified source of
@@ -568,7 +569,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     }
     let cancelled = false
     void (
-      window.api.gh.repoSlug({ repoPath: selectedRepoPath, repoId }) as Promise<{
+      api.gh.repoSlug({ repoPath: selectedRepoPath, repoId }) as Promise<{
         owner: string
         repo: string
       } | null>
@@ -929,7 +930,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     }
 
     try {
-      await window.api.ssh.connect({ targetId })
+      await api.ssh.connect({ targetId })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to connect to project.')
     }
@@ -990,7 +991,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     setLinkItemsLoading(true)
 
     const lookupRepoId = selectedRepo.id
-    void window.api.gh
+    void api.gh
       .listWorkItems({ repoPath: selectedRepo.path, repoId: selectedRepo.id, limit: 100 })
       .then((envelope) => {
         if (!cancelled) {
@@ -1059,7 +1060,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     // resolving direct lookups against the selected repo instead of requiring a
     // text match in the recent-items list.
     const lookupRepoId = selectedRepo.id
-    void window.api.gh
+    void api.gh
       .workItem({
         repoPath: selectedRepo.path,
         repoId: selectedRepo.id,
@@ -1130,9 +1131,9 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         repoPath: selectedRepo.path,
         repoId: selectedRepo.id,
         intent,
-        workItem: (args) => window.api.gh.workItem(args) as Promise<GitHubWorkItem | null>,
+        workItem: (args) => api.gh.workItem(args) as Promise<GitHubWorkItem | null>,
         workItemByOwnerRepo: (args) =>
-          window.api.gh.workItemByOwnerRepo(args) as Promise<GitHubWorkItem | null>
+          api.gh.workItemByOwnerRepo(args) as Promise<GitHubWorkItem | null>
       })
       if (!item) {
         throw new Error('Could not resolve the GitHub item before creating the workspace.')
@@ -1368,7 +1369,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
 
   const handleAddAttachment = useCallback(async (): Promise<void> => {
     try {
-      const selectedPath = await window.api.shell.pickAttachment()
+      const selectedPath = await api.shell.pickAttachment()
       if (!selectedPath) {
         return
       }
@@ -1391,8 +1392,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       const folderPaths: string[] = []
       for (const filePath of paths) {
         try {
-          await window.api.fs.authorizeExternalPath({ targetPath: filePath })
-          const stat = await window.api.fs.stat({ filePath })
+          await api.fs.authorizeExternalPath({ targetPath: filePath })
+          const stat = await api.fs.stat({ filePath })
           if (stat.isDirectory) {
             folderPaths.push(filePath)
           } else {
@@ -1427,7 +1428,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   useEffect(() => {
     const instanceId = instanceIdRef.current
     composerDropStack.push(instanceId)
-    const unsubscribe = window.api.ui.onFileDrop((data) => {
+    const unsubscribe = api.ui.onFileDrop((data) => {
       if (data.target !== 'composer') {
         return
       }
@@ -1594,7 +1595,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       const target = getActiveRuntimeTarget(settings)
       const resolvePrBase =
         target.kind === 'local'
-          ? window.api.worktrees.resolvePrBase({
+          ? api.worktrees.resolvePrBase({
               repoId: repoForItem.id,
               prNumber: item.number,
               ...(item.branchName ? { headRefName: item.branchName } : {}),
@@ -1654,7 +1655,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       if (item.type !== 'mr' || !repoForItem) {
         return
       }
-      void window.api.worktrees
+      void api.worktrees
         .resolveMrBase({
           repoId: repoForItem.id,
           mrIid: item.number,
@@ -2132,11 +2133,11 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         // skipped — best-effort, errors swallowed by main. Guard the IPC
         // presence so a stale preload bundle doesn't crash the launch with
         // "Cannot read properties of undefined".
-        if (agent && worktree.path && window.api.agentTrust?.markTrusted) {
+        if (agent && worktree.path && api.agentTrust?.markTrusted) {
           const preflight = TUI_AGENT_CONFIG[agent].preflightTrust
           if (preflight) {
             try {
-              await window.api.agentTrust.markTrusted({
+              await api.agentTrust.markTrusted({
                 preset: preflight,
                 workspacePath: worktree.path
               })

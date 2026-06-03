@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useCallback, useEffect, useRef } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import type { Editor } from '@tiptap/react'
@@ -271,10 +272,10 @@ export function LinearIssueMarkdownDescriptionEditor({
       }
     },
     onFocus: () => {
-      window.api.ui.setMarkdownEditorFocused(true)
+      api.ui.setMarkdownEditorFocused(true)
     },
     onBlur: ({ editor: nextEditor }) => {
-      window.api.ui.setMarkdownEditorFocused(false)
+      api.ui.setMarkdownEditorFocused(false)
       const nextValue = nextEditor.getMarkdown()
       lastEditorMarkdownRef.current = nextValue
       onChange(nextValue)

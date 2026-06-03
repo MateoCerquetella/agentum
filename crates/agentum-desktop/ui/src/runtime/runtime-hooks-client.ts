@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import type { GlobalSettings, AgentumHooks } from '../../../shared/types'
 import type { SetupScriptImportCandidate } from '../../../shared/setup-script-imports'
 import { callRuntimeRpc, getActiveRuntimeTarget } from './runtime-rpc-client'
@@ -24,7 +25,7 @@ export async function checkRuntimeHooks(
 ): Promise<HookCheckResult> {
   const target = getActiveRuntimeTarget(settings)
   if (target.kind !== 'environment') {
-    return window.api.hooks.check({ repoId })
+    return api.hooks.check({ repoId })
   }
   return callRuntimeRpc<HookCheckResult>(
     target,
@@ -40,7 +41,7 @@ export async function inspectRuntimeSetupScriptImports(
 ): Promise<SetupScriptImportCandidate[]> {
   const target = getActiveRuntimeTarget(settings)
   if (target.kind !== 'environment') {
-    return window.api.hooks.inspectSetupScriptImports({ repoId })
+    return api.hooks.inspectSetupScriptImports({ repoId })
   }
   return callRuntimeRpc<SetupScriptImportCandidate[]>(
     target,
@@ -56,7 +57,7 @@ export async function readRuntimeIssueCommand(
 ): Promise<IssueCommandReadResult> {
   const target = getActiveRuntimeTarget(settings)
   if (target.kind !== 'environment') {
-    return window.api.hooks.readIssueCommand({ repoId })
+    return api.hooks.readIssueCommand({ repoId })
   }
   return callRuntimeRpc<IssueCommandReadResult>(
     target,
@@ -73,7 +74,7 @@ export async function writeRuntimeIssueCommand(
 ): Promise<void> {
   const target = getActiveRuntimeTarget(settings)
   if (target.kind !== 'environment') {
-    await window.api.hooks.writeIssueCommand({ repoId, content })
+    await api.hooks.writeIssueCommand({ repoId, content })
     return
   }
   await callRuntimeRpc(

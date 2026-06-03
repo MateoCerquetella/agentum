@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '@/store'
 import { recognizeAgentProcess } from '../../../shared/agent-process-recognition'
@@ -162,7 +163,7 @@ export function useTabAgent(tab: TerminalTab): TuiAgent | null {
     // Why: re-runs when ptyId or tab.title changes — a title change is the event
     // signalling a possible foreground transition (agent start, exit, or turn).
     // One RPC per transition, not a timer; cancellation coalesces rapid churn.
-    window.api.pty
+    api.pty
       .getForegroundProcess(ptyId)
       .then((process) => {
         if (cancelled) {

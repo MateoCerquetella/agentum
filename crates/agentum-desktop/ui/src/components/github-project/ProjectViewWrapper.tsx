@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: top-level Project-mode container coordinates picker, view selection, query overrides, fetch lifecycle, and toolbar interactions; splitting these would fragment shared state. */
 // Why: top-level container for Project mode. Handles the picker, header,
 // filter label, count pill, Open-in-GitHub, and all Interaction States
@@ -71,7 +72,7 @@ function listProjectViewsForRuntime(
     ? callRuntimeRpc<ListProjectViewsResult>(target, 'github.project.listViews', args, {
         timeoutMs: 30_000
       })
-    : window.api.gh.listProjectViews(args)
+    : api.gh.listProjectViews(args)
 }
 
 export default function ProjectViewWrapper(_props: Props = {} as Props): React.JSX.Element {
@@ -471,7 +472,7 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
       if (!origin) {
         // Redacted / draft / missing slug — fall back to opening GitHub.
         if (row.content.url) {
-          void window.api.shell.openUrl(row.content.url)
+          void api.shell.openUrl(row.content.url)
         }
         return
       }
@@ -524,7 +525,7 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
           // or agent detection fails), fall back to opening the URL so the
           // user keeps a path forward rather than a silent no-op.
           if (row.content.url) {
-            void window.api.shell.openUrl(row.content.url)
+            void api.shell.openUrl(row.content.url)
           }
         }
       })
@@ -673,7 +674,7 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
                 variant="outline"
                 size="icon"
                 className="h-7 w-7"
-                onClick={() => void window.api.shell.openUrl(selectedViewUrl)}
+                onClick={() => void api.shell.openUrl(selectedViewUrl)}
                 aria-label="Open view in GitHub"
               >
                 <ExternalLink className="size-3.5" />
@@ -741,7 +742,7 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
           totalCount={error.totalCount}
           onOpenInGitHub={() => {
             if (selectedViewUrl) {
-              void window.api.shell.openUrl(selectedViewUrl)
+              void api.shell.openUrl(selectedViewUrl)
             }
           }}
         />
@@ -755,7 +756,7 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
           onEditIssueType={(row, issueType) => void handleEditIssueType(row, issueType)}
           onOpenInBrowser={(row) => {
             if (row.content.url) {
-              void window.api.shell.openUrl(row.content.url)
+              void api.shell.openUrl(row.content.url)
             }
           }}
           onStartWork={handleStartWork}
@@ -784,7 +785,7 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
             telemetrySource: 'sidebar',
             openModalFallback: () => {
               if (item.url) {
-                void window.api.shell.openUrl(item.url)
+                void api.shell.openUrl(item.url)
               }
             }
           })
@@ -825,7 +826,7 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
                 variant="outline"
                 onClick={() => {
                   if (resolvedMissingRepoDialogs.repoNotInAgentum?.url) {
-                    void window.api.shell.openUrl(resolvedMissingRepoDialogs.repoNotInAgentum.url)
+                    void api.shell.openUrl(resolvedMissingRepoDialogs.repoNotInAgentum.url)
                   }
                   setRepoNotInAgentum(null)
                 }}
@@ -1043,7 +1044,7 @@ function ViewTabStrip({
                   type="button"
                   size="xs"
                   variant="outline"
-                  onClick={() => void window.api.shell.openUrl(AGENTUM_FEATURE_REQUEST_URL)}
+                  onClick={() => void api.shell.openUrl(AGENTUM_FEATURE_REQUEST_URL)}
                 >
                   File feature request
                   <ExternalLink className="size-3" />

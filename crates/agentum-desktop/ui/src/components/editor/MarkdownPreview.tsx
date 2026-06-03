@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: MarkdownPreview owns rendering, link interception,
 search, and viewport state for the preview surface in one place so markdown
 behavior stays coherent across split panes and preview tabs. */
@@ -858,7 +859,7 @@ export default function MarkdownPreview({
       const copied = await copyMarkdownReviewNotesForAgent({
         notes: markdownReviewNotes,
         content: renderedContent,
-        writeClipboardText: window.api.ui.writeClipboardText
+        writeClipboardText: api.ui.writeClipboardText
       })
       if (!copied || !reviewNotesCopyMountedRef.current) {
         return
@@ -880,7 +881,7 @@ export default function MarkdownPreview({
         const copied = await copyMarkdownReviewNotesForAgent({
           notes: [note],
           content: renderedContent,
-          writeClipboardText: window.api.ui.writeClipboardText
+          writeClipboardText: api.ui.writeClipboardText
         })
         if (!copied || !reviewNotesCopyMountedRef.current) {
           return
@@ -1249,18 +1250,18 @@ export default function MarkdownPreview({
                 // Why: use the classifier's stripped absolutePath (no `:line:col`
                 // or `#L10` suffix) so the OS handler receives a clean file URI.
                 const cleanUri = absolutePathToFileUri(classified.absolutePath)
-                void window.api.shell.pathExists(classified.absolutePath).then((exists) => {
+                void api.shell.pathExists(classified.absolutePath).then((exists) => {
                   if (!exists) {
                     toast.error(
                       `File not found: ${classified.relativePath ?? classified.absolutePath}`
                     )
                     return
                   }
-                  void window.api.shell.openFileUri(cleanUri)
+                  void api.shell.openFileUri(cleanUri)
                 })
                 return
               }
-              void window.api.shell.openFileUri(parsed.toString())
+              void api.shell.openFileUri(parsed.toString())
             }
             return
           }
@@ -1271,7 +1272,7 @@ export default function MarkdownPreview({
           }
 
           if (target.protocol === 'http:' || target.protocol === 'https:') {
-            void window.api.shell.openUrl(target.toString())
+            void api.shell.openUrl(target.toString())
             return
           }
 
@@ -1324,7 +1325,7 @@ export default function MarkdownPreview({
               showLocalPathOpenBlockedToast()
               return
             }
-            void window.api.shell.openFileUri(target.toString())
+            void api.shell.openFileUri(target.toString())
             return
           }
 

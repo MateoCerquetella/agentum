@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../shared/constants'
 
 export type OpenHttpLinkOptions = {
@@ -51,5 +52,5 @@ export function openHttpLink(url: string, opts: OpenHttpLinkOptions = {}): void 
     return
   }
 
-  void window.api.shell.openUrl(url)
+  void api.shell.openUrl(url)
 }

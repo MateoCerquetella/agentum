@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: repo slice owns local/runtime routing,
 add/remove/reorder side effects, and cross-slice teardown. Splitting it during
 the client-server refactor would obscure the invariants this file is currently
@@ -132,7 +133,7 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
       const target = getActiveRuntimeTarget(get().settings)
       const repos =
         target.kind === 'local'
-          ? await window.api.repos.list()
+          ? await api.repos.list()
           : (
               await callRuntimeRpc<{ repos: Repo[] }>(
                 target,
@@ -166,7 +167,7 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
       const target = getActiveRuntimeTarget(get().settings)
       const projectGroups =
         target.kind === 'local'
-          ? await window.api.projectGroups.list()
+          ? await api.projectGroups.list()
           : (
               await callRuntimeRpc<{ groups: ProjectGroup[] }>(
                 target,
@@ -187,7 +188,7 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
     try {
       const target = getActiveRuntimeTarget(get().settings)
       return target.kind === 'local'
-        ? await window.api.projectGroups.scanNested({
+        ? await api.projectGroups.scanNested({
             path,
             connectionId
           })
@@ -208,7 +209,7 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
       const target = getActiveRuntimeTarget(get().settings)
       const result =
         target.kind === 'local'
-          ? await window.api.projectGroups.importNested(args)
+          ? await api.projectGroups.importNested(args)
           : await callRuntimeRpc<ProjectGroupImportResult>(
               target,
               'projectGroup.importNested',
@@ -237,7 +238,7 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
       const target = getActiveRuntimeTarget(get().settings)
       const group =
         target.kind === 'local'
-          ? await window.api.projectGroups.create({
+          ? await api.projectGroups.create({
               name,
               createdFrom: 'manual'
             })
@@ -262,7 +263,7 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
       const target = getActiveRuntimeTarget(get().settings)
       const updated =
         target.kind === 'local'
-          ? await window.api.projectGroups.update({ groupId, updates })
+          ? await api.projectGroups.update({ groupId, updates })
           : (
               await callRuntimeRpc<{ group: ProjectGroup | null }>(
                 target,
@@ -289,7 +290,7 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
       const target = getActiveRuntimeTarget(get().settings)
       const deleted =
         target.kind === 'local'
-          ? await window.api.projectGroups.delete({ groupId })
+          ? await api.projectGroups.delete({ groupId })
           : (
               await callRuntimeRpc<{ deleted: boolean }>(
                 target,
@@ -324,7 +325,7 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
       const target = getActiveRuntimeTarget(get().settings)
       const moved =
         target.kind === 'local'
-          ? await window.api.projectGroups.moveProject({
+          ? await api.projectGroups.moveProject({
               projectId,
               groupId,
               order
@@ -354,7 +355,7 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
       let repo: Repo
       try {
         if (target.kind === 'local') {
-          const result = await window.api.repos.add({ path, kind })
+          const result = await api.repos.add({ path, kind })
           if ('error' in result) {
             throw new Error(result.error)
           }
@@ -420,7 +421,7 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
       toast.error('Use a server path to add projects from a remote runtime.')
       return null
     }
-    const path = await window.api.repos.pickFolder()
+    const path = await api.repos.pickFolder()
     if (!path) {
       return null
     }
@@ -444,7 +445,7 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
       const folderWorktree = get().worktreesByRepo[repo.id]?.[0]
       if (folderWorktree) {
         const { activateAndRevealWorktree } = await import('../../lib/worktree-activation')
-        const onboarding = await window.api.onboarding.get().catch(() => null)
+        const onboarding = await api.onboarding.get().catch(() => null)
         // Why: a new user can dismiss the wizard, then immediately add their
         // first folder from Landing. That path skips onboarding's completeRepo
         // hook, so carry the selected default agent into the first terminal here.
@@ -471,7 +472,7 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
     try {
       const target = getActiveRuntimeTarget(get().settings)
       await (target.kind === 'local'
-        ? window.api.repos.remove({ repoId: projectId })
+        ? api.repos.remove({ repoId: projectId })
         : callRuntimeRpc(target, 'repo.rm', { repo: projectId }, { timeoutMs: 15_000 }))
 
       get().clearAgentumHookTrustForRepo(projectId)
@@ -498,7 +499,7 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
           for (const ptyId of get().ptyIdsByTabId[tab.id] ?? []) {
             killedPtyIds.add(ptyId)
             if (!ptyId.startsWith('remote:')) {
-              window.api.pty.kill(ptyId)
+              api.pty.kill(ptyId)
             }
           }
         }
@@ -598,7 +599,7 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
         const sanitizedUpdates = sanitizeRepoUpdate(updates)
         const target = getActiveRuntimeTarget(get().settings)
         await (target.kind === 'local'
-          ? window.api.repos.update({ repoId: projectId, updates: sanitizedUpdates })
+          ? api.repos.update({ repoId: projectId, updates: sanitizedUpdates })
           : callRuntimeRpc(
               target,
               'repo.update',
@@ -653,7 +654,7 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
       const target = getActiveRuntimeTarget(get().settings)
       const result =
         target.kind === 'local'
-          ? await window.api.repos.reorder({ orderedIds })
+          ? await api.repos.reorder({ orderedIds })
           : await callRuntimeRpc<{ status: 'applied' | 'rejected' }>(
               target,
               'repo.reorder',

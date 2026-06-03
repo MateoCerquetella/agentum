@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useCallback, useState } from 'react'
 import { LoaderCircle } from 'lucide-react'
 import { toast } from 'sonner'
@@ -53,7 +54,7 @@ export function useDaemonActions(callbacks?: DaemonActionCallbacks): DaemonActio
   const runRestart = useCallback(async () => {
     setBusyKind('restart')
     try {
-      const { success } = await window.api.pty.management.restart()
+      const { success } = await api.pty.management.restart()
       if (success) {
         toast.success('Daemon restarted.')
       } else {
@@ -75,7 +76,7 @@ export function useDaemonActions(callbacks?: DaemonActionCallbacks): DaemonActio
     setBusyKind('killAll')
     callbacks?.onKillAllStart?.()
     try {
-      const { killedCount, remainingCount } = await window.api.pty.management.killAll()
+      const { killedCount, remainingCount } = await api.pty.management.killAll()
       if (remainingCount > 0 && killedCount > 0) {
         toast.warning(
           `Killed ${killedCount} of ${killedCount + remainingCount} sessions. ${remainingCount} refused to exit.`

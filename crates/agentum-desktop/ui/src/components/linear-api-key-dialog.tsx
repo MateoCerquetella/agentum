@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useId, useMemo, useState } from 'react'
 import { ExternalLink, LoaderCircle, Lock } from 'lucide-react'
 import type { LinearWorkspace } from '../../../shared/types'
@@ -184,7 +185,7 @@ export function LinearApiKeyDialog({
               <button
                 type="button"
                 className="inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline"
-                onClick={() => window.api.shell.openUrl(personalKeyUrl)}
+                onClick={() => api.shell.openUrl(personalKeyUrl)}
               >
                 <ExternalLink className="size-3" />
                 Personal API keys
@@ -193,7 +194,7 @@ export function LinearApiKeyDialog({
               <button
                 type="button"
                 className="inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline"
-                onClick={() => window.api.shell.openUrl(workspaceApiUrl)}
+                onClick={() => api.shell.openUrl(workspaceApiUrl)}
               >
                 <ExternalLink className="size-3" />
                 Workspace API settings

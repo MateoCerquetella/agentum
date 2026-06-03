@@ -1,9 +1,10 @@
+import { api } from '@/tauri'
 import type { OnboardingState } from '../../../../shared/types'
 
 const ONBOARDING_REOPENED_EVENT = 'agentum:onboarding-reopened'
 
 export async function showOnboardingFromRenderer(): Promise<void> {
-  const nextOnboarding = await window.api.onboarding.update({
+  const nextOnboarding = await api.onboarding.update({
     closedAt: null,
     outcome: null,
     lastCompletedStep: -1,

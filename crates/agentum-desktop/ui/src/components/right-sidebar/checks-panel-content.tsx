@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: co-locating all checks-panel sub-components (checks list,
 conflict sections, threaded PR comments) keeps the shared icon/color maps in one place. */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
@@ -637,7 +638,7 @@ function CheckRunDetails({
                 className="h-7 gap-1 px-2 text-[11px]"
                 onClick={(event) => {
                   event.stopPropagation()
-                  window.api.shell.openUrl(openUrl)
+                  api.shell.openUrl(openUrl)
                 }}
               >
                 Open details
@@ -805,7 +806,7 @@ function CheckRunDetailsDialog({
             size="sm"
             onClick={(event) => {
               event.stopPropagation()
-              window.api.shell.openUrl(openUrl)
+              api.shell.openUrl(openUrl)
             }}
           >
             Open details
@@ -1121,7 +1122,7 @@ function CopyButton({ text }: { text: string }): React.JSX.Element {
   const handleCopy = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
-      void window.api.ui.writeClipboardText(text).then(() => {
+      void api.ui.writeClipboardText(text).then(() => {
         if (!isMountedRef.current) {
           return
         }
@@ -1253,7 +1254,7 @@ function CommentRow({
       )}
       onClick={() => {
         if (comment.url) {
-          window.api.shell.openUrl(comment.url)
+          api.shell.openUrl(comment.url)
         }
       }}
     >

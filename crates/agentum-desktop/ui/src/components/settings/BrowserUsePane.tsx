@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: Browser Use setup keeps enablement, CLI registration, skill install, cookie import, examples, and interaction tracking in one pane so the three-step setup state stays coherent. */
 import { useCallback, useEffect, useState } from 'react'
 import { Import, Loader2, MousePointerClick } from 'lucide-react'
@@ -89,7 +90,7 @@ export function BrowserUseSetup({
   const refreshCli = useCallback(async (): Promise<void> => {
     setCliLoading(true)
     try {
-      handleCliStatusChange(await window.api.cli.getInstallStatus())
+      handleCliStatusChange(await api.cli.getInstallStatus())
     } catch (error) {
       if (mountedRef.current) {
         toast.error(error instanceof Error ? error.message : 'Failed to load CLI status.')

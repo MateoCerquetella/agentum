@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Columns2,
@@ -222,7 +223,7 @@ export function EditorPanelHeader({
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onSelect={() => {
-                void window.api.ui.writeClipboardText(activeFile.filePath)
+                void api.ui.writeClipboardText(activeFile.filePath)
               }}
             >
               <Copy className="w-3.5 h-3.5 mr-1.5" />
@@ -230,7 +231,7 @@ export function EditorPanelHeader({
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={() => {
-                void window.api.ui.writeClipboardText(activeFile.relativePath)
+                void api.ui.writeClipboardText(activeFile.relativePath)
               }}
             >
               <Copy className="w-3.5 h-3.5 mr-1.5" />

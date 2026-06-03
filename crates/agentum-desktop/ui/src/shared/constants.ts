@@ -10,6 +10,7 @@ import type {
   WorkspaceSessionState,
   AgentActivityDisplayMode
 } from './types'
+import { currentPlatform } from './platform'
 import { DEFAULT_STATUS_BAR_ITEMS } from './status-bar-defaults'
 import { DEFAULT_TERMINAL_FONT_WEIGHT } from './terminal-fonts'
 import { getDefaultTerminalQuickCommands } from './terminal-quick-commands'
@@ -69,7 +70,7 @@ export const BROWSER_FAMILY_LABELS: Record<string, string> = {
 // buildFontFamily() adds the full cross-platform fallback chain, so this only
 // affects what users see in Settings as the initial value.
 function defaultTerminalFontFamily(): string {
-  const platform = typeof process !== 'undefined' ? process.platform : ''
+  const platform = currentPlatform()
   if (platform === 'win32') {
     return 'Cascadia Mono'
   }
@@ -80,7 +81,7 @@ function defaultTerminalFontFamily(): string {
 }
 
 export const getDefaultPrimarySelectionMiddleClickPaste = (
-  platform = typeof process !== 'undefined' ? process.platform : ''
+  platform: string = currentPlatform()
 ): boolean => platform === 'linux' || platform === 'darwin'
 
 /**
@@ -180,8 +181,7 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     editorMinimapEnabled: false,
     markdownReviewToolsEnabled: true,
     primarySelectionMiddleClickPaste: getDefaultPrimarySelectionMiddleClickPaste(),
-    primarySelectionMiddleClickPasteDefaultedForLinux:
-      typeof process !== 'undefined' && process.platform === 'linux',
+    primarySelectionMiddleClickPasteDefaultedForLinux: currentPlatform() === 'linux',
     primarySelectionMiddleClickPasteDefaultedForTerminalDefaults:
       getDefaultPrimarySelectionMiddleClickPaste(),
     terminalFontSize: 14,

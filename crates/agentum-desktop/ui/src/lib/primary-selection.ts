@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 export const PRIMARY_SELECTION_MAX_LENGTH = 65_536
 
 let enabled = false
@@ -20,7 +21,7 @@ function getSelectionClipboardApi(): SelectionClipboardApi | null {
   if (typeof window === 'undefined') {
     return null
   }
-  const uiApi = window.api?.ui
+  const uiApi = api?.ui
   if (
     typeof uiApi?.readSelectionClipboardText !== 'function' ||
     typeof uiApi.writeSelectionClipboardText !== 'function'

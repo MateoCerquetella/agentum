@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback } from 'react'
 import { useAppStore } from '@/store'
 import { getRepoMapFromState, getWorktreeMapFromState } from '@/store/selectors'
@@ -270,7 +271,7 @@ export function dispatchTerminalNotification(
       }
     : {}
 
-  void window.api.notifications
+  void api.notifications
     .dispatch({
       source: event.source,
       worktreeId,

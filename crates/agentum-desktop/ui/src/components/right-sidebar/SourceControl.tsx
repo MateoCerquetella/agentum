@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -1215,7 +1216,7 @@ function SourceControlInner(): React.JSX.Element {
       return
     }
     try {
-      await window.api.ui.writeClipboardText(diffCommentsPrompt)
+      await api.ui.writeClipboardText(diffCommentsPrompt)
       showDiffCommentsCopied(true)
     } catch {
       // Why: swallow — clipboard write can fail when the window isn't focused.
@@ -2472,7 +2473,7 @@ function SourceControlInner(): React.JSX.Element {
         toast.warning(`${copy.titleLabel} created, but Agentum could not refresh it yet.`, {
           action: {
             label: `Open on ${copy.providerName}`,
-            onClick: () => window.api.shell.openUrl(result.url)
+            onClick: () => api.shell.openUrl(result.url)
           }
         })
       }
@@ -2865,7 +2866,7 @@ function SourceControlInner(): React.JSX.Element {
           url: result.url
         })
         if (resolvedPrCreationDefaults.openAfterCreate) {
-          window.api.shell.openUrl(result.url)
+          api.shell.openUrl(result.url)
         }
         return
       }
@@ -2879,7 +2880,7 @@ function SourceControlInner(): React.JSX.Element {
           {
             action: {
               label: `Open on ${hostedReviewCreateCopy.providerName}`,
-              onClick: () => window.api.shell.openUrl(result.existingReview!.url)
+              onClick: () => api.shell.openUrl(result.existingReview!.url)
             }
           }
         )
@@ -6235,7 +6236,7 @@ function DiffCommentsInlineList({
   const handleCopyOne = useCallback(
     async (c: DiffComment): Promise<void> => {
       try {
-        await window.api.ui.writeClipboardText(formatDiffComment(c))
+        await api.ui.writeClipboardText(formatDiffComment(c))
         showCopiedId(c.id)
       } catch {
         // Why: swallow — clipboard write can fail when the window isn't focused.

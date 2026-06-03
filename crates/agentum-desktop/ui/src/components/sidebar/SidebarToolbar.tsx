@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useState } from 'react'
 import {
   BookOpen,
@@ -30,7 +31,7 @@ import { ScrollToCurrentWorkspaceToolbarButton } from './ScrollToCurrentWorkspac
 const DOCS_URL = 'https://www.onagentum.dev/docs'
 
 function openExternalUrl(url: string): void {
-  void window.api.shell.openUrl(url)
+  void api.shell.openUrl(url)
 }
 
 const SidebarToolbar = React.memo(function SidebarToolbar() {
@@ -74,7 +75,7 @@ const SidebarToolbar = React.memo(function SidebarToolbar() {
     }
     setIsRestartingAgentum(true)
     toast.info('Restarting Agentum…')
-    void window.api.app.restart().catch((error) => {
+    void api.app.restart().catch((error) => {
       if (mountedRef.current) {
         setIsRestartingAgentum(false)
         toast.error('Couldn’t restart Agentum.', {

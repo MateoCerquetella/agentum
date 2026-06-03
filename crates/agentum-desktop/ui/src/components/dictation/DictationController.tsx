@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useRef, useCallback } from 'react'
 import { useAppStore } from '@/store'
 import { useAudioCapture } from '@/hooks/use-audio-capture'
@@ -51,7 +52,7 @@ export function DictationController() {
       setDictationState('stopping')
       stopCapture()
       try {
-        await window.api.speech.stopDictation(sessionId)
+        await api.speech.stopDictation(sessionId)
       } catch {
         // Swallow stop errors — the worker may already be torn down.
       }
@@ -130,12 +131,12 @@ export function DictationController() {
         return
       }
 
-      await window.api.speech.startDictation(modelId, undefined, sessionId)
+      await api.speech.startDictation(modelId, undefined, sessionId)
       if (dictationRunRef.current !== runId) {
         discardBufferedAudio()
         insertionTargetRef.current = null
         stopCapture()
-        await window.api.speech.stopDictation(sessionId).catch(() => undefined)
+        await api.speech.stopDictation(sessionId).catch(() => undefined)
         drainStoppedSession(sessionId)
         return
       }
@@ -145,7 +146,7 @@ export function DictationController() {
         discardBufferedAudio()
         insertionTargetRef.current = null
         stopCapture()
-        await window.api.speech.stopDictation(sessionId).catch(() => undefined)
+        await api.speech.stopDictation(sessionId).catch(() => undefined)
         drainStoppedSession(sessionId)
         return
       }
@@ -161,7 +162,7 @@ export function DictationController() {
       if (dictationRunRef.current !== runId) {
         return
       }
-      await window.api.speech.stopDictation(sessionId).catch(() => undefined)
+      await api.speech.stopDictation(sessionId).catch(() => undefined)
       drainStoppedSession(sessionId)
       if (captureStarted) {
         stopCapture()
@@ -258,7 +259,7 @@ export function DictationController() {
       }
     }
 
-    const cleanup = window.api.ui.onDictationKeyDown(handleKeyDown)
+    const cleanup = api.ui.onDictationKeyDown(handleKeyDown)
     return cleanup
   }, [
     settings?.voice?.dictationMode,
@@ -346,14 +347,14 @@ export function DictationController() {
   ])
 
   useEffect(() => {
-    const cleanupPartial = window.api.speech.onPartialTranscript((data) => {
+    const cleanupPartial = api.speech.onPartialTranscript((data) => {
       if (data.sessionId !== activeSessionIdRef.current) {
         return
       }
       setPartialTranscript(data.text)
     })
 
-    const cleanupFinal = window.api.speech.onFinalTranscript((data) => {
+    const cleanupFinal = api.speech.onFinalTranscript((data) => {
       if (data.sessionId !== activeSessionIdRef.current || !data.text) {
         return
       }
@@ -372,11 +373,11 @@ export function DictationController() {
       }
     })
 
-    const cleanupStopped = window.api.speech.onStopped((data) => {
+    const cleanupStopped = api.speech.onStopped((data) => {
       recordStoppedSession(data.sessionId, stoppedSessionIdsRef, stoppedResolversRef)
     })
 
-    const cleanupError = window.api.speech.onError((data) => {
+    const cleanupError = api.speech.onError((data) => {
       if (data.sessionId !== activeSessionIdRef.current) {
         return
       }
@@ -389,7 +390,7 @@ export function DictationController() {
       stopCapture()
       discardBufferedAudio()
       void (async () => {
-        await window.api.speech.stopDictation(sessionId).catch(() => undefined)
+        await api.speech.stopDictation(sessionId).catch(() => undefined)
         await waitForStoppedSession(sessionId, stoppedSessionIdsRef, stoppedResolversRef)
         insertionTargetRef.current = null
         intentionalTargetCancellationRef.current = false

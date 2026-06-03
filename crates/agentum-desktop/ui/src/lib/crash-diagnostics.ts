@@ -1,3 +1,5 @@
+import { api } from '@/tauri'
+
 import type {
   CrashReportBreadcrumbData,
   CrashReportDetailValue
@@ -25,8 +27,7 @@ export function recordRendererCrashBreadcrumb(
 
   try {
     // Why: crash diagnostics must never create or mask renderer startup failures.
-    const api = (window as Window & { api?: Window['api'] }).api
-    api?.crashReports.recordBreadcrumb({ name, ...(data ? { data } : {}) })
+    api.crashReports.recordBreadcrumb({ name, ...(data ? { data } : {}) })
   } catch {
     // Best-effort crash evidence only.
   }

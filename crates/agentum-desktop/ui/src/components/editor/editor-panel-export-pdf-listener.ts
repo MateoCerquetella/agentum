@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { exportActiveMarkdownToPdf } from './export-active-markdown'
 
 // Why: the "File -> Export as PDF..." menu IPC fans out to every EditorPanel
@@ -9,7 +10,7 @@ let exportPdfListenerUnsubscribe: (() => void) | null = null
 export function acquireExportPdfListener(): () => void {
   exportPdfListenerOwners += 1
   if (exportPdfListenerOwners === 1) {
-    exportPdfListenerUnsubscribe = window.api.ui.onExportPdfRequested(() => {
+    exportPdfListenerUnsubscribe = api.ui.onExportPdfRequested(() => {
       void exportActiveMarkdownToPdf()
     })
   }

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback, useEffect, useState } from 'react'
 import { FolderOpen, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
@@ -87,7 +88,7 @@ export function CliSection({ currentPlatform }: CliSectionProps): React.JSX.Elem
   const refreshStatus = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
-      handleStatusChange(await window.api.cli.getInstallStatus())
+      handleStatusChange(await api.cli.getInstallStatus())
     } catch (error) {
       if (mountedRef.current) {
         toast.error(error instanceof Error ? error.message : 'Failed to load CLI status.')
@@ -114,7 +115,7 @@ export function CliSection({ currentPlatform }: CliSectionProps): React.JSX.Elem
   const handleInstall = async (): Promise<void> => {
     setBusyAction('install')
     try {
-      const next = await window.api.cli.install()
+      const next = await api.cli.install()
       if (mountedRef.current) {
         setStatus(next)
         setDialogOpen(false)
@@ -136,7 +137,7 @@ export function CliSection({ currentPlatform }: CliSectionProps): React.JSX.Elem
   const handleRemove = async (): Promise<void> => {
     setBusyAction('remove')
     try {
-      const next = await window.api.cli.remove()
+      const next = await api.cli.remove()
       if (mountedRef.current) {
         setStatus(next)
         setDialogOpen(false)
@@ -242,7 +243,7 @@ export function CliSection({ currentPlatform }: CliSectionProps): React.JSX.Elem
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => void window.api.shell.openPath(status.commandPath as string)}
+              onClick={() => void api.shell.openPath(status.commandPath as string)}
               disabled={loading || !canRevealCommandPath}
               className="gap-2"
             >

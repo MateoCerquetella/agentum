@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the update card owns the full updater lifecycle in one
    renderer surface. Keeping the state machine and its presentation variants together avoids
    scattering tightly coupled update behavior across multiple files. */
@@ -62,7 +63,7 @@ function CompactCardContent({
         {action && (
           <button
             className="text-xs text-muted-foreground underline hover:text-foreground mt-0.5"
-            onClick={() => void window.api.shell.openUrl(action.url)}
+            onClick={() => void api.shell.openUrl(action.url)}
           >
             {action.label}
           </button>
@@ -191,7 +192,7 @@ export function UpdateCard() {
   // auto-restart the app — the user expects to click "Restart" in Settings.
   useEffect(() => {
     if (status.state === 'downloaded' && hasStartedDownload.current) {
-      void window.api.updater.quitAndInstall().catch((error) => {
+      void api.updater.quitAndInstall().catch((error) => {
         setInstallError(String((error as Error)?.message ?? error))
       })
     }
@@ -306,7 +307,7 @@ export function UpdateCard() {
     if (!reassuranceSeen) {
       markReassuranceSeen()
     }
-    void window.api.updater.download()
+    void api.updater.download()
   }
 
   // Why: the 'error' variant has no version field, so dismiss needs an
@@ -327,7 +328,7 @@ export function UpdateCard() {
   }
 
   const handleInstallRetry = () => {
-    void window.api.updater.quitAndInstall().catch((error) => {
+    void api.updater.quitAndInstall().catch((error) => {
       setInstallError(String((error as Error)?.message ?? error))
     })
   }
@@ -354,7 +355,7 @@ export function UpdateCard() {
             : {
                 label: 'Re-check',
                 onClick: () => {
-                  void window.api.updater.check({ includePrerelease: false })
+                  void api.updater.check({ includePrerelease: false })
                 }
               }
         }
@@ -665,7 +666,7 @@ function RichCardContent({
             {' '}
             <button
               className="text-xs text-muted-foreground/70 underline hover:text-foreground inline"
-              onClick={() => void window.api.shell.openUrl(release.releaseNotesUrl)}
+              onClick={() => void api.shell.openUrl(release.releaseNotesUrl)}
             >
               +{releasesBehind - 1} more since your last update
             </button>
@@ -675,7 +676,7 @@ function RichCardContent({
 
       <button
         className="text-xs text-muted-foreground underline hover:text-foreground self-start"
-        onClick={() => void window.api.shell.openUrl(release.releaseNotesUrl)}
+        onClick={() => void api.shell.openUrl(release.releaseNotesUrl)}
       >
         Read the full release notes
       </button>
@@ -723,7 +724,7 @@ function SimpleCardContent({
 
       <button
         className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground self-start"
-        onClick={() => void window.api.shell.openUrl(releaseUrl)}
+        onClick={() => void api.shell.openUrl(releaseUrl)}
       >
         Release notes
       </button>
@@ -812,7 +813,7 @@ function DownloadingContent({
       <button
         className="text-xs text-muted-foreground underline hover:text-foreground self-start"
         onClick={() =>
-          void window.api.shell.openUrl(
+          void api.shell.openUrl(
             release ? release.releaseNotesUrl : releaseUrlForVersion(version)
           )
         }
@@ -876,7 +877,7 @@ function ErrorCardContent({
         <Button
           variant="outline"
           size="sm"
-          onClick={() => void window.api.shell.openUrl(releaseUrl)}
+          onClick={() => void api.shell.openUrl(releaseUrl)}
           className={primaryAction ? 'flex-1' : 'w-full'}
         >
           Download Manually

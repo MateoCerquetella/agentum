@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: dialog co-locates header, three
    tabs (Description / Conversation / Pipeline), comment composer,
    and four mutation actions. Splitting any of these into separate
@@ -267,7 +268,7 @@ function PipelineJobRow({
               type="button"
               variant="ghost"
               size="icon-xs"
-              onClick={() => void window.api.shell.openUrl(job.webUrl)}
+              onClick={() => void api.shell.openUrl(job.webUrl)}
               title="Open job in GitLab"
             >
               <ExternalLink className="size-3" />
@@ -362,7 +363,7 @@ export default function GitLabItemDialog({
     let stale = false
     setLoading(true)
     setError(null)
-    void window.api.gl
+    void api.gl
       .workItemDetails({ repoPath, iid: item.number, type: item.type })
       .then((data) => {
         if (stale) {
@@ -421,7 +422,7 @@ export default function GitLabItemDialog({
     }
     setLabelOptionsLoading(true)
     try {
-      const labels = await window.api.gl.listLabels({ repoPath })
+      const labels = await api.gl.listLabels({ repoPath })
       if (mountedRef.current) {
         setLabelOptions(normalizeGitLabLabels(labels))
       }
@@ -442,7 +443,7 @@ export default function GitLabItemDialog({
     }
     setReviewerOptionsLoading(true)
     try {
-      const users = await window.api.gl.listAssignableUsers({ repoPath })
+      const users = await api.gl.listAssignableUsers({ repoPath })
       if (mountedRef.current) {
         setReviewerOptions(dedupeGitLabUsers(users))
       }
@@ -514,7 +515,7 @@ export default function GitLabItemDialog({
 
     setDetailsSaving(true)
     try {
-      const res = await window.api.gl.updateMR({ repoPath, iid: item.number, updates })
+      const res = await api.gl.updateMR({ repoPath, iid: item.number, updates })
       if (res.ok) {
         if (mountedRef.current) {
           setDetails((current) =>
@@ -568,7 +569,7 @@ export default function GitLabItemDialog({
         [job.id]: { loading: true }
       }))
       try {
-        const result = await window.api.gl.jobTrace({
+        const result = await api.gl.jobTrace({
           repoPath,
           jobId: job.id,
           projectRef: details?.item.projectRef ?? item.projectRef ?? null
@@ -604,7 +605,7 @@ export default function GitLabItemDialog({
       }
       setRetryingJobId(job.id)
       try {
-        const result = await window.api.gl.retryJob({
+        const result = await api.gl.retryJob({
           repoPath,
           jobId: job.id,
           projectRef: details?.item.projectRef ?? item.projectRef ?? null
@@ -653,7 +654,7 @@ export default function GitLabItemDialog({
       }
       setReviewerUpdating(true)
       try {
-        const result = await window.api.gl.updateMRReviewers({
+        const result = await api.gl.updateMRReviewers({
           repoPath,
           iid: item.number,
           reviewerIds,
@@ -699,7 +700,7 @@ export default function GitLabItemDialog({
     }
     setInlineCommentSubmitting(true)
     try {
-      const result = await window.api.gl.addMRInlineComment({
+      const result = await api.gl.addMRInlineComment({
         repoPath,
         iid: item.number,
         projectRef: details.item.projectRef ?? item.projectRef ?? null,
@@ -746,7 +747,7 @@ export default function GitLabItemDialog({
     }
     setActionInFlight('close')
     try {
-      const res = await window.api.gl.closeMR({ repoPath, iid: item.number })
+      const res = await api.gl.closeMR({ repoPath, iid: item.number })
       if (res.ok) {
         if (mountedRef.current) {
           toast.success(`Closed MR !${item.number}`)
@@ -770,7 +771,7 @@ export default function GitLabItemDialog({
     }
     setActionInFlight('reopen')
     try {
-      const res = await window.api.gl.reopenMR({ repoPath, iid: item.number })
+      const res = await api.gl.reopenMR({ repoPath, iid: item.number })
       if (res.ok) {
         if (mountedRef.current) {
           toast.success(`Reopened MR !${item.number}`)
@@ -794,7 +795,7 @@ export default function GitLabItemDialog({
     }
     setActionInFlight('merge')
     try {
-      const res = await window.api.gl.mergeMR({ repoPath, iid: item.number })
+      const res = await api.gl.mergeMR({ repoPath, iid: item.number })
       if (res.ok) {
         if (mountedRef.current) {
           toast.success(`Merged MR !${item.number}`)
@@ -823,8 +824,8 @@ export default function GitLabItemDialog({
       // Branch on the item type to hit the right channel.
       const res =
         item.type === 'mr'
-          ? await window.api.gl.addMRComment({ repoPath, iid: item.number, body })
-          : await window.api.gl.addIssueComment({ repoPath, number: item.number, body })
+          ? await api.gl.addMRComment({ repoPath, iid: item.number, body })
+          : await api.gl.addIssueComment({ repoPath, number: item.number, body })
       if (res.ok) {
         if (mountedRef.current) {
           setCommentDraftState((current) =>
@@ -851,7 +852,7 @@ export default function GitLabItemDialog({
       }
       setResolvingThreadId(threadId)
       try {
-        const res = await window.api.gl.resolveMRDiscussion({
+        const res = await api.gl.resolveMRDiscussion({
           repoPath,
           iid: item.number,
           discussionId: threadId,
@@ -1441,7 +1442,7 @@ export default function GitLabItemDialog({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => void window.api.shell.openUrl(item.url)}
+                  onClick={() => void api.shell.openUrl(item.url)}
                   className="gap-1.5"
                 >
                   <ExternalLink className="size-3.5" />

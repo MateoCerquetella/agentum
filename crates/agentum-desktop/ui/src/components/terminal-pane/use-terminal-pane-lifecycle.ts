@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: terminal pane lifecycle wiring is intentionally co-located so PTY attach, theme sync, and runtime graph publication remain consistent for live terminals. */
 import { useEffect, useRef } from 'react'
 import type { IDisposable, Terminal } from '@xterm/xterm'
@@ -514,7 +515,7 @@ export function useTerminalPaneLifecycle({
         const osc52Disposable = pane.terminal.parser.registerOscHandler(52, (data) =>
           handleOsc52ClipboardRequest(data, {
             allowClipboardWrite: settingsRef.current?.terminalAllowOsc52Clipboard === true,
-            writeClipboardText: window.api.ui.writeClipboardText,
+            writeClipboardText: api.ui.writeClipboardText,
             onBlockedWrite: showOsc52ClipboardBlockedToast
           })
         )
@@ -671,7 +672,7 @@ export function useTerminalPaneLifecycle({
           if (!selection) {
             return
           }
-          void window.api.ui.writeClipboardText(selection).catch(() => {
+          void api.ui.writeClipboardText(selection).catch(() => {
             /* ignore clipboard write failures */
           })
         })

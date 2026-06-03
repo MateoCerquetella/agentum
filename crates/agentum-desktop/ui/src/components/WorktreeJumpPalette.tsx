@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* oxlint-disable max-lines */
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -966,7 +967,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
       const lookupToken = createLookupGuard.start()
       preserveCreateLookupOnCloseRef.current = true
       closeModal()
-      void window.api.gh
+      void api.gh
         .workItemByOwnerRepo({
           repoPath: repoForLookup.path,
           repoId: repoForLookup.id,
@@ -1035,7 +1036,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
       const lookupToken = createLookupGuard.start()
       preserveCreateLookupOnCloseRef.current = true
       closeModal()
-      void window.api.gh
+      void api.gh
         .workItem({ repoPath: repoForLookup.path, repoId: repoForLookup.id, number: ghNumber })
         .then((item) => {
           if (!createLookupGuard.isCurrent(lookupToken)) {

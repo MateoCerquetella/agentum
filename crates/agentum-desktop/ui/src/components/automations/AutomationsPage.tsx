@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: this page owns the automations list/detail
  * orchestration while the form and detail presentation live in sibling files. */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -520,9 +521,9 @@ export default function AutomationsPage(): React.JSX.Element {
     setIsLoading(true)
     try {
       const [nextAutomations, nextRuns, nextExternalManagers] = await Promise.all([
-        window.api.automations.list(),
-        window.api.automations.listRuns(),
-        window.api.automations.listExternalManagers()
+        api.automations.list(),
+        api.automations.listRuns(),
+        api.automations.listExternalManagers()
       ])
       const currentSelectedId = useAppStore.getState().selectedAutomationId
       const hasCurrentSelection = nextAutomations.some(
@@ -532,7 +533,7 @@ export default function AutomationsPage(): React.JSX.Element {
         ? currentSelectedId
         : (nextAutomations[0]?.id ?? null)
       const nextSelectedRuns = nextSelectedId
-        ? await window.api.automations.listRuns({ automationId: nextSelectedId })
+        ? await api.automations.listRuns({ automationId: nextSelectedId })
         : []
       setAutomations(nextAutomations)
       setRuns(nextRuns)
@@ -550,7 +551,7 @@ export default function AutomationsPage(): React.JSX.Element {
   }, [selectAutomationId])
 
   const hydratePersistedUIState = useCallback(async (): Promise<void> => {
-    useAppStore.getState().hydratePersistedUI(await window.api.ui.get())
+    useAppStore.getState().hydratePersistedUI(await api.ui.get())
   }, [])
 
   useEffect(() => {
@@ -570,7 +571,7 @@ export default function AutomationsPage(): React.JSX.Element {
       return
     }
     let cancelled = false
-    void window.api.automations.listRuns({ automationId }).then((nextRuns) => {
+    void api.automations.listRuns({ automationId }).then((nextRuns) => {
       if (!cancelled) {
         setSelectedAutomationRuns({ automationId, runs: nextRuns })
       }
@@ -640,7 +641,7 @@ export default function AutomationsPage(): React.JSX.Element {
     }
     void Promise.all(
       completedRuns.map((run) =>
-        window.api.automations.markDispatchResult({
+        api.automations.markDispatchResult({
           runId: run.id,
           status: 'completed',
           workspaceId: run.workspaceId,
@@ -761,7 +762,7 @@ export default function AutomationsPage(): React.JSX.Element {
     let latest = automation
     try {
       latest =
-        (await window.api.automations.list()).find((entry) => entry.id === automation.id) ??
+        (await api.automations.list()).find((entry) => entry.id === automation.id) ??
         automation
     } catch {
       latest = automation
@@ -948,11 +949,11 @@ export default function AutomationsPage(): React.JSX.Element {
           workdir: selectedWorktree.path
         }
         await (editingExternalTarget
-          ? window.api.automations.updateExternal({
+          ? api.automations.updateExternal({
               ...input,
               jobId: editingExternalTarget.job.id
             })
-          : window.api.automations.createExternal(input))
+          : api.automations.createExternal(input))
         if (!editingExternalTarget) {
           useAppStore.getState().recordFeatureInteraction('automation-created')
         }
@@ -991,7 +992,7 @@ export default function AutomationsPage(): React.JSX.Element {
       if (editingAutomationId) {
         try {
           currentAutomation =
-            (await window.api.automations.list()).find(
+            (await api.automations.list()).find(
               (automation) => automation.id === editingAutomationId
             ) ?? currentAutomation
         } catch {
@@ -1017,11 +1018,11 @@ export default function AutomationsPage(): React.JSX.Element {
         updates.dtstart = now
       }
       const automation = editingAutomationId
-        ? await window.api.automations.update({
+        ? await api.automations.update({
             id: editingAutomationId,
             updates
           })
-        : await window.api.automations.create({
+        : await api.automations.create({
             name: draft.name,
             prompt: draft.prompt,
             precheck,
@@ -1059,7 +1060,7 @@ export default function AutomationsPage(): React.JSX.Element {
   }
 
   const toggleAutomation = async (automation: Automation): Promise<void> => {
-    await window.api.automations.update({
+    await api.automations.update({
       id: automation.id,
       updates: { enabled: !automation.enabled }
     })
@@ -1067,7 +1068,7 @@ export default function AutomationsPage(): React.JSX.Element {
   }
 
   const deleteAutomation = async (automation: Automation): Promise<void> => {
-    await window.api.automations.delete({ id: automation.id })
+    await api.automations.delete({ id: automation.id })
     if (useAppStore.getState().selectedAutomationId === automation.id) {
       selectAutomationId(null)
     }
@@ -1116,7 +1117,7 @@ export default function AutomationsPage(): React.JSX.Element {
   }
 
   const runNow = async (automation: Automation): Promise<void> => {
-    await window.api.automations.runNow({ id: automation.id })
+    await api.automations.runNow({ id: automation.id })
     await hydratePersistedUIState()
     await refresh()
     toast.message('Automation run queued.')
@@ -1132,7 +1133,7 @@ export default function AutomationsPage(): React.JSX.Element {
     rerunRunIdsInFlightRef.current.add(runId)
     setRerunRunIdsInFlight(new Set(rerunRunIdsInFlightRef.current))
     try {
-      await window.api.automations.runNow({ id: automationId })
+      await api.automations.runNow({ id: automationId })
       await hydratePersistedUIState()
       await refresh()
       toast.message('Automation run queued.')
@@ -1155,7 +1156,7 @@ export default function AutomationsPage(): React.JSX.Element {
     const key = `${manager.id}:${job.id}:${action}`
     setExternalActionKey(key)
     try {
-      await window.api.automations.runExternalAction({
+      await api.automations.runExternalAction({
         managerId: manager.id,
         provider: manager.provider,
         target: manager.target,
@@ -1190,7 +1191,7 @@ export default function AutomationsPage(): React.JSX.Element {
         totalCount: job.runCount
       }
       const listExternalRuns = (
-        window.api.automations as Partial<Pick<typeof window.api.automations, 'listExternalRuns'>>
+        api.automations as Partial<Pick<typeof api.automations, 'listExternalRuns'>>
       ).listExternalRuns
       if (typeof listExternalRuns !== 'function') {
         return fallbackRunsPage
@@ -1260,7 +1261,7 @@ export default function AutomationsPage(): React.JSX.Element {
     const sourceKey = getExternalAutomationSourceKey(manager)
     setConnectingExternalSourceKey(sourceKey)
     try {
-      const state = await window.api.ssh.connect({ targetId: manager.target.connectionId })
+      const state = await api.ssh.connect({ targetId: manager.target.connectionId })
       if (!state || state.status !== 'connected') {
         toast.error(state?.error ?? 'SSH connections are unavailable in this client.')
         return

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import type { StateCreator } from 'zustand'
 import type { PreflightStatus } from '../../../../preload/api-types'
 import type { AppState } from '../types'
@@ -68,7 +69,7 @@ export const createPreflightSlice: StateCreator<AppState, [], [], PreflightSlice
       preflightStatusError: null
     })
 
-    const request = window.api.preflight
+    const request = api.preflight
       .check(buildPreflightArgs(force, context))
       .then((status) => {
         if (requestId !== latestPreflightRequestId) {

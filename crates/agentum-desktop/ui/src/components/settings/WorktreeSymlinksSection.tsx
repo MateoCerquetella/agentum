@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useMemo, useState } from 'react'
 import { Folder, Link2, Plus, X } from 'lucide-react'
 import type { Repo } from '../../../../shared/types'
@@ -36,7 +37,7 @@ export function WorktreeSymlinksSection({
       return
     }
     let cancelled = false
-    void window.api.fs
+    void api.fs
       .readDir({ dirPath: repo.path, connectionId: repo.connectionId ?? undefined })
       .then((list) => {
         if (cancelled) {

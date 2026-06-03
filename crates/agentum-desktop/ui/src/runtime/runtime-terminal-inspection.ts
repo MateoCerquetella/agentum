@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import type { GlobalSettings } from '../../../shared/types'
 import type { RuntimeTerminalSend } from '../../../shared/runtime-types'
 import { RuntimeRpcCallError, callRuntimeRpc, getActiveRuntimeTarget } from './runtime-rpc-client'
@@ -47,8 +48,8 @@ export async function inspectRuntimeTerminalProcess(
   const terminal = getRemoteRuntimeTerminalHandle(ptyId)
   if (target.kind !== 'environment' || !terminal) {
     const [foregroundProcess, hasChildProcesses] = await Promise.all([
-      window.api.pty.getForegroundProcess(ptyId),
-      window.api.pty.hasChildProcesses(ptyId)
+      api.pty.getForegroundProcess(ptyId),
+      api.pty.hasChildProcesses(ptyId)
     ])
     return { foregroundProcess, hasChildProcesses }
   }
@@ -80,7 +81,7 @@ export function sendRuntimePtyInput(
     : getActiveRuntimeTarget(settings)
   const terminal = getRemoteRuntimeTerminalHandle(ptyId)
   if (target.kind !== 'environment' || !terminal) {
-    window.api.pty.write(ptyId, data)
+    api.pty.write(ptyId, data)
     return true
   }
 
@@ -107,9 +108,9 @@ export async function sendRuntimePtyInputVerified(
     : getActiveRuntimeTarget(settings)
   const terminal = getRemoteRuntimeTerminalHandle(ptyId)
   if (target.kind !== 'environment' || !terminal) {
-    const accepted = await window.api.pty.writeAccepted(ptyId, data)
+    const accepted = await api.pty.writeAccepted(ptyId, data)
     if (!accepted) {
-      window.api.pty.write(ptyId, data)
+      api.pty.write(ptyId, data)
       // Why: SSH/local fallback writes are fire-and-forget. Callers use this
       // boolean to continue UX flow, while hook telemetry confirms real turns.
       return true

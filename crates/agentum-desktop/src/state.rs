@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 pub struct PtyHandle {
     pub master: Box<dyn MasterPty + Send>,
     pub writer: Box<dyn Write + Send>,
-    pub child: Box<dyn Child + Send + Sync>,
+    // Shared so the reader thread can wait() for the real exit code on EOF while
+    // pty_kill / introspection still reach the child from the command handlers.
+    pub child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

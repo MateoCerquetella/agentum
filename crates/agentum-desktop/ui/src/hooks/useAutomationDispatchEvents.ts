@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: automation dispatch is a single renderer lifecycle
  * coordinator spanning workspace creation, SSH readiness, terminal launch/reuse,
  * completion bookkeeping, and focus restoration. */
@@ -44,9 +45,9 @@ function buildAutomationWorkspaceName(runTitle: string, scheduledFor: number): s
 
 export function useAutomationDispatchEvents(): void {
   useEffect(() => {
-    const unsubscribe = window.api.automations.onDispatchRequested(async ({ automation, run }) => {
+    const unsubscribe = api.automations.onDispatchRequested(async ({ automation, run }) => {
       const markDispatchResult = async (result: AutomationDispatchResult): Promise<void> => {
-        await window.api.automations.markDispatchResult(result)
+        await api.automations.markDispatchResult(result)
         window.dispatchEvent(new Event(AUTOMATIONS_CHANGED_EVENT))
       }
       const state = useAppStore.getState()
@@ -77,7 +78,7 @@ export function useAutomationDispatchEvents(): void {
       }
 
       if (repo.connectionId) {
-        const needsPrompt = await window.api.ssh.needsPassphrasePrompt({
+        const needsPrompt = await api.ssh.needsPassphrasePrompt({
           targetId: repo.connectionId
         })
         if (needsPrompt) {
@@ -90,10 +91,10 @@ export function useAutomationDispatchEvents(): void {
           })
           return
         }
-        const sshState = await window.api.ssh.getState({ targetId: repo.connectionId })
+        const sshState = await api.ssh.getState({ targetId: repo.connectionId })
         if (sshState?.status !== 'connected') {
           try {
-            const connected = await window.api.ssh.connect({ targetId: repo.connectionId })
+            const connected = await api.ssh.connect({ targetId: repo.connectionId })
             if (connected?.status !== 'connected') {
               throw new Error('SSH target is unavailable.')
             }
@@ -122,7 +123,7 @@ export function useAutomationDispatchEvents(): void {
       }
 
       if (run.trigger === 'scheduled' && automation.precheck) {
-        precheckResult = await window.api.automations.runPrecheck({
+        precheckResult = await api.automations.runPrecheck({
           automationId: automation.id,
           runId: run.id
         })
@@ -272,7 +273,7 @@ export function useAutomationDispatchEvents(): void {
             agentId: automation.agentId,
             worktreeId: worktree.id,
             currentRunId: run.id,
-            runs: await window.api.automations.listRuns({ automationId: automation.id }),
+            runs: await api.automations.listRuns({ automationId: automation.id }),
             state: useAppStore.getState()
           })
           if (reusableSession) {
@@ -424,7 +425,7 @@ export function useAutomationDispatchEvents(): void {
         })
       }
     })
-    void window.api.automations.rendererReady()
+    void api.automations.rendererReady()
     return unsubscribe
   }, [])
 }

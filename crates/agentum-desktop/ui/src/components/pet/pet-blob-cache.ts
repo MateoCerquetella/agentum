@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 // Why: isolated module so the store slice can call revokeCustomPetBlobUrl
 // without importing usePetUrl (which itself imports the store). Keeps
 // the dependency graph acyclic.
@@ -38,7 +39,7 @@ export async function loadCustomBlobUrl(
   // Why: defensively clear any stale entry so we don't leak a prior blob URL
   // or ImageBitmap[] when re-populating after a cache miss.
   revokeCustomPetBlobUrl(id)
-  const buffer = await window.api.pet.read(id, fileName, kind)
+  const buffer = await api.pet.read(id, fileName, kind)
   if (!buffer) {
     return null
   }

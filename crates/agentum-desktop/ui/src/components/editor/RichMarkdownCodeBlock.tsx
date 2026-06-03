@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useCallback, useRef, useState } from 'react'
 import { NodeViewContent, NodeViewWrapper } from '@tiptap/react'
 import type { NodeViewProps } from '@tiptap/react'
@@ -83,7 +84,7 @@ export function RichMarkdownCodeBlock({
     (e: React.MouseEvent) => {
       e.stopPropagation()
       const text = node.textContent
-      void window.api.ui
+      void api.ui
         .writeClipboardText(text)
         .then(() => {
           if (!isMountedRef.current) {

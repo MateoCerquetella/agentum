@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useRef } from 'react'
 import {
   FOCUS_TERMINAL_PANE_EVENT,
@@ -244,7 +245,7 @@ export function useTerminalPaneGlobalEffects({
     if (!isActive && !isVisible) {
       return
     }
-    return window.api.ui.onFileDrop((data) => {
+    return api.ui.onFileDrop((data) => {
       if (data.target !== 'terminal') {
         return
       }

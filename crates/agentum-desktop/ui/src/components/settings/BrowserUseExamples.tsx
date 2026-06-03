@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { Copy, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '../ui/button'
@@ -11,7 +12,7 @@ const EXAMPLE_PROMPTS: string[] = [
 
 async function handleCopyText(text: string, label: string): Promise<void> {
   try {
-    await window.api.ui.writeClipboardText(text)
+    await api.ui.writeClipboardText(text)
     toast.success(`Copied ${label}.`)
   } catch (error) {
     toast.error(error instanceof Error ? error.message : 'Failed to copy.')

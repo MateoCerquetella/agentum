@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: terminal keyboard routing keeps shortcut
  * precedence in one ordered handler so shell input, pane commands, search, and
  * split actions do not race across separate window listeners. */
@@ -256,7 +257,7 @@ export function useTerminalKeyboardShortcuts({
         }
         e.preventDefault()
         e.stopImmediatePropagation()
-        void window.api.ui.writeClipboardText(selection).catch(() => {
+        void api.ui.writeClipboardText(selection).catch(() => {
           /* ignore clipboard write failures */
         })
         return

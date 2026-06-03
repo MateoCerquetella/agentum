@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 const isMac = navigator.userAgent.includes('Mac')
 
 /**
@@ -7,10 +8,10 @@ const isMac = navigator.userAgent.includes('Mac')
  */
 export function applyUIZoom(level: number): void {
   const zoomFactor = Math.pow(1.2, level)
-  window.api.ui.setZoomLevel(level)
+  api.ui.setZoomLevel(level)
   document.documentElement.style.setProperty('--ui-zoom-factor', String(zoomFactor))
   if (isMac) {
-    window.api.ui.syncTrafficLights(zoomFactor)
+    api.ui.syncTrafficLights(zoomFactor)
   }
 }
 
@@ -19,10 +20,10 @@ export function applyUIZoom(level: number): void {
  * Call on startup after the main process has restored the zoom.
  */
 export function syncZoomCSSVar(): void {
-  const level = window.api.ui.getZoomLevel()
+  const level = api.ui.getZoomLevel()
   const zoomFactor = Math.pow(1.2, level)
   document.documentElement.style.setProperty('--ui-zoom-factor', String(zoomFactor))
   if (isMac) {
-    window.api.ui.syncTrafficLights(zoomFactor)
+    api.ui.syncTrafficLights(zoomFactor)
   }
 }

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: repo metadata hooks share TTL caches and
 Linear/GitHub cache invalidation entrypoints used by the issue dialog. */
 import { useEffect, useRef, useState } from 'react'
@@ -84,7 +85,7 @@ export function useRepoLabels(
             { repo: repoSelector },
             { timeoutMs: 15_000 }
           )
-        : window.api.gh
+        : api.gh
             .listLabels({ repoPath: repoPath ?? '', repoId: repoId ?? undefined })
             .then((labels) => labels as string[])
     )
@@ -158,7 +159,7 @@ export function useRepoAssignees(
             { repo: repoSelector },
             { timeoutMs: 15_000 }
           )
-        : window.api.gh
+        : api.gh
             .listAssignableUsers({ repoPath: repoPath ?? '', repoId: repoId ?? undefined })
             .then((users) => users as GitHubAssignableUser[])
     )

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Plus, Upload } from 'lucide-react'
@@ -39,7 +40,7 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
   const loadTargets = useCallback(
     async (opts?: { signal?: AbortSignal }) => {
       try {
-        const result = (await window.api.ssh.listTargets()) as SshTarget[]
+        const result = (await api.ssh.listTargets()) as SshTarget[]
         if (opts?.signal?.aborted || !mountedRef.current) {
           return
         }
@@ -94,8 +95,8 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
 
     try {
       await (editingId
-        ? window.api.ssh.updateTarget({ id: editingId, updates: target })
-        : window.api.ssh.addTarget({ target }))
+        ? api.ssh.updateTarget({ id: editingId, updates: target })
+        : api.ssh.addTarget({ target }))
       recordFeatureInteraction('ssh')
       if (!mountedRef.current) {
         return
@@ -114,7 +115,7 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
 
   const terminateSessionsWithReconnect = async (targetId: string): Promise<void> => {
     try {
-      await window.api.ssh.terminateSessions({ targetId })
+      await api.ssh.terminateSessions({ targetId })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       if (!message.includes(SSH_TERMINATE_RECONNECT_REQUIRED)) {
@@ -122,14 +123,14 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
       }
       // Why: disconnect is now non-destructive, so preserved remote PTYs may
       // require a fresh relay attachment before they can be explicitly killed.
-      await window.api.ssh.connect({ targetId })
-      await window.api.ssh.terminateSessions({ targetId })
+      await api.ssh.connect({ targetId })
+      await api.ssh.terminateSessions({ targetId })
     }
   }
 
   const handleRemove = async (id: string): Promise<void> => {
     try {
-      await removeSshTargetWithBestEffortCleanup(window.api.ssh, id)
+      await removeSshTargetWithBestEffortCleanup(api.ssh, id)
       // Why: a deleted passphrase-gated target may still have deferred
       // reconnect metadata; clear it so focused SSH tabs stop retrying it.
       clearRemovedSshTargetState(id)
@@ -152,7 +153,7 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
 
   const handleConnect = async (targetId: string): Promise<void> => {
     try {
-      await window.api.ssh.connect({ targetId })
+      await api.ssh.connect({ targetId })
       recordFeatureInteraction('ssh')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Connection failed')
@@ -161,7 +162,7 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
 
   const handleDisconnect = async (targetId: string): Promise<void> => {
     try {
-      await window.api.ssh.disconnect({ targetId })
+      await api.ssh.disconnect({ targetId })
       recordFeatureInteraction('ssh')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Disconnect failed')
@@ -179,7 +180,7 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
 
   const handleResetRelay = async (targetId: string): Promise<void> => {
     try {
-      await window.api.ssh.resetRelay({ targetId })
+      await api.ssh.resetRelay({ targetId })
       if (mountedRef.current) {
         toast.success('Remote relay reset')
       }
@@ -194,7 +195,7 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
   const handleTest = async (targetId: string): Promise<void> => {
     setTestingIds((prev) => new Set(prev).add(targetId))
     try {
-      const result = await window.api.ssh.testConnection({ targetId })
+      const result = await api.ssh.testConnection({ targetId })
       recordFeatureInteraction('ssh')
       if (mountedRef.current) {
         if (result.success) {
@@ -220,7 +221,7 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
 
   const handleImport = async (): Promise<void> => {
     try {
-      const imported = (await window.api.ssh.importConfig()) as SshTarget[]
+      const imported = (await api.ssh.importConfig()) as SshTarget[]
       recordFeatureInteraction('ssh')
       if (mountedRef.current) {
         if (imported.length === 0) {

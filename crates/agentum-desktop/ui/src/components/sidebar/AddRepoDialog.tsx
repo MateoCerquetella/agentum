@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the add-project dialog centralizes step routing, clone/remote/create state, and reset semantics across five steps so the modal flow stays in one place. */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -188,7 +189,7 @@ const AddRepoDialog = React.memo(function AddRepoDialog() {
     if (!isCloning) {
       return
     }
-    return window.api.repos.onCloneProgress(setCloneProgress)
+    return api.repos.onCloneProgress(setCloneProgress)
   }, [isCloning])
 
   const cloneDestinationAutoFill = getCloneDestinationAutoFill({
@@ -253,7 +254,7 @@ const AddRepoDialog = React.memo(function AddRepoDialog() {
     setupActionGenRef.current++
     // Why: kill the git clone process if one is running, so backing out
     // or closing the dialog doesn't leave a clone running on disk.
-    void window.api.repos.cloneAbort()
+    void api.repos.cloneAbort()
     setStep('add')
     setAddedRepo(null)
     setExistingWorkspaceSource(null)
@@ -365,7 +366,7 @@ const AddRepoDialog = React.memo(function AddRepoDialog() {
     const gen = ++localAddGenRef.current
     setIsAdding(true)
     try {
-      const path = await window.api.repos.pickFolder()
+      const path = await api.repos.pickFolder()
       if (!path || gen !== localAddGenRef.current) {
         return
       }
@@ -572,7 +573,7 @@ const AddRepoDialog = React.memo(function AddRepoDialog() {
       return
     }
     const gen = cloneGenRef.current
-    const dir = await window.api.repos.pickDirectory()
+    const dir = await api.repos.pickDirectory()
     if (dir && gen === cloneGenRef.current) {
       setCloneDestination(dir)
       setCloneError(null)
@@ -603,7 +604,7 @@ const AddRepoDialog = React.memo(function AddRepoDialog() {
                 { timeoutMs: 10 * 60_000 }
               )
             ).repo
-          : ((await window.api.repos.clone({
+          : ((await api.repos.clone({
               url: trimmedUrl,
               destination: cloneDestination.trim()
             })) as Repo)

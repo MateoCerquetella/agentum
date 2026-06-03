@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback } from 'react'
 import { toast } from 'sonner'
 import { track } from '@/lib/telemetry'
@@ -19,7 +20,7 @@ export async function persistStep(
   stepNumber: number,
   updates: Partial<OnboardingState> = {}
 ): Promise<OnboardingState> {
-  return window.api.onboarding.update({
+  return api.onboarding.update({
     lastCompletedStep: Math.max(stepNumber, -1),
     ...updates
   })
@@ -82,7 +83,7 @@ export function useCloseWith({
         // Why: main-process updateOnboarding already merges with current state,
         // so spreading the local (potentially stale) onboarding.checklist would
         // overwrite concurrent updates.
-        nextState = await window.api.onboarding.update({
+        nextState = await api.onboarding.update({
           closedAt: Date.now(),
           outcome,
           lastCompletedStep: outcome === 'completed' ? ONBOARDING_FINAL_STEP : -1,

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { toast } from 'sonner'
 import { getActiveMarkdownExportPayload } from './markdown-export-extract'
 
@@ -17,7 +18,7 @@ export async function exportActiveMarkdownToPdf(): Promise<void> {
 
   const toastId = toast.loading('Exporting PDF...')
   try {
-    const result = await window.api.export.htmlToPdf({
+    const result = await api.export.htmlToPdf({
       html: payload.html,
       title: payload.title
     })

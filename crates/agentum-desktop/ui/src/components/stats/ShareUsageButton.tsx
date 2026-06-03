@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback, useRef, useState } from 'react'
 import { toPng } from 'html-to-image'
 import { Check, Copy, Share2 } from 'lucide-react'
@@ -52,7 +53,7 @@ export function ShareUsageButton(props: ShareUsageButtonProps): React.JSX.Elemen
         pixelRatio: 2,
         backgroundColor: undefined
       })
-      await window.api.ui.writeClipboardImage(dataUrl)
+      await api.ui.writeClipboardImage(dataUrl)
       return true
     } finally {
       if (isMountedRef.current) {
@@ -112,7 +113,7 @@ export function ShareUsageButton(props: ShareUsageButtonProps): React.JSX.Elemen
       'github.com/stablyai/agentum'
     ]
     const url = `https://x.com/intent/post?text=${encodeURIComponent(lines.join('\n'))}`
-    await window.api.shell.openUrl(url)
+    await api.shell.openUrl(url)
   }, [props])
 
   return (

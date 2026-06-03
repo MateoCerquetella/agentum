@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import {
   lazy,
@@ -151,12 +152,12 @@ function WindowControls(): React.JSX.Element {
     // restored to a maximized state at startup would render the wrong icon
     // until the user first clicks the button. Seed from main on mount.
     let cancelled = false
-    void window.api.ui.isMaximized().then((value) => {
+    void api.ui.isMaximized().then((value) => {
       if (!cancelled) {
         setMaximized(value)
       }
     })
-    const unsubscribe = window.api.ui.onMaximizeChanged(setMaximized)
+    const unsubscribe = api.ui.onMaximizeChanged(setMaximized)
     return () => {
       cancelled = true
       unsubscribe()
@@ -167,7 +168,7 @@ function WindowControls(): React.JSX.Element {
       <button
         className="window-controls-btn"
         aria-label="Minimize"
-        onClick={() => window.api.ui.minimize()}
+        onClick={() => api.ui.minimize()}
       >
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
           <path d="M0 5h10v1H0z" fill="currentColor" />
@@ -176,7 +177,7 @@ function WindowControls(): React.JSX.Element {
       <button
         className="window-controls-btn"
         aria-label={maximized ? 'Restore' : 'Maximize'}
-        onClick={() => window.api.ui.maximize()}
+        onClick={() => api.ui.maximize()}
       >
         {maximized ? (
           // Restore icon (two overlapping squares)
@@ -197,7 +198,7 @@ function WindowControls(): React.JSX.Element {
         // sends 'window:close-requested' back to the renderer and keeps the
         // terminal-running confirmation guard active. window.close() is
         // unreliable in sandboxed renderers.
-        onClick={() => window.api.ui.requestClose()}
+        onClick={() => api.ui.requestClose()}
       >
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
           <path d="M1 0L0 1l4 4-4 4 1 1 4-4 4 4 1-1-4-4 4-4-1-1-4 4-4-4z" fill="currentColor" />
@@ -526,7 +527,7 @@ function App(): React.JSX.Element {
     }
 
     let cancelled = false
-    void window.api.cli
+    void api.cli
       .getInstallStatus()
       .then((status) => {
         if (cancelled) {
@@ -637,13 +638,13 @@ function App(): React.JSX.Element {
         await actions.fetchProjectGroups()
         await actions.fetchAllWorktrees()
         await actions.fetchWorktreeLineage()
-        const persistedUI = await window.api.ui.get()
+        const persistedUI = await api.ui.get()
         uiHydrated = hydratePersistedUIAfterStartupRead({
           persistedUI,
           cancelled,
           hydratePersistedUI: actions.hydratePersistedUI
         })
-        const session = await window.api.session.get()
+        const session = await api.session.get()
         await actions.fetchKeybindings()
         if (!cancelled) {
           actions.hydrateWorkspaceSession(session)
@@ -661,7 +662,7 @@ function App(): React.JSX.Element {
           actions.pruneLastVisitedTimestamps()
           actions.seedActiveWorktreeLastVisitedIfMissing()
           await actions.fetchBrowserSessionProfiles()
-          const onboardingState = await window.api.onboarding.get()
+          const onboardingState = await api.onboarding.get()
           if (!cancelled) {
             setOnboarding(onboardingState)
           }
@@ -675,7 +676,7 @@ function App(): React.JSX.Element {
           if (connectionIds.length > 0) {
             try {
               const SSH_RECONNECT_TIMEOUT_MS = 15_000
-              const allTargets = await window.api.ssh.listTargets()
+              const allTargets = await api.ssh.listTargets()
               const targetMap = new Map(allTargets.map((t) => [t.id, t]))
               const targets = connectionIds.map((targetId) => ({
                 targetId,
@@ -699,7 +700,7 @@ function App(): React.JSX.Element {
               await Promise.allSettled(
                 eagerTargets.map(({ targetId }) =>
                   Promise.race([
-                    window.api.ssh.connect({ targetId }),
+                    api.ssh.connect({ targetId }),
                     new Promise((_, reject) =>
                       setTimeout(
                         () => reject(new Error('SSH reconnect timeout')),
@@ -733,7 +734,7 @@ function App(): React.JSX.Element {
                   continue
                 }
                 try {
-                  const state = await window.api.ssh.getState({ targetId })
+                  const state = await api.ssh.getState({ targetId })
                   console.warn(
                     `[ssh-restore] Polled state for ${targetId}: status=${state?.status}`
                   )
@@ -799,7 +800,7 @@ function App(): React.JSX.Element {
             action: {
               label: 'Restart now',
               onClick: () => {
-                void window.api.app.relaunch()
+                void api.app.relaunch()
               }
             }
           })
@@ -927,7 +928,7 @@ function App(): React.JSX.Element {
       store: useAppStore,
       shouldSchedulePersist: () => !isRemoteWorkspaceSnapshotApplyInProgress(),
       persist: ({ patch }) => {
-        const localWrite = window.api.session.patch(patch)
+        const localWrite = api.session.patch(patch)
         void localWrite
         const state = useAppStore.getState()
         const hydratedTargetIds = Array.from(state.remoteWorkspaceHydratedTargetIds).filter(
@@ -935,7 +936,7 @@ function App(): React.JSX.Element {
         )
         if (hydratedTargetIds.length > 0) {
           void localWrite
-            .then(() => window.api.remoteWorkspace?.setForConnectedTargets({ hydratedTargetIds }))
+            .then(() => api.remoteWorkspace?.setForConnectedTargets({ hydratedTargetIds }))
             .then((results) => {
               for (const { targetId, result } of results ?? []) {
                 applyRemoteWorkspacePatchStatus(targetId, result)
@@ -984,7 +985,7 @@ function App(): React.JSX.Element {
       // into the store via Zustand setters. The earlier read is only for the
       // gating flags and would miss those updates.
       const freshState = useAppStore.getState()
-      window.api.session.setSync(buildWorkspaceSessionPayload(freshState))
+      api.session.setSync(buildWorkspaceSessionPayload(freshState))
       shutdownBuffersCaptured = true
     }
     window.addEventListener('beforeunload', captureAndFlush)
@@ -1009,7 +1010,7 @@ function App(): React.JSX.Element {
     }
 
     const timer = window.setTimeout(() => {
-      void window.api.ui.set({
+      void api.ui.set({
         sidebarWidth,
         rightSidebarOpen,
         rightSidebarTab,
@@ -1453,7 +1454,7 @@ function App(): React.JSX.Element {
                 <button
                   className="titlebar-icon-button"
                   aria-label="Application menu"
-                  onClick={() => window.api.ui.popupMenu()}
+                  onClick={() => api.ui.popupMenu()}
                 >
                   <MoreHorizontal size={14} />
                 </button>

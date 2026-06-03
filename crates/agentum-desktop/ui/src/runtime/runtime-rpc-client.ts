@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import type { GlobalSettings } from '../../../shared/types'
 import type { RuntimeRpcFailure, RuntimeRpcResponse } from '../../../shared/runtime-rpc-envelope'
 import type { RuntimeStatus } from '../../../shared/runtime-types'
@@ -54,8 +55,8 @@ export async function callRuntimeRpc<TResult>(
   const nextParams = addFeatureInteractionSource(params, options)
   const response =
     target.kind === 'local'
-      ? await window.api.runtime.call({ method, params: nextParams })
-      : await window.api.runtimeEnvironments.call({
+      ? await api.runtime.call({ method, params: nextParams })
+      : await api.runtimeEnvironments.call({
           selector: target.environmentId,
           method,
           params: nextParams,
@@ -86,7 +87,7 @@ async function ensureRuntimeEnvironmentCompatible(
     return
   }
   const check = (async () => {
-    const response = await window.api.runtimeEnvironments.call({
+    const response = await api.runtimeEnvironments.call({
       selector: environmentId,
       method: 'status.get',
       timeoutMs

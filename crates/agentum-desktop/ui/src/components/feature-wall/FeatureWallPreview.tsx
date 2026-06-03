@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useState } from 'react'
 import type { JSX } from 'react'
 import { ChevronRight } from 'lucide-react'
@@ -80,7 +81,7 @@ export function RelatedFeatures(props: {
                   source
                 })
                 track('feature_wall_tile_clicked', { tile_id: tile.id })
-                void window.api.shell.openUrl(tile.docsUrl)
+                void api.shell.openUrl(tile.docsUrl)
               }}
               className="inline-flex items-center gap-1.5 text-left text-[13px] hover:underline hover:underline-offset-2"
             >

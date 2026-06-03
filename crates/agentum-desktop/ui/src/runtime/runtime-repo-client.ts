@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import type { BaseRefSearchResult, GlobalSettings } from '../../../shared/types'
 import { legacyBaseRefSearchResult } from '../../../shared/base-ref-search-result'
 import { callRuntimeRpc, getActiveRuntimeTarget } from './runtime-rpc-client'
@@ -13,7 +14,7 @@ export async function getRuntimeRepoBaseRefDefault(
 ): Promise<RuntimeRepoBaseRefDefault> {
   const target = getActiveRuntimeTarget(settings)
   if (target.kind !== 'environment') {
-    return window.api.repos.getBaseRefDefault({ repoId })
+    return api.repos.getBaseRefDefault({ repoId })
   }
   return callRuntimeRpc<RuntimeRepoBaseRefDefault>(
     target,
@@ -31,7 +32,7 @@ export async function searchRuntimeRepoBaseRefs(
 ): Promise<string[]> {
   const target = getActiveRuntimeTarget(settings)
   if (target.kind !== 'environment') {
-    return window.api.repos.searchBaseRefs({ repoId, query, limit })
+    return api.repos.searchBaseRefs({ repoId, query, limit })
   }
   const result = await callRuntimeRpc<{ refs: string[]; truncated: boolean }>(
     target,
@@ -50,7 +51,7 @@ export async function searchRuntimeRepoBaseRefDetails(
 ): Promise<BaseRefSearchResult[]> {
   const target = getActiveRuntimeTarget(settings)
   if (target.kind !== 'environment') {
-    return window.api.repos.searchBaseRefDetails({ repoId, query, limit })
+    return api.repos.searchBaseRefDetails({ repoId, query, limit })
   }
   const result = await callRuntimeRpc<{
     refs: string[]

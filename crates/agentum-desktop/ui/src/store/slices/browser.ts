@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
@@ -804,9 +805,9 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
       workspace?.activePageId &&
       !isRuntimeEnvironmentActive(get()) &&
       typeof window !== 'undefined' &&
-      window.api?.browser
+      api?.browser
     ) {
-      window.api.browser
+      api.browser
         .notifyActiveTabChanged({ browserPageId: workspace.activePageId })
         .catch(() => {})
     }
@@ -1036,9 +1037,9 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
     if (
       !isRuntimeEnvironmentActive(get()) &&
       typeof window !== 'undefined' &&
-      window.api?.browser
+      api?.browser
     ) {
-      window.api.browser.notifyActiveTabChanged({ browserPageId: pageId }).catch(() => {})
+      api.browser.notifyActiveTabChanged({ browserPageId: pageId }).catch(() => {})
     }
 
     const workspace = findWorkspace(get().browserTabsByWorktree, workspaceId)
@@ -1113,9 +1114,9 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
     if (
       !isRuntimeEnvironmentActive(get()) &&
       typeof window !== 'undefined' &&
-      window.api?.browser
+      api?.browser
     ) {
-      window.api.browser.notifyActiveTabChanged({ browserPageId }).catch(() => {})
+      api.browser.notifyActiveTabChanged({ browserPageId }).catch(() => {})
     }
 
     // Why: keep the unified-tab strip's active entry in sync within the
@@ -1618,7 +1619,7 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
       return
     }
     try {
-      const profiles = (await window.api.browser.sessionListProfiles()) as BrowserSessionProfile[]
+      const profiles = (await api.browser.sessionListProfiles()) as BrowserSessionProfile[]
       set({ browserSessionProfiles: profiles })
     } catch {
       /* best-effort — stale profile list is preferable to a crash */
@@ -1646,7 +1647,7 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
       }
     }
     try {
-      const profile = (await window.api.browser.sessionCreateProfile({
+      const profile = (await api.browser.sessionCreateProfile({
         scope,
         label
       })) as BrowserSessionProfile | null
@@ -1684,7 +1685,7 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
       }
     }
     try {
-      const ok = await window.api.browser.sessionDeleteProfile({ profileId })
+      const ok = await api.browser.sessionDeleteProfile({ profileId })
       if (ok) {
         set((s) => ({
           browserSessionProfiles: s.browserSessionProfiles.filter((p) => p.id !== profileId),
@@ -1721,7 +1722,7 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
       }
     })
     try {
-      const result = (await window.api.browser.sessionImportCookies({
+      const result = (await api.browser.sessionImportCookies({
         profileId
       })) as BrowserCookieImportResult
       if (result.ok) {
@@ -1788,7 +1789,7 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
       return
     }
     try {
-      const browsers = (await window.api.browser.sessionDetectBrowsers()) as {
+      const browsers = (await api.browser.sessionDetectBrowsers()) as {
         family: string
         label: string
         profiles: { name: string; directory: string }[]
@@ -1863,7 +1864,7 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
       }
     })
     try {
-      const result = (await window.api.browser.sessionImportFromBrowser({
+      const result = (await api.browser.sessionImportFromBrowser({
         profileId,
         browserFamily,
         browserProfile
@@ -1924,7 +1925,7 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
       }
     }
     try {
-      const ok = await window.api.browser.sessionClearDefaultCookies()
+      const ok = await api.browser.sessionClearDefaultCookies()
       if (ok) {
         get().recordFeatureInteraction?.('cookie-import')
         await get().fetchBrowserSessionProfiles()

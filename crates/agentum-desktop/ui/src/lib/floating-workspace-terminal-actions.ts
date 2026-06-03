@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../shared/constants'
 import type { BrowserTab, TabGroup } from '../../../shared/types'
 import { getGroupVisibleTabOrder } from '@/components/tab-bar/group-tab-order'
@@ -159,8 +160,8 @@ function activateFloatingWorkspaceCyclableTab(
       })
     }
     const workspace = getFloatingWorkspaceBrowserTab(store, next.id)
-    if (workspace?.activePageId && typeof window !== 'undefined' && window.api?.browser) {
-      void window.api.browser.notifyActiveTabChanged({ browserPageId: workspace.activePageId })
+    if (workspace?.activePageId && typeof window !== 'undefined' && api?.browser) {
+      void api.browser.notifyActiveTabChanged({ browserPageId: workspace.activePageId })
     }
   }
 }

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
@@ -3355,7 +3356,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
         // Why: terminal file links already authorize clicked external paths
         // before opening them in Agentum. Markdown file:// links need the same
         // user-gesture authorization so /tmp screenshots can use ImageViewer.
-        await window.api.fs.authorizeExternalPath({ targetPath: target.absolutePath })
+        await api.fs.authorizeExternalPath({ targetPath: target.absolutePath })
       } else {
         let stats: { isDirectory: boolean }
         try {

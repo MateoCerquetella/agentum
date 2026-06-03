@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, FileCode2, LoaderCircle, Plus, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
@@ -129,7 +130,7 @@ export function McpConfigSection({ repo }: McpConfigSectionProps): React.JSX.Ele
         return
       }
 
-      if (!connectionId && !(await window.api.shell.pathExists(targetRootPath))) {
+      if (!connectionId && !(await api.shell.pathExists(targetRootPath))) {
         if (mountedRef.current) {
           setConfigs(missingInspections)
           setInspectionUnavailableMessage('This workspace path is not available on disk.')
@@ -138,7 +139,7 @@ export function McpConfigSection({ repo }: McpConfigSectionProps): React.JSX.Ele
       }
 
       const entriesByRelativeDir = new Map<string, readonly McpConfigDirectoryEntry[]>()
-      const rootEntries = await window.api.fs.readDir({ dirPath: targetRootPath, connectionId })
+      const rootEntries = await api.fs.readDir({ dirPath: targetRootPath, connectionId })
       entriesByRelativeDir.set('', rootEntries)
 
       const rootDirectoryNames = new Set(
@@ -151,7 +152,7 @@ export function McpConfigSection({ repo }: McpConfigSectionProps): React.JSX.Ele
             return
           }
           try {
-            const entries = await window.api.fs.readDir({
+            const entries = await api.fs.readDir({
               dirPath: joinPath(targetRootPath, relativeDir),
               connectionId
             })
@@ -192,7 +193,7 @@ export function McpConfigSection({ repo }: McpConfigSectionProps): React.JSX.Ele
           }
 
           try {
-            const result = await window.api.fs.readFile({ filePath: absolutePath, connectionId })
+            const result = await api.fs.readFile({ filePath: absolutePath, connectionId })
             const inspection = inspectMcpConfigContent(
               candidate,
               result.isBinary ? '' : result.content
@@ -274,7 +275,7 @@ export function McpConfigSection({ repo }: McpConfigSectionProps): React.JSX.Ele
     try {
       // Why: v1 only creates the root workspace config so we do not need to
       // guess per-agent directory layouts or mutate agent-specific files.
-      await window.api.fs.writeFile({ filePath: target, content: MCP_STARTER_CONFIG, connectionId })
+      await api.fs.writeFile({ filePath: target, content: MCP_STARTER_CONFIG, connectionId })
       clearCreateConfirmResetTimer()
       if (mountedRef.current) {
         setCreateConfirm(false)

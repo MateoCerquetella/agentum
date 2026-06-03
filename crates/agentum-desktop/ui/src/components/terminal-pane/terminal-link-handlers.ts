@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import type { IDisposable, ILink, ILinkProvider, Terminal } from '@xterm/xterm'
 import {
   extractTerminalFileLinkCandidates,
@@ -174,7 +175,7 @@ export function createFilePathLinkProvider(
                 cachedExists ??
                 (fileContext.connectionId || isRemoteRuntimePath
                   ? await runtimePathExists(fileContext, resolved.absolutePath)
-                  : await window.api.shell.pathExists(resolved.absolutePath))
+                  : await api.shell.pathExists(resolved.absolutePath))
               writeTerminalPathExistsCache(pathExistsCache, cacheKey, exists)
               if (!exists) {
                 return null

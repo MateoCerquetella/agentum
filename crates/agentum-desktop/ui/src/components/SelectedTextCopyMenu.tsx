@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React from 'react'
 import { createPortal } from 'react-dom'
 import { Copy } from 'lucide-react'
@@ -94,7 +95,7 @@ export function SelectedTextCopyMenu({
     if (!menu) {
       return
     }
-    void window.api.ui.writeClipboardText(menu.text)
+    void api.ui.writeClipboardText(menu.text)
     setMenu(null)
   }, [menu])
 

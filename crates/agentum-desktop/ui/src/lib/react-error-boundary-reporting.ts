@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import type React from 'react'
 import type {
   CrashReportRecord,
@@ -130,7 +131,7 @@ export async function reportReactErrorBoundaryCrash(
   }
 
   try {
-    const result = await window.api?.crashReports?.recordRendererError?.(args)
+    const result = await api?.crashReports?.recordRendererError?.(args)
     if (result && !result.ok) {
       console.warn('[react-error-boundary] Failed to record renderer crash:', result.error)
       return

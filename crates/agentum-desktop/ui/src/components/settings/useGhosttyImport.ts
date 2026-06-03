@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useState } from 'react'
 import type { GhosttyImportPreview, GlobalSettings } from '../../../../shared/types'
 import { useMountedRef } from '../../hooks/useMountedRef'
@@ -32,7 +33,7 @@ export function useGhosttyImport(
     setOpen(true)
     setLoading(true)
     try {
-      const result = await window.api.settings.previewGhosttyImport()
+      const result = await api.settings.previewGhosttyImport()
       if (mountedRef.current) {
         setPreview(result)
       }

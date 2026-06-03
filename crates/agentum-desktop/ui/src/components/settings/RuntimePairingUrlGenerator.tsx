@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the generated URL cache, grant list, and
    settings form stay together so revocation and cache invalidation remain
    auditable. */
@@ -146,7 +147,7 @@ export function RuntimePairingUrlGenerator({
         setIsLoadingAccessGrants(true)
       }
       try {
-        const result = await window.api.mobile.listRuntimeAccessGrants()
+        const result = await api.mobile.listRuntimeAccessGrants()
         if (mountedRef.current && loadId === accessGrantLoadIdRef.current) {
           setRuntimeAccessGrants(result.grants)
         }
@@ -177,7 +178,7 @@ export function RuntimePairingUrlGenerator({
         setRefreshingNetworkInterfaces(true)
       }
       try {
-        const result = await window.api.mobile.listNetworkInterfaces()
+        const result = await api.mobile.listNetworkInterfaces()
         if (mountedRef.current && loadId === networkInterfaceLoadIdRef.current) {
           setNetworkInterfaces(result.interfaces)
         }
@@ -227,7 +228,7 @@ export function RuntimePairingUrlGenerator({
     setIsGeneratingPairing(true)
     try {
       const advertiseAddress = customAddress.trim() || selectedAddress
-      const result = await window.api.mobile.getRuntimePairingUrl({
+      const result = await api.mobile.getRuntimePairingUrl({
         address: advertiseAddress,
         rotate: true
       })
@@ -264,7 +265,7 @@ export function RuntimePairingUrlGenerator({
   const revokeRuntimeAccess = async (grant: RuntimeAccessGrant): Promise<void> => {
     setRevokingGrantId(grant.deviceId)
     try {
-      const result = await window.api.mobile.revokeRuntimeAccess({ deviceId: grant.deviceId })
+      const result = await api.mobile.revokeRuntimeAccess({ deviceId: grant.deviceId })
       if (!result.revoked) {
         if (mountedRef.current) {
           toast.error('Shared access was already revoked.')
@@ -296,7 +297,7 @@ export function RuntimePairingUrlGenerator({
 
   const copyGeneratedUrl = async (target: 'web' | 'pairing', value: string): Promise<void> => {
     try {
-      await window.api.ui.writeClipboardText(value)
+      await api.ui.writeClipboardText(value)
       if (mountedRef.current) {
         clearCopiedTargetResetTimer()
         setCopiedTarget(target)

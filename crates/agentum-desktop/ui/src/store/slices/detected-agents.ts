@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
 import type { PathSource, ShellHydrationFailureReason, TuiAgent } from '../../../../shared/types'
@@ -69,7 +70,7 @@ export const createDetectedAgentsSlice: StateCreator<AppState, [], [], DetectedA
       detectedAgentIds: contextChanged ? null : get().detectedAgentIds,
       isDetectingAgents: true
     })
-    const pending = window.api.preflight
+    const pending = api.preflight
       .detectAgents(context)
       .then((ids) => {
         const typed = ids as TuiAgent[]
@@ -102,7 +103,7 @@ export const createDetectedAgentsSlice: StateCreator<AppState, [], [], DetectedA
       detectedAgentIds: contextChanged ? null : get().detectedAgentIds,
       isRefreshingAgents: true
     })
-    const pending = window.api.preflight
+    const pending = api.preflight
       .refreshAgents(context)
       .then((result) => {
         const typed = result.agents as TuiAgent[]
@@ -152,7 +153,7 @@ export const createDetectedAgentsSlice: StateCreator<AppState, [], [], DetectedA
       isDetectingRemoteAgents: { ...s.isDetectingRemoteAgents, [connectionId]: true }
     }))
 
-    const pending = window.api.preflight
+    const pending = api.preflight
       .detectRemoteAgents({ connectionId })
       .then((ids) => {
         const typed = ids as TuiAgent[]

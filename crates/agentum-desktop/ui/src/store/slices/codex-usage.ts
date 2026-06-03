@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import type { StateCreator } from 'zustand'
 import type {
   CodexUsageBreakdownRow,
@@ -42,7 +43,7 @@ export const createCodexUsageSlice: StateCreator<AppState, [], [], CodexUsageSli
 
   setCodexUsageEnabled: async (enabled) => {
     try {
-      const nextScanState = (await window.api.codexUsage.setEnabled({
+      const nextScanState = (await api.codexUsage.setEnabled({
         enabled
       })) as CodexUsageScanState
       set({
@@ -80,7 +81,7 @@ export const createCodexUsageSlice: StateCreator<AppState, [], [], CodexUsageSli
 
   fetchCodexUsage: async (opts) => {
     try {
-      const scanState = (await window.api.codexUsage.getScanState()) as CodexUsageScanState
+      const scanState = (await api.codexUsage.getScanState()) as CodexUsageScanState
       const currentScanState = get().codexUsageScanState
       const shouldPreserveLoadingState =
         opts?.forceRefresh === true &&
@@ -100,31 +101,31 @@ export const createCodexUsageSlice: StateCreator<AppState, [], [], CodexUsageSli
         return
       }
 
-      const nextScanState = (await window.api.codexUsage.refresh({
+      const nextScanState = (await api.codexUsage.refresh({
         force: opts?.forceRefresh ?? false
       })) as CodexUsageScanState
       const { codexUsageScope, codexUsageRange } = get()
 
       const [summary, daily, modelBreakdown, projectBreakdown, recentSessions] = await Promise.all([
-        window.api.codexUsage.getSummary({
+        api.codexUsage.getSummary({
           scope: codexUsageScope,
           range: codexUsageRange
         }) as Promise<CodexUsageSummary>,
-        window.api.codexUsage.getDaily({
+        api.codexUsage.getDaily({
           scope: codexUsageScope,
           range: codexUsageRange
         }) as Promise<CodexUsageDailyPoint[]>,
-        window.api.codexUsage.getBreakdown({
+        api.codexUsage.getBreakdown({
           scope: codexUsageScope,
           range: codexUsageRange,
           kind: 'model'
         }) as Promise<CodexUsageBreakdownRow[]>,
-        window.api.codexUsage.getBreakdown({
+        api.codexUsage.getBreakdown({
           scope: codexUsageScope,
           range: codexUsageRange,
           kind: 'project'
         }) as Promise<CodexUsageBreakdownRow[]>,
-        window.api.codexUsage.getRecentSessions({
+        api.codexUsage.getRecentSessions({
           scope: codexUsageScope,
           range: codexUsageRange,
           limit: 10

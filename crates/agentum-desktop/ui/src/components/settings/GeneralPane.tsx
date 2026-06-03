@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: GeneralPane is the single owner of all general settings UI;
    splitting individual settings into separate files would scatter related controls without a
    meaningful abstraction boundary. */
@@ -197,7 +198,7 @@ export function GeneralPane({ settings, updateSettings }: GeneralPaneProps): Rea
 
   useEffect(() => {
     let cancelled = false
-    void window.api.updater.getVersion().then((version) => {
+    void api.updater.getVersion().then((version) => {
       if (!cancelled) {
         setAppVersion(version)
       }
@@ -209,7 +210,7 @@ export function GeneralPane({ settings, updateSettings }: GeneralPaneProps): Rea
 
   useEffect(() => {
     let cancelled = false
-    void window.api.gh.checkAgentumStarred().then((result) => {
+    void api.gh.checkAgentumStarred().then((result) => {
       if (cancelled) {
         return
       }
@@ -229,7 +230,7 @@ export function GeneralPane({ settings, updateSettings }: GeneralPaneProps): Rea
       return
     }
     setStarState('starring')
-    const ok = await window.api.gh.starAgentum('settings')
+    const ok = await api.gh.starAgentum('settings')
     if (!ok) {
       if (mountedRef.current) {
         setStarState('error')
@@ -241,7 +242,7 @@ export function GeneralPane({ settings, updateSettings }: GeneralPaneProps): Rea
     }
     // Why: clicking star anywhere should also permanently mute the
     // threshold-based nag so the user isn't re-prompted via the popup.
-    await window.api.starNag.complete()
+    await api.starNag.complete()
   }
 
   const resolvedAutoSaveDelayDraftState = resolveAutoSaveDelayDraftState(
@@ -299,7 +300,7 @@ export function GeneralPane({ settings, updateSettings }: GeneralPaneProps): Rea
   }
 
   const handleBrowseWorkspace = async () => {
-    const path = await window.api.repos.pickFolder()
+    const path = await api.repos.pickFolder()
     if (path) {
       updateSettings({ workspaceDir: path })
     }
@@ -355,7 +356,7 @@ export function GeneralPane({ settings, updateSettings }: GeneralPaneProps): Rea
     // deferred timer in the main process), so rejection here is only possible
     // if the IPC channel itself breaks. Log defensively; the user will notice
     // the app didn't restart and can retry.
-    void window.api.updater.quitAndInstall().catch(console.error)
+    void api.updater.quitAndInstall().catch(console.error)
   }
 
   const visibleSections = [
@@ -875,7 +876,7 @@ export function GeneralPane({ settings, updateSettings }: GeneralPaneProps): Rea
               // channel. Keep the affordance hidden — it's a power-user
               // shortcut, not a discoverable toggle.
               onClick={(event) =>
-                window.api.updater.check({
+                api.updater.check({
                   includePrerelease: event.shiftKey
                 })
               }
@@ -895,7 +896,7 @@ export function GeneralPane({ settings, updateSettings }: GeneralPaneProps): Rea
                 variant="default"
                 size="sm"
                 onClick={() => {
-                  void window.api.updater.download().catch((error) => {
+                  void api.updater.download().catch((error) => {
                     toast.error('Could not start the update download.', {
                       description: String((error as Error)?.message ?? error)
                     })

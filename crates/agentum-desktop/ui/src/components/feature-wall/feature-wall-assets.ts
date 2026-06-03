@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useState } from 'react'
 
 export function toFeatureWallAssetUrl(baseUrl: string | null, assetPath: string): string | null {
@@ -20,7 +21,7 @@ export function useFeatureWallAssetBaseUrl(load: boolean): string | null {
     }
 
     let cancelled = false
-    void window.api.app
+    void api.app
       .getFeatureWallAssetBaseUrl()
       .then((url) => {
         if (!cancelled) {

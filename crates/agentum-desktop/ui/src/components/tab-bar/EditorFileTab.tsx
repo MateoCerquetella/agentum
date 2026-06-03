@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: editor tab rendering, drag behavior, rename handling, and its context menu share one tightly-coupled tab surface. */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
@@ -488,7 +489,7 @@ export default function EditorFileTab({
           )}
           <DropdownMenuItem
             onSelect={() => {
-              void window.api.ui.writeClipboardText(file.filePath)
+              void api.ui.writeClipboardText(file.filePath)
             }}
           >
             <Copy className="w-3.5 h-3.5 mr-1.5" />
@@ -496,7 +497,7 @@ export default function EditorFileTab({
           </DropdownMenuItem>
           <DropdownMenuItem
             onSelect={() => {
-              void window.api.ui.writeClipboardText(file.relativePath)
+              void api.ui.writeClipboardText(file.relativePath)
             }}
           >
             <Copy className="w-3.5 h-3.5 mr-1.5" />
@@ -515,7 +516,7 @@ export default function EditorFileTab({
                 showLocalPathOpenBlockedToast()
                 return
               }
-              window.api.shell.openPath(file.filePath)
+              api.shell.openPath(file.filePath)
             }}
           >
             <ExternalLink className="w-3.5 h-3.5 mr-1.5" />

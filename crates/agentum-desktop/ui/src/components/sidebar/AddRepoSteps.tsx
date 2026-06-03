@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: AddRepoDialog step views are already split from the parent,
    and keeping clone/remote/setup step props together avoids a larger wizard refactor in this
    leak fix. */
@@ -54,13 +55,13 @@ export function useRemoteRepo(
     const gen = ++remoteGenRef.current
     setStep('remote')
     try {
-      const targets = (await window.api.ssh.listTargets()) as SshTarget[]
+      const targets = (await api.ssh.listTargets()) as SshTarget[]
       if (gen !== remoteGenRef.current) {
         return
       }
       const withState = await Promise.all(
         targets.map(async (t) => {
-          const state = (await window.api.ssh.getState({
+          const state = (await api.ssh.getState({
             targetId: t.id
           })) as SshConnectionState | null
           return { ...t, state: state ?? undefined }
@@ -86,7 +87,7 @@ export function useRemoteRepo(
   // open, so clicking the inline Connect button below updates the dot/label
   // live without the user reopening the step.
   useEffect(() => {
-    const unsubscribe = window.api.ssh.onStateChanged(({ targetId, state }) => {
+    const unsubscribe = api.ssh.onStateChanged(({ targetId, state }) => {
       setSshTargets((prev) => prev.map((t) => (t.id === targetId ? { ...t, state } : t)))
       if (state.status === 'connected') {
         setSelectedTargetId((curr) => curr ?? targetId)
@@ -97,7 +98,7 @@ export function useRemoteRepo(
 
   const handleConnectTarget = useCallback(async (targetId: string) => {
     try {
-      await window.api.ssh.connect({ targetId })
+      await api.ssh.connect({ targetId })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Connection failed')
     }
@@ -122,7 +123,7 @@ export function useRemoteRepo(
         showNestedRepoReview?.(scan, trimmedRemotePath, selectedTargetId, attemptId)
         return
       }
-      const result = await window.api.repos.addRemote({
+      const result = await api.repos.addRemote({
         connectionId: selectedTargetId,
         remotePath: trimmedRemotePath
       })

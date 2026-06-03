@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the checks panel co-locates PR header, checks, comments,
 merge actions, and conflict state in one component to keep the data flow straightforward. */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
@@ -147,7 +148,7 @@ async function fetchGitLabMRDetailsForChecks(args: {
       { timeoutMs: 30_000 }
     )
   }
-  return (await window.api.gl.workItemDetails({
+  return (await api.gl.workItemDetails({
     repoPath: args.repoPath,
     iid: args.iid,
     type: 'mr'
@@ -176,7 +177,7 @@ async function resolveGitLabMRDiscussionForChecks(args: {
       { timeoutMs: 30_000 }
     )
   }
-  return window.api.gl.resolveMRDiscussion({
+  return api.gl.resolveMRDiscussion({
     repoPath: args.repoPath,
     iid: args.iid,
     discussionId: args.discussionId,
@@ -1110,7 +1111,7 @@ export default function ChecksPanel(): React.JSX.Element {
     if (activeGitLabReview || !repo || !prNumber || !isPanelVisible) {
       return undefined
     }
-    return window.api.gh.onWorkItemMutated((payload) => {
+    return api.gh.onWorkItemMutated((payload) => {
       const sameRepo =
         payload.repoId != null ? payload.repoId === repo.id : payload.repoPath === repo.path
       if (!sameRepo || payload.type !== 'pr' || payload.number !== prNumber) {
@@ -1468,7 +1469,7 @@ export default function ChecksPanel(): React.JSX.Element {
     setTitleSaving(true)
     try {
       if (activeReview.provider === 'gitlab') {
-        const result = await window.api.gl.updateMR({
+        const result = await api.gl.updateMR({
           repoPath: repo.path,
           iid: activeReview.number,
           updates: { title: nextTitle }
@@ -1482,7 +1483,7 @@ export default function ChecksPanel(): React.JSX.Element {
         if (!pr) {
           return
         }
-        const ok = await window.api.gh.updatePRTitle({
+        const ok = await api.gh.updatePRTitle({
           repoPath: repo.path,
           repoId: repo.id,
           prNumber: pr.number,
@@ -1835,7 +1836,7 @@ export default function ChecksPanel(): React.JSX.Element {
   // Open hosted review in browser
   const handleOpenPR = useCallback(() => {
     if (activeReview?.url) {
-      window.api.shell.openUrl(activeReview.url)
+      api.shell.openUrl(activeReview.url)
     }
   }, [activeReview])
 

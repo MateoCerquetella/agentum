@@ -1,9 +1,10 @@
+import { api } from '@/tauri'
 // Why: Project mode rows carry a GitHub `owner/repo` slug, but Agentum's
 // `state.repos` stores only absolute paths. Before any repo-context action
 // (opening the item dialog in repo-backed mode, launching a worktree) can
 // dispatch correctly, we need a renderer-side index mapping slug → Repo[].
 //
-// The index is built lazily from `window.api.gh.repoSlug({ repoPath })` —
+// The index is built lazily from `api.gh.repoSlug({ repoPath })` —
 // the main-process resolver that reads `git remote` and classifies the
 // remote into `owner/repo`. Repos whose slug cannot be resolved (no GitHub
 // remote, SSH lookup failure) are excluded; the design doc (§Row actions)
@@ -73,7 +74,7 @@ async function resolveRepoSlug(
             { repo: repo.id },
             { timeoutMs: 30_000 }
           )
-        : await window.api.gh.repoSlug({ repoPath: repo.path, repoId: repo.id })
+        : await api.gh.repoSlug({ repoPath: repo.path, repoId: repo.id })
     if (!result) {
       slugByRepoId.set(cacheKey, null)
       return null

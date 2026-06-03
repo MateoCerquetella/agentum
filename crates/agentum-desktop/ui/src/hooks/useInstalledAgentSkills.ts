@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { DiscoveredSkill, SkillDiscoveryResult, SkillSourceKind } from '../../../shared/skills'
 import { useMountedRef } from './useMountedRef'
@@ -63,7 +64,7 @@ export function notifyInstalledAgentSkillsChanged(): void {
 }
 
 function startInstalledAgentSkillDiscovery(force: boolean): Promise<SkillDiscoveryResult> {
-  const discovery = window.api.skills
+  const discovery = api.skills
     .discover()
     .then((result) => {
       cachedDiscovery = result

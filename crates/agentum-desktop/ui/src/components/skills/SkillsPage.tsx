@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, BookOpen, Clock, FolderOpen, Loader2, RefreshCw, Search } from 'lucide-react'
 import { toast } from 'sonner'
@@ -56,7 +57,7 @@ function pluralize(count: number, singular: string): string {
 
 function SkillCard({ skill }: { skill: DiscoveredSkill }): React.JSX.Element {
   const revealSkill = async (): Promise<void> => {
-    const result = await window.api.shell.openInFileManager(skill.skillFilePath)
+    const result = await api.shell.openInFileManager(skill.skillFilePath)
     if (!result.ok) {
       toast.error('Could not reveal skill file')
     }
@@ -187,7 +188,7 @@ export default function SkillsPage(): React.JSX.Element {
   const loadSkills = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
-      const nextResult = await window.api.skills.discover()
+      const nextResult = await api.skills.discover()
       if (mountedRef.current) {
         setResult(nextResult)
       }

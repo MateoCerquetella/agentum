@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Github, Image, Link2, RotateCcw } from 'lucide-react'
@@ -62,7 +63,7 @@ export function RepositoryIconPicker({
 
   const handleUploadImage = async () => {
     try {
-      const result = await window.api.shell.pickRepoIconImage()
+      const result = await api.shell.pickRepoIconImage()
       if (!result || !mountedRef.current) {
         return
       }
@@ -99,7 +100,7 @@ export function RepositoryIconPicker({
               { repo: repo.id },
               { timeoutMs: 30_000 }
             )
-          : await window.api.gh.repoSlug({ repoPath: repo.path, repoId: repo.id })
+          : await api.gh.repoSlug({ repoPath: repo.path, repoId: repo.id })
       if (!slug) {
         if (mountedRef.current) {
           toast.error('No GitHub remote found for this repo.')

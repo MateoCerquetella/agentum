@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the smart name field owns source tabs,
 search orchestration, and result rendering so the unified create flow stays
 in one predictable form control instead of splitting state across fragments. */
@@ -375,9 +376,9 @@ export default function SmartWorkspaceNameField({
                 number: directLink.number,
                 type: directLink.type
               },
-              workItem: (args) => window.api.gh.workItem(args) as Promise<GitHubWorkItem | null>,
+              workItem: (args) => api.gh.workItem(args) as Promise<GitHubWorkItem | null>,
               workItemByOwnerRepo: (args) =>
-                window.api.gh.workItemByOwnerRepo(args) as Promise<GitHubWorkItem | null>
+                api.gh.workItemByOwnerRepo(args) as Promise<GitHubWorkItem | null>
             })
             if (!stale) {
               setGithubItems(item ? [item] : [])
@@ -420,9 +421,9 @@ export default function SmartWorkspaceNameField({
         repoPath: selectedRepo.path,
         repoId: selectedRepo.id,
         intent,
-        workItem: (args) => window.api.gh.workItem(args) as Promise<GitHubWorkItem | null>,
+        workItem: (args) => api.gh.workItem(args) as Promise<GitHubWorkItem | null>,
         workItemByOwnerRepo: (args) =>
-          window.api.gh.workItemByOwnerRepo(args) as Promise<GitHubWorkItem | null>
+          api.gh.workItemByOwnerRepo(args) as Promise<GitHubWorkItem | null>
       })
       void request
         .then((item) => {
@@ -609,7 +610,7 @@ export default function SmartWorkspaceNameField({
     }
     let stale = false
     setGitlabLoading(true)
-    void window.api.gl
+    void api.gl
       .workItemByPath({
         repoPath: selectedRepo.path,
         // Why: parseGitLabIssueOrMRLink doesn't carry the host (the URL
@@ -667,7 +668,7 @@ export default function SmartWorkspaceNameField({
     }
     let stale = false
     setGitlabLoading(true)
-    void window.api.gl
+    void api.gl
       .listMRs({
         repoPath: selectedRepo.path,
         state: mrStateFilter,
@@ -817,7 +818,7 @@ export default function SmartWorkspaceNameField({
       handledCrossRepoUrlRef.current = debouncedQuery.trim()
       setGithubLoading(true)
       try {
-        const item = await window.api.gh.workItemByOwnerRepo({
+        const item = await api.gh.workItemByOwnerRepo({
           repoPath: targetRepo.path,
           repoId: targetRepo.id,
           owner: crossRepoPrompt.link.slug.owner,
@@ -984,7 +985,7 @@ export default function SmartWorkspaceNameField({
                           type="button"
                           variant="ghost"
                           size="icon-xs"
-                          onClick={() => void window.api.shell.openUrl(selectedSource.url!)}
+                          onClick={() => void api.shell.openUrl(selectedSource.url!)}
                           className="size-6 shrink-0 rounded-sm text-muted-foreground hover:text-foreground"
                           aria-label="Open link in browser"
                         >
@@ -1312,7 +1313,7 @@ async function getRepoSlugCached(
     return cache.get(cacheKey) ?? null
   }
   try {
-    const slug = await window.api.gh.repoSlug({ repoPath: repo.path, repoId: repo.id })
+    const slug = await api.gh.repoSlug({ repoPath: repo.path, repoId: repo.id })
     cache.set(cacheKey, slug)
     return slug
   } catch {

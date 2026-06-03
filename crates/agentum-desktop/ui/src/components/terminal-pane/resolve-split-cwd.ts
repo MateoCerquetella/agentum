@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 // Why: resolving the "where should the new split start?" question is a
 // two-layer strategy — OSC 7 from the live shell (fast, authoritative) with a
 // `/proc`-or-lsof-backed IPC fallback for shells that never emit OSC 7 (agent
@@ -36,7 +37,7 @@ export async function resolveSplitCwd(args: {
   if (sourcePtyId && !isRemoteRuntimePtyId(sourcePtyId)) {
     try {
       const ipcCwd = await Promise.race<string | null>([
-        window.api.pty.getCwd(sourcePtyId).catch(() => null),
+        api.pty.getCwd(sourcePtyId).catch(() => null),
         new Promise<null>((resolve) => setTimeout(() => resolve(null), GET_CWD_TIMEOUT_MS))
       ])
       if (ipcCwd) {

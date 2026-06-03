@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 // Why: when the dialog opens for a Project row whose repo differs from the
 // active workspace, label/assignee lookups must target the row's repo via
 // slug-addressed IPCs (`listLabelsBySlug` / `listAssignableUsersBySlug`),
@@ -81,7 +82,7 @@ export function useRepoLabelsBySlug(
             { owner, repo },
             { timeoutMs: 30_000 }
           )
-        : window.api.gh.listLabelsBySlug({ owner, repo })
+        : api.gh.listLabelsBySlug({ owner, repo })
       ).then((res) => {
         if (!res.ok) {
           throw new Error(res.error.message)
@@ -169,7 +170,7 @@ export function useRepoAssigneesBySlug(
             args,
             { timeoutMs: 30_000 }
           )
-        : window.api.gh.listAssignableUsersBySlug(args)
+        : api.gh.listAssignableUsersBySlug(args)
       ).then((res) => {
         if (!res.ok) {
           throw new Error(res.error.message)

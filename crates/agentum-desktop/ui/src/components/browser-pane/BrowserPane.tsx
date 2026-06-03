@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import {
   useCallback,
@@ -1558,7 +1559,7 @@ function RemoteBrowserPagePane({
       streamGenerationRef.current = token.generation
       activeStreamTokenRef.current = token
       try {
-        const subscription = await window.api.runtimeEnvironments.subscribe(
+        const subscription = await api.runtimeEnvironments.subscribe(
           {
             selector: target.environmentId,
             method: 'browser.screencast',
@@ -1792,7 +1793,7 @@ function RemoteBrowserPagePane({
     if (!isActive) {
       return
     }
-    return window.api.ui.onFocusBrowserAddressBar(() => {
+    return api.ui.onFocusBrowserAddressBar(() => {
       addressBarInputRef.current?.focus()
       addressBarInputRef.current?.select()
     })
@@ -2264,7 +2265,7 @@ function RemoteBrowserPagePane({
                       onClick={() => {
                         const targetUrl = normalizeExternalBrowserUrl(contextMenu.linkUrl!)
                         if (targetUrl) {
-                          void window.api.shell.openUrl(targetUrl)
+                          void api.shell.openUrl(targetUrl)
                         }
                         setContextMenu(null)
                       }}
@@ -2275,7 +2276,7 @@ function RemoteBrowserPagePane({
                       role="menuitem"
                       className="relative flex w-full cursor-default items-center gap-2 rounded-[7px] px-2 py-0.5 text-[12px] leading-5 font-medium outline-none select-none hover:bg-black/8 dark:hover:bg-white/14"
                       onClick={() => {
-                        void window.api.ui.writeClipboardText(contextMenu.linkUrl ?? '')
+                        void api.ui.writeClipboardText(contextMenu.linkUrl ?? '')
                         setContextMenu(null)
                       }}
                     >
@@ -2321,7 +2322,7 @@ function RemoteBrowserPagePane({
                   onClick={() => {
                     const targetUrl = normalizeExternalBrowserUrl(contextMenu.pageUrl)
                     if (targetUrl) {
-                      void window.api.shell.openUrl(targetUrl)
+                      void api.shell.openUrl(targetUrl)
                     }
                     setContextMenu(null)
                   }}
@@ -2332,7 +2333,7 @@ function RemoteBrowserPagePane({
                   role="menuitem"
                   className="relative flex w-full cursor-default items-center gap-2 rounded-[7px] px-2 py-0.5 text-[12px] leading-5 font-medium outline-none select-none hover:bg-black/8 dark:hover:bg-white/14"
                   onClick={() => {
-                    void window.api.ui.writeClipboardText(contextMenu.pageUrl)
+                    void api.ui.writeClipboardText(contextMenu.pageUrl)
                     setContextMenu(null)
                   }}
                 >
@@ -2699,7 +2700,7 @@ function BrowserPagePane({
     }
     if (!grab.contextMenu) {
       const text = formatGrabPayloadAsText(grab.payload)
-      void window.api.ui.writeClipboardText(text)
+      void api.ui.writeClipboardText(text)
       showGrabToast('Copied', 'success', grab.payload)
     }
   }, [grab.state, grab.payload, grab.contextMenu, grabIntent, showGrabToast])
@@ -2780,7 +2781,7 @@ function BrowserPagePane({
   }, [browserTab.id])
 
   useEffect(() => {
-    return window.api.browser.onPermissionDenied((event) => {
+    return api.browser.onPermissionDenied((event) => {
       if (event.browserPageId !== browserTab.id) {
         return
       }
@@ -2789,7 +2790,7 @@ function BrowserPagePane({
   }, [browserTab.id])
 
   useEffect(() => {
-    return window.api.browser.onPopup((event) => {
+    return api.browser.onPopup((event) => {
       if (event.browserPageId !== browserTab.id) {
         return
       }
@@ -2798,7 +2799,7 @@ function BrowserPagePane({
   }, [browserTab.id])
 
   useEffect(() => {
-    return window.api.browser.onContextMenuRequested((event) => {
+    return api.browser.onContextMenuRequested((event) => {
       if (event.browserPageId !== browserTab.id) {
         return
       }
@@ -2809,7 +2810,7 @@ function BrowserPagePane({
       // window.screenX/Y gives the window origin in the same screen
       // coordinate system that screen.getCursorScreenPoint() uses. Dividing
       // by the zoom factor converts screen points to CSS pixels.
-      const zoomFactor = Math.pow(1.2, window.api.ui.getZoomLevel())
+      const zoomFactor = Math.pow(1.2, api.ui.getZoomLevel())
       const x = Math.round((event.screenX - window.screenX) / zoomFactor)
       const y = Math.round((event.screenY - window.screenY) / zoomFactor)
       console.debug(
@@ -2832,7 +2833,7 @@ function BrowserPagePane({
   }, [browserTab.id])
 
   useEffect(() => {
-    return window.api.browser.onContextMenuDismissed((event) => {
+    return api.browser.onContextMenuDismissed((event) => {
       if (event.browserPageId !== browserTab.id) {
         return
       }
@@ -2893,7 +2894,7 @@ function BrowserPagePane({
   }, [contextMenu])
 
   useEffect(() => {
-    return window.api.browser.onDownloadRequested((event) => {
+    return api.browser.onDownloadRequested((event) => {
       if (event.browserPageId !== browserTab.id) {
         return
       }
@@ -2910,7 +2911,7 @@ function BrowserPagePane({
   }, [browserTab.id])
 
   useEffect(() => {
-    return window.api.browser.onDownloadProgress((event: BrowserDownloadProgressEvent) => {
+    return api.browser.onDownloadProgress((event: BrowserDownloadProgressEvent) => {
       setDownloadState((current) => {
         if (!current || current.downloadId !== event.downloadId) {
           return current
@@ -2926,7 +2927,7 @@ function BrowserPagePane({
   }, [])
 
   useEffect(() => {
-    return window.api.browser.onDownloadFinished((event: BrowserDownloadFinishedEvent) => {
+    return api.browser.onDownloadFinished((event: BrowserDownloadFinishedEvent) => {
       const current = downloadStateRef.current
       if (!current || current.downloadId !== event.downloadId) {
         return
@@ -3002,7 +3003,7 @@ function BrowserPagePane({
     if (!isActive) {
       return
     }
-    return window.api.ui.onFocusBrowserAddressBar(() => {
+    return api.ui.onFocusBrowserAddressBar(() => {
       focusAddressBarNow()
     })
   }, [focusAddressBarNow, isActive])
@@ -3100,7 +3101,7 @@ function BrowserPagePane({
     if (!isActive) {
       return
     }
-    return window.api.ui.onFindInBrowserPage(() => {
+    return api.ui.onFindInBrowserPage(() => {
       setFindOpen(true)
     })
   }, [isActive])
@@ -3156,7 +3157,7 @@ function BrowserPagePane({
     if (!isActive) {
       return
     }
-    return window.api.ui.onReloadBrowserPage(() => {
+    return api.ui.onReloadBrowserPage(() => {
       webviewRef.current?.reload()
     })
   }, [isActive])
@@ -3165,7 +3166,7 @@ function BrowserPagePane({
     if (!isActive) {
       return
     }
-    return window.api.ui.onHardReloadBrowserPage(() => {
+    return api.ui.onHardReloadBrowserPage(() => {
       webviewRef.current?.reloadIgnoringCache()
     })
   }, [isActive])
@@ -3213,7 +3214,7 @@ function BrowserPagePane({
       rectViewport: annotation.payload.target.rectViewport
     }))
     const enabled = isActiveRef.current && (pendingAnnotationPayload !== null || markers.length > 0)
-    void window.api.browser
+    void api.browser
       .setAnnotationViewportBridge({
         browserPageId: browserTab.id,
         emitViewport: pendingAnnotationPayload !== null,
@@ -3280,7 +3281,7 @@ function BrowserPagePane({
       if (registeredWebContentsIds.get(browserTab.id) !== webContentsId) {
         registeredWebContentsIds.set(browserTab.id, webContentsId)
         queuedAnnotationViewportBridgeSync = true
-        void window.api.browser
+        void api.browser
           .registerGuest({
             browserPageId: browserTab.id,
             workspaceId,
@@ -3308,7 +3309,7 @@ function BrowserPagePane({
       // Emulation.setDeviceMetricsOverride can persist across same-origin navigations
       // within the same renderer. Sending null ensures CDP matches the store state
       // instead of showing a stale emulated viewport after the user picks "Default".
-      void window.api.browser.setViewportOverride({
+      void api.browser.setViewportOverride({
         browserPageId: browserTab.id,
         override: preset ? browserViewportPresetToOverride(preset) : null
       })
@@ -3748,7 +3749,7 @@ function BrowserPagePane({
   // would not use it for native copy, so grab mode still toggles from web
   // content without stealing real copy from inputs or selections.
   useEffect(() => {
-    return window.api.browser.onGrabModeToggle((tabId) => {
+    return api.browser.onGrabModeToggle((tabId) => {
       if (tabId === browserTab.id) {
         startGrabIntent('copy')
       }
@@ -3771,13 +3772,13 @@ function BrowserPagePane({
       const copyFromPayload = (payload: BrowserGrabPayload): void => {
         if (key === 'c') {
           const text = formatGrabPayloadAsText(payload)
-          void window.api.ui.writeClipboardText(text)
+          void api.ui.writeClipboardText(text)
           recordFeatureInteraction('browser-grab')
           showGrabToast('Copied', 'success', payload)
         } else {
           const dataUrl = payload.screenshot?.dataUrl
           if (dataUrl?.startsWith('data:image/png;base64,')) {
-            void window.api.ui.writeClipboardImage(dataUrl)
+            void api.ui.writeClipboardImage(dataUrl)
             recordFeatureInteraction('browser-grab')
             showGrabToast('Screenshotted', 'success', payload)
           } else {
@@ -3805,7 +3806,7 @@ function BrowserPagePane({
       } else {
         // armed/awaiting — extract hovered element via IPC without clicking
         void (async () => {
-          const result = await window.api.browser.extractHoverPayload({
+          const result = await api.browser.extractHoverPayload({
             browserPageId: browserTabIdRef.current
           })
           if (!result.ok) {
@@ -3816,7 +3817,7 @@ function BrowserPagePane({
 
           if (key === 's') {
             try {
-              const ssResult = await window.api.browser.captureSelectionScreenshot({
+              const ssResult = await api.browser.captureSelectionScreenshot({
                 browserPageId: browserTabIdRef.current,
                 rect: payload.target.rectViewport
               })
@@ -3863,7 +3864,7 @@ function BrowserPagePane({
     if (grab.state === 'idle' || grab.state === 'error') {
       return
     }
-    return window.api.browser.onGrabActionShortcut(({ browserPageId, key }) => {
+    return api.browser.onGrabActionShortcut(({ browserPageId, key }) => {
       if (browserPageId !== browserTab.id) {
         return
       }
@@ -3884,7 +3885,7 @@ function BrowserPagePane({
       return
     }
     const text = formatGrabPayloadAsText(payload)
-    void window.api.ui.writeClipboardText(text)
+    void api.ui.writeClipboardText(text)
     recordFeatureInteraction('browser-grab')
     showGrabToast('Copied', 'success', payload)
     grab.rearm()
@@ -3900,7 +3901,7 @@ function BrowserPagePane({
     if (!dataUrl?.startsWith('data:image/png;base64,')) {
       return
     }
-    void window.api.ui.writeClipboardImage(dataUrl)
+    void api.ui.writeClipboardImage(dataUrl)
     recordFeatureInteraction('browser-grab')
     showGrabToast('Screenshotted', 'success', payload)
     grab.rearm()
@@ -3948,7 +3949,7 @@ function BrowserPagePane({
     if (!browserAnnotationsPrompt) {
       return
     }
-    void window.api.ui.writeClipboardText(browserAnnotationsPrompt)
+    void api.ui.writeClipboardText(browserAnnotationsPrompt)
     recordFeatureInteraction('browser-annotations')
     clearTimeout(annotationCopyTimerRef.current)
     setBrowserAnnotationsCopied(true)
@@ -4091,7 +4092,7 @@ function BrowserPagePane({
               connectionId: undefined
             }
             if (!isRemoteRuntimeFileOperation(fileContext, notebookPath)) {
-              await window.api.fs.authorizeExternalPath({ targetPath: notebookPath })
+              await api.fs.authorizeExternalPath({ targetPath: notebookPath })
             }
             const stat = await statRuntimePath(fileContext, notebookPath)
             if (stat.isDirectory) {
@@ -4278,7 +4279,7 @@ function BrowserPagePane({
                       onClick={() => {
                         const targetUrl = normalizeExternalBrowserUrl(contextMenu.linkUrl!)
                         if (targetUrl) {
-                          void window.api.shell.openUrl(targetUrl)
+                          void api.shell.openUrl(targetUrl)
                         }
                         setContextMenu(null)
                       }}
@@ -4289,7 +4290,7 @@ function BrowserPagePane({
                       role="menuitem"
                       className="relative flex w-full cursor-default items-center gap-2 rounded-[7px] px-2 py-0.5 text-[12px] leading-5 font-medium outline-none select-none hover:bg-black/8 dark:hover:bg-white/14"
                       onClick={() => {
-                        void window.api.ui.writeClipboardText(contextMenu.linkUrl ?? '')
+                        void api.ui.writeClipboardText(contextMenu.linkUrl ?? '')
                         setContextMenu(null)
                       }}
                     >
@@ -4337,7 +4338,7 @@ function BrowserPagePane({
                   onClick={() => {
                     const targetUrl = normalizeExternalBrowserUrl(contextMenu.pageUrl)
                     if (targetUrl) {
-                      void window.api.shell.openUrl(targetUrl)
+                      void api.shell.openUrl(targetUrl)
                     }
                     setContextMenu(null)
                   }}
@@ -4348,7 +4349,7 @@ function BrowserPagePane({
                   role="menuitem"
                   className="relative flex w-full cursor-default items-center gap-2 rounded-[7px] px-2 py-0.5 text-[12px] leading-5 font-medium outline-none select-none hover:bg-black/8 dark:hover:bg-white/14"
                   onClick={() => {
-                    void window.api.ui.writeClipboardText(contextMenu.pageUrl)
+                    void api.ui.writeClipboardText(contextMenu.pageUrl)
                     setContextMenu(null)
                   }}
                 >
@@ -4359,7 +4360,7 @@ function BrowserPagePane({
                   role="menuitem"
                   className="relative flex w-full cursor-default items-center gap-2 rounded-[7px] px-2 py-0.5 text-[12px] leading-5 font-medium outline-none select-none hover:bg-black/8 dark:hover:bg-white/14"
                   onClick={() => {
-                    void window.api.browser.openDevTools({ browserPageId: browserTab.id })
+                    void api.browser.openDevTools({ browserPageId: browserTab.id })
                     setContextMenu(null)
                   }}
                 >
@@ -4486,7 +4487,7 @@ function BrowserPagePane({
           size="icon"
           variant="ghost"
           className="h-7 w-7"
-          onClick={() => void window.api.browser.openDevTools({ browserPageId: browserTab.id })}
+          onClick={() => void api.browser.openDevTools({ browserPageId: browserTab.id })}
           title="Open browser devtools"
         >
           <SquareCode className="size-4" />
@@ -4500,7 +4501,7 @@ function BrowserPagePane({
             if (!externalUrl) {
               return
             }
-            void window.api.shell.openUrl(externalUrl)
+            void api.shell.openUrl(externalUrl)
           }}
           title="Open in default browser"
           disabled={!externalUrl}
@@ -4533,7 +4534,7 @@ function BrowserPagePane({
                 variant="outline"
                 className="h-7"
                 onClick={() => {
-                  void window.api.browser.acceptDownload({
+                  void api.browser.acceptDownload({
                     downloadId: downloadState.downloadId
                   })
                 }}
@@ -4545,7 +4546,7 @@ function BrowserPagePane({
                 variant="ghost"
                 className="h-7"
                 onClick={() => {
-                  void window.api.browser.cancelDownload({
+                  void api.browser.cancelDownload({
                     downloadId: downloadState.downloadId
                   })
                 }}
@@ -4729,7 +4730,7 @@ function BrowserPagePane({
                     // error surface. Put the current URL on the clipboard from
                     // the recovery UI itself so they can retry elsewhere
                     // without having to discover the toolbar overflow first.
-                    void window.api.ui.writeClipboardText(currentBrowserUrl)
+                    void api.ui.writeClipboardText(currentBrowserUrl)
                     setResourceNotice('Copied the current page URL.')
                   }}
                 >
@@ -4749,7 +4750,7 @@ function BrowserPagePane({
                       // browser profile. Keep this action in the failed-state
                       // overlay so recovery does not depend on toolbar affordance
                       // discovery while the guest itself is unusable.
-                      void window.api.shell.openUrl(externalUrl)
+                      void api.shell.openUrl(externalUrl)
                     }}
                   >
                     <ExternalLink className="size-4" />
@@ -5016,7 +5017,7 @@ function BrowserPagePane({
                       onSelect={() => {
                         const dataUrl = grabToast.payload?.screenshot?.dataUrl
                         if (dataUrl?.startsWith('data:image/png;base64,')) {
-                          void window.api.ui.writeClipboardImage(dataUrl)
+                          void api.ui.writeClipboardImage(dataUrl)
                           setGrabToast((prev) =>
                             prev ? { ...prev, message: 'Screenshotted' } : null
                           )

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useAppStore } from '@/store'
 import { getHasAnyWorktreesFromState } from '@/store/selectors'
@@ -103,7 +104,7 @@ export function WorkspacePortScanner(): null {
       retryTimer = null
     }
 
-    const unsubscribe = window.api.workspacePorts.onAdvertisedUrlChanged(() => {
+    const unsubscribe = api.workspacePorts.onAdvertisedUrlChanged(() => {
       eventSequence += 1
       const sequence = eventSequence
       clearRetryTimer()

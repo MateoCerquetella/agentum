@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: project picker handles pinned, recent, browse-all listing, paste-to-add, view selection, and accessibility-related orchestration in one place to keep the entry-point flow coherent. */
 // Why: the picker is the only v1 entry point for switching projects (no
 // header tab strip). Pinned + Recent come from settings; Browse all lazy-loads
@@ -60,7 +61,7 @@ async function listAccessibleProjectsForRuntime(
         {},
         { timeoutMs: 60_000 }
       )
-    : window.api.gh.listAccessibleProjects()
+    : api.gh.listAccessibleProjects()
 }
 
 async function listProjectViewsForRuntime(
@@ -72,7 +73,7 @@ async function listProjectViewsForRuntime(
     ? callRuntimeRpc<ListProjectViewsResult>(target, 'github.project.listViews', args, {
         timeoutMs: 30_000
       })
-    : window.api.gh.listProjectViews(args)
+    : api.gh.listProjectViews(args)
 }
 
 async function resolveProjectRefForRuntime(
@@ -87,7 +88,7 @@ async function resolveProjectRefForRuntime(
         { input },
         { timeoutMs: 30_000 }
       )
-    : window.api.gh.resolveProjectRef({ input })
+    : api.gh.resolveProjectRef({ input })
 }
 
 export default function ProjectPicker({ activeProject, onSelect }: Props): React.JSX.Element {

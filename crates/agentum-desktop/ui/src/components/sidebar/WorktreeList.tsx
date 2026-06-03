@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import React, { useMemo, useCallback, useRef, useState, useEffect, useLayoutEffect } from 'react'
 import {
@@ -3639,7 +3640,7 @@ const WorktreeList = React.memo(function WorktreeList({
           { orderedIds: sortedIds },
           { timeoutMs: 15_000 }
         )
-      : window.api.worktrees.persistSortOrder({ orderedIds: sortedIds }))
+      : api.worktrees.persistSortOrder({ orderedIds: sortedIds }))
   }, [sortedIds, sortBy])
 
   // Flatten, filter, and apply stable sort order via the shared utility so

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the server settings pane keeps active
    server selection, saved server mutation, and confirmation dialogs together so
    the state transitions stay auditable. */
@@ -70,7 +71,7 @@ export function RuntimeEnvironmentsPane({
       setIsLoading(true)
     }
     try {
-      const nextEnvironments = await window.api.runtimeEnvironments.list()
+      const nextEnvironments = await api.runtimeEnvironments.list()
       if (mountedRef.current) {
         setEnvironments(nextEnvironments)
       }
@@ -120,7 +121,7 @@ export function RuntimeEnvironmentsPane({
           return
         }
       }
-      const result = await window.api.runtimeEnvironments.addFromPairingCode({
+      const result = await api.runtimeEnvironments.addFromPairingCode({
         name: trimmedName,
         pairingCode: trimmedPairingCode
       })
@@ -132,7 +133,7 @@ export function RuntimeEnvironmentsPane({
       if (!allowLocalRuntime) {
         const switched = await switchRuntimeEnvironment(result.environment.id)
         if (!switched) {
-          await window.api.runtimeEnvironments.remove({ selector: result.environment.id })
+          await api.runtimeEnvironments.remove({ selector: result.environment.id })
           await loadEnvironments()
           return
         }
@@ -184,7 +185,7 @@ export function RuntimeEnvironmentsPane({
           return true
         }
       }
-      await window.api.runtimeEnvironments.remove({ selector: environment.id })
+      await api.runtimeEnvironments.remove({ selector: environment.id })
       await loadEnvironments()
       if (mountedRef.current) {
         toast.success(`Removed ${environment.name}.`)

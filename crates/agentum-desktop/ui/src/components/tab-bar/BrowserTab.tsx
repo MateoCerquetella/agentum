@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useState } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { Globe, X, ExternalLink, Columns2, Rows2, Copy, Pin, PinOff } from 'lucide-react'
@@ -308,7 +309,7 @@ export default function BrowserTab({
             Close Tabs To The Right
           </DropdownMenuItem>
           <DropdownMenuItem
-            onSelect={() => void window.api.shell.openUrl(openInBrowserUrl)}
+            onSelect={() => void api.shell.openUrl(openInBrowserUrl)}
             disabled={!isHttpUrl}
           >
             <ExternalLink className="w-3.5 h-3.5 mr-1.5" />

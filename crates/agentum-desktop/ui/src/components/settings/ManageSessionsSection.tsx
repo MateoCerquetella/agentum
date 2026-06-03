@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: this pane owns all admin controls for the
    pty daemon (list, kill-all, kill-one, restart) plus the confirmation
    dialog and table. Splitting would scatter the shared action state and
@@ -189,7 +190,7 @@ export function ManageSessionsSection(): React.JSX.Element {
     }
     setIsRefreshing(true)
     try {
-      const result = await window.api.pty.management.listSessions()
+      const result = await api.pty.management.listSessions()
       if (!isMounted.current || mutationInFlight.current) {
         return result.sessions
       }
@@ -247,7 +248,7 @@ export function ManageSessionsSection(): React.JSX.Element {
       setBusyKind('killOne')
       mutationInFlight.current = true
       try {
-        const { success } = await window.api.pty.management.killOne({
+        const { success } = await api.pty.management.killOne({
           sessionId: session.sessionId
         })
         if (success) {

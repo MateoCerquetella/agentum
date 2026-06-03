@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: runtime graph sync and mobile session-tab publication share the same injected renderer state and terminal registry. Keeping them together prevents a second store/registry reader from drifting. */
 import {
   collectLeafIdsInOrder,
@@ -570,7 +571,7 @@ async function syncRuntimeGraph(): Promise<void> {
   }
 
   try {
-    await window.api.runtime.syncWindowGraph(graph)
+    await api.runtime.syncWindowGraph(graph)
   } catch (error) {
     console.error('[runtime] Failed to sync renderer graph:', error)
   }

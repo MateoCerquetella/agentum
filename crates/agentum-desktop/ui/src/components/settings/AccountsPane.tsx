@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: AccountsPane owns all per-provider account UI
    (Claude, Codex, Gemini, OpenCode Go, and future providers). Each provider's
    add/select/reauth/remove flow is tightly coupled to the provider-specific
@@ -301,7 +302,7 @@ export function AccountsPane({
 
     const loadCodexAccounts = async (): Promise<void> => {
       try {
-        const nextCodex = await window.api.codexAccounts.list()
+        const nextCodex = await api.codexAccounts.list()
         if (!stale) {
           setCodexAccounts(nextCodex)
           setCodexAccountsLoaded(true)
@@ -317,7 +318,7 @@ export function AccountsPane({
 
     const loadClaudeAccounts = async (): Promise<void> => {
       try {
-        const nextClaude = await window.api.claudeAccounts.list()
+        const nextClaude = await api.claudeAccounts.list()
         if (!stale) {
           setClaudeAccounts(nextClaude)
         }
@@ -524,7 +525,7 @@ export function AccountsPane({
               size="xs"
               onClick={() =>
                 void runClaudeAccountAction('adding', () =>
-                  window.api.claudeAccounts.add({
+                  api.claudeAccounts.add({
                     runtime: accountRuntime.runtime,
                     wslDistro: accountRuntime.wslDistro
                   })
@@ -549,7 +550,7 @@ export function AccountsPane({
               type="button"
               onClick={() =>
                 void runClaudeAccountAction('select:system', () =>
-                  window.api.claudeAccounts.select({
+                  api.claudeAccounts.select({
                     accountId: null,
                     runtime: accountRuntime.runtime,
                     wslDistro: accountRuntime.wslDistro
@@ -605,7 +606,7 @@ export function AccountsPane({
                         type="button"
                         onClick={() =>
                           void runClaudeAccountAction(`select:${account.id}`, () =>
-                            window.api.claudeAccounts.select({
+                            api.claudeAccounts.select({
                               accountId: account.id,
                               runtime: account.managedAuthRuntime ?? 'host',
                               wslDistro: account.wslDistro ?? null
@@ -645,7 +646,7 @@ export function AccountsPane({
                           onClick={(event) => {
                             event.stopPropagation()
                             void runClaudeAccountAction(`reauth:${account.id}`, () =>
-                              window.api.claudeAccounts.reauthenticate({ accountId: account.id })
+                              api.claudeAccounts.reauthenticate({ accountId: account.id })
                             )
                           }}
                           disabled={isBusy}
@@ -739,7 +740,7 @@ export function AccountsPane({
               size="xs"
               onClick={() =>
                 void runCodexAccountAction('adding', () =>
-                  window.api.codexAccounts.add({
+                  api.codexAccounts.add({
                     runtime: accountRuntime.runtime,
                     wslDistro: accountRuntime.wslDistro
                   })
@@ -764,7 +765,7 @@ export function AccountsPane({
               type="button"
               onClick={() =>
                 void runCodexAccountAction('select:system', () =>
-                  window.api.codexAccounts.select({
+                  api.codexAccounts.select({
                     accountId: null,
                     runtime: accountRuntime.runtime,
                     wslDistro: accountRuntime.wslDistro
@@ -847,7 +848,7 @@ export function AccountsPane({
                         type="button"
                         onClick={() =>
                           void runCodexAccountAction(`select:${account.id}`, () =>
-                            window.api.codexAccounts.select({
+                            api.codexAccounts.select({
                               accountId: account.id,
                               runtime: account.managedHomeRuntime ?? 'host',
                               wslDistro: account.wslDistro ?? null
@@ -913,7 +914,7 @@ export function AccountsPane({
                           onClick={(event) => {
                             event.stopPropagation()
                             void runCodexAccountAction(`reauth:${account.id}`, () =>
-                              window.api.codexAccounts.reauthenticate({ accountId: account.id })
+                              api.codexAccounts.reauthenticate({ accountId: account.id })
                             )
                           }}
                           disabled={isBusy}
@@ -1127,7 +1128,7 @@ export function AccountsPane({
                 }
                 setRemoveAccountId(null)
                 void runCodexAccountAction(`remove:${accountId}`, () =>
-                  window.api.codexAccounts.remove({ accountId })
+                  api.codexAccounts.remove({ accountId })
                 )
               }}
             >
@@ -1161,7 +1162,7 @@ export function AccountsPane({
                 }
                 setRemoveClaudeAccountId(null)
                 void runClaudeAccountAction(`remove:${accountId}`, () =>
-                  window.api.claudeAccounts.remove({ accountId })
+                  api.claudeAccounts.remove({ accountId })
                 )
               }}
             >

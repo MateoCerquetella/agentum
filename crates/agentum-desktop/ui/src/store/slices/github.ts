@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the GitHub slice co-locates all cache + fetch logic for
 PR, issue, checks, and comments data so the dedup and invalidation patterns stay consistent. */
 import type { StateCreator } from 'zustand'
@@ -1053,7 +1054,7 @@ function debouncedSaveCache(state: AppState): void {
   }
   saveTimer = setTimeout(() => {
     saveTimer = null
-    window.api.cache.setGitHub({
+    api.cache.setGitHub({
       cache: {
         pr: state.prCache,
         issue: state.issueCache
@@ -1350,7 +1351,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
                 args,
                 { timeoutMs: 60_000 }
               )
-            : await window.api.gh.getProjectViewTable(args)
+            : await api.gh.getProjectViewTable(args)
         if (envelope.ok) {
           const table = envelope.data
           const key = projectViewCacheKey(
@@ -1448,7 +1449,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
             },
             { timeoutMs: 30_000 }
           )
-        : await window.api.gh.updateProjectItemField({
+        : await api.gh.updateProjectItemField({
             projectId: table.project.id,
             itemId: rowId,
             fieldId,
@@ -1499,7 +1500,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
             },
             { timeoutMs: 30_000 }
           )
-        : await window.api.gh.clearProjectItemField({
+        : await api.gh.clearProjectItemField({
             projectId: table.project.id,
             itemId: rowId,
             fieldId
@@ -1600,7 +1601,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
               args,
               { timeoutMs: 30_000 }
             )
-          : await window.api.gh.updatePullRequestBySlug(args)
+          : await api.gh.updatePullRequestBySlug(args)
       if (!prRes.ok) {
         envelope = prRes
       }
@@ -1635,7 +1636,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
               args,
               { timeoutMs: 30_000 }
             )
-          : await window.api.gh.updateIssueBySlug(args)
+          : await api.gh.updateIssueBySlug(args)
       if (!issueRes.ok) {
         envelope = issueRes
       }
@@ -1691,7 +1692,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
             args,
             { timeoutMs: 30_000 }
           )
-        : await window.api.gh.updateIssueTypeBySlug(args)
+        : await api.gh.updateIssueTypeBySlug(args)
     if (!res.ok) {
       rollbackRowIfPresent(set, get, cacheKey, rowId, previousRow)
     }
@@ -1792,7 +1793,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
     const request = (async () => {
       await acquireWorkItemSlot()
       try {
-        const envelope = await window.api.gh.listWorkItems({
+        const envelope = await api.gh.listWorkItems({
           repoPath,
           repoId,
           limit,
@@ -1892,7 +1893,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
       repos.map(async (r) => {
         await acquireWorkItemSlot()
         try {
-          const envelope = await window.api.gh.listWorkItems({
+          const envelope = await api.gh.listWorkItems({
             repoPath: r.path,
             repoId: r.repoId,
             limit: perRepoLimit,
@@ -1933,7 +1934,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
     const counts = await Promise.all(
       repos.map(async (r) => {
         try {
-          return await window.api.gh.countWorkItems({
+          return await api.gh.countWorkItems({
             repoPath: r.path,
             repoId: r.repoId,
             query: query || undefined
@@ -1960,7 +1961,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
 
   initGitHubCache: async () => {
     try {
-      const persisted = await window.api.cache.getGitHub()
+      const persisted = await api.cache.getGitHub()
       if (persisted) {
         set({
           prCache: evictStaleEntries(persisted.pr || {}),
@@ -2066,9 +2067,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
                 cachedMergeable: cached?.data?.mergeable ?? null,
                 cachedMergeStateStatus: cached?.data?.mergeStateStatus ?? null
               }
-              return window.api.gh.refreshPRNow
-                ? await window.api.gh.refreshPRNow({ candidate })
-                : await window.api.gh
+              return api.gh.refreshPRNow
+                ? await api.gh.refreshPRNow({ candidate })
+                : await api.gh
                     .prForBranch({ repoPath, repoId, branch, linkedPRNumber, fallbackPRNumber })
                     .then((pr) =>
                       pr
@@ -2151,7 +2152,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
 
     const request = (async () => {
       try {
-        const issue = await window.api.gh.issue({ repoPath, repoId, number })
+        const issue = await api.gh.issue({ repoPath, repoId, number })
         set((s) => ({
           issueCache: withBoundedCacheEntry(s.issueCache, cacheKey, {
             data: issue,
@@ -2255,7 +2256,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
               },
               { timeoutMs: 30_000 }
             )
-          : ((await window.api.gh.prChecks({
+          : ((await api.gh.prChecks({
               repoPath,
               repoId,
               prNumber,
@@ -2328,7 +2329,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
           },
           { timeoutMs: 30_000 }
         )
-      : ((await window.api.gh.prCheckDetails({
+      : ((await api.gh.prCheckDetails({
           repoPath,
           repoId,
           checkRunId: args.checkRunId,
@@ -2377,7 +2378,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
               },
               { timeoutMs: 30_000 }
             )
-          : ((await window.api.gh.prComments({
+          : ((await api.gh.prComments({
               repoPath,
               repoId,
               prNumber,
@@ -2432,7 +2433,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
             },
             { timeoutMs: 30_000 }
           )
-        : await window.api.gh.addIssueComment({
+        : await api.gh.addIssueComment({
             repoPath,
             repoId,
             number: prNumber,
@@ -2491,7 +2492,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
             },
             { timeoutMs: 30_000 }
           )
-        : await window.api.gh.addPRReviewCommentReply({
+        : await api.gh.addPRReviewCommentReply({
             repoPath,
             repoId,
             prNumber,
@@ -2566,7 +2567,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
             { repo: runtimeRepo.repo.id, threadId, resolve },
             { timeoutMs: 30_000 }
           )
-        : await window.api.gh.resolveReviewThread({ repoPath, repoId, threadId, resolve })
+        : await api.gh.resolveReviewThread({ repoPath, repoId, threadId, resolve })
     } catch (err) {
       console.error('Failed to update review thread:', err)
       ok = false
@@ -2600,7 +2601,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
       })
       return
     }
-    const enqueue = window.api.gh.enqueuePRRefresh
+    const enqueue = api.gh.enqueuePRRefresh
     if (enqueue) {
       void enqueue({ candidate, reason, priority })
         .then((queued) => {
@@ -2640,7 +2641,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
       }
       return
     }
-    const reportVisible = window.api.gh.reportVisiblePRRefreshCandidates
+    const reportVisible = api.gh.reportVisiblePRRefreshCandidates
     if (reportVisible) {
       void reportVisible({ candidates, generation }).catch((err) => {
         console.warn('Failed to report visible PR refresh candidates:', err)
@@ -2878,7 +2879,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
           fallbackPRSource: candidate.fallbackPRSource ?? null
         })
       } else {
-        void window.api.gh.enqueuePRRefresh?.({ candidate, reason: 'swr', priority: 10 })
+        void api.gh.enqueuePRRefresh?.({ candidate, reason: 'swr', priority: 10 })
       }
     }
   },
@@ -2935,7 +2936,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
             fallbackPRSource: candidate.fallbackPRSource ?? null
           })
         } else {
-          void window.api.gh.enqueuePRRefresh?.({ candidate, reason: 'post-push', priority: 100 })
+          void api.gh.enqueuePRRefresh?.({ candidate, reason: 'post-push', priority: 100 })
         }
       }
     }
@@ -2994,7 +2995,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
       const updates = { issueSourcePreference: preference === 'auto' ? undefined : preference }
       const target = getActiveRuntimeTarget(get().settings)
       await (target.kind === 'local'
-        ? window.api.repos.update({ repoId, updates })
+        ? api.repos.update({ repoId, updates })
         : callRuntimeRpc(target, 'repo.update', { repo: repoId, updates }, { timeoutMs: 15_000 }))
     } catch (err) {
       console.error('Failed to persist issue-source preference:', err)
@@ -3116,7 +3117,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
             fallbackPRSource: candidate.fallbackPRSource ?? null
           })
         } else {
-          void window.api.gh.enqueuePRRefresh?.({ candidate, reason: 'active', priority: 80 })
+          void api.gh.enqueuePRRefresh?.({ candidate, reason: 'active', priority: 80 })
         }
       }
     }

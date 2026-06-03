@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useState } from 'react'
 import { ExternalLink, Github } from 'lucide-react'
 import { toast } from 'sonner'
@@ -29,7 +30,7 @@ type SidebarFeedbackDialogProps = {
 }
 
 function openExternalUrl(url: string): void {
-  void window.api.shell.openUrl(url)
+  void api.shell.openUrl(url)
 }
 
 function getSubmitIdentity(viewer: GitHubViewer | null, anonymous: boolean): SubmitIdentity {
@@ -64,7 +65,7 @@ export function SidebarFeedbackDialog({
 
     let cancelled = false
     setIsViewerLoading(true)
-    void window.api.gh
+    void api.gh
       .viewer()
       .then((nextViewer) => {
         if (!cancelled) {
@@ -103,7 +104,7 @@ export function SidebarFeedbackDialog({
       // cross-origin fetch() fail CORS preflight. Electron's net module in
       // the main process has no CORS restrictions and works uniformly in dev
       // and prod.
-      const result = await window.api.feedback.submit({
+      const result = await api.feedback.submit({
         feedback: trimmed,
         submitAnonymously,
         githubLogin: identity.githubLogin,

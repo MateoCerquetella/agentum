@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useCallback } from 'react'
 import { ExternalLink, FolderOpen } from 'lucide-react'
 import { toast } from 'sonner'
@@ -91,8 +92,8 @@ export async function openWorktreePath(args: {
 
   const result =
     args.target === 'file-manager'
-      ? await window.api.shell.openInFileManager(args.worktreePath)
-      : await window.api.shell.openInExternalEditor(args.worktreePath, args.command)
+      ? await api.shell.openInFileManager(args.worktreePath)
+      : await api.shell.openInExternalEditor(args.worktreePath, args.command)
   if (!result.ok) {
     showOpenFailureToast(result.reason)
   }

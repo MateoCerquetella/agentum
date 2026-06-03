@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useCallback, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@/store'
 import {
@@ -213,7 +214,7 @@ const WorktreeMetaDialog = React.memo(function WorktreeMetaDialog() {
     }
 
     if (issueUrlFromInput) {
-      void window.api.shell.openUrl(issueUrlFromInput)
+      void api.shell.openUrl(issueUrlFromInput)
       return
     }
 
@@ -222,7 +223,7 @@ const WorktreeMetaDialog = React.memo(function WorktreeMetaDialog() {
     }
 
     if (cachedIssueUrl) {
-      void window.api.shell.openUrl(cachedIssueUrl)
+      void api.shell.openUrl(cachedIssueUrl)
       return
     }
 
@@ -234,7 +235,7 @@ const WorktreeMetaDialog = React.memo(function WorktreeMetaDialog() {
     try {
       const issue = await fetchIssue(issueRepo.path, issueNumber, { repoId: issueRepo.id })
       if (issue?.url) {
-        void window.api.shell.openUrl(issue.url)
+        void api.shell.openUrl(issue.url)
       }
     } finally {
       if (mountedRef.current) {

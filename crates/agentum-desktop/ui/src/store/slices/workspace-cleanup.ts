@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
@@ -115,7 +116,7 @@ export const createWorkspaceCleanupSlice: StateCreator<AppState, [], [], Workspa
                 ])
               ]
             }
-      const scan = await window.api.workspaceCleanup.scan(scanArgs)
+      const scan = await api.workspaceCleanup.scan(scanArgs)
       const enriched = await enrichWorkspaceCleanupCandidates(scan.candidates, get())
       const result = { ...scan, candidates: enriched }
       set({ workspaceCleanupScan: result, workspaceCleanupLoading: false })
@@ -168,7 +169,7 @@ export const createWorkspaceCleanupSlice: StateCreator<AppState, [], [], Workspa
       }
     })
 
-    await window.api.workspaceCleanup.dismiss({ dismissals })
+    await api.workspaceCleanup.dismiss({ dismissals })
   },
 
   resetWorkspaceCleanupDismissals: async () => {
@@ -186,7 +187,7 @@ export const createWorkspaceCleanupSlice: StateCreator<AppState, [], [], Workspa
           }
         : state.workspaceCleanupScan
     }))
-    await window.api.workspaceCleanup.clearDismissals()
+    await api.workspaceCleanup.clearDismissals()
   },
 
   removeWorkspaceCleanupCandidates: async (worktreeIds) => {
@@ -387,7 +388,7 @@ async function preflightWorkspaceCleanupCandidate(
   | { ok: true; candidate: WorkspaceCleanupCandidate }
   | { ok: false; failure: WorkspaceCleanupFailure }
 > {
-  const scan = await window.api.workspaceCleanup.scan({ worktreeId })
+  const scan = await api.workspaceCleanup.scan({ worktreeId })
   const [candidate] = await enrichWorkspaceCleanupCandidates(scan.candidates, getState(), {
     applyDismissals: false
   })
@@ -459,8 +460,8 @@ async function probeTerminalLiveness(
   for (const { tab, ptyId } of ptyChecks) {
     try {
       const [hasChildProcesses, foregroundProcess] = await Promise.all([
-        window.api.pty.hasChildProcesses(ptyId),
-        window.api.pty.getForegroundProcess(ptyId)
+        api.pty.hasChildProcesses(ptyId),
+        api.pty.getForegroundProcess(ptyId)
       ])
       const processName = normalizeProcessName(foregroundProcess)
       if (!hasChildProcesses && (!processName || SHELL_PROCESS_NAMES.has(processName))) {

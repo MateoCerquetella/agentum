@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: combined diff behavior depends on one
 component-level state machine that coordinates lazy loading, inline editing,
 restore-on-remount caching, and scroll preservation. Splitting those pieces
@@ -1040,7 +1041,7 @@ export default function CombinedDiffViewer({
       return
     }
     try {
-      await window.api.ui.writeClipboardText(diffCommentsPrompt)
+      await api.ui.writeClipboardText(diffCommentsPrompt)
       if (!notesCopyMountedRef.current) {
         return
       }

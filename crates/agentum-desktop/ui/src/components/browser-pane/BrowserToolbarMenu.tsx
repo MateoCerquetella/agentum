@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useState } from 'react'
 import { Check, Ellipsis, Import, Monitor, Plus, Settings } from 'lucide-react'
 import { toast } from 'sonner'
@@ -63,7 +64,7 @@ export function BrowserToolbarMenu({
     setBrowserPageViewportPreset(browserPageId, nextId)
     const preset = getBrowserViewportPreset(nextId)
     const override = preset ? browserViewportPresetToOverride(preset) : null
-    void window.api.browser.setViewportOverride({ browserPageId, override })
+    void api.browser.setViewportOverride({ browserPageId, override })
   }
 
   const [newProfileDialogOpen, setNewProfileDialogOpen] = useState(false)

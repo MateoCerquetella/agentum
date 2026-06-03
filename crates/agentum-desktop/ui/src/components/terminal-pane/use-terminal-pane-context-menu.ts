@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import type { ManagedPane, PaneManager } from '@/lib/pane-manager/pane-manager'
@@ -110,7 +111,7 @@ export function useTerminalPaneContextMenu({
     }
     const selection = pane.terminal.getSelection()
     if (selection) {
-      await window.api.ui.writeClipboardText(selection)
+      await api.ui.writeClipboardText(selection)
     }
     // Why: Radix returns focus to the menu trigger (the pane container) on
     // close, but xterm.js only accepts input when its own helper textarea is
@@ -126,7 +127,7 @@ export function useTerminalPaneContextMenu({
     }
     // Why: orchestration targets use AGENTUM_PANE_KEY, which survives renderer
     // remounts; the numeric PaneManager id is only a local runtime handle.
-    await window.api.ui.writeClipboardText(makePaneKey(tabId, pane.leafId))
+    await api.ui.writeClipboardText(makePaneKey(tabId, pane.leafId))
     toast.success('Pane ID copied')
     pane.terminal.focus()
   }
@@ -138,8 +139,8 @@ export function useTerminalPaneContextMenu({
     }
     const connectionId = getConnectionId(worktreeId) ?? null
     await pasteTerminalClipboard({
-      readClipboardText: window.api.ui.readClipboardText,
-      saveClipboardImageAsTempFile: window.api.ui.saveClipboardImageAsTempFile,
+      readClipboardText: api.ui.readClipboardText,
+      saveClipboardImageAsTempFile: api.ui.saveClipboardImageAsTempFile,
       connectionId,
       pasteText: (text, options) => pasteTerminalText(pane.terminal, text, options),
       onImagePasteError: (error) => {
@@ -276,7 +277,7 @@ export function useTerminalPaneContextMenu({
       event.stopPropagation()
       const selection = clickedPane?.terminal.getSelection()
       if (selection) {
-        void window.api.ui.writeClipboardText(selection)
+        void api.ui.writeClipboardText(selection)
         clickedPane?.terminal.clearSelection()
       } else {
         void onPaste()

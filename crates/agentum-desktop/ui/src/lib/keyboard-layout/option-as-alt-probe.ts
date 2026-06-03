@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /**
  * Runtime probe for the active macOS keyboard layout.
  *
@@ -56,19 +57,16 @@ export type OptionAsAltProbe = {
 
 type CreateProbeOptions = {
   /** Injectable reader for the macOS input source ID. Defaults to the
-   *  preload `window.api.app.getKeyboardInputSourceId` when available.
+   *  preload `api.app.getKeyboardInputSourceId` when available.
    *  Tests pass a stub to exercise the compose override deterministically. */
   readInputSourceId?: InputSourceIdReader
 }
 
 function defaultInputSourceIdReader(): InputSourceIdReader {
   return async () => {
-    const api = (
-      globalThis as {
-        window?: { api?: { app?: { getKeyboardInputSourceId?: () => Promise<string | null> } } }
-      }
-    ).window?.api
-    const reader = api?.app?.getKeyboardInputSourceId
+    const reader = api?.app?.getKeyboardInputSourceId as
+      | (() => Promise<string | null>)
+      | undefined
     if (!reader) {
       return null
     }

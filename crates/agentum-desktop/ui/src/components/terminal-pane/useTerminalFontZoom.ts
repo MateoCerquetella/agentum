@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useEffect } from 'react'
 import type { PaneManager } from '@/lib/pane-manager/pane-manager'
 import { dispatchZoomLevelChanged } from '@/lib/zoom-events'
@@ -24,7 +25,7 @@ export function useTerminalFontZoom({
     const MAX_FONT_SIZE = 32
     const FONT_SIZE_STEP = 1
 
-    return window.api.ui.onTerminalZoom((direction) => {
+    return api.ui.onTerminalZoom((direction) => {
       const manager = managerRef.current
       if (!manager) {
         return

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: this component co-locates the rich markdown editor surface, toolbar, search, and slash menu so tightly coupled editor state stays in one place. */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
@@ -850,7 +851,7 @@ export default function RichMarkdownEditor({
         }
         cancelAutoFocusRef.current?.()
         cancelAutoFocusRef.current = null
-        window.api.ui.setMarkdownEditorFocused(false)
+        api.ui.setMarkdownEditorFocused(false)
       }
       rootRef.current = node
     },
@@ -924,7 +925,7 @@ export default function RichMarkdownEditor({
       const copied = await copyMarkdownReviewNotesForAgent({
         notes: markdownReviewNotes,
         content: markdownReviewContent,
-        writeClipboardText: window.api.ui.writeClipboardText
+        writeClipboardText: api.ui.writeClipboardText
       })
       if (copied && rootRef.current) {
         markReviewNotesCopied()
@@ -940,7 +941,7 @@ export default function RichMarkdownEditor({
         const copied = await copyMarkdownReviewNotesForAgent({
           notes: [note],
           content: markdownReviewContent,
-          writeClipboardText: window.api.ui.writeClipboardText
+          writeClipboardText: api.ui.writeClipboardText
         })
         if (copied && rootRef.current) {
           markReviewNoteCopied(note.id)
@@ -1254,15 +1255,15 @@ export default function RichMarkdownEditor({
             return true
           }
           if (classified.kind === 'markdown') {
-            void window.api.shell.pathExists(classified.absolutePath).then((exists) => {
+            void api.shell.pathExists(classified.absolutePath).then((exists) => {
               if (!exists) {
                 toast.error(`File not found: ${classified.relativePath}`)
                 return
               }
-              void window.api.shell.openFileUri(toFileUrlForOsEscape(classified.absolutePath))
+              void api.shell.openFileUri(toFileUrlForOsEscape(classified.absolutePath))
             })
           } else if (classified.kind === 'file') {
-            void window.api.shell.openFileUri(classified.uri)
+            void api.shell.openFileUri(classified.uri)
           }
           return true
         }
@@ -1280,10 +1281,10 @@ export default function RichMarkdownEditor({
       // Cmd+B carve-out in createMainWindow.ts lets the bold keymap run instead
       // of intercepting the chord for sidebar toggle.
       // See docs/markdown-cmd-b-bold-design.md.
-      window.api.ui.setMarkdownEditorFocused(true)
+      api.ui.setMarkdownEditorFocused(true)
     },
     onBlur: () => {
-      window.api.ui.setMarkdownEditorFocused(false)
+      api.ui.setMarkdownEditorFocused(false)
       setAnnotationTarget(null)
     },
     onCreate: ({ editor: nextEditor }) => {
@@ -1505,7 +1506,7 @@ export default function RichMarkdownEditor({
   })
 
   useEffect(() => {
-    return window.api.ui.onRichMarkdownContextCommand((payload) => {
+    return api.ui.onRichMarkdownContextCommand((payload) => {
       const ed = editorRef.current
       if (!ed || !isRichMarkdownContextCommandTarget(payload, rootRef.current)) {
         return

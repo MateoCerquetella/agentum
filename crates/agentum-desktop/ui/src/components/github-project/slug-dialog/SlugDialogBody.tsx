@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CircleDot, ExternalLink, GitPullRequest, LoaderCircle, X } from 'lucide-react'
 import { toast } from 'sonner'
@@ -50,7 +51,7 @@ export function SlugDialogBody({
     setLoading(true)
     setError(null)
     setDetails(null)
-    window.api.gh
+    api.gh
       .projectWorkItemDetailsBySlug({ owner, repo, number, type })
       .then((res) => {
         if (rid !== requestIdRef.current) {
@@ -173,7 +174,7 @@ export function SlugDialogBody({
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7"
-                onClick={() => void window.api.shell.openUrl(url)}
+                onClick={() => void api.shell.openUrl(url)}
                 aria-label="Open in GitHub"
               >
                 <ExternalLink className="size-3.5" />

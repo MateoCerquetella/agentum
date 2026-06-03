@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* oxlint-disable max-lines -- Why: this App-level IPC bridge intentionally keeps the renderer's main-process event contract in one place so shortcut, runtime, updater, and agent-status wiring do not drift across files. */
 import { useEffect } from 'react'
 import { toast } from 'sonner'
@@ -467,7 +468,7 @@ async function syncRemoteWorkspaceAfterConnect(targetId: string): Promise<void> 
   const hasLocalTabs = Array.from(worktreeIds).some(
     (worktreeId) => (useAppStore.getState().tabsByWorktree[worktreeId] ?? []).length > 0
   )
-  const snapshot = await window.api.remoteWorkspace.get({ targetId })
+  const snapshot = await api.remoteWorkspace.get({ targetId })
   if (!snapshot) {
     useAppStore.getState().setRemoteWorkspaceSyncStatus(targetId, {
       phase: 'offline',
@@ -487,7 +488,7 @@ async function syncRemoteWorkspaceAfterConnect(targetId: string): Promise<void> 
     // Otherwise a reconnecting device can overwrite a newer cross-device
     // workspace snapshot with stale local renderer state.
     const session = buildWorkspaceSessionPayload(useAppStore.getState())
-    const results = await window.api.remoteWorkspace.setForConnectedTargets({
+    const results = await api.remoteWorkspace.setForConnectedTargets({
       session,
       hydratedTargetIds: [targetId]
     })
@@ -588,7 +589,7 @@ export function useIpcEvents(): void {
     let pendingAgentStatusRetryTimer: ReturnType<typeof setTimeout> | null = null
 
     unsubs.push(
-      window.api.repos.onChanged(() => {
+      api.repos.onChanged(() => {
         if (isRuntimeEnvironmentActive()) {
           // Why: this event comes from the local Electron store. While a
           // runtime server is selected, repo hydration must be driven by the
@@ -602,7 +603,7 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.worktrees.onChanged(async (data: { repoId: string }) => {
+      api.worktrees.onChanged(async (data: { repoId: string }) => {
         if (isRuntimeEnvironmentActive()) {
           // Why: local worktree events carry local repo ids. Fetching the
           // active runtime with those ids can purge or overwrite server state.
@@ -643,7 +644,7 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.worktrees.onBaseStatus((event) => {
+      api.worktrees.onBaseStatus((event) => {
         if (isRuntimeEnvironmentActive()) {
           return
         }
@@ -652,7 +653,7 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.worktrees.onRemoteBranchConflict((event) => {
+      api.worktrees.onRemoteBranchConflict((event) => {
         if (isRuntimeEnvironmentActive()) {
           return
         }
@@ -660,22 +661,22 @@ export function useIpcEvents(): void {
       })
     )
 
-    if (window.api.gh?.onPRRefreshEvent) {
+    if (api.gh?.onPRRefreshEvent) {
       unsubs.push(
-        window.api.gh.onPRRefreshEvent((event) => {
+        api.gh.onPRRefreshEvent((event) => {
           useAppStore.getState().applyGitHubPRRefreshEvent(event)
         })
       )
     }
 
     unsubs.push(
-      window.api.ui.onOpenSettings(() => {
+      api.ui.onOpenSettings(() => {
         useAppStore.getState().openSettingsPage()
       })
     )
 
     unsubs.push(
-      window.api.ui.onOpenFeatureTour(() => {
+      api.ui.onOpenFeatureTour(() => {
         useAppStore.getState().openModal('feature-wall', { source: 'help_menu' })
       })
     )
@@ -686,7 +687,7 @@ export function useIpcEvents(): void {
     // titlebar re-render immediately instead of waiting for the next
     // fetchSettings() call.
     unsubs.push(
-      window.api.settings.onChanged((updates) => {
+      api.settings.onChanged((updates) => {
         const store = useAppStore.getState()
         if (!store.settings) {
           return
@@ -704,22 +705,22 @@ export function useIpcEvents(): void {
       })
     )
 
-    if (window.api.keybindings) {
+    if (api.keybindings) {
       unsubs.push(
-        window.api.keybindings.onChanged((snapshot) => {
+        api.keybindings.onChanged((snapshot) => {
           useAppStore.getState().setKeybindingSnapshot(snapshot)
         })
       )
     }
 
     unsubs.push(
-      window.api.ui.onToggleLeftSidebar(() => {
+      api.ui.onToggleLeftSidebar(() => {
         useAppStore.getState().toggleSidebar()
       })
     )
 
     unsubs.push(
-      window.api.ui.onToggleRightSidebar(() => {
+      api.ui.onToggleRightSidebar(() => {
         const store = useAppStore.getState()
         if (!canShowRightSidebarForView(store.activeView)) {
           return
@@ -729,7 +730,7 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onToggleWorktreePalette(() => {
+      api.ui.onToggleWorktreePalette(() => {
         const store = useAppStore.getState()
         if (store.activeModal === 'worktree-palette') {
           store.closeModal()
@@ -740,14 +741,14 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onToggleFloatingTerminal(() => {
+      api.ui.onToggleFloatingTerminal(() => {
         window.dispatchEvent(new CustomEvent(TOGGLE_FLOATING_TERMINAL_EVENT))
       })
     )
 
-    if (window.api.ui.onTerminalShortcutCaptured) {
+    if (api.ui.onTerminalShortcutCaptured) {
       unsubs.push(
-        window.api.ui.onTerminalShortcutCaptured(({ actionId }) => {
+        api.ui.onTerminalShortcutCaptured(({ actionId }) => {
           showTerminalShortcutCaptureNotification({
             actionId,
             platform: getShortcutPlatform(),
@@ -758,7 +759,7 @@ export function useIpcEvents(): void {
     }
 
     unsubs.push(
-      window.api.ui.onOpenQuickOpen(() => {
+      api.ui.onOpenQuickOpen(() => {
         const store = useAppStore.getState()
         if (store.activeView === 'terminal' && store.activeWorktreeId !== null) {
           store.openModal('quick-open')
@@ -767,7 +768,7 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onOpenNewWorkspace(() => {
+      api.ui.onOpenNewWorkspace(() => {
         // Why: keep the global shortcut quiet on a fresh install, but allow
         // both Git projects and plain folder projects to create workspaces.
         const store = useAppStore.getState()
@@ -781,9 +782,9 @@ export function useIpcEvents(): void {
       })
     )
 
-    if (window.api.ui.onDeleteCurrentWorkspace) {
+    if (api.ui.onDeleteCurrentWorkspace) {
       unsubs.push(
-        window.api.ui.onDeleteCurrentWorkspace(() => {
+        api.ui.onDeleteCurrentWorkspace(() => {
           const store = useAppStore.getState()
           if (
             store.activeModal !== 'none' ||
@@ -798,7 +799,7 @@ export function useIpcEvents(): void {
     }
 
     unsubs.push(
-      window.api.ui.onOpenTasks(() => {
+      api.ui.onOpenTasks(() => {
         const store = useAppStore.getState()
         if (store.activeView === 'settings' || !store.repos.some((repo) => isGitRepoKind(repo))) {
           return
@@ -808,7 +809,7 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onJumpToWorktreeIndex((index) => {
+      api.ui.onJumpToWorktreeIndex((index) => {
         const store = useAppStore.getState()
         if (store.activeView !== 'terminal') {
           return
@@ -821,13 +822,13 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onJumpToTabIndex((index) => {
+      api.ui.onJumpToTabIndex((index) => {
         activateTabNumberShortcut(index)
       })
     )
 
     unsubs.push(
-      window.api.ui.onWorktreeHistoryNavigate((direction) => {
+      api.ui.onWorktreeHistoryNavigate((direction) => {
         const store = useAppStore.getState()
         // Why: mirror the button-visibility rule — worktree history navigation
         // is only meaningful in the terminal (worktree) view. Settings/Tasks
@@ -845,14 +846,14 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onToggleStatusBar(() => {
+      api.ui.onToggleStatusBar(() => {
         const store = useAppStore.getState()
         store.setStatusBarVisible(!store.statusBarVisible)
       })
     )
 
     unsubs.push(
-      window.api.ui.onActivateWorktree(({ repoId, worktreeId, setup, startup, defaultTabs }) => {
+      api.ui.onActivateWorktree(({ repoId, worktreeId, setup, startup, defaultTabs }) => {
         void (async () => {
           if (isRuntimeEnvironmentActive()) {
             // Why: local CLI-created worktree events carry local repo/worktree
@@ -886,7 +887,7 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onCreateTerminal(
+      api.ui.onCreateTerminal(
         ({
           requestId,
           worktreeId,
@@ -902,7 +903,7 @@ export function useIpcEvents(): void {
           try {
             if (isRuntimeEnvironmentActive()) {
               if (requestId) {
-                window.api.ui.replyTerminalCreate({
+                api.ui.replyTerminalCreate({
                   requestId,
                   error: 'Local terminal reveal is unavailable while a remote runtime is active'
                 })
@@ -1022,7 +1023,7 @@ export function useIpcEvents(): void {
               store.queueTabStartupCommand(tab.id, { command })
             }
             if (requestId) {
-              window.api.ui.replyTerminalCreate({
+              api.ui.replyTerminalCreate({
                 requestId,
                 tabId: tab.id,
                 title: title ?? tab.title
@@ -1032,7 +1033,7 @@ export function useIpcEvents(): void {
             if (!requestId) {
               throw err
             }
-            window.api.ui.replyTerminalCreate({
+            api.ui.replyTerminalCreate({
               requestId,
               error: err instanceof Error ? err.message : 'Terminal reveal failed'
             })
@@ -1045,10 +1046,10 @@ export function useIpcEvents(): void {
     // tabId reply so it can resolve a handle the caller can use immediately.
     // This mirrors the browser's onRequestTabCreate/replyTabCreate pattern.
     unsubs.push(
-      window.api.ui.onRequestTerminalCreate((data) => {
+      api.ui.onRequestTerminalCreate((data) => {
         try {
           if (isRuntimeEnvironmentActive()) {
-            window.api.ui.replyTerminalCreate({
+            api.ui.replyTerminalCreate({
               requestId: data.requestId,
               error: 'Local terminal creation is unavailable while a remote runtime is active'
             })
@@ -1057,7 +1058,7 @@ export function useIpcEvents(): void {
           const store = useAppStore.getState()
           const worktreeId = data.worktreeId ?? store.activeWorktreeId
           if (!worktreeId) {
-            window.api.ui.replyTerminalCreate({
+            api.ui.replyTerminalCreate({
               requestId: data.requestId,
               error: 'No active worktree'
             })
@@ -1123,13 +1124,13 @@ export function useIpcEvents(): void {
           if (data.command) {
             store.queueTabStartupCommand(tab.id, { command: data.command })
           }
-          window.api.ui.replyTerminalCreate({
+          api.ui.replyTerminalCreate({
             requestId: data.requestId,
             tabId: tab.id,
             title: data.title ?? tab.title
           })
         } catch (err) {
-          window.api.ui.replyTerminalCreate({
+          api.ui.replyTerminalCreate({
             requestId: data.requestId,
             error: err instanceof Error ? err.message : 'Terminal creation failed'
           })
@@ -1138,20 +1139,20 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onSplitTerminal(({ tabId, paneRuntimeId, direction, command }) => {
+      api.ui.onSplitTerminal(({ tabId, paneRuntimeId, direction, command }) => {
         const detail: SplitTerminalPaneDetail = { tabId, paneRuntimeId, direction, command }
         window.dispatchEvent(new CustomEvent(SPLIT_TERMINAL_PANE_EVENT, { detail }))
       })
     )
 
     unsubs.push(
-      window.api.ui.onRenameTerminal(({ tabId, title }) => {
+      api.ui.onRenameTerminal(({ tabId, title }) => {
         useAppStore.getState().setTabCustomTitle(tabId, title)
       })
     )
 
     unsubs.push(
-      window.api.ui.onFocusTerminal(
+      api.ui.onFocusTerminal(
         ({
           tabId,
           worktreeId,
@@ -1186,7 +1187,7 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onFocusEditorTab(({ tabId, worktreeId }) => {
+      api.ui.onFocusEditorTab(({ tabId, worktreeId }) => {
         const store = useAppStore.getState()
         const tab = (store.unifiedTabsByWorktree[worktreeId] ?? []).find(
           (item) => item.id === tabId
@@ -1225,7 +1226,7 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onCloseSessionTab(({ tabId, worktreeId }) => {
+      api.ui.onCloseSessionTab(({ tabId, worktreeId }) => {
         const store = useAppStore.getState()
         const browserTarget = resolveBrowserSessionTabTarget(store, worktreeId, tabId)
         if (browserTarget) {
@@ -1243,7 +1244,7 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onMoveSessionTab((move) => {
+      api.ui.onMoveSessionTab((move) => {
         const { tabId, targetGroupId } = move
         const store = useAppStore.getState()
         if (move.kind === 'reorder') {
@@ -1259,7 +1260,7 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onCloseTerminal(({ tabId, paneRuntimeId }) => {
+      api.ui.onCloseTerminal(({ tabId, paneRuntimeId }) => {
         if (paneRuntimeId != null) {
           // Why: when targeting a specific pane in a split layout, dispatch to the
           // lifecycle hook so PaneManager.closePane() handles sibling promotion.
@@ -1281,37 +1282,37 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onSleepWorktree(({ worktreeId }) => {
+      api.ui.onSleepWorktree(({ worktreeId }) => {
         void runSleepWorktree(worktreeId)
       })
     )
 
     // Hydrate initial update status then subscribe to changes
-    window.api.updater.getStatus().then((status) => {
+    api.updater.getStatus().then((status) => {
       useAppStore.getState().setUpdateStatus(status as UpdateStatus)
     })
 
     unsubs.push(
-      window.api.updater.onStatus((raw) => {
+      api.updater.onStatus((raw) => {
         const status = raw as UpdateStatus
         useAppStore.getState().setUpdateStatus(status)
       })
     )
 
     unsubs.push(
-      window.api.updater.onClearDismissal(() => {
+      api.updater.onClearDismissal(() => {
         useAppStore.getState().clearDismissedUpdateVersion()
       })
     )
 
     unsubs.push(
-      window.api.ui.onFullscreenChanged((isFullScreen) => {
+      api.ui.onFullscreenChanged((isFullScreen) => {
         useAppStore.getState().setIsFullScreen(isFullScreen)
       })
     )
 
     unsubs.push(
-      window.api.browser.onGuestLoadFailed(({ browserPageId, loadError }) => {
+      api.browser.onGuestLoadFailed(({ browserPageId, loadError }) => {
         if (isRuntimeEnvironmentActive()) {
           return
         }
@@ -1329,7 +1330,7 @@ export function useIpcEvents(): void {
     // navigations, so the Zustand store (address bar, tab title) stays stale.
     // This IPC pushes the live URL/title from main after goto/click/back/reload.
     unsubs.push(
-      window.api.browser.onNavigationUpdate(({ browserPageId, url, title }) => {
+      api.browser.onNavigationUpdate(({ browserPageId, url, title }) => {
         if (isRuntimeEnvironmentActive()) {
           return
         }
@@ -1343,7 +1344,7 @@ export function useIpcEvents(): void {
     // has display != none. Main sends this before browser automation commands
     // so persisted hidden tabs mount without changing the user's active pane.
     unsubs.push(
-      window.api.browser.onActivateView(({ worktreeId }) => {
+      api.browser.onActivateView(({ worktreeId }) => {
         if (isRuntimeEnvironmentActive()) {
           return
         }
@@ -1361,7 +1362,7 @@ export function useIpcEvents(): void {
     // on the targeted worktree. Cross-worktree --focus calls are silent
     // pre-staging for whenever the user next visits that worktree.
     unsubs.push(
-      window.api.browser.onPaneFocus(({ worktreeId, browserPageId }) => {
+      api.browser.onPaneFocus(({ worktreeId, browserPageId }) => {
         if (isRuntimeEnvironmentActive()) {
           return
         }
@@ -1380,7 +1381,7 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.browser.onOpenLinkInAgentumTab(({ browserPageId, url }) => {
+      api.browser.onOpenLinkInAgentumTab(({ browserPageId, url }) => {
         if (isRuntimeEnvironmentActive()) {
           return
         }
@@ -1402,7 +1403,7 @@ export function useIpcEvents(): void {
     // Shortcut forwarding for embedded browser guests whose webContents
     // capture keyboard focus and bypass the renderer's window-level keydown.
     unsubs.push(
-      window.api.ui.onNewBrowserTab(() => {
+      api.ui.onNewBrowserTab(() => {
         const store = useAppStore.getState()
         if (isFloatingWorkspacePanelFocused()) {
           void createFloatingWorkspaceBrowserTab(store)
@@ -1439,7 +1440,7 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onNewMarkdownTab(() => {
+      api.ui.onNewMarkdownTab(() => {
         const store = useAppStore.getState()
         if (isFloatingWorkspacePanelFocused()) {
           void createFloatingWorkspaceMarkdownTab(store).catch((err) => {
@@ -1465,12 +1466,12 @@ export function useIpcEvents(): void {
     // url. The renderer creates the tab and replies with the page ID so the
     // main process can wait for registerGuest before returning to the CLI.
     unsubs.push(
-      window.api.ui.onRequestTabCreate((data) => {
+      api.ui.onRequestTabCreate((data) => {
         try {
           if (isRuntimeEnvironmentActive()) {
             // Why: browser automation targets client-local Electron webviews.
             // Runtime agents cannot see or control those surfaces.
-            window.api.ui.replyTabCreate({
+            api.ui.replyTabCreate({
               requestId: data.requestId,
               error: 'Browser tabs are unavailable while a remote runtime is active'
             })
@@ -1479,7 +1480,7 @@ export function useIpcEvents(): void {
           const store = useAppStore.getState()
           const worktreeId = data.worktreeId ?? store.activeWorktreeId
           if (!worktreeId) {
-            window.api.ui.replyTabCreate({ requestId: data.requestId, error: 'No active worktree' })
+            api.ui.replyTabCreate({ requestId: data.requestId, error: 'No active worktree' })
             return
           }
           // Why: CLI-created tabs should land in the same group as the active
@@ -1504,9 +1505,9 @@ export function useIpcEvents(): void {
           const pages = useAppStore.getState().browserPagesByWorkspace[workspace.id] ?? []
           const browserPageId = pages[0]?.id ?? workspace.id
           acquireBrowserAutomationBootstrapLease(worktreeId, browserPageId)
-          window.api.ui.replyTabCreate({ requestId: data.requestId, browserPageId })
+          api.ui.replyTabCreate({ requestId: data.requestId, browserPageId })
         } catch (err) {
-          window.api.ui.replyTabCreate({
+          api.ui.replyTabCreate({
             requestId: data.requestId,
             error: err instanceof Error ? err.message : 'Tab creation failed'
           })
@@ -1515,10 +1516,10 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onRequestTabSetProfile((data) => {
+      api.ui.onRequestTabSetProfile((data) => {
         try {
           if (isRuntimeEnvironmentActive()) {
-            window.api.ui.replyTabSetProfile({
+            api.ui.replyTabSetProfile({
               requestId: data.requestId,
               error: 'Browser profiles are unavailable while a remote runtime is active'
             })
@@ -1535,7 +1536,7 @@ export function useIpcEvents(): void {
               return pages.some((page) => page.id === data.browserPageId)
             })
           if (!owningWorkspace) {
-            window.api.ui.replyTabSetProfile({
+            api.ui.replyTabSetProfile({
               requestId: data.requestId,
               error: `Browser tab ${data.browserPageId} not found`
             })
@@ -1552,9 +1553,9 @@ export function useIpcEvents(): void {
             destroyPersistentWebview(data.browserPageId)
           }
           store.switchBrowserTabProfile(owningWorkspace.id, data.profileId)
-          window.api.ui.replyTabSetProfile({ requestId: data.requestId })
+          api.ui.replyTabSetProfile({ requestId: data.requestId })
         } catch (err) {
-          window.api.ui.replyTabSetProfile({
+          api.ui.replyTabSetProfile({
             requestId: data.requestId,
             error: err instanceof Error ? err.message : 'Tab profile update failed'
           })
@@ -1563,10 +1564,10 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onRequestTabClose((data) => {
+      api.ui.onRequestTabClose((data) => {
         try {
           if (isRuntimeEnvironmentActive()) {
-            window.api.ui.replyTabClose({
+            api.ui.replyTabClose({
               requestId: data.requestId,
               error: 'Browser tabs are unavailable while a remote runtime is active'
             })
@@ -1580,7 +1581,7 @@ export function useIpcEvents(): void {
               ? (store.activeBrowserTabIdByWorktree?.[data.worktreeId] ?? null)
               : store.activeBrowserTabId)
           if (!tabToClose) {
-            window.api.ui.replyTabClose({
+            api.ui.replyTabClose({
               requestId: data.requestId,
               error: 'No active browser tab to close'
             })
@@ -1606,7 +1607,7 @@ export function useIpcEvents(): void {
                     tabs.some((tab) => tab.id === workspaceId)
                   )?.[0] ?? null
                 if (owningWorktreeId && isPinnedSessionTab(store, owningWorktreeId, workspaceId)) {
-                  window.api.ui.replyTabClose({
+                  api.ui.replyTabClose({
                     requestId: data.requestId,
                     error: `Browser tab ${workspaceId} is pinned`
                   })
@@ -1616,12 +1617,12 @@ export function useIpcEvents(): void {
               } else {
                 store.closeBrowserPage(tabToClose)
               }
-              window.api.ui.replyTabClose({ requestId: data.requestId })
+              api.ui.replyTabClose({ requestId: data.requestId })
               return
             }
           }
           if (explicitTargetId) {
-            window.api.ui.replyTabClose({
+            api.ui.replyTabClose({
               requestId: data.requestId,
               error: `Browser tab ${explicitTargetId} not found`
             })
@@ -1632,16 +1633,16 @@ export function useIpcEvents(): void {
               tabs.some((tab) => tab.id === tabToClose)
             )?.[0] ?? null
           if (owningWorktreeId && isPinnedSessionTab(store, owningWorktreeId, tabToClose)) {
-            window.api.ui.replyTabClose({
+            api.ui.replyTabClose({
               requestId: data.requestId,
               error: `Browser tab ${tabToClose} is pinned`
             })
             return
           }
           store.closeBrowserTab(tabToClose)
-          window.api.ui.replyTabClose({ requestId: data.requestId })
+          api.ui.replyTabClose({ requestId: data.requestId })
         } catch (err) {
-          window.api.ui.replyTabClose({
+          api.ui.replyTabClose({
             requestId: data.requestId,
             error: err instanceof Error ? err.message : 'Tab close failed'
           })
@@ -1650,7 +1651,7 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onNewTerminalTab(() => {
+      api.ui.onNewTerminalTab(() => {
         const store = useAppStore.getState()
         if (isFloatingWorkspacePanelFocused()) {
           void createFloatingWorkspaceTerminalTab(store)
@@ -1700,7 +1701,7 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onCloseActiveTab(() => {
+      api.ui.onCloseActiveTab(() => {
         if (isEmptyFloatingWorkspacePanelVisible()) {
           window.dispatchEvent(new Event(TOGGLE_FLOATING_TERMINAL_EVENT))
           return
@@ -1733,7 +1734,7 @@ export function useIpcEvents(): void {
     )
 
     unsubs.push(
-      window.api.ui.onSwitchTab((direction) => {
+      api.ui.onSwitchTab((direction) => {
         const store = useAppStore.getState()
         if (isFloatingWorkspacePanelFocused()) {
           switchFloatingWorkspaceTab(store, direction, 'same-type')
@@ -1743,7 +1744,7 @@ export function useIpcEvents(): void {
       })
     )
     unsubs.push(
-      window.api.ui.onSwitchTabAcrossAllTypes((direction) => {
+      api.ui.onSwitchTabAcrossAllTypes((direction) => {
         const store = useAppStore.getState()
         if (isFloatingWorkspacePanelFocused()) {
           switchFloatingWorkspaceTab(store, direction, 'all-types')
@@ -1752,9 +1753,9 @@ export function useIpcEvents(): void {
         handleSwitchTabAcrossAllTypes(direction)
       })
     )
-    unsubs.push(window.api.ui.onSwitchRecentTab(handleSwitchRecentTab))
+    unsubs.push(api.ui.onSwitchRecentTab(handleSwitchRecentTab))
     unsubs.push(
-      window.api.ui.onSwitchTerminalTab((direction) => {
+      api.ui.onSwitchTerminalTab((direction) => {
         const store = useAppStore.getState()
         if (isFloatingWorkspacePanelFocused()) {
           switchFloatingWorkspaceTab(store, direction, 'terminal')
@@ -1765,17 +1766,17 @@ export function useIpcEvents(): void {
     )
 
     // Hydrate initial rate limit state then subscribe to push updates
-    window.api.rateLimits.get().then((state) => {
+    api.rateLimits.get().then((state) => {
       useAppStore.getState().setRateLimitsFromPush(state as RateLimitState)
     })
 
     unsubs.push(
-      window.api.rateLimits.onUpdate((state) => {
+      api.rateLimits.onUpdate((state) => {
         useAppStore.getState().setRateLimitsFromPush(state as RateLimitState)
       })
     )
 
-    const unsubscribeWorkspaceSpaceProgress = window.api.workspaceSpace?.onProgress?.(
+    const unsubscribeWorkspaceSpaceProgress = api.workspaceSpace?.onProgress?.(
       (progress) => {
         useAppStore.getState().applyWorkspaceSpaceProgress(progress)
       }
@@ -1790,10 +1791,10 @@ export function useIpcEvents(): void {
     // reflect the correct connected/disconnected state on app launch.
     void (async () => {
       try {
-        const targets = await window.api.ssh.listTargets()
+        const targets = await api.ssh.listTargets()
         useAppStore.getState().setSshTargetsMetadata(targets)
         for (const target of targets) {
-          const state = await window.api.ssh.getState({ targetId: target.id })
+          const state = await api.ssh.getState({ targetId: target.id })
           if (state) {
             useAppStore.getState().setSshConnectionState(target.id, state as SshConnectionState)
             // Why: if the renderer reattaches while an SSH session is alive
@@ -1802,8 +1803,8 @@ export function useIpcEvents(): void {
             // Ports panel doesn't show empty for an active session.
             if ((state as SshConnectionState).status === 'connected') {
               const [forwards, detected] = await Promise.all([
-                window.api.ssh.listPortForwards({ targetId: target.id }),
-                window.api.ssh.listDetectedPorts({ targetId: target.id })
+                api.ssh.listPortForwards({ targetId: target.id }),
+                api.ssh.listDetectedPorts({ targetId: target.id })
               ])
               // Why: if the session disconnected while we were awaiting the
               // snapshot, the disconnect handler already cleared port state.
@@ -1828,25 +1829,25 @@ export function useIpcEvents(): void {
     })()
 
     unsubs.push(
-      window.api.ssh.onCredentialRequest((data) => {
+      api.ssh.onCredentialRequest((data) => {
         useAppStore.getState().enqueueSshCredentialRequest(data)
       })
     )
 
     unsubs.push(
-      window.api.ssh.onCredentialResolved(({ requestId }) => {
+      api.ssh.onCredentialResolved(({ requestId }) => {
         useAppStore.getState().removeSshCredentialRequest(requestId)
       })
     )
 
     unsubs.push(
-      window.api.ssh.onPortForwardsChanged(({ targetId, forwards }) => {
+      api.ssh.onPortForwardsChanged(({ targetId, forwards }) => {
         useAppStore.getState().setPortForwards(targetId, forwards)
       })
     )
 
     unsubs.push(
-      window.api.ssh.onDetectedPortsChanged(({ targetId, ports }) => {
+      api.ssh.onDetectedPortsChanged(({ targetId, ports }) => {
         useAppStore.getState().setDetectedPorts(targetId, ports)
       })
     )
@@ -1929,7 +1930,7 @@ export function useIpcEvents(): void {
     const latestSshTargetStateEventByTargetId = new Map<string, number>()
 
     unsubs.push(
-      window.api.ssh.onStateChanged((data: { targetId: string; state: unknown }) => {
+      api.ssh.onStateChanged((data: { targetId: string; state: unknown }) => {
         const store = useAppStore.getState()
         const state = data.state as SshConnectionState
         const stateEventId = ++sshTargetStateEventId
@@ -1938,11 +1939,11 @@ export function useIpcEvents(): void {
           // Why: targets added after boot aren't in the labels map, while
           // removed targets can still race a final disconnect event. Confirm
           // with main before mutating renderer state for an unknown target id.
-          window.api.ssh
+          api.ssh
             .listTargets()
             // Why: this refresh is now a deletion guard, not just a label fetch.
             // Retry once so a transient IPC failure does not drop a real added-target event.
-            .catch(() => window.api.ssh.listTargets())
+            .catch(() => api.ssh.listTargets())
             .then((targets) => {
               if (latestSshTargetStateEventByTargetId.get(data.targetId) !== stateEventId) {
                 return
@@ -1975,7 +1976,7 @@ export function useIpcEvents(): void {
     let remoteWorkspaceClientId: string | null = null
     let remoteWorkspaceClientIdPromise: Promise<string | null> | null = null
     const getRemoteWorkspaceClientId = (): Promise<string | null> => {
-      const remoteWorkspace = window.api.remoteWorkspace
+      const remoteWorkspace = api.remoteWorkspace
       if (!remoteWorkspace) {
         return Promise.resolve(null)
       }
@@ -1991,10 +1992,10 @@ export function useIpcEvents(): void {
         .catch(() => null)
       return remoteWorkspaceClientIdPromise
     }
-    if (window.api.remoteWorkspace) {
+    if (api.remoteWorkspace) {
       void getRemoteWorkspaceClientId()
       unsubs.push(
-        window.api.remoteWorkspace.onChanged((event) => {
+        api.remoteWorkspace.onChanged((event) => {
           void (async () => {
             // Why: relay notifications can race the initial client-id IPC.
             // Self-originated writes must never bounce back into restore.
@@ -2016,7 +2017,7 @@ export function useIpcEvents(): void {
 
     // Zoom handling for menu accelerators and keyboard fallback paths.
     unsubs.push(
-      window.api.ui.onTerminalZoom((direction) => {
+      api.ui.onTerminalZoom((direction) => {
         const { activeView, activeTabType, editorFontZoomLevel, setEditorFontZoomLevel, settings } =
           useAppStore.getState()
         const target = resolveZoomTarget({
@@ -2030,7 +2031,7 @@ export function useIpcEvents(): void {
         if (target === 'editor') {
           const next = nextEditorFontZoomLevel(editorFontZoomLevel, direction)
           setEditorFontZoomLevel(next)
-          void window.api.ui.set({ editorFontZoomLevel: next })
+          void api.ui.set({ editorFontZoomLevel: next })
 
           // Why: use the same base font size the editor surfaces use (terminalFontSize)
           // and computeEditorFontSize to account for clamping, so the overlay percent
@@ -2042,13 +2043,13 @@ export function useIpcEvents(): void {
           return
         }
 
-        const current = window.api.ui.getZoomLevel()
+        const current = api.ui.getZoomLevel()
         const rawNext =
           direction === 'in' ? current + ZOOM_STEP : direction === 'out' ? current - ZOOM_STEP : 0
         const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, rawNext))
 
         applyUIZoom(next)
-        void window.api.ui.set({ uiZoomLevel: next })
+        void api.ui.set({ uiZoomLevel: next })
 
         dispatchZoomLevelChanged('ui', zoomLevelToPercent(next))
       })
@@ -2239,7 +2240,7 @@ export function useIpcEvents(): void {
       if (snapshotRequestedForReadyWindow) {
         return
       }
-      const getSnapshot = window.api.agentStatus.getSnapshot
+      const getSnapshot = api.agentStatus.getSnapshot
       if (typeof getSnapshot !== 'function') {
         return
       }
@@ -2258,7 +2259,7 @@ export function useIpcEvents(): void {
             applyAgentStatus(entry, { replay: true })
           }
           const getMigrationUnsupportedSnapshot =
-            window.api.agentStatus.getMigrationUnsupportedSnapshot
+            api.agentStatus.getMigrationUnsupportedSnapshot
           if (typeof getMigrationUnsupportedSnapshot !== 'function') {
             return
           }
@@ -2287,11 +2288,11 @@ export function useIpcEvents(): void {
     }
 
     unsubs.push(
-      window.api.agentStatus.onSet((data) => {
+      api.agentStatus.onSet((data) => {
         applyAgentStatus(data)
       })
     )
-    const unsubscribeMigrationUnsupported = window.api.agentStatus.onMigrationUnsupported?.(
+    const unsubscribeMigrationUnsupported = api.agentStatus.onMigrationUnsupported?.(
       (entry) => {
         const store = useAppStore.getState()
         if (!store.workspaceSessionReady) {
@@ -2306,7 +2307,7 @@ export function useIpcEvents(): void {
       unsubs.push(unsubscribeMigrationUnsupported)
     }
     const unsubscribeMigrationUnsupportedClear =
-      window.api.agentStatus.onMigrationUnsupportedClear?.(({ ptyId }) => {
+      api.agentStatus.onMigrationUnsupportedClear?.(({ ptyId }) => {
         useAppStore.getState().clearMigrationUnsupportedPty(ptyId)
       })
     if (unsubscribeMigrationUnsupportedClear) {

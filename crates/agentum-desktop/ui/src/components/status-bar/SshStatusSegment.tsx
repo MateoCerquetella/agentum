@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import React, { useCallback, useState } from 'react'
 import { AlertTriangle, Cloud, Loader2, MonitorSmartphone, Server, ServerOff } from 'lucide-react'
 import { toast } from 'sonner'
@@ -122,7 +123,7 @@ function TargetRow({
   const handleConnect = useCallback(async () => {
     setBusy(true)
     try {
-      await window.api.ssh.connect({ targetId })
+      await api.ssh.connect({ targetId })
       recordFeatureInteraction('ssh')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Connection failed')
@@ -136,7 +137,7 @@ function TargetRow({
   const handleDisconnect = useCallback(async () => {
     setBusy(true)
     try {
-      await window.api.ssh.disconnect({ targetId })
+      await api.ssh.disconnect({ targetId })
       recordFeatureInteraction('ssh')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Disconnect failed')

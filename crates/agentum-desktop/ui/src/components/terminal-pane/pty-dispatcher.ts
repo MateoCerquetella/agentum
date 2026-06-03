@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /**
  * Singleton PTY event dispatcher and eager buffer helpers.
  *
@@ -85,7 +86,7 @@ export function ensurePtyDispatcher(): void {
     return
   }
   ptyDispatcherAttached = true
-  window.api.pty.onData((payload) => {
+  api.pty.onData((payload) => {
     let meta: PtyDataMeta | undefined
     if (typeof payload.seq === 'number') {
       meta ??= {}
@@ -111,10 +112,10 @@ export function ensurePtyDispatcher(): void {
       }
     }
   })
-  window.api.pty.onReplay((payload) => {
+  api.pty.onReplay((payload) => {
     ptyReplayHandlers.get(payload.id)?.(payload.data)
   })
-  window.api.pty.onExit((payload) => {
+  api.pty.onExit((payload) => {
     ptyExitHandlers.get(payload.id)?.(payload.code)
     const sidecars = ptyExitSidecars.get(payload.id)
     if (sidecars && sidecars.size > 0) {

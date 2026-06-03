@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback, useEffect, useState } from 'react'
 import { Check, Clipboard, Copy, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -55,7 +56,7 @@ export function FloatingTerminalOrchestrationDialog({
   const refreshCliStatus = useCallback(async (): Promise<void> => {
     setCliLoading(true)
     try {
-      setCliStatusIfMounted(await window.api.cli.getInstallStatus())
+      setCliStatusIfMounted(await api.cli.getInstallStatus())
     } catch (error) {
       if (mountedRef.current) {
         toast.error(error instanceof Error ? error.message : 'Failed to load CLI status.')
@@ -116,7 +117,7 @@ export function FloatingTerminalOrchestrationDialog({
       localStorage.setItem(ORCHESTRATION_ENABLED_STORAGE_KEY, '1')
       localStorage.removeItem(ORCHESTRATION_SETUP_DISMISSED_STORAGE_KEY)
       notifyOrchestrationSetupStateChanged()
-      await window.api.ui.writeClipboardText(ORCHESTRATION_SKILL_INSTALL_COMMAND)
+      await api.ui.writeClipboardText(ORCHESTRATION_SKILL_INSTALL_COMMAND)
       if (activeTabId) {
         window.dispatchEvent(
           new CustomEvent(PASTE_TERMINAL_TEXT_EVENT, {
@@ -147,7 +148,7 @@ export function FloatingTerminalOrchestrationDialog({
 
   const handleCopySkillCommand = async (): Promise<void> => {
     try {
-      await window.api.ui.writeClipboardText(ORCHESTRATION_SKILL_INSTALL_COMMAND)
+      await api.ui.writeClipboardText(ORCHESTRATION_SKILL_INSTALL_COMMAND)
       toast.success('Copied the skill install command.')
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to copy skill command.')

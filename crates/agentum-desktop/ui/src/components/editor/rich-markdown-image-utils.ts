@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { basename, dirname, joinPath } from '@/lib/path'
 
 export function extractIpcErrorMessage(err: unknown, fallback: string): string {
@@ -34,7 +35,7 @@ export async function getImageCopyDestination(
   // Why: picking "diagram.png" from elsewhere should not silently replace an
   // existing sibling asset in the note's directory. We deconflict the copy
   // target and keep the inserted markdown pointing at the unique name.
-  while (destPath !== sourceImagePath && (await window.api.shell.pathExists(destPath))) {
+  while (destPath !== sourceImagePath && (await api.shell.pathExists(destPath))) {
     if (suffix >= MAX_DECONFLICT_ATTEMPTS) {
       throw new Error(`Too many name collisions for "${originalImageName}".`)
     }

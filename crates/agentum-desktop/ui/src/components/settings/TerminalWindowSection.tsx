@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useRef, useState } from 'react'
 import { RotateCw } from 'lucide-react'
 import type { GlobalSettings, TerminalColorOverrides } from '../../../../shared/types'
@@ -94,7 +95,7 @@ export function TerminalWindowSection({
     }
     setRelaunchingBlur(true)
     try {
-      await window.api.app.relaunch()
+      await api.app.relaunch()
     } catch {
       if (mountedRef.current) {
         setRelaunchingBlur(false)

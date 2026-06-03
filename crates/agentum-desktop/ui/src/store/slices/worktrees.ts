@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
@@ -490,8 +491,8 @@ async function listDetectedWorktreesForRepo(
 ): Promise<DetectedWorktreeListResult> {
   const target = getActiveRuntimeTarget(settings)
   if (target.kind === 'local') {
-    const worktreesApi = window.api.worktrees as typeof window.api.worktrees & {
-      listDetected?: typeof window.api.worktrees.listDetected
+    const worktreesApi = api.worktrees as typeof api.worktrees & {
+      listDetected?: typeof api.worktrees.listDetected
     }
     if (typeof worktreesApi.listDetected === 'function') {
       return worktreesApi.listDetected({ repoId })
@@ -525,7 +526,7 @@ async function listWorktreeLineageForRuntime(
 ): Promise<Record<string, WorktreeLineage>> {
   const target = getActiveRuntimeTarget(settings)
   if (target.kind === 'local') {
-    return window.api.worktrees.listLineage()
+    return api.worktrees.listLineage()
   }
   return (
     await callRuntimeRpc<{ lineage: Record<string, WorktreeLineage> }>(
@@ -560,7 +561,7 @@ async function persistWorktreeMeta(
 ): Promise<void> {
   const target = getActiveRuntimeTarget(settings)
   if (target.kind === 'local') {
-    await window.api.worktrees.updateMeta({ worktreeId, updates })
+    await api.worktrees.updateMeta({ worktreeId, updates })
     return
   }
   await callRuntimeRpc(
@@ -580,7 +581,7 @@ async function resolveLinkedPrPushTarget(
     const target = getActiveRuntimeTarget(settings)
     const result =
       target.kind === 'local'
-        ? await window.api.worktrees.resolvePrBase({ repoId, prNumber })
+        ? await api.worktrees.resolvePrBase({ repoId, prNumber })
         : await callRuntimeRpc<GitHubPrStartPoint | { error: string }>(
             target,
             'worktree.resolvePrBase',
@@ -917,7 +918,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
       let updatedRemoteWorktree: WorktreeWithLineage | undefined
       const lineage =
         target.kind === 'local'
-          ? await window.api.worktrees.updateLineage({ worktreeId, ...args })
+          ? await api.worktrees.updateLineage({ worktreeId, ...args })
           : await callRuntimeRpc<{ worktree: WorktreeWithLineage }>(
               target,
               'worktree.set',
@@ -1073,8 +1074,8 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
           const target = getActiveRuntimeTarget(get().settings)
           const result =
             target.kind === 'local'
-              ? await window.api.worktrees.create(createArgs)
-              : await callRuntimeRpc<Awaited<ReturnType<typeof window.api.worktrees.create>>>(
+              ? await api.worktrees.create(createArgs)
+              : await callRuntimeRpc<Awaited<ReturnType<typeof api.worktrees.create>>>(
                   target,
                   'worktree.create',
                   {
@@ -1170,7 +1171,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
 
       const target = getActiveRuntimeTarget(get().settings)
       const removalResult = await (target.kind === 'local'
-        ? window.api.worktrees.remove({ worktreeId, force, skipArchive })
+        ? api.worktrees.remove({ worktreeId, force, skipArchive })
         : callRuntimeRpc<RemoveWorktreeResult>(
             target,
             'worktree.rm',
@@ -1184,7 +1185,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
         ?.displayName?.trim()
       if (worktreeDisplayName) {
         try {
-          await window.api.automations?.snapshotWorkspaceName?.({
+          await api.automations?.snapshotWorkspaceName?.({
             workspaceId: worktreeId,
             displayName: worktreeDisplayName
           })
@@ -1450,7 +1451,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
     try {
       const target = getActiveRuntimeTarget(get().settings)
       const result = await (target.kind === 'local'
-        ? window.api.worktrees.forceDeletePreservedBranch({
+        ? api.worktrees.forceDeletePreservedBranch({
             worktreeId,
             branchName,
             expectedHead

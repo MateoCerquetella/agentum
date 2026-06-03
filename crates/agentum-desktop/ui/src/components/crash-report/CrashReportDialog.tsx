@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Clipboard, Send } from 'lucide-react'
 import { toast } from 'sonner'
@@ -78,7 +79,7 @@ export function CrashReportDialog(): React.JSX.Element {
   const loadViewerForOpenDialog = useCallback((): void => {
     const requestId = ++viewerRequestIdRef.current
     setViewer(null)
-    void window.api.gh
+    void api.gh
       .viewer()
       .then((nextViewer) => {
         if (mountedRef.current && requestId === viewerRequestIdRef.current) {
@@ -116,15 +117,15 @@ export function CrashReportDialog(): React.JSX.Element {
       setLoading(true)
       try {
         const nextReport = promptIfPresent
-          ? await window.api.crashReports.getLatestPending()
-          : await window.api.crashReports.getLatestReport()
+          ? await api.crashReports.getLatestPending()
+          : await api.crashReports.getLatestReport()
         let displayedReport = nextReport
         if (nextReport?.status === 'pending' && promptIfPresent) {
           try {
             // Why: startup crash prompts are one-shot. The open dialog keeps the
             // report data locally if the user chooses to send immediately, while
             // Help > Report Crash can still reopen dismissed unsent reports.
-            await window.api.crashReports.dismiss({ reportId: nextReport.id })
+            await api.crashReports.dismiss({ reportId: nextReport.id })
             displayedReport = { ...nextReport, status: 'dismissed' as const }
           } catch (error) {
             console.error('Failed to dismiss crash report after startup prompt:', error)
@@ -157,7 +158,7 @@ export function CrashReportDialog(): React.JSX.Element {
   }, [loadCrashReport])
 
   useEffect(() => {
-    return window.api.ui.onOpenCrashReport(() => {
+    return api.ui.onOpenCrashReport(() => {
       void loadCrashReport(false).then(() => {
         if (mountedRef.current) {
           openDialog()
@@ -189,7 +190,7 @@ export function CrashReportDialog(): React.JSX.Element {
   }, [openCrashReport])
 
   const handleCopy = async (): Promise<void> => {
-    const result = await window.api.crashReports.copyLatestDiagnostics(
+    const result = await api.crashReports.copyLatestDiagnostics(
       report ? { reportId: report.id, notes } : {}
     )
     if (!result.ok) {
@@ -201,7 +202,7 @@ export function CrashReportDialog(): React.JSX.Element {
 
   const dismissReportIfNeeded = async (): Promise<void> => {
     if (report?.status === 'pending') {
-      await window.api.crashReports.dismiss({ reportId: report.id })
+      await api.crashReports.dismiss({ reportId: report.id })
       if (mountedRef.current) {
         setReport({ ...report, status: 'dismissed' })
       }
@@ -221,7 +222,7 @@ export function CrashReportDialog(): React.JSX.Element {
     }
     setSubmitting(true)
     try {
-      const result = await window.api.crashReports.submit({
+      const result = await api.crashReports.submit({
         reportId: report.id,
         notes,
         // Why: crash reporting must degrade to anonymous if gh is unavailable;

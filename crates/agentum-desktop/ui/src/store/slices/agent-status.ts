@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the agent-status slice co-locates live map, retained snapshots, retention-suppression, and tab-prefix sweep so the teardown contract stays readable end-to-end. Splitting across files would scatter the drop/remove/retain interactions that must stay in lockstep. */
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
@@ -626,7 +627,7 @@ export const createAgentStatusSlice: StateCreator<AppState, [], [], AgentStatusS
       // Why: the typeof window guard keeps the slice usable from the
       // node test environment, where window is undefined.
       if (typeof window !== 'undefined') {
-        window.api?.agentStatus?.drop?.(paneKey)
+        api?.agentStatus?.drop?.(paneKey)
       }
     },
 
@@ -888,7 +889,7 @@ export const createAgentStatusSlice: StateCreator<AppState, [], [], AgentStatusS
     dismissRetainedAgentsByWorktree: (worktreeId) => {
       // Why: collect inside set so we capture the exact paneKeys removed
       // (worktree filter is applied here). After the synchronous set()
-      // returns, fan out a window.api.agentStatus.drop per removed key so
+      // returns, fan out a api.agentStatus.drop per removed key so
       // the main-process hook cache (and on-disk last-status file) eviction
       // matches the renderer's removal. Without this, the on-disk cache
       // would resurrect the dismissed rows on the next launch.
@@ -936,7 +937,7 @@ export const createAgentStatusSlice: StateCreator<AppState, [], [], AgentStatusS
       })
       if (typeof window !== 'undefined') {
         for (const paneKey of dismissedPaneKeys) {
-          window.api?.agentStatus?.drop?.(paneKey)
+          api?.agentStatus?.drop?.(paneKey)
         }
       }
     },

@@ -1,3 +1,4 @@
+import { api } from '@/tauri'
 /* oxlint-disable max-lines -- Why: co-locates forwarded list, detected list, modal form, and
 per-entry actions in one file to keep the data flow straightforward. */
 import React, { useCallback, useMemo, useState } from 'react'
@@ -421,7 +422,7 @@ function LocalPortRow({
   onOpenInBrowser: (port: WorkspacePort) => void
 }): React.JSX.Element {
   const handleCopy = useCallback(() => {
-    void window.api.ui.writeClipboardText(addressForPort(port))
+    void api.ui.writeClipboardText(addressForPort(port))
   }, [port])
 
   const handleOpenBrowser = useCallback(() => {
@@ -573,7 +574,7 @@ function LocalPortRow({
         <ContextMenuItem
           className={LOCAL_PORT_MENU_ITEM_CLASS}
           onSelect={() => {
-            void window.api.ui.writeClipboardText(JSON.stringify(port, null, 2))
+            void api.ui.writeClipboardText(JSON.stringify(port, null, 2))
           }}
         >
           <Copy size={13} />
@@ -713,7 +714,7 @@ function SshPortsPanel(): React.JSX.Element {
     (entry: PortForwardEntry) => {
       const url = browserUrlForPortForwardEntry(entry)
       if (!shouldOpenWorkspacePortInAgentumBrowser(settings)) {
-        void window.api.shell.openUrl(url)
+        void api.shell.openUrl(url)
         return
       }
       if (!activeWorktree?.id) {
@@ -870,7 +871,7 @@ function ForwardedPortRow({
   const handleRemove = useCallback(async () => {
     setRemoving(true)
     try {
-      await window.api.ssh.removePortForward({ id: entry.id })
+      await api.ssh.removePortForward({ id: entry.id })
     } catch {
       // broadcast will update state
     }
@@ -880,7 +881,7 @@ function ForwardedPortRow({
   }, [entry.id, mountedRef])
 
   const handleCopy = useCallback(() => {
-    void window.api.ui.writeClipboardText(forwardedAddress)
+    void api.ui.writeClipboardText(forwardedAddress)
   }, [forwardedAddress])
 
   const handleOpenBrowser = useCallback(() => {
@@ -1174,7 +1175,7 @@ function PortForwardForm({
       setSubmitting(true)
       try {
         await (mode === 'edit' && editId
-          ? window.api.ssh.updatePortForward({
+          ? api.ssh.updatePortForward({
               id: editId,
               targetId,
               localPort: lPort,
@@ -1182,7 +1183,7 @@ function PortForwardForm({
               remotePort: rPort,
               label: label || undefined
             })
-          : window.api.ssh.addPortForward({
+          : api.ssh.addPortForward({
               targetId,
               localPort: lPort,
               remoteHost: remoteHost || 'localhost',
