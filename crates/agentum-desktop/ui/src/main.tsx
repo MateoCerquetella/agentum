@@ -31,7 +31,12 @@ if (
   void import('react-grab/styles.css')
 }
 
-applyDocumentTheme('dark', { disableTransitions: false })
+// Apply the last-used theme immediately so the first paint matches the user's
+// choice (no dark flash on light setups). App.tsx re-applies authoritatively once
+// settings load, and persists `agentum-theme` on every change.
+const persistedTheme =
+  (localStorage.getItem('agentum-theme') as 'system' | 'dark' | 'light' | null) ?? 'system'
+applyDocumentTheme(persistedTheme, { disableTransitions: false })
 
 const rootElement = document.getElementById('root')
 if (!rootElement) {

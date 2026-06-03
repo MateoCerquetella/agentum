@@ -1053,6 +1053,12 @@ function App(): React.JSX.Element {
     if (!settings) {
       return
     }
+    // Persist so the next boot's first paint matches (see main.tsx).
+    try {
+      localStorage.setItem('agentum-theme', settings.theme)
+    } catch {
+      /* ignore storage failures */
+    }
 
     if (settings.theme === 'dark') {
       applyDocumentTheme('dark')
