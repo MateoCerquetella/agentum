@@ -206,6 +206,18 @@ export function dispatchTerminalNotification(
   event: TerminalNotificationEvent
 ): void {
   const state = useAppStore.getState()
+  const notificationSettings = state.settings?.notifications
+
+  // Why: check if notifications are globally enabled and source-specific settings.
+  if (notificationSettings?.enabled === false) {
+    return
+  }
+  if (event.source === 'agent-task-complete' && notificationSettings?.agentTaskComplete === false) {
+    return
+  }
+  if (event.source === 'terminal-bell' && notificationSettings?.terminalBell !== true) {
+    return
+  }
 
   // Why: shutdownWorktreeTerminals clears ptyIdsByTabId synchronously
   // before killing PTYs asynchronously. Any notification arriving after
@@ -242,6 +254,24 @@ export function dispatchTerminalNotification(
     }
   }
 
+  if (event.source === 'terminal-bell') {
+    // Why: bell events from background terminals should mark the worktree as unread
+    // so users can see which worktree needs attention.
+    if (state.activeWorktreeId !== worktreeId || !isAgentumWindowForegroundFocused()) {
+      state.markWorktreeUnread(worktreeId)
+    }
+  }
+
+  // Why: suppressWhenFocused allows users to skip OS notifications when the
+  // triggering worktree is already visible and the window is focused.
+  // Default is true (suppress), so only skip suppression when explicitly set to false.
+  const suppressWhenFocused = notificationSettings?.suppressWhenFocused !== false
+  const isActiveAndFocused =
+    state.activeWorktreeId === worktreeId && isAgentumWindowForegroundFocused()
+  if (suppressWhenFocused && isActiveAndFocused) {
+    return
+  }
+
   // Why: prefer worktree.repoId over string-parsing the worktreeId. The
   // `${repoId}::${path}` format is an implementation detail of id
   // construction; coupling the notification dispatcher to it would silently
@@ -251,6 +281,7 @@ export function dispatchTerminalNotification(
   const repo = worktree ? getRepoMapFromState(state).get(worktree.repoId) : null
   const customSoundId = state.settings?.notifications?.customSoundId ?? 'system'
   const customSoundVolume = state.settings?.notifications?.customSoundVolume ?? null
+  const customSoundPath = state.settings?.notifications?.customSoundPath ?? null
   const agentStatus =
     event.source === 'agent-task-complete' && event.paneKey
       ? state.agentStatusByPaneKey[event.paneKey]
@@ -285,7 +316,7 @@ export function dispatchTerminalNotification(
     })
     .then((result) => {
       if (result.delivered) {
-        void playDesktopNotificationSound(customSoundId, customSoundVolume)
+        void playDesktopNotificationSound(customSoundId, customSoundVolume, customSoundPath)
       }
     })
     .catch((err) => {

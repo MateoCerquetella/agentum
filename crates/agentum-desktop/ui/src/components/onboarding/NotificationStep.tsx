@@ -16,6 +16,7 @@ import {
 import { sendNotificationSettingsTestNotification } from '@/components/settings/NotificationsPane'
 import { getNotificationSoundOptions } from '@/components/notification-sound-options'
 import { useMountedRef } from '@/hooks/useMountedRef'
+import { playDesktopNotificationSound } from '@/lib/desktop-notification-sound'
 
 export type NotificationDraft = {
   agentTaskComplete: boolean
@@ -107,16 +108,19 @@ export function NotificationStep({
   }
 
   const previewSound = async (
-    customSoundId: GlobalSettings['notifications']['customSoundId']
+    soundId: GlobalSettings['notifications']['customSoundId'],
+    soundPath?: string | null
   ): Promise<void> => {
-    if (customSoundId === 'system') {
+    if (soundId === 'system') {
       return
     }
-    const result = await api.notifications.playSound({
-      force: true,
-      volume: getCustomSoundVolume()
-    })
-    if (!result.played) {
+    const played = await playDesktopNotificationSound(
+      soundId,
+      getCustomSoundVolume(),
+      soundPath ?? notificationSettingsRef.current?.customSoundPath,
+      { force: true }
+    )
+    if (!played) {
       if (mountedRef.current) {
         toast.error('Notification sound could not be played')
       }
@@ -129,7 +133,7 @@ export function NotificationStep({
       const soundPath = await api.shell.pickAudio()
       if (soundPath) {
         await updateNotificationSettings({ customSoundId: 'custom', customSoundPath: soundPath })
-        await previewSound('custom')
+        await previewSound('custom', soundPath)
       }
     } finally {
       if (mountedRef.current) {
