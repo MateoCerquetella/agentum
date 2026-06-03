@@ -34,7 +34,7 @@ Update the checkboxes + "Current state" after every meaningful step.
 - [x] deleted `tauri/legacy-global.ts` + dropped its import from main.tsx
 - [x] node-isms (renderer-live): `src/shared/base64.ts` + `src/shared/platform.ts` helpers; fixed Buffer in `e2ee-crypto.ts`/`pairing.ts`, process.platform in `constants.ts`. Crypto/pairing tests pass.
 - [x] VERIFIED renderer is node-free in OUR code: node-side leftovers (`secure-file.ts`,`agent-hook-listener.ts`,`remote-runtime-client.ts`,`runtime-environment-store.ts` — fs/net/ws) are DEAD (0 refs in dist bundle, no reachable importers). Remaining Buffer(2528)/process.platform(10) in dist are third-party lib internals (out of scope).
-- NOTE: dead node-side Electron-leftover files remain in src/ (not bundled, not run). Deleting them is a separate dead-code cleanup with web-entry/CLI coupling risk — deferred.
+- [x] DEAD node cluster DELETED (17 files): `agent-hook-listener/relay`, `secure-file`, `runtime-environment-store`, `remote-runtime-client`, `remote-runtime-request-{connection,frames,websocket}`, `filesystem-rename-collision` + their tests. Verified: only imported by their own tests + each other (no production, no web-entry, no barrel re-export). `vite build` green; vitest unchanged (same 24 pre-existing fails; the −58 passing are the removed dead tests). `src/` is now literally node-free (no fs/net/ws/node: imports, no node Buffer/process) excl. out-of-scope web/.
 
 ### P4 — Rust stubs
 - [x] pty_spawn (shared `open_pty` helper; emits `pty-data`/`pty-exit`; returns {id}) — Rust compiles, app boots
