@@ -285,7 +285,11 @@ export function mergeSnapshotAndSessions(
   }
 
   // ── Step 1: ingest snapshot worktrees as the local-truth foundation.
-  if (snapshot) {
+  // Guard `snapshot.worktrees`: the agentum host-metrics snapshot can be present
+  // but omit the worktrees array (different shape than orca's MemorySnapshot),
+  // which otherwise crashed the status bar with "undefined is not an object
+  // (evaluating 'snapshot.worktrees')" — e.g. on opening the SSH segment.
+  if (snapshot?.worktrees) {
     for (const wt of snapshot.worktrees as readonly WorktreeMemory[]) {
       const repo = ensureRepo(wt.repoId, wt.repoName)
       const sessions: UnifiedSessionRow[] = wt.sessions.map((s) => {
