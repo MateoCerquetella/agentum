@@ -86,6 +86,13 @@ function getCompactAgentTime(agent: DashboardAgentRowData, now: number): string 
   return startedAt > 0 ? formatShortTimeAgo(startedAt, now) : null
 }
 
+function formatContextUsage(percent: number | undefined): string | null {
+  if (typeof percent !== 'number') {
+    return null
+  }
+  return `ctx ${percent}%`
+}
+
 const SUMMARY_STATE_ORDER: AgentDotState[] = [
   'waiting',
   'blocked',
@@ -315,6 +322,7 @@ export const CompactAgentRow = React.memo(function CompactAgentRow({
     ? formatAgentTypeLabel(agent.agentType)
     : getCompactAgentSecondary(agent)
   const shortTime = getCompactAgentTime(agent, now)
+  const contextUsage = formatContextUsage(agent.entry.contextUsagePercent)
 
   const handleActivate = useCallback(
     (e: React.MouseEvent) => {
@@ -369,6 +377,14 @@ export const CompactAgentRow = React.memo(function CompactAgentRow({
       {hasChildDisclosure && !childAgentsExpanded && (
         <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70">
           +{childAgentCount}
+        </span>
+      )}
+      {contextUsage && (
+        <span
+          className="shrink-0 rounded-sm bg-sidebar-accent/50 px-1 text-[10px] tabular-nums text-muted-foreground/70"
+          title="Context window usage"
+        >
+          {contextUsage}
         </span>
       )}
       {shortTime && (

@@ -323,4 +323,39 @@ describe('parseAgentStatusPayload', () => {
       expect(secondLast >= 0xd800 && secondLast <= 0xdbff).toBe(true)
     }
   })
+
+  it('parses contextUsagePercent when present as a number', () => {
+    const result = parseAgentStatusPayload('{"state":"working","contextUsagePercent":75}')
+    expect(result!.contextUsagePercent).toBe(75)
+  })
+
+  it('clamps contextUsagePercent to 0-100 range', () => {
+    expect(
+      parseAgentStatusPayload('{"state":"working","contextUsagePercent":-10}')!.contextUsagePercent
+    ).toBe(0)
+    expect(
+      parseAgentStatusPayload('{"state":"working","contextUsagePercent":150}')!.contextUsagePercent
+    ).toBe(100)
+  })
+
+  it('rounds contextUsagePercent to nearest integer', () => {
+    expect(
+      parseAgentStatusPayload('{"state":"working","contextUsagePercent":75.7}')!.contextUsagePercent
+    ).toBe(76)
+    expect(
+      parseAgentStatusPayload('{"state":"working","contextUsagePercent":75.3}')!.contextUsagePercent
+    ).toBe(75)
+  })
+
+  it('ignores contextUsagePercent when not a number', () => {
+    expect(
+      parseAgentStatusPayload('{"state":"working","contextUsagePercent":"75"}')!.contextUsagePercent
+    ).toBeUndefined()
+    expect(
+      parseAgentStatusPayload('{"state":"working","contextUsagePercent":null}')!.contextUsagePercent
+    ).toBeUndefined()
+    expect(
+      parseAgentStatusPayload('{"state":"working","contextUsagePercent":true}')!.contextUsagePercent
+    ).toBeUndefined()
+  })
 })

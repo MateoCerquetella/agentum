@@ -103,6 +103,9 @@ export type AgentStatusEntry = {
    *  Why: parent/child agent hierarchy is pane-level state, not worktree
    *  lineage; workers often run in the same worktree as their coordinator. */
   orchestration?: AgentStatusOrchestrationContext
+  /** Context window usage as a percentage (0-100). Reported by agents that track
+   *  their context consumption. Undefined when the agent doesn't report usage. */
+  contextUsagePercent?: number
 }
 
 export type MigrationUnsupportedPtyEntry = {
@@ -130,6 +133,7 @@ export type AgentStatusPayload = {
   toolInput?: string
   lastAssistantMessage?: string
   interrupted?: boolean
+  contextUsagePercent?: number
 }
 
 /**
@@ -306,7 +310,13 @@ function normalizeAgentStatusObject(parsed: unknown): ParsedAgentStatusPayload |
     ),
     // Why: only meaningful on `done`. Coerce to undefined on other states so
     // the field doesn't leak stale truth through state transitions.
-    interrupted: obj.interrupted === true && state === 'done' ? true : undefined
+    interrupted: obj.interrupted === true && state === 'done' ? true : undefined,
+    // Why: clamp to 0-100 range and only accept numbers. Agents that don't
+    // track context usage simply omit the field.
+    contextUsagePercent:
+      typeof obj.contextUsagePercent === 'number'
+        ? Math.max(0, Math.min(100, Math.round(obj.contextUsagePercent)))
+        : undefined
   }
 }
 

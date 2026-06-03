@@ -302,7 +302,11 @@ export const createAgentStatusSlice: StateCreator<AppState, [], [], AgentStatusS
           // already clamps it to `undefined` for non-done states, so writing
           // the field through directly preserves truth for done and resets
           // it when a new turn starts (working → Stop reprices it).
-          interrupted: payload.interrupted
+          interrupted: payload.interrupted,
+          // Why: context usage is a point-in-time snapshot from the agent.
+          // Preserve the last known value if the current payload omits it,
+          // so brief status pings don't flicker the display to "unknown".
+          contextUsagePercent: payload.contextUsagePercent ?? existing?.contextUsagePercent
         }
         if (
           isAgentCompletionState(entry.state) &&

@@ -273,8 +273,12 @@ const DashboardAgentRow = React.memo(function DashboardAgentRow({
   if (doneAt !== null) {
     tsParts.push(`done ${formatTimeAgo(doneAt, now)}`)
   }
+  const contextUsagePercent = agent.entry.contextUsagePercent
 
   const titleParts = sendTargetDisabledReason ? [sendTargetDisabledReason, ...tsParts] : tsParts
+  if (typeof contextUsagePercent === 'number') {
+    titleParts.push(`context ${contextUsagePercent}%`)
+  }
 
   return (
     // Why: NOT role="button" / tabIndex={0}. The row contains real <button>
