@@ -120,13 +120,35 @@ pub fn worktrees_update_meta(
     let mut worktrees = read_worktrees()?;
     let index = worktrees
         .iter()
-        .position(|worktree| worktree.id == worktree_id)
-        .ok_or_else(|| format!("worktree not found: {worktree_id}"))?;
+        .position(|worktree| worktree.id == worktree_id);
 
-    let mut object = serde_json::to_value(&worktrees[index])
-        .ok()
-        .and_then(|value| value.as_object().cloned())
-        .ok_or_else(|| "failed to serialize worktree".to_string())?;
+    // Git-detected worktrees (e.g. a repo's main/staging trees) often have no
+    // registry entry, so the old "not found" error meant pin/unpin silently
+    // failed. Upsert a minimal entry instead so metadata (isPinned, displayName,
+    // …) persists for any worktree the UI shows.
+    let mut object = match index {
+        Some(i) => serde_json::to_value(&worktrees[i])
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .ok_or_else(|| "failed to serialize worktree".to_string())?,
+        None => {
+            let repo_id = worktree_id
+                .split_once("::")
+                .map(|(repo, _)| repo.to_string())
+                .unwrap_or_default();
+            let mut seed = Map::new();
+            seed.insert("id".into(), Value::String(worktree_id.clone()));
+            seed.insert("repoId".into(), Value::String(repo_id));
+            seed.insert("displayName".into(), Value::String(String::new()));
+            seed.insert("comment".into(), Value::String(String::new()));
+            seed.insert("isArchived".into(), Value::Bool(false));
+            seed.insert("isUnread".into(), Value::Bool(false));
+            seed.insert("isPinned".into(), Value::Bool(false));
+            seed.insert("sortOrder".into(), Value::Number(0.into()));
+            seed.insert("lastActivityAt".into(), Value::Number(now_millis().into()));
+            seed
+        }
+    };
     for (key, value) in updates {
         // id encodes repoId::path; neither is user-updatable.
         if key == "id" || key == "repoId" {
@@ -135,7 +157,10 @@ pub fn worktrees_update_meta(
         object.insert(key, value);
     }
     let updated: Worktree = serde_json::from_value(Value::Object(object)).map_err(map_err)?;
-    worktrees[index] = updated.clone();
+    match index {
+        Some(i) => worktrees[i] = updated.clone(),
+        None => worktrees.push(updated.clone()),
+    }
     write_worktrees(&worktrees)?;
     Ok(updated)
 }
