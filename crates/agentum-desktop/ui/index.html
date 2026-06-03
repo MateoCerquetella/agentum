@@ -4,8 +4,21 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>agentum</title>
+  <script>
+    // Apply the persisted theme to <html> before first paint so there's no flash
+    // and no conflicting hardcoded `body.dark` (which previously overrode the
+    // theme tokens for the sidebar/topbar chrome). Kept in sync by applyDocumentTheme.
+    try {
+      var t = localStorage.getItem('agentum-theme') || 'system'
+      var dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
+      document.documentElement.classList.toggle('dark', dark)
+      document.documentElement.classList.toggle('light', !dark)
+    } catch (e) {
+      /* ignore */
+    }
+  </script>
 </head>
-<body class="dark">
+<body>
   <div id="root"></div>
   <script type="module" src="/src/main.tsx"></script>
 </body>
