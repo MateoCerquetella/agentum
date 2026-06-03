@@ -428,7 +428,19 @@ describe('connectPanePty', () => {
       repos: [{ id: 'repo1', connectionId: null, displayName: 'agentum' }],
       sshConnectionStates: new Map(),
       cacheTimerByKey: {},
-      settings: { promptCacheTimerEnabled: true, experimentalTerminalAttention: true },
+      settings: {
+        promptCacheTimerEnabled: true,
+        experimentalTerminalAttention: true,
+        notifications: {
+          enabled: true,
+          agentTaskComplete: true,
+          terminalBell: true,
+          suppressWhenFocused: false,
+          customSoundId: 'system',
+          customSoundPath: null,
+          customSoundVolume: 100
+        }
+      },
       codexRestartNoticeByPtyId: {},
       deferredSshReconnectTargets: [],
       deferredSshSessionIdsByTabId: {},

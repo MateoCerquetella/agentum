@@ -19,6 +19,7 @@ import { BellRing, Bot, FileAudio, Siren, Upload, Volume2 } from 'lucide-react'
 import { getNotificationSoundOptions } from '@/components/notification-sound-options'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { useAppStore } from '@/store'
+import { playDesktopNotificationSound } from '@/lib/desktop-notification-sound'
 export { NOTIFICATIONS_PANE_SEARCH_ENTRIES } from './notifications-search'
 
 type NotificationsPaneProps = {
@@ -104,16 +105,17 @@ export async function sendNotificationSettingsTestNotification(
     // Why: the Test button must always play through, even if the user clicks
     // it twice in quick succession — the in-flight dedupe is for incidental
     // bursts of real notifications, not for an explicit user action.
-    const soundResult =
-      notificationSettings.customSoundId !== 'system'
-        ? await api.notifications.playSound({
-            force: true,
-            volume: volumeDraft
-          })
-        : null
-    if (notificationSettings.customSoundId !== 'system' && soundResult && !soundResult.played) {
-      toast.error('Custom notification sound could not be played')
-      return
+    if (notificationSettings.customSoundId !== 'system') {
+      const played = await playDesktopNotificationSound(
+        notificationSettings.customSoundId,
+        volumeDraft,
+        notificationSettings.customSoundPath,
+        { force: true }
+      )
+      if (!played) {
+        toast.error('Custom notification sound could not be played')
+        return
+      }
     }
     const settingsCopy = getSystemNotificationSettingsCopy(permissionStatus.platform)
     if (permissionStatus.platform === 'darwin' && settingsCopy) {
@@ -223,16 +225,19 @@ export function NotificationsPane({
   }
 
   const previewSound = async (
-    customSoundId: GlobalSettings['notifications']['customSoundId']
+    soundId: GlobalSettings['notifications']['customSoundId'],
+    soundPath?: string | null
   ): Promise<void> => {
-    if (customSoundId === 'system') {
+    if (soundId === 'system') {
       return
     }
-    const result = await api.notifications.playSound({
-      force: true,
-      volume: volumeDraft
-    })
-    if (!result.played) {
+    const played = await playDesktopNotificationSound(
+      soundId,
+      volumeDraft,
+      soundPath ?? notificationSettings.customSoundPath,
+      { force: true }
+    )
+    if (!played) {
       toast.error('Notification sound could not be played')
     }
   }
@@ -243,7 +248,7 @@ export function NotificationsPane({
       const soundPath = await api.shell.pickAudio()
       if (soundPath) {
         await updateNotificationSettings({ customSoundId: 'custom', customSoundPath: soundPath })
-        await previewSound('custom')
+        await previewSound('custom', soundPath)
       }
     } finally {
       if (mountedRef.current) {
