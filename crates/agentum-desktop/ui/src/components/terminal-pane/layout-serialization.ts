@@ -104,8 +104,8 @@ const FALLBACK_FONTS = [
   'monospace' // ultimate generic fallback
 ] as const
 
-export function buildFontFamily(fontFamily: string): string {
-  const trimmed = fontFamily.trim()
+export function buildFontFamily(fontFamily: string | null | undefined): string {
+  const trimmed = (fontFamily ?? '').trim()
   const parts = trimmed ? [`"${trimmed}"`] : []
   const lowerParts = parts.map((p) => p.toLowerCase())
   // Append each fallback unless the user's font name already contains it

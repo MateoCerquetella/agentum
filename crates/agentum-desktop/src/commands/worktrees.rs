@@ -180,31 +180,55 @@ pub async fn worktrees_create(
     display_name: Option<String>,
 ) -> Result<CreateWorktreeResult, String> {
     let repo_path = repo_path_for(&repo_id)?;
-    let parent = PathBuf::from(&repo_path)
-        .parent()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(&repo_path));
-    let worktree_path = parent.join(&name);
+    // Agentum keeps worktrees under <repo>/.claude/worktrees/<name> (the same place
+    // the TUI/daemon use), not as siblings of the repo. The old sibling scheme
+    // polluted the projects dir and collided with unrelated folders
+    // ("'.../Test' already exists").
+    let worktrees_root = PathBuf::from(&repo_path).join(".claude").join("worktrees");
+    std::fs::create_dir_all(&worktrees_root).map_err(map_err)?;
+    let worktree_path = worktrees_root.join(&name);
     let worktree_path_string = worktree_path.to_string_lossy().into_owned();
     let branch = branch_name_override.unwrap_or_else(|| name.clone());
 
-    let mut args = vec![
+    // First try to create a NEW branch (the "Name" flow). If the branch already
+    // exists (a leftover from a failed attempt, or the "Branch" flow that targets
+    // an existing branch), attach the worktree to that branch instead of failing.
+    let mut new_branch_args = vec![
         "-C".to_string(),
-        repo_path,
+        repo_path.clone(),
         "worktree".to_string(),
         "add".to_string(),
         "-b".to_string(),
         branch.clone(),
         worktree_path_string.clone(),
     ];
-    if let Some(base) = base_branch {
-        args.push(base);
+    if let Some(base) = base_branch.clone() {
+        new_branch_args.push(base);
     }
-    let output = tokio::process::Command::new("git")
-        .args(&args)
+    let mut output = tokio::process::Command::new("git")
+        .args(&new_branch_args)
         .output()
         .await
         .map_err(map_err)?;
+
+    if !output.status.success()
+        && String::from_utf8_lossy(&output.stderr).contains("already exists")
+    {
+        let existing_branch_args = vec![
+            "-C".to_string(),
+            repo_path.clone(),
+            "worktree".to_string(),
+            "add".to_string(),
+            worktree_path_string.clone(),
+            branch.clone(),
+        ];
+        output = tokio::process::Command::new("git")
+            .args(&existing_branch_args)
+            .output()
+            .await
+            .map_err(map_err)?;
+    }
+
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }

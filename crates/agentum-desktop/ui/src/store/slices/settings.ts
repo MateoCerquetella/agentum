@@ -9,6 +9,7 @@ import {
   getRemoteRuntimePtyEnvironmentId,
   getRemoteRuntimeTerminalHandle
 } from '@/runtime/runtime-terminal-stream'
+import { getDefaultSettings } from '../../../../shared/constants'
 import { normalizeTerminalQuickCommands } from '../../../../shared/terminal-quick-commands'
 import { normalizeTaskProviderSettings } from '../../../../shared/task-providers'
 import { normalizeOpenInApplications } from '../../../../shared/open-in-applications'
@@ -243,8 +244,11 @@ export const createSettingsSlice: StateCreator<AppState, [], [], SettingsSlice> 
 
   fetchSettings: async () => {
     try {
-      const settings = await api.settings.get()
-      set({ settings })
+      // settings.get() returns only the keys that were explicitly stored; merge
+      // over defaults so `settings` is always a complete GlobalSettings object
+      // (avoids `undefined` reads like buildFontFamily(settings.terminalFontFamily)).
+      const stored = (await api.settings.get()) as Partial<GlobalSettings> | null
+      set({ settings: { ...getDefaultSettings('~'), ...(stored ?? {}) } })
     } catch (err) {
       console.error('Failed to fetch settings:', err)
     }
@@ -284,7 +288,14 @@ export const createSettingsSlice: StateCreator<AppState, [], [], SettingsSlice> 
         sanitizedUpdates.disabledTuiAgents = normalizeDisabledTuiAgents(updates.disabledTuiAgents)
       }
       const nextSettings = await api.settings.set(sanitizedUpdates)
-      set((s) => ({ settings: (nextSettings as GlobalSettings | undefined) ?? s.settings }))
+      // Merge over the (complete) in-memory settings so the result stays a full
+      // GlobalSettings even though set() returns only the stored keys.
+      set((s) => ({
+        settings: {
+          ...(s.settings ?? getDefaultSettings('~')),
+          ...((nextSettings as Partial<GlobalSettings> | undefined) ?? {})
+        }
+      }))
     } catch (err) {
       console.error('Failed to update settings:', err)
     }
@@ -315,9 +326,12 @@ export const createSettingsSlice: StateCreator<AppState, [], [], SettingsSlice> 
       })
       set((s) => ({
         ...runtimeScopedStateReset(),
-        settings:
-          (nextSettings as GlobalSettings | undefined) ??
-          (s.settings ? { ...s.settings, activeRuntimeEnvironmentId: nextId } : null)
+        settings: {
+          ...(s.settings ?? getDefaultSettings('~')),
+          ...((nextSettings as Partial<GlobalSettings> | undefined) ?? {
+            activeRuntimeEnvironmentId: nextId
+          })
+        }
       }))
       // Why: server-owned state is cleared before refetch so old worktree,
       // terminal, browser, and issue IDs cannot be used against the new server

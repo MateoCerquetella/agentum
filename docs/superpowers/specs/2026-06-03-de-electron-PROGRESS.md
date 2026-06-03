@@ -68,3 +68,20 @@ Generators (delete when desired): `/tmp/gen-tauri-client.mjs`, `/tmp/migrate-win
 - Keep intentional-no-op Rust stubs (Electron window-chrome) as documented `{}`.
 - Method sigs `(...args:any[])=>Promise<any>`, events `(cb)=>()=>void` (structural typing; tighten later).
 - `defineNamespace` fallback chosen over chasing every alias method: static enumeration is provably incomplete (the finder itself missed the multiline `clientId` crash), so a per-namespace fallback guarantees "make it work" while keeping the explicit typed surface and no global proxy.
+
+## Follow-up fixes (post-migration, user-reported)
+- **settings_get/set** (`settings.rs`): the renderer uses the orca BULK convention —
+  `settings.get()` (no key) → all settings; `settings.set(partial)` → merge + return
+  full settings. The port had single-key `settings_get(key)`/`settings_set(key,value)`,
+  so settings never loaded/persisted. Rewrote both to bulk semantics.
+- **terminal-pane crash** (`layout-serialization.ts`, `settings.ts`): with settings now
+  a partial stored object, `buildFontFamily(settings.terminalFontFamily)` hit
+  `undefined.trim()` and crashed the terminal workbench (blocking spawn-agent). Fixed
+  `buildFontFamily` to tolerate undefined AND merge `getDefaultSettings('~')` in
+  fetchSettings/updateSettings so `settings` is always a complete GlobalSettings.
+- **Create Worktree** (`worktrees.rs`): worktrees were created as SIBLINGS of the repo
+  (`<projects>/<name>`), colliding with unrelated folders ("... already exists"). Now
+  under `<repo>/.claude/worktrees/<name>` (the scheme existing worktrees use), and the
+  create falls back to attaching an EXISTING branch when `-b <branch>` reports the
+  branch already exists (fixes retries + the "Branch" mode). Verified via git for both
+  new-branch and existing-branch paths.
