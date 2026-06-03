@@ -310,7 +310,24 @@ pub async fn worktrees_remove(
         .await
         .map_err(map_err)?;
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Structural problems mean the registry entry is stale/invalid (e.g. it
+        // points at a main working tree from the old sibling-path bug, was already
+        // removed, or never was a real linked worktree). Deregister it anyway so the
+        // user can clear bad entries from the UI. Real failures (uncommitted changes,
+        // locked worktree) are still surfaced so nothing is silently discarded.
+        let is_stale_entry = stderr.contains("is a main working tree")
+            || stderr.contains("is not a working tree")
+            || stderr.contains("not a working tree")
+            || stderr.contains("No such file or directory");
+        if !is_stale_entry {
+            return Err(stderr.trim().to_string());
+        }
+        // Best-effort cleanup of git's stale worktree metadata.
+        let _ = tokio::process::Command::new("git")
+            .args(["-C", &repo_path_for(repo_id)?, "worktree", "prune"])
+            .output()
+            .await;
     }
 
     let mut worktrees = read_worktrees()?;
