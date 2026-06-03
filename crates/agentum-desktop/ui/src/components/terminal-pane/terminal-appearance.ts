@@ -206,7 +206,20 @@ export function applyTerminalAppearance(
 
   for (const pane of manager.getPanes()) {
     if (theme) {
+      const themeChanged = pane.terminal.options.theme?.background !== theme.background
       pane.terminal.options.theme = theme
+      // Why: xterm updates colors on the options.theme setter, but already-
+      // rendered rows can keep the previous background until the next paint.
+      // Force a full repaint when the theme actually changed so a live
+      // dark/light switch repaints existing terminal content immediately
+      // (otherwise the pane keeps its creation-time background).
+      if (themeChanged) {
+        try {
+          pane.terminal.refresh(0, Math.max(0, pane.terminal.rows - 1))
+        } catch {
+          /* refresh is best-effort */
+        }
+      }
     }
     // Why: xterm's allowTransparency has measurable rendering cost, so clear
     // it explicitly when opacity is at (or above) 1 to avoid a stale `true`
