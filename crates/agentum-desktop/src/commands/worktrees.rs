@@ -434,6 +434,10 @@ fn scan_git_worktrees(repo_id: &str) -> Result<Vec<Value>, String> {
             }
         }
     }
+    // Overlay persisted metadata (pin/rename/comment/archive/sort) onto the
+    // git-authoritative path/branch. Without this, every re-scan reset user
+    // choices — most visibly re-pinning the primary worktrees the user unpinned.
+    let registry = read_worktrees().unwrap_or_default();
     Ok(entries
         .into_iter()
         .enumerate()
@@ -445,19 +449,24 @@ fn scan_git_worktrees(repo_id: &str) -> Result<Vec<Value>, String> {
                     .unwrap_or_else(|| path.clone())
             });
             let is_primary = idx == 0;
+            let id = format!("{repo_id}::{path}");
+            let meta = registry.iter().find(|worktree| worktree.id == id);
             serde_json::json!({
-                "id": format!("{repo_id}::{path}"),
+                "id": id,
                 "repoId": repo_id,
-                "displayName": name,
-                "comment": "",
-                "linkedIssue": null,
-                "linkedPr": null,
-                "linkedLinearIssue": null,
-                "isArchived": false,
-                "isUnread": false,
-                "isPinned": is_primary,
-                "sortOrder": idx as i64,
-                "lastActivityAt": 0,
+                "displayName": meta
+                    .map(|m| m.display_name.clone())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(name),
+                "comment": meta.map(|m| m.comment.clone()).unwrap_or_default(),
+                "linkedIssue": meta.and_then(|m| m.linked_issue),
+                "linkedPr": meta.and_then(|m| m.linked_pr),
+                "linkedLinearIssue": meta.and_then(|m| m.linked_linear_issue.clone()),
+                "isArchived": meta.map(|m| m.is_archived).unwrap_or(false),
+                "isUnread": meta.map(|m| m.is_unread).unwrap_or(false),
+                "isPinned": meta.map(|m| m.is_pinned).unwrap_or(is_primary),
+                "sortOrder": meta.map(|m| m.sort_order).unwrap_or(idx as i64),
+                "lastActivityAt": meta.map(|m| m.last_activity_at).unwrap_or(0),
                 "path": path,
                 "branch": branch,
                 "ownership": "self",
