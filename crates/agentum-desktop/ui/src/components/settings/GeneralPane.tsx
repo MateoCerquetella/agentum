@@ -925,7 +925,7 @@ export function GeneralPane({ settings, updateSettings }: GeneralPaneProps): Rea
                 <a
                   href={
                     updateStatus.releaseUrl ??
-                    `https://github.com/stablyai/agentum/releases/tag/v${updateStatus.version}`
+                    `https://github.com/mateocerquetella/agentum/releases/tag/v${updateStatus.version}`
                   }
                   target="_blank"
                   rel="noopener noreferrer"
@@ -944,7 +944,7 @@ export function GeneralPane({ settings, updateSettings }: GeneralPaneProps): Rea
                 <a
                   href={
                     updateStatus.releaseUrl ??
-                    `https://github.com/stablyai/agentum/releases/tag/v${updateStatus.version}`
+                    `https://github.com/mateocerquetella/agentum/releases/tag/v${updateStatus.version}`
                   }
                   target="_blank"
                   rel="noopener noreferrer"

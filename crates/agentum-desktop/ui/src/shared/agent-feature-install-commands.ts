@@ -1,4 +1,4 @@
-export const AGENTUM_SKILLS_REPOSITORY_URL = 'https://github.com/stablyai/agentum'
+export const AGENTUM_SKILLS_REPOSITORY_URL = 'https://github.com/mateocerquetella/agentum'
 
 export const AGENTUM_CLI_SKILL_NAME = 'agentum-cli'
 export const COMPUTER_USE_SKILL_NAME = 'computer-use'

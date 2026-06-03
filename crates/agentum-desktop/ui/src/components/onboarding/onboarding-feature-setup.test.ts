@@ -115,7 +115,7 @@ describe('onboarding feature setup runner', () => {
 
     expect(text).toBe(ALL_SKILL_INSTALL_COMMAND)
     expect(text).toBe(
-      'npx skills add https://github.com/stablyai/agentum --skill agentum-cli computer-use orchestration --global'
+      'npx skills add https://github.com/mateocerquetella/agentum --skill agentum-cli computer-use orchestration --global'
     )
   })
 

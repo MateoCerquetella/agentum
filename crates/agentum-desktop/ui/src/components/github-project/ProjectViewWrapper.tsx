@@ -61,7 +61,7 @@ import {
 
 type Props = Record<string, never>
 
-const AGENTUM_FEATURE_REQUEST_URL = 'https://github.com/stablyai/agentum/issues/new'
+const AGENTUM_FEATURE_REQUEST_URL = 'https://github.com/mateocerquetella/agentum/issues/new'
 
 function listProjectViewsForRuntime(
   settings: Parameters<typeof getActiveRuntimeTarget>[0],

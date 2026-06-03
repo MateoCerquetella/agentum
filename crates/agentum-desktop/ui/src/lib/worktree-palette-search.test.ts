@@ -31,7 +31,7 @@ const repoMap = new Map<string, Repo>([
     {
       id: 'repo-1',
       path: '/repo/agentum',
-      displayName: 'stablyai/agentum',
+      displayName: 'mateocerquetella/agentum',
       badgeColor: '#22c55e',
       addedAt: 0
     }

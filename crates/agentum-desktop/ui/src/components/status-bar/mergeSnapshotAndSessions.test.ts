@@ -304,9 +304,9 @@ describe('mergeSnapshotAndSessions', () => {
   })
 
   it('uses repoDisplayNameById to humanize new project groups when available', () => {
-    const ds: DaemonSession[] = [{ id: 'stably-ai/agentum::/remote/Wt@@1', cwd: '', title: '' }]
+    const ds: DaemonSession[] = [{ id: 'mateocerquetella/agentum::/remote/Wt@@1', cwd: '', title: '' }]
     const ctx = baseCtx({
-      repoDisplayNameById: new Map([['stably-ai/agentum', 'AGENTUM']])
+      repoDisplayNameById: new Map([['mateocerquetella/agentum', 'AGENTUM']])
     })
     const out = mergeSnapshotAndSessions(null, ds, ctx)
     expect(out[0].repoName).toBe('AGENTUM')

@@ -15,7 +15,7 @@ import { useMountedRef } from '@/hooks/useMountedRef'
 import { cn } from '@/lib/utils'
 import type { GitHubViewer } from '../../../../shared/types'
 
-const GITHUB_ISSUES_URL = 'https://github.com/stablyai/agentum/issues/'
+const GITHUB_ISSUES_URL = 'https://github.com/mateocerquetella/agentum/issues/'
 const DISCORD_URL = 'https://discord.gg/fzjDKHxv8Q'
 const X_URL = 'https://x.com/agentum_build'
 

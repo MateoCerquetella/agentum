@@ -43,7 +43,7 @@ describe('app_starred_agentum schema', () => {
   it('rejects extra keys via .strict()', () => {
     const parsed = eventSchemas.app_starred_agentum.safeParse({
       source: 'landing',
-      repo: 'stablyai/agentum'
+      repo: 'mateocerquetella/agentum'
     })
     expect(parsed.success).toBe(false)
   })

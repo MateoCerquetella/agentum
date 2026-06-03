@@ -187,7 +187,7 @@ export function CardFooter(props: {
             marginLeft: 5
           }}
         >
-          github.com/stablyai/agentum
+          github.com/mateocerquetella/agentum
         </span>
       </div>
     </div>

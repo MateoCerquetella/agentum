@@ -56,7 +56,7 @@ export function TerminalErrorToast({
               {'\n'}
               If this persists, please{' '}
               <a
-                href="https://github.com/stablyai/agentum/issues"
+                href="https://github.com/mateocerquetella/agentum/issues"
                 style={{ color: '#fca5a5', textDecoration: 'underline' }}
               >
                 file an issue

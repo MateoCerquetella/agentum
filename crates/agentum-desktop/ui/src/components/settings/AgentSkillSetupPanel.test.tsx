@@ -8,7 +8,7 @@ function renderPanel(overrides: Partial<ComponentProps<typeof AgentSkillSetupPan
     <AgentSkillSetupPanel
       title="CLI skill"
       description="Enables agents to use Agentum workflows."
-      command="npx skills add https://github.com/stablyai/agentum --skill agentum-cli --global"
+      command="npx skills add https://github.com/mateocerquetella/agentum --skill agentum-cli --global"
       terminalTitle="CLI skill setup"
       terminalAriaLabel="CLI skill install terminal"
       terminalWorktreeId="settings-cli-skill-terminal"

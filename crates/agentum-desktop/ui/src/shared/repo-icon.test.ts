@@ -14,15 +14,15 @@ describe('sanitizeRepoIcon', () => {
     expect(
       sanitizeRepoIcon({
         type: 'image',
-        src: 'https://github.com/stablyai.png?size=64',
+        src: 'https://github.com/mateocerquetella.png?size=64',
         source: 'github',
-        label: 'stablyai/agentum'
+        label: 'mateocerquetella/agentum'
       })
     ).toEqual({
       type: 'image',
-      src: 'https://github.com/stablyai.png?size=64',
+      src: 'https://github.com/mateocerquetella.png?size=64',
       source: 'github',
-      label: 'stablyai/agentum'
+      label: 'mateocerquetella/agentum'
     })
     expect(
       sanitizeRepoIcon({

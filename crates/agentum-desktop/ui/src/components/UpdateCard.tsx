@@ -19,8 +19,8 @@ function releaseUrlForVersion(version: string | null): string {
   // when GitHub's release API is degraded, and the listing is the most
   // reliable manual fallback.
   return version
-    ? `https://github.com/stablyai/agentum/releases/tag/v${version}`
-    : 'https://github.com/stablyai/agentum/releases'
+    ? `https://github.com/mateocerquetella/agentum/releases/tag/v${version}`
+    : 'https://github.com/mateocerquetella/agentum/releases'
 }
 
 function isAnimatedGif(url: string | undefined): boolean {

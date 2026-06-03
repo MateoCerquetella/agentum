@@ -20,8 +20,8 @@ describe('resolveRepoBackedProjectDialogState', () => {
 
 describe('resolveMissingRepoProjectDialogState', () => {
   it('waits for the slug index before closing missing-repo dialogs', () => {
-    const slugDialog = { origin: { owner: 'stablyai', repo: 'agentum' } }
-    const repoNotInAgentum = { owner: 'stablyai', repo: 'agentum', url: null }
+    const slugDialog = { origin: { owner: 'mateocerquetella', repo: 'agentum' } }
+    const repoNotInAgentum = { owner: 'mateocerquetella', repo: 'agentum', url: null }
 
     expect(
       resolveMissingRepoProjectDialogState({
@@ -34,13 +34,13 @@ describe('resolveMissingRepoProjectDialogState', () => {
   })
 
   it('clears slug fallback dialogs once the repo slug resolves', () => {
-    const slugDialog = { origin: { owner: 'stablyai', repo: 'agentum' } }
+    const slugDialog = { origin: { owner: 'mateocerquetella', repo: 'agentum' } }
     const repoNotInAgentum = { owner: 'other', repo: 'tool', url: null }
     const result = resolveMissingRepoProjectDialogState({
       slugIndexReady: true,
       slugDialog,
       repoNotInAgentum,
-      lookupSlug: (slug) => (slug === 'stablyai/agentum' ? ['repo-1'] : [])
+      lookupSlug: (slug) => (slug === 'mateocerquetella/agentum' ? ['repo-1'] : [])
     })
 
     expect(result.slugDialog).toBeNull()
@@ -49,12 +49,12 @@ describe('resolveMissingRepoProjectDialogState', () => {
 
   it('clears repo-not-in-agentum dialogs once the repo slug resolves', () => {
     const slugDialog = { origin: { owner: 'other', repo: 'tool' } }
-    const repoNotInAgentum = { owner: 'stablyai', repo: 'agentum', url: null }
+    const repoNotInAgentum = { owner: 'mateocerquetella', repo: 'agentum', url: null }
     const result = resolveMissingRepoProjectDialogState({
       slugIndexReady: true,
       slugDialog,
       repoNotInAgentum,
-      lookupSlug: (slug) => (slug === 'stablyai/agentum' ? ['repo-1'] : [])
+      lookupSlug: (slug) => (slug === 'mateocerquetella/agentum' ? ['repo-1'] : [])
     })
 
     expect(result.slugDialog).toBe(slugDialog)

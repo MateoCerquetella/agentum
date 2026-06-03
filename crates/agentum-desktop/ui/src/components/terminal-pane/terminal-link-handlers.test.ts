@@ -1295,7 +1295,7 @@ describe('createFilePathLinkProvider range bounds', () => {
   it('does not intercept regular URL clicks in the file-path fallback', async () => {
     setPlatform('Macintosh')
     const rows = [
-      makeBufferLine('PR opened: https://github.com/stablyai/agentum-marketing-website/pull/82')
+      makeBufferLine('PR opened: https://github.com/mateocerquetella/agentum-marketing-website/pull/82')
     ]
     const { terminal, element } = makeFallbackTerminal(rows)
     const disposable = installFilePathLinkClickFallback(1, terminal, {
@@ -1334,7 +1334,7 @@ describe('createFilePathLinkProvider range bounds', () => {
     setPlatform('Macintosh')
     storeState.settings = { openLinksInApp: false }
     const rows = [
-      makeBufferLine('PR opened: https://github.com/stablyai/agentum-marketing-website/pull/82')
+      makeBufferLine('PR opened: https://github.com/mateocerquetella/agentum-marketing-website/pull/82')
     ]
     const { terminal, element } = makeFallbackTerminal(rows)
     const disposable = installHttpLinkClickFallback(terminal, { worktreeId: 'wt-1' })
@@ -1355,7 +1355,7 @@ describe('createFilePathLinkProvider range bounds', () => {
     } as unknown as MouseEvent)
 
     expect(openUrlMock).toHaveBeenCalledWith(
-      'https://github.com/stablyai/agentum-marketing-website/pull/82'
+      'https://github.com/mateocerquetella/agentum-marketing-website/pull/82'
     )
     expect(preventDefault).toHaveBeenCalled()
     expect(stopPropagation).not.toHaveBeenCalled()
@@ -1368,7 +1368,7 @@ describe('createFilePathLinkProvider range bounds', () => {
   it('does not double-open URLs when xterm already handled the mouseup', () => {
     setPlatform('Macintosh')
     storeState.settings = { openLinksInApp: false }
-    const rows = [makeBufferLine('Open https://github.com/stablyai/agentum/pull/2914')]
+    const rows = [makeBufferLine('Open https://github.com/mateocerquetella/agentum/pull/2914')]
     const { terminal, element } = makeFallbackTerminal(rows)
     const disposable = installHttpLinkClickFallback(terminal, { worktreeId: 'wt-1' })
     const mouseUp = getRegisteredBubbleMouseUpHandler(element)

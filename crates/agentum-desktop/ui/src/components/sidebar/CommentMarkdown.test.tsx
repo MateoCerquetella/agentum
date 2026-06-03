@@ -7,12 +7,12 @@ describe('CommentMarkdown', () => {
     const markup = renderToStaticMarkup(
       <CommentMarkdown
         variant="document"
-        githubRepo={{ owner: 'stablyai', repo: 'agentum' }}
+        githubRepo={{ owner: 'mateocerquetella', repo: 'agentum' }}
         content="Automated fix-PR from pr-bug-scan for parent **#2316**."
       />
     )
 
-    expect(markup).toContain('href="https://github.com/stablyai/agentum/issues/2316"')
+    expect(markup).toContain('href="https://github.com/mateocerquetella/agentum/issues/2316"')
     expect(markup).toContain('<strong><a')
   })
 
@@ -20,7 +20,7 @@ describe('CommentMarkdown', () => {
     const markup = renderToStaticMarkup(
       <CommentMarkdown
         variant="document"
-        githubRepo={{ owner: 'stablyai', repo: 'agentum' }}
+        githubRepo={{ owner: 'mateocerquetella', repo: 'agentum' }}
         content="See another-org/other-repo#42."
       />
     )
@@ -32,14 +32,14 @@ describe('CommentMarkdown', () => {
     const markup = renderToStaticMarkup(
       <CommentMarkdown
         variant="document"
-        githubRepo={{ owner: 'stablyai', repo: 'agentum' }}
+        githubRepo={{ owner: 'mateocerquetella', repo: 'agentum' }}
         content="[`#2316`](https://example.com/already-linked) and `#2317`"
       />
     )
 
     expect(markup).toContain('href="https://example.com/already-linked"')
-    expect(markup).not.toContain('href="https://github.com/stablyai/agentum/issues/2316"')
-    expect(markup).not.toContain('href="https://github.com/stablyai/agentum/issues/2317"')
+    expect(markup).not.toContain('href="https://github.com/mateocerquetella/agentum/issues/2316"')
+    expect(markup).not.toContain('href="https://github.com/mateocerquetella/agentum/issues/2317"')
   })
 
   it('keeps remote compact markdown images as links', () => {
@@ -79,13 +79,13 @@ describe('CommentMarkdown', () => {
       ]
     }
 
-    const transform = remarkGitHubReferences({ owner: 'stablyai', repo: 'agentum' })()
+    const transform = remarkGitHubReferences({ owner: 'mateocerquetella', repo: 'agentum' })()
 
     expect(() => transform(tree)).not.toThrow()
     expect(tree.children[0]?.children).toHaveLength(referenceCount * 2 - 1)
     expect(tree.children[0]?.children[0]).toMatchObject({
       type: 'link',
-      url: 'https://github.com/stablyai/agentum/issues/1'
+      url: 'https://github.com/mateocerquetella/agentum/issues/1'
     })
   })
 

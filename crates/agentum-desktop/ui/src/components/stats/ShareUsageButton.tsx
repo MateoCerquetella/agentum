@@ -110,7 +110,7 @@ export function ShareUsageButton(props: ShareUsageButtonProps): React.JSX.Elemen
       '',
       `${fmtTokens(totalTokens)} tokens · ${costStr} est. cost`,
       '',
-      'github.com/stablyai/agentum'
+      'github.com/mateocerquetella/agentum'
     ]
     const url = `https://x.com/intent/post?text=${encodeURIComponent(lines.join('\n'))}`
     await api.shell.openUrl(url)

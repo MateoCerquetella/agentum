@@ -64,7 +64,7 @@ export const TUI_AGENT_CONFIG: Record<TuiAgent, TuiAgentConfig> = {
     // Why: `claude --prefill <text>` lands the TUI with `<text>` in the
     // input box, nothing submitted. Strictly better than the paste-after-
     // ready fallback because it eliminates the readiness race entirely.
-    // See PR https://github.com/stablyai/agentum/pull/926 for context.
+    // See PR https://github.com/mateocerquetella/agentum/pull/926 for context.
     draftPromptFlag: '--prefill'
   },
   openclaude: {
