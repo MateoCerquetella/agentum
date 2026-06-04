@@ -81,16 +81,6 @@ pub fn pane_log(session_id: &str) -> Result<PathBuf, PathError> {
         .join(format!("{session_id}.log")))
 }
 
-/// Per-session scratch dir for launch-time artifacts that must outlive the
-/// `start` call but not the machine — the managed agent-status hook script and
-/// any relocated agent config home live here. Sibling to [`pane_log`] under
-/// `cache_dir()` so a cache wipe cleans both.
-pub fn session_hook_dir(session_id: &str) -> Result<PathBuf, PathError> {
-    Ok(cache_dir()?
-        .join("sessions")
-        .join(format!("{session_id}.run")))
-}
-
 /// Path to the per-server planner config: `$XDG_CONFIG_HOME/agentum/planner.toml`.
 /// Sibling to `profiles.toml` and `credentials.toml` — all operator config
 /// lives under `config_dir()`, not `data_dir()`.
