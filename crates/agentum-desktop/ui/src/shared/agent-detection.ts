@@ -185,7 +185,8 @@ function containsAgentName(title: string): boolean {
     containsLegacyAgentName(title) ||
     AGY_AGENT_NAME_RE.test(title) ||
     DROID_AGENT_NAME_RE.test(title) ||
-    HERMES_AGENT_NAME_RE.test(title)
+    HERMES_AGENT_NAME_RE.test(title) ||
+    isCursorNativeStatusTitle(title)
   )
 }
 
@@ -394,6 +395,12 @@ export function getAgentLabel(title: string): string | null {
   if (lower.includes('cursor')) {
     return 'Cursor'
   }
+  // Why: a renamed cursor chat ("Test Agent - ⏳ Working") drops the literal
+  // "cursor" token but is still the cursor-agent CLI. A title-derived row needs
+  // a non-null label, so resolve cursor's decorated format here too.
+  if (isCursorNativeStatusTitle(title)) {
+    return 'Cursor'
+  }
   // Why: synthesized "⠋ Droid" working title needs to be matched before Claude's braille heuristic.
   // Token matching avoids labeling ordinary Android terminal titles as Droid.
   if (DROID_AGENT_NAME_RE.test(title)) {
@@ -411,13 +418,45 @@ export function getAgentLabel(title: string): string | null {
   return null
 }
 
-// Why: cursor-agent's native OSC title is the literal string "Cursor Agent"
-// across the entire turn — it carries zero working/idle information. Agentum
-// synthesizes its own titles ("⠋ Cursor Agent" for working, "Cursor -
-// action required" for permission) from cursor's hook events; the bare
-// native title must be a no-op so cursor's per-turn re-emissions cannot
-// stomp the synthesized state back to idle.
+// Why: cursor-agent's *bare* native OSC title is the literal string "Cursor
+// Agent" — it carries zero working/idle information, so it must stay a no-op
+// (otherwise a per-turn re-emission would stomp the live state back to idle).
 const CURSOR_NATIVE_TITLE_LOWER = 'cursor agent'
+
+// Why: cursor-agent (≥ v2026.06) decorates its OSC title with live status —
+// "<chat name> Agent - ⏳ Working ···" while working and "<chat name> Agent -
+// ✅ Ready" when idle. The "<chat name>" prefix is DYNAMIC: cursor renames it
+// to the conversation topic (e.g. a "test" prompt yields "Test Agent"), so we
+// anchor on cursor's distinctive "Agent - <emoji>" suffix rather than the
+// prefix name — the ⏳/✅ glyphs are unique to cursor among supported agents.
+// Without this, a renamed cursor chat matched no agent name, returned null,
+// and the sidebar dropped the agent row + status mid-session.
+const CURSOR_NATIVE_STATUS_TITLE_RE = /\bagent\s*[-–—]\s*(?:⏳|✅)/iu
+
+export function isCursorNativeStatusTitle(title: string): boolean {
+  return CURSOR_NATIVE_STATUS_TITLE_RE.test(title)
+}
+
+// Why: classify cursor's decorated title by the status WORD ("Working"/"Ready"),
+// not the emoji, so `clearWorkingIndicators` (which strips "working") can still
+// neutralize a stale working title. Permission wording is matched defensively
+// (cursor's approval title isn't captured yet) — harmless if cursor never uses
+// it, and it must win over the working/idle keyword checks.
+function cursorNativeTitleStatus(title: string): AgentStatus | null {
+  if (!isCursorNativeStatusTitle(title)) {
+    return null
+  }
+  if (containsAny(title, ['action required', 'permission', 'waiting', 'approval', 'needs input'])) {
+    return 'permission'
+  }
+  if (STRONG_WORKING_KEYWORDS_RE.test(title)) {
+    return 'working'
+  }
+  if (STRONG_IDLE_KEYWORDS_RE.test(title)) {
+    return 'idle'
+  }
+  return null
+}
 
 export function detectAgentStatusFromTitle(title: string): AgentStatus | null {
   if (!title) {
@@ -429,6 +468,15 @@ export function detectAgentStatusFromTitle(title: string): AgentStatus | null {
   // or a tighter match worth classifying.
   if (title.trim().toLowerCase() === CURSOR_NATIVE_TITLE_LOWER) {
     return null
+  }
+
+  // Why: cursor's decorated title ("<chat> Agent - ⏳ Working" / "✅ Ready")
+  // carries the only working/idle signal cursor emits. Classify it before the
+  // name-based fallbacks so a renamed chat ("Test Agent - …") still resolves
+  // even though its prefix isn't a known agent name.
+  const cursorNativeStatus = cursorNativeTitleStatus(title)
+  if (cursorNativeStatus) {
+    return cursorNativeStatus
   }
 
   // Gemini CLI symbols are the most specific and should take precedence.

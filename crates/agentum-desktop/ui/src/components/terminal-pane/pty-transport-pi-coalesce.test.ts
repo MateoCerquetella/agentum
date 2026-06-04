@@ -80,8 +80,15 @@ describe('pty-transport — coalesced OSC titles from Pi', () => {
     // title — if the intermediate frames are dropped, users never see the
     // spinner on fast-agent prompts.
     expect(seen).toContain('⠋ Pi')
-    // Idle must land last so the spinner disappears on agent_end.
-    expect(seen.at(-1)).toBe('Pi')
+
+    // The trailing idle title is the spinner-stripped form of the working
+    // title, so the transport holds it briefly to absorb mid-animation spinner
+    // resets (Codex's interleaved bare frame). After the hold window with no
+    // returning working frame, the genuine agent_end idle commits last so the
+    // spinner disappears.
+    await new Promise((resolve) => setTimeout(resolve, 350))
+    const settled = onTitleChange.mock.calls.map((c) => c[0])
+    expect(settled.at(-1)).toBe('Pi')
 
     transport.disconnect()
   })

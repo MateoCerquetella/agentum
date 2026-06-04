@@ -1,5 +1,5 @@
 import type { DashboardAgentRow } from '@/components/dashboard/useDashboardData'
-import { detectAgentStatusFromTitle, getAgentLabel } from '@/lib/agent-status'
+import { detectAgentStatusFromTitle, getAgentLabel, formatAgentTypeLabel } from '@/lib/agent-status'
 import { tabHasLivePty } from '@/lib/tab-has-live-pty'
 import {
   type AgentStatusEntry,
@@ -100,15 +100,22 @@ function buildTitleDerivedAgentRow(args: {
   now: number
 }): DashboardAgentRow | null {
   const status = detectAgentStatusFromTitle(args.title)
-  const label = getAgentLabel(args.title)
-  if (!status || !label) {
+  const titleLabel = getAgentLabel(args.title)
+  if (!status || !titleLabel) {
     return null
   }
   if (!isTerminalLeafId(args.leafId)) {
     return null
   }
   const paneKey = makePaneKey(args.tab.id, args.leafId)
-  const agentType = TITLE_AGENT_LABEL_TO_TYPE[label] ?? 'unknown'
+  // Why: prefer the tab's KNOWN launch agent over the title-inferred identity.
+  // Several agents emit a title that carries no name — codex's is just the cwd
+  // basename with a braille spinner ("⠧ another-test"), which trips Claude's
+  // generic braille heuristic and mislabels the row as "Claude Code". The
+  // launch agent is authoritative; fall back to the title label only for panes
+  // with no recorded agent (e.g. an agent started inside a plain shell tab).
+  const agentType: AgentType = args.tab.launchAgent ?? TITLE_AGENT_LABEL_TO_TYPE[titleLabel] ?? 'unknown'
+  const label = args.tab.launchAgent ? formatAgentTypeLabel(agentType) : titleLabel
   const rowState = titleStatusToRowState(status)
   const secondary =
     status === 'permission' ? 'Needs input' : status === 'working' ? 'Running' : 'Idle'

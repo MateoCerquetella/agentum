@@ -11,34 +11,11 @@
 use agentum_core::Session;
 
 mod adapters;
-mod hook_script;
 
 pub use adapters::{
     AgentAdapter, ClaudeAdapter, CodexAdapter, CursorAdapter, GeminiAdapter, HermesAdapter,
     PassthroughAdapter, TerminalAdapter,
 };
-pub use hook_script::HOOK_SCRIPT;
-
-/// How to register agentum's managed status hook ([`HOOK_SCRIPT`]) for a given
-/// agent's CLI. The server writes the script to a per-session path, calls
-/// [`ToolAdapter::hook_install`], and applies the returned spec. Returning
-/// `None` means "this agent can't report status via hooks" (it relies on its
-/// terminal title, or has no signal at all).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AgentHookInstall {
-    /// Extra argv the launcher appends to register the hook — e.g. Claude-style
-    /// `--settings <json>` where the JSON points its lifecycle events at the
-    /// managed script. Strings are used verbatim.
-    Argv(Vec<String>),
-    /// Relocate the agent's config home via `env_var` (e.g. `CODEX_HOME`) to a
-    /// server-managed directory and write `files` (relative path → contents)
-    /// into it. The server seeds the managed dir from the user's real config so
-    /// auth/settings survive the relocation, then overlays these files.
-    ConfigHome {
-        env_var: &'static str,
-        files: Vec<(&'static str, String)>,
-    },
-}
 
 /// What tmux actually launches: argv plus per-session environment overrides.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,15 +100,6 @@ pub trait ToolAdapter: Send + Sync {
     /// shouldn't fire a toast.
     fn is_agent(&self) -> bool {
         false
-    }
-
-    /// How to register the managed status hook ([`HOOK_SCRIPT`]) for this
-    /// agent, or `None` if it can't report status via hooks. `hook_script_path`
-    /// is the absolute path the server already materialized the script to for
-    /// this session, so the spec can reference it directly. Default `None`
-    /// keeps shells/passthroughs out of the hook path unless they opt in.
-    fn hook_install(&self, _hook_script_path: &str) -> Option<AgentHookInstall> {
-        None
     }
 }
 

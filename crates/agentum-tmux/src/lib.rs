@@ -150,6 +150,25 @@ pub async fn capture_pane_ansi(target: &str) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
+/// Read the pane's current title (`#{pane_title}`). tmux captures the program's
+/// OSC 0/2 title sequences into this property and — with `set-titles off` —
+/// never forwards the raw sequences to an attached client. Agent CLIs announce
+/// working/idle/permission in that title, so the session stream re-injects this
+/// value as a synthetic `\x1b]0;…\x07` so the desktop's title-derived
+/// agent-status pipeline can follow the state. Returns the trimmed title.
+pub async fn pane_title(target: &str) -> Result<String> {
+    let out = Command::new("tmux")
+        .args(["display-message", "-p", "-t"])
+        .arg(target)
+        .arg("#{pane_title}")
+        .output()
+        .await?;
+    check(&out)?;
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .trim_matches(|c| c == '\n' || c == '\r')
+        .to_string())
+}
+
 /// Send raw key spec (e.g. "C-c", "Enter") or text to a pane.
 /// `append_enter` adds a trailing Enter, useful for chat-style input bars.
 pub async fn send_keys(target: &str, keys: &str, append_enter: bool) -> Result<()> {

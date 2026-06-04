@@ -46,6 +46,19 @@ export { extractLastOscTitle } from '../../../../shared/agent-detection'
 
 const SSH_SESSION_EXPIRED_ERROR = 'SSH_SESSION_EXPIRED'
 const STALE_TITLE_TIMEOUT = 3000 // ms before stale working title is cleared
+// Why: some agents (Codex) animate their spinner by interleaving a bare,
+// status-less title frame ("testi") between the braille frames ("⠴ testi")
+// *while still working*. Each bare frame makes detectAgentStatusFromTitle
+// return null, which would collapse the sidebar spinner to idle for that
+// instant — so the spinner visibly flickers or never appears steady. Hold a
+// transient working→non-working transition for this window: if a working frame
+// returns first, the blip is absorbed; only a sustained non-working title (a
+// real turn end) commits to idle. 300ms comfortably spans the gap between
+// Codex spinner frames (~80–125ms each) while keeping the post-completion
+// spinner lag imperceptible for agents whose idle title equals their
+// spinner-stripped working title (Codex, Pi).
+const WORKING_TITLE_HOLD_MS = 300
+
 const MAX_PTY_SIDE_EFFECTS_PER_DRAIN = 64
 
 // Why: onAgentStatus callback added to IpcPtyTransportOptions in pty-dispatcher
@@ -99,6 +112,7 @@ export function createPtyOutputProcessor({
   const processAgentStatusChunk = createAgentStatusOscProcessor()
   let lastEmittedTitle: string | null = null
   let staleTitleTimer: ReturnType<typeof setTimeout> | null = null
+  let workingHoldTimer: ReturnType<typeof setTimeout> | null = null
   let sideEffectDrainTimer: ReturnType<typeof setTimeout> | null = null
   let pendingSideEffects: PendingPtySideEffect[] = []
   let pendingSideEffectIndex = 0
@@ -144,10 +158,55 @@ export function createPtyOutputProcessor({
     if (title.trim().toLowerCase() === 'cursor agent') {
       return
     }
-    lastEmittedTitle = normalizeTerminalTitle(title)
+    const normalized = normalizeTerminalTitle(title)
+    // Why: absorb a transient working→non-working blip (Codex interleaves a
+    // bare "testi" frame between braille spinner frames mid-turn). Hold it
+    // briefly; a returning working frame cancels the deferral so the spinner
+    // stays steady, and only a frame surviving WORKING_TITLE_HOLD_MS commits.
+    //
+    // Scope the hold TIGHTLY: only defer a frame that is exactly the
+    // spinner-stripped form of the current working title (i.e. the same base
+    // text with the braille/working indicator removed — a real animation
+    // reset). A genuinely different idle title (Claude's "* Claude done" vs
+    // ". Claude working") is a real completion and must apply immediately, so
+    // distinct-title transitions and completion notifications aren't delayed.
+    const newStatus = detectAgentStatusFromTitle(normalized)
+    const strippedWorkingTitle =
+      lastEmittedTitle !== null ? clearWorkingIndicators(lastEmittedTitle) : null
+    if (
+      isWorkingTitle(lastEmittedTitle) &&
+      newStatus !== 'working' &&
+      newStatus !== 'permission' &&
+      normalized === strippedWorkingTitle
+    ) {
+      if (workingHoldTimer === null) {
+        const heldRaw = title
+        const heldNormalized = normalized
+        workingHoldTimer = setTimeout(() => {
+          workingHoldTimer = null
+          lastEmittedTitle = heldNormalized
+          onTitleChange?.(heldNormalized, heldRaw)
+          if (!suppressAgentTracker) {
+            agentTracker?.handleTitle(heldRaw)
+          }
+        }, WORKING_TITLE_HOLD_MS)
+      }
+      return
+    }
+    // A real (working/permission) frame, or we weren't working: apply now and
+    // cancel any pending blip so the working state wins.
+    clearWorkingHoldTimer()
+    lastEmittedTitle = normalized
     onTitleChange?.(lastEmittedTitle, title)
     if (!suppressAgentTracker) {
       agentTracker?.handleTitle(title)
+    }
+  }
+
+  function clearWorkingHoldTimer(): void {
+    if (workingHoldTimer) {
+      clearTimeout(workingHoldTimer)
+      workingHoldTimer = null
     }
   }
 
@@ -400,6 +459,7 @@ export function createPtyOutputProcessor({
     pendingSideEffectIndex = 0
     pendingWorkingTitleSideEffects = 0
     clearStaleTitleTimer()
+    clearWorkingHoldTimer()
     agentTracker?.reset()
     bellDetector.reset()
   }

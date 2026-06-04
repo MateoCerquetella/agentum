@@ -466,8 +466,7 @@ async fn start(
         // Loopback hook URLs only work for local panes. SSH-hosted agents
         // run on another machine, where 127.0.0.1 points at the VPS.
         let hook_token = crate::auth::new_token();
-        let hook_base = state.hook_base.read().unwrap().clone();
-        let hook_url = format!("{}/api/sessions/{}/hook", hook_base, session.id);
+        let hook_url = format!("http://127.0.0.1:8822/api/sessions/{}/hook", session.id);
         launch
             .env
             .push(("AGENTUM_HOOK_URL".into(), hook_url.clone()));
@@ -503,13 +502,6 @@ async fn start(
             launch.argv.push(settings.to_string());
         }
 
-        // Generic per-adapter status-hook install for agents that emit no
-        // working/idle signal in their terminal title (Codex, …). Claude keeps
-        // its bespoke path above and returns None here, so it is never
-        // double-installed. Every step is best-effort: a hook IO failure must
-        // never block the session from launching.
-        install_status_hook(&mut launch, adapter.as_ref(), &session.id.to_string());
-
         let mut map = state.hook_tokens.lock().unwrap();
         map.insert(session.id, hook_token);
     }
@@ -530,90 +522,6 @@ async fn start(
         .update_status_and_target(id, Status::Running, Some(&target))
         .await?;
     Ok(Json(load(&state, id).await?))
-}
-
-/// Best-effort `$HOME`, used to locate the user's real agent config dir.
-fn user_home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
-
-/// Materialize the managed status-hook script for this session and apply the
-/// adapter's [`agentum_executor::AgentHookInstall`] spec (extra argv, or a
-/// relocated config home seeded from the user's real config). Best-effort
-/// throughout: any IO failure leaves the session launchable, just without
-/// status hooks for that agent.
-fn install_status_hook(
-    launch: &mut agentum_executor::LaunchCommand,
-    adapter: &dyn agentum_executor::ToolAdapter,
-    session_id: &str,
-) {
-    let hook_dir = match paths::session_hook_dir(session_id) {
-        Ok(d) => d,
-        Err(_) => return,
-    };
-    if std::fs::create_dir_all(&hook_dir).is_err() {
-        return;
-    }
-    let script_path = hook_dir.join("agentum-hook.sh");
-    if std::fs::write(&script_path, agentum_executor::HOOK_SCRIPT).is_err() {
-        return;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755));
-    }
-    let script_str = script_path.to_string_lossy().to_string();
-    let Some(install) = adapter.hook_install(&script_str) else {
-        return;
-    };
-    match install {
-        agentum_executor::AgentHookInstall::Argv(args) => launch.argv.extend(args),
-        agentum_executor::AgentHookInstall::ConfigHome { env_var, files } => {
-            let cfg_dir = hook_dir.join("agent-home");
-            if std::fs::create_dir_all(&cfg_dir).is_err() {
-                return;
-            }
-            seed_agent_config_home(env_var, &cfg_dir);
-            for (rel, contents) in files {
-                let _ = std::fs::write(cfg_dir.join(rel), contents);
-            }
-            launch
-                .env
-                .push((env_var.to_string(), cfg_dir.to_string_lossy().to_string()));
-        }
-    }
-}
-
-/// Mirror the user's real agent config dir into `managed` via symlinks so the
-/// relocated agent keeps its auth, settings, and history; the caller then
-/// overlays its own hooks file. We never link the user's own `hooks.json` —
-/// that slot belongs to agentum in the managed home. Best-effort.
-fn seed_agent_config_home(env_var: &str, managed: &std::path::Path) {
-    let real = match env_var {
-        "CODEX_HOME" => user_home().map(|h| h.join(".codex")),
-        _ => None,
-    };
-    let Some(real) = real else {
-        return;
-    };
-    let Ok(entries) = std::fs::read_dir(&real) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        if name == std::ffi::OsStr::new("hooks.json") {
-            continue;
-        }
-        let dst = managed.join(&name);
-        if dst.exists() {
-            continue;
-        }
-        #[cfg(unix)]
-        {
-            let _ = std::os::unix::fs::symlink(entry.path(), &dst);
-        }
-    }
 }
 
 async fn stop(
@@ -1119,8 +1027,32 @@ async fn stream_session(
     });
 
     let mut bytes_forwarded: u64 = 0;
+    // Why: tmux consumes the agent's OSC title (set-titles off) so it never
+    // reaches the client through the pane byte stream — the desktop's
+    // title-derived agent-status (working/idle/needs-attention) had no input.
+    // Poll the captured pane_title and re-inject it as a synthetic OSC title
+    // whenever it changes. Invisible to the terminal grid; the desktop's
+    // title pipeline extracts it. ~400ms keeps the sidebar dot responsive
+    // without hammering tmux.
+    let mut title_ticker = tokio::time::interval(Duration::from_millis(400));
+    let mut last_pane_title = String::new();
     loop {
         tokio::select! {
+            _ = title_ticker.tick() => {
+                if let Ok(title) = agentum_tmux::pane_title(&target).await
+                    && !title.is_empty()
+                    && title != last_pane_title
+                {
+                    last_pane_title = title.clone();
+                    let mut osc = Vec::with_capacity(title.len() + 5);
+                    osc.extend_from_slice(b"\x1b]0;");
+                    osc.extend_from_slice(title.as_bytes());
+                    osc.push(0x07);
+                    if socket.send(Message::Binary(Bytes::from(osc))).await.is_err() {
+                        break;
+                    }
+                }
+            }
             chunk = tail_rx.recv() => match chunk {
                 Some(bytes) => {
                     let len = bytes.len() as u64;

@@ -201,6 +201,39 @@ describe('detectAgentStatusFromTitle', () => {
     expect(detectAgentStatusFromTitle('Cursor - action required')).toBe('permission')
   })
 
+  // --- Cursor (cursor-agent) native dynamic-named titles (v2026.06+) ---
+  // Why: cursor-agent now emits its own decorated OSC title per conversation —
+  // "<chat name> Agent - ⏳ Working ···" while working, "<chat name> Agent -
+  // ✅ Ready" when idle. The "<chat name>" prefix is DYNAMIC: it renames to the
+  // conversation topic (e.g. typing a "test" prompt yields "Test Agent"), so
+  // detection must key off cursor's "Agent - <emoji> <status>" suffix, not a
+  // hard-coded agent name. Before this, a renamed cursor chat returned null and
+  // the sidebar agent row + status vanished mid-session. Strings verified
+  // against captured cursor v2026.06.02 session logs.
+  it('classifies cursor native "Cursor Agent - ⏳ Working" as working', () => {
+    expect(detectAgentStatusFromTitle('Cursor Agent - ⏳ Working ···')).toBe('working')
+    expect(detectAgentStatusFromTitle('Cursor Agent - ⏳ Working ...')).toBe('working')
+  })
+
+  it('classifies cursor native "Cursor Agent - ✅ Ready" as idle', () => {
+    expect(detectAgentStatusFromTitle('Cursor Agent - ✅ Ready')).toBe('idle')
+  })
+
+  it('classifies a renamed cursor chat title regardless of the prefix name', () => {
+    // The prefix tracks the conversation topic, not the agent. "Test Agent" is
+    // the same cursor-agent CLI as "Cursor Agent" and must still light up.
+    expect(detectAgentStatusFromTitle('Test Agent - ⏳ Working ···')).toBe('working')
+    expect(detectAgentStatusFromTitle('Test Agent - ✅ Ready')).toBe('idle')
+  })
+
+  it('labels cursor native dynamic-named titles as Cursor', () => {
+    // A row needs BOTH a non-null status and a non-null label, so getAgentLabel
+    // must resolve even when the prefix isn't the literal word "cursor".
+    expect(getAgentLabel('Cursor Agent - ⏳ Working ···')).toBe('Cursor')
+    expect(getAgentLabel('Test Agent - ⏳ Working ···')).toBe('Cursor')
+    expect(getAgentLabel('Test Agent - ✅ Ready')).toBe('Cursor')
+  })
+
   it('classifies synthesized Droid titles', () => {
     expect(detectAgentStatusFromTitle('⠋ Droid')).toBe('working')
     expect(detectAgentStatusFromTitle('Droid ready')).toBe('idle')

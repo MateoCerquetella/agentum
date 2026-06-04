@@ -11,6 +11,8 @@ import {
   bindServerSessionTerminal,
   type ServerSessionTerminalBinding
 } from '@/runtime/server-session-terminal'
+import { detectAgentStatusFromTitle } from '@/lib/agent-status'
+import { makePaneKey } from '../../../../shared/stable-pane-id'
 
 /** The tab's launch agent (claude/codex/…) drives the server session's tool;
  *  a plain terminal tab has none, so it runs a shell. */
@@ -50,6 +52,55 @@ export function connectPaneServerSession(
   // When the server path fails, we hand the pane to connectPanePty and delegate
   // every binding method to it — the lifecycle hook never knows the difference.
   let localFallback: PanePtyBinding | null = null
+  // Synthetic pty id so the sidebar's title-derived agent rows treat this pane
+  // as a live PTY (buildTitleDerivedAgentRows gates on tabHasLivePty). Cleared
+  // on dispose. `server:` prefix keeps it distinct from real local pty ids.
+  let registeredPtyId: string | null = null
+  const paneKey = makePaneKey(deps.tabId, pane.leafId)
+  // Last title-derived state, so we can fire the task-complete notification on
+  // the working→idle edge (the server path bypasses connectPanePty's hook).
+  let lastTitleStatus: 'working' | 'permission' | 'idle' | null = null
+
+  const agentTaskCompleteNotificationsEnabled = (): boolean => {
+    const notifications = useAppStore.getState().settings?.notifications
+    return notifications?.enabled !== false && notifications?.agentTaskComplete !== false
+  }
+
+  // Why: server-session bytes go straight to xterm and never touched the
+  // agent-status pipeline, so the sidebar working/idle dot stayed blank for
+  // every tmux-backed agent — and no "task complete" notification ever fired.
+  // Route each OSC title into runtimePaneTitlesByTabId (what
+  // buildTitleDerivedAgentRows reads) and raise the completion notification on
+  // the working→idle transition, mirroring the local PTY path.
+  const handleServerSessionTitle = (title: string): void => {
+    if (disposed) {
+      return
+    }
+    // Parity with the local path: cursor-agent's bare native title carries no
+    // status and must not stomp a live working/idle state back to nothing.
+    if (title.trim().toLowerCase() === 'cursor agent') {
+      return
+    }
+    deps.setRuntimePaneTitle(deps.tabId, pane.id, title)
+    if (manager.getActivePane()?.id === pane.id) {
+      deps.updateTabTitle(deps.tabId, title)
+    }
+    const status = detectAgentStatusFromTitle(title)
+    if (status === 'working' || status === 'idle' || status === 'permission') {
+      if (
+        lastTitleStatus === 'working' &&
+        status === 'idle' &&
+        agentTaskCompleteNotificationsEnabled()
+      ) {
+        deps.dispatchNotification({
+          source: 'agent-task-complete',
+          terminalTitle: title,
+          paneKey
+        })
+      }
+      lastTitleStatus = status
+    }
+  }
 
   const fallBackToLocal = (reason: string): void => {
     if (disposed || localFallback) {
@@ -75,11 +126,18 @@ export function connectPaneServerSession(
         if (disposed) {
           return
         }
-        binding = await bindServerSessionTerminal(session.id, pane.terminal, { startupCommand })
+        binding = await bindServerSessionTerminal(session.id, pane.terminal, {
+          startupCommand,
+          onTitle: handleServerSessionTitle
+        })
         if (disposed) {
           binding.dispose()
           binding = null
+          return
         }
+        // Mark the tab as having a live PTY so title-derived agent rows render.
+        registeredPtyId = `server:${session.id}:${pane.leafId}`
+        deps.updateTabPtyId(deps.tabId, registeredPtyId)
       } catch (error) {
         if (!disposed) {
           fallBackToLocal(String(error))
@@ -91,6 +149,11 @@ export function connectPaneServerSession(
   return {
     dispose: () => {
       disposed = true
+      if (registeredPtyId) {
+        deps.clearTabPtyId(deps.tabId, registeredPtyId)
+        deps.clearRuntimePaneTitle(deps.tabId, pane.id)
+        registeredPtyId = null
+      }
       binding?.dispose()
       binding = null
       localFallback?.dispose()

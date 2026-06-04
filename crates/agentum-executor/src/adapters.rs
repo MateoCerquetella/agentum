@@ -171,33 +171,6 @@ impl ToolAdapter for CodexAdapter {
     fn is_agent(&self) -> bool {
         true
     }
-
-    // Codex emits no working/idle signal in its OSC title (the pane title is
-    // just the cwd basename), so the sidebar spinner has nothing to follow
-    // without a hook. Codex v0.128 honors `CODEX_HOME` for its config dir and
-    // runs `type:command` hooks through a shell (so an env-var prefix works —
-    // the same way the in-wild multi-agent hooks register them). We relocate
-    // CODEX_HOME to a server-managed dir (seeded from the user's real config)
-    // and register the managed script on the turn-start / turn-end events,
-    // encoding the kind in AGENTUM_HOOK_KIND so we never depend on parsing
-    // Codex's payload shape.
-    fn hook_install(&self, hook_script_path: &str) -> Option<crate::AgentHookInstall> {
-        let command = |kind: &str| format!("AGENTUM_HOOK_KIND={kind} \"{hook_script_path}\"");
-        let hooks = serde_json::json!({
-            "hooks": {
-                "UserPromptSubmit": [
-                    { "hooks": [{ "type": "command", "command": command("working") }] }
-                ],
-                "Stop": [
-                    { "hooks": [{ "type": "command", "command": command("done") }] }
-                ]
-            }
-        });
-        Some(crate::AgentHookInstall::ConfigHome {
-            env_var: "CODEX_HOME",
-            files: vec![("hooks.json", hooks.to_string())],
-        })
-    }
 }
 
 // ---------- cursor ----------
@@ -563,32 +536,6 @@ mod tests {
         let s = fixture("codex", None, &["--foo", "--bar=baz"]);
         let cmd = CodexAdapter.launch(&s);
         assert_eq!(cmd.argv, vec!["codex", "--foo", "--bar=baz"]);
-    }
-
-    #[test]
-    fn codex_hook_install_relocates_codex_home_with_managed_hooks() {
-        let spec = CodexAdapter
-            .hook_install("/run/agentum/sess/agentum-hook.sh")
-            .expect("codex should install a status hook");
-        match spec {
-            crate::AgentHookInstall::ConfigHome { env_var, files } => {
-                assert_eq!(env_var, "CODEX_HOME");
-                let (name, contents) = files.iter().find(|(n, _)| *n == "hooks.json").unwrap();
-                assert_eq!(*name, "hooks.json");
-                assert!(contents.contains("/run/agentum/sess/agentum-hook.sh"));
-                assert!(contents.contains("UserPromptSubmit"));
-                assert!(contents.contains("AGENTUM_HOOK_KIND=working"));
-                assert!(contents.contains("AGENTUM_HOOK_KIND=done"));
-            }
-            other => panic!("expected ConfigHome, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn claude_keeps_no_managed_hook_install() {
-        // Claude already drives its spinner from its OSC title + the existing
-        // tool_done settings hook; it must not get a second managed install.
-        assert!(ClaudeAdapter.hook_install("/x/agentum-hook.sh").is_none());
     }
 
     #[test]
