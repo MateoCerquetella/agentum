@@ -20,6 +20,7 @@ pub mod notes;
 pub mod preferences;
 pub mod preflight;
 pub mod profiles;
+pub mod repos;
 pub mod sessions;
 pub mod uploads;
 pub mod usage;
