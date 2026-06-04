@@ -46,7 +46,6 @@ pub mod ui;
 pub mod window;
 pub mod workspace_cleanup;
 pub mod workspace_ports;
-pub mod worktrees;
 
 // Small single-command namespaces ported as their own modules.
 pub mod e2e;
