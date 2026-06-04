@@ -152,10 +152,12 @@ pub async fn notifications_open_system_settings() -> Result<(), String> {
 
 #[tauri::command]
 pub fn notifications_play_sound() -> NotificationSoundResult {
-    // Why: custom notification-sound path config isn't ported yet, so there is
-    // no file to play. Mirrors the web adapter's missing-path fallback.
+    // Why: client-side Audio API handles playback via desktop-notification-sound.ts.
+    // This Rust command exists for symmetry with the generated contract but the
+    // renderer always plays sounds directly through the browser Audio API for
+    // lower latency and better cross-platform support.
     NotificationSoundResult {
         played: false,
-        reason: Some("missing-path".to_string()),
+        reason: Some("client-side-playback".to_string()),
     }
 }
