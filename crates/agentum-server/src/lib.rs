@@ -142,6 +142,13 @@ pub struct AppState {
     /// `std::sync::Mutex` because the critical section is a single HashMap
     /// lookup/insert/remove — no `.await` while holding the lock.
     pub hook_tokens: Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, String>>>,
+    /// Loopback base URL that launched agents' status hooks POST to, e.g.
+    /// `http://127.0.0.1:58176`. Set once the listener binds so hooks reach
+    /// THIS instance — the standalone daemon and the embedded desktop server
+    /// share this code, and the embedded one binds an ephemeral port (port 0),
+    /// so the value is only knowable after the bind. `RwLock` for that late
+    /// write; reads on the hot launch path are cheap.
+    pub hook_base: Arc<std::sync::RwLock<String>>,
 }
 
 impl AppState {
@@ -175,6 +182,7 @@ impl AppState {
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             clipboard_request_bus,
             hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            hook_base: Arc::new(std::sync::RwLock::new("http://127.0.0.1:8822".to_string())),
         }
     }
 }
@@ -283,6 +291,9 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
     let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
     let mut state = AppState::with_fingerprint(store, bus.clone(), cert_fingerprint);
     state.no_auth = opts.no_auth;
+    // Agent status hooks POST to loopback on the actual bound port (not a
+    // hardcoded one) so they reach this instance.
+    *state.hook_base.write().unwrap() = format!("http://127.0.0.1:{}", opts.addr.port());
 
     if state.store.count_users().await.unwrap_or(0) == 0 {
         tracing::warn!(
@@ -393,12 +404,16 @@ pub async fn serve_embedded_loopback(store: Store) -> anyhow::Result<SocketAddr>
     let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
     let mut state = AppState::with_fingerprint(store, bus.clone(), String::new());
     state.no_auth = true;
+    // hook_base must reflect the ephemeral bound port; clone the Arc handle
+    // before `state` is moved into the router, then write it once we bind.
+    let hook_base = state.hook_base.clone();
 
     spawn_background_workers(&state, &bus);
 
     let app = router(state);
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
     let addr = listener.local_addr()?;
+    *hook_base.write().unwrap() = format!("http://127.0.0.1:{}", addr.port());
     tracing::info!(%addr, "agentum-server listening (embedded loopback, no-auth)");
     tokio::spawn(async move {
         if let Err(e) = axum::serve(

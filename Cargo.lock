@@ -107,6 +107,7 @@ name = "agentum-executor"
 version = "0.10.10"
 dependencies = [
  "agentum-core",
+ "serde_json",
  "thiserror 2.0.18",
  "time",
  "tracing",

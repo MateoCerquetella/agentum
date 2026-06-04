@@ -10,6 +10,7 @@ description = "Tool-adapter abstraction so every supported AI CLI maps to a unif
 
 [dependencies]
 agentum-core  = { workspace = true }
+serde_json    = { workspace = true }
 thiserror     = { workspace = true }
 tracing       = { workspace = true }
 
