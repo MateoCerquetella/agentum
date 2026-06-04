@@ -1,6 +1,5 @@
 pub mod accounts;
 pub mod agent_status;
-pub mod agents;
 pub mod app;
 pub mod automations;
 pub mod browser;
@@ -53,7 +52,6 @@ pub mod worktrees;
 // Small single-command namespaces ported as their own modules.
 pub mod e2e;
 pub mod mobile;
-pub mod preflight;
 pub mod stats;
 pub mod telemetry;
 pub mod workspace_space;

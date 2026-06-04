@@ -1,9 +1,23 @@
+//! `/api/preflight` — local tool + agent detection for the desktop shell.
+//!
+//! Ported from the desktop's native `preflight_*` Tauri commands so the desktop
+//! drives the same embedded backend as everything else, instead of a parallel
+//! `which`/process implementation living in the Tauri crate. The embedded server
+//! runs as the user on a no-auth loopback, so it has the same `PATH` reach the
+//! desktop process did.
+
+use axum::routing::get;
+use axum::{Json, Router};
 use serde_json::{json, Value};
 
-// Preflight tool + agent detection. The renderer reads `status.git.installed`,
-// `status.gh.authenticated`, etc., and the Agents pane awaits detect/refresh, so
-// every method must resolve with the right shape (a partial/absent result makes the
-// Landing page throw or the Agents section spin forever).
+use crate::AppState;
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/api/preflight/check", get(check))
+        .route("/api/preflight/agents", get(detect_agents_handler))
+        .route("/api/preflight/agents/refresh", get(refresh_agents_handler))
+}
 
 fn installed(bin: &str) -> bool {
     which::which(bin).is_ok()
@@ -11,8 +25,12 @@ fn installed(bin: &str) -> bool {
 
 // gh/glab report auth via the exit code of `<cli> auth status` (0 = authenticated),
 // with an output-marker fallback for versions that exit non-zero but print success.
-fn cli_authenticated(bin: &str) -> bool {
-    match std::process::Command::new(bin).args(["auth", "status"]).output() {
+async fn cli_authenticated(bin: &str) -> bool {
+    match tokio::process::Command::new(bin)
+        .args(["auth", "status"])
+        .output()
+        .await
+    {
         Ok(output) => {
             if output.status.success() {
                 return true;
@@ -68,20 +86,18 @@ fn detect_agents() -> Vec<String> {
         .collect()
 }
 
-#[tauri::command]
-pub fn preflight_check() -> Value {
+// `GET /api/preflight/check` — git presence + gh/glab install & auth status. Shape
+// matches the renderer's PreflightStatus (Landing reads `status.git.installed`,
+// `status.gh.authenticated`, …; a missing field makes the Landing page throw).
+async fn check() -> Json<Value> {
     let gh_installed = installed("gh");
     let glab_installed = installed("glab");
-    json!({
+    let gh_authenticated = gh_installed && cli_authenticated("gh").await;
+    let glab_authenticated = glab_installed && cli_authenticated("glab").await;
+    Json(json!({
         "git": { "installed": installed("git") },
-        "gh": {
-            "installed": gh_installed,
-            "authenticated": gh_installed && cli_authenticated("gh")
-        },
-        "glab": {
-            "installed": glab_installed,
-            "authenticated": glab_installed && cli_authenticated("glab")
-        },
+        "gh": { "installed": gh_installed, "authenticated": gh_authenticated },
+        "glab": { "installed": glab_installed, "authenticated": glab_authenticated },
         "bitbucket": { "configured": false, "authenticated": false, "account": null },
         "azureDevOps": {
             "configured": false,
@@ -97,29 +113,23 @@ pub fn preflight_check() -> Value {
             "baseUrl": null,
             "tokenConfigured": false
         }
-    })
+    }))
 }
 
-#[tauri::command]
-pub fn preflight_detect_agents() -> Vec<String> {
-    detect_agents()
+// `GET /api/preflight/agents` — ids of the agent CLIs found on PATH.
+async fn detect_agents_handler() -> Json<Vec<String>> {
+    Json(detect_agents())
 }
 
-#[tauri::command]
-pub fn preflight_refresh_agents() -> Value {
-    // Login-shell PATH re-hydration isn't ported; detect against the current PATH
-    // and report success with no new segments. Shape mirrors RefreshAgentsResult.
-    json!({
+// `GET /api/preflight/agents/refresh` — same detection, in the RefreshAgentsResult
+// shape. Login-shell PATH re-hydration isn't ported, so we detect against the
+// current PATH and report success with no new segments.
+async fn refresh_agents_handler() -> Json<Value> {
+    Json(json!({
         "agents": detect_agents(),
         "addedPathSegments": [],
         "shellHydrationOk": true,
         "pathSource": "shell_hydrate",
         "pathFailureReason": "none"
-    })
-}
-
-#[tauri::command]
-pub fn preflight_detect_remote_agents() -> Vec<String> {
-    // Remote (SSH) agent detection needs a live relay session; not ported.
-    Vec::new()
+    }))
 }

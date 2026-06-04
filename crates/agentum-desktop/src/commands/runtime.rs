@@ -21,7 +21,10 @@ pub async fn runtime_get_status(state: State<'_, AppState>) -> Result<RuntimeSta
         active_project: runtime.workspace.active_project.clone(),
         active_session_id: runtime.workspace.active_session_id.clone(),
         healthy: runtime.workspace.healthy,
-        running_agents: runtime.agents.len(),
+        // The desktop's in-memory agent registry was removed (dead: never
+        // populated). Real running agents live in the embedded server's
+        // sessions; surface 0 here until runtime status routes through it.
+        running_agents: 0,
     })
 }
 

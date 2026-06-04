@@ -2,7 +2,7 @@ mod commands;
 mod state;
 
 use commands::{
-    accounts, agent_status, agents, app, automations, browser, cache, claude_usage, cli, clipboard,
+    accounts, agent_status, app, automations, browser, cache, claude_usage, cli, clipboard,
     codex_usage,
     crash_reports, diagnostics, feedback, fs, gh, git, gl, hooks, hosted_review, html_export,
     keybindings, linear, notebook, notifications, onboarding, open_code_usage, permissions,
@@ -11,7 +11,7 @@ use commands::{
     speech,
     shell_runtimes, skills, ssh, star_nag, ui, updater, window, workspace_cleanup, workspace_ports,
     worktrees,
-    e2e, mobile, preflight, stats, telemetry, workspace_space,
+    e2e, mobile, stats, telemetry, workspace_space,
 };
 use state::AppState;
 use tauri::Manager;
@@ -397,10 +397,6 @@ pub fn run() {
             star_nag::star_nag_dismiss,
             star_nag::star_nag_complete,
             star_nag::star_nag_force_show,
-            agents::agents_list,
-            agents::agents_spawn,
-            agents::agents_kill,
-            agents::agents_get_status,
             runtime::runtime_get_status,
             runtime::runtime_get_terminal_fit_overrides,
             runtime::runtime_get_terminal_drivers,
@@ -526,10 +522,6 @@ pub fn run() {
             e2e::e2e_get_config,
             stats::stats_get_summary,
             workspace_space::workspace_space_cancel,
-            preflight::preflight_check,
-            preflight::preflight_detect_agents,
-            preflight::preflight_refresh_agents,
-            preflight::preflight_detect_remote_agents
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

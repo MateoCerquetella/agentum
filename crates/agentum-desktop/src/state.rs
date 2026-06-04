@@ -1,7 +1,6 @@
 use std::{collections::HashMap, io::Write, sync::Arc};
 
 use anyhow::Context;
-use chrono::{DateTime, Utc};
 use notify::RecommendedWatcher;
 use parking_lot::Mutex;
 use portable_pty::{Child, MasterPty};
@@ -14,15 +13,6 @@ pub struct PtyHandle {
     // Shared so the reader thread can wait() for the real exit code on EOF while
     // pty_kill / introspection still reach the child from the command handlers.
     pub child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentRecord {
-    pub id: String,
-    pub kind: String,
-    pub status: String,
-    pub config: serde_json::Value,
-    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,7 +37,6 @@ impl Default for WorkspaceState {
 #[derive(Debug, Default)]
 pub struct RuntimeStateData {
     pub workspace: WorkspaceState,
-    pub agents: HashMap<String, AgentRecord>,
 }
 
 pub struct AppState {
