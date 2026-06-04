@@ -502,7 +502,12 @@ fn scan_git_worktrees(repo_id: &str) -> Result<Vec<Value>, ApiError> {
                 "linkedLinearIssue": meta.and_then(|m| m.linked_linear_issue.clone()),
                 "isArchived": meta.map(|m| m.is_archived).unwrap_or(false),
                 "isUnread": meta.map(|m| m.is_unread).unwrap_or(false),
-                "isPinned": meta.map(|m| m.is_pinned).unwrap_or(is_primary),
+                // Pinning is EXPLICIT: a worktree with no registry row is NOT
+                // pinned. Defaulting the primary to pinned made it impossible to
+                // keep unpinned — deleting a worktree drops its row, so it
+                // reverted to auto-pinned, and a repo's primary worktree (which
+                // `git worktree remove` can't delete) reappeared pinned forever.
+                "isPinned": meta.map(|m| m.is_pinned).unwrap_or(false),
                 "sortOrder": meta.map(|m| m.sort_order).unwrap_or(idx as i64),
                 "lastActivityAt": meta.map(|m| m.last_activity_at).unwrap_or(0),
                 "path": path,
