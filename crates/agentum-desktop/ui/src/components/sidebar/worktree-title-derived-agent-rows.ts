@@ -101,7 +101,14 @@ function buildTitleDerivedAgentRow(args: {
 }): DashboardAgentRow | null {
   const status = detectAgentStatusFromTitle(args.title)
   const titleLabel = getAgentLabel(args.title)
-  if (!status || !titleLabel) {
+  const launchAgent = args.tab.launchAgent
+  // Why: a tab launched with a known agent keeps a live agent session even when
+  // its idle title is unrecognizable — codex's idle title is just the cwd
+  // basename ("another-test"), which yields no status and no label. Dropping the
+  // row there made the agent VANISH from the sidebar the moment it finished a
+  // turn, even though it's still running. Keep it visible (as idle) when we know
+  // the launch agent; only require a recognizable agent title when we don't.
+  if (!launchAgent && (!status || !titleLabel)) {
     return null
   }
   if (!isTerminalLeafId(args.leafId)) {
@@ -109,16 +116,21 @@ function buildTitleDerivedAgentRow(args: {
   }
   const paneKey = makePaneKey(args.tab.id, args.leafId)
   // Why: prefer the tab's KNOWN launch agent over the title-inferred identity.
-  // Several agents emit a title that carries no name — codex's is just the cwd
-  // basename with a braille spinner ("⠧ another-test"), which trips Claude's
-  // generic braille heuristic and mislabels the row as "Claude Code". The
-  // launch agent is authoritative; fall back to the title label only for panes
-  // with no recorded agent (e.g. an agent started inside a plain shell tab).
-  const agentType: AgentType = args.tab.launchAgent ?? TITLE_AGENT_LABEL_TO_TYPE[titleLabel] ?? 'unknown'
-  const label = args.tab.launchAgent ? formatAgentTypeLabel(agentType) : titleLabel
-  const rowState = titleStatusToRowState(status)
+  // codex's "⠧ another-test" otherwise trips Claude's generic braille heuristic
+  // and mislabels the row as "Claude Code". The launch agent is authoritative;
+  // fall back to the title label only for panes with no recorded agent.
+  const agentType: AgentType =
+    launchAgent ?? (titleLabel ? (TITLE_AGENT_LABEL_TO_TYPE[titleLabel] ?? 'unknown') : 'unknown')
+  const label = launchAgent ? formatAgentTypeLabel(agentType) : (titleLabel ?? formatAgentTypeLabel(agentType))
+  // A known agent with an unrecognized (idle) title reads as idle, not gone.
+  const effectiveStatus = status ?? 'idle'
+  const rowState = titleStatusToRowState(effectiveStatus)
   const secondary =
-    status === 'permission' ? 'Needs input' : status === 'working' ? 'Running' : 'Idle'
+    effectiveStatus === 'permission'
+      ? 'Needs input'
+      : effectiveStatus === 'working'
+        ? 'Running'
+        : 'Idle'
   const entryState: AgentStatusState = rowState === 'waiting' ? 'waiting' : 'working'
   const entry: AgentStatusEntry = {
     paneKey,

@@ -57,21 +57,59 @@ export function connectPaneServerSession(
   // on dispose. `server:` prefix keeps it distinct from real local pty ids.
   let registeredPtyId: string | null = null
   const paneKey = makePaneKey(deps.tabId, pane.leafId)
-  // Last title-derived state, so we can fire the task-complete notification on
-  // the working→idle edge (the server path bypasses connectPanePty's hook).
-  let lastTitleStatus: 'working' | 'permission' | 'idle' | null = null
+  // A tab launched with an agent keeps a live agent session even when its idle
+  // title is unrecognizable (codex's idle title is just the cwd basename), so
+  // treat an unknown title as idle rather than dropping the status entirely.
+  const isAgentTab = resolveSessionTool(deps) !== 'terminal'
+  // Last COMMITTED status — drives the working→idle completion notification and
+  // the spinner-flicker debounce below.
+  let committedTitleStatus: 'working' | 'permission' | 'idle' | null = null
+  let idleHoldTimer: ReturnType<typeof setTimeout> | null = null
+  let pendingIdleTitle: string | null = null
+  // Why: codex animates its spinner by interleaving a bare cwd title between
+  // braille frames mid-turn. A working→idle edge must persist for this window
+  // before it counts as a real turn end — otherwise every flicker fires a false
+  // completion notification and blinks the sidebar dot. Mirrors the local PTY
+  // path's WORKING_TITLE_HOLD_MS.
+  const WORKING_TO_IDLE_HOLD_MS = 700
+
+  const clearIdleHold = (): void => {
+    if (idleHoldTimer) {
+      clearTimeout(idleHoldTimer)
+      idleHoldTimer = null
+    }
+    pendingIdleTitle = null
+  }
 
   const agentTaskCompleteNotificationsEnabled = (): boolean => {
     const notifications = useAppStore.getState().settings?.notifications
     return notifications?.enabled !== false && notifications?.agentTaskComplete !== false
   }
 
+  const commitServerSessionStatus = (
+    title: string,
+    status: 'working' | 'permission' | 'idle'
+  ): void => {
+    deps.setRuntimePaneTitle(deps.tabId, pane.id, title)
+    if (manager.getActivePane()?.id === pane.id) {
+      deps.updateTabTitle(deps.tabId, title)
+    }
+    if (
+      committedTitleStatus === 'working' &&
+      status === 'idle' &&
+      agentTaskCompleteNotificationsEnabled()
+    ) {
+      deps.dispatchNotification({ source: 'agent-task-complete', terminalTitle: title, paneKey })
+    }
+    committedTitleStatus = status
+  }
+
   // Why: server-session bytes go straight to xterm and never touched the
-  // agent-status pipeline, so the sidebar working/idle dot stayed blank for
-  // every tmux-backed agent — and no "task complete" notification ever fired.
-  // Route each OSC title into runtimePaneTitlesByTabId (what
-  // buildTitleDerivedAgentRows reads) and raise the completion notification on
-  // the working→idle transition, mirroring the local PTY path.
+  // agent-status pipeline, so the sidebar dot stayed blank and no "task
+  // complete" notification ever fired for tmux-backed agents. Route each OSC
+  // title into runtimePaneTitlesByTabId (what buildTitleDerivedAgentRows reads),
+  // map a known agent's unrecognized title to idle (so the row survives a turn
+  // end), and raise the completion notification on a SUSTAINED working→idle.
   const handleServerSessionTitle = (title: string): void => {
     if (disposed) {
       return
@@ -81,25 +119,40 @@ export function connectPaneServerSession(
     if (title.trim().toLowerCase() === 'cursor agent') {
       return
     }
-    deps.setRuntimePaneTitle(deps.tabId, pane.id, title)
-    if (manager.getActivePane()?.id === pane.id) {
-      deps.updateTabTitle(deps.tabId, title)
-    }
-    const status = detectAgentStatusFromTitle(title)
-    if (status === 'working' || status === 'idle' || status === 'permission') {
-      if (
-        lastTitleStatus === 'working' &&
-        status === 'idle' &&
-        agentTaskCompleteNotificationsEnabled()
-      ) {
-        deps.dispatchNotification({
-          source: 'agent-task-complete',
-          terminalTitle: title,
-          paneKey
-        })
+    const status: 'working' | 'permission' | 'idle' | null =
+      detectAgentStatusFromTitle(title) ?? (isAgentTab ? 'idle' : null)
+    if (status === null) {
+      // Plain shell line on a non-agent tab — reflect it with no status meaning.
+      deps.setRuntimePaneTitle(deps.tabId, pane.id, title)
+      if (manager.getActivePane()?.id === pane.id) {
+        deps.updateTabTitle(deps.tabId, title)
       }
-      lastTitleStatus = status
+      return
     }
+    if (status === 'working' || status === 'permission') {
+      // A live frame wins immediately and cancels a pending completion, so
+      // codex's bare-title flicker can never read as a finished turn.
+      clearIdleHold()
+      commitServerSessionStatus(title, status)
+      return
+    }
+    // status === 'idle': hold a working→idle edge briefly; a returning working
+    // frame cancels it. Only a sustained idle commits and notifies.
+    if (committedTitleStatus === 'working') {
+      pendingIdleTitle = title
+      if (!idleHoldTimer) {
+        idleHoldTimer = setTimeout(() => {
+          idleHoldTimer = null
+          const heldTitle = pendingIdleTitle ?? title
+          pendingIdleTitle = null
+          if (!disposed) {
+            commitServerSessionStatus(heldTitle, 'idle')
+          }
+        }, WORKING_TO_IDLE_HOLD_MS)
+      }
+      return
+    }
+    commitServerSessionStatus(title, status)
   }
 
   const fallBackToLocal = (reason: string): void => {
@@ -149,6 +202,7 @@ export function connectPaneServerSession(
   return {
     dispose: () => {
       disposed = true
+      clearIdleHold()
       if (registeredPtyId) {
         deps.clearTabPtyId(deps.tabId, registeredPtyId)
         deps.clearRuntimePaneTitle(deps.tabId, pane.id)
