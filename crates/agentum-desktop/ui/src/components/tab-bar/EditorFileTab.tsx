@@ -231,7 +231,7 @@ export default function EditorFileTab({
       data-pinned={isPinned ? 'true' : 'false'}
       {...attributes}
       {...listeners}
-      className={`group relative flex items-center h-full px-1.5 text-xs cursor-pointer select-none shrink-0 outline-none focus:outline-none focus-visible:outline-none border-t ${hasTabsToRight ? 'border-r' : ''} border-border bg-card ${getDropIndicatorClasses(dropIndicator ?? null)} ${
+      className={`group relative flex items-center h-full px-1.5 text-xs cursor-pointer select-none shrink-0 outline-none focus:outline-none focus-visible:outline-none border-t ${hasTabsToRight ? 'border-r' : ''} border-border ${isActive ? 'bg-card' : 'bg-sidebar'} ${getDropIndicatorClasses(dropIndicator ?? null)} ${
         isActive ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
       }`}
       onPointerDown={(e) => {

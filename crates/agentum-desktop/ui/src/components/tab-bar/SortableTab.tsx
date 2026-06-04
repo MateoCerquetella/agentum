@@ -218,7 +218,7 @@ export default function SortableTab({
       // tab still reads as "selected + has activity". The wash is
       // rendered as an absolutely-positioned child below so the ::after
       // pseudo-element stays free for the drop indicator.
-      className={`group relative flex items-center h-full px-1.5 text-xs cursor-pointer select-none shrink-0 outline-none focus:outline-none focus-visible:outline-none border-t ${hasTabsToRight ? 'border-r' : ''} border-border bg-card ${getDropIndicatorClasses(dropIndicator ?? null)} ${
+      className={`group relative flex items-center h-full px-1.5 text-xs cursor-pointer select-none shrink-0 outline-none focus:outline-none focus-visible:outline-none border-t ${hasTabsToRight ? 'border-r' : ''} border-border ${isActive ? 'bg-card' : 'bg-sidebar'} ${getDropIndicatorClasses(dropIndicator ?? null)} ${
         isActive ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
       }`}
       onDoubleClick={(e) => {

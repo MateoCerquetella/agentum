@@ -104,41 +104,50 @@
   --font-mono: var(--app-font-family);
   /* Agentum radius scale tops out at 6px (then jumps to pill). */
   --radius: 0.375rem;
-  --background: #fff;
+  /* Light = "Paper": calm achromatic field, coral CTA, ink-on-paper text.
+     Matched to the design-system Paper theme — off-white canvas (#f7f7f8),
+     cards stay pure white, signals darkened just enough to read as hue on
+     light, coral kept as the only warm brand accent (parity with dark). */
+  --background: #f7f7f8;
   --editor-surface: #ffffff;
-  --foreground: #0a0a0a;
-  --card: #fff;
-  --card-foreground: #0a0a0a;
-  --popover: #fff;
-  --popover-foreground: #0a0a0a;
-  --primary: #171717;
-  --primary-foreground: #fafafa;
-  --secondary: #f5f5f5;
-  --secondary-foreground: #171717;
-  --muted: #f5f5f5;
-  --muted-foreground: #737373;
-  --accent: #f5f5f5;
-  --accent-foreground: #171717;
-  --destructive: #e40014;
-  --destructive-foreground: #fcf3f3;
-  --border: #e5e5e5;
-  --input: #e5e5e5;
-  --ring: #a1a1a1;
+  --foreground: #18181a;
+  --card: #ffffff;
+  --card-foreground: #18181a;
+  --popover: #ffffff;
+  --popover-foreground: #18181a;
+  --primary: #e85544;
+  --primary-foreground: #ffffff;
+  --secondary: #eeeef0;
+  --secondary-foreground: #18181a;
+  --muted: #eeeef0;
+  --muted-foreground: #70717a;
+  --accent: #ededf0;
+  --accent-foreground: #18181a;
+  --destructive: #d83a3a;
+  --destructive-foreground: #ffffff;
+  --border: #ececee;
+  --input: #dadadd;
+  --ring: #0a46d6;
   --terminal-pane-locate: var(--color-blue-600);
   --ai-action-accent: var(--color-violet-500);
-  --chart-1: var(--color-blue-300);
-  --chart-2: var(--color-blue-500);
-  --chart-3: var(--color-blue-600);
-  --chart-4: var(--color-blue-700);
-  --chart-5: var(--color-blue-800);
-  --sidebar: #fafafa;
-  --sidebar-foreground: #0a0a0a;
-  --sidebar-primary: #171717;
-  --sidebar-primary-foreground: #fafafa;
-  --sidebar-accent: #f5f5f5;
-  --sidebar-accent-foreground: #171717;
-  --sidebar-border: #e5e5e5;
-  --sidebar-ring: #a1a1a1;
+  /* Signal palette (Paper): same hues as dark, darkened to read on light. */
+  --chart-1: #1a9b12; /* green  — done / live */
+  --chart-2: #1c83c4; /* blue */
+  --chart-3: #bb7708; /* amber  — running / attention */
+  --chart-4: #c400d0; /* magenta */
+  --chart-5: #e85544; /* coral  — brand / blocked */
+  /* Rail + titlebar = "chrome": a hair off the canvas so the frame reads
+     distinct from white content (Paper --bg-chrome #f1f1f3). */
+  --sidebar: #f1f1f3;
+  --sidebar-foreground: #18181a;
+  --sidebar-primary: #e85544;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #ededf0;
+  --sidebar-accent-foreground: #18181a;
+  --sidebar-border: #ececee;
+  --sidebar-ring: #0a46d6;
+  /* Titlebar shares the chrome surface so the top strip reads as one with the rail. */
+  --bg-titlebar: var(--sidebar);
   --terminal-pane-title-on-dark-fg: rgb(255 255 255 / 0.52);
   --terminal-pane-title-on-dark-input-fg: rgb(255 255 255 / 0.7);
   --terminal-pane-title-on-dark-placeholder: rgb(255 255 255 / 0.38);
@@ -494,7 +503,8 @@
   flex-direction: row;
   align-items: center;
   background: var(--bg-titlebar, var(--card));
-  border-bottom: 1px solid var(--border);
+  /* Seamless top: no divider between the titlebar and content (matches the
+     "Paper" reference where the top chrome flows into the body unbroken). */
   -webkit-app-region: drag;
   user-select: none;
 }
@@ -513,15 +523,8 @@
   overflow: hidden;
   flex-shrink: 0;
   background: var(--bg-titlebar, var(--card));
-  /* Why: draw the divider via inset shadow instead of border-bottom so the
-     flex content area spans the full 36px. With border-bottom + border-box,
-     the content area shrinks to 35px and flex-centered controls land at
-     y=17.5, a half-pixel below the native traffic-light center at y=18
-     (set via setWindowButtonPosition in createMainWindow.ts). The shadow
-     paints the same 1px seam without stealing layout space, so the sidebar
-     toggle, agent badge, and back/forward arrows align pixel-perfectly
-     with the traffic lights. */
-  box-shadow: inset 0 -1px 0 var(--border);
+  /* Seamless top: no bottom seam under the workspace titlebar strip so the top
+     chrome flows into the sidebar/content unbroken (matches the Paper reference). */
   -webkit-app-region: drag;
   user-select: none;
 }
@@ -2785,8 +2788,8 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
 .dark .file-type-badge[data-ft='rb'] { color: #e2554d; }
 .file-type-badge[data-ft='go'] { color: #0d87a8; }
 .dark .file-type-badge[data-ft='go'] { color: #2bc4ef; }
-.file-type-badge[data-ft='md'] { color: #5e7283; }
-.dark .file-type-badge[data-ft='md'] { color: #9fb4c6; }
+.file-type-badge[data-ft='md'] { color: #4f7aa6; }
+.dark .file-type-badge[data-ft='md'] { color: #93b8da; }
 .file-type-badge[data-ft='json'] { color: #8a8a1c; }
 .dark .file-type-badge[data-ft='json'] { color: #d2d24a; }
 .file-type-badge[data-ft='toml'] { color: #786a58; }

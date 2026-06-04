@@ -267,7 +267,7 @@ export default function TabGroupSplitLayout({
         className="flex flex-col flex-1 min-w-0 min-h-0 overflow-hidden border-l border-border"
       >
         <div
-          className="h-[4px] shrink-0 bg-card"
+          className="h-[4px] shrink-0 bg-sidebar"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         />
         <div className="flex flex-1 min-w-0 min-h-0 overflow-hidden">

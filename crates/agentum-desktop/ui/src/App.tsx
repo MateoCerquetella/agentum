@@ -132,7 +132,17 @@ import { isGitRepoKind } from '../../shared/repo-kind'
 import { showTerminalShortcutCaptureNotification } from '@/lib/terminal-shortcut-capture-notification'
 import { resolveMountedLazyModalIds, type LazyModalId } from './lazy-modal-mount-state'
 
-const isMac = navigator.userAgent.includes('Mac')
+// Why: a WebView user-agent can omit "Mac" in some embeddings, which would
+// drop the macOS traffic-light pad and let the sidebar toggle collide with the
+// native window controls. Fall back to the platform string (e.g. "MacIntel")
+// so macOS is detected reliably regardless of UA spelling.
+const isMac =
+  navigator.userAgent.includes('Mac') ||
+  /Mac/i.test(
+    (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform ??
+      navigator.platform ??
+      ''
+  )
 const isWindows = !isMac && navigator.userAgent.includes('Windows')
 const shortcutPlatform: NodeJS.Platform = isMac ? 'darwin' : isWindows ? 'win32' : 'linux'
 
@@ -1473,82 +1483,66 @@ function App(): React.JSX.Element {
         ) : (
           <div className="pl-2" />
         )}
-        {showSidebar && !isWindows && (
-          <>
-            {settings?.showTitlebarAppName !== false && (
-              <ContextMenu>
-                <ContextMenuTrigger asChild>
-                  <div className="titlebar-app-name" aria-label="agentum">
-                    <span className="titlebar-app-name-main">agentum</span>
-                  </div>
-                </ContextMenuTrigger>
-                <ContextMenuContent>
-                  <ContextMenuItem
-                    onSelect={() => {
-                      void actions.updateSettings({ showTitlebarAppName: false })
-                    }}
-                  >
-                    Hide App Name
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              </ContextMenu>
-            )}
-          </>
-        )}
-        {showSidebar && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                className="sidebar-toggle"
-                onClick={actions.toggleSidebar}
-                aria-label="Toggle sidebar"
-              >
-                <PanelLeft size={16} />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" sideOffset={6}>
-              {`Toggle sidebar (${leftSidebarShortcutLabel})`}
-            </TooltipContent>
-          </Tooltip>
-        )}
+        {/* App-name wordmark removed; the sidebar toggle + history arrows are
+            pinned to the right edge of the sidebar header (below), not here. */}
       </div>
-      {/* Why: Back/Forward traverse mixed worktree + page history, so the
-          cluster is shown wherever the history shortcut is live. Hidden in
-          Settings and non-stack page views. */}
-      {shouldShowWorktreeHistoryControls(activeView) && (
-        // Why: when the workspace sidebar is collapsed, this header shrink-wraps
-        // and ml-auto has no spare width; keep a fixed gutter before Back.
-        <div className="ml-auto mr-3 flex items-center pl-2">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                className="sidebar-toggle sidebar-toggle-compact"
-                onClick={() => useAppStore.getState().goBackWorktree()}
-                disabled={!canGoBackWorktree}
-                aria-label="Go back"
-              >
-                <ArrowLeft size={12} />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" sideOffset={6}>
-              {`Go back (${historyBackShortcutLabel})`}
-            </TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                className="sidebar-toggle sidebar-toggle-compact"
-                onClick={() => useAppStore.getState().goForwardWorktree()}
-                disabled={!canGoForwardWorktree}
-                aria-label="Go forward"
-              >
-                <ArrowRight size={12} />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" sideOffset={6}>
-              {`Go forward (${historyForwardShortcutLabel})`}
-            </TooltipContent>
-          </Tooltip>
+      {/* Why: the sidebar toggle and Back/Forward history arrows form one nav
+          group pinned (ml-auto) to the RIGHT edge of the sidebar-width header,
+          so they sit at the sidebar/content boundary (matches design) instead
+          of next to the traffic lights. Back/Forward only render where the
+          history shortcut is live (hidden in Settings / non-stack pages). */}
+      {(showSidebar || shouldShowWorktreeHistoryControls(activeView)) && (
+        <div className="ml-auto mr-3 flex items-center gap-0.5">
+          {showSidebar && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  className="sidebar-toggle"
+                  onClick={actions.toggleSidebar}
+                  aria-label="Toggle sidebar"
+                >
+                  <PanelLeft size={16} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={6}>
+                {`Toggle sidebar (${leftSidebarShortcutLabel})`}
+              </TooltipContent>
+            </Tooltip>
+          )}
+          {shouldShowWorktreeHistoryControls(activeView) && (
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    className="sidebar-toggle sidebar-toggle-compact"
+                    onClick={() => useAppStore.getState().goBackWorktree()}
+                    disabled={!canGoBackWorktree}
+                    aria-label="Go back"
+                  >
+                    <ArrowLeft size={12} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={6}>
+                  {`Go back (${historyBackShortcutLabel})`}
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    className="sidebar-toggle sidebar-toggle-compact"
+                    onClick={() => useAppStore.getState().goForwardWorktree()}
+                    disabled={!canGoForwardWorktree}
+                    aria-label="Go forward"
+                  >
+                    <ArrowRight size={12} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={6}>
+                  {`Go forward (${historyForwardShortcutLabel})`}
+                </TooltipContent>
+              </Tooltip>
+            </>
+          )}
         </div>
       )}
     </div>
