@@ -11,7 +11,7 @@ use commands::{
     speech,
     shell_runtimes, skills, ssh, star_nag, ui, updater, window, workspace_cleanup, workspace_ports,
     worktrees,
-    e2e, memory, mobile, preflight, stats, telemetry, workspace_space,
+    e2e, mobile, preflight, stats, telemetry, workspace_space,
 };
 use state::AppState;
 use tauri::Manager;
@@ -526,7 +526,6 @@ pub fn run() {
             e2e::e2e_get_config,
             stats::stats_get_summary,
             workspace_space::workspace_space_cancel,
-            memory::memory_get_snapshot,
             preflight::preflight_check,
             preflight::preflight_detect_agents,
             preflight::preflight_refresh_agents,

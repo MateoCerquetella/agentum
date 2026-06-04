@@ -1,12 +1,80 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use tauri::Emitter;
 
 fn map_err(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+// Mirrors SshConnectionState in agentum/src/shared/ssh-types.ts. The renderer's
+// `ssh.onStateChanged` handler expects `{ targetId, state }` and reads `state.status`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SshConnectionState {
+    target_id: String,
+    status: String,
+    error: Option<String>,
+    reconnect_attempt: u32,
+}
+
+// Last known connection state per target. Approach A has no persistent native
+// relay, so this just records what we've reported to the renderer (so
+// `ssh_get_state` can answer the startup-reconnect poll in App.tsx).
+fn connection_states() -> &'static Mutex<BTreeMap<String, SshConnectionState>> {
+    static STATES: OnceLock<Mutex<BTreeMap<String, SshConnectionState>>> = OnceLock::new();
+    STATES.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn record_state(state: &SshConnectionState) {
+    if let Ok(mut states) = connection_states().lock() {
+        states.insert(state.target_id.clone(), state.clone());
+    }
+}
+
+fn emit_state(app: &tauri::AppHandle, status: &str, target_id: &str, error: Option<String>) {
+    let state = SshConnectionState {
+        target_id: target_id.to_string(),
+        status: status.to_string(),
+        error,
+        reconnect_attempt: 0,
+    };
+    record_state(&state);
+    // Payload shape matches the renderer: `{ targetId, state }`.
+    let _ = app.emit(
+        "ssh-state-changed",
+        serde_json::json!({ "targetId": target_id, "state": state }),
+    );
+}
+
+// Builds the ssh CLI args for a target: identity + destination (the ssh-config
+// host alias when present, otherwise `-p <port> <user>@<host>`). Mirrors
+// `ssh_test_connection`'s destination logic so the terminal PTY and the
+// connectivity probe stay in sync. Returns None for an unknown target id.
+// Shared with commands::pty, which spawns the interactive `ssh … tmux` terminal.
+pub(crate) fn ssh_target_args(target_id: &str) -> Option<Vec<String>> {
+    let target = read_targets()
+        .ok()?
+        .into_iter()
+        .find(|candidate| candidate.id == target_id)?;
+    let mut args: Vec<String> = Vec::new();
+    if let Some(identity) = &target.identity_file {
+        args.push("-i".into());
+        args.push(identity.clone());
+    }
+    match &target.config_host {
+        Some(config_host) => args.push(config_host.clone()),
+        None => {
+            args.push("-p".into());
+            args.push(target.port.to_string());
+            args.push(format!("{}@{}", target.username, target.host));
+        }
+    }
+    Some(args)
 }
 
 // Mirrors SshTarget in agentum/src/shared/ssh-types.ts. `extra` round-trips fields
@@ -216,16 +284,31 @@ pub async fn ssh_import_config() -> Result<Vec<SshTarget>, String> {
 
 #[tauri::command]
 pub fn ssh_get_state(target_id: String) -> Result<Value, String> {
-    let _ = target_id;
-    // No live SSH transport yet → no connection state.
-    Ok(Value::Null)
+    let state = connection_states()
+        .lock()
+        .ok()
+        .and_then(|states| states.get(&target_id).cloned());
+    match state {
+        Some(state) => serde_json::to_value(state).map_err(map_err),
+        None => Ok(Value::Null),
+    }
 }
 
+// Approach A: there is no persistent native SSH relay. A terminal opened on an
+// SSH target spawns an interactive `ssh -tt … tmux` PTY (see commands::pty),
+// and any password/passphrase/host-key prompt is answered in the terminal
+// itself. So "connecting" is optimistic — once we've verified the target
+// exists, we mark it connected so the renderer's `waitForSshConnection`
+// unblocks and the terminal can spawn. The PTY surfaces any real connection
+// failure visibly to the user.
 #[tauri::command]
-pub fn ssh_connect(target_id: String) -> Result<Value, String> {
-    let _ = target_id;
-    // SSH transport (connection pool + relay) isn't ported yet; cannot connect.
-    Ok(Value::Null)
+pub fn ssh_connect(app: tauri::AppHandle, target_id: String) -> Result<Value, String> {
+    if ssh_target_args(&target_id).is_none() {
+        return Err(format!("SSH target not found: {target_id}"));
+    }
+    emit_state(&app, "connecting", &target_id, None);
+    emit_state(&app, "connected", &target_id, None);
+    ssh_get_state(target_id)
 }
 
 #[tauri::command]
@@ -361,8 +444,15 @@ pub fn ssh_submit_credential() {}
 #[tauri::command]
 pub fn ssh_terminate_sessions() {}
 
+// "Disconnect" only flips the reported state to disconnected. Under Approach A
+// the remote tmux session deliberately keeps running so the next terminal
+// reattaches to it (-A); there is no native relay to tear down.
 #[tauri::command]
-pub fn ssh_disconnect() {}
+pub fn ssh_disconnect(app: tauri::AppHandle, target_id: Option<String>) {
+    if let Some(target_id) = target_id {
+        emit_state(&app, "disconnected", &target_id, None);
+    }
+}
 
 #[tauri::command]
 pub fn ssh_browse_dir() -> Result<Vec<Value>, String> {

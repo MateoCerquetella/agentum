@@ -323,9 +323,6 @@ export interface AgentumApi {
     testConnection: ApiMethod
     updateIssue: ApiMethod
   }
-  memory: {
-    getSnapshot: ApiMethod
-  }
   mobile: {
     getRuntimePairingUrl: ApiMethod
     listNetworkInterfaces: ApiMethod

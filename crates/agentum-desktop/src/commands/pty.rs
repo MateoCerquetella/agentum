@@ -33,6 +33,130 @@ fn map_err(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
+// POSIX single-quote escaping: wrap in single quotes, replacing each `'` with
+// `'\''`. Used to build the remote tmux command string that the remote login
+// shell re-parses (cwd/command/env values may contain spaces or specials).
+fn sh_single_quote(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('\'');
+    for ch in value.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+// A stable, tmux-safe session name per pane so reconnects reattach (`-A`) to the
+// same remote session instead of spawning a new one. Prefer worktreeId+leafId
+// (stable across reconnects of a pane); fall back to cwd, then a constant. tmux
+// session names can't contain `.`/`:`, so non-alphanumerics collapse to `_`.
+fn tmux_session_name(opts: &Value, cwd: Option<&str>) -> String {
+    let worktree = opts.get("worktreeId").and_then(Value::as_str).unwrap_or("");
+    let leaf = opts.get("leafId").and_then(Value::as_str).unwrap_or("");
+    let base = if !worktree.is_empty() || !leaf.is_empty() {
+        format!("{worktree}_{leaf}")
+    } else {
+        cwd.unwrap_or("session").to_string()
+    };
+    let mut sanitized: String = base
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    sanitized.truncate(60);
+    if sanitized.is_empty() {
+        sanitized.push_str("session");
+    }
+    format!("agentum_{sanitized}")
+}
+
+// The single remote command string sent to the remote login shell:
+// `[env K=V …] tmux new-session -A -s <session> [-c <cwd>] [<command>]`. The
+// session name is sanitized (no quoting needed); cwd/command/env values are
+// single-quoted because the remote shell re-parses this string. env is forwarded
+// only for shell-safe keys; it lands on the session at creation (ignored on
+// reattach).
+fn remote_tmux_command(
+    session: &str,
+    cwd: Option<&str>,
+    command: Option<&str>,
+    env: &[(String, String)],
+) -> String {
+    let mut remote = String::new();
+    let safe: Vec<&(String, String)> = env
+        .iter()
+        .filter(|(key, _)| {
+            !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+        .collect();
+    if !safe.is_empty() {
+        remote.push_str("env");
+        for (key, value) in safe {
+            remote.push(' ');
+            remote.push_str(key);
+            remote.push('=');
+            remote.push_str(&sh_single_quote(value));
+        }
+        remote.push(' ');
+    }
+    remote.push_str("tmux new-session -A -s ");
+    remote.push_str(session);
+    if let Some(cwd) = cwd {
+        remote.push_str(" -c ");
+        remote.push_str(&sh_single_quote(cwd));
+    }
+    if let Some(command) = command {
+        remote.push(' ');
+        remote.push_str(&sh_single_quote(command));
+    }
+    remote
+}
+
+// Build the (program, args) for an SSH-backed terminal: an interactive
+// `ssh -tt <target> tmux new-session -A -s <session>` that attaches to (or
+// creates) a per-pane tmux session on the remote host. `-tt` forces a remote
+// PTY; tmux gives persistence (the session outlives the ssh process and
+// reattaches via `-A`). cwd, the optional startup command, and env are encoded
+// into the single remote command string (re-parsed by the remote shell), so the
+// local ssh process needs neither a cwd nor an env. Returns Err for an unknown
+// target id. Mirrors how the original agentum daemon attaches to remote tmux.
+fn build_ssh_tmux_command(
+    connection_id: &str,
+    opts: &Value,
+    cwd: Option<&str>,
+    command: Option<&str>,
+    env: &[(String, String)],
+) -> Result<(String, Vec<String>), String> {
+    let target_args = crate::commands::ssh::ssh_target_args(connection_id)
+        .ok_or_else(|| format!("SSH target not found: {connection_id}"))?;
+
+    let session = tmux_session_name(opts, cwd);
+    let remote = remote_tmux_command(&session, cwd, command, env);
+
+    // ssh options, then destination (from target_args), then the remote command
+    // as a single argument. accept-new keeps first-connect TOFU non-interactive;
+    // we deliberately do NOT set BatchMode so password/passphrase prompts work
+    // inside the PTY.
+    let mut args = vec![
+        "-tt".to_string(),
+        "-o".to_string(),
+        "StrictHostKeyChecking=accept-new".to_string(),
+    ];
+    args.extend(target_args);
+    args.push(remote);
+
+    Ok(("ssh".to_string(), args))
+}
+
 // What program to run in a fresh PTY and how to size/place it.
 struct SpawnConfig {
     program: String,
@@ -196,12 +320,37 @@ pub async fn pty_spawn(
         })
         .unwrap_or_default();
 
-    let program = shell_override.unwrap_or_else(default_shell_path);
-    // No command -> plain interactive shell (empty args, like pty_create). A
-    // command runs via `<shell> -c "<command>"`.
-    let args = match command {
-        Some(cmd) => vec!["-c".to_string(), cmd],
-        None => Vec::new(),
+    // A connectionId (set on panes whose worktree belongs to a remote/SSH repo)
+    // turns this into an SSH terminal: instead of a local shell we spawn an
+    // interactive `ssh -tt … tmux` session. cwd/env are folded into the remote
+    // command, so the local ssh process gets neither.
+    let connection_id = opts
+        .get("connectionId")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string);
+
+    let (program, args, spawn_cwd, spawn_env) = match &connection_id {
+        Some(connection_id) => {
+            let (program, args) = build_ssh_tmux_command(
+                connection_id,
+                &opts,
+                cwd.as_deref(),
+                command.as_deref(),
+                &env,
+            )?;
+            (program, args, None, Vec::new())
+        }
+        None => {
+            let program = shell_override.unwrap_or_else(default_shell_path);
+            // No command -> plain interactive shell (empty args, like
+            // pty_create). A command runs via `<shell> -c "<command>"`.
+            let args = match command {
+                Some(cmd) => vec!["-c".to_string(), cmd],
+                None => Vec::new(),
+            };
+            (program, args, cwd, env)
+        }
     };
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -214,8 +363,8 @@ pub async fn pty_spawn(
             SpawnConfig {
                 program,
                 args,
-                cwd,
-                env,
+                cwd: spawn_cwd,
+                env: spawn_env,
                 cols,
                 rows,
             },
@@ -536,3 +685,69 @@ pub fn pty_get_cwd(
 
 #[tauri::command]
 pub fn pty_report_geometry() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_quote_escapes_embedded_quotes() {
+        assert_eq!(sh_single_quote("plain"), "'plain'");
+        assert_eq!(sh_single_quote("a b"), "'a b'");
+        // The classic single-quote escape: close, literal quote, reopen.
+        assert_eq!(sh_single_quote("it's"), "'it'\\''s'");
+        assert_eq!(sh_single_quote("$(rm -rf /)"), "'$(rm -rf /)'");
+    }
+
+    #[test]
+    fn session_name_is_stable_and_tmux_safe() {
+        let opts = serde_json::json!({ "worktreeId": "wt.1:2", "leafId": "leaf/3" });
+        let name = tmux_session_name(&opts, Some("/tmp"));
+        // '.', ':' and '/' are illegal in tmux names -> collapsed to '_'.
+        assert_eq!(name, "agentum_wt_1_2_leaf_3");
+        // Same inputs -> same name, so a reconnect reattaches.
+        assert_eq!(name, tmux_session_name(&opts, Some("/other")));
+    }
+
+    #[test]
+    fn session_name_falls_back_to_cwd_then_constant() {
+        let empty = serde_json::json!({});
+        assert_eq!(
+            tmux_session_name(&empty, Some("/home/me/proj")),
+            "agentum__home_me_proj"
+        );
+        assert_eq!(tmux_session_name(&empty, None), "agentum_session");
+    }
+
+    #[test]
+    fn remote_command_attaches_or_creates_with_cwd_and_command() {
+        let remote = remote_tmux_command("agentum_x", Some("/srv/app"), Some("htop"), &[]);
+        assert_eq!(
+            remote,
+            "tmux new-session -A -s agentum_x -c '/srv/app' 'htop'"
+        );
+    }
+
+    #[test]
+    fn remote_command_forwards_only_shell_safe_env_keys() {
+        let env = vec![
+            ("TERM".to_string(), "xterm-256color".to_string()),
+            ("AGENTUM_TAB_ID".to_string(), "a b".to_string()),
+            // Shell-unsafe key is dropped rather than risk breaking the command.
+            ("BAD-KEY".to_string(), "x".to_string()),
+        ];
+        let remote = remote_tmux_command("agentum_x", None, None, &env);
+        assert_eq!(
+            remote,
+            "env TERM='xterm-256color' AGENTUM_TAB_ID='a b' tmux new-session -A -s agentum_x"
+        );
+    }
+
+    #[test]
+    fn remote_command_plain_shell_when_no_cwd_or_command() {
+        assert_eq!(
+            remote_tmux_command("agentum_x", None, None, &[]),
+            "tmux new-session -A -s agentum_x"
+        );
+    }
+}

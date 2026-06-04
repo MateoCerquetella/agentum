@@ -159,7 +159,7 @@ import {
   pruneWorktreeSelection,
   updateWorktreeSelection
 } from './worktree-multi-selection'
-import { branchDisplayName } from './WorktreeCardHelpers'
+import { branchDisplayName, FilledBellIcon } from './WorktreeCardHelpers'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { getRepoHeaderCreateState } from './repo-header-create-state'
 import type { PendingSidebarWorktreeReveal } from '@/store/slices/ui'
@@ -486,12 +486,25 @@ function SectionMetricsBadge({
 }): React.JSX.Element {
   const runningCount = showStatus ? summary.runningCount : 0
   const hasRunning = runningCount > 0
+  // Why: unread/attention is its own fixed card property — it persists past the
+  // working->idle transition, so it must be surfaced independently of the
+  // `status` (running) toggle. A collapsed project header is otherwise the only
+  // place a finished agent's attention dot would be visible.
+  const unreadCount = summary.unreadCount
+  const hasUnread = unreadCount > 0
   const totalLabel = formatSectionActivityLabel(count, 'workspace')
   const runningLabel = hasRunning
     ? formatSectionActivityLabel(runningCount, 'running workspace')
     : 'no running workspaces'
-  const badgeLabel = showStatus ? `${totalLabel}; ${runningLabel}` : totalLabel
-  const totalTooltipLabel = showStatus && !hasRunning ? badgeLabel : totalLabel
+  const unreadLabel = formatSectionActivityLabel(unreadCount, 'unread workspace')
+  const badgeLabel = [
+    totalLabel,
+    showStatus ? runningLabel : null,
+    hasUnread ? unreadLabel : null
+  ]
+    .filter(Boolean)
+    .join('; ')
+  const totalTooltipLabel = showStatus && !hasRunning && !hasUnread ? badgeLabel : totalLabel
 
   return (
     <span
@@ -521,6 +534,19 @@ function SectionMetricsBadge({
           </TooltipTrigger>
           <TooltipContent side="bottom" sideOffset={6}>
             {runningLabel}
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+      {hasUnread ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex h-full min-w-4 items-center justify-center gap-1 border-l border-sidebar-border/80 bg-amber-500/15 px-1.5 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
+              <FilledBellIcon className="size-2.5 text-amber-500" />
+              <span>{unreadCount}</span>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={6}>
+            {unreadLabel}
           </TooltipContent>
         </Tooltip>
       ) : null}

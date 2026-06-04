@@ -237,9 +237,7 @@ export function AppearancePane({
                   description={toggle.toggleDescription}
                   checked={enabled}
                   onChange={() => {
-                    if (toggle.id === 'resource-usage') {
-                      recordFeatureInteraction('resource-manager')
-                    } else if (toggle.id === 'ports') {
+                    if (toggle.id === 'ports') {
                       recordFeatureInteraction('ports')
                     } else if (toggle.id === 'ssh') {
                       recordFeatureInteraction('ssh')

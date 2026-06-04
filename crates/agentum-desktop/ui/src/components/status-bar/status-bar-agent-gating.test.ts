@@ -3,11 +3,10 @@ import { isStatusBarItemAvailable } from './status-bar-agent-gating'
 
 describe('isStatusBarItemAvailable', () => {
   it('shows non-CLI items regardless of detection', () => {
-    // Why: ssh, resource-usage, and opencode-go aren't CLIs on PATH, so
+    // Why: ssh, ports, and opencode-go aren't CLIs on PATH, so
     // detection results don't apply.
     expect(isStatusBarItemAvailable('ssh', null)).toBe(true)
     expect(isStatusBarItemAvailable('ssh', [])).toBe(true)
-    expect(isStatusBarItemAvailable('resource-usage', [])).toBe(true)
     expect(isStatusBarItemAvailable('ports', [])).toBe(true)
     expect(isStatusBarItemAvailable('opencode-go', [])).toBe(true)
   })

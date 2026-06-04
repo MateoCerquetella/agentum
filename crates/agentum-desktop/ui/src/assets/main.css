@@ -527,9 +527,13 @@
 }
 
 .titlebar-traffic-light-pad {
-  /* Floor at 80px so a >1 zoom factor can't shrink the pad under the macOS
-     traffic lights (~78px) and let the app name slide beneath them. */
-  width: max(80px, calc(80px / var(--ui-zoom-factor, 1)));
+  /* Floor at 96px: the three macOS traffic lights span ~78px, and at exactly
+     80px the app name + sidebar toggle sat flush against the green button,
+     leaving no comfortable hit target on the close/minimize buttons. The extra
+     ~18px gutter pushes the brand + toggle clear of the lights so the window
+     controls stay easy to click. Stays zoom-aware so a >1 zoom factor can't
+     shrink the pad back under the lights. */
+  width: max(96px, calc(96px / var(--ui-zoom-factor, 1)));
   flex-shrink: 0;
 }
 
@@ -2744,3 +2748,70 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
   gap: 8px;
   margin-top: 4px;
 }
+
+/* ── File-type badges ──────────────────────────────────────────────────────
+   Colored monospace labels shown left of filenames in the explorer, tabs,
+   quick-open, source-control and the diff trees (see lib/file-type-icons.tsx).
+   No chip — just the tint. `className` sets the box size (size-3.5 / size-4);
+   color is keyed by `data-ft` and tuned per theme so the glyph stays legible on
+   both the light (#fff) and dark (#161619) backgrounds. The light value is the
+   default; `.dark` lifts the pale hues that would wash out on white. These
+   rules are unlayered so they win over Tailwind's `text-*` utilities. */
+.file-type-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-weight: 700;
+  font-size: 9px;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.file-type-badge[data-ft='rs'] { color: #b35a32; }
+.dark .file-type-badge[data-ft='rs'] { color: #dea584; }
+.file-type-badge[data-ft='ts'] { color: #2f74c0; }
+.dark .file-type-badge[data-ft='ts'] { color: #4a9eea; }
+.file-type-badge[data-ft='js'] { color: #9a7d00; }
+.dark .file-type-badge[data-ft='js'] { color: #e6d44f; }
+.file-type-badge[data-ft='svelte'] { color: #e23500; }
+.dark .file-type-badge[data-ft='svelte'] { color: #ff5a2a; }
+.file-type-badge[data-ft='vue'] { color: #2f9e6f; }
+.dark .file-type-badge[data-ft='vue'] { color: #4fc98f; }
+.file-type-badge[data-ft='py'] { color: #3a6b96; }
+.dark .file-type-badge[data-ft='py'] { color: #6cb0e0; }
+.file-type-badge[data-ft='rb'] { color: #c0392b; }
+.dark .file-type-badge[data-ft='rb'] { color: #e2554d; }
+.file-type-badge[data-ft='go'] { color: #0d87a8; }
+.dark .file-type-badge[data-ft='go'] { color: #2bc4ef; }
+.file-type-badge[data-ft='md'] { color: #5e7283; }
+.dark .file-type-badge[data-ft='md'] { color: #9fb4c6; }
+.file-type-badge[data-ft='json'] { color: #8a8a1c; }
+.dark .file-type-badge[data-ft='json'] { color: #d2d24a; }
+.file-type-badge[data-ft='toml'] { color: #786a58; }
+.dark .file-type-badge[data-ft='toml'] { color: #b6a791; }
+.file-type-badge[data-ft='yaml'] { color: #b8410f; }
+.dark .file-type-badge[data-ft='yaml'] { color: #e2673a; }
+.file-type-badge[data-ft='nix'] { color: #5151d4; }
+.dark .file-type-badge[data-ft='nix'] { color: #9b9bff; }
+.file-type-badge[data-ft='css'] { color: #2b8fd6; }
+.dark .file-type-badge[data-ft='css'] { color: #5ab0f7; }
+.file-type-badge[data-ft='scss'] { color: #c2507f; }
+.dark .file-type-badge[data-ft='scss'] { color: #de7ba8; }
+.file-type-badge[data-ft='html'] { color: #d6410f; }
+.dark .file-type-badge[data-ft='html'] { color: #f06a45; }
+.file-type-badge[data-ft='sh'] { color: #4d9a28; }
+.dark .file-type-badge[data-ft='sh'] { color: #93e85e; }
+.file-type-badge[data-ft='java'] { color: #a6601a; }
+.dark .file-type-badge[data-ft='java'] { color: #e0913a; }
+.file-type-badge[data-ft='c'] { color: #3d7ea6; }
+.dark .file-type-badge[data-ft='c'] { color: #6ab0d8; }
+.file-type-badge[data-ft='cpp'] { color: #5a6cb0; }
+.dark .file-type-badge[data-ft='cpp'] { color: #8aa0e6; }
+.file-type-badge[data-ft='swift'] { color: #d24a26; }
+.dark .file-type-badge[data-ft='swift'] { color: #fa7a5a; }
+.file-type-badge[data-ft='kt'] { color: #6b3fd4; }
+.dark .file-type-badge[data-ft='kt'] { color: #b39bff; }
+.file-type-badge[data-ft='php'] { color: #5f63a6; }
+.dark .file-type-badge[data-ft='php'] { color: #9b9fd6; }

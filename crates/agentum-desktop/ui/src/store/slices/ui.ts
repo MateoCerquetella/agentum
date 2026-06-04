@@ -162,17 +162,21 @@ function presetToQuery(presetId: TaskViewPresetId | null): string {
   }
 }
 
-// Why: persisted UI state pre-dated the consolidation of `memory` + `sessions`
-// into a single `resource-usage` entry. Rewrite legacy ids in place and
-// de-duplicate. We leave unknown ids alone so a downgrade→upgrade cycle
-// doesn't strip a newer build's ids out of the user's settings.
+// Why: the Resource Manager status-bar segment (legacy ids `memory`/`sessions`,
+// later consolidated to `resource-usage`) was removed. Drop those ids from
+// persisted settings so they don't linger. We leave unknown ids alone so a
+// downgrade→upgrade cycle doesn't strip a newer build's ids out of the
+// user's settings.
+const REMOVED_STATUS_BAR_ITEMS = new Set(['memory', 'sessions', 'resource-usage'])
 function migrateStatusBarItems(items: readonly string[] | undefined): StatusBarItem[] {
   const source = items ?? DEFAULT_STATUS_BAR_ITEMS
   const out: string[] = []
   for (const id of source) {
-    const mapped = id === 'memory' || id === 'sessions' ? 'resource-usage' : id
-    if (!out.includes(mapped)) {
-      out.push(mapped)
+    if (REMOVED_STATUS_BAR_ITEMS.has(id)) {
+      continue
+    }
+    if (!out.includes(id)) {
+      out.push(id)
     }
   }
   return out as StatusBarItem[]

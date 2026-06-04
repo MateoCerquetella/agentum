@@ -2420,7 +2420,6 @@ export type StatusBarItem =
   | 'gemini'
   | 'opencode-go'
   | 'ssh'
-  | 'resource-usage'
   | 'ports'
 export type FloatingTerminalTriggerLocation = 'floating-button' | 'status-bar'
 
@@ -2843,57 +2842,3 @@ export type StatsSummary = {
 // the IPC payload is the same shape everywhere. Memory is in bytes; CPU
 // is a percentage (can exceed 100 on multi-core).
 
-/** cpu is percent of a single core — can exceed 100 on multi-core. memory is in bytes. */
-export type UsageValues = {
-  cpu: number
-  memory: number
-}
-
-/** The top-level cpu/memory are the sum of main + renderer + other. */
-export type AppMemory = UsageValues & {
-  main: UsageValues
-  renderer: UsageValues
-  other: UsageValues
-  /** Oldest-first memory samples (bytes) for the whole Agentum app, one per
-   *  successful collection. Used to render the sparkline in the dashboard.
-   *  Empty before the first snapshot is recorded. */
-  history: number[]
-}
-
-export type SessionMemory = UsageValues & {
-  sessionId: string
-  paneKey: string | null
-  pid: number
-}
-
-/** The top-level cpu/memory are the sum of sessions. */
-export type WorktreeMemory = UsageValues & {
-  worktreeId: string
-  worktreeName: string
-  repoId: string
-  repoName: string
-  sessions: SessionMemory[]
-  /** Oldest-first memory samples (bytes) for this worktree's tracked
-   *  subtrees, one per successful collection. */
-  history: number[]
-}
-
-export type HostMemory = {
-  totalMemory: number
-  freeMemory: number
-  usedMemory: number
-  memoryUsagePercent: number
-  cpuCoreCount: number
-  loadAverage1m: number
-}
-
-export type MemorySnapshot = {
-  app: AppMemory
-  worktrees: WorktreeMemory[]
-  host: HostMemory
-  /** Sum of app + all tracked worktree sessions. Percent of a single core, so may exceed 100 on multi-core machines. */
-  totalCpu: number
-  /** Sum of app + all tracked worktree sessions in bytes. NOT the same as host.totalMemory, which is physical RAM. */
-  totalMemory: number
-  collectedAt: number
-}

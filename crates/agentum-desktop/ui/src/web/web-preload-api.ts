@@ -8,7 +8,6 @@ import type {
   DirEntry,
   ForceDeleteWorktreeBranchResult,
   GlobalSettings,
-  MemorySnapshot,
   OnboardingState,
   PersistedUIState,
   Repo,
@@ -526,9 +525,6 @@ function createWebPreloadApi(): Partial<PreloadApi> {
           totalAgentTimeMs: 0,
           firstEventAt: null
         }))
-    },
-    memory: {
-      getSnapshot: () => Promise.resolve(createEmptyMemorySnapshot())
     },
     preflight: createPreflightApi(),
     notifications: createNotificationsApi(),
@@ -2524,25 +2520,6 @@ function mapRuntimeNamespaceArg(prefix: string, args: unknown): unknown {
     return args
   }
   return mapRepoPathArg(args)
-}
-
-function createEmptyMemorySnapshot(): MemorySnapshot {
-  const emptyUsage = { cpu: 0, memory: 0 }
-  return {
-    app: { ...emptyUsage, main: emptyUsage, renderer: emptyUsage, other: emptyUsage, history: [] },
-    worktrees: [],
-    host: {
-      totalMemory: 0,
-      freeMemory: 0,
-      usedMemory: 0,
-      memoryUsagePercent: 0,
-      cpuCoreCount: navigator.hardwareConcurrency || 1,
-      loadAverage1m: 0
-    },
-    totalCpu: 0,
-    totalMemory: 0,
-    collectedAt: Date.now()
-  }
 }
 
 function getBrowserPlatform(): NodeJS.Platform {

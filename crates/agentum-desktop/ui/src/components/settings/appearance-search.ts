@@ -46,14 +46,6 @@ export const STATUS_BAR_TOGGLES: readonly {
       'Show the active SSH connection. Only visible once an SSH target is configured.'
   },
   {
-    id: 'resource-usage',
-    title: 'Resource Manager',
-    description: 'Show CPU, memory, terminal sessions, and workspace disk usage in the status bar.',
-    keywords: ['status bar', 'resource', 'manager', 'memory', 'cpu', 'terminal', 'disk', 'space'],
-    toggleDescription:
-      'Show the Resource Manager. Click it for CPU, memory, sessions, daemon controls, and workspace disk scans.'
-  },
-  {
     id: 'ports',
     title: 'Ports',
     description: 'Show live workspace ports in the status bar.',

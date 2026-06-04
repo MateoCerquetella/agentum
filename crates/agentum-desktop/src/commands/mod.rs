@@ -52,7 +52,6 @@ pub mod worktrees;
 
 // Small single-command namespaces ported as their own modules.
 pub mod e2e;
-pub mod memory;
 pub mod mobile;
 pub mod preflight;
 pub mod stats;

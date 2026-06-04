@@ -144,13 +144,51 @@ describe('buildWorktreeSectionActivitySummaries', () => {
     })
 
     expect(summaries.get(getProjectGroupHeaderKey(parent.id))).toEqual({
-      runningCount: 1
+      runningCount: 1,
+      unreadCount: 0
     })
     expect(summaries.get(getProjectGroupHeaderKey(child.id))).toEqual({
-      runningCount: 1
+      runningCount: 1,
+      unreadCount: 0
     })
     expect(summaries.get(`repo:${repo.id}`)).toEqual({
-      runningCount: 1
+      runningCount: 1,
+      unreadCount: 0
+    })
+  })
+
+  it('rolls up unread worktrees across project-group ancestors', () => {
+    const parent = makeProjectGroup({ id: 'parent', name: 'Parent' })
+    const child = makeProjectGroup({
+      id: 'child',
+      name: 'Child',
+      parentGroupId: parent.id
+    })
+    const repo = makeRepo({ projectGroupId: child.id })
+    // Why: a finished/attention worktree leaves no running PTY, so the unread
+    // rollup must be derived from worktree.isUnread independently of runningCount.
+    const unread = makeWorktree({ id: 'wt-unread', repoId: repo.id, isUnread: true })
+    const read = makeWorktree({ id: 'wt-read', repoId: repo.id, isUnread: false })
+    const state = makeState()
+
+    const summaries = buildSummaries({
+      worktrees: [unread, read],
+      repos: [repo],
+      projectGroups: [parent, child],
+      state
+    })
+
+    expect(summaries.get(getProjectGroupHeaderKey(parent.id))).toEqual({
+      runningCount: 0,
+      unreadCount: 1
+    })
+    expect(summaries.get(getProjectGroupHeaderKey(child.id))).toEqual({
+      runningCount: 0,
+      unreadCount: 1
+    })
+    expect(summaries.get(`repo:${repo.id}`)).toEqual({
+      runningCount: 0,
+      unreadCount: 1
     })
   })
 
@@ -184,7 +222,8 @@ describe('buildWorktreeSectionActivitySummaries', () => {
     })
 
     expect(summaries.get(PINNED_GROUP_KEY)).toEqual({
-      runningCount: 1
+      runningCount: 1,
+      unreadCount: 0
     })
     expect(summaries.get(`repo:${repo.id}`)).toBeUndefined()
     expect(summaries.get(getProjectGroupHeaderKey('group-1'))).toBeUndefined()

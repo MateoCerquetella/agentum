@@ -30,7 +30,6 @@ import { hooks } from './hooks'
 import { hostedReview } from './hostedReview'
 import { keybindings } from './keybindings'
 import { linear } from './linear'
-import { memory } from './memory'
 import { mobile } from './mobile'
 import { notebook } from './notebook'
 import { notifications } from './notifications'
@@ -93,7 +92,6 @@ export const api: AgentumApi = {
   hostedReview,
   keybindings,
   linear,
-  memory,
   mobile,
   notebook,
   notifications,

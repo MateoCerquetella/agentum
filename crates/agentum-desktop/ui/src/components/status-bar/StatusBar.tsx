@@ -4,7 +4,6 @@ interaction menus, and compact-layout behavior together so the hover/click
 states stay consistent across Claude and Codex. */
 import {
   AlertTriangle,
-  Activity,
   Plug,
   ChevronDown,
   ChevronRight,
@@ -42,7 +41,6 @@ import { formatWindowLabel } from '@/lib/window-label-formatter'
 import { markLiveCodexSessionsForRestart } from '@/lib/codex-session-restart'
 import { SshStatusSegment } from './SshStatusSegment'
 import { UpdateStatusSegment } from './UpdateStatusSegment'
-import { ResourceUsageStatusSegment } from './ResourceUsageStatusSegment'
 import { PortsStatusSegment } from './PortsStatusSegment'
 import { isStatusBarItemAvailable } from './status-bar-agent-gating'
 import { isProviderConfigured } from './status-bar-provider-visibility'
@@ -1577,11 +1575,10 @@ function StatusBarInner({ floatingTerminalOpen }: StatusBarProps): React.JSX.Ele
   // detection-gating doesn't apply.
   const showOpencodeGo = isProviderConfigured(opencodeGo) && statusBarItems.includes('opencode-go')
   const showSsh = statusBarItems.includes('ssh')
-  const showResourceUsage = statusBarItems.includes('resource-usage')
   const showPorts = statusBarItems.includes('ports')
   const showFloatingTerminalToggle =
     floatingTerminalEnabled && floatingTerminalTriggerLocation === 'status-bar'
-  const anyVisible = showClaude || showCodex || showGemini || showOpencodeGo || showResourceUsage
+  const anyVisible = showClaude || showCodex || showGemini || showOpencodeGo
   const anyFetching =
     claude?.status === 'fetching' ||
     codex?.status === 'fetching' ||
@@ -1661,7 +1658,6 @@ function StatusBarInner({ floatingTerminalOpen }: StatusBarProps): React.JSX.Ele
       <div className="flex items-center gap-3">
         <UpdateStatusSegment compact={compact} iconOnly={iconOnly} />
         {petEnabled && <PetStatusSegment />}
-        {showResourceUsage && <ResourceUsageStatusSegment compact={compact} iconOnly={iconOnly} />}
         {showPorts && <PortsStatusSegment compact={compact} iconOnly={iconOnly} />}
         {showSsh && <SshStatusSegment compact={compact} iconOnly={iconOnly} />}
         {showFloatingTerminalToggle && (
@@ -1752,16 +1748,6 @@ function StatusBarInner({ floatingTerminalOpen }: StatusBarProps): React.JSX.Ele
           >
             <Server className="size-3.5" />
             SSH Status
-          </DropdownMenuCheckboxItem>
-          <DropdownMenuCheckboxItem
-            checked={statusBarItems.includes('resource-usage')}
-            onCheckedChange={() => {
-              recordFeatureInteraction('resource-manager')
-              toggleStatusBarItem('resource-usage')
-            }}
-          >
-            <Activity className="size-3.5" />
-            Resource Manager
           </DropdownMenuCheckboxItem>
           <DropdownMenuCheckboxItem
             checked={statusBarItems.includes('ports')}

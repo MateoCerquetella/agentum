@@ -634,14 +634,14 @@ describe('createUISlice hydratePersistedUI', () => {
 
     store.getState().hydratePersistedUI(
       makePersistedUI({
-        statusBarItems: ['claude', 'resource-usage'],
+        statusBarItems: ['claude', 'gemini'],
         _portsStatusBarDefaultAdded: false
       })
     )
 
-    expect(store.getState().statusBarItems).toEqual(['claude', 'resource-usage', 'ports'])
+    expect(store.getState().statusBarItems).toEqual(['claude', 'gemini', 'ports'])
     expect(setUI).toHaveBeenCalledWith({
-      statusBarItems: ['claude', 'resource-usage', 'ports'],
+      statusBarItems: ['claude', 'gemini', 'ports'],
       _portsStatusBarDefaultAdded: true
     })
   })
@@ -653,12 +653,12 @@ describe('createUISlice hydratePersistedUI', () => {
 
     store.getState().hydratePersistedUI(
       makePersistedUI({
-        statusBarItems: ['claude', 'resource-usage'],
+        statusBarItems: ['claude', 'gemini'],
         _portsStatusBarDefaultAdded: true
       })
     )
 
-    expect(store.getState().statusBarItems).toEqual(['claude', 'resource-usage'])
+    expect(store.getState().statusBarItems).toEqual(['claude', 'gemini'])
     expect(setUI).not.toHaveBeenCalled()
   })
 

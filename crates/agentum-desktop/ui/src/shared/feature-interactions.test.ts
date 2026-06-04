@@ -51,7 +51,6 @@ describe('feature interactions', () => {
       'notifications',
       'ports',
       'quick-commands',
-      'resource-manager',
       'review-notes',
       'ssh',
       'terminal-panes',

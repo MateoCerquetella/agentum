@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Why: the analyzer's private treemap, selection,
-   breakdown, and table pieces share one scan state and should evolve as one resource-manager surface. */
+   breakdown, and table pieces share one scan state and should evolve as one workspace-space surface. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,

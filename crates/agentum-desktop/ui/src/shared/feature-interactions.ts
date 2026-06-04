@@ -24,7 +24,6 @@ export type FeatureInteractionId =
   | 'notifications'
   | 'ports'
   | 'quick-commands'
-  | 'resource-manager'
   | 'review-notes'
   | 'ssh'
   | 'terminal-panes'
@@ -153,10 +152,6 @@ export const FEATURE_INTERACTIONS = [
   {
     id: 'quick-commands',
     interaction: 'terminal quick command created or edited'
-  },
-  {
-    id: 'resource-manager',
-    interaction: 'Resource Manager opened or configured'
   },
   {
     id: 'review-notes',

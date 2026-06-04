@@ -298,7 +298,12 @@ function getExtension(filename: string): string {
   return filename.slice(lastDot + 1).toLowerCase()
 }
 
-export function getFileTypeIcon(filePath: string): LucideIcon {
+/** Lower-cased extension for a path (compound-archive aware). Empty when none. */
+export function getFileExtension(filePath: string): string {
+  return getExtension(getFilename(filePath))
+}
+
+export function getLucideFileIcon(filePath: string): LucideIcon {
   const filename = getFilename(filePath)
   const lowerName = filename.toLowerCase()
   const exactMatch = FILE_ICON_BY_NAME[lowerName]
