@@ -208,3 +208,63 @@ export function gitCommitCompare(sessionId: string, commit: string): Promise<Git
     `/api/sessions/${sessionId}/git/commit-compare${qs({ commit })}`
   )
 }
+
+/** Subset of `paths` that git ignores (`git check-ignore`). */
+export function gitCheckIgnore(sessionId: string, paths: string[]): Promise<string[]> {
+  return postJson<string[]>(`/api/sessions/${sessionId}/git/check-ignore`, { paths })
+}
+
+/** `git merge --ff-only @{upstream}` — fast-forward to the tracking branch. */
+export function gitFastForward(sessionId: string): Promise<void> {
+  return postJson<void>(`/api/sessions/${sessionId}/git/fast-forward`)
+}
+
+/** Web URL for a file/line on origin's host (null when there's no origin remote). */
+export function gitRemoteFileUrl(
+  sessionId: string,
+  path: string,
+  line: number
+): Promise<{ url: string | null }> {
+  return getJson<{ url: string | null }>(
+    `/api/sessions/${sessionId}/git/remote-file-url${qs({ path, line })}`
+  )
+}
+
+export type GitBlob = {
+  /** Base64 of the file's bytes at the requested revision (empty if absent). */
+  content: string
+  /** True when the bytes contain a NUL — render as a binary/image preview. */
+  isBinary: boolean
+  truncated: boolean
+}
+
+/** One file's bytes at an arbitrary revision (`git show <commit>:<path>`), base64. */
+export function gitBlob(sessionId: string, path: string, commit: string): Promise<GitBlob> {
+  return getJson<GitBlob>(`/api/sessions/${sessionId}/git/blob${qs({ path, commit })}`)
+}
+
+export type GitHistoryEntry = {
+  id: string
+  parentIds: string[]
+  subject: string
+  message: string
+  displayId: string
+  author: string
+  authorEmail: string
+  timestamp: number | null
+}
+
+/** Mirrors the desktop's native `git_history` shape (HEAD-scoped commit list). */
+export type GitHistory = {
+  items: GitHistoryEntry[]
+  hasIncomingChanges: boolean
+  hasOutgoingChanges: boolean
+  hasMore: boolean
+  limit: number
+  currentRef?: { id: string; name: string }
+}
+
+/** Recent commits + incoming/outgoing-vs-upstream flags + the current ref. */
+export function gitHistory(sessionId: string, limit?: number): Promise<GitHistory> {
+  return getJson<GitHistory>(`/api/sessions/${sessionId}/git/history${qs({ limit })}`)
+}

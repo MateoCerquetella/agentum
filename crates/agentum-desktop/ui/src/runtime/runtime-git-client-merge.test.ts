@@ -1,30 +1,51 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Native git was removed: a local workspace's abort routes through the
+// embedded-server adapter; a remote runtime environment routes over RPC.
+vi.mock('./server-git-adapter', () => ({
+  getServerGitStatus: vi.fn(),
+  getServerGitConflictOperation: vi.fn(),
+  getServerGitUpstreamStatus: vi.fn(),
+  serverGitStage: vi.fn(),
+  getServerGitBranchCompare: vi.fn(),
+  getServerGitCommitCompare: vi.fn(),
+  serverGitFetch: vi.fn(),
+  serverGitPull: vi.fn(),
+  serverGitCommit: vi.fn(),
+  serverGitDiscard: vi.fn(),
+  serverGitPush: vi.fn(),
+  serverGitRebase: vi.fn(),
+  serverGitAbortMerge: vi.fn(),
+  serverGitAbortRebase: vi.fn(),
+  getServerGitDiff: vi.fn(),
+  getServerGitCheckIgnored: vi.fn(),
+  serverGitFastForward: vi.fn(),
+  getServerGitRemoteFileUrl: vi.fn(),
+  getServerGitCommitDiff: vi.fn(),
+  getServerGitBranchDiff: vi.fn(),
+  getServerGitHistory: vi.fn()
+}))
+
 import {
   createCompatibleRuntimeStatusResponseIfNeeded,
   type RuntimeEnvironmentCallRequest
 } from './runtime-compatibility-test-fixture'
 import { abortRuntimeGitMerge, abortRuntimeGitRebase } from './runtime-git-client'
+import { serverGitAbortMerge, serverGitAbortRebase } from './server-git-adapter'
 import { clearRuntimeCompatibilityCacheForTests } from './runtime-rpc-client'
 
-const gitAbortMerge = vi.fn()
-const gitAbortRebase = vi.fn()
 const runtimeEnvironmentCall = vi.fn()
 const runtimeEnvironmentTransportCall = vi.fn()
 const runtimeCall = vi.fn()
 
 beforeEach(() => {
   clearRuntimeCompatibilityCacheForTests()
-  gitAbortMerge.mockReset()
-  gitAbortRebase.mockReset()
-  runtimeEnvironmentCall.mockReset()
-  runtimeEnvironmentTransportCall.mockReset()
-  runtimeCall.mockReset()
+  vi.clearAllMocks()
   runtimeEnvironmentTransportCall.mockImplementation((args: RuntimeEnvironmentCallRequest) => {
     return createCompatibleRuntimeStatusResponseIfNeeded(args) ?? runtimeEnvironmentCall(args)
   })
   vi.stubGlobal('window', {
     api: {
-      git: { abortMerge: gitAbortMerge, abortRebase: gitAbortRebase },
       runtime: { call: runtimeCall },
       runtimeEnvironments: { call: runtimeEnvironmentTransportCall }
     }
@@ -32,8 +53,8 @@ beforeEach(() => {
 })
 
 describe('runtime git client merge operations', () => {
-  it('uses local git IPC when no remote runtime is active', async () => {
-    gitAbortMerge.mockResolvedValue(undefined)
+  it('aborts a merge through the embedded-server adapter for a local workspace', async () => {
+    vi.mocked(serverGitAbortMerge).mockResolvedValue()
 
     await abortRuntimeGitMerge({
       settings: { activeRuntimeEnvironmentId: null },
@@ -41,7 +62,7 @@ describe('runtime git client merge operations', () => {
       worktreePath: '/repo'
     })
 
-    expect(gitAbortMerge).toHaveBeenCalledWith({ connectionId: undefined, worktreePath: '/repo' })
+    expect(serverGitAbortMerge).toHaveBeenCalledWith('/repo')
     expect(runtimeEnvironmentCall).not.toHaveBeenCalled()
   })
 
@@ -65,11 +86,11 @@ describe('runtime git client merge operations', () => {
       params: { worktree: 'wt-1' },
       timeoutMs: 30_000
     })
-    expect(gitAbortMerge).not.toHaveBeenCalled()
+    expect(serverGitAbortMerge).not.toHaveBeenCalled()
   })
 
-  it('uses local git IPC when aborting a rebase without an active runtime', async () => {
-    gitAbortRebase.mockResolvedValue(undefined)
+  it('aborts a rebase through the embedded-server adapter for a local workspace', async () => {
+    vi.mocked(serverGitAbortRebase).mockResolvedValue()
 
     await abortRuntimeGitRebase({
       settings: { activeRuntimeEnvironmentId: null },
@@ -78,7 +99,7 @@ describe('runtime git client merge operations', () => {
       connectionId: 'ssh-1'
     })
 
-    expect(gitAbortRebase).toHaveBeenCalledWith({ connectionId: 'ssh-1', worktreePath: '/repo' })
+    expect(serverGitAbortRebase).toHaveBeenCalledWith('/repo')
     expect(runtimeEnvironmentCall).not.toHaveBeenCalled()
   })
 
@@ -102,6 +123,6 @@ describe('runtime git client merge operations', () => {
       params: { worktree: 'wt-1' },
       timeoutMs: 30_000
     })
-    expect(gitAbortRebase).not.toHaveBeenCalled()
+    expect(serverGitAbortRebase).not.toHaveBeenCalled()
   })
 })

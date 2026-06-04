@@ -23,7 +23,6 @@ import { exportApi } from './export'
 import { feedback } from './feedback'
 import { fs } from './fs'
 import { gh } from './gh'
-import { git } from './git'
 import { gitBash } from './gitBash'
 import { gl } from './gl'
 import { hooks } from './hooks'
@@ -85,7 +84,6 @@ export const api: AgentumApi = {
   feedback,
   fs,
   gh,
-  git,
   gitBash,
   gl,
   hooks,

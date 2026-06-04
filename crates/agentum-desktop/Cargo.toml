@@ -41,7 +41,6 @@ tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 thiserror = "2"
 portable-pty = "0.9"
-git2 = "0.20"
 base64 = "0.22"
 notify = "7"
 rusqlite = { version = "0.32", features = ["bundled"] }

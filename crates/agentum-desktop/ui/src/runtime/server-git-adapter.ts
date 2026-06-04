@@ -11,6 +11,7 @@ import type {
   GitUpstreamStatus as DesktopGitUpstreamStatus
 } from '../../../shared/types'
 import type { GitConflictOperation } from '../../../shared/git-status-types'
+import type { GitHistoryOptions, GitHistoryResult } from '../../../shared/git-history'
 import { ensureWorkspaceSession } from './workspace-session'
 import {
   gitStatusEntries,
@@ -29,6 +30,12 @@ import {
   gitAbortMerge,
   gitAbortRebase,
   gitFile,
+  gitCheckIgnore,
+  gitFastForward,
+  gitRemoteFileUrl,
+  gitBlob,
+  gitHistory,
+  type GitBlob,
   type GitStatusEntry as ServerStatusEntry,
   type GitConflictOp,
   type GitFileRevision
@@ -231,4 +238,142 @@ export async function getServerGitDiff(
     originalIsBinary: false,
     modifiedIsBinary: false
   }
+}
+
+/** The empty side of a content-pair (e.g. a root commit's parent, or an add). */
+const EMPTY_BLOB: GitBlob = { content: '', isBinary: false, truncated: false }
+
+/** MIME for binary preview, mirroring the desktop's native `guess_mime`. */
+function guessMime(filePath: string): string | undefined {
+  const lower = filePath.toLowerCase()
+  if (lower.endsWith('.png')) return 'image/png'
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+  if (lower.endsWith('.gif')) return 'image/gif'
+  if (lower.endsWith('.webp')) return 'image/webp'
+  if (lower.endsWith('.svg')) return 'image/svg+xml'
+  if (lower.endsWith('.pdf')) return 'application/pdf'
+  return undefined
+}
+
+/** Decode a base64 blob to a UTF-8 string (atob yields latin1 bytes). */
+function base64ToUtf8(b64: string): string {
+  const bin = atob(b64)
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i += 1) {
+    bytes[i] = bin.charCodeAt(i)
+  }
+  return new TextDecoder().decode(bytes)
+}
+
+/**
+ * Build the desktop's content-pair `GitDiffResult` from two server blobs,
+ * binary-aware so image/PDF diffs preview from base64 — matching the native
+ * `diff_result_value`. Text blobs are decoded from base64 to UTF-8.
+ */
+function diffResultFromBlobs(
+  filePath: string,
+  original: GitBlob,
+  modified: GitBlob
+): GitDiffResult {
+  if (original.isBinary || modified.isBinary) {
+    const mime = guessMime(filePath)
+    return {
+      kind: 'binary',
+      originalContent: original.content,
+      modifiedContent: modified.content,
+      originalIsBinary: original.isBinary,
+      modifiedIsBinary: modified.isBinary,
+      ...(mime ? { isImage: mime.startsWith('image/'), mimeType: mime } : {})
+    } as GitDiffResult
+  }
+  return {
+    kind: 'text',
+    originalContent: base64ToUtf8(original.content),
+    modifiedContent: base64ToUtf8(modified.content),
+    originalIsBinary: false,
+    modifiedIsBinary: false
+  }
+}
+
+/** Subset of `paths` git ignores, via the workspace's server session. */
+export async function getServerGitCheckIgnored(
+  workdir: string,
+  paths: string[]
+): Promise<string[]> {
+  if (paths.length === 0) {
+    return []
+  }
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  return gitCheckIgnore(session.id, paths)
+}
+
+/** `git merge --ff-only @{upstream}` in the workspace's server session. */
+export async function serverGitFastForward(workdir: string): Promise<void> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  await gitFastForward(session.id)
+}
+
+/** Web URL for a file/line on origin's host (null when unavailable). */
+export async function getServerGitRemoteFileUrl(
+  workdir: string,
+  relativePath: string,
+  line: number
+): Promise<string | null> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  const { url } = await gitRemoteFileUrl(session.id, relativePath, line)
+  return url
+}
+
+/**
+ * Content-pair diff for a single commit (commit vs its parent), mirroring the
+ * native `git_commit_diff`. No parent (root commit) → the original side is empty.
+ */
+export async function getServerGitCommitDiff(
+  workdir: string,
+  args: { commitOid: string; parentOid?: string | null; filePath: string; oldPath?: string }
+): Promise<GitDiffResult> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  const old = args.oldPath ?? args.filePath
+  const [original, modified] = await Promise.all([
+    args.parentOid ? gitBlob(session.id, old, args.parentOid) : Promise.resolve(EMPTY_BLOB),
+    gitBlob(session.id, args.filePath, args.commitOid)
+  ])
+  return diffResultFromBlobs(args.filePath, original, modified)
+}
+
+/**
+ * Content-pair diff for a branch comparison (base vs HEAD), mirroring the native
+ * `git_branch_diff`: base = mergeBase || baseOid, modified = headOid.
+ */
+export async function getServerGitBranchDiff(
+  workdir: string,
+  args: {
+    compare: { baseRef: string; baseOid: string; headOid: string; mergeBase: string }
+    filePath: string
+    oldPath?: string
+  }
+): Promise<GitDiffResult> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  const base = args.compare.mergeBase || args.compare.baseOid
+  const old = args.oldPath ?? args.filePath
+  const [original, modified] = await Promise.all([
+    base ? gitBlob(session.id, old, base) : Promise.resolve(EMPTY_BLOB),
+    args.compare.headOid
+      ? gitBlob(session.id, args.filePath, args.compare.headOid)
+      : Promise.resolve(EMPTY_BLOB)
+  ])
+  return diffResultFromBlobs(args.filePath, original, modified)
+}
+
+/**
+ * Commit history for the workspace's server session. The server returns the same
+ * (HEAD-scoped) shape the desktop's native `git_history` produced, so the cast
+ * preserves the existing local behaviour exactly.
+ */
+export async function getServerGitHistory(
+  workdir: string,
+  options: GitHistoryOptions = {}
+): Promise<GitHistoryResult> {
+  const session = await ensureWorkspaceSession({ workdir, tool: 'terminal' })
+  return gitHistory(session.id, options.limit) as unknown as GitHistoryResult
 }

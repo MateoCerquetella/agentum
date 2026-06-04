@@ -13,7 +13,6 @@ pub mod diagnostics;
 pub mod feedback;
 pub mod fs;
 pub mod gh;
-pub mod git;
 pub mod gl;
 pub mod hooks;
 pub mod hosted_review;

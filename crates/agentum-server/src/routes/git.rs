@@ -24,6 +24,8 @@
 
 use std::path::{Component, Path as StdPath, PathBuf};
 
+use base64::Engine as _;
+
 use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, header};
@@ -59,6 +61,14 @@ pub fn router() -> Router<AppState> {
         .route("/api/sessions/{id}/git/commit-compare", get(commit_compare))
         .route("/api/sessions/{id}/git/status-entries", get(status_entries))
         .route("/api/sessions/{id}/git/commit-staged", post(commit_staged))
+        .route("/api/sessions/{id}/git/check-ignore", post(check_ignore))
+        .route("/api/sessions/{id}/git/fast-forward", post(fast_forward))
+        .route(
+            "/api/sessions/{id}/git/remote-file-url",
+            get(remote_file_url),
+        )
+        .route("/api/sessions/{id}/git/blob", get(blob))
+        .route("/api/sessions/{id}/git/history", get(history))
 }
 
 /// One working-tree change with its staging area, for the desktop's
@@ -211,8 +221,11 @@ async fn commit_compare(
     let id = parse_uuid(&id)?;
     let cwd = cwd_for(&state, id).await?;
     let commit = q.commit.trim().to_string();
-    let commit_oid = match run_git(&cwd, &["rev-parse", "--verify", &format!("{commit}^{{commit}}")])
-        .await
+    let commit_oid = match run_git(
+        &cwd,
+        &["rev-parse", "--verify", &format!("{commit}^{{commit}}")],
+    )
+    .await
     {
         Ok(s) => s.trim().to_string(),
         Err(_) => {
@@ -456,7 +469,9 @@ struct ConflictResp {
 
 /// True when `git rev-parse -q --verify <rev>` resolves (the ref/state exists).
 async fn git_ref_exists(cwd: &StdPath, rev: &str) -> bool {
-    run_git(cwd, &["rev-parse", "-q", "--verify", rev]).await.is_ok()
+    run_git(cwd, &["rev-parse", "-q", "--verify", rev])
+        .await
+        .is_ok()
 }
 
 /// `GET /api/sessions/{id}/git/conflict` — which conflict op (if any) is mid-flight.
@@ -571,14 +586,22 @@ async fn upstream(
 ) -> Result<Json<UpstreamStatus>, ApiError> {
     let id = parse_uuid(&id)?;
     let cwd = cwd_for(&state, id).await?;
-    let upstream = run_git(&cwd, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
-        .await
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    let upstream = run_git(
+        &cwd,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .await
+    .ok()
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty());
     let (ahead, behind) = if upstream.is_some() {
         // `--left-right --count @{u}...HEAD` prints "<behind>\t<ahead>".
-        match run_git(&cwd, &["rev-list", "--left-right", "--count", "@{u}...HEAD"]).await {
+        match run_git(
+            &cwd,
+            &["rev-list", "--left-right", "--count", "@{u}...HEAD"],
+        )
+        .await
+        {
             Ok(out) => {
                 let mut it = out.split_whitespace();
                 let behind = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -636,7 +659,11 @@ async fn branches(
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty() && s != "HEAD");
-    let raw = run_git(&cwd, &["for-each-ref", "--format=%(refname:short)", "refs/heads"]).await?;
+    let raw = run_git(
+        &cwd,
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+    )
+    .await?;
     let branches = raw
         .lines()
         .map(|l| l.trim().to_string())
@@ -696,7 +723,10 @@ fn parse_log_lines(raw: &str) -> Vec<LogEntry> {
 }
 
 /// `POST /api/sessions/{id}/git/fetch` — `git fetch --all --prune`.
-async fn fetch(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+async fn fetch(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
     let cwd = cwd_for(&state, id).await?;
     run_git(&cwd, &["fetch", "--all", "--prune"]).await?;
@@ -704,7 +734,10 @@ async fn fetch(State(state): State<AppState>, Path(id): Path<String>) -> Result<
 }
 
 /// `POST /api/sessions/{id}/git/pull` — fast-forward-only pull.
-async fn pull(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+async fn pull(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
     let cwd = cwd_for(&state, id).await?;
     run_git(&cwd, &["pull", "--ff-only"]).await?;
@@ -713,7 +746,10 @@ async fn pull(State(state): State<AppState>, Path(id): Path<String>) -> Result<S
 
 /// `POST /api/sessions/{id}/git/push` — push the current branch, setting upstream
 /// on first push so a fresh worktree branch publishes without extra ceremony.
-async fn push(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+async fn push(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
     let cwd = cwd_for(&state, id).await?;
     run_git(&cwd, &["push", "--set-upstream", "origin", "HEAD"]).await?;
@@ -1188,8 +1224,363 @@ async fn commit_staged(
         ],
     )
     .await?;
-    let sha = run_git(&cwd, &["rev-parse", "HEAD"]).await?.trim().to_string();
+    let sha = run_git(&cwd, &["rev-parse", "HEAD"])
+        .await?
+        .trim()
+        .to_string();
     Ok(Json(CommitResp { sha }))
+}
+
+// ───────────────────────── desktop local-path parity ─────────────────────────
+// These endpoints fill the gaps the desktop's native git commands covered but
+// the session API did not, so the desktop source-control panel can run entirely
+// on the embedded server (see `ui/src/runtime/server-git-adapter.ts`). All are
+// read-only or single-command writes reusing the `run_git`/`cwd_for` plumbing.
+
+#[derive(Debug, Deserialize)]
+struct CheckIgnoreBody {
+    paths: Vec<String>,
+}
+
+/// `POST /api/sessions/{id}/git/check-ignore` — the subset of `paths` git ignores.
+/// `git check-ignore` exits 0 (some ignored), 1 (none), >1 (a real error). The
+/// `--` guard keeps a path that starts with `-` from being read as an option.
+async fn check_ignore(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<CheckIgnoreBody>,
+) -> Result<Json<Vec<String>>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    if body.paths.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(&cwd).args(["check-ignore", "--"]);
+    for p in &body.paths {
+        cmd.arg(p);
+    }
+    let out = cmd
+        .output()
+        .await
+        .map_err(|e| ApiError::Internal(format!("git check-ignore: {e}")))?;
+    if matches!(out.status.code(), Some(code) if code > 1) {
+        return Err(ApiError::Internal(format!(
+            "git check-ignore failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(Json(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect(),
+    ))
+}
+
+/// `POST /api/sessions/{id}/git/fast-forward` — `git merge --ff-only @{upstream}`.
+/// Advances the current branch to its tracking branch without a merge commit.
+async fn fast_forward(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    run_git(&cwd, &["merge", "--ff-only", "@{upstream}"]).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+struct RemoteFileUrlQuery {
+    /// Repo-relative path.
+    path: String,
+    line: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct RemoteFileUrlResp {
+    /// Web URL for the file/line on origin's host, or null when there's no
+    /// `origin` remote or its URL couldn't be parsed.
+    url: Option<String>,
+}
+
+/// Convert a git remote URL (scp-like, `ssh://`, or `http(s)://`) to
+/// `(web_base, host)`. Mirrors the desktop's `git_url_to_web_base`.
+fn git_url_to_web_base(url: &str) -> Option<(String, String)> {
+    let url = url.trim();
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    if let Some(rest) = url.strip_prefix("git@") {
+        if let Some((host, path)) = rest.split_once(':') {
+            return Some((format!("https://{host}/{path}"), host.to_string()));
+        }
+    }
+    if let Some(rest) = url.strip_prefix("ssh://") {
+        let rest = rest.split_once('@').map_or(rest, |(_, after)| after);
+        if let Some((host, path)) = rest.split_once('/') {
+            return Some((format!("https://{host}/{path}"), host.to_string()));
+        }
+    }
+    for prefix in ["https://", "http://"] {
+        if let Some(rest) = url.strip_prefix(prefix) {
+            let rest = rest.split_once('@').map_or(rest, |(_, after)| after);
+            if let Some((host, path)) = rest.split_once('/') {
+                return Some((format!("https://{host}/{path}"), host.to_string()));
+            }
+        }
+    }
+    None
+}
+
+/// Build a host-specific blob URL. Mirrors the desktop's `build_file_url`.
+fn build_file_url(web_base: &str, host: &str, reference: &str, path: &str, line: i64) -> String {
+    let host = host.to_lowercase();
+    if host.contains("gitlab") {
+        format!("{web_base}/-/blob/{reference}/{path}#L{line}")
+    } else if host.contains("bitbucket") {
+        format!("{web_base}/src/{reference}/{path}#lines-{line}")
+    } else {
+        format!("{web_base}/blob/{reference}/{path}#L{line}")
+    }
+}
+
+/// `GET /api/sessions/{id}/git/remote-file-url?path=…&line=N` — a web URL to the
+/// given file/line on origin's host (GitHub/GitLab/Bitbucket URL shapes).
+async fn remote_file_url(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<RemoteFileUrlQuery>,
+) -> Result<Json<RemoteFileUrlResp>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    let remote = match run_git(&cwd, &["remote", "get-url", "origin"]).await {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => return Ok(Json(RemoteFileUrlResp { url: None })),
+    };
+    let Some((web_base, host)) = git_url_to_web_base(&remote) else {
+        return Ok(Json(RemoteFileUrlResp { url: None }));
+    };
+    // Prefer the branch name; fall back to the commit oid for detached HEAD.
+    let branch = run_git(&cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .await
+        .ok()
+        .map(|s| s.trim().to_string());
+    let reference = match branch {
+        Some(name) if !name.is_empty() && name != "HEAD" => name,
+        _ => run_git(&cwd, &["rev-parse", "HEAD"])
+            .await
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| "HEAD".to_string()),
+    };
+    Ok(Json(RemoteFileUrlResp {
+        url: Some(build_file_url(
+            &web_base, &host, &reference, &q.path, q.line,
+        )),
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct BlobQuery {
+    /// Repo-relative path. Rejected if absolute or contains `..`.
+    path: String,
+    /// Revision to read at (commit oid or ref); `git show <commit>:<path>`.
+    commit: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BlobResp {
+    /// Base64 of the blob's bytes (binary-safe). Empty when the path is absent
+    /// at that revision (e.g. a file added after `commit`) — so adds/deletes
+    /// render cleanly as one empty side of the pair.
+    content: String,
+    /// True when the bytes contain a NUL; the desktop then renders the diff as a
+    /// binary preview (image/PDF) from the base64 rather than as text.
+    is_binary: bool,
+    truncated: bool,
+}
+
+/// `GET /api/sessions/{id}/git/blob?path=…&commit=<rev>` — one file's bytes at an
+/// arbitrary revision, base64-encoded. Powers the desktop's commit/branch diff
+/// (content-pair) views, which fetch two blobs and diff them client-side.
+async fn blob(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<BlobQuery>,
+) -> Result<Json<BlobResp>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    ensure_safe_relative(&q.path)?;
+    // A commit/ref never starts with '-'; reject so the rev can't smuggle a
+    // `git show` option.
+    if q.commit.starts_with('-') {
+        return Err(ApiError::BadRequest("invalid commit ref".into()));
+    }
+    let spec = format!("{}:{}", q.commit, q.path);
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&cwd)
+        .args(["show", &spec])
+        .output()
+        .await
+        .map_err(|e| ApiError::Internal(format!("git show: {e}")))?;
+    // A non-zero exit means the path doesn't exist at that revision → empty.
+    let mut bytes = if out.status.success() {
+        out.stdout
+    } else {
+        Vec::new()
+    };
+    let is_binary = bytes.contains(&0);
+    let truncated = bytes.len() > MAX_FILE_BYTES;
+    if truncated {
+        bytes.truncate(MAX_FILE_BYTES);
+    }
+    let content = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(Json(BlobResp {
+        content,
+        is_binary,
+        truncated,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct HistoryQuery {
+    #[serde(default)]
+    limit: Option<u32>,
+    // Accepted for parity with the desktop call (its `GitHistoryOptions`), but
+    // unused: this panel is scoped to HEAD's history.
+    #[serde(default, rename = "baseRef")]
+    #[allow(dead_code)]
+    base_ref: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryItem {
+    id: String,
+    parent_ids: Vec<String>,
+    subject: String,
+    /// Full commit body (`%B`), for the expanded-commit view.
+    message: String,
+    /// First 8 chars of the oid, for compact display.
+    display_id: String,
+    author: String,
+    author_email: String,
+    /// Author date as a unix timestamp (`%at`); null if unparseable.
+    timestamp: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryCurrentRef {
+    id: String,
+    name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryResp {
+    items: Vec<HistoryItem>,
+    has_incoming_changes: bool,
+    has_outgoing_changes: bool,
+    has_more: bool,
+    limit: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_ref: Option<HistoryCurrentRef>,
+}
+
+/// Parse `git log --pretty=format:%H␟%P␟%s␟%B␟%an␟%ae␟%at␞` (`␟` = unit sep,
+/// `␞` = record sep — control chars that don't appear in commit metadata).
+/// Records with fewer than 7 fields are skipped. Mirrors the desktop's
+/// `git_history` parsing exactly so the history shape is unchanged.
+fn parse_history_records(raw: &str) -> Vec<HistoryItem> {
+    let mut out = Vec::new();
+    for record in raw.split('\u{1e}') {
+        let record = record.trim_matches(['\n', '\r']);
+        if record.is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = record.split('\u{1f}').collect();
+        if fields.len() < 7 {
+            continue;
+        }
+        let parent_ids = fields[1].split_whitespace().map(str::to_string).collect();
+        out.push(HistoryItem {
+            id: fields[0].to_string(),
+            parent_ids,
+            subject: fields[2].to_string(),
+            message: fields[3].to_string(),
+            display_id: fields[0].chars().take(8).collect(),
+            author: fields[4].to_string(),
+            author_email: fields[5].to_string(),
+            timestamp: fields[6].trim().parse::<i64>().ok(),
+        });
+    }
+    out
+}
+
+/// `GET /api/sessions/{id}/git/history?limit=N` — recent commits plus
+/// incoming/outgoing-vs-upstream flags and the current ref. Returns the same
+/// shape the desktop's native `git_history` produced.
+async fn history(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<HistoryQuery>,
+) -> Result<Json<HistoryResp>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let cwd = cwd_for(&state, id).await?;
+    let limit = q.limit.unwrap_or(50).clamp(1, 1000);
+    // \x1f field sep, \x1e record sep; fetch one extra to detect `hasMore`.
+    let fmt = "%H\u{1f}%P\u{1f}%s\u{1f}%B\u{1f}%an\u{1f}%ae\u{1f}%at\u{1e}";
+    let max_count = format!("--max-count={}", limit + 1);
+    let pretty = format!("--pretty=format:{fmt}");
+    // An unborn HEAD makes `git log` exit non-zero — treat as no history.
+    let raw = run_git(&cwd, &["log", &max_count, &pretty])
+        .await
+        .unwrap_or_default();
+    let mut items = parse_history_records(&raw);
+    let has_more = items.len() as u32 > limit;
+    items.truncate(limit as usize);
+
+    // Upstream ahead/behind → incoming/outgoing. No upstream → false/false.
+    let (incoming, outgoing) = match run_git(
+        &cwd,
+        &["rev-list", "--left-right", "--count", "@{u}...HEAD"],
+    )
+    .await
+    {
+        Ok(out) => {
+            let mut it = out.split_whitespace();
+            let behind: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            let ahead: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            (behind > 0, ahead > 0)
+        }
+        Err(_) => (false, false),
+    };
+
+    // currentRef = head oid + ref name (`HEAD` when detached); omitted on unborn.
+    let head_oid = run_git(&cwd, &["rev-parse", "HEAD"])
+        .await
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let name = run_git(&cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .await
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let current_ref = match (head_oid, name) {
+        (Some(id), Some(name)) => Some(HistoryCurrentRef { id, name }),
+        _ => None,
+    };
+
+    Ok(Json(HistoryResp {
+        items,
+        has_incoming_changes: incoming,
+        has_outgoing_changes: outgoing,
+        has_more,
+        limit,
+        current_ref,
+    }))
 }
 
 #[cfg(test)]
@@ -1316,5 +1707,85 @@ mod tests {
         assert_eq!(e[0].area, "staged");
         assert_eq!(e[0].path, "new.rs");
         assert_eq!(e[0].old_path.as_deref(), Some("old.rs"));
+    }
+
+    #[test]
+    fn git_url_to_web_base_handles_scp_ssh_and_https() {
+        // scp-like (git@host:path).
+        assert_eq!(
+            git_url_to_web_base("git@github.com:owner/repo.git"),
+            Some(("https://github.com/owner/repo".into(), "github.com".into()))
+        );
+        // ssh:// with user.
+        assert_eq!(
+            git_url_to_web_base("ssh://git@gitlab.com/group/repo.git"),
+            Some(("https://gitlab.com/group/repo".into(), "gitlab.com".into()))
+        );
+        // https with embedded token (stripped).
+        assert_eq!(
+            git_url_to_web_base("https://x-token:abc@github.com/o/r"),
+            Some(("https://github.com/o/r".into(), "github.com".into()))
+        );
+        assert_eq!(git_url_to_web_base("not a url"), None);
+    }
+
+    #[test]
+    fn build_file_url_is_host_specific() {
+        assert_eq!(
+            build_file_url(
+                "https://github.com/o/r",
+                "github.com",
+                "main",
+                "src/a.rs",
+                12
+            ),
+            "https://github.com/o/r/blob/main/src/a.rs#L12"
+        );
+        assert_eq!(
+            build_file_url(
+                "https://gitlab.com/g/r",
+                "gitlab.com",
+                "main",
+                "src/a.rs",
+                12
+            ),
+            "https://gitlab.com/g/r/-/blob/main/src/a.rs#L12"
+        );
+        assert_eq!(
+            build_file_url(
+                "https://bitbucket.org/o/r",
+                "bitbucket.org",
+                "main",
+                "a.rs",
+                5
+            ),
+            "https://bitbucket.org/o/r/src/main/a.rs#lines-5"
+        );
+    }
+
+    #[test]
+    fn parse_history_records_splits_fields_and_short_id() {
+        // Two records: one with two parents (a merge), one root commit.
+        let raw = "abcdef1234567890\u{1f}p1 p2\u{1f}fix: thing\u{1f}fix: thing\n\nbody\u{1f}Jane\u{1f}jane@x.dev\u{1f}1700000000\u{1e}\
+                   0011223344556677\u{1f}\u{1f}init\u{1f}init\u{1f}Bob\u{1f}bob@x.dev\u{1f}1690000000\u{1e}";
+        let items = parse_history_records(raw);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, "abcdef1234567890");
+        assert_eq!(items[0].display_id, "abcdef12");
+        assert_eq!(items[0].parent_ids, vec!["p1", "p2"]);
+        assert_eq!(items[0].subject, "fix: thing");
+        assert!(items[0].message.contains("body"));
+        assert_eq!(items[0].author_email, "jane@x.dev");
+        assert_eq!(items[0].timestamp, Some(1700000000));
+        // Root commit: no parents.
+        assert!(items[1].parent_ids.is_empty());
+        assert_eq!(items[1].subject, "init");
+    }
+
+    #[test]
+    fn parse_history_records_skips_short_records() {
+        // A record missing fields (e.g. truncated) is dropped, not panicked on.
+        assert!(parse_history_records("only\u{1f}two\u{1e}").is_empty());
+        assert!(parse_history_records("").is_empty());
     }
 }

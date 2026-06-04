@@ -1,5 +1,33 @@
 /* eslint-disable max-lines -- Why: runtime git routing tests share compatibility-cache and IPC stubs; splitting would hide cross-environment contract drift. */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Native git was removed: a LOCAL workspace routes through the embedded-server
+// adapter, so mock it and assert the local path dispatches there. Remote runtime
+// environments still route over RPC (asserted via runtimeEnvironmentCall).
+vi.mock('./server-git-adapter', () => ({
+  getServerGitStatus: vi.fn(),
+  getServerGitConflictOperation: vi.fn(),
+  getServerGitUpstreamStatus: vi.fn(),
+  serverGitStage: vi.fn(),
+  getServerGitBranchCompare: vi.fn(),
+  getServerGitCommitCompare: vi.fn(),
+  serverGitFetch: vi.fn(),
+  serverGitPull: vi.fn(),
+  serverGitCommit: vi.fn(),
+  serverGitDiscard: vi.fn(),
+  serverGitPush: vi.fn(),
+  serverGitRebase: vi.fn(),
+  serverGitAbortMerge: vi.fn(),
+  serverGitAbortRebase: vi.fn(),
+  getServerGitDiff: vi.fn(),
+  getServerGitCheckIgnored: vi.fn(),
+  serverGitFastForward: vi.fn(),
+  getServerGitRemoteFileUrl: vi.fn(),
+  getServerGitCommitDiff: vi.fn(),
+  getServerGitBranchDiff: vi.fn(),
+  getServerGitHistory: vi.fn()
+}))
+
 import {
   bulkDiscardRuntimeGitPaths,
   bulkStageRuntimeGitPaths,
@@ -16,70 +44,26 @@ import {
   pushRuntimeGit,
   rebaseRuntimeGitFromBase
 } from './runtime-git-client'
+import { getServerGitStatus } from './server-git-adapter'
 import {
   createCompatibleRuntimeStatusResponseIfNeeded,
   type RuntimeEnvironmentCallRequest
 } from './runtime-compatibility-test-fixture'
 import { clearRuntimeCompatibilityCacheForTests } from './runtime-rpc-client'
 
-const gitStatus = vi.fn()
-const gitCheckIgnored = vi.fn()
-const gitDiff = vi.fn()
-const gitHistory = vi.fn()
-const gitBulkStage = vi.fn()
-const gitBulkDiscard = vi.fn()
-const gitCommit = vi.fn()
-const gitFetch = vi.fn()
-const gitFastForward = vi.fn()
-const gitPush = vi.fn()
-const gitRebaseFromBase = vi.fn()
-const gitGenerateCommitMessage = vi.fn()
-const gitDiscoverCommitMessageModels = vi.fn()
-const gitCancelGenerateCommitMessage = vi.fn()
 const runtimeEnvironmentCall = vi.fn()
 const runtimeEnvironmentTransportCall = vi.fn()
 const runtimeCall = vi.fn()
 
 beforeEach(() => {
   clearRuntimeCompatibilityCacheForTests()
-  gitStatus.mockReset()
-  gitCheckIgnored.mockReset()
-  gitDiff.mockReset()
-  gitHistory.mockReset()
-  gitBulkStage.mockReset()
-  gitBulkDiscard.mockReset()
-  gitCommit.mockReset()
-  gitFetch.mockReset()
-  gitFastForward.mockReset()
-  gitPush.mockReset()
-  gitRebaseFromBase.mockReset()
-  gitGenerateCommitMessage.mockReset()
-  gitDiscoverCommitMessageModels.mockReset()
-  gitCancelGenerateCommitMessage.mockReset()
-  runtimeEnvironmentCall.mockReset()
-  runtimeEnvironmentTransportCall.mockReset()
-  runtimeCall.mockReset()
+  vi.clearAllMocks()
   runtimeEnvironmentTransportCall.mockImplementation((args: RuntimeEnvironmentCallRequest) => {
     return createCompatibleRuntimeStatusResponseIfNeeded(args) ?? runtimeEnvironmentCall(args)
   })
+  // Native git preload is gone; the RPC path still needs the runtime transports.
   vi.stubGlobal('window', {
     api: {
-      git: {
-        status: gitStatus,
-        checkIgnored: gitCheckIgnored,
-        diff: gitDiff,
-        history: gitHistory,
-        bulkStage: gitBulkStage,
-        bulkDiscard: gitBulkDiscard,
-        commit: gitCommit,
-        fetch: gitFetch,
-        fastForward: gitFastForward,
-        push: gitPush,
-        rebaseFromBase: gitRebaseFromBase,
-        generateCommitMessage: gitGenerateCommitMessage,
-        discoverCommitMessageModels: gitDiscoverCommitMessageModels,
-        cancelGenerateCommitMessage: gitCancelGenerateCommitMessage
-      },
       runtime: { call: runtimeCall },
       runtimeEnvironments: { call: runtimeEnvironmentTransportCall }
     }
@@ -87,8 +71,8 @@ beforeEach(() => {
 })
 
 describe('runtime git client', () => {
-  it('uses local git IPC when no remote runtime is active', async () => {
-    gitStatus.mockResolvedValue({ entries: [], conflictOperation: 'unknown' })
+  it('routes a local workspace status through the embedded-server adapter', async () => {
+    vi.mocked(getServerGitStatus).mockResolvedValue({ entries: [], conflictOperation: 'unknown' })
 
     await getRuntimeGitStatus({
       settings: { activeRuntimeEnvironmentId: null },
@@ -97,88 +81,7 @@ describe('runtime git client', () => {
       connectionId: 'ssh-1'
     })
 
-    expect(gitStatus).toHaveBeenCalledWith({ worktreePath: '/repo', connectionId: 'ssh-1' })
-    expect(runtimeEnvironmentCall).not.toHaveBeenCalled()
-  })
-
-  it('forwards includeIgnored to local git status only when enabled', async () => {
-    gitStatus.mockResolvedValue({ entries: [], conflictOperation: 'unknown' })
-
-    await getRuntimeGitStatus(
-      {
-        settings: { activeRuntimeEnvironmentId: null },
-        worktreeId: 'wt-1',
-        worktreePath: '/repo'
-      },
-      { includeIgnored: true }
-    )
-    await getRuntimeGitStatus(
-      {
-        settings: { activeRuntimeEnvironmentId: null },
-        worktreeId: 'wt-1',
-        worktreePath: '/repo'
-      },
-      { includeIgnored: false }
-    )
-
-    expect(gitStatus).toHaveBeenNthCalledWith(1, {
-      worktreePath: '/repo',
-      connectionId: undefined,
-      includeIgnored: true
-    })
-    expect(gitStatus).toHaveBeenNthCalledWith(2, {
-      worktreePath: '/repo',
-      connectionId: undefined
-    })
-  })
-
-  it('checks ignored paths through local git IPC', async () => {
-    gitCheckIgnored.mockResolvedValue(['dist/bundle.js'])
-
-    const result = await getRuntimeGitIgnoredPaths(
-      {
-        settings: { activeRuntimeEnvironmentId: null },
-        worktreeId: 'wt-1',
-        worktreePath: '/repo',
-        connectionId: 'ssh-1'
-      },
-      ['dist/bundle.js', 'src/index.ts']
-    )
-
-    expect(gitCheckIgnored).toHaveBeenCalledWith({
-      worktreePath: '/repo',
-      connectionId: 'ssh-1',
-      paths: ['dist/bundle.js', 'src/index.ts']
-    })
-    expect(result).toEqual(['dist/bundle.js'])
-    expect(runtimeEnvironmentCall).not.toHaveBeenCalled()
-  })
-
-  it('uses local git IPC for history when no remote runtime is active', async () => {
-    gitHistory.mockResolvedValue({
-      items: [],
-      hasIncomingChanges: false,
-      hasOutgoingChanges: false,
-      hasMore: false,
-      limit: 50
-    })
-
-    await getRuntimeGitHistory(
-      {
-        settings: { activeRuntimeEnvironmentId: null },
-        worktreeId: 'wt-1',
-        worktreePath: '/repo',
-        connectionId: 'ssh-1'
-      },
-      { limit: 25, baseRef: 'origin/main' }
-    )
-
-    expect(gitHistory).toHaveBeenCalledWith({
-      worktreePath: '/repo',
-      connectionId: 'ssh-1',
-      limit: 25,
-      baseRef: 'origin/main'
-    })
+    expect(getServerGitStatus).toHaveBeenCalledWith('/repo')
     expect(runtimeEnvironmentCall).not.toHaveBeenCalled()
   })
 
@@ -446,6 +349,15 @@ describe('runtime git client', () => {
       params: { worktree: 'wt-1', agentId: 'cursor', agentCmdOverrides },
       timeoutMs: 75_000
     })
-    expect(gitDiscoverCommitMessageModels).not.toHaveBeenCalled()
+  })
+
+  it('returns the no-runtime stub for local commit-message generation', async () => {
+    const result = await generateRuntimeCommitMessage({
+      settings: { activeRuntimeEnvironmentId: null },
+      worktreeId: 'wt-1',
+      worktreePath: '/repo'
+    })
+    expect(result.success).toBe(false)
+    expect(runtimeEnvironmentCall).not.toHaveBeenCalled()
   })
 })

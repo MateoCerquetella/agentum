@@ -1,5 +1,4 @@
-import { api } from '@/tauri'
-/* eslint-disable max-lines -- Why: this module mirrors the git preload API with
+/* eslint-disable max-lines -- Why: this module mirrors the git API with
 runtime-aware routing so source-control callers have one typed boundary instead
 of reimplementing local-vs-environment branching per operation. */
 import type {
@@ -18,7 +17,6 @@ import type {
 } from '../../../shared/commit-message-agent-spec'
 import { getCommitMessageModelDiscoveryHostKeyForScope } from '../../../shared/commit-message-host-key'
 import type { GitHistoryOptions, GitHistoryResult } from '../../../shared/git-history'
-import { getRepoIdFromWorktreeId } from '../../../shared/worktree-id'
 import { callRuntimeRpc, getActiveRuntimeTarget } from './runtime-rpc-client'
 import {
   getServerGitStatus,
@@ -35,39 +33,23 @@ import {
   serverGitRebase,
   serverGitAbortMerge,
   serverGitAbortRebase,
-  getServerGitDiff
+  getServerGitDiff,
+  getServerGitCheckIgnored,
+  serverGitFastForward,
+  getServerGitRemoteFileUrl,
+  getServerGitCommitDiff,
+  getServerGitBranchDiff,
+  getServerGitHistory
 } from './server-git-adapter'
 
 /**
- * Option A: route source-control through the embedded server's session git API
- * (real git on the session worktree). Default ON; set
- * `localStorage['agentum.serverTerminals'] = '0'` to force the local preload.
- * Reads fall back to local on error (see `serverGitRead`); writes surface
- * errors, no auto-retry.
+ * Source-control routing for the desktop. A LOCAL workspace's git runs against
+ * its embedded-server session (`server-git-adapter`); a remote runtime
+ * environment routes over RPC. There is no longer a native (Tauri) git preload:
+ * the embedded server is the single git surface (the duplicate `commands/git.rs`
+ * was removed). `target.kind === 'local' || !worktreeId` selects the local
+ * server path; everything else is an active runtime environment (RPC).
  */
-function shouldUseServerGit(): boolean {
-  try {
-    return globalThis.localStorage?.getItem('agentum.serverTerminals') !== '0'
-  } catch {
-    return true
-  }
-}
-
-/**
- * Run a server-backed git READ, falling back to `local()` if it throws — so a
- * server hiccup degrades to the proven local path instead of breaking the
- * source-control panel. Reads are idempotent, so retrying locally is safe.
- * (Writes deliberately do NOT use this: re-applying a non-idempotent op after a
- * partial server success could double-commit/double-push.)
- */
-async function serverGitRead<T>(server: () => Promise<T>, local: () => Promise<T>): Promise<T> {
-  try {
-    return await server()
-  } catch (error) {
-    console.warn('[agentum] server git read failed, using local:', error)
-    return local()
-  }
-}
 
 export type RuntimeGenerateCommitMessageResult =
   | { success: true; message: string; agentLabel?: string }
@@ -146,24 +128,25 @@ export function getRuntimeGitScope(
   return target.kind === 'environment' ? `runtime:${target.environmentId}` : connectionId
 }
 
+/** True for a local workspace (or a workspace with no runtime worktree id): its
+ *  git runs against the embedded server, not a remote runtime environment. */
+function isLocalGit(
+  target: ReturnType<typeof getActiveRuntimeTarget>,
+  context: RuntimeGitContext
+): boolean {
+  return target.kind === 'local' || !context.worktreeId
+}
+
 export async function getRuntimeGitStatus(
   context: RuntimeGitContext,
   options?: { includeIgnored?: boolean }
 ): Promise<GitStatusResult> {
   const target = getActiveRuntimeTarget(context.settings)
   const includeIgnoredArgs = options?.includeIgnored ? { includeIgnored: true } : {}
-  const localStatus = (): Promise<GitStatusResult> =>
-    api.git.status({
-      worktreePath: context.worktreePath,
-      connectionId: context.connectionId,
-      ...includeIgnoredArgs
-    })
-  // Option A: a local workspace's source control runs against its server session.
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
-    return serverGitRead(() => getServerGitStatus(context.worktreePath), localStatus)
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    return localStatus()
+  if (isLocalGit(target, context)) {
+    // The server status doesn't fold in ignoredPaths; callers that need them use
+    // getRuntimeGitIgnoredPaths (a separate check-ignore call).
+    return getServerGitStatus(context.worktreePath)
   }
   return callRuntimeRpc<GitStatusResult>(
     target,
@@ -181,12 +164,8 @@ export async function getRuntimeGitIgnoredPaths(
   if (paths.length === 0) {
     return []
   }
-  if (target.kind === 'local' || !context.worktreeId) {
-    return api.git.checkIgnored({
-      worktreePath: context.worktreePath,
-      connectionId: context.connectionId,
-      paths
-    })
+  if (isLocalGit(target, context)) {
+    return getServerGitCheckIgnored(context.worktreePath, paths)
   }
   return callRuntimeRpc<string[]>(
     target,
@@ -201,12 +180,8 @@ export async function getRuntimeGitHistory(
   options: GitHistoryOptions = {}
 ): Promise<GitHistoryResult> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (target.kind === 'local' || !context.worktreeId) {
-    return api.git.history({
-      worktreePath: context.worktreePath,
-      connectionId: context.connectionId,
-      ...options
-    })
+  if (isLocalGit(target, context)) {
+    return getServerGitHistory(context.worktreePath, options)
   }
   return callRuntimeRpc<GitHistoryResult>(
     target,
@@ -220,16 +195,8 @@ export async function getRuntimeGitConflictOperation(
   context: RuntimeGitContext
 ): Promise<GitConflictOperation> {
   const target = getActiveRuntimeTarget(context.settings)
-  const localConflict = (): Promise<GitConflictOperation> =>
-    api.git.conflictOperation({
-      worktreePath: context.worktreePath,
-      connectionId: context.connectionId
-    })
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
-    return serverGitRead(() => getServerGitConflictOperation(context.worktreePath), localConflict)
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    return localConflict()
+  if (isLocalGit(target, context)) {
+    return getServerGitConflictOperation(context.worktreePath)
   }
   return callRuntimeRpc<GitConflictOperation>(
     target,
@@ -241,15 +208,8 @@ export async function getRuntimeGitConflictOperation(
 
 export async function abortRuntimeGitMerge(context: RuntimeGitContext): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+  if (isLocalGit(target, context)) {
     await serverGitAbortMerge(context.worktreePath)
-    return
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    await api.git.abortMerge({
-      worktreePath: context.worktreePath,
-      connectionId: context.connectionId
-    })
     return
   }
   await callRuntimeRpc(
@@ -262,15 +222,8 @@ export async function abortRuntimeGitMerge(context: RuntimeGitContext): Promise<
 
 export async function abortRuntimeGitRebase(context: RuntimeGitContext): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+  if (isLocalGit(target, context)) {
     await serverGitAbortRebase(context.worktreePath)
-    return
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    await api.git.abortRebase({
-      worktreePath: context.worktreePath,
-      connectionId: context.connectionId
-    })
     return
   }
   await callRuntimeRpc(
@@ -286,19 +239,8 @@ export async function getRuntimeGitDiff(
   args: { filePath: string; staged: boolean; compareAgainstHead?: boolean }
 ): Promise<GitDiffResult> {
   const target = getActiveRuntimeTarget(context.settings)
-  const localDiff = (): Promise<GitDiffResult> =>
-    api.git.diff({
-      worktreePath: context.worktreePath,
-      filePath: args.filePath,
-      staged: args.staged,
-      compareAgainstHead: args.compareAgainstHead,
-      connectionId: context.connectionId
-    })
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
-    return serverGitRead(() => getServerGitDiff(context.worktreePath, args), localDiff)
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    return localDiff()
+  if (isLocalGit(target, context)) {
+    return getServerGitDiff(context.worktreePath, args)
   }
   return callRuntimeRpc<GitDiffResult>(
     target,
@@ -313,20 +255,8 @@ export async function getRuntimeGitBranchCompare(
   baseRef: string
 ): Promise<GitBranchCompareResult> {
   const target = getActiveRuntimeTarget(context.settings)
-  const localBranchCompare = (): Promise<GitBranchCompareResult> =>
-    api.git.branchCompare({
-      worktreePath: context.worktreePath,
-      baseRef,
-      connectionId: context.connectionId
-    })
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
-    return serverGitRead(
-      () => getServerGitBranchCompare(context.worktreePath, baseRef),
-      localBranchCompare
-    )
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    return localBranchCompare()
+  if (isLocalGit(target, context)) {
+    return getServerGitBranchCompare(context.worktreePath, baseRef)
   }
   return callRuntimeRpc<GitBranchCompareResult>(
     target,
@@ -341,20 +271,8 @@ export async function getRuntimeGitCommitCompare(
   commitId: string
 ): Promise<GitCommitCompareResult> {
   const target = getActiveRuntimeTarget(context.settings)
-  const localCommitCompare = (): Promise<GitCommitCompareResult> =>
-    api.git.commitCompare({
-      worktreePath: context.worktreePath,
-      commitId,
-      connectionId: context.connectionId
-    })
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
-    return serverGitRead(
-      () => getServerGitCommitCompare(context.worktreePath, commitId),
-      localCommitCompare
-    )
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    return localCommitCompare()
+  if (isLocalGit(target, context)) {
+    return getServerGitCommitCompare(context.worktreePath, commitId)
   }
   return callRuntimeRpc<GitCommitCompareResult>(
     target,
@@ -369,18 +287,10 @@ export async function getRuntimeGitUpstreamStatus(
   pushTarget?: GitPushTarget
 ): Promise<GitUpstreamStatus> {
   const target = getActiveRuntimeTarget(context.settings)
-  const localUpstream = (): Promise<GitUpstreamStatus> =>
-    api.git.upstreamStatus({
-      worktreePath: context.worktreePath,
-      connectionId: context.connectionId,
-      ...(pushTarget ? { pushTarget } : {})
-    })
-  // Server path tracks @{u} only; defer to local when an explicit pushTarget is set.
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath && !pushTarget) {
-    return serverGitRead(() => getServerGitUpstreamStatus(context.worktreePath), localUpstream)
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    return localUpstream()
+  // The embedded server tracks @{u} only — it ignores an explicit pushTarget,
+  // matching the prior native command (whose signature had no pushTarget either).
+  if (isLocalGit(target, context)) {
+    return getServerGitUpstreamStatus(context.worktreePath)
   }
   return callRuntimeRpc<GitUpstreamStatus>(
     target,
@@ -395,17 +305,9 @@ export async function fetchRuntimeGit(
   pushTarget?: GitPushTarget
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
-  // Server path is `fetch --all --prune`; defer to local for a specific target.
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath && !pushTarget) {
+  // Embedded server fetch is `fetch --all --prune` (target-agnostic).
+  if (isLocalGit(target, context)) {
     await serverGitFetch(context.worktreePath)
-    return
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    await api.git.fetch({
-      worktreePath: context.worktreePath,
-      connectionId: context.connectionId,
-      ...(pushTarget ? { pushTarget } : {})
-    })
     return
   }
   await callRuntimeRpc(
@@ -421,17 +323,9 @@ export async function pullRuntimeGit(
   pushTarget?: GitPushTarget
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
-  // Server path is fast-forward-only pull; defer to local for a specific target.
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath && !pushTarget) {
+  // Embedded server pull is fast-forward-only (target-agnostic).
+  if (isLocalGit(target, context)) {
     await serverGitPull(context.worktreePath)
-    return
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    await api.git.pull({
-      worktreePath: context.worktreePath,
-      connectionId: context.connectionId,
-      ...(pushTarget ? { pushTarget } : {})
-    })
     return
   }
   await callRuntimeRpc(
@@ -447,12 +341,9 @@ export async function fastForwardRuntimeGit(
   pushTarget?: GitPushTarget
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (target.kind === 'local' || !context.worktreeId) {
-    await api.git.fastForward({
-      worktreePath: context.worktreePath,
-      connectionId: context.connectionId,
-      ...(pushTarget ? { pushTarget } : {})
-    })
+  // Embedded server fast-forwards to @{upstream} (target-agnostic).
+  if (isLocalGit(target, context)) {
+    await serverGitFastForward(context.worktreePath)
     return
   }
   await callRuntimeRpc(
@@ -468,16 +359,8 @@ export async function rebaseRuntimeGitFromBase(
   baseRef: string
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+  if (isLocalGit(target, context)) {
     await serverGitRebase(context.worktreePath, baseRef)
-    return
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    await api.git.rebaseFromBase({
-      worktreePath: context.worktreePath,
-      baseRef,
-      connectionId: context.connectionId
-    })
     return
   }
   await callRuntimeRpc(
@@ -493,26 +376,12 @@ export async function pushRuntimeGit(
   args: { publish?: boolean; pushTarget?: GitPushTarget; forceWithLease?: boolean } = {}
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
-  // Server push is a plain `push --set-upstream origin HEAD`; defer to local for
-  // force-with-lease or a specific target, which it doesn't model.
-  if (
-    shouldUseServerGit() &&
-    target.kind === 'local' &&
-    context.worktreePath &&
-    !args.forceWithLease &&
-    !args.pushTarget
-  ) {
+  // Embedded server push is `push --set-upstream origin HEAD` — it does not model
+  // publish / a specific pushTarget / force-with-lease (neither did the prior
+  // native command, whose signature had none of them). Remote runtime
+  // environments still honour them over RPC.
+  if (isLocalGit(target, context)) {
     await serverGitPush(context.worktreePath)
-    return
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    await api.git.push({
-      worktreePath: context.worktreePath,
-      connectionId: context.connectionId,
-      ...(args.publish !== undefined ? { publish: args.publish } : {}),
-      ...(args.pushTarget !== undefined ? { pushTarget: args.pushTarget } : {}),
-      ...(args.forceWithLease !== undefined ? { forceWithLease: args.forceWithLease } : {})
-    })
     return
   }
   await callRuntimeRpc(
@@ -537,14 +406,8 @@ export async function getRuntimeGitBranchDiff(
   }
 ): Promise<GitDiffResult> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (target.kind === 'local' || !context.worktreeId) {
-    return api.git.branchDiff({
-      worktreePath: context.worktreePath,
-      compare: args.compare,
-      filePath: args.filePath,
-      oldPath: args.oldPath,
-      connectionId: context.connectionId
-    })
+  if (isLocalGit(target, context)) {
+    return getServerGitBranchDiff(context.worktreePath, args)
   }
   return callRuntimeRpc<GitDiffResult>(
     target,
@@ -564,15 +427,8 @@ export async function getRuntimeGitCommitDiff(
   }
 ): Promise<GitDiffResult> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (target.kind === 'local' || !context.worktreeId) {
-    return api.git.commitDiff({
-      worktreePath: context.worktreePath,
-      commitOid: args.commitOid,
-      parentOid: args.parentOid,
-      filePath: args.filePath,
-      oldPath: args.oldPath,
-      connectionId: context.connectionId
-    })
+  if (isLocalGit(target, context)) {
+    return getServerGitCommitDiff(context.worktreePath, args)
   }
   return callRuntimeRpc<GitDiffResult>(
     target,
@@ -587,15 +443,8 @@ export async function commitRuntimeGit(
   message: string
 ): Promise<{ success: boolean; error?: string }> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+  if (isLocalGit(target, context)) {
     return serverGitCommit(context.worktreePath, message)
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    return api.git.commit({
-      worktreePath: context.worktreePath,
-      message,
-      connectionId: context.connectionId
-    })
   }
   return callRuntimeRpc<{ success: boolean; error?: string }>(
     target,
@@ -609,12 +458,13 @@ export async function generateRuntimeCommitMessage(
   context: RuntimeGitContext
 ): Promise<RuntimeGenerateCommitMessageResult> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (target.kind === 'local' || !context.worktreeId) {
-    return api.git.generateCommitMessage({
-      worktreePath: context.worktreePath,
-      repoId: context.worktreeId ? getRepoIdFromWorktreeId(context.worktreeId) : undefined,
-      connectionId: context.connectionId
-    }) as Promise<RuntimeGenerateCommitMessageResult>
+  if (isLocalGit(target, context)) {
+    // The desktop doesn't host the agent runtime locally (the prior native
+    // command was a fixed failure stub); return that contract variant.
+    return {
+      success: false,
+      error: "Commit-message generation requires the agent runtime, which isn't available yet."
+    }
   }
   return callRuntimeRpc<RuntimeGenerateCommitMessageResult>(
     target,
@@ -632,12 +482,8 @@ export async function discoverRuntimeCommitMessageModels(
   agentId: string
 ): Promise<RuntimeDiscoverCommitMessageModelsResult> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (target.kind === 'local' || !context.worktreeId) {
-    return api.git.discoverCommitMessageModels({
-      agentId,
-      worktreePath: context.worktreePath,
-      connectionId: context.connectionId
-    }) as Promise<RuntimeDiscoverCommitMessageModelsResult>
+  if (isLocalGit(target, context)) {
+    return { success: false, error: 'No commit-message models available.' }
   }
   return callRuntimeRpc<RuntimeDiscoverCommitMessageModelsResult>(
     target,
@@ -657,11 +503,8 @@ export async function cancelRuntimeGenerateCommitMessage(
   context: RuntimeGitContext
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (target.kind === 'local' || !context.worktreeId) {
-    await api.git.cancelGenerateCommitMessage({
-      worktreePath: context.worktreePath,
-      connectionId: context.connectionId
-    })
+  if (isLocalGit(target, context)) {
+    // No local agent runtime to cancel (the prior native command was a no-op).
     return
   }
   await callRuntimeRpc(
@@ -677,13 +520,11 @@ export async function generateRuntimePullRequestFields(
   input: { base: string; title: string; body: string; draft: boolean }
 ): Promise<RuntimeGeneratePullRequestFieldsResult> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (target.kind === 'local' || !context.worktreeId) {
-    return api.git.generatePullRequestFields({
-      worktreePath: context.worktreePath,
-      repoId: context.worktreeId ? getRepoIdFromWorktreeId(context.worktreeId) : undefined,
-      connectionId: context.connectionId,
-      ...input
-    }) as Promise<RuntimeGeneratePullRequestFieldsResult>
+  if (isLocalGit(target, context)) {
+    return {
+      success: false,
+      error: "PR-field generation requires the agent runtime, which isn't available yet."
+    }
   }
   return callRuntimeRpc<RuntimeGeneratePullRequestFieldsResult>(
     target,
@@ -701,11 +542,7 @@ export async function cancelRuntimeGeneratePullRequestFields(
   context: RuntimeGitContext
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (target.kind === 'local' || !context.worktreeId) {
-    await api.git.cancelGeneratePullRequestFields({
-      worktreePath: context.worktreePath,
-      connectionId: context.connectionId
-    })
+  if (isLocalGit(target, context)) {
     return
   }
   await callRuntimeRpc(
@@ -721,16 +558,8 @@ export async function stageRuntimeGitPath(
   filePath: string
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+  if (isLocalGit(target, context)) {
     await serverGitStage(context.worktreePath, [filePath], false)
-    return
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    await api.git.stage({
-      worktreePath: context.worktreePath,
-      filePath,
-      connectionId: context.connectionId
-    })
     return
   }
   await callRuntimeRpc(
@@ -746,16 +575,8 @@ export async function bulkStageRuntimeGitPaths(
   filePaths: string[]
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+  if (isLocalGit(target, context)) {
     await serverGitStage(context.worktreePath, filePaths, false)
-    return
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    await api.git.bulkStage({
-      worktreePath: context.worktreePath,
-      filePaths,
-      connectionId: context.connectionId
-    })
     return
   }
   await callRuntimeRpc(
@@ -771,16 +592,8 @@ export async function unstageRuntimeGitPath(
   filePath: string
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+  if (isLocalGit(target, context)) {
     await serverGitStage(context.worktreePath, [filePath], true)
-    return
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    await api.git.unstage({
-      worktreePath: context.worktreePath,
-      filePath,
-      connectionId: context.connectionId
-    })
     return
   }
   await callRuntimeRpc(
@@ -796,16 +609,8 @@ export async function bulkUnstageRuntimeGitPaths(
   filePaths: string[]
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+  if (isLocalGit(target, context)) {
     await serverGitStage(context.worktreePath, filePaths, true)
-    return
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    await api.git.bulkUnstage({
-      worktreePath: context.worktreePath,
-      filePaths,
-      connectionId: context.connectionId
-    })
     return
   }
   await callRuntimeRpc(
@@ -821,16 +626,8 @@ export async function bulkDiscardRuntimeGitPaths(
   filePaths: string[]
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+  if (isLocalGit(target, context)) {
     await serverGitDiscard(context.worktreePath, filePaths)
-    return
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    await api.git.bulkDiscard({
-      worktreePath: context.worktreePath,
-      filePaths,
-      connectionId: context.connectionId
-    })
     return
   }
   await callRuntimeRpc(
@@ -846,16 +643,8 @@ export async function discardRuntimeGitPath(
   filePath: string
 ): Promise<void> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (shouldUseServerGit() && target.kind === 'local' && context.worktreePath) {
+  if (isLocalGit(target, context)) {
     await serverGitDiscard(context.worktreePath, [filePath])
-    return
-  }
-  if (target.kind === 'local' || !context.worktreeId) {
-    await api.git.discard({
-      worktreePath: context.worktreePath,
-      filePath,
-      connectionId: context.connectionId
-    })
     return
   }
   await callRuntimeRpc(
@@ -871,13 +660,8 @@ export async function getRuntimeGitRemoteFileUrl(
   args: { relativePath: string; line: number }
 ): Promise<string | null> {
   const target = getActiveRuntimeTarget(context.settings)
-  if (target.kind === 'local' || !context.worktreeId) {
-    return api.git.remoteFileUrl({
-      worktreePath: context.worktreePath,
-      relativePath: args.relativePath,
-      line: args.line,
-      connectionId: context.connectionId
-    })
+  if (isLocalGit(target, context)) {
+    return getServerGitRemoteFileUrl(context.worktreePath, args.relativePath, args.line)
   }
   return callRuntimeRpc<string | null>(
     target,

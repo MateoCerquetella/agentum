@@ -225,38 +225,6 @@ export interface AgentumApi {
     onPRRefreshEvent: ApiEvent
     onWorkItemMutated: ApiEvent
   }
-  git: {
-    abortMerge: ApiMethod
-    abortRebase: ApiMethod
-    branchCompare: ApiMethod
-    branchDiff: ApiMethod
-    bulkDiscard: ApiMethod
-    bulkStage: ApiMethod
-    bulkUnstage: ApiMethod
-    cancelGenerateCommitMessage: ApiMethod
-    cancelGeneratePullRequestFields: ApiMethod
-    checkIgnored: ApiMethod
-    commit: ApiMethod
-    commitCompare: ApiMethod
-    commitDiff: ApiMethod
-    conflictOperation: ApiMethod
-    diff: ApiMethod
-    discard: ApiMethod
-    discoverCommitMessageModels: ApiMethod
-    fastForward: ApiMethod
-    fetch: ApiMethod
-    generateCommitMessage: ApiMethod
-    generatePullRequestFields: ApiMethod
-    history: ApiMethod
-    pull: ApiMethod
-    push: ApiMethod
-    rebaseFromBase: ApiMethod
-    remoteFileUrl: ApiMethod
-    stage: ApiMethod
-    status: ApiMethod
-    unstage: ApiMethod
-    upstreamStatus: ApiMethod
-  }
   gitBash: {
     isAvailable: ApiMethod
   }
