@@ -26,3 +26,4 @@ pub mod uploads;
 pub mod usage;
 pub mod util;
 pub mod watchdog;
+pub mod worktrees;

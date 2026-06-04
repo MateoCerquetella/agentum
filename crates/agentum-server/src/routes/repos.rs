@@ -195,6 +195,13 @@ struct CreateBody {
 
 /// `POST /api/repos/create` — make a new folder (optionally `git init`) + register.
 async fn create(Json(body): Json<CreateBody>) -> Result<Json<Value>, ApiError> {
+    // `name` is a single new folder under `parent_path` — reject separators/`..`
+    // so it can't escape, and a leading dash so `git init` can't read it as a flag.
+    if body.name.contains('/') || body.name.contains('\\') || body.name == ".." {
+        return Err(ApiError::BadRequest(
+            "name must be a single path segment (no '/' or '..')".into(),
+        ));
+    }
     let target = StdPath::new(&body.parent_path).join(&body.name);
     if target.exists() {
         return Ok(Json(serde_json::json!({
@@ -205,6 +212,7 @@ async fn create(Json(body): Json<CreateBody>) -> Result<Json<Value>, ApiError> {
     if body.kind == "git" {
         let status = Command::new("git")
             .arg("init")
+            .arg("--")
             .arg(&target)
             .status()
             .await
@@ -225,8 +233,15 @@ struct CloneBody {
 
 /// `POST /api/repos/clone` — `git clone <url> <destination>` + register.
 async fn clone(Json(body): Json<CloneBody>) -> Result<Json<Repo>, ApiError> {
+    // `--` + leading-dash rejection so a `-`-prefixed url/destination can't smuggle
+    // a `git clone` flag (the server may run as a shared daemon).
+    if body.url.starts_with('-') || body.destination.starts_with('-') {
+        return Err(ApiError::BadRequest(
+            "url/destination must not start with '-'".into(),
+        ));
+    }
     let output = Command::new("git")
-        .args(["clone", &body.url, &body.destination])
+        .args(["clone", "--", &body.url, &body.destination])
         .output()
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -271,7 +286,9 @@ async fn reorder(Json(body): Json<ReorderBody>) -> Result<Json<Value>, ApiError>
     Ok(Json(serde_json::json!({ "status": "applied" })))
 }
 
-fn resolve_repo_path(repo_id: &str) -> Result<String, ApiError> {
+/// Resolve a repoId to its checkout path via the registry. `pub(crate)` so the
+/// worktrees route can resolve the same path without duplicating the read.
+pub(crate) fn resolve_repo_path(repo_id: &str) -> Result<String, ApiError> {
     read_repos()?
         .iter()
         .find(|repo| repo.id == repo_id)
