@@ -94,12 +94,18 @@ export function connectPaneServerSession(
     if (manager.getActivePane()?.id === pane.id) {
       deps.updateTabTitle(deps.tabId, title)
     }
-    if (
-      committedTitleStatus === 'working' &&
-      status === 'idle' &&
-      agentTaskCompleteNotificationsEnabled()
-    ) {
+    const justFinished = committedTitleStatus === 'working' && status === 'idle'
+    if (justFinished && agentTaskCompleteNotificationsEnabled()) {
       deps.dispatchNotification({ source: 'agent-task-complete', terminalTitle: title, paneKey })
+    }
+    // Green ✓ "done" on a real turn end; cleared the moment the agent works
+    // again (or is torn down, in dispose). A fresh idle that never worked stays
+    // grey because justFinished is only true on a working→idle edge.
+    const store = useAppStore.getState()
+    if (justFinished) {
+      store.markServerAgentDone(paneKey)
+    } else if (status === 'working' || status === 'permission') {
+      store.clearServerAgentDone(paneKey)
     }
     committedTitleStatus = status
   }
@@ -203,6 +209,7 @@ export function connectPaneServerSession(
     dispose: () => {
       disposed = true
       clearIdleHold()
+      useAppStore.getState().clearServerAgentDone(paneKey)
       if (registeredPtyId) {
         deps.clearTabPtyId(deps.tabId, registeredPtyId)
         deps.clearRuntimePaneTitle(deps.tabId, pane.id)

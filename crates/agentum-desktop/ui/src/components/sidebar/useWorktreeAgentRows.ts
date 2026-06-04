@@ -4,6 +4,7 @@ import type { DashboardAgentRow } from '@/components/dashboard/useDashboardData'
 import { applyAgentRowLineage } from '@/components/dashboard/agent-row-lineage'
 import { migrationUnsupportedToAgentStatusEntry } from '@/lib/migration-unsupported-agent-entry'
 import { useAppStore } from '@/store'
+import { parsePaneKey } from '../../../../shared/stable-pane-id'
 import {
   selectLivePtyIdsForWorktree,
   selectRuntimePaneTitlesForWorktree
@@ -64,6 +65,23 @@ export function useWorktreeAgentRows(worktreeId: string): DashboardAgentRow[] {
   // expire, even if no new PTY data arrives — same rationale as
   // useDashboardData.
   const agentStatusEpoch = useAppStore((s) => s.agentStatusEpoch)
+  // Why: title-derived server-session agents have no completion hook, so a
+  // finished turn is recorded here (working→idle edge). An idle row whose pane
+  // is marked done renders the green ✓ completion state. Narrowed to this
+  // worktree's tabs so unrelated completions don't re-render the card.
+  const serverAgentDoneByPaneKey = useAppStore(
+    useShallow((s) => {
+      const tabIds = new Set((s.tabsByWorktree[worktreeId] ?? []).map((t) => t.id))
+      const out: Record<string, number> = {}
+      for (const [paneKey, finishedAt] of Object.entries(s.serverAgentDoneByPaneKey)) {
+        const parsed = parsePaneKey(paneKey)
+        if (parsed && tabIds.has(parsed.tabId)) {
+          out[paneKey] = finishedAt
+        }
+      }
+      return out
+    })
+  )
 
   return useMemo<DashboardAgentRow[]>(() => {
     // Why: Date.now() is read inside the memo (not as a dep) so stale-decay
@@ -80,17 +98,31 @@ export function useWorktreeAgentRows(worktreeId: string): DashboardAgentRow[] {
             })
           ]
         : liveEntries
-    return applyAgentRowLineage(
-      buildWorktreeAgentRows({
-        tabs: tabs ?? [],
-        entries,
-        retained,
-        runtimePaneTitlesByTabId,
-        ptyIdsByTabId,
-        terminalLayoutsByTabId,
-        now
-      })
-    )
+    const rows = buildWorktreeAgentRows({
+      tabs: tabs ?? [],
+      entries,
+      retained,
+      runtimePaneTitlesByTabId,
+      ptyIdsByTabId,
+      terminalLayoutsByTabId,
+      now
+    })
+    // Upgrade an idle title-derived row to 'done' (green ✓) when its pane just
+    // finished a turn. Only idle rows are upgraded — a live working/permission
+    // status always wins, and the marker is cleared the moment work resumes.
+    const withDone = rows.map((row) => {
+      const finishedAt = serverAgentDoneByPaneKey[row.paneKey]
+      if (row.state !== 'idle' || finishedAt === undefined) {
+        return row
+      }
+      return {
+        ...row,
+        state: 'done' as const,
+        startedAt: finishedAt,
+        entry: { ...row.entry, state: 'done' as const, stateStartedAt: finishedAt }
+      }
+    })
+    return applyAgentRowLineage(withDone)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     tabs,
@@ -100,6 +132,7 @@ export function useWorktreeAgentRows(worktreeId: string): DashboardAgentRow[] {
     runtimePaneTitlesByTabId,
     ptyIdsByTabId,
     terminalLayoutsByTabId,
+    serverAgentDoneByPaneKey,
     agentStatusEpoch
   ])
 }

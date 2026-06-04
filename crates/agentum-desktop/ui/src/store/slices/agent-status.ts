@@ -57,6 +57,19 @@ export type AgentStatusSlice = {
    *  disappearance. Consumed by the retention sync as a one-shot suppressor. */
   retentionSuppressedPaneKeys: Record<string, true>
 
+  /** Pane keys (→ finish timestamp) of title-derived server-session agents that
+   *  just completed a turn. Server sessions have no completion hook, so we infer
+   *  "done" from the working→idle title edge and surface a green ✓ for it — the
+   *  sidebar hook upgrades an idle row to 'done' while a key is present here.
+   *  Kept OUT of agentStatusByPaneKey to honor the "no title inference in the
+   *  explicit hook store" rule. Cleared when the agent works again or is torn
+   *  down. */
+  serverAgentDoneByPaneKey: Record<string, number>
+  /** Mark a server-session pane as having just completed a turn (green ✓). */
+  markServerAgentDone: (paneKey: string) => void
+  /** Clear the done marker (agent resumed work, or the pane was torn down). */
+  clearServerAgentDone: (paneKey: string) => void
+
   /** Update or insert an agent status entry from a status payload. */
   setAgentStatus: (
     paneKey: string,
@@ -200,6 +213,28 @@ export const createAgentStatusSlice: StateCreator<AppState, [], [], AgentStatusS
     agentStatusEpoch: 0,
     retainedAgentsByPaneKey: {},
     retentionSuppressedPaneKeys: {},
+    serverAgentDoneByPaneKey: {},
+
+    markServerAgentDone: (paneKey) =>
+      set((s) =>
+        s.serverAgentDoneByPaneKey[paneKey] !== undefined
+          ? s
+          : {
+              serverAgentDoneByPaneKey: {
+                ...s.serverAgentDoneByPaneKey,
+                [paneKey]: Date.now()
+              }
+            }
+      ),
+    clearServerAgentDone: (paneKey) =>
+      set((s) => {
+        if (!(paneKey in s.serverAgentDoneByPaneKey)) {
+          return s
+        }
+        const next = { ...s.serverAgentDoneByPaneKey }
+        delete next[paneKey]
+        return { serverAgentDoneByPaneKey: next }
+      }),
 
     setAgentStatus: (paneKey, payload, terminalTitle, timing) => {
       const updatedAt = timing?.updatedAt ?? Date.now()
