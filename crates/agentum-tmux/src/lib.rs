@@ -11,6 +11,9 @@ use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::time::sleep;
 
+/// Host-aware tmux ops (Local or SSH) + the shared SSH connection builder.
+pub mod ssh;
+
 #[derive(Debug, thiserror::Error)]
 pub enum TmuxError {
     #[error("tmux exited with status {status:?} (stderr: {stderr})")]

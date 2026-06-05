@@ -14,3 +14,8 @@ thiserror     = { workspace = true }
 tokio         = { workspace = true }
 tracing       = { workspace = true }
 shlex         = "1"
+
+[dev-dependencies]
+# The ssh-module tests construct a `Host` (created_at/updated_at are
+# `time::OffsetDateTime`); only the test code needs `time`.
+time          = { workspace = true }

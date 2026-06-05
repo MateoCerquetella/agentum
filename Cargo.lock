@@ -175,6 +175,7 @@ dependencies = [
  "agentum-core",
  "shlex",
  "thiserror 2.0.18",
+ "time",
  "tokio",
  "tracing",
 ]

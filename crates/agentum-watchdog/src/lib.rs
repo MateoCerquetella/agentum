@@ -103,32 +103,81 @@ impl Watchdog {
             tracing::debug!(%id, "watchdog: dropped finished/non-running task");
         }
 
-        // Spawn watch tasks for sessions we don't already track.
+        // Spawn watch tasks for sessions we don't already track. Remote
+        // (SSH) sessions are no longer skipped: pane sampling is host-aware
+        // now (`agentum_tmux::ssh::*` branches on the host kind), so
+        // hookless agents (opencode, codex, …) on an SSH host get the same
+        // Working/Idle detection as local ones.
         for sess in running {
-            if sess.host_id.unwrap_or(LOCAL_HOST_ID) != LOCAL_HOST_ID {
-                tracing::debug!(
-                    name = %sess.name,
-                    id = %sess.id,
-                    "watchdog: skipping ssh-hosted session until remote pane sampling is supported"
-                );
+            let id = sess.id;
+            if tasks.contains_key(&id) {
                 continue;
             }
-            let id = sess.id;
-            tasks.entry(id).or_insert_with(|| {
-                tracing::info!(name = %sess.name, %id, "watchdog: starting watch task");
-                let bus = self.bus.clone();
-                let store = self.store.clone();
-                tokio::spawn(watch_session(sess, bus, store))
-            });
+            // Resolve the session's host once, up front. The local host row is
+            // seeded by migration 0018, so this is almost always `Some`; fall
+            // back to a synthesized `Local` host if it's somehow absent (or a
+            // remote host row was deleted out from under a running session) so
+            // the task still samples *something* rather than silently dropping.
+            let host_id = sess.host_id.unwrap_or(LOCAL_HOST_ID);
+            let host = match self.store.get_host(host_id).await {
+                Ok(Some(h)) => h,
+                Ok(None) => {
+                    tracing::warn!(
+                        name = %sess.name,
+                        %id,
+                        %host_id,
+                        "watchdog: host row missing; falling back to local pane sampling"
+                    );
+                    local_host_fallback(host_id)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        name = %sess.name,
+                        %id,
+                        %host_id,
+                        error = ?e,
+                        "watchdog: get_host failed; skipping watch task this tick"
+                    );
+                    continue;
+                }
+            };
+            tracing::info!(name = %sess.name, %id, "watchdog: starting watch task");
+            let bus = self.bus.clone();
+            let store = self.store.clone();
+            tasks.insert(id, tokio::spawn(watch_session(sess, host, bus, store)));
         }
 
         Ok(())
     }
 }
 
+/// Synthesize a `Local` host when the store has no row for `id`. Defensive:
+/// the local host is seeded by migration 0018, but a deleted remote-host row
+/// (or a fresh DB mid-migration) shouldn't leave a running session unwatched.
+/// `created_at`/`updated_at` are placeholders — the watchdog only reads
+/// `kind` to pick the local-vs-SSH branch.
+fn local_host_fallback(id: Uuid) -> agentum_core::Host {
+    agentum_core::Host {
+        id,
+        name: "local".to_string(),
+        kind: agentum_core::HostKind::Local,
+        created_at: time::OffsetDateTime::UNIX_EPOCH,
+        updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        last_seen_at: None,
+    }
+}
+
 /// One session's watch loop. Returns when the pane is gone or a crash
 /// signature is hit (which marks the session crashed and emits an event).
-async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<Store>) {
+/// Pane sampling is host-aware: `host` is `Local` (tmux run directly) or
+/// `Ssh` (tmux run over the session's ssh connection) — see
+/// `agentum_tmux::ssh`.
+async fn watch_session(
+    sess: Session,
+    host: agentum_core::Host,
+    bus: broadcast::Sender<Event>,
+    store: Arc<Store>,
+) {
     let target = sess
         .tmux_target
         .clone()
@@ -199,7 +248,7 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
     loop {
         tick.tick().await;
 
-        match agentum_tmux::has_session(&target).await {
+        match agentum_tmux::ssh::has_session(&host, &target).await {
             Ok(true) => {}
             Ok(false) => {
                 // Pane is gone. Distinguish "user killed it" from "it
@@ -238,14 +287,14 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
         //                 finished — the scrollback retained the spinner
         //                 footer from the prior turn, so `pane.contains
         //                 ("esc to interrupt")` kept matching.
-        let pane = match agentum_tmux::capture_pane(&target, 100).await {
+        let pane = match agentum_tmux::ssh::capture_pane(&host, &target, 100).await {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(target = %target, error = ?e, "capture_pane failed");
                 continue;
             }
         };
-        let viewport = match agentum_tmux::capture_pane_visible(&target).await {
+        let viewport = match agentum_tmux::ssh::capture_pane_visible(&host, &target).await {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(target = %target, error = ?e, "capture_pane_visible failed");
@@ -281,7 +330,7 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
                     .unwrap_or(true);
                 if due {
                     last_compact = Some(now);
-                    if let Err(e) = agentum_tmux::send_keys(&target, cmd, true).await {
+                    if let Err(e) = agentum_tmux::ssh::send_keys(&host, &target, cmd, true).await {
                         tracing::warn!(error = ?e, "watchdog: send_keys /compact failed");
                     }
                     let ev = Event::new("watchdog.compact")
@@ -302,7 +351,7 @@ async fn watch_session(sess: Session, bus: broadcast::Sender<Event>, store: Arc<
         // shell-out (git, ls, …) doesn't get latched as the active tool.
         // The `tool_candidate` slot is reset whenever the observation
         // doesn't match it.
-        if let Ok(cmd) = agentum_tmux::pane_current_command(&target).await
+        if let Ok(cmd) = agentum_tmux::ssh::pane_current_command(&host, &target).await
             && let Some(detected) = canonical_tool_from_command(&cmd)
             && detected != current_tool
         {
