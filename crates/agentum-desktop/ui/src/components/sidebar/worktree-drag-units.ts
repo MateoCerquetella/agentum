@@ -9,6 +9,9 @@ type WorktreeDragUnitRow =
   | { type: 'header'; key: string }
   | { type: 'item'; worktree: { id: string }; depth: number }
   | { type: 'imported-worktrees-card' }
+  // Host-first grouping adds a super-level above repo headers; it carries no
+  // drag units, so the unit builder accepts and skips it.
+  | { type: 'host-header' }
 
 export function getWorktreeDragUnitGroups(
   rows: readonly WorktreeDragUnitRow[]
@@ -27,6 +30,9 @@ export function getWorktreeDragUnitGroups(
       continue
     }
     if (row.type === 'imported-worktrees-card') {
+      continue
+    }
+    if (row.type === 'host-header') {
       continue
     }
     if (!current) {

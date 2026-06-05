@@ -71,13 +71,18 @@ import {
   type ProjectGroupOrdering,
   type Row,
   type WorktreeGroupBy,
+  type SidebarHost,
   ALL_GROUP_KEY,
   PINNED_GROUP_KEY,
   buildRows,
   getGroupKeysForWorktree,
   getProjectGroupOrdering,
-  getLineageGroupKey
+  getLineageGroupKey,
+  groupRowsByHost,
+  getHostHeaderKey
 } from './worktree-list-groups'
+import { HostGroupHeader } from './HostGroupHeader'
+import { SessionActivityCard } from './SessionActivityCard'
 import {
   estimateRenderRowSize,
   extractWorktreeVirtualRowIndexes,
@@ -704,6 +709,9 @@ export function getRenderRowKey(row: RenderRow): string {
   if (row.type === 'imported-worktrees-card') {
     return `imported:${row.key}`
   }
+  if (row.type === 'host-header') {
+    return `host:${row.key}`
+  }
   return `wt:${row.worktree.id}`
 }
 
@@ -718,6 +726,11 @@ export function getWorktreeDragGroups(rows: Row[]): WorktreeDragGroup[] {
       continue
     }
     if (row.type === 'imported-worktrees-card') {
+      continue
+    }
+    // Host-header rows are a super-level above repo groups — not a drag group
+    // boundary and not a worktree item; skip so they don't pollute drag ids.
+    if (row.type === 'host-header') {
       continue
     }
     if (!current) {
@@ -2546,6 +2559,28 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
               return null
             }
 
+            if (row.type === 'host-header') {
+              return (
+                <div
+                  key={vItem.key}
+                  role="presentation"
+                  data-worktree-virtual-row
+                  data-worktree-virtual-row-key={String(vItem.key)}
+                  data-index={vItem.index}
+                  ref={measureVirtualRowElement}
+                  className="absolute left-0 right-0 pt-1"
+                  style={{ transform: getVirtualRowTransform(vItem.start) }}
+                >
+                  <HostGroupHeader
+                    host={row.host}
+                    count={row.count}
+                    collapsed={collapsedGroups.has(row.key)}
+                    onToggle={() => toggleGroupWithScrollAnchor(row.key)}
+                  />
+                </div>
+              )
+            }
+
             if (row.type === 'header') {
               const isActiveStickyHeader = activeStickyHeaderIndexRef.current === vItem.index
               const hasHeaderTopSpacing = shouldUseHeaderTopSpacing({
@@ -3321,6 +3356,9 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                 }
               >
                 {renderWorktreeRow(row, false)}
+                {row.worktree.id === activeWorktreeId ? (
+                  <SessionActivityCard worktreeId={row.worktree.id} />
+                ) : null}
               </div>
             )
           })}
@@ -3353,6 +3391,9 @@ const WorktreeList = React.memo(function WorktreeList({
   const detectedWorktreesByRepo = useAppStore((s) => s.detectedWorktreesByRepo)
   const activeWorktreeId = useAppStore((s) => s.activeWorktreeId)
   const groupBy = useAppStore((s) => s.groupBy)
+  const hostMetaByKey = useAppStore((s) => s.hostMetaByKey)
+  const sshConnectionStates = useAppStore((s) => s.sshConnectionStates)
+  const sshTargetLabels = useAppStore((s) => s.sshTargetLabels)
   const workspaceStatuses = useAppStore((s) => s.workspaceStatuses)
   const sortBy = useAppStore((s) => s.sortBy)
   const setSortBy = useAppStore((s) => s.setSortBy)
@@ -3806,7 +3847,10 @@ const WorktreeList = React.memo(function WorktreeList({
   }, [filterRepoIds, groupBy, projectGroups.length, repos, worktreesByRepo])
   const allRepoIds = useMemo(() => repos.map((r) => r.id), [repos])
   const reorderReposAction = useAppStore((s) => s.reorderRepos)
-  const projectGroupOrdering = getProjectGroupOrdering(groupBy, sortBy)
+  // Why: host mode is a post-processing layer on top of repo grouping; the
+  // inner builder always gets 'repo' so host headers can bucket repo groups.
+  const effectiveGroupBy: WorktreeGroupBy = groupBy === 'host' ? 'repo' : groupBy
+  const projectGroupOrdering = getProjectGroupOrdering(effectiveGroupBy, sortBy)
   const showSectionStatus = cardProps.includes('status')
   const sectionActivityState: WorktreeSectionActivityState = useMemo(() => {
     const current = useAppStore.getState()
@@ -3836,7 +3880,7 @@ const WorktreeList = React.memo(function WorktreeList({
     () =>
       showSectionStatus
         ? buildWorktreeSectionActivitySummaries({
-            groupBy,
+            groupBy: effectiveGroupBy,
             worktrees,
             repoMap,
             prCache,
@@ -3859,28 +3903,44 @@ const WorktreeList = React.memo(function WorktreeList({
     ]
   )
 
+  const hostForKey = useCallback(
+    (hostKey: string): SidebarHost => {
+      const meta = hostMetaByKey[hostKey]
+      const isSsh = hostKey.startsWith('ssh:')
+      const connectionId = isSsh ? hostKey.slice('ssh:'.length) : undefined
+      const status: SidebarHost['status'] = !isSsh
+        ? 'reachable'
+        : (() => {
+            const s = connectionId ? sshConnectionStates.get(connectionId)?.status : undefined
+            return s === 'connected'
+              ? 'reachable'
+              : s === 'connecting'
+                ? 'connecting'
+                : s === 'error'
+                  ? 'down'
+                  : 'unknown'
+          })()
+      return {
+        key: hostKey,
+        kind: isSsh ? 'ssh' : 'local',
+        label:
+          meta?.label ??
+          (isSsh
+            ? connectionId
+              ? (sshTargetLabels.get(connectionId) ?? 'Remote host')
+              : 'Remote host'
+            : 'This Mac'),
+        detail: meta?.detail,
+        status
+      }
+    },
+    [hostMetaByKey, sshConnectionStates, sshTargetLabels]
+  )
+
   // Build flat row list for rendering
-  const rows: Row[] = useMemo(
-    () =>
-      buildRows(
-        groupBy,
-        worktrees,
-        repoMap,
-        prCache,
-        effectiveCollapsedGroups,
-        repoOrder,
-        workspaceStatuses,
-        projectGroupOrdering,
-        worktreeLineageById,
-        worktreeMap,
-        true,
-        settings,
-        projectGroups,
-        placeholderRepoIds,
-        importedWorktreesByRepo
-      ),
-    [
-      groupBy,
+  const rows: Row[] = useMemo(() => {
+    const built = buildRows(
+      effectiveGroupBy,
       worktrees,
       repoMap,
       prCache,
@@ -3890,12 +3950,33 @@ const WorktreeList = React.memo(function WorktreeList({
       projectGroupOrdering,
       worktreeLineageById,
       worktreeMap,
+      true,
       settings,
-      projectGroups,
+      // Project-group nesting is out of scope for host-first v1; pass [] in host
+      // mode so blocks are flat repo groups the host post-processor can bucket.
+      groupBy === 'host' ? [] : projectGroups,
       placeholderRepoIds,
       importedWorktreesByRepo
-    ]
-  )
+    )
+    return groupBy === 'host' ? groupRowsByHost(built, hostForKey, effectiveCollapsedGroups) : built
+  }, [
+    effectiveGroupBy,
+    groupBy,
+    worktrees,
+    repoMap,
+    prCache,
+    effectiveCollapsedGroups,
+    repoOrder,
+    workspaceStatuses,
+    projectGroupOrdering,
+    worktreeLineageById,
+    worktreeMap,
+    settings,
+    projectGroups,
+    placeholderRepoIds,
+    importedWorktreesByRepo,
+    hostForKey
+  ])
   // Why: header/mode changes can shift entire groups, so remount the
   // virtualizer for those broad structure changes. Do not key on rows.length:
   // add/delete must keep the same row DOM long enough for the remaining rows
