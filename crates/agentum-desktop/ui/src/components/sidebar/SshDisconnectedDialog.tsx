@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useMountedRef } from '@/hooks/useMountedRef'
+import { connectSshTargetViaServer } from '@/runtime/server-host-client'
 import { statusColor } from '@/components/settings/SshTargetCard'
 import type { SshConnectionStatus } from '../../../../shared/ssh-types'
 
@@ -48,8 +49,13 @@ export function SshDisconnectedDialog({
   const handleReconnect = useCallback(async () => {
     setConnecting(true)
     try {
-      await api.ssh.connect({ targetId })
-      if (mountedRef.current) {
+      // `api.ssh.connect` is an unported no-op; use the server-host connect
+      // (registers the host + probes over SSH + updates sshConnectionStates)
+      // so the reconnect button actually reconnects.
+      const result = await connectSshTargetViaServer(targetId)
+      if (!result.ok) {
+        toast.error(result.message || 'Reconnection failed')
+      } else if (mountedRef.current) {
         onOpenChange(false)
       }
     } catch (err) {

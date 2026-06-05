@@ -1,4 +1,5 @@
 import { api } from '@/tauri'
+import { connectSshTargetViaServer } from '@/runtime/server-host-client'
 /* eslint-disable max-lines */
 import {
   lazy,
@@ -710,7 +711,13 @@ function App(): React.JSX.Element {
               await Promise.allSettled(
                 eagerTargets.map(({ targetId }) =>
                   Promise.race([
-                    api.ssh.connect({ targetId }),
+                    // `api.ssh.connect` is an unported no-op, so persisted remote
+                    // projects never auto-reconnected on launch (showed "Not
+                    // connected" until manually reconnected). Route through the
+                    // server-host connect, which registers + probes over SSH and
+                    // updates sshConnectionStates — so reopening the app restores
+                    // the connection to still-running remote tmux sessions.
+                    connectSshTargetViaServer(targetId),
                     new Promise((_, reject) =>
                       setTimeout(
                         () => reject(new Error('SSH reconnect timeout')),
