@@ -19,6 +19,13 @@ type WorktreeAgentRowsState = Pick<
   | 'tabsByWorktree'
 >
 
+// Stable empty fallbacks so a partial state (e.g. a minimal store mock under
+// the sidebar ctx% chip) doesn't crash the selector, while keeping a constant
+// identity so the memo caches below still hit. Real store state never omits these.
+const EMPTY_AGENT_STATUS_BY_PANE_KEY: WorktreeAgentRowsState['agentStatusByPaneKey'] = {}
+const EMPTY_TABS_BY_WORKTREE: WorktreeAgentRowsState['tabsByWorktree'] =
+  {} as WorktreeAgentRowsState['tabsByWorktree']
+
 type TabWorktreeIndexCache = {
   tabsByWorktree: WorktreeAgentRowsState['tabsByWorktree']
   tabIdToWorktreeId: Map<string, string>
@@ -75,17 +82,23 @@ function getTabIdToWorktreeId(
 }
 
 function getLiveEntriesByWorktree(state: WorktreeAgentRowsState): Map<string, AgentStatusEntry[]> {
+  // Default to STABLE empty constants when a (partial) state omits these — keeps
+  // identity stable so the cache below still hits, while tolerating callers
+  // (e.g. the sidebar ctx% chip under minimal store mocks) whose state lacks
+  // the agent-status fields. Real store state always provides both.
+  const tabsByWorktree = state.tabsByWorktree ?? EMPTY_TABS_BY_WORKTREE
+  const agentStatusByPaneKey = state.agentStatusByPaneKey ?? EMPTY_AGENT_STATUS_BY_PANE_KEY
   if (
-    liveEntriesByWorktreeCache?.tabsByWorktree === state.tabsByWorktree &&
-    liveEntriesByWorktreeCache.agentStatusByPaneKey === state.agentStatusByPaneKey
+    liveEntriesByWorktreeCache?.tabsByWorktree === tabsByWorktree &&
+    liveEntriesByWorktreeCache.agentStatusByPaneKey === agentStatusByPaneKey
   ) {
     return liveEntriesByWorktreeCache.entriesByWorktree
   }
 
-  const tabIdToWorktreeId = getTabIdToWorktreeId(state.tabsByWorktree)
+  const tabIdToWorktreeId = getTabIdToWorktreeId(tabsByWorktree)
   const previous = liveEntriesByWorktreeCache?.entriesByWorktree
   const entriesByWorktree = new Map<string, AgentStatusEntry[]>()
-  for (const [paneKey, entry] of Object.entries(state.agentStatusByPaneKey)) {
+  for (const [paneKey, entry] of Object.entries(agentStatusByPaneKey)) {
     const parsed = parsePaneKey(paneKey)
     if (!parsed) {
       continue
@@ -105,8 +118,8 @@ function getLiveEntriesByWorktree(state: WorktreeAgentRowsState): Map<string, Ag
     entriesByWorktree.set(worktreeId, reuseArrayIfEqual(previous?.get(worktreeId), entries))
   }
   liveEntriesByWorktreeCache = {
-    tabsByWorktree: state.tabsByWorktree,
-    agentStatusByPaneKey: state.agentStatusByPaneKey,
+    tabsByWorktree,
+    agentStatusByPaneKey,
     entriesByWorktree
   }
   return entriesByWorktree
