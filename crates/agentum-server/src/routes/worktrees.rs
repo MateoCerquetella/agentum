@@ -11,16 +11,18 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use agentum_core::Host;
 use axum::Router;
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tokio::process::Command;
 
+use crate::AppState;
 use crate::error::ApiError;
-use crate::routes::repos::resolve_repo_path;
+use crate::host_runtime::{self, git_in_dir};
+use crate::routes::repos::{load_host_for_repo, resolve_repo_path};
 
 pub fn router() -> Router<crate::AppState> {
     Router::new()
@@ -230,7 +232,10 @@ struct CreateBody {
 /// `POST /api/worktrees/create` — `git worktree add` under
 /// `<repo>/.claude/worktrees/<name>` (same place the TUI/daemon use), creating a
 /// new branch or attaching to an existing one. Returns `{worktree}`.
-async fn create(Json(body): Json<CreateBody>) -> Result<Json<Value>, ApiError> {
+async fn create(
+    State(state): State<AppState>,
+    Json(body): Json<CreateBody>,
+) -> Result<Json<Value>, ApiError> {
     // `name` becomes a directory under `.claude/worktrees/` and (by default) the
     // branch — keep it a plain segment so it can't escape the dir or smuggle a flag.
     reject_dashed("name", &body.name)?;
@@ -246,60 +251,54 @@ async fn create(Json(body): Json<CreateBody>) -> Result<Json<Value>, ApiError> {
         reject_dashed("branchNameOverride", branch)?;
     }
     let repo_path = resolve_repo_path(&body.repo_id)?;
-    let worktrees_root = PathBuf::from(&repo_path).join(".claude").join("worktrees");
-    std::fs::create_dir_all(&worktrees_root).map_err(|e| ApiError::Internal(e.to_string()))?;
-    let worktree_path = worktrees_root.join(&body.name);
-    let worktree_path_string = worktree_path.to_string_lossy().into_owned();
+    let host = load_host_for_repo(&state, &body.repo_id).await?;
+    // Build the worktree path as a plain string (not PathBuf): for a remote
+    // repo this is a POSIX path on the *remote* fs, not the daemon's. Both
+    // local and remote hosts are unix, so `/`-joined strings are correct
+    // either way — and PathBuf would canonicalize against the wrong machine.
+    let worktrees_root = format!("{}/.claude/worktrees", repo_path.trim_end_matches('/'));
+    // `git worktree add` creates the leaf, but not the `.claude/worktrees`
+    // parent — make it on the repo's host (the local create_dir_all was the
+    // `ENOTSUP (os error 45)` 500 on remote repos).
+    host_runtime::mkdir_p(&host, &worktrees_root)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let worktree_path_string = format!("{worktrees_root}/{}", body.name);
     let branch = body.branch_name_override.clone().unwrap_or_else(|| body.name.clone());
 
     // Try to create a NEW branch; if it already exists, attach to it instead.
     let mut new_branch_args = vec![
-        "-C".to_string(),
-        repo_path.clone(),
-        "worktree".to_string(),
-        "add".to_string(),
-        "-b".to_string(),
-        branch.clone(),
-        worktree_path_string.clone(),
+        "worktree",
+        "add",
+        "-b",
+        &branch,
+        &worktree_path_string,
     ];
-    if let Some(base) = body.base_branch.clone() {
+    if let Some(base) = body.base_branch.as_deref() {
         new_branch_args.push(base);
     }
-    let mut output = Command::new("git")
-        .args(&new_branch_args)
-        .output()
+    let mut output = git_in_dir(&host, &repo_path, &new_branch_args)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    if !output.status.success()
-        && String::from_utf8_lossy(&output.stderr).contains("already exists")
-    {
-        output = Command::new("git")
-            .args([
-                "-C",
-                &repo_path,
-                "worktree",
-                "add",
-                &worktree_path_string,
-                &branch,
-            ])
-            .output()
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if !output.success && output.stderr.contains("already exists") {
+        output = git_in_dir(
+            &host,
+            &repo_path,
+            &["worktree", "add", &worktree_path_string, &branch],
+        )
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
-    if !output.status.success() {
-        return Err(ApiError::BadRequest(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ));
+    if !output.success {
+        return Err(ApiError::BadRequest(output.stderr.trim().to_string()));
     }
 
-    let head = Command::new("git")
-        .args(["-C", &worktree_path_string, "rev-parse", "HEAD"])
-        .output()
+    let head = git_in_dir(&host, &worktree_path_string, &["rev-parse", "HEAD"])
         .await
         .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
+        .filter(|o| o.success)
+        .map(|o| o.stdout_string().trim().to_string())
         .unwrap_or_default();
 
     let mut extra = Map::new();
@@ -345,31 +344,28 @@ struct RemoveBody {
 /// `POST /api/worktrees/remove` — `git worktree remove` + deregister. Stale
 /// registry entries (point at a main tree, already gone, …) are deregistered
 /// anyway after a `worktree prune`; real failures (dirty/locked) surface.
-async fn remove(Json(body): Json<RemoveBody>) -> Result<Json<Value>, ApiError> {
+async fn remove(
+    State(state): State<AppState>,
+    Json(body): Json<RemoveBody>,
+) -> Result<Json<Value>, ApiError> {
     let (repo_id, worktree_path) = body
         .worktree_id
         .split_once("::")
         .ok_or_else(|| ApiError::BadRequest(format!("invalid worktree id: {}", body.worktree_id)))?;
     reject_dashed("worktree path", worktree_path)?;
     let repo_path = resolve_repo_path(repo_id)?;
+    let host = load_host_for_repo(&state, repo_id).await?;
 
-    let mut args = vec![
-        "-C".to_string(),
-        repo_path.clone(),
-        "worktree".to_string(),
-        "remove".to_string(),
-    ];
+    let mut args = vec!["worktree", "remove"];
     if body.force.unwrap_or(false) {
-        args.push("--force".to_string());
+        args.push("--force");
     }
-    args.push(worktree_path.to_string());
-    let output = Command::new("git")
-        .args(&args)
-        .output()
+    args.push(worktree_path);
+    let output = git_in_dir(&host, &repo_path, &args)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.success {
+        let stderr = &output.stderr;
         let is_stale_entry = stderr.contains("is a main working tree")
             || stderr.contains("is not a working tree")
             || stderr.contains("not a working tree")
@@ -377,10 +373,7 @@ async fn remove(Json(body): Json<RemoveBody>) -> Result<Json<Value>, ApiError> {
         if !is_stale_entry {
             return Err(ApiError::BadRequest(stderr.trim().to_string()));
         }
-        let _ = Command::new("git")
-            .args(["-C", &repo_path, "worktree", "prune"])
-            .output()
-            .await;
+        let _ = git_in_dir(&host, &repo_path, &["worktree", "prune"]).await;
     }
 
     let mut worktrees = read_worktrees()?;
@@ -427,7 +420,10 @@ struct ForceDeleteBranchBody {
 }
 
 /// `POST /api/worktrees/force-delete-branch` — `git branch -D <branch>`.
-async fn force_delete_branch(Json(body): Json<ForceDeleteBranchBody>) -> Result<Json<Value>, ApiError> {
+async fn force_delete_branch(
+    State(state): State<AppState>,
+    Json(body): Json<ForceDeleteBranchBody>,
+) -> Result<Json<Value>, ApiError> {
     reject_dashed("branchName", &body.branch_name)?;
     let repo_id = body
         .worktree_id
@@ -435,19 +431,16 @@ async fn force_delete_branch(Json(body): Json<ForceDeleteBranchBody>) -> Result<
         .map(|(repo, _)| repo)
         .unwrap_or(&body.worktree_id);
     let repo_path = resolve_repo_path(repo_id)?;
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&repo_path)
-        .args(["branch", "-D", "--", &body.branch_name])
-        .output()
+    let host = load_host_for_repo(&state, repo_id).await?;
+    let output = git_in_dir(&host, &repo_path, &["branch", "-D", "--", &body.branch_name])
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    if output.status.success() {
+    if output.success {
         Ok(Json(serde_json::json!({ "deleted": true })))
     } else {
         Ok(Json(serde_json::json!({
             "deleted": false,
-            "error": String::from_utf8_lossy(&output.stderr).trim()
+            "error": output.stderr.trim()
         })))
     }
 }
@@ -455,16 +448,15 @@ async fn force_delete_branch(Json(body): Json<ForceDeleteBranchBody>) -> Result<
 /// On-disk worktree detection via `git worktree list --porcelain`, overlaying
 /// persisted metadata onto the git-authoritative path/branch (so a re-scan
 /// doesn't reset the user's pin/rename/comment). First entry is the primary.
-fn scan_git_worktrees(repo_id: &str) -> Result<Vec<Value>, ApiError> {
+async fn scan_git_worktrees(host: &Host, repo_id: &str) -> Result<Vec<Value>, ApiError> {
     let repo_path = resolve_repo_path(repo_id)?;
-    let output = std::process::Command::new("git")
-        .args(["-C", &repo_path, "worktree", "list", "--porcelain"])
-        .output()
+    let output = git_in_dir(host, &repo_path, &["worktree", "list", "--porcelain"])
+        .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    if !output.status.success() {
+    if !output.success {
         return Ok(Vec::new());
     }
-    let text = String::from_utf8_lossy(&output.stdout);
+    let text = output.stdout_string();
     let mut entries: Vec<(String, Option<String>)> = Vec::new();
     for line in text.lines() {
         if let Some(path) = line.strip_prefix("worktree ") {
@@ -521,11 +513,15 @@ fn scan_git_worktrees(repo_id: &str) -> Result<Vec<Value>, ApiError> {
 }
 
 /// `GET /api/worktrees/detected?repoId=` — git-authoritative worktree list.
-async fn detected(Query(q): Query<ListQuery>) -> Result<Json<Value>, ApiError> {
+async fn detected(
+    State(state): State<AppState>,
+    Query(q): Query<ListQuery>,
+) -> Result<Json<Value>, ApiError> {
     let repo_id = q
         .repo_id
         .ok_or_else(|| ApiError::BadRequest("repoId is required".into()))?;
-    let worktrees = scan_git_worktrees(&repo_id).unwrap_or_default();
+    let host = load_host_for_repo(&state, &repo_id).await?;
+    let worktrees = scan_git_worktrees(&host, &repo_id).await.unwrap_or_default();
     let authoritative = !worktrees.is_empty();
     Ok(Json(serde_json::json!({
         "repoId": repo_id,

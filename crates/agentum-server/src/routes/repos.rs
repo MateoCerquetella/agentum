@@ -15,14 +15,17 @@
 use std::path::{Path as StdPath, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use agentum_core::{Host, LOCAL_HOST_ID};
 use axum::Router;
-use axum::extract::{Path, Query};
+use axum::extract::{Path, Query, State};
 use axum::routing::{get, patch, post};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tokio::process::Command;
+use uuid::Uuid;
 
+use crate::AppState;
 use crate::error::ApiError;
 
 pub fn router() -> Router<crate::AppState> {
@@ -52,6 +55,13 @@ struct Repo {
     kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     connection_id: Option<String>,
+    /// Server host (`/api/hosts`) the repo lives on. Resolved CLIENT-side
+    /// from `connection_id` at add time (mirroring how sessions carry
+    /// `host_id`), so server git/worktree/agent ops can route through
+    /// `host_runtime` without knowing the desktop's native SSH-target ids.
+    /// Absent / null = the daemon's local host.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host_id: Option<Uuid>,
     #[serde(flatten)]
     extra: Map<String, Value>,
 }
@@ -117,6 +127,7 @@ fn append_repo(
     path: String,
     kind: Option<String>,
     connection_id: Option<String>,
+    host_id: Option<Uuid>,
 ) -> Result<Repo, ApiError> {
     let mut repos = read_repos()?;
     if let Some(existing) = repos.iter().find(|repo| repo.path == path) {
@@ -139,6 +150,7 @@ fn append_repo(
         added_at: now_millis(),
         kind: Some(resolved_kind),
         connection_id,
+        host_id,
         path,
         extra: Map::new(),
     };
@@ -164,6 +176,10 @@ struct AddBody {
     /// host on the client).
     #[serde(default)]
     connection_id: Option<String>,
+    /// Server host id the client resolved from `connection_id`. Persisted so
+    /// server-side git/worktree/agent ops can route through `host_runtime`.
+    #[serde(default)]
+    host_id: Option<Uuid>,
 }
 
 /// `POST /api/repos` — register `path`. Returns `{repo}` or `{error}` (the
@@ -175,7 +191,7 @@ async fn add(Json(body): Json<AddBody>) -> Result<Json<Value>, ApiError> {
             serde_json::json!({ "error": format!("path does not exist: {}", body.path) }),
         ));
     }
-    let repo = append_repo(body.path, body.kind, body.connection_id)?;
+    let repo = append_repo(body.path, body.kind, body.connection_id, body.host_id)?;
     Ok(Json(serde_json::json!({ "repo": repo })))
 }
 
@@ -243,7 +259,7 @@ async fn create(Json(body): Json<CreateBody>) -> Result<Json<Value>, ApiError> {
             return Ok(Json(serde_json::json!({ "error": "git init failed" })));
         }
     }
-    let repo = append_repo(target.to_string_lossy().into_owned(), Some(body.kind), None)?;
+    let repo = append_repo(target.to_string_lossy().into_owned(), Some(body.kind), None, None)?;
     Ok(Json(serde_json::json!({ "repo": repo })))
 }
 
@@ -272,7 +288,7 @@ async fn clone(Json(body): Json<CloneBody>) -> Result<Json<Repo>, ApiError> {
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
         ));
     }
-    Ok(Json(append_repo(body.destination, Some("git".to_string()), None)?))
+    Ok(Json(append_repo(body.destination, Some("git".to_string()), None, None)?))
 }
 
 /// `DELETE /api/repos/{id}` — drop from the registry.
@@ -318,45 +334,67 @@ pub(crate) fn resolve_repo_path(repo_id: &str) -> Result<String, ApiError> {
         .ok_or_else(|| ApiError::NotFound(format!("repo not found: {repo_id}")))
 }
 
-/// Run `git -C <path> <args>`; stdout on success, None on failure.
-async fn git_out(path: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(args)
-        .output()
-        .await
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+/// The server host id a repo lives on, or `None` for a local repo. `None`
+/// when the repo carries no `host_id` (a local repo, or one added before
+/// this field existed). `pub(crate)` so the worktrees route shares it.
+pub(crate) fn resolve_repo_host_id(repo_id: &str) -> Result<Option<Uuid>, ApiError> {
+    read_repos()?
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .map(|repo| repo.host_id)
+        .ok_or_else(|| ApiError::NotFound(format!("repo not found: {repo_id}")))
+}
+
+/// Load the [`Host`] a repo's git/worktree ops run on. Mirrors
+/// `sessions::load_host_for_session`: the repo's `host_id` (or the local
+/// host when absent) → `store.get_host`. `pub(crate)` so the worktrees
+/// route resolves the same host. A repo whose recorded host has since been
+/// deleted surfaces a clear error rather than silently running locally.
+pub(crate) async fn load_host_for_repo(state: &AppState, repo_id: &str) -> Result<Host, ApiError> {
+    let host_id = resolve_repo_host_id(repo_id)?.unwrap_or(LOCAL_HOST_ID);
+    state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest(format!("repo host is missing: {host_id}")))
+}
+
+/// Run `git <args>` with `path` as the working dir on `host`; stdout on
+/// success, `None` on a non-zero exit or transport failure. Host-aware so
+/// a remote repo's refs resolve over SSH.
+async fn git_out(host: &Host, path: &str, args: &[&str]) -> Option<String> {
+    let out = crate::host_runtime::git_in_dir(host, path, args).await.ok()?;
+    out.success.then(|| out.stdout_string().trim().to_string())
 }
 
 /// `GET /api/repos/{id}/base-ref-default` — origin's default head, else local
 /// main/master, else the current branch; plus the remote count.
-async fn base_ref_default(Path(repo_id): Path<String>) -> Result<Json<Value>, ApiError> {
+async fn base_ref_default(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
     let path = resolve_repo_path(&repo_id)?;
-    let remote_count = git_out(&path, &["remote"])
+    let host = load_host_for_repo(&state, &repo_id).await?;
+    let remote_count = git_out(&host, &path, &["remote"])
         .await
         .map(|out| out.lines().filter(|line| !line.trim().is_empty()).count())
         .unwrap_or(0);
     let default = if let Some(head) =
-        git_out(&path, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).await
+        git_out(&host, &path, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).await
     {
         Some(head.trim_start_matches("origin/").to_string())
-    } else if git_out(&path, &["rev-parse", "--verify", "-q", "refs/heads/main"])
+    } else if git_out(&host, &path, &["rev-parse", "--verify", "-q", "refs/heads/main"])
         .await
         .is_some()
     {
         Some("main".to_string())
-    } else if git_out(&path, &["rev-parse", "--verify", "-q", "refs/heads/master"])
+    } else if git_out(&host, &path, &["rev-parse", "--verify", "-q", "refs/heads/master"])
         .await
         .is_some()
     {
         Some("master".to_string())
     } else {
-        git_out(&path, &["rev-parse", "--abbrev-ref", "HEAD"])
+        git_out(&host, &path, &["rev-parse", "--abbrev-ref", "HEAD"])
             .await
             .filter(|branch| branch != "HEAD")
     };
@@ -366,17 +404,17 @@ async fn base_ref_default(Path(repo_id): Path<String>) -> Result<Json<Value>, Ap
 }
 
 /// (refName, localBranchName) pairs across local + remote branches.
-async fn collect_refs(path: &str) -> Vec<(String, String)> {
+async fn collect_refs(host: &Host, path: &str) -> Vec<(String, String)> {
     let mut refs = Vec::new();
     if let Some(locals) =
-        git_out(path, &["for-each-ref", "--format=%(refname:short)", "refs/heads"]).await
+        git_out(host, path, &["for-each-ref", "--format=%(refname:short)", "refs/heads"]).await
     {
         for name in locals.lines().filter(|line| !line.is_empty()) {
             refs.push((name.to_string(), name.to_string()));
         }
     }
     if let Some(remotes) =
-        git_out(path, &["for-each-ref", "--format=%(refname:short)", "refs/remotes"]).await
+        git_out(host, path, &["for-each-ref", "--format=%(refname:short)", "refs/remotes"]).await
     {
         for name in remotes
             .lines()
@@ -399,13 +437,15 @@ struct RefSearchQuery {
 
 /// `GET /api/repos/{id}/base-refs?q=&limit=` — matching ref names.
 async fn base_refs(
+    State(state): State<AppState>,
     Path(repo_id): Path<String>,
     Query(query): Query<RefSearchQuery>,
 ) -> Result<Json<Vec<String>>, ApiError> {
     let path = resolve_repo_path(&repo_id)?;
+    let host = load_host_for_repo(&state, &repo_id).await?;
     let needle = query.q.to_lowercase();
     Ok(Json(
-        collect_refs(&path)
+        collect_refs(&host, &path)
             .await
             .into_iter()
             .map(|(ref_name, _)| ref_name)
@@ -417,13 +457,15 @@ async fn base_refs(
 
 /// `GET /api/repos/{id}/base-ref-details?q=&limit=` — `{refName, localBranchName}`.
 async fn base_ref_details(
+    State(state): State<AppState>,
     Path(repo_id): Path<String>,
     Query(query): Query<RefSearchQuery>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
     let path = resolve_repo_path(&repo_id)?;
+    let host = load_host_for_repo(&state, &repo_id).await?;
     let needle = query.q.to_lowercase();
     Ok(Json(
-        collect_refs(&path)
+        collect_refs(&host, &path)
             .await
             .into_iter()
             .filter(|(ref_name, _)| needle.is_empty() || ref_name.to_lowercase().contains(&needle))
@@ -465,6 +507,7 @@ mod tests {
             added_at: 42,
             kind: Some("git".into()),
             connection_id: None,
+            host_id: None,
             extra,
         };
         let v = serde_json::to_value(&repo).unwrap();
@@ -473,5 +516,6 @@ mod tests {
         assert_eq!(v["addedAt"], 42);
         assert_eq!(v["pinned"], true); // flattened
         assert!(v.get("connectionId").is_none()); // skipped when None
+        assert!(v.get("hostId").is_none()); // skipped when None
     }
 }

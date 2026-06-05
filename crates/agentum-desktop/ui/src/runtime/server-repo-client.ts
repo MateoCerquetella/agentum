@@ -17,12 +17,22 @@ export function reposAdd(path: string, kind?: string): Promise<{ repo?: Repo; er
 /** `POST /api/repos` for a REMOTE path: register `remotePath` against an SSH
  *  target (`connectionId`). The server skips the local existence check and the
  *  repo's sessions/git route through that connection. Returns `{repo}` or
- *  `{error}`. */
+ *  `{error}`.
+ *
+ *  `hostId` is the server host id the client resolved from `connectionId`
+ *  (via `resolveServerHostIdForConnection`). Persisting it on the repo lets
+ *  the server run git/worktree/agent ops over SSH without mapping the
+ *  desktop's native target ids — the same trick sessions use. */
 export function reposAddRemote(
   connectionId: string,
-  remotePath: string
+  remotePath: string,
+  hostId?: string | null
 ): Promise<{ repo?: Repo; error?: string }> {
-  return postJson('/api/repos', { path: remotePath, connectionId })
+  return postJson('/api/repos', {
+    path: remotePath,
+    connectionId,
+    ...(hostId ? { hostId } : {})
+  })
 }
 
 /** `PATCH /api/repos/{id}` — apply `updates` (id/path/addedAt are ignored). */

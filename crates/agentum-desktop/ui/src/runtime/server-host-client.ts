@@ -38,6 +38,34 @@ export function testServerHost(hostId: string): Promise<ServerHostProbe> {
   return postJson<ServerHostProbe>(`/api/hosts/${encodeURIComponent(hostId)}/test`)
 }
 
+/** One agent CLI entry from `/api/hosts/{id}/readiness` (`agents[]`). */
+type HostReadinessAgent = { id: string; installed: boolean }
+type HostReadinessResp = { agents?: HostReadinessAgent[] }
+
+/**
+ * Agent CLIs installed on the host behind a repo's SSH `connectionId`, for
+ * the composer's remote Agent picker. Resolves connectionId → server host id
+ * (same mapping sessions use), then reads the host's readiness report — the
+ * server already probes "every probed agent CLI" over SSH there — and returns
+ * the installed ids. Returns `[]` (so the picker falls back to Blank Terminal)
+ * when the host can't be resolved or reached, never throwing into the UI.
+ */
+export async function detectRemoteAgentsViaServer(connectionId: string): Promise<string[]> {
+  try {
+    const hostId = await resolveServerHostIdForConnection(connectionId)
+    if (!hostId) {
+      return []
+    }
+    const readiness = await getJson<HostReadinessResp>(
+      `/api/hosts/${encodeURIComponent(hostId)}/readiness`
+    )
+    return (readiness.agents ?? []).filter((a) => a.installed).map((a) => a.id)
+  } catch (err) {
+    console.warn('[agentum] failed to detect remote agents for connection', connectionId, err)
+    return []
+  }
+}
+
 /**
  * Shared "Connect" for any SSH connect button (settings, status bar, add-repo
  * remote step). The native ssh_connect transport was never ported; with the

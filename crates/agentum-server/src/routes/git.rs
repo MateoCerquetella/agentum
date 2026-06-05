@@ -26,6 +26,7 @@ use std::path::{Component, Path as StdPath, PathBuf};
 
 use base64::Engine as _;
 
+use agentum_core::{Host, LOCAL_HOST_ID};
 use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, header};
@@ -33,11 +34,11 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, http::StatusCode};
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
 use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
+use crate::host_runtime::{self, git_in_dir};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -156,32 +157,27 @@ async fn status_entries(
     Path(id): Path<String>,
 ) -> Result<Json<Vec<StatusEntry>>, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
-    if !crate::git::is_git_repo(&cwd).await {
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    if !host_runtime::is_git_repo(&host, &cwd).await {
         return Err(ApiError::BadRequest(format!(
-            "not a git repository: {}",
-            cwd.display()
+            "not a git repository: {cwd}"
         )));
     }
-    let raw = run_git_bytes(&cwd, &["status", "--porcelain=v1", "-z"]).await?;
+    let raw = run_git_bytes(&host, &cwd, &["status", "--porcelain=v1", "-z"]).await?;
     Ok(Json(parse_status_entries(&raw)))
 }
 
 /// Like `run_git` but returns raw bytes (porcelain `-z` output is NUL-delimited
-/// and not guaranteed valid UTF-8 at record boundaries).
-async fn run_git_bytes(cwd: &StdPath, args: &[&str]) -> Result<Vec<u8>, ApiError> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .output()
+/// and not guaranteed valid UTF-8 at record boundaries). Host-aware.
+async fn run_git_bytes(host: &Host, cwd: &str, args: &[&str]) -> Result<Vec<u8>, ApiError> {
+    let out = git_in_dir(host, cwd, args)
         .await
         .map_err(|e| ApiError::Internal(format!("git {}: {e}", args.join(" "))))?;
-    if !out.status.success() {
+    if !out.success {
         return Err(ApiError::Internal(format!(
             "git {} failed: {}",
             args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
+            out.stderr.trim()
         )));
     }
     Ok(out.stdout)
@@ -219,10 +215,10 @@ async fn commit_compare(
     Query(q): Query<CommitCompareQuery>,
 ) -> Result<Json<CommitCompareResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
     let commit = q.commit.trim().to_string();
     let commit_oid = match run_git(
-        &cwd,
+        &host, &cwd,
         &["rev-parse", "--verify", &format!("{commit}^{{commit}}")],
     )
     .await
@@ -243,7 +239,7 @@ async fn commit_compare(
         }
     };
     // First parent, if any. Root commits diff against the empty-tree object.
-    let parent_oid = run_git(&cwd, &["rev-parse", "--verify", &format!("{commit_oid}^")])
+    let parent_oid = run_git(&host, &cwd, &["rev-parse", "--verify", &format!("{commit_oid}^")])
         .await
         .ok()
         .map(|s| s.trim().to_string());
@@ -251,9 +247,9 @@ async fn commit_compare(
     let base = parent_oid.clone().unwrap_or_else(|| EMPTY_TREE.to_string());
 
     let range = format!("{base}..{commit_oid}");
-    let name_status = run_git(&cwd, &["diff", "--name-status", "-M", "-z", &range]).await?;
+    let name_status = run_git(&host, &cwd, &["diff", "--name-status", "-M", "-z", &range]).await?;
     let mut entries = parse_name_status_z(name_status.as_bytes());
-    if let Ok(numstat) = run_git(&cwd, &["diff", "--numstat", "-z", &range]).await {
+    if let Ok(numstat) = run_git(&host, &cwd, &["diff", "--numstat", "-z", &range]).await {
         for rec in numstat.split('\0').filter(|r| !r.is_empty()) {
             let mut cols = rec.splitn(3, '\t');
             let added = cols.next().and_then(|s| s.parse::<u32>().ok());
@@ -373,17 +369,17 @@ async fn branch_compare(
     Query(q): Query<BranchCompareQuery>,
 ) -> Result<Json<BranchCompareResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
     let base = q.base.trim().to_string();
-    let compare_ref = run_git(&cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+    let compare_ref = run_git(&host, &cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
         .await
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|_| "HEAD".into());
-    let head_oid = run_git(&cwd, &["rev-parse", "HEAD"])
+    let head_oid = run_git(&host, &cwd, &["rev-parse", "HEAD"])
         .await
         .ok()
         .map(|s| s.trim().to_string());
-    let base_oid = run_git(&cwd, &["rev-parse", &base])
+    let base_oid = run_git(&host, &cwd, &["rev-parse", &base])
         .await
         .ok()
         .map(|s| s.trim().to_string());
@@ -407,18 +403,18 @@ async fn branch_compare(
     if head_oid.is_none() {
         return Ok(Json(err("unborn-head")));
     }
-    let merge_base = match run_git(&cwd, &["merge-base", &base, "HEAD"]).await {
+    let merge_base = match run_git(&host, &cwd, &["merge-base", &base, "HEAD"]).await {
         Ok(s) => s.trim().to_string(),
         Err(_) => return Ok(Json(err("no-merge-base"))),
     };
 
     let range = format!("{merge_base}..HEAD");
-    let name_status = run_git(&cwd, &["diff", "--name-status", "-M", "-z", &range]).await?;
+    let name_status = run_git(&host, &cwd, &["diff", "--name-status", "-M", "-z", &range]).await?;
     let mut entries = parse_name_status_z(name_status.as_bytes());
 
     // Merge numstat (added/removed). `--numstat -z` gives `<add>\t<del>\t<path>\0`
     // (binary files show `-`); index by path so rename targets line up.
-    if let Ok(numstat) = run_git(&cwd, &["diff", "--numstat", "-z", &range]).await {
+    if let Ok(numstat) = run_git(&host, &cwd, &["diff", "--numstat", "-z", &range]).await {
         for rec in numstat.split('\0').filter(|r| !r.is_empty()) {
             let mut cols = rec.splitn(3, '\t');
             let added = cols.next().and_then(|s| s.parse::<u32>().ok());
@@ -432,7 +428,7 @@ async fn branch_compare(
         }
     }
 
-    let commits_ahead = run_git(&cwd, &["rev-list", "--count", &range])
+    let commits_ahead = run_git(&host, &cwd, &["rev-list", "--count", &range])
         .await
         .ok()
         .and_then(|s| s.trim().parse::<u32>().ok());
@@ -468,10 +464,26 @@ struct ConflictResp {
 }
 
 /// True when `git rev-parse -q --verify <rev>` resolves (the ref/state exists).
-async fn git_ref_exists(cwd: &StdPath, rev: &str) -> bool {
-    run_git(cwd, &["rev-parse", "-q", "--verify", rev])
+async fn git_ref_exists(host: &Host, cwd: &str, rev: &str) -> bool {
+    run_git(host, cwd, &["rev-parse", "-q", "--verify", rev])
         .await
         .is_ok()
+}
+
+/// True when the git state dir `<sub>` (e.g. `rebase-merge`/`rebase-apply`)
+/// exists on `host`. `git rev-parse --git-path` yields a path relative to
+/// cwd (or absolute); we resolve it on the host's fs, not the daemon's.
+async fn git_state_dir_exists(host: &Host, cwd: &str, sub: &str) -> bool {
+    let Ok(p) = run_git(host, cwd, &["rev-parse", "--git-path", sub]).await else {
+        return false;
+    };
+    let p = p.trim();
+    let abs = if p.starts_with('/') {
+        p.to_string()
+    } else {
+        format!("{cwd}/{p}")
+    };
+    host_runtime::path_exists(host, &abs).await.unwrap_or(false)
 }
 
 /// `GET /api/sessions/{id}/git/conflict` — which conflict op (if any) is mid-flight.
@@ -480,21 +492,15 @@ async fn conflict(
     Path(id): Path<String>,
 ) -> Result<Json<ConflictResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
     // Rebase leaves a state dir (rebase-merge / rebase-apply) rather than a ref.
-    let rebase_dir = run_git(&cwd, &["rev-parse", "--git-path", "rebase-merge"])
-        .await
-        .map(|p| StdPath::new(cwd.as_path()).join(p.trim()).exists())
-        .unwrap_or(false)
-        || run_git(&cwd, &["rev-parse", "--git-path", "rebase-apply"])
-            .await
-            .map(|p| StdPath::new(cwd.as_path()).join(p.trim()).exists())
-            .unwrap_or(false);
+    let rebase_dir = git_state_dir_exists(&host, &cwd, "rebase-merge").await
+        || git_state_dir_exists(&host, &cwd, "rebase-apply").await;
     let operation = if rebase_dir {
         ConflictOp::Rebase
-    } else if git_ref_exists(&cwd, "MERGE_HEAD").await {
+    } else if git_ref_exists(&host, &cwd, "MERGE_HEAD").await {
         ConflictOp::Merge
-    } else if git_ref_exists(&cwd, "CHERRY_PICK_HEAD").await {
+    } else if git_ref_exists(&host, &cwd, "CHERRY_PICK_HEAD").await {
         ConflictOp::CherryPick
     } else {
         ConflictOp::None
@@ -516,11 +522,11 @@ async fn rebase(
     Json(body): Json<RebaseBody>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
     if body.base_ref.trim().is_empty() {
         return Err(ApiError::BadRequest("base_ref is empty".into()));
     }
-    run_git(&cwd, &["rebase", body.base_ref.trim()]).await?;
+    run_git(&host, &cwd, &["rebase", body.base_ref.trim()]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -530,8 +536,8 @@ async fn abort_merge(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
-    run_git(&cwd, &["merge", "--abort"]).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    run_git(&host, &cwd, &["merge", "--abort"]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -541,8 +547,8 @@ async fn abort_rebase(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
-    run_git(&cwd, &["rebase", "--abort"]).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    run_git(&host, &cwd, &["rebase", "--abort"]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -559,14 +565,14 @@ async fn discard(
     Json(body): Json<DiscardBody>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
     for p in &body.paths {
         ensure_safe_relative(p)?;
     }
     if !body.paths.is_empty() {
         let mut args = vec!["restore", "--source=HEAD", "--staged", "--worktree", "--"];
         args.extend(body.paths.iter().map(String::as_str));
-        run_git(&cwd, &args).await?;
+        run_git(&host, &cwd, &args).await?;
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -585,9 +591,9 @@ async fn upstream(
     Path(id): Path<String>,
 ) -> Result<Json<UpstreamStatus>, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
     let upstream = run_git(
-        &cwd,
+        &host, &cwd,
         &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
     )
     .await
@@ -597,7 +603,7 @@ async fn upstream(
     let (ahead, behind) = if upstream.is_some() {
         // `--left-right --count @{u}...HEAD` prints "<behind>\t<ahead>".
         match run_git(
-            &cwd,
+            &host, &cwd,
             &["rev-list", "--left-right", "--count", "@{u}...HEAD"],
         )
         .await
@@ -620,23 +626,21 @@ async fn upstream(
     }))
 }
 
-/// Run `git -C <cwd> <args...>`; return stdout (lossy UTF-8) on success.
-async fn run_git(cwd: &StdPath, args: &[&str]) -> Result<String, ApiError> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .output()
+/// Run `git <args...>` with `cwd` as the working dir on `host`; return
+/// stdout (lossy UTF-8) on success. Host-aware: `git -C` locally,
+/// `cd && git` over SSH (see `host_runtime::git_in_dir`).
+async fn run_git(host: &Host, cwd: &str, args: &[&str]) -> Result<String, ApiError> {
+    let out = git_in_dir(host, cwd, args)
         .await
         .map_err(|e| ApiError::Internal(format!("git {}: {e}", args.join(" "))))?;
-    if !out.status.success() {
+    if !out.success {
         return Err(ApiError::Internal(format!(
             "git {} failed: {}",
             args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
+            out.stderr.trim()
         )));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok(out.stdout_string())
 }
 
 #[derive(Debug, Serialize)]
@@ -653,14 +657,14 @@ async fn branches(
     Path(id): Path<String>,
 ) -> Result<Json<BranchesResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
-    let current = run_git(&cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let current = run_git(&host, &cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
         .await
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty() && s != "HEAD");
     let raw = run_git(
-        &cwd,
+        &host, &cwd,
         &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
     )
     .await?;
@@ -694,12 +698,12 @@ async fn log(
     Query(q): Query<LogQuery>,
 ) -> Result<Json<Vec<LogEntry>>, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
     let limit_arg = format!("-{limit}");
     // \x1f (unit separator) won't appear in commit metadata — a safe field delimiter.
     let fmt_arg = "--format=%H%x1f%s%x1f%an%x1f%aI";
-    let raw = run_git(&cwd, &["log", &limit_arg, fmt_arg]).await?;
+    let raw = run_git(&host, &cwd, &["log", &limit_arg, fmt_arg]).await?;
     Ok(Json(parse_log_lines(&raw)))
 }
 
@@ -728,8 +732,8 @@ async fn fetch(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
-    run_git(&cwd, &["fetch", "--all", "--prune"]).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    run_git(&host, &cwd, &["fetch", "--all", "--prune"]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -739,8 +743,8 @@ async fn pull(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
-    run_git(&cwd, &["pull", "--ff-only"]).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    run_git(&host, &cwd, &["pull", "--ff-only"]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -751,8 +755,8 @@ async fn push(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
-    run_git(&cwd, &["push", "--set-upstream", "origin", "HEAD"]).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    run_git(&host, &cwd, &["push", "--set-upstream", "origin", "HEAD"]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -837,6 +841,26 @@ pub(crate) async fn cwd_for(state: &AppState, id: Uuid) -> Result<PathBuf, ApiEr
     Ok(PathBuf::from(session.effective_cwd()))
 }
 
+/// Resolve a session to `(host, cwd)`: the host its git ops run on (its
+/// `host_id`, or the local host) and its effective working directory. The
+/// cwd is a path on `host` — a remote path for a remote session — so all
+/// git in this module routes through `host_runtime::git_in_dir`, never a
+/// local `git -C` against a path that only exists on the remote.
+async fn host_and_cwd_for(state: &AppState, id: Uuid) -> Result<(Host, String), ApiError> {
+    let session = state
+        .store
+        .get_session_by_id(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
+    let host_id = session.host_id.unwrap_or(LOCAL_HOST_ID);
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest(format!("session host is missing: {host_id}")))?;
+    Ok((host, session.effective_cwd().to_string()))
+}
+
 fn parse_uuid(s: &str) -> Result<Uuid, ApiError> {
     Uuid::parse_str(s).map_err(|e| ApiError::BadRequest(e.to_string()))
 }
@@ -866,28 +890,15 @@ async fn status(
     Path(id): Path<String>,
 ) -> Result<Json<GitStatus>, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
-    if !crate::git::is_git_repo(&cwd).await {
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    if !host_runtime::is_git_repo(&host, &cwd).await {
         return Err(ApiError::BadRequest(format!(
-            "not a git repository: {}",
-            cwd.display()
+            "not a git repository: {cwd}"
         )));
     }
 
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(&cwd)
-        .args(["status", "--porcelain=v1", "-z"])
-        .output()
-        .await
-        .map_err(|e| ApiError::Internal(format!("git status: {}", e)))?;
-    if !out.status.success() {
-        return Err(ApiError::Internal(format!(
-            "git status failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        )));
-    }
-    Ok(Json(parse_porcelain_z(&out.stdout)))
+    let raw = run_git_bytes(&host, &cwd, &["status", "--porcelain=v1", "-z"]).await?;
+    Ok(Json(parse_porcelain_z(&raw)))
 }
 
 /// Parse `git status --porcelain=v1 -z` output.
@@ -945,37 +956,42 @@ async fn diff(
     Query(q): Query<DiffQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
     ensure_safe_relative(&q.path)?;
 
-    let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(&cwd).args(["diff", "--no-color"]);
+    let mut diff_args = vec!["diff", "--no-color"];
     if q.staged {
-        cmd.arg("--cached");
+        diff_args.push("--cached");
     }
-    cmd.arg("--").arg(&q.path);
-    let out = cmd
-        .output()
+    diff_args.push("--");
+    diff_args.push(&q.path);
+    // git_in_dir (not run_git): `git diff` exits non-zero in some states
+    // we still want stdout from, and never errors on "no diff".
+    let out = git_in_dir(&host, &cwd, &diff_args)
         .await
-        .map_err(|e| ApiError::Internal(format!("git diff: {}", e)))?;
-
-    let mut body = String::from_utf8_lossy(&out.stdout).into_owned();
+        .map_err(|e| ApiError::Internal(format!("git diff: {e}")))?;
+    let mut body = out.stdout_string();
 
     // Empty diff + worktree side requested + the file exists on disk →
     // very likely an untracked file. `git diff --no-index /dev/null <path>`
     // synthesises a diff against an empty baseline so the UI shows the
     // new content. `--no-index` exits 1 when a diff exists; we ignore
     // status and just read stdout.
-    if body.is_empty() && !q.staged && cwd.join(&q.path).exists() {
-        let synth = Command::new("git")
-            .arg("-C")
-            .arg(&cwd)
-            .args(["diff", "--no-color", "--no-index", "--", "/dev/null"])
-            .arg(&q.path)
-            .output()
+    let worktree_file = format!("{}/{}", cwd.trim_end_matches('/'), q.path);
+    if body.is_empty()
+        && !q.staged
+        && host_runtime::path_exists(&host, &worktree_file)
             .await
-            .map_err(|e| ApiError::Internal(format!("git diff --no-index: {}", e)))?;
-        body = String::from_utf8_lossy(&synth.stdout).into_owned();
+            .unwrap_or(false)
+    {
+        let synth = git_in_dir(
+            &host,
+            &cwd,
+            &["diff", "--no-color", "--no-index", "--", "/dev/null", &q.path],
+        )
+        .await
+        .map_err(|e| ApiError::Internal(format!("git diff --no-index: {e}")))?;
+        body = synth.stdout_string();
     }
 
     let mut headers = HeaderMap::new();
@@ -999,7 +1015,7 @@ async fn file(
     Query(q): Query<FileQuery>,
 ) -> Result<Json<FileResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
     ensure_safe_relative(&q.path)?;
     let rev = q.rev.as_deref().unwrap_or("worktree");
 
@@ -1012,27 +1028,21 @@ async fn file(
             } else {
                 format!(":{}", q.path)
             };
-            let out = Command::new("git")
-                .arg("-C")
-                .arg(&cwd)
-                .args(["show", &spec])
-                .output()
+            // A non-zero exit means the path doesn't exist at that revision
+            // (new file) → empty content.
+            let out = git_in_dir(&host, &cwd, &["show", &spec])
                 .await
-                .map_err(|e| ApiError::Internal(format!("git show: {}", e)))?;
-            if out.status.success() {
-                out.stdout
-            } else {
-                Vec::new()
-            }
+                .map_err(|e| ApiError::Internal(format!("git show: {e}")))?;
+            if out.success { out.stdout } else { Vec::new() }
         }
         "worktree" => {
-            // Read straight off disk; a missing file (deleted in the worktree)
-            // is empty content, matching the head/index behavior above.
-            match tokio::fs::read(cwd.join(&q.path)).await {
-                Ok(b) => b,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-                Err(e) => return Err(ApiError::Internal(format!("read file: {}", e))),
-            }
+            // Read the on-disk file from the session's host; a missing file
+            // (deleted in the worktree) is empty content, matching head/index.
+            let abs = format!("{}/{}", cwd.trim_end_matches('/'), q.path);
+            host_runtime::read_file_bytes(&host, &abs)
+                .await
+                .map_err(|e| ApiError::Internal(format!("read file: {e}")))?
+                .unwrap_or_default()
         }
         other => {
             return Err(ApiError::BadRequest(format!(
@@ -1063,7 +1073,7 @@ async fn stage(
     Json(body): Json<StageBody>,
 ) -> Result<Json<GitStatus>, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
     if body.paths.is_empty() {
         return Err(ApiError::BadRequest("paths is empty".into()));
     }
@@ -1071,43 +1081,28 @@ async fn stage(
         ensure_safe_relative(p)?;
     }
 
-    let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(&cwd);
-    if body.unstage {
-        // `restore --staged` resets the index entry to HEAD without touching
-        // the worktree — the inverse of `add` for the dashboard's toggle.
-        cmd.args(["restore", "--staged", "--"]);
+    // `restore --staged` resets the index entry to HEAD without touching the
+    // worktree — the inverse of `add` for the dashboard's toggle.
+    let mut args: Vec<&str> = if body.unstage {
+        vec!["restore", "--staged", "--"]
     } else {
-        cmd.args(["add", "--"]);
-    }
-    for p in &body.paths {
-        cmd.arg(p);
-    }
-    let out = cmd
-        .output()
+        vec!["add", "--"]
+    };
+    args.extend(body.paths.iter().map(String::as_str));
+    let out = git_in_dir(&host, &cwd, &args)
         .await
-        .map_err(|e| ApiError::Internal(format!("git stage: {}", e)))?;
-    if !out.status.success() {
+        .map_err(|e| ApiError::Internal(format!("git stage: {e}")))?;
+    if !out.success {
         return Err(ApiError::BadRequest(format!(
             "git {} failed: {}",
-            if body.unstage {
-                "restore --staged"
-            } else {
-                "add"
-            },
-            String::from_utf8_lossy(&out.stderr)
+            if body.unstage { "restore --staged" } else { "add" },
+            out.stderr
         )));
     }
 
     // Re-read status so the caller reflects the new staged/unstaged split.
-    let st = Command::new("git")
-        .arg("-C")
-        .arg(&cwd)
-        .args(["status", "--porcelain=v1", "-z"])
-        .output()
-        .await
-        .map_err(|e| ApiError::Internal(format!("git status: {}", e)))?;
-    Ok(Json(parse_porcelain_z(&st.stdout)))
+    let st = run_git_bytes(&host, &cwd, &["status", "--porcelain=v1", "-z"]).await?;
+    Ok(Json(parse_porcelain_z(&st)))
 }
 
 /// `POST /api/sessions/{id}/git/commit`
@@ -1122,7 +1117,7 @@ async fn commit(
     Json(body): Json<CommitBody>,
 ) -> Result<Json<CommitResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
     if body.message.trim().is_empty() {
         return Err(ApiError::BadRequest("commit message is empty".into()));
     }
@@ -1133,19 +1128,15 @@ async fn commit(
         ensure_safe_relative(p)?;
     }
 
-    let mut add = Command::new("git");
-    add.arg("-C").arg(&cwd).args(["add", "--"]);
-    for p in &body.paths {
-        add.arg(p);
-    }
-    let add_out = add
-        .output()
+    let mut add_args = vec!["add", "--"];
+    add_args.extend(body.paths.iter().map(String::as_str));
+    let add_out = git_in_dir(&host, &cwd, &add_args)
         .await
-        .map_err(|e| ApiError::Internal(format!("git add: {}", e)))?;
-    if !add_out.status.success() {
+        .map_err(|e| ApiError::Internal(format!("git add: {e}")))?;
+    if !add_out.success {
         return Err(ApiError::BadRequest(format!(
             "git add failed: {}",
-            String::from_utf8_lossy(&add_out.stderr)
+            add_out.stderr
         )));
     }
 
@@ -1153,42 +1144,31 @@ async fn commit(
     // listed paths, independent of whatever else might be staged in the
     // index. Without the pathspec the dashboard's "select these N files"
     // UX would silently include sibling work the user didn't pick.
-    let mut commit = Command::new("git");
-    commit
-        .arg("-C")
-        .arg(&cwd)
-        .args([
-            "-c",
-            "user.name=agentum-bot",
-            "-c",
-            "user.email=agentum@localhost",
-            "commit",
-            "-m",
-        ])
-        .arg(&body.message)
-        .arg("--");
-    for p in &body.paths {
-        commit.arg(p);
-    }
-    let commit_out = commit
-        .output()
+    let mut commit_args = vec![
+        "-c",
+        "user.name=agentum-bot",
+        "-c",
+        "user.email=agentum@localhost",
+        "commit",
+        "-m",
+        body.message.as_str(),
+        "--",
+    ];
+    commit_args.extend(body.paths.iter().map(String::as_str));
+    let commit_out = git_in_dir(&host, &cwd, &commit_args)
         .await
-        .map_err(|e| ApiError::Internal(format!("git commit: {}", e)))?;
-    if !commit_out.status.success() {
+        .map_err(|e| ApiError::Internal(format!("git commit: {e}")))?;
+    if !commit_out.success {
         return Err(ApiError::BadRequest(format!(
             "git commit failed: {}",
-            String::from_utf8_lossy(&commit_out.stderr)
+            commit_out.stderr
         )));
     }
 
-    let sha_out = Command::new("git")
-        .arg("-C")
-        .arg(&cwd)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .await
-        .map_err(|e| ApiError::Internal(format!("git rev-parse: {}", e)))?;
-    let sha = String::from_utf8_lossy(&sha_out.stdout).trim().to_string();
+    let sha = run_git(&host, &cwd, &["rev-parse", "HEAD"])
+        .await?
+        .trim()
+        .to_string();
 
     Ok(Json(CommitResp { sha }))
 }
@@ -1207,12 +1187,12 @@ async fn commit_staged(
     Json(body): Json<CommitStagedBody>,
 ) -> Result<Json<CommitResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
     if body.message.trim().is_empty() {
         return Err(ApiError::BadRequest("commit message is empty".into()));
     }
     run_git(
-        &cwd,
+        &host, &cwd,
         &[
             "-c",
             "user.name=agentum-bot",
@@ -1224,7 +1204,7 @@ async fn commit_staged(
         ],
     )
     .await?;
-    let sha = run_git(&cwd, &["rev-parse", "HEAD"])
+    let sha = run_git(&host, &cwd, &["rev-parse", "HEAD"])
         .await?
         .trim()
         .to_string();
@@ -1251,30 +1231,24 @@ async fn check_ignore(
     Json(body): Json<CheckIgnoreBody>,
 ) -> Result<Json<Vec<String>>, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
     if body.paths.is_empty() {
         return Ok(Json(Vec::new()));
     }
-    let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(&cwd).args(["check-ignore", "--"]);
-    for p in &body.paths {
-        cmd.arg(p);
-    }
-    let out = cmd
-        .output()
+    let mut args = vec!["check-ignore", "--"];
+    args.extend(body.paths.iter().map(String::as_str));
+    // `git check-ignore` exits 0 (some ignored), 1 (none), >1 (a real error).
+    let out = git_in_dir(&host, &cwd, &args)
         .await
         .map_err(|e| ApiError::Internal(format!("git check-ignore: {e}")))?;
-    if matches!(out.status.code(), Some(code) if code > 1) {
+    if matches!(out.code, Some(code) if code > 1) {
         return Err(ApiError::Internal(format!(
             "git check-ignore failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
+            out.stderr.trim()
         )));
     }
     Ok(Json(
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(str::to_string)
-            .collect(),
+        out.stdout_string().lines().map(str::to_string).collect(),
     ))
 }
 
@@ -1285,8 +1259,8 @@ async fn fast_forward(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
-    run_git(&cwd, &["merge", "--ff-only", "@{upstream}"]).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    run_git(&host, &cwd, &["merge", "--ff-only", "@{upstream}"]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1351,29 +1325,29 @@ async fn remote_file_url(
     Query(q): Query<RemoteFileUrlQuery>,
 ) -> Result<Json<RemoteFileUrlResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
-    let remote = match run_git(&cwd, &["remote", "get-url", "origin"]).await {
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let remote = match run_git(&host, &cwd, &["remote", "get-url", "origin"]).await {
         Ok(s) => s.trim().to_string(),
         Err(_) => return Ok(Json(RemoteFileUrlResp { url: None })),
     };
-    let Some((web_base, host)) = git_url_to_web_base(&remote) else {
+    let Some((web_base, web_host)) = git_url_to_web_base(&remote) else {
         return Ok(Json(RemoteFileUrlResp { url: None }));
     };
     // Prefer the branch name; fall back to the commit oid for detached HEAD.
-    let branch = run_git(&cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+    let branch = run_git(&host, &cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
         .await
         .ok()
         .map(|s| s.trim().to_string());
     let reference = match branch {
         Some(name) if !name.is_empty() && name != "HEAD" => name,
-        _ => run_git(&cwd, &["rev-parse", "HEAD"])
+        _ => run_git(&host, &cwd, &["rev-parse", "HEAD"])
             .await
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|_| "HEAD".to_string()),
     };
     Ok(Json(RemoteFileUrlResp {
         url: Some(build_file_url(
-            &web_base, &host, &reference, &q.path, q.line,
+            &web_base, &web_host, &reference, &q.path, q.line,
         )),
     }))
 }
@@ -1408,7 +1382,7 @@ async fn blob(
     Query(q): Query<BlobQuery>,
 ) -> Result<Json<BlobResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
     ensure_safe_relative(&q.path)?;
     // A commit/ref never starts with '-'; reject so the rev can't smuggle a
     // `git show` option.
@@ -1416,19 +1390,11 @@ async fn blob(
         return Err(ApiError::BadRequest("invalid commit ref".into()));
     }
     let spec = format!("{}:{}", q.commit, q.path);
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(&cwd)
-        .args(["show", &spec])
-        .output()
+    let out = git_in_dir(&host, &cwd, &["show", &spec])
         .await
         .map_err(|e| ApiError::Internal(format!("git show: {e}")))?;
     // A non-zero exit means the path doesn't exist at that revision → empty.
-    let mut bytes = if out.status.success() {
-        out.stdout
-    } else {
-        Vec::new()
-    };
+    let mut bytes = if out.success { out.stdout } else { Vec::new() };
     let is_binary = bytes.contains(&0);
     let truncated = bytes.len() > MAX_FILE_BYTES;
     if truncated {
@@ -1527,14 +1493,14 @@ async fn history(
     Query(q): Query<HistoryQuery>,
 ) -> Result<Json<HistoryResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let cwd = cwd_for(&state, id).await?;
+    let (host, cwd) = host_and_cwd_for(&state, id).await?;
     let limit = q.limit.unwrap_or(50).clamp(1, 1000);
     // \x1f field sep, \x1e record sep; fetch one extra to detect `hasMore`.
     let fmt = "%H\u{1f}%P\u{1f}%s\u{1f}%B\u{1f}%an\u{1f}%ae\u{1f}%at\u{1e}";
     let max_count = format!("--max-count={}", limit + 1);
     let pretty = format!("--pretty=format:{fmt}");
     // An unborn HEAD makes `git log` exit non-zero — treat as no history.
-    let raw = run_git(&cwd, &["log", &max_count, &pretty])
+    let raw = run_git(&host, &cwd, &["log", &max_count, &pretty])
         .await
         .unwrap_or_default();
     let mut items = parse_history_records(&raw);
@@ -1543,7 +1509,7 @@ async fn history(
 
     // Upstream ahead/behind → incoming/outgoing. No upstream → false/false.
     let (incoming, outgoing) = match run_git(
-        &cwd,
+        &host, &cwd,
         &["rev-list", "--left-right", "--count", "@{u}...HEAD"],
     )
     .await
@@ -1558,12 +1524,12 @@ async fn history(
     };
 
     // currentRef = head oid + ref name (`HEAD` when detached); omitted on unborn.
-    let head_oid = run_git(&cwd, &["rev-parse", "HEAD"])
+    let head_oid = run_git(&host, &cwd, &["rev-parse", "HEAD"])
         .await
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    let name = run_git(&cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+    let name = run_git(&host, &cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
         .await
         .ok()
         .map(|s| s.trim().to_string())

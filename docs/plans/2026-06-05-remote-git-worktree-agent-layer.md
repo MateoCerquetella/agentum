@@ -1,8 +1,39 @@
 # Remote (SSH) projects: host-aware git/worktree ops + remote agent detection
 
-**Status:** PLAN. No code yet. Finishes the remote-project work begun in
-`2026-06-04-desktop-ssh-tmux-sessions.md` (add/connect/browse + sessions-in-
-remote-tmux already shipped on staging ≤ 210179a).
+**Status:** DONE (2026-06-05). All three work items implemented, `cargo build`
++ `cargo test --workspace --lib` (379 pass, +3 new host_runtime tests) +
+`vite build` + relevant vitest suites all green. NOT yet validated against a
+live remote host (the plan's "only true validation" — needs the Omarchy box).
+Finishes the remote-project work begun in `2026-06-04-desktop-ssh-tmux-sessions.md`
+(add/connect/browse + sessions-in-remote-tmux already shipped on staging ≤ 210179a).
+
+## What shipped (file-by-file)
+- **`host_runtime.rs`** (foundation): `HostCommandOutput {success, code, stdout,
+  stderr}`; `git_in_dir(host, cwd, args)` (Local `git -C`, SSH `sh -c 'cd && git'`,
+  GIT_TIMEOUT 120s); `is_git_repo`, `mkdir_p`, `read_file_bytes`, `path_exists`
+  — all Local/SSH. Local-backend unit tests added.
+- **`routes/repos.rs`** (item 1): `Repo.host_id`/`AddBody.host_id`; `append_repo`
+  stores it; `resolve_repo_host_id` + `load_host_for_repo` (mirrors
+  `load_host_for_session`); base-ref reads (`git_out`/`collect_refs`/the 3 handlers)
+  now host-aware.
+- **`routes/worktrees.rs`** (item 2): `create` (remote `mkdir -p` + `git worktree
+  add` over SSH — the `os error 45` 500), `remove`, `detected`/`scan_git_worktrees`,
+  `force_delete_branch` all host-aware; worktree paths built as POSIX strings under
+  `<repo>/.claude/worktrees/<name>`.
+- **`routes/git.rs`** (item 2 + cascade): `run_git`/`run_git_bytes`/`git_ref_exists`
+  host-aware; `host_and_cwd_for` resolves a session's host; EVERY handler (status,
+  status-entries, diff incl. `--no-index`, file incl. worktree-disk read, stage,
+  commit, blob, conflict's rebase-dir check, branches/log/history/upstream/…)
+  routes through the host.
+- **TS client** (items 1 + 3): `reposAddRemote(connectionId, remotePath, hostId?)`;
+  `AddRepoSteps` + `tauri/repos.ts addRemote` resolve `connectionId → hostId` via
+  `resolveServerHostIdForConnection` and persist it; `Repo.hostId` type added.
+  `detectRemoteAgentsViaServer` (new, in server-host-client) reads
+  `/api/hosts/{id}/readiness`; `preflight.detectRemoteAgents` wired to it (was a
+  `[]` stub) so the composer's remote Agent picker lists installed remote CLIs.
+
+## Original plan below
+
 
 ## Problem
 Remote SSH projects can be added, connected, browsed, and their agent **sessions

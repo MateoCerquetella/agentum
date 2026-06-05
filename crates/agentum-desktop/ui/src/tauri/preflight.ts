@@ -3,10 +3,12 @@
 // backend. Consuming slices (preflight, detected-agents) are unchanged — they
 // still call `api.preflight.*`; only the implementation moved to HTTP.
 //
-// `detectRemoteAgents` stays a no-op ([]): the desktop's SSH targets aren't the
-// daemon's hosts, so per-target remote detection can't route through the server
-// yet (it was already a native stub returning []).
+// `detectRemoteAgents` resolves the repo's SSH connection to a server host and
+// reads that host's readiness (the server probes agent CLIs over SSH there), so
+// the composer's remote Agent picker lists what's actually installed on the
+// remote — not just "Blank Terminal". See `detectRemoteAgentsViaServer`.
 import { apiUrl } from '@/runtime/server-endpoint'
+import { detectRemoteAgentsViaServer } from '@/runtime/server-host-client'
 
 async function serverGet<T>(path: string): Promise<T> {
   const res = await fetch(await apiUrl(path))
@@ -20,5 +22,6 @@ export const preflight = {
   check: () => serverGet('/api/preflight/check'),
   detectAgents: () => serverGet('/api/preflight/agents'),
   refreshAgents: () => serverGet('/api/preflight/agents/refresh'),
-  detectRemoteAgents: () => Promise.resolve([])
+  detectRemoteAgents: (args?: { connectionId?: string }) =>
+    args?.connectionId ? detectRemoteAgentsViaServer(args.connectionId) : Promise.resolve([])
 }

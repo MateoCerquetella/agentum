@@ -91,6 +91,9 @@ export type Repo = {
   hookSettings?: RepoHookSettings
   /** SSH target ID for remote repos. null/undefined = local. */
   connectionId?: string | null
+  /** Server host id (resolved from `connectionId`) the repo's git/worktree/
+   *  agent ops run on. null/undefined = the daemon's local host. */
+  hostId?: string | null
   /** Per-repo override for issue-source resolution. `undefined` is treated
    *  identically to `'auto'`; writers leave it undefined on creation so
    *  existing persisted records stay forward-compatible. */

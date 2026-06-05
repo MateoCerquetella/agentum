@@ -12,7 +12,10 @@ import { Input } from '@/components/ui/input'
 import { RemoteFileBrowser } from './RemoteFileBrowser'
 import { SshTargetRow } from './SshTargetRow'
 import { reposAddRemote } from '@/runtime/server-repo-client'
-import { connectSshTargetViaServer } from '@/runtime/server-host-client'
+import {
+  connectSshTargetViaServer,
+  resolveServerHostIdForConnection
+} from '@/runtime/server-host-client'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import type { AddRepoExistingWorkspaceSource } from '../../../../shared/telemetry-events'
 import type { NestedRepoScanResult, Repo } from '../../../../shared/types'
@@ -127,8 +130,11 @@ export function useRemoteRepo(
       // Register the remote repo on the server with its SSH connection. The
       // native addRemote command was a hardcoded "not available" stub; this
       // routes through /api/repos so the repo carries its connectionId and its
-      // sessions run in tmux on the remote host.
-      const result = await reposAddRemote(selectedTargetId, trimmedRemotePath)
+      // sessions run in tmux on the remote host. Resolve the server host id
+      // up front and persist it too, so server-side git/worktree/agent ops can
+      // route over SSH without mapping native target ids (mirrors sessions).
+      const hostId = await resolveServerHostIdForConnection(selectedTargetId)
+      const result = await reposAddRemote(selectedTargetId, trimmedRemotePath, hostId)
       if ('error' in result) {
         throw new Error(result.error)
       }
