@@ -31,7 +31,10 @@ export type HostsSlice = {
   hydrateHosts: () => Promise<void>
 }
 
-function unameDetail(prefix: string, uname: string | null): string {
+/** Compose a host's OS detail line: `<transport> · <uname>` when the readiness
+ *  probe returned a uname (e.g. "localhost · Darwin 24.5"), degrading to just the
+ *  transport prefix when it's unknown — never a dangling separator. */
+export function unameDetail(prefix: string, uname: string | null): string {
   return uname ? `${prefix} · ${uname}` : prefix
 }
 
