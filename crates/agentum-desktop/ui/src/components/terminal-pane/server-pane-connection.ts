@@ -7,6 +7,8 @@ import { connectPanePty, type PanePtyBinding } from './pty-connection'
 import type { PtyConnectionDeps } from './pty-connection-types'
 import { useAppStore } from '@/store'
 import { ensureWorkspaceSession } from '@/runtime/workspace-session'
+import { resolveServerHostIdForConnection } from '@/runtime/server-host-client'
+import { getRepoMapFromState, getWorktreeMapFromState } from '@/store/selectors'
 import {
   bindServerSessionTerminal,
   type ServerSessionTerminalBinding
@@ -181,7 +183,21 @@ export function connectPaneServerSession(
     const startupCommand = tool === 'terminal' ? deps.startup?.command : undefined
     void (async () => {
       try {
-        const session = await ensureWorkspaceSession({ workdir, tool })
+        // Why: a remote (SSH) worktree's repo carries a `connectionId` (native
+        // SSH target). Resolve it to a server host id so the session's tmux pane
+        // runs ON THE REMOTE over SSH — the same path the TUI uses. Local repos
+        // have no connectionId and run on the local host (hostId undefined).
+        const state = useAppStore.getState()
+        const worktree = getWorktreeMapFromState(state).get(deps.worktreeId)
+        const repo = worktree ? getRepoMapFromState(state).get(worktree.repoId) : null
+        const connectionId = repo?.connectionId ?? null
+        const hostId = connectionId
+          ? await resolveServerHostIdForConnection(connectionId)
+          : undefined
+        if (disposed) {
+          return
+        }
+        const session = await ensureWorkspaceSession({ workdir, tool, hostId })
         if (disposed) {
           return
         }

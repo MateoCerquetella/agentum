@@ -562,6 +562,24 @@ pub async fn capture_pane_visible(host: &Host, target: &str) -> Result<String> {
     }
 }
 
+/// Read the pane's current title (`#{pane_title}`). tmux captures the agent's
+/// OSC title here but never forwards it over a `capture-pane` stream (set-titles
+/// off), so the desktop's title-derived agent status has no input. The session
+/// stream re-injects this as a synthetic OSC title. Trimmed of trailing newline.
+pub async fn pane_title(host: &Host, target: &str) -> Result<String> {
+    match &host.kind {
+        HostKind::Local => Ok(agentum_tmux::pane_title(target).await?),
+        HostKind::Ssh { .. } => {
+            let out = ssh_stdout(
+                host,
+                &format!("tmux display-message -p -t {} '#{{pane_title}}'", q(target)?),
+            )
+            .await?;
+            Ok(out.trim_matches(|c| c == '\n' || c == '\r').to_string())
+        }
+    }
+}
+
 pub async fn send_keys(host: &Host, target: &str, keys: &str, append_enter: bool) -> Result<()> {
     match &host.kind {
         HostKind::Local => Ok(agentum_tmux::send_keys(target, keys, append_enter).await?),

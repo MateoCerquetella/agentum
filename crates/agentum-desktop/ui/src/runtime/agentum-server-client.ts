@@ -123,6 +123,9 @@ export function createSession(input: CreateSessionInput): Promise<Session> {
   }
   if (input.model) body.model = input.model
   if (input.flags && input.flags.length > 0) body.flags = input.flags
+  // Run the agent's tmux pane on a specific server host (SSH = remote). Omitted
+  // → server defaults to the local host. Was declared but never forwarded.
+  if (input.host_id) body.host_id = input.host_id
   // Empty WorktreeSpec: branch derives from the session name, base ref = HEAD.
   if (input.worktree) body.worktree = {}
   return request<Session>('/api/sessions', { method: 'POST', body: JSON.stringify(body) })

@@ -18,6 +18,11 @@ export type WorkspaceSessionRequest = {
   name?: string
   /** Ask the server to create a dedicated git worktree for this session. */
   worktree?: boolean
+  /** Server host id (from /api/hosts) to run the session on. Omitted/undefined
+   *  runs on the local host. An SSH host runs the agent in tmux on the remote
+   *  over SSH — the session is keyed by (workdir, tool, host) so a remote and a
+   *  local workspace at the same path don't collide. */
+  hostId?: string | null
 }
 
 function basename(path: string): string {
@@ -55,14 +60,21 @@ function sessionName(workdir: string, tool: string): string {
  */
 export async function ensureWorkspaceSession(req: WorkspaceSessionRequest): Promise<Session> {
   const sessions = await listSessions()
-  const existing = sessions.find((s) => s.workdir === req.workdir && s.tool === req.tool)
+  // Why: match on host too. The server reports a session's host as `hostId`
+  // (absent/null = local), so a remote SSH session and a local one at the same
+  // (workdir, tool) stay distinct instead of reattaching to the wrong pane.
+  const wantHostId = req.hostId ?? null
+  const existing = sessions.find(
+    (s) => s.workdir === req.workdir && s.tool === req.tool && (s.host_id ?? null) === wantHostId
+  )
   const session =
     existing ??
     (await createSession({
       name: req.name ?? sessionName(req.workdir, req.tool),
       workdir: req.workdir,
       tool: req.tool,
-      worktree: req.worktree
+      worktree: req.worktree,
+      host_id: req.hostId ?? undefined
     }))
   // Spawn the tmux pane if the session isn't live yet. Idempotent server-side;
   // ignore "already running" so a reattach to a live pane still succeeds.
