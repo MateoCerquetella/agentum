@@ -8,6 +8,10 @@ import { useAppStore } from '@/store'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { Button } from '../ui/button'
 import { removeSshTargetWithBestEffortCleanup } from './ssh-target-remove'
+import {
+  resolveServerHostIdForConnection,
+  testServerHost
+} from '@/runtime/server-host-client'
 import { SshTargetCard } from './SshTargetCard'
 import { SshTargetDestructiveActions } from './SshTargetDestructiveActions'
 import { SshTargetForm, EMPTY_FORM, type EditingTarget } from './SshTargetForm'
@@ -27,6 +31,7 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
   // global store (via useIpcEvents.ts). Reading from the store avoids
   // duplicating the onStateChanged listener and per-target getState IPC calls.
   const sshConnectionStates = useAppStore((s) => s.sshConnectionStates)
+  const setSshConnectionState = useAppStore((s) => s.setSshConnectionState)
   const recordFeatureInteraction = useAppStore((s) => s.recordFeatureInteraction)
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -152,11 +157,58 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
   }
 
   const handleConnect = async (targetId: string): Promise<void> => {
+    // Why: the native ssh_connect transport was never ported (returns null), so
+    // this used to silently leave the target "Disconnected". With sessions now
+    // routed through the embedded server's host_runtime (it SSHes per session,
+    // no persistent client connection), "Connect" means: register the target as
+    // a server host and probe it over SSH. A successful probe marks it connected
+    // and ensures the host exists so remote workspaces/terminals can run on it.
+    recordFeatureInteraction('ssh')
+    setSshConnectionState(targetId, {
+      targetId,
+      status: 'connecting',
+      error: null,
+      reconnectAttempt: 0
+    })
     try {
-      await api.ssh.connect({ targetId })
-      recordFeatureInteraction('ssh')
+      const hostId = await resolveServerHostIdForConnection(targetId)
+      if (!hostId) {
+        throw new Error('Could not register this host with the server')
+      }
+      const probe = await testServerHost(hostId)
+      if (!mountedRef.current) {
+        return
+      }
+      if (probe.ok) {
+        setSshConnectionState(targetId, {
+          targetId,
+          status: 'connected',
+          error: null,
+          reconnectAttempt: 0
+        })
+        toast.success(
+          probe.tmux ? 'Connected' : 'Connected — but tmux is missing on the host'
+        )
+      } else {
+        setSshConnectionState(targetId, {
+          targetId,
+          status: 'error',
+          error: probe.message,
+          reconnectAttempt: 0
+        })
+        toast.error(probe.message || 'Connection failed')
+      }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Connection failed')
+      if (mountedRef.current) {
+        const message = err instanceof Error ? err.message : 'Connection failed'
+        setSshConnectionState(targetId, {
+          targetId,
+          status: 'error',
+          error: message,
+          reconnectAttempt: 0
+        })
+        toast.error(message)
+      }
     }
   }
 

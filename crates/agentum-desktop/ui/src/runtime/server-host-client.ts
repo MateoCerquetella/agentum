@@ -23,20 +23,46 @@ export function listServerHosts(): Promise<ServerHost[]> {
   return getJson<ServerHost[]>('/api/hosts')
 }
 
+/** Result of `POST /api/hosts/{id}/test` — a real SSH+tmux reachability probe. */
+export type ServerHostProbe = {
+  ok: boolean
+  message: string
+  uname?: string | null
+  tmux: boolean
+  git: boolean
+}
+
+/** `POST /api/hosts/{id}/test` — probe the host over SSH (uname + tmux + git). */
+export function testServerHost(hostId: string): Promise<ServerHostProbe> {
+  return postJson<ServerHostProbe>(`/api/hosts/${encodeURIComponent(hostId)}/test`)
+}
+
 /** `POST /api/hosts` — register an SSH host. Auth defaults to agent/key on the
  *  server; we pass an explicit key path when the native target has one so the
  *  remote exec uses the same identity the user configured. */
+// Why: prefer the OpenSSH config alias (configHost) over the raw host when the
+// target was imported from ~/.ssh/config. The server's ssh invocation reads
+// ~/.ssh/config, so `ssh user@<alias>` applies that Host block (ProxyCommand,
+// ProxyJump, IdentityFile, …) which a bare IP would skip. Falls back to the
+// literal host for manually-entered targets.
+function targetHostname(target: SshTarget): string {
+  return target.configHost?.trim() || target.host
+}
+
 function createServerHost(name: string, target: SshTarget): Promise<ServerHost> {
+  // `auth` is an internally-tagged SshAuth on the server (tag = "auth"), so it
+  // must be a nested object — {auth:'agent'} or {auth:'key', path} — NOT a flat
+  // field. Default to agent auth when the target has no explicit identity file.
   const auth = target.identityFile
-    ? { auth: 'key', path: target.identityFile }
-    : { auth: 'agent' }
+    ? { auth: 'key' as const, path: target.identityFile }
+    : { auth: 'agent' as const }
   return postJson<ServerHost>('/api/hosts', {
     name,
     kind: 'ssh',
     user: target.username,
-    hostname: target.host,
+    hostname: targetHostname(target),
     port: target.port,
-    ...auth
+    auth
   })
 }
 
@@ -48,7 +74,7 @@ function sameSshCoords(host: ServerHost, target: SshTarget): boolean {
   return (
     host.kind === 'ssh' &&
     host.user === target.username &&
-    host.hostname === target.host &&
+    host.hostname === targetHostname(target) &&
     (host.port ?? 22) === (target.port ?? 22)
   )
 }
