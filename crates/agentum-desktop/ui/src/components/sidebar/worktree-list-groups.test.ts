@@ -12,7 +12,7 @@ import {
   getPRGroupKey,
   getProjectGroupOrdering,
   LOCAL_HOST_KEY,
-  repoHostKey
+  hostKeyForRepo
 } from './worktree-list-groups'
 import type {
   DetectedWorktree,
@@ -52,32 +52,30 @@ const worktree: Worktree = {
 
 const repoMap = new Map([[repo.id, repo]])
 
-describe('repoHostKey', () => {
+describe('hostKeyForRepo', () => {
   it('buckets a local repo (no host association) under the synthetic local key', () => {
-    expect(repoHostKey(repo)).toBe(LOCAL_HOST_KEY)
-    expect(repoHostKey(repo)).toBe('local')
+    expect(hostKeyForRepo(repo)).toBe(LOCAL_HOST_KEY)
+    expect(hostKeyForRepo(repo)).toBe('local')
   })
 
-  it('buckets a repo by its resolved server hostId', () => {
-    expect(repoHostKey({ ...repo, hostId: 'host-omarchy' })).toBe('host-omarchy')
+  it('buckets a repo with a connectionId under the ssh: prefixed key', () => {
+    expect(hostKeyForRepo({ ...repo, connectionId: 'ssh-1' })).toBe('ssh:ssh-1')
   })
 
-  it('falls back to connectionId for a remote repo not yet backfilled with a hostId', () => {
-    expect(repoHostKey({ ...repo, connectionId: 'ssh-1' })).toBe('ssh-1')
+  it('returns the local key for a repo with no connectionId', () => {
+    expect(hostKeyForRepo({ ...repo, connectionId: undefined })).toBe(LOCAL_HOST_KEY)
   })
 
-  it('prefers hostId over connectionId when both are present', () => {
-    expect(repoHostKey({ ...repo, hostId: 'host-omarchy', connectionId: 'ssh-1' })).toBe(
-      'host-omarchy'
-    )
+  it('returns the local key when called with undefined', () => {
+    expect(hostKeyForRepo(undefined)).toBe(LOCAL_HOST_KEY)
   })
 
   it('groups multiple repos on the same host under one key, distinct from other hosts', () => {
-    const a = { ...repo, id: 'a', hostId: 'h1' }
-    const b = { ...repo, id: 'b', hostId: 'h1' }
-    const c = { ...repo, id: 'c', hostId: 'h2' }
-    expect(repoHostKey(a)).toBe(repoHostKey(b))
-    expect(repoHostKey(a)).not.toBe(repoHostKey(c))
+    const a = { ...repo, id: 'a', connectionId: 'ssh-1' }
+    const b = { ...repo, id: 'b', connectionId: 'ssh-1' }
+    const c = { ...repo, id: 'c', connectionId: 'ssh-2' }
+    expect(hostKeyForRepo(a)).toBe(hostKeyForRepo(b))
+    expect(hostKeyForRepo(a)).not.toBe(hostKeyForRepo(c))
   })
 })
 

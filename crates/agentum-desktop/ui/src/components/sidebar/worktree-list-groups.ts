@@ -29,7 +29,16 @@ import { UNGROUPED_PROJECT_GROUP_KEY } from '../../../../shared/project-groups'
 
 export { branchName }
 
-export type WorktreeGroupBy = 'none' | 'workspace-status' | 'repo' | 'pr-status'
+export type WorktreeGroupBy = 'none' | 'workspace-status' | 'repo' | 'pr-status' | 'host'
+
+/** A host as rendered in the sidebar tree. `key` is `local` or `ssh:<id>`. */
+export type SidebarHost = {
+  key: string
+  kind: 'local' | 'ssh'
+  label: string
+  detail?: string
+  status?: 'reachable' | 'connecting' | 'down' | 'unknown'
+}
 export type ProjectGroupOrdering = 'manual' | 'visible-worktree-order'
 
 export function getProjectGroupOrdering(
@@ -78,7 +87,14 @@ export type ImportedWorktreesCardRow = {
   placement: 'repo-group' | 'pinned-fallback'
 }
 
-export type Row = GroupHeaderRow | WorktreeRow | ImportedWorktreesCardRow
+export type HostHeaderRow = {
+  type: 'host-header'
+  key: string
+  host: SidebarHost
+  count: number
+}
+
+export type Row = GroupHeaderRow | WorktreeRow | ImportedWorktreesCardRow | HostHeaderRow
 
 export type PRGroupKey = 'done' | 'in-review' | 'in-progress' | 'closed'
 
@@ -123,19 +139,18 @@ export function getProjectGroupHeaderKey(groupId: string | null): string {
   return groupId ? `project-group:${groupId}` : UNGROUPED_PROJECT_GROUP_KEY
 }
 
-/** Synthetic host key for repos with no host association (local machine). */
 export const LOCAL_HOST_KEY = 'local'
 
-/**
- * The host a repo's sessions run on, as a stable grouping key — the desktop
- * analogue of the TUI's `host_group_key()` (`agentum-cli .../terminal/app.rs`).
- * Prefer the resolved server `hostId`; fall back to the desktop's native
- * `connectionId` for a remote repo not yet backfilled; local repos (neither)
- * bucket under the synthetic `local` host. Pure + stable so the grouping
- * builder and host-header rows agree on one key per host.
- */
-export function repoHostKey(repo: Repo): string {
-  return repo.hostId ?? repo.connectionId ?? LOCAL_HOST_KEY
+/** Map a repo to its host key. Local repos (no SSH target) bucket under the
+ *  synthetic local host. Mirrors the TUI's `host_group_key()`. */
+export function hostKeyForRepo(repo: Repo | undefined): string {
+  return repo?.connectionId ? `ssh:${repo.connectionId}` : LOCAL_HOST_KEY
+}
+
+/** Collapse-state key for a host header. Reuses the shared `collapsedGroups`
+ *  set so host collapse rides the existing toggle/scroll-anchor machinery. */
+export function getHostHeaderKey(hostKey: string): string {
+  return `host:${hostKey}`
 }
 
 export const PINNED_GROUP_KEY = 'pinned'
