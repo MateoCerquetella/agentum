@@ -41,6 +41,13 @@ function Sidebar({
   const repos = useAppStore((s) => s.repos)
   const fetchAllWorktrees = useAppStore((s) => s.fetchAllWorktrees)
   const { nativeDropTarget, dropHandlers, affordance } = useSidebarProjectDrop()
+  const hydrateHosts = useAppStore((s) => s.hydrateHosts)
+  const sshConnectedGeneration = useAppStore((s) => s.sshConnectedGeneration)
+
+  // Hydrate host metadata (label, OS) on mount and whenever an SSH target connects.
+  useEffect(() => {
+    void hydrateHosts()
+  }, [hydrateHosts, sshConnectedGeneration])
 
   const setLiveSidebarWidth = React.useCallback((width: number) => {
     document.documentElement.style.setProperty('--workspace-sidebar-live-width', `${width}px`)
