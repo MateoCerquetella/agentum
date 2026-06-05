@@ -393,6 +393,10 @@ const LINEAGE_INDENT = 18
 const WORKTREE_GROUP_INDENT = 18
 const PROJECT_GROUP_HEADER_BASE_PADDING = 4
 const PROJECT_GROUP_HEADER_INDENT = 10
+// Why: in host-first grouping the host header is the top-level parent, so every
+// row beneath it (repo sub-headers + their worktrees) shifts one step right to
+// make the host → project → worktree nesting read visually.
+const HOST_CHILD_INDENT = 16
 const SIDEBAR_POINTER_DRAG_THRESHOLD_PX = 4
 
 type VirtualizedWorktreeViewportProps = {
@@ -2671,6 +2675,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                     style={{
                       paddingLeft:
                         PROJECT_GROUP_HEADER_BASE_PADDING +
+                        (groupBy === 'host' ? HOST_CHILD_INDENT : 0) +
                         Math.min(projectGroupDepth, 6) * PROJECT_GROUP_HEADER_INDENT
                     }}
                     onDragOver={
@@ -3003,7 +3008,9 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
               const paddingDepth = nested ? Math.max(0, itemRow.depth - 1) : itemRow.depth
               // Why: grouped rows still indent their contents under the header,
               // but the card surface spans the full sidebar hit/background row.
-              const basePadding = !nested && groupBy !== 'none' ? WORKTREE_GROUP_INDENT : 0
+              const hostChildIndent = !nested && groupBy === 'host' ? HOST_CHILD_INDENT : 0
+              const basePadding =
+                (!nested && groupBy !== 'none' ? WORKTREE_GROUP_INDENT : 0) + hostChildIndent
               const paddingLeft = basePadding + paddingDepth * LINEAGE_INDENT
               const worktreeDragGroupKey = groupKeyByWorktreeId.get(itemRow.worktree.id)
               const worktreeDragGroupIndex = groupIndexByWorktreeId.get(itemRow.worktree.id)
