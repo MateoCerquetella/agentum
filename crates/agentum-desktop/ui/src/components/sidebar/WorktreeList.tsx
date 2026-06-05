@@ -3075,7 +3075,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                         }
                         onCardDragStart={handleWorktreeCardDragStart}
                         onCardDragEnd={clearWorktreeDrag}
-                        hideRepoBadge={groupBy === 'repo'}
+                        hideRepoBadge={groupBy === 'repo' || groupBy === 'host'}
                         lineageChildCount={itemRow.lineageChildCount}
                         lineageCollapsed={itemRow.lineageCollapsed}
                         lineageChildren={lineageChildren}
@@ -3164,7 +3164,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                             {child.worktree.displayName}
                           </div>
                           <div className="mt-1 flex min-w-0 items-center gap-1.5">
-                            {child.repo && groupBy !== 'repo' ? (
+                            {child.repo && groupBy !== 'repo' && groupBy !== 'host' ? (
                               <span className="flex h-[16px] shrink-0 items-center gap-1.5 rounded-[4px] border border-border bg-accent px-1.5 text-[10px] font-semibold leading-none text-foreground dark:bg-accent/50 dark:border-border/60">
                                 <RepoBadgeMark color={child.repo.badgeColor} />
                                 <span className="max-w-[6rem] truncate lowercase">
