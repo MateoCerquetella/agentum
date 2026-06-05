@@ -10,7 +10,7 @@ import { useAppStore } from '@/store'
 import type { SshTarget } from '../../../shared/ssh-types'
 
 /** A server host as returned by `/api/hosts` (camelCase flattened kind). */
-type ServerHost = {
+export type ServerHost = {
   id: string
   name: string
   kind: 'local' | 'ssh'
@@ -63,6 +63,24 @@ export async function detectRemoteAgentsViaServer(connectionId: string): Promise
   } catch (err) {
     console.warn('[agentum] failed to detect remote agents for connection', connectionId, err)
     return []
+  }
+}
+
+/**
+ * Read a host's OS one-liner from `/api/hosts/{id}/readiness` (`system.uname`,
+ * e.g. "Linux 6.9" / "Darwin 24.5"). Best-effort — returns null on any failure
+ * or when the daemon predates the field, so the sidebar header degrades to a
+ * kind-only label rather than throwing.
+ */
+export async function getServerHostReadinessUname(hostId: string): Promise<string | null> {
+  try {
+    const readiness = await getJson<{ system?: { uname?: string | null } }>(
+      `/api/hosts/${encodeURIComponent(hostId)}/readiness`
+    )
+    return readiness.system?.uname ?? null
+  } catch (err) {
+    console.warn('[agentum] failed to read host readiness uname', hostId, err)
+    return null
   }
 }
 
