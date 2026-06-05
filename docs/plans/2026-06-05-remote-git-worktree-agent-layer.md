@@ -1,11 +1,20 @@
 # Remote (SSH) projects: host-aware git/worktree ops + remote agent detection
 
-**Status:** DONE (2026-06-05). All three work items implemented, `cargo build`
-+ `cargo test --workspace --lib` (379 pass, +3 new host_runtime tests) +
-`vite build` + relevant vitest suites all green. NOT yet validated against a
-live remote host (the plan's "only true validation" — needs the Omarchy box).
+**Status:** DONE + LIVE-VALIDATED (2026-06-05). All three work items
+implemented; `cargo build` + `cargo test --workspace --lib` (379 pass, +3 new
+host_runtime tests) + `vite build` + vitest suites all green. **Validated
+against the real Omarchy SSH host** (the plan's "only true validation"):
+`git worktree add` over SSH now succeeds (the original `500 os error 45`),
+plus worktree remove + branch delete + worktree-list + base-refs + host
+readiness — all over SSH, host left pristine after the reversible smoke test.
 Finishes the remote-project work begun in `2026-06-04-desktop-ssh-tmux-sessions.md`
 (add/connect/browse + sessions-in-remote-tmux already shipped on staging ≤ 210179a).
+
+Shipped across two commits: `a4992e6` (the feature) and `7388cb0` (a boot-crash
+fix the feature introduced — static `server-host-client` imports in the
+`@/tauri`/`@/store` barrels caused a circular-import TDZ that blanked the SPA;
+fixed by deferring them to dynamic `import()`, plus a legacy-repo `hostId`
+backfill in `fetchRepos`).
 
 ## What shipped (file-by-file)
 - **`host_runtime.rs`** (foundation): `HostCommandOutput {success, code, stdout,
