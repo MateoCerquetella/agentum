@@ -2,6 +2,7 @@
    provider-specific action rows, and markdown note preview together so the sidebar
    card has one metadata contract. */
 import React from 'react'
+import { useLatestAgentActivity } from './useLatestAgentActivity'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card'
@@ -261,6 +262,23 @@ export const WorktreeCardMetaBadges = React.forwardRef<
     </div>
   )
 })
+
+/** Muted "ctx N%" chip shown on the worktree leaf when an agent reports context usage. */
+export function WorktreeCardCtxChip({
+  worktreeId
+}: {
+  worktreeId: string
+}): React.JSX.Element | null {
+  const { contextUsagePercent } = useLatestAgentActivity(worktreeId)
+  if (typeof contextUsagePercent !== 'number') {
+    return null
+  }
+  return (
+    <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+      ctx {Math.round(contextUsagePercent)}%
+    </span>
+  )
+}
 
 export function WorktreeCardDetailsHover({
   issue,

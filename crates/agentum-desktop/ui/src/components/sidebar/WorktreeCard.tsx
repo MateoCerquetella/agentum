@@ -34,6 +34,7 @@ import type {
 } from '../../../../shared/types'
 import { branchDisplayName, CONFLICT_OPERATION_LABELS } from './WorktreeCardHelpers'
 import {
+  WorktreeCardCtxChip,
   WorktreeCardDetailsHover,
   hasWorktreeCardDetails,
   WorktreeCardMetaBadges,
@@ -870,6 +871,8 @@ const WorktreeCard = React.memo(function WorktreeCard({
                   {branch}
                 </span>
               ) : null}
+
+              {!isFolder && <WorktreeCardCtxChip worktreeId={worktree.id} />}
 
               {showConflictOperationBadge && (
                 <Badge
