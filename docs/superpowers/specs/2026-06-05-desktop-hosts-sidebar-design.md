@@ -1,7 +1,10 @@
 # Desktop ADE — Hosts-first sidebar
 
 **Date:** 2026-06-05
-**Status:** Design approved, pending spec review
+**Status:** Design approved → specs drafted, pending spec review. Split into 3
+incremental specs: `ai/specs/002-sidebar-host-grouping` (grouping + host header +
+count badge), `ai/specs/003-sidebar-host-metadata` (OS/arch line),
+`ai/specs/004-sidebar-session-activity` (ctx% chip + PRIMARY slot + active card).
 **Area:** `crates/agentum-desktop/ui/` (React + Vite SPA)
 
 ## 1. Summary
