@@ -28,10 +28,11 @@ type SidebarWorkspaceOptionsMenuProps = {
 }
 
 const GROUP_BY_OPTIONS = [
-  { id: 'none', label: 'None' },
+  { id: 'host', label: 'Host' },
+  { id: 'repo', label: 'Project' },
   { id: 'workspace-status', label: 'Status' },
   { id: 'pr-status', label: 'PR' },
-  { id: 'repo', label: 'Project' }
+  { id: 'none', label: 'None' }
 ] as const
 
 const CARD_LAYOUT_OPTIONS = [
