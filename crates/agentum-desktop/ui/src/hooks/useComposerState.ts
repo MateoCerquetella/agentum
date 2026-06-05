@@ -20,6 +20,7 @@ import { filterEnabledTuiAgents, isTuiAgentEnabled } from '../../../shared/tui-a
 import { tuiAgentToAgentKind } from '@/lib/telemetry'
 import { isGitRepoKind } from '../../../shared/repo-kind'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
+import { connectSshTargetViaServer } from '@/runtime/server-host-client'
 import type {
   GitHubWorkItem,
   GitHubPrStartPoint,
@@ -930,7 +931,15 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     }
 
     try {
-      await api.ssh.connect({ targetId })
+      // The native `ssh_connect` command is an unported no-op (returns null), so
+      // the old call left the composer stuck on "Not connected". Use the same
+      // server-host path every other Connect surface uses (status bar, add-repo
+      // step): it registers the SSH target as a server host, probes it over SSH,
+      // and updates sshConnectionStates — which flips this card to "connected".
+      const result = await connectSshTargetViaServer(targetId)
+      if (!result.ok) {
+        toast.error(result.message || 'Failed to connect to project.')
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to connect to project.')
     }
