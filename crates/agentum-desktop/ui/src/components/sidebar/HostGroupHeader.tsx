@@ -1,5 +1,5 @@
 import type React from 'react'
-import { ChevronDown, Monitor, Server } from 'lucide-react'
+import { ChevronDown, Monitor, Server, SquareTerminal } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { SidebarHost } from './worktree-list-groups'
 
@@ -49,7 +49,32 @@ export function HostGroupHeader({
           <span className="truncate text-[11px] text-muted-foreground">{host.detail}</span>
         ) : null}
       </div>
-      <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-sidebar-accent px-1.5 py-0.5 text-[11px] text-muted-foreground">
+      {/* tmux indicator: sessions on this host run inside tmux. Green when
+          available; amber "tmux?" when missing (hook for an install prompt). */}
+      {host.tmuxInstalled !== undefined ? (
+        <span
+          title={
+            host.tmuxInstalled
+              ? 'Sessions on this host run inside tmux'
+              : 'tmux is not installed on this host — sessions may not persist'
+          }
+          className={cn(
+            'ml-auto inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium',
+            host.tmuxInstalled
+              ? 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400'
+              : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+          )}
+        >
+          <SquareTerminal className="size-3 shrink-0" />
+          {host.tmuxInstalled ? 'tmux' : 'tmux?'}
+        </span>
+      ) : null}
+      <span
+        className={cn(
+          'inline-flex items-center gap-1 rounded-full bg-sidebar-accent px-1.5 py-0.5 text-[11px] text-muted-foreground',
+          host.tmuxInstalled === undefined && 'ml-auto'
+        )}
+      >
         <span className={cn('size-1.5 rounded-full', STATUS_DOT[status])} />
         {count}
       </span>

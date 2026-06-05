@@ -72,14 +72,28 @@ export async function detectRemoteAgentsViaServer(connectionId: string): Promise
  * kind-only label rather than throwing.
  */
 export async function getServerHostReadinessUname(hostId: string): Promise<string | null> {
+  return (await getServerHostReadinessInfo(hostId)).uname
+}
+
+/** Host readiness essentials for the sidebar header: OS one-liner + whether
+ *  `tmux` is installed (sessions run inside tmux on the host, so this is the
+ *  "tmux is available here" signal). One `/readiness` fetch; best-effort —
+ *  unknowns degrade to null/undefined rather than throwing into the UI. */
+export type HostReadinessInfo = { uname: string | null; tmuxInstalled?: boolean }
+
+export async function getServerHostReadinessInfo(hostId: string): Promise<HostReadinessInfo> {
   try {
-    const readiness = await getJson<{ system?: { uname?: string | null } }>(
-      `/api/hosts/${encodeURIComponent(hostId)}/readiness`
-    )
-    return readiness.system?.uname ?? null
+    const readiness = await getJson<{
+      system?: { uname?: string | null }
+      required?: { id: string; installed: boolean }[]
+    }>(`/api/hosts/${encodeURIComponent(hostId)}/readiness`)
+    return {
+      uname: readiness.system?.uname ?? null,
+      tmuxInstalled: readiness.required?.find((d) => d.id === 'tmux')?.installed
+    }
   } catch (err) {
-    console.warn('[agentum] failed to read host readiness uname', hostId, err)
-    return null
+    console.warn('[agentum] failed to read host readiness', hostId, err)
+    return { uname: null }
   }
 }
 

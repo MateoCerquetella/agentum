@@ -3,7 +3,7 @@ import type { AppState } from '../types'
 import {
   listServerHosts,
   resolveServerHostIdForConnection,
-  getServerHostReadinessUname,
+  getServerHostReadinessInfo,
   type ServerHost
 } from '@/runtime/server-host-client'
 
@@ -19,6 +19,10 @@ export type HostMeta = {
   /** Right-of-name OS line, e.g. "localhost · Darwin 24.5" or
    *  "ssh forge.lan · Linux 6.9". Undefined until readiness resolves. */
   detail?: string
+  /** Whether `tmux` is installed on the host. Sessions run inside tmux there,
+   *  so this is the "tmux available" signal on the host header (and the hook for
+   *  an install prompt when false). Undefined until readiness resolves. */
+  tmuxInstalled?: boolean
 }
 
 export type HostsSlice = {
@@ -49,12 +53,15 @@ export const createHostsSlice: StateCreator<AppState, [], [], HostsSlice> = (set
     try {
       const hosts: ServerHost[] = await listServerHosts()
       const local = hosts.find((h) => h.kind === 'local')
-      const localUname = local ? await getServerHostReadinessUname(local.id) : null
+      const localInfo = local
+        ? await getServerHostReadinessInfo(local.id)
+        : { uname: null as string | null, tmuxInstalled: undefined }
       get().setHostMeta('local', {
         key: 'local',
         kind: 'local',
         label: local?.name?.trim() || 'This Mac',
-        detail: unameDetail('localhost', localUname)
+        detail: unameDetail('localhost', localInfo.uname),
+        tmuxInstalled: localInfo.tmuxInstalled
       })
     } catch (err) {
       console.warn('[agentum] hydrateHosts: local host failed', err)
@@ -71,9 +78,15 @@ export const createHostsSlice: StateCreator<AppState, [], [], HostsSlice> = (set
         if (!hostId) continue
         const hosts: ServerHost[] = await listServerHosts()
         const host = hosts.find((h) => h.id === hostId)
-        const uname = await getServerHostReadinessUname(hostId)
+        const info = await getServerHostReadinessInfo(hostId)
         const prefix = host?.hostname ? `ssh ${host.hostname}` : 'ssh'
-        get().setHostMeta(key, { key, kind: 'ssh', label, detail: unameDetail(prefix, uname) })
+        get().setHostMeta(key, {
+          key,
+          kind: 'ssh',
+          label,
+          detail: unameDetail(prefix, info.uname),
+          tmuxInstalled: info.tmuxInstalled
+        })
       } catch (err) {
         console.warn('[agentum] hydrateHosts: ssh host failed', connectionId, err)
       }

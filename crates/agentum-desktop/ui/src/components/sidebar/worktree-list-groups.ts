@@ -38,6 +38,9 @@ export type SidebarHost = {
   label: string
   detail?: string
   status?: 'reachable' | 'connecting' | 'down' | 'unknown'
+  /** Whether `tmux` is installed on the host (sessions run inside it). Drives
+   *  the host header's tmux indicator. Undefined until readiness resolves. */
+  tmuxInstalled?: boolean
 }
 export type ProjectGroupOrdering = 'manual' | 'visible-worktree-order'
 
