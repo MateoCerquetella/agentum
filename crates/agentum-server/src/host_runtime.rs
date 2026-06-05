@@ -650,6 +650,144 @@ pub async fn ssh_stdout(host: &Host, script: &str) -> Result<String> {
     Ok(String::from_utf8(output.stdout)?)
 }
 
+// ───────────────────────── host-aware git / fs ─────────────────────────
+// Generic command plumbing so the repo/worktree/git routes run their git
+// (and the few fs touches around it) on the *repo's host*: directly when
+// the host is `Local`, over `ssh` when it's `Ssh`. The SSH form always
+// wraps in `sh -c` for the same reason every other remote path does — the
+// login shell may be fish/zsh, which reject the bash/POSIX `&&`/`cd` we
+// build here. See `fs::list_remote_dir`.
+
+/// `git worktree add` (and a clone-from-scratch checkout) can take far
+/// longer than the 12s probe budget, so host-aware git gets its own,
+/// roomier timeout. Still bounded so a hung remote can't wedge a request.
+const GIT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Captured output of a command run on a host. Unlike [`ssh_stdout`], a
+/// non-zero exit is NOT an error — callers inspect `success`/`stderr`
+/// themselves, because git uses exit codes to signal *expected* states
+/// (a branch that "already exists", a path absent at a revision, …).
+#[derive(Debug)]
+pub struct HostCommandOutput {
+    pub success: bool,
+    /// Process exit code, when known. For SSH this is the *remote* command's
+    /// code (ssh forwards it). `None` if the process was signalled. Callers
+    /// that branch on specific codes (e.g. `git check-ignore`: 0/1/≥2) need
+    /// this; most only read `success`.
+    pub code: Option<i32>,
+    pub stdout: Vec<u8>,
+    pub stderr: String,
+}
+
+impl HostCommandOutput {
+    /// stdout as lossy UTF-8 (callers trim as needed).
+    pub fn stdout_string(&self) -> String {
+        String::from_utf8_lossy(&self.stdout).into_owned()
+    }
+}
+
+/// Run `git <args>` with `cwd` as the working directory on `host`.
+/// Local → `git -C <cwd> <args>`; SSH → `sh -c 'cd <cwd> && git <args>'`
+/// with every token shell-quoted. A non-zero git exit is reported via
+/// `success`, not as an `Err` (only transport/timeout failures error).
+pub async fn git_in_dir(host: &Host, cwd: &str, args: &[&str]) -> Result<HostCommandOutput> {
+    match &host.kind {
+        HostKind::Local => {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(cwd)
+                .args(args)
+                .output()
+                .await?;
+            Ok(HostCommandOutput {
+                success: out.status.success(),
+                code: out.status.code(),
+                stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+                stdout: out.stdout,
+            })
+        }
+        HostKind::Ssh { .. } => {
+            let mut inner = format!("cd {} && git", q(cwd)?);
+            for a in args {
+                inner.push(' ');
+                inner.push_str(&q(a)?);
+            }
+            let script = format!("sh -c {}", q(&inner)?);
+            let out = timeout(GIT_TIMEOUT, ssh_command(host, &script).output())
+                .await
+                .map_err(|_| HostRuntimeError::Timeout)??;
+            Ok(HostCommandOutput {
+                success: out.status.success(),
+                code: out.status.code(),
+                stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+                stdout: out.stdout,
+            })
+        }
+    }
+}
+
+/// True when `cwd` is inside a git work tree on `host`
+/// (`git rev-parse --is-inside-work-tree`). Host-aware replacement for
+/// `crate::git::is_git_repo`, which is local-only.
+pub async fn is_git_repo(host: &Host, cwd: &str) -> bool {
+    git_in_dir(host, cwd, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .map(|o| o.success)
+        .unwrap_or(false)
+}
+
+/// `mkdir -p <path>` on `host`. The worktree routes need the
+/// `.claude/worktrees` parent to exist before `git worktree add`.
+pub async fn mkdir_p(host: &Host, path: &str) -> Result<()> {
+    match &host.kind {
+        HostKind::Local => {
+            tokio::fs::create_dir_all(path).await?;
+            Ok(())
+        }
+        HostKind::Ssh { .. } => {
+            let script = format!("sh -c {}", q(&format!("mkdir -p {}", q(path)?))?);
+            ssh_checked(host, &script).await
+        }
+    }
+}
+
+/// Read a file's raw bytes from `host`, or `None` when it doesn't exist.
+/// Used for the `worktree` revision of a git diff (the on-disk content,
+/// which may differ from index/HEAD). SSH reads via `cat`; a missing file
+/// exits non-zero → `None`, mirroring the local `NotFound` branch.
+pub async fn read_file_bytes(host: &Host, abs_path: &str) -> Result<Option<Vec<u8>>> {
+    match &host.kind {
+        HostKind::Local => match tokio::fs::read(abs_path).await {
+            Ok(b) => Ok(Some(b)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        },
+        HostKind::Ssh { .. } => {
+            let script = format!("sh -c {}", q(&format!("cat {}", q(abs_path)?))?);
+            let out = timeout(GIT_TIMEOUT, ssh_command(host, &script).output())
+                .await
+                .map_err(|_| HostRuntimeError::Timeout)??;
+            Ok(out.status.success().then_some(out.stdout))
+        }
+    }
+}
+
+/// Whether `abs_path` exists on `host` (`test -e` over SSH). Used by the
+/// diff route to decide whether an empty `git diff` means "untracked file"
+/// (so it can synthesise a diff) versus "no change".
+pub async fn path_exists(host: &Host, abs_path: &str) -> Result<bool> {
+    match &host.kind {
+        HostKind::Local => Ok(tokio::fs::try_exists(abs_path).await.unwrap_or(false)),
+        HostKind::Ssh { .. } => {
+            let script = format!("sh -c {}", q(&format!("test -e {}", q(abs_path)?))?);
+            let out = timeout(SSH_TIMEOUT, ssh_command(host, &script).output())
+                .await
+                .map_err(|_| HostRuntimeError::Timeout)??;
+            Ok(out.status.success())
+        }
+    }
+}
+
 async fn ssh_checked(host: &Host, script: &str) -> Result<()> {
     let output = timeout(SSH_TIMEOUT, ssh_command(host, script).output())
         .await
@@ -913,5 +1051,72 @@ mod tests {
         for pm in ["apt-get", "dnf", "pacman", "brew"] {
             assert!(script.contains(pm), "script probes {pm}");
         }
+    }
+
+    // ── host-aware git/fs, Local backend ──────────────────────────────────
+    // The SSH backend can't be unit-tested without a live host (the only true
+    // validation — see the plan), but the Local branch is the same code the
+    // worktree/git routes hit for a local repo, so exercising it guards the
+    // refactor that routed every git call through `git_in_dir`.
+
+    fn local_host() -> Host {
+        Host {
+            id: agentum_core::LOCAL_HOST_ID,
+            name: "local".into(),
+            kind: HostKind::Local,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+            last_seen_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn git_in_dir_local_reports_repo_and_propagates_exit_code() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+        let host = local_host();
+
+        // Not a repo yet: rev-parse fails (non-zero), but the call itself Ok's
+        // — git's exit code rides on `success`, not an Err.
+        let before = git_in_dir(&host, &path, &["rev-parse", "--is-inside-work-tree"])
+            .await
+            .unwrap();
+        assert!(!before.success);
+        assert!(!is_git_repo(&host, &path).await);
+
+        let init = git_in_dir(&host, &path, &["init"]).await.unwrap();
+        assert!(init.success, "git init stderr: {}", init.stderr);
+
+        let after = git_in_dir(&host, &path, &["rev-parse", "--is-inside-work-tree"])
+            .await
+            .unwrap();
+        assert!(after.success);
+        assert_eq!(after.stdout_string().trim(), "true");
+        assert!(is_git_repo(&host, &path).await);
+    }
+
+    #[tokio::test]
+    async fn mkdir_p_creates_nested_and_path_exists_tracks_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let nested = format!("{}/.claude/worktrees", dir.path().to_string_lossy());
+        let host = local_host();
+
+        assert!(!path_exists(&host, &nested).await.unwrap());
+        mkdir_p(&host, &nested).await.unwrap();
+        assert!(path_exists(&host, &nested).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn read_file_bytes_local_reads_present_and_none_for_missing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = format!("{}/hello.txt", dir.path().to_string_lossy());
+        let host = local_host();
+
+        assert!(read_file_bytes(&host, &file).await.unwrap().is_none());
+        tokio::fs::write(&file, b"hi there").await.unwrap();
+        assert_eq!(
+            read_file_bytes(&host, &file).await.unwrap().as_deref(),
+            Some(&b"hi there"[..])
+        );
     }
 }
