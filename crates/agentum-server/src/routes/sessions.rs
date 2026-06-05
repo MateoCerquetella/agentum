@@ -1166,8 +1166,30 @@ async fn stream_session(
 async fn stream_remote_session(mut socket: WebSocket, host: Host, target: String) {
     let mut ticker = tokio::time::interval(Duration::from_millis(700));
     let mut last_snapshot: Vec<u8> = Vec::new();
+    // Why: like the local stream, the remote pane's OSC title is consumed by tmux
+    // on the host and never crosses capture-pane — so the desktop's title-derived
+    // agent status would be blank for SSH sessions. Poll the remote pane_title and
+    // re-inject it as a synthetic OSC title on change. Slower cadence than local
+    // (1s) since each poll is a round-trip SSH exec.
+    let mut title_ticker = tokio::time::interval(Duration::from_millis(1000));
+    let mut last_pane_title = String::new();
     loop {
         tokio::select! {
+            _ = title_ticker.tick() => {
+                if let Ok(title) = crate::host_runtime::pane_title(&host, &target).await
+                    && !title.is_empty()
+                    && title != last_pane_title
+                {
+                    last_pane_title = title.clone();
+                    let mut osc = Vec::with_capacity(title.len() + 5);
+                    osc.extend_from_slice(b"\x1b]0;");
+                    osc.extend_from_slice(title.as_bytes());
+                    osc.push(0x07);
+                    if socket.send(Message::Binary(Bytes::from(osc))).await.is_err() {
+                        break;
+                    }
+                }
+            }
             _ = ticker.tick() => {
                 match crate::host_runtime::capture_pane_ansi(&host, &target).await {
                     Ok(snap) if snap != last_snapshot => {
