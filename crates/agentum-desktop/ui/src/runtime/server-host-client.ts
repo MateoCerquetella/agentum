@@ -6,7 +6,6 @@
 // coordinates and caches the mapping for the session lifetime.
 import { getJson, postJson } from './server-http'
 import { api } from '@/tauri'
-import { useAppStore } from '@/store'
 import type { SshTarget } from '../../../shared/ssh-types'
 
 /** A server host as returned by `/api/hosts` (camelCase flattened kind). */
@@ -95,6 +94,8 @@ export async function getServerHostReadinessUname(hostId: string): Promise<strin
 export async function connectSshTargetViaServer(
   targetId: string
 ): Promise<{ ok: boolean; message: string }> {
+  // Lazy import to avoid circular dependency: server-host-client ← store ← hosts ← server-host-client.
+  const { useAppStore } = await import('@/store')
   const setState = useAppStore.getState().setSshConnectionState
   setState(targetId, { targetId, status: 'connecting', error: null, reconnectAttempt: 0 })
   try {

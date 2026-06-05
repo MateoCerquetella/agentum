@@ -1,6 +1,5 @@
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
-import { useAppStore } from '@/store'
 import {
   listServerHosts,
   resolveServerHostIdForConnection,
@@ -59,7 +58,7 @@ export const createHostsSlice: StateCreator<AppState, [], [], HostsSlice> = (set
     }
 
     // SSH hosts: one entry per known native target (label from the store).
-    const labels = useAppStore.getState().sshTargetLabels
+    const labels = get().sshTargetLabels
     for (const [connectionId, label] of labels) {
       const key = `ssh:${connectionId}`
       // Seed the label immediately so the header renders before readiness lands.
