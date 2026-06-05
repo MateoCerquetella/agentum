@@ -7,12 +7,17 @@ import {
   buildRows,
   getGroupKeyForWorktree,
   getGroupKeysForWorktree,
+  getHostHeaderKey,
   getLineageGroupKey,
   getLineageRenderInfo,
   getPRGroupKey,
   getProjectGroupOrdering,
+  groupRowsByHost,
   LOCAL_HOST_KEY,
-  hostKeyForRepo
+  hostKeyForRepo,
+  PINNED_GROUP_KEY,
+  type Row,
+  type SidebarHost
 } from './worktree-list-groups'
 import type {
   DetectedWorktree,
@@ -1335,6 +1340,64 @@ describe('buildRows workspace lineage nesting', () => {
       worktree: { id: child.id }
     })
     expect(rows[1]).not.toHaveProperty('parentLabel')
+  })
+})
+
+describe('groupRowsByHost', () => {
+  const hostForKey = (key: string): SidebarHost => ({
+    key,
+    kind: key === 'local' ? 'local' : 'ssh',
+    label: key === 'local' ? 'studio' : 'forge',
+    status: 'reachable'
+  })
+
+  // A repo header carries `.repo` (with optional connectionId) and a count.
+  const repoHeader = (id: string, connectionId: string | null, count: number): Row =>
+    ({ type: 'header', key: `repo:${id}`, label: id, count, tone: '', repo: { connectionId } } as unknown as Row)
+  const item = (id: string, repoConnectionId: string | null): Row =>
+    ({ type: 'item', worktree: { id }, repo: { connectionId: repoConnectionId }, depth: 0, lineageTrail: [], isLastLineageChild: false, lineageChildCount: 0 } as unknown as Row)
+
+  it('inserts a host header above each host group, local first', () => {
+    const rows: Row[] = [
+      repoHeader('remote-repo', 'conn-1', 1),
+      item('w1', 'conn-1'),
+      repoHeader('local-repo', null, 1),
+      item('w2', null)
+    ]
+    const out = groupRowsByHost(rows, hostForKey, new Set())
+    expect(out.map((r) => r.type)).toEqual([
+      'host-header', 'header', 'item', // local host first
+      'host-header', 'header', 'item' // then ssh host
+    ])
+    expect((out[0] as { host: SidebarHost }).host.key).toBe('local')
+    expect((out[3] as { host: SidebarHost }).host.key).toBe('ssh:conn-1')
+  })
+
+  it('sums repo header counts into the host count', () => {
+    const rows: Row[] = [repoHeader('a', null, 2), item('w1', null), repoHeader('b', null, 3), item('w2', null)]
+    const out = groupRowsByHost(rows, hostForKey, new Set())
+    expect((out[0] as { count: number }).count).toBe(5)
+  })
+
+  it('hides a host group body when its host header is collapsed', () => {
+    const rows: Row[] = [repoHeader('a', null, 1), item('w1', null)]
+    const collapsed = new Set([getHostHeaderKey('local')])
+    const out = groupRowsByHost(rows, hostForKey, collapsed)
+    expect(out.map((r) => r.type)).toEqual(['host-header'])
+  })
+
+  it('keeps a leading Pinned section above all hosts', () => {
+    const rows: Row[] = [
+      { type: 'header', key: PINNED_GROUP_KEY, label: 'Pinned', count: 1, tone: '' } as Row,
+      item('p1', null),
+      repoHeader('a', null, 1),
+      item('w1', null)
+    ]
+    const out = groupRowsByHost(rows, hostForKey, new Set())
+    expect(out[0].type).toBe('header')
+    expect((out[0] as { key: string }).key).toBe(PINNED_GROUP_KEY)
+    expect(out[1].type).toBe('item')
+    expect(out[2].type).toBe('host-header')
   })
 })
 

@@ -756,6 +756,83 @@ export function getGroupKeyForWorktree(
   return `pr:${getPRGroupKey(worktree, repoMap, prCache, settings)}`
 }
 
+type HostRowBlock = { hostKey: string; headerCount: number; rows: Row[] }
+
+/**
+ * Post-process a repo-grouped row list into a host-first tree. Operates purely
+ * on the `Row[]` output of `buildRows('repo', ...)`:
+ *   1. A leading "Pinned" section stays at the very top, above all hosts.
+ *   2. Each repo header + its following non-header rows form a block; the
+ *      block's host is derived from the repo header's `connectionId`.
+ *   3. Blocks are bucketed by host (local first, then first-seen order) and
+ *      emitted under a `host-header` row. A collapsed `host:<key>` hides its body.
+ */
+export function groupRowsByHost(
+  repoRows: Row[],
+  hostForKey: (hostKey: string) => SidebarHost,
+  collapsedGroups: Set<string>
+): Row[] {
+  const result: Row[] = []
+  const pinnedBlock: Row[] = []
+  let i = 0
+
+  if (repoRows[i]?.type === 'header' && (repoRows[i] as GroupHeaderRow).key === PINNED_GROUP_KEY) {
+    pinnedBlock.push(repoRows[i])
+    i += 1
+    while (i < repoRows.length && repoRows[i].type !== 'header') {
+      pinnedBlock.push(repoRows[i])
+      i += 1
+    }
+  }
+
+  const blocks: HostRowBlock[] = []
+  let current: HostRowBlock | null = null
+  for (; i < repoRows.length; i += 1) {
+    const row = repoRows[i]
+    if (row.type === 'header') {
+      const header = row as GroupHeaderRow
+      current = { hostKey: hostKeyForRepo(header.repo), headerCount: header.count, rows: [row] }
+      blocks.push(current)
+    } else if (current) {
+      current.rows.push(row)
+    } else {
+      // Defensive: a body row with no preceding repo header (not expected in
+      // repo mode) — anchor it under the local host as its own block.
+      current = { hostKey: LOCAL_HOST_KEY, headerCount: 0, rows: [row] }
+      blocks.push(current)
+    }
+  }
+
+  const order: string[] = []
+  const byHost = new Map<string, HostRowBlock[]>()
+  for (const block of blocks) {
+    if (!byHost.has(block.hostKey)) {
+      byHost.set(block.hostKey, [])
+      order.push(block.hostKey)
+    }
+    byHost.get(block.hostKey)!.push(block)
+  }
+  order.sort((a, b) => (a === LOCAL_HOST_KEY ? -1 : b === LOCAL_HOST_KEY ? 1 : 0))
+
+  result.push(...pinnedBlock)
+  for (const hostKey of order) {
+    const hostBlocks = byHost.get(hostKey)!
+    const headerKey = getHostHeaderKey(hostKey)
+    result.push({
+      type: 'host-header',
+      key: headerKey,
+      host: hostForKey(hostKey),
+      count: hostBlocks.reduce((sum, block) => sum + block.headerCount, 0)
+    })
+    if (!collapsedGroups.has(headerKey)) {
+      for (const block of hostBlocks) {
+        result.push(...block.rows)
+      }
+    }
+  }
+  return result
+}
+
 export function getGroupKeysForWorktree(
   groupBy: WorktreeGroupBy,
   worktree: Worktree,
