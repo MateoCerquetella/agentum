@@ -592,7 +592,7 @@ export type UISlice = {
   clearAgentumHookTrustForRepo: (repoId: string) => void
   setupScriptPromptDismissedRepoIds: string[]
   dismissSetupScriptPrompt: (repoId: string) => void
-  groupBy: 'none' | 'workspace-status' | 'repo' | 'pr-status'
+  groupBy: 'none' | 'workspace-status' | 'repo' | 'pr-status' | 'host'
   setGroupBy: (g: UISlice['groupBy']) => void
   sortBy: 'name' | 'smart' | 'recent' | 'repo' | 'manual'
   setSortBy: (s: UISlice['sortBy']) => void
@@ -1220,7 +1220,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       return { setupScriptPromptDismissedRepoIds: next }
     }),
 
-  groupBy: 'repo',
+  groupBy: 'host',
   // Why: group keys are mode-specific (e.g. repo id vs PR status), so
   // collapsed state from one mode is meaningless in another. Clearing
   // also prevents unbounded accumulation of stale keys across mode switches.
@@ -1488,12 +1488,13 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         rightSidebarOpen: typeof ui.rightSidebarOpen === 'boolean' ? ui.rightSidebarOpen : true,
         rightSidebarTab: normalizePersistedRightSidebarTab(ui.rightSidebarTab),
         // Why: persisted state predating this key has `ui.groupBy === undefined`.
-        // Fall back to the 'repo' default (the grouped "Projects" sidebar) instead
-        // of writing `undefined`, which would collapse to the flat "Workspaces" view.
+        // Fall back to 'host' (hosts-first sidebar) for new/legacy state.
+        // The legacy 'parent' value migrates to 'host'; explicit user choices
+        // (repo/pr-status/etc.) are preserved as-is.
         groupBy:
           (ui.groupBy as UISlice['groupBy'] | 'parent') === 'parent'
-            ? 'repo'
-            : ((ui.groupBy as UISlice['groupBy']) ?? 'repo'),
+            ? 'host'
+            : ((ui.groupBy as UISlice['groupBy']) ?? 'host'),
         sortBy,
         // Why: Active-only was retired. Force the old persisted flag off so an
         // old profile cannot invisibly keep narrowing the workspace list.
