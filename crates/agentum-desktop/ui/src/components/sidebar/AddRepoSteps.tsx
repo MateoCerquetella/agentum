@@ -43,6 +43,11 @@ export function useRemoteRepo(
   const [isAddingRemote, setIsAddingRemote] = useState(false)
   const remoteGenRef = useRef(0)
   const mountedRef = useMountedRef()
+  // Why: connection state lives in the store (sshConnectionStates), updated by
+  // connectSshTargetViaServer. The old native getState/onStateChanged this step
+  // used are dead stubs, so the modal showed every target as Disconnected even
+  // after a successful Connect. Drive the displayed state from the store.
+  const sshConnectionStates = useAppStore((s) => s.sshConnectionStates)
 
   const resetRemoteState = useCallback(() => {
     remoteGenRef.current++
@@ -61,17 +66,8 @@ export function useRemoteRepo(
       if (gen !== remoteGenRef.current) {
         return
       }
-      const withState = await Promise.all(
-        targets.map(async (t) => {
-          const state = (await api.ssh.getState({
-            targetId: t.id
-          })) as SshConnectionState | null
-          return { ...t, state: state ?? undefined }
-        })
-      )
-      if (gen !== remoteGenRef.current) {
-        return
-      }
+      const states = useAppStore.getState().sshConnectionStates
+      const withState = targets.map((t) => ({ ...t, state: states.get(t.id) }))
       setSshTargets(withState)
       const connected = withState.find((t) => t.state?.status === 'connected')
       if (connected) {
@@ -86,17 +82,18 @@ export function useRemoteRepo(
   }, [setStep])
 
   // Why: keep the target list's connection state in sync while the dialog is
-  // open, so clicking the inline Connect button below updates the dot/label
-  // live without the user reopening the step.
+  // open, so clicking the inline Connect button updates the dot/label live.
+  // Driven by the store's sshConnectionStates (the native onStateChanged event
+  // was never emitted), so a server-backed Connect reflects immediately and
+  // auto-selects the now-connected target.
   useEffect(() => {
-    const unsubscribe = api.ssh.onStateChanged(({ targetId, state }) => {
-      setSshTargets((prev) => prev.map((t) => (t.id === targetId ? { ...t, state } : t)))
+    setSshTargets((prev) => prev.map((t) => ({ ...t, state: sshConnectionStates.get(t.id) })))
+    for (const [targetId, state] of sshConnectionStates) {
       if (state.status === 'connected') {
         setSelectedTargetId((curr) => curr ?? targetId)
       }
-    })
-    return unsubscribe
-  }, [])
+    }
+  }, [sshConnectionStates])
 
   const handleConnectTarget = useCallback(async (targetId: string) => {
     // Native ssh_connect is a no-op; connect through the server host probe.
