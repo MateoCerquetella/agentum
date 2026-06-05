@@ -40,13 +40,18 @@ export function testServerHost(hostId: string): Promise<ServerHostProbe> {
 /** `POST /api/hosts` — register an SSH host. Auth defaults to agent/key on the
  *  server; we pass an explicit key path when the native target has one so the
  *  remote exec uses the same identity the user configured. */
-// Why: prefer the OpenSSH config alias (configHost) over the raw host when the
-// target was imported from ~/.ssh/config. The server's ssh invocation reads
-// ~/.ssh/config, so `ssh user@<alias>` applies that Host block (ProxyCommand,
-// ProxyJump, IdentityFile, …) which a bare IP would skip. Falls back to the
-// literal host for manually-entered targets.
+// Why: prefer a genuine OpenSSH config alias (configHost) over the raw host so a
+// config-imported target gets its ~/.ssh/config Host block. But ignore a
+// configHost that just duplicates the host/IP (some imports set configHost to
+// the IP itself) — it's not a real alias, and treating it as one drops the
+// explicit port. The server always passes the explicit port regardless, so when
+// in doubt use the literal host.
 function targetHostname(target: SshTarget): string {
-  return target.configHost?.trim() || target.host
+  const alias = target.configHost?.trim()
+  if (alias && alias !== target.host) {
+    return alias
+  }
+  return target.host
 }
 
 function createServerHost(name: string, target: SshTarget): Promise<ServerHost> {

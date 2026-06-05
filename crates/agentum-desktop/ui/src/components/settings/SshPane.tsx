@@ -247,13 +247,25 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
   const handleTest = async (targetId: string): Promise<void> => {
     setTestingIds((prev) => new Set(prev).add(targetId))
     try {
-      const result = await api.ssh.testConnection({ targetId })
+      // Why: route Test through the server probe (same backend as Connect and as
+      // real sessions). The native ssh_test_connection mishandles a target whose
+      // configHost is the IP itself — it treats it as an ssh-config alias and
+      // drops `-p <port>`, so ssh falls back to port 22 and times out. The server
+      // probe always passes the explicit port + identity, so the test reflects
+      // exactly how sessions connect.
+      const hostId = await resolveServerHostIdForConnection(targetId)
+      if (!hostId) {
+        throw new Error('Could not register this host with the server')
+      }
+      const probe = await testServerHost(hostId)
       recordFeatureInteraction('ssh')
       if (mountedRef.current) {
-        if (result.success) {
-          toast.success('Connection successful')
+        if (probe.ok) {
+          toast.success(
+            probe.tmux ? 'Connection successful' : 'Connected — but tmux is missing on the host'
+          )
         } else {
-          toast.error(result.error ?? 'Connection test failed')
+          toast.error(probe.message || 'Connection test failed')
         }
       }
     } catch (err) {

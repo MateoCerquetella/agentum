@@ -399,9 +399,18 @@ pub fn ssh_test_connection(target_id: String) -> Value {
     if let Some(identity) = &target.identity_file {
         command.args(["-i", identity]);
     }
-    // Prefer the ssh-config host alias when present; otherwise user@host -p port.
-    let destination = match &target.config_host {
-        Some(config_host) => config_host.clone(),
+    // Use the ssh-config alias as a bare destination (letting ~/.ssh/config
+    // supply port/identity) ONLY when it's a genuine alias — i.e. it differs
+    // from the literal host. A config_host equal to the host (some imports set
+    // it to the IP itself) is NOT a real alias; treating it as one drops `-p`
+    // and ssh falls back to port 22. In that case connect to user@host -p port.
+    let alias = target
+        .config_host
+        .as_deref()
+        .map(str::trim)
+        .filter(|alias| !alias.is_empty() && *alias != target.host);
+    let destination = match alias {
+        Some(alias) => alias.to_string(),
         None => {
             command.args(["-p", &target.port.to_string()]);
             format!("{}@{}", target.username, target.host)
