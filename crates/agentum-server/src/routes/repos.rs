@@ -113,18 +113,32 @@ fn basename(path: &str) -> String {
 
 /// Adds `path` to the registry (idempotent by path) and returns the Repo. Shared
 /// by add/create/clone so registration stays in one place.
-fn append_repo(path: String, kind: Option<String>) -> Result<Repo, ApiError> {
+fn append_repo(
+    path: String,
+    kind: Option<String>,
+    connection_id: Option<String>,
+) -> Result<Repo, ApiError> {
     let mut repos = read_repos()?;
     if let Some(existing) = repos.iter().find(|repo| repo.path == path) {
         return Ok(existing.clone());
     }
+    // detect_kind probes the LOCAL filesystem, which is meaningless for a remote
+    // (connection_id) path. Use the caller's kind, else default remote repos to
+    // 'git' and only local-detect when there's no connection.
+    let resolved_kind = kind.unwrap_or_else(|| {
+        if connection_id.is_some() {
+            "git".to_string()
+        } else {
+            detect_kind(&path)
+        }
+    });
     let repo = Repo {
         id: uuid::Uuid::new_v4().to_string(),
         display_name: basename(&path),
         badge_color: BADGE_COLORS[repos.len() % BADGE_COLORS.len()].to_string(),
         added_at: now_millis(),
-        kind: Some(kind.unwrap_or_else(|| detect_kind(&path))),
-        connection_id: None,
+        kind: Some(resolved_kind),
+        connection_id,
         path,
         extra: Map::new(),
     };
@@ -139,21 +153,29 @@ async fn list() -> Result<Json<Vec<Repo>>, ApiError> {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AddBody {
     path: String,
     #[serde(default)]
     kind: Option<String>,
+    /// SSH target id (a desktop native connection) the repo lives on. When set,
+    /// the path is on a remote host — skip the local existence check, and the
+    /// repo's sessions/git route through that connection (resolved to a server
+    /// host on the client).
+    #[serde(default)]
+    connection_id: Option<String>,
 }
 
 /// `POST /api/repos` — register `path`. Returns `{repo}` or `{error}` (the
 /// renderer's add-project dialogs branch on `'error' in result`).
 async fn add(Json(body): Json<AddBody>) -> Result<Json<Value>, ApiError> {
-    if !StdPath::new(&body.path).exists() {
+    // Only validate existence for LOCAL paths; a remote path can't be stat'd here.
+    if body.connection_id.is_none() && !StdPath::new(&body.path).exists() {
         return Ok(Json(
             serde_json::json!({ "error": format!("path does not exist: {}", body.path) }),
         ));
     }
-    let repo = append_repo(body.path, body.kind)?;
+    let repo = append_repo(body.path, body.kind, body.connection_id)?;
     Ok(Json(serde_json::json!({ "repo": repo })))
 }
 
@@ -221,7 +243,7 @@ async fn create(Json(body): Json<CreateBody>) -> Result<Json<Value>, ApiError> {
             return Ok(Json(serde_json::json!({ "error": "git init failed" })));
         }
     }
-    let repo = append_repo(target.to_string_lossy().into_owned(), Some(body.kind))?;
+    let repo = append_repo(target.to_string_lossy().into_owned(), Some(body.kind), None)?;
     Ok(Json(serde_json::json!({ "repo": repo })))
 }
 
@@ -250,7 +272,7 @@ async fn clone(Json(body): Json<CloneBody>) -> Result<Json<Repo>, ApiError> {
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
         ));
     }
-    Ok(Json(append_repo(body.destination, Some("git".to_string()))?))
+    Ok(Json(append_repo(body.destination, Some("git".to_string()), None)?))
 }
 
 /// `DELETE /api/repos/{id}` — drop from the registry.

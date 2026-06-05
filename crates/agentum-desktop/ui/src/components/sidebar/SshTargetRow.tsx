@@ -37,9 +37,12 @@ export function SshTargetRow({
       : 'bg-muted-foreground/30'
 
   const handleRowClick = (): void => {
-    if (isConnected) {
-      onSelect(target.id)
-    }
+    // Why: selection used to require the native "connected" state, but that
+    // transport was never ported (the status dot is driven by a stub, so it
+    // never goes green) — which made every host unselectable. The server now
+    // connects per request via host_runtime, so a target is selectable as soon
+    // as it exists; browsing/sessions establish the SSH connection on demand.
+    onSelect(target.id)
   }
 
   const handleConnectClick = (e: React.MouseEvent): void => {

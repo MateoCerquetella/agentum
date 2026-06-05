@@ -16,6 +16,16 @@ import {
   resolveSegmentStep,
   type DirEntry
 } from './remote-file-browser-helpers'
+import { getJson, qs } from '@/runtime/server-http'
+import { resolveServerHostIdForConnection } from '@/runtime/server-host-client'
+
+// Server `/api/fs/list` response (dirs-only directory listing). Mirrors
+// agentum-server routes::fs::ListResp.
+type ServerFsListResp = {
+  path: string
+  parent: string | null
+  dirs: { name: string; path: string }[]
+}
 
 type RemoteFileBrowserProps = {
   targetId: string
@@ -117,7 +127,24 @@ export function RemoteFileBrowser({
       if (cached) {
         return cached
       }
-      const result = await api.ssh.browseDir({ targetId, dirPath })
+      // Why: the native ssh_browse_dir command was never ported (returns []),
+      // so remote browsing showed nothing. List the host's directory through the
+      // embedded server's /api/fs/list, which runs `ls` over SSH via the same
+      // host_runtime that drives remote sessions. Resolve the native SSH target
+      // id to the server host id first (create-or-get; cached).
+      const hostId = await resolveServerHostIdForConnection(targetId)
+      if (!hostId) {
+        throw new Error('Could not reach this host through the server')
+      }
+      const resp = await getJson<ServerFsListResp>(
+        `/api/fs/list${qs({ host_id: hostId, path: dirPath })}`
+      )
+      const result: BrowseResult = {
+        resolvedPath: resp.path,
+        // Server /list returns directories only — exactly what a project picker
+        // needs. Mark every entry as a directory.
+        entries: resp.dirs.map((d) => ({ name: d.name, isDirectory: true }))
+      }
       listingCacheRef.current.set(result.resolvedPath, result)
       // Also cache under the requested dirPath when it differs from the
       // server-resolved canonical path (e.g. `~`, `~/foo`, or a relative

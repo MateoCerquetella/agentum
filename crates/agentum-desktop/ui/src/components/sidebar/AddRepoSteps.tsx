@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { RemoteFileBrowser } from './RemoteFileBrowser'
 import { SshTargetRow } from './SshTargetRow'
+import { reposAddRemote } from '@/runtime/server-repo-client'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import type { AddRepoExistingWorkspaceSource } from '../../../../shared/telemetry-events'
 import type { NestedRepoScanResult, Repo } from '../../../../shared/types'
@@ -123,10 +124,11 @@ export function useRemoteRepo(
         showNestedRepoReview?.(scan, trimmedRemotePath, selectedTargetId, attemptId)
         return
       }
-      const result = await api.repos.addRemote({
-        connectionId: selectedTargetId,
-        remotePath: trimmedRemotePath
-      })
+      // Register the remote repo on the server with its SSH connection. The
+      // native addRemote command was a hardcoded "not available" stub; this
+      // routes through /api/repos so the repo carries its connectionId and its
+      // sessions run in tmux on the remote host.
+      const result = await reposAddRemote(selectedTargetId, trimmedRemotePath)
       if ('error' in result) {
         throw new Error(result.error)
       }

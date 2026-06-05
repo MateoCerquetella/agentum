@@ -14,6 +14,17 @@ export function reposAdd(path: string, kind?: string): Promise<{ repo?: Repo; er
   return postJson('/api/repos', { path, ...(kind ? { kind } : {}) })
 }
 
+/** `POST /api/repos` for a REMOTE path: register `remotePath` against an SSH
+ *  target (`connectionId`). The server skips the local existence check and the
+ *  repo's sessions/git route through that connection. Returns `{repo}` or
+ *  `{error}`. */
+export function reposAddRemote(
+  connectionId: string,
+  remotePath: string
+): Promise<{ repo?: Repo; error?: string }> {
+  return postJson('/api/repos', { path: remotePath, connectionId })
+}
+
 /** `PATCH /api/repos/{id}` — apply `updates` (id/path/addedAt are ignored). */
 export function reposUpdate(repoId: string, updates: Record<string, unknown>): Promise<Repo> {
   return patchJson<Repo>(`/api/repos/${encodeURIComponent(repoId)}`, updates)
