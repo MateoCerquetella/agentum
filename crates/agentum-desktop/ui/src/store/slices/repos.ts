@@ -18,6 +18,46 @@ import { normalizeRepoBadgeColor } from '../../../../shared/repo-badge-color'
 import { getProjectGroupSubtreeIds } from '../../../../shared/project-groups'
 import { getRepoIdFromWorktreeId } from './worktree-helpers'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '../../runtime/runtime-rpc-client'
+
+/**
+ * One-time migration for remote repos added before repos carried a server
+ * `hostId` (mirrors the profiles' legacy-token migration). Such a repo has a
+ * `connectionId` but no `hostId`, so server git/worktree/agent ops would fall
+ * back to the LOCAL host and silently run on the wrong machine. Resolve the
+ * connection to a server host id and PATCH it so those ops route over SSH.
+ * Only the embedded local daemon's repos are backfilled — a remote runtime
+ * target owns its own repo registry and host mapping. Best-effort: an
+ * unresolvable connection (deleted SSH target) is left as-is.
+ */
+async function backfillRemoteRepoHostIds(
+  repos: Repo[],
+  set: (fn: (s: AppState) => Partial<AppState>) => void
+): Promise<void> {
+  const stale = repos.filter((repo) => repo.connectionId && !repo.hostId)
+  if (stale.length === 0) {
+    return
+  }
+  // Dynamic import: server-host-client pulls in `@/store`, and this module is a
+  // composed slice of that store — a static import would form a circular
+  // dependency that leaves `createRepoSlice` undefined at module-init time.
+  const { resolveServerHostIdForConnection } = await import('../../runtime/server-host-client')
+  await Promise.all(
+    stale.map(async (repo) => {
+      try {
+        const hostId = await resolveServerHostIdForConnection(repo.connectionId as string)
+        if (!hostId) {
+          return
+        }
+        await api.repos.update({ repoId: repo.id, updates: { hostId } })
+        set((s) => ({
+          repos: s.repos.map((r) => (r.id === repo.id ? { ...r, hostId } : r))
+        }))
+      } catch (err) {
+        console.warn('[agentum] failed to backfill hostId for repo', repo.id, err)
+      }
+    })
+  )
+}
 import { buildDismissedOnboardingFolderAgentStartup } from '@/lib/onboarding-folder-agent-startup'
 import { filterSetupScriptPromptDismissalsToValidRepos } from '@/lib/setup-script-prompt'
 
@@ -157,6 +197,12 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
           )
         }
       })
+      // Backfill server hostId onto legacy remote repos (added before the field
+      // existed) so their git/worktree/agent ops route over SSH, not locally.
+      // Only the embedded local daemon owns this mapping; skip remote targets.
+      if (target.kind === 'local') {
+        void backfillRemoteRepoHostIds(repos, set)
+      }
     } catch (err) {
       console.error('Failed to fetch repos:', err)
     }

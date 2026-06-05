@@ -17,7 +17,6 @@ import {
   getServerRepoBaseRefs,
   getServerRepoBaseRefDetails
 } from '../runtime/server-repo-client'
-import { resolveServerHostIdForConnection } from '../runtime/server-host-client'
 
 export const repos = {
   list: () => reposList(),
@@ -51,6 +50,11 @@ export const repos = {
     if (!connectionId || !remotePath) {
       return { error: 'a remote project needs both an SSH connection and a path' }
     }
+    // Dynamic import: this module is part of the `@/tauri` barrel, and
+    // server-host-client statically pulls in `@/store` + `@/tauri`. A top-level
+    // import would close a circular dependency that TDZ-crashes the SPA at boot
+    // (blank window). Defer it to call time.
+    const { resolveServerHostIdForConnection } = await import('../runtime/server-host-client')
     const hostId = await resolveServerHostIdForConnection(connectionId)
     return reposAddRemote(connectionId, remotePath, hostId)
   },

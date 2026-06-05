@@ -8,7 +8,6 @@
 // the composer's remote Agent picker lists what's actually installed on the
 // remote — not just "Blank Terminal". See `detectRemoteAgentsViaServer`.
 import { apiUrl } from '@/runtime/server-endpoint'
-import { detectRemoteAgentsViaServer } from '@/runtime/server-host-client'
 
 async function serverGet<T>(path: string): Promise<T> {
   const res = await fetch(await apiUrl(path))
@@ -22,6 +21,14 @@ export const preflight = {
   check: () => serverGet('/api/preflight/check'),
   detectAgents: () => serverGet('/api/preflight/agents'),
   refreshAgents: () => serverGet('/api/preflight/agents/refresh'),
-  detectRemoteAgents: (args?: { connectionId?: string }) =>
-    args?.connectionId ? detectRemoteAgentsViaServer(args.connectionId) : Promise.resolve([])
+  // Dynamic import: server-host-client pulls in `@/store` + `@/tauri`, which
+  // statically importing here would weave into the barrel's init cycle. Defer
+  // it to call time (this only runs when a remote project's picker opens).
+  detectRemoteAgents: async (args?: { connectionId?: string }) => {
+    if (!args?.connectionId) {
+      return []
+    }
+    const { detectRemoteAgentsViaServer } = await import('@/runtime/server-host-client')
+    return detectRemoteAgentsViaServer(args.connectionId)
+  }
 }
