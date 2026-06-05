@@ -10,7 +10,9 @@ import {
   getLineageGroupKey,
   getLineageRenderInfo,
   getPRGroupKey,
-  getProjectGroupOrdering
+  getProjectGroupOrdering,
+  LOCAL_HOST_KEY,
+  repoHostKey
 } from './worktree-list-groups'
 import type {
   DetectedWorktree,
@@ -49,6 +51,35 @@ const worktree: Worktree = {
 }
 
 const repoMap = new Map([[repo.id, repo]])
+
+describe('repoHostKey', () => {
+  it('buckets a local repo (no host association) under the synthetic local key', () => {
+    expect(repoHostKey(repo)).toBe(LOCAL_HOST_KEY)
+    expect(repoHostKey(repo)).toBe('local')
+  })
+
+  it('buckets a repo by its resolved server hostId', () => {
+    expect(repoHostKey({ ...repo, hostId: 'host-omarchy' })).toBe('host-omarchy')
+  })
+
+  it('falls back to connectionId for a remote repo not yet backfilled with a hostId', () => {
+    expect(repoHostKey({ ...repo, connectionId: 'ssh-1' })).toBe('ssh-1')
+  })
+
+  it('prefers hostId over connectionId when both are present', () => {
+    expect(repoHostKey({ ...repo, hostId: 'host-omarchy', connectionId: 'ssh-1' })).toBe(
+      'host-omarchy'
+    )
+  })
+
+  it('groups multiple repos on the same host under one key, distinct from other hosts', () => {
+    const a = { ...repo, id: 'a', hostId: 'h1' }
+    const b = { ...repo, id: 'b', hostId: 'h1' }
+    const c = { ...repo, id: 'c', hostId: 'h2' }
+    expect(repoHostKey(a)).toBe(repoHostKey(b))
+    expect(repoHostKey(a)).not.toBe(repoHostKey(c))
+  })
+})
 
 function makeDetectedWorktree(overrides: Partial<DetectedWorktree> = {}): DetectedWorktree {
   return {

@@ -123,6 +123,21 @@ export function getProjectGroupHeaderKey(groupId: string | null): string {
   return groupId ? `project-group:${groupId}` : UNGROUPED_PROJECT_GROUP_KEY
 }
 
+/** Synthetic host key for repos with no host association (local machine). */
+export const LOCAL_HOST_KEY = 'local'
+
+/**
+ * The host a repo's sessions run on, as a stable grouping key — the desktop
+ * analogue of the TUI's `host_group_key()` (`agentum-cli .../terminal/app.rs`).
+ * Prefer the resolved server `hostId`; fall back to the desktop's native
+ * `connectionId` for a remote repo not yet backfilled; local repos (neither)
+ * bucket under the synthetic `local` host. Pure + stable so the grouping
+ * builder and host-header rows agree on one key per host.
+ */
+export function repoHostKey(repo: Repo): string {
+  return repo.hostId ?? repo.connectionId ?? LOCAL_HOST_KEY
+}
+
 export const PINNED_GROUP_KEY = 'pinned'
 
 export const PINNED_GROUP_META = {
