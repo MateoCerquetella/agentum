@@ -7,10 +7,12 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use agentum_core::{
-    AgentDepCheck, DepCheck, Host, HostKind, HostReadiness, HostSystemInfo, SshAuth,
-};
+use agentum_core::{AgentDepCheck, DepCheck, Host, HostKind, HostReadiness, HostSystemInfo};
 use agentum_executor::{binary_for, probed_tools};
+// The SSH connection builder lives in the shared lower crate so the watchdog
+// (which can't depend on agentum-server) shares one source of truth for the
+// ssh/sshpass flags. Every `ssh_command(host, …)` call site below is unchanged.
+use agentum_tmux::ssh::ssh_command;
 use tokio::process::Command;
 use tokio::time::{sleep, timeout};
 
@@ -802,73 +804,6 @@ async fn ssh_checked(host: &Host, script: &str) -> Result<()> {
     }
 }
 
-fn ssh_command(host: &Host, script: &str) -> Command {
-    let HostKind::Ssh {
-        user,
-        hostname,
-        port,
-        auth,
-    } = &host.kind
-    else {
-        return Command::new("false");
-    };
-
-    // Password auth shells through `sshpass`, which answers ssh's password
-    // prompt. That requires BatchMode=no (BatchMode=yes suppresses the
-    // prompt entirely, so sshpass would have nothing to answer). Key/agent
-    // auth keeps BatchMode=yes so it never blocks waiting on a prompt.
-    let password = match auth {
-        SshAuth::Password { password } if !password.trim().is_empty() => Some(password.as_str()),
-        _ => None,
-    };
-
-    let mut cmd = match password {
-        Some(pw) => {
-            let mut c = Command::new("sshpass");
-            c.arg("-p").arg(pw).arg("ssh");
-            c
-        }
-        None => Command::new("ssh"),
-    };
-
-    cmd.arg("-o")
-        .arg(if password.is_some() {
-            "BatchMode=no"
-        } else {
-            "BatchMode=yes"
-        })
-        .arg("-o")
-        .arg("ConnectTimeout=8")
-        .arg("-o")
-        .arg("ConnectionAttempts=1")
-        .arg("-o")
-        .arg("ServerAliveInterval=5")
-        .arg("-o")
-        .arg("ServerAliveCountMax=1")
-        .arg("-o")
-        .arg("StrictHostKeyChecking=accept-new")
-        .arg("-p")
-        .arg(port.to_string());
-
-    match auth {
-        SshAuth::Key { path } if !path.trim().is_empty() => {
-            cmd.arg("-i").arg(path);
-        }
-        SshAuth::Password { .. } => {
-            // Force password auth so ssh doesn't silently try a key first
-            // (which would bypass sshpass and fail confusingly).
-            cmd.arg("-o")
-                .arg("PreferredAuthentications=password")
-                .arg("-o")
-                .arg("PubkeyAuthentication=no");
-        }
-        _ => {}
-    }
-
-    cmd.arg(format!("{user}@{hostname}")).arg(script);
-    cmd
-}
-
 fn q(s: &str) -> Result<std::borrow::Cow<'_, str>> {
     shlex::try_quote(s).map_err(|_| HostRuntimeError::Quote)
 }
@@ -931,63 +866,9 @@ mod tests {
         assert_eq!(probe.pkg_manager, "unknown");
     }
 
-    fn ssh_host(auth: SshAuth) -> Host {
-        Host {
-            id: agentum_core::LOCAL_HOST_ID,
-            name: "t".into(),
-            kind: HostKind::Ssh {
-                user: "me".into(),
-                hostname: "box.local".into(),
-                port: 2222,
-                auth,
-            },
-            created_at: time::OffsetDateTime::UNIX_EPOCH,
-            updated_at: time::OffsetDateTime::UNIX_EPOCH,
-            last_seen_at: None,
-        }
-    }
-
-    // `ssh_command` returns a tokio Command; `.as_std()` exposes the inner
-    // std Command for introspecting program + args.
-    fn arg_strings(cmd: &Command) -> Vec<String> {
-        cmd.as_std()
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect()
-    }
-
-    #[test]
-    fn ssh_command_key_uses_plain_ssh_with_batchmode() {
-        let cmd = ssh_command(&ssh_host(SshAuth::Agent), "echo hi");
-        assert_eq!(cmd.as_std().get_program().to_string_lossy(), "ssh");
-        let args = arg_strings(&cmd);
-        assert!(args.contains(&"BatchMode=yes".to_string()));
-        assert!(args.iter().any(|a| a == "me@box.local"));
-        // Key/agent must never reach for sshpass options.
-        assert!(!args.contains(&"PreferredAuthentications=password".to_string()));
-    }
-
-    #[test]
-    fn ssh_command_password_shells_through_sshpass() {
-        let cmd = ssh_command(
-            &ssh_host(SshAuth::Password {
-                password: "s3cret".into(),
-            }),
-            "echo hi",
-        );
-        assert_eq!(cmd.as_std().get_program().to_string_lossy(), "sshpass");
-        let args = arg_strings(&cmd);
-        // `sshpass -p <pw> ssh …`
-        assert_eq!(args[0], "-p");
-        assert_eq!(args[1], "s3cret");
-        assert_eq!(args[2], "ssh");
-        // Password auth must NOT use BatchMode=yes (it suppresses the
-        // prompt sshpass needs to answer) and must force password auth.
-        assert!(args.contains(&"BatchMode=no".to_string()));
-        assert!(!args.contains(&"BatchMode=yes".to_string()));
-        assert!(args.contains(&"PreferredAuthentications=password".to_string()));
-        assert!(args.iter().any(|a| a == "me@box.local"));
-    }
+    // The `ssh_command` builder + its argv tests moved to
+    // `agentum_tmux::ssh` (the shared lower crate the watchdog can depend
+    // on). This module no longer owns the builder.
 
     #[test]
     fn assemble_readiness_ok_when_required_present() {
