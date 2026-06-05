@@ -6,6 +6,7 @@
 // coordinates and caches the mapping for the session lifetime.
 import { getJson, postJson } from './server-http'
 import { api } from '@/tauri'
+import { useAppStore } from '@/store'
 import type { SshTarget } from '../../../shared/ssh-types'
 
 /** A server host as returned by `/api/hosts` (camelCase flattened kind). */
@@ -35,6 +36,42 @@ export type ServerHostProbe = {
 /** `POST /api/hosts/{id}/test` — probe the host over SSH (uname + tmux + git). */
 export function testServerHost(hostId: string): Promise<ServerHostProbe> {
   return postJson<ServerHostProbe>(`/api/hosts/${encodeURIComponent(hostId)}/test`)
+}
+
+/**
+ * Shared "Connect" for any SSH connect button (settings, status bar, add-repo
+ * remote step). The native ssh_connect transport was never ported; with the
+ * server-host model "connect" means register the target as a server host and
+ * probe it over SSH, then reflect the result in sshConnectionStates so every
+ * SSH UI surface (dot, status-bar segment, target rows) updates. Returns a
+ * human-readable result for the caller's toast.
+ */
+export async function connectSshTargetViaServer(
+  targetId: string
+): Promise<{ ok: boolean; message: string }> {
+  const setState = useAppStore.getState().setSshConnectionState
+  setState(targetId, { targetId, status: 'connecting', error: null, reconnectAttempt: 0 })
+  try {
+    const hostId = await resolveServerHostIdForConnection(targetId)
+    if (!hostId) {
+      throw new Error('Could not register this host with the server')
+    }
+    const probe = await testServerHost(hostId)
+    if (probe.ok) {
+      setState(targetId, { targetId, status: 'connected', error: null, reconnectAttempt: 0 })
+      return {
+        ok: true,
+        message: probe.tmux ? 'Connected' : 'Connected — but tmux is missing on the host'
+      }
+    }
+    const message = probe.message || 'Connection failed'
+    setState(targetId, { targetId, status: 'error', error: message, reconnectAttempt: 0 })
+    return { ok: false, message }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Connection failed'
+    setState(targetId, { targetId, status: 'error', error: message, reconnectAttempt: 0 })
+    return { ok: false, message }
+  }
 }
 
 /** `POST /api/hosts` — register an SSH host. Auth defaults to agent/key on the

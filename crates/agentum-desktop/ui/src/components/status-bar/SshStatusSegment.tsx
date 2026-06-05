@@ -12,6 +12,7 @@ import {
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { useAppStore } from '../../store'
 import { STATUS_LABELS, statusColor } from '../settings/SshTargetCard'
+import { connectSshTargetViaServer } from '@/runtime/server-host-client'
 import type { SshConnectionStatus } from '../../../../shared/ssh-types'
 import type { RemoteWorkspaceSyncStatus } from '../../store/slices/ssh'
 
@@ -123,10 +124,15 @@ function TargetRow({
   const handleConnect = useCallback(async () => {
     setBusy(true)
     try {
-      await api.ssh.connect({ targetId })
+      // Native ssh_connect was never ported (no-op). Connect through the server
+      // host probe, which updates sshConnectionStates so this segment + dot flip.
+      const result = await connectSshTargetViaServer(targetId)
       recordFeatureInteraction('ssh')
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Connection failed')
+      if (result.ok) {
+        toast.success(result.message)
+      } else {
+        toast.error(result.message)
+      }
     } finally {
       if (mountedRef.current) {
         setBusy(false)

@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { RemoteFileBrowser } from './RemoteFileBrowser'
 import { SshTargetRow } from './SshTargetRow'
 import { reposAddRemote } from '@/runtime/server-repo-client'
+import { connectSshTargetViaServer } from '@/runtime/server-host-client'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import type { AddRepoExistingWorkspaceSource } from '../../../../shared/telemetry-events'
 import type { NestedRepoScanResult, Repo } from '../../../../shared/types'
@@ -98,10 +99,12 @@ export function useRemoteRepo(
   }, [])
 
   const handleConnectTarget = useCallback(async (targetId: string) => {
-    try {
-      await api.ssh.connect({ targetId })
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Connection failed')
+    // Native ssh_connect is a no-op; connect through the server host probe.
+    const result = await connectSshTargetViaServer(targetId)
+    if (result.ok) {
+      toast.success(result.message)
+    } else {
+      toast.error(result.message)
     }
   }, [])
 

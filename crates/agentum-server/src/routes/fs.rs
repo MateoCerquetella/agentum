@@ -235,8 +235,18 @@ async fn list_remote_dir(
     q: ListQuery,
 ) -> Result<Json<ListResp>, ApiError> {
     let raw = q.path.unwrap_or_default();
+    // Strip trailing slashes (mirrors the local `resolve`) so `~/` collapses to
+    // `~` and `/foo/bar/` to `/foo/bar`. Without this, `~/` skipped the `= "~"`
+    // tilde-expansion branch in the remote script and resolved to the literal
+    // `$HOME/~/`, which isn't a directory → 400. Keep a lone `/` intact.
+    let trimmed = raw.trim();
+    let trimmed = if trimmed.len() > 1 {
+        trimmed.trim_end_matches('/')
+    } else {
+        trimmed
+    };
     let quoted =
-        shlex::try_quote(raw.trim()).map_err(|_| ApiError::BadRequest("bad path".into()))?;
+        shlex::try_quote(trimmed).map_err(|_| ApiError::BadRequest("bad path".into()))?;
     let hidden_filter = if q.show_hidden {
         ""
     } else {
