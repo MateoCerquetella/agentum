@@ -81,7 +81,7 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
     const graceSeconds = parseRelayGracePeriodSeconds(form)
     if (!isRelayGracePeriodValid(form, graceSeconds)) {
       toast.error(
-        `Relay grace period must be between 60 and ${MAX_SSH_RELAY_GRACE_PERIOD_SECONDS} seconds, or choose keep alive until reset`
+        `Relay grace period must be between 60 and ${MAX_SSH_RELAY_GRACE_PERIOD_SECONDS} seconds`
       )
       return
     }
@@ -94,6 +94,7 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
       username,
       relayGracePeriodSeconds: graceSeconds,
       ...(form.identityFile.trim() ? { identityFile: form.identityFile.trim() } : {}),
+      ...(form.password.trim() ? { password: form.password.trim() } : {}),
       ...(form.proxyCommand.trim() ? { proxyCommand: form.proxyCommand.trim() } : {}),
       ...(form.jumpHost.trim() ? { jumpHost: form.jumpHost.trim() } : {})
     }

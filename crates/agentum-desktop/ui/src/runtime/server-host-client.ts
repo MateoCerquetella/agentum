@@ -154,11 +154,15 @@ function targetHostname(target: SshTarget): string {
 
 function createServerHost(name: string, target: SshTarget): Promise<ServerHost> {
   // `auth` is an internally-tagged SshAuth on the server (tag = "auth"), so it
-  // must be a nested object — {auth:'agent'} or {auth:'key', path} — NOT a flat
-  // field. Default to agent auth when the target has no explicit identity file.
-  const auth = target.identityFile
-    ? { auth: 'key' as const, path: target.identityFile }
-    : { auth: 'agent' as const }
+  // must be a nested object — {auth:'agent'}, {auth:'key', path}, or
+  // {auth:'password', password} — NOT a flat field. Precedence: an explicit
+  // password wins (host only allows password login), then an identity file,
+  // else the SSH agent.
+  const auth = target.password
+    ? { auth: 'password' as const, password: target.password }
+    : target.identityFile
+      ? { auth: 'key' as const, path: target.identityFile }
+      : { auth: 'agent' as const }
   return postJson<ServerHost>('/api/hosts', {
     name,
     kind: 'ssh',

@@ -4,6 +4,24 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.11] — 2026-06-06
+
+### Added
+- **Edit and delete SSH hosts from the terminal UI.** The `Ctrl-H` hosts
+  overlay can now edit a host's connection settings in place (`e`) and
+  remove a host (`d`) behind a confirmation prompt — both also reachable
+  from the command palette (`Ctrl-P` → "Edit host…" / "Delete host…").
+  Editing pre-fills the form from the host (including the stored password
+  for password auth) and preserves the host's id, so any sessions already
+  attached to it stay put. Backed by a new `PUT /api/hosts/{id}` route.
+
+### Fixed
+- **Deleting an SSH host is now discoverable and safe.** Delete was bound
+  to `d` but never advertised, had no confirmation, and surfaced the
+  daemon's "host still has sessions" rejection as a surprise error. It's
+  now listed in the overlay's help line and the command palette, and asks
+  before removing.
+
 ## [0.10.10] — 2026-06-01
 
 ### Fixed
