@@ -141,6 +141,56 @@ impl Store {
         })
     }
 
+    /// Edit an existing SSH host in place. Rewrites every connection field
+    /// (name, user, hostname, port, auth + its secret) from `new` and bumps
+    /// `updated_at`, preserving `id`, `created_at`, and `last_seen_at` so the
+    /// row keeps its identity (sessions reference `host_id`) and its sidebar
+    /// dot history. The local pseudo-host is immutable. Returns the refreshed
+    /// [`Host`], `NotFound` if the id doesn't exist (or is the immutable local
+    /// host — mirrors `delete_host`, which treats it as "no such editable
+    /// host"), or `AlreadyExists` when a rename collides with another host.
+    pub async fn update_host(&self, id: Uuid, new: NewHost) -> Result<Host> {
+        if id == LOCAL_HOST_ID {
+            return Err(StoreError::NotFound(
+                "the local host is not editable".into(),
+            ));
+        }
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let parts = host_kind_parts(&new.kind);
+        let res = sqlx::query(
+            r#"
+            UPDATE hosts SET
+                name = ?, kind = ?, user = ?, hostname = ?, port = ?,
+                auth_kind = ?, key_path = ?, secret = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(&new.name)
+        .bind(parts.kind)
+        .bind(parts.user)
+        .bind(parts.hostname)
+        .bind(parts.port.map(i64::from))
+        .bind(parts.auth_kind)
+        .bind(parts.key_path)
+        .bind(parts.secret)
+        .bind(&now_s)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await;
+        if let Err(sqlx::Error::Database(db)) = &res
+            && db.is_unique_violation()
+        {
+            return Err(StoreError::AlreadyExists(new.name));
+        }
+        let affected = res?.rows_affected();
+        if affected == 0 {
+            return Err(StoreError::NotFound(id.to_string()));
+        }
+        self.get_host(id)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(id.to_string()))
+    }
+
     pub async fn update_host_seen(&self, id: Uuid) -> Result<()> {
         let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
         sqlx::query("UPDATE hosts SET last_seen_at = ?, updated_at = ? WHERE id = ?")
@@ -2188,6 +2238,153 @@ mod tests {
         s.create_session(new.clone()).await.unwrap();
         let err = s.create_session(new).await.unwrap_err();
         assert!(matches!(err, StoreError::AlreadyExists(_)));
+    }
+
+    #[tokio::test]
+    async fn update_host_rewrites_fields_in_place() {
+        let s = tmp_store().await;
+        let created = s
+            .create_host(NewHost {
+                name: "box".into(),
+                kind: HostKind::Ssh {
+                    user: "me".into(),
+                    hostname: "old.local".into(),
+                    port: 22,
+                    auth: SshAuth::Agent,
+                },
+            })
+            .await
+            .unwrap();
+
+        // Edit every connection field, including a switch to password auth.
+        let updated = s
+            .update_host(
+                created.id,
+                NewHost {
+                    name: "box-renamed".into(),
+                    kind: HostKind::Ssh {
+                        user: "root".into(),
+                        hostname: "new.local".into(),
+                        port: 2222,
+                        auth: SshAuth::Password {
+                            password: "hunter2".into(),
+                        },
+                    },
+                },
+            )
+            .await
+            .unwrap();
+
+        // Same row (id + created_at preserved); fields swapped.
+        assert_eq!(updated.id, created.id);
+        assert_eq!(updated.created_at, created.created_at);
+        assert_eq!(updated.name, "box-renamed");
+        assert_eq!(
+            updated.kind,
+            HostKind::Ssh {
+                user: "root".into(),
+                hostname: "new.local".into(),
+                port: 2222,
+                auth: SshAuth::Password {
+                    password: "hunter2".into(),
+                },
+            }
+        );
+
+        // Persisted, not just returned.
+        let reloaded = s.get_host(created.id).await.unwrap().unwrap();
+        assert_eq!(reloaded.name, "box-renamed");
+        assert_eq!(reloaded.kind, updated.kind);
+    }
+
+    #[tokio::test]
+    async fn update_host_rename_collision_is_conflict() {
+        let s = tmp_store().await;
+        s.create_host(NewHost {
+            name: "alpha".into(),
+            kind: HostKind::Ssh {
+                user: "me".into(),
+                hostname: "a.local".into(),
+                port: 22,
+                auth: SshAuth::Agent,
+            },
+        })
+        .await
+        .unwrap();
+        let beta = s
+            .create_host(NewHost {
+                name: "beta".into(),
+                kind: HostKind::Ssh {
+                    user: "me".into(),
+                    hostname: "b.local".into(),
+                    port: 22,
+                    auth: SshAuth::Agent,
+                },
+            })
+            .await
+            .unwrap();
+
+        // Renaming beta → alpha collides with the existing host name.
+        let err = s
+            .update_host(
+                beta.id,
+                NewHost {
+                    name: "alpha".into(),
+                    kind: HostKind::Ssh {
+                        user: "me".into(),
+                        hostname: "b.local".into(),
+                        port: 22,
+                        auth: SshAuth::Agent,
+                    },
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StoreError::AlreadyExists(_)));
+    }
+
+    #[tokio::test]
+    async fn update_host_unknown_id_is_not_found() {
+        let s = tmp_store().await;
+        let err = s
+            .update_host(
+                Uuid::new_v4(),
+                NewHost {
+                    name: "ghost".into(),
+                    kind: HostKind::Ssh {
+                        user: "me".into(),
+                        hostname: "g.local".into(),
+                        port: 22,
+                        auth: SshAuth::Agent,
+                    },
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StoreError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn update_host_rejects_local_host() {
+        let s = tmp_store().await;
+        // The local pseudo-host is immutable; editing it is "no such
+        // editable host" (NotFound), mirroring delete_host's guard.
+        let err = s
+            .update_host(
+                LOCAL_HOST_ID,
+                NewHost {
+                    name: "nope".into(),
+                    kind: HostKind::Ssh {
+                        user: "me".into(),
+                        hostname: "x.local".into(),
+                        port: 22,
+                        auth: SshAuth::Agent,
+                    },
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StoreError::NotFound(_)));
     }
 
     #[tokio::test]
