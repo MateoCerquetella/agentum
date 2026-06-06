@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use agentum_core::Host;
+use agentum_core::{Host, HostKind};
 use axum::Router;
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
@@ -141,6 +141,30 @@ fn reject_dashed(label: &str, value: &str) -> Result<(), ApiError> {
         return Err(ApiError::BadRequest(format!("{label} must not start with '-'")));
     }
     Ok(())
+}
+
+/// Where a worktree create ran, for the human-readable non-git error. `Local`
+/// for the daemon's own machine; `Ssh(hostname)` for a remote host.
+fn host_location(host: &Host) -> String {
+    match &host.kind {
+        HostKind::Local => "this machine".to_string(),
+        HostKind::Ssh { hostname, .. } => format!("the remote host {hostname}"),
+    }
+}
+
+/// Map a failed `git worktree add` stderr to a friendly create error. When the
+/// target path isn't a git repo (spec 006's FinanzasArgy case), `git` emits a
+/// `fatal: not a git repository` line that means nothing to a user — replace it
+/// with one that names the path + host and points at the fix. Returns `None` for
+/// every other failure so the caller keeps surfacing the raw git stderr.
+fn non_git_create_error_message(stderr: &str, repo_path: &str, host_location: &str) -> Option<String> {
+    if stderr.contains("not a git repository") {
+        Some(format!(
+            "{repo_path} on {host_location} is not a git repository — re-add the project with the correct path"
+        ))
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -291,6 +315,14 @@ async fn create(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
     if !output.success {
+        // A non-git target path 400s with `fatal: not a git repository`, which
+        // is opaque to a user who registered the wrong remote path. Swap in a
+        // message that names the path + host; keep the raw stderr otherwise.
+        if let Some(friendly) =
+            non_git_create_error_message(&output.stderr, &repo_path, &host_location(&host))
+        {
+            return Err(ApiError::BadRequest(friendly));
+        }
         return Err(ApiError::BadRequest(output.stderr.trim().to_string()));
     }
 
@@ -541,6 +573,68 @@ async fn resolve_pr_base() -> Json<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn non_git_stderr_maps_to_friendly_message() {
+        // The FinanzasArgy case: a registered path that isn't a repo on the host.
+        let stderr = "fatal: not a git repository (or any of the parent directories): .git";
+        let msg = non_git_create_error_message(
+            stderr,
+            "/home/malloc/Developer/projects/CerqueTech/FinanzasArgy",
+            "the remote host forge.lan",
+        )
+        .expect("non-git stderr should map to a friendly message");
+        assert!(msg.contains("/home/malloc/Developer/projects/CerqueTech/FinanzasArgy"));
+        assert!(msg.contains("the remote host forge.lan"));
+        assert!(msg.contains("not a git repository"));
+        assert!(msg.contains("re-add the project"));
+        // The raw git `fatal:` prefix must not leak into the user-facing copy.
+        assert!(!msg.contains("fatal:"));
+    }
+
+    #[test]
+    fn other_create_stderr_is_not_rewritten() {
+        // Any other failure (branch conflict, dirty tree, …) keeps the raw stderr.
+        assert!(
+            non_git_create_error_message(
+                "fatal: a branch named 'feature' already exists",
+                "/repo",
+                "this machine",
+            )
+            .is_none()
+        );
+        assert!(non_git_create_error_message("", "/repo", "this machine").is_none());
+    }
+
+    #[test]
+    fn host_location_describes_local_and_ssh() {
+        use agentum_core::{HostKind, LOCAL_HOST_ID};
+        use time::OffsetDateTime;
+        let now = OffsetDateTime::now_utc();
+        let local = Host {
+            id: LOCAL_HOST_ID,
+            name: "local".into(),
+            kind: HostKind::Local,
+            created_at: now,
+            updated_at: now,
+            last_seen_at: None,
+        };
+        assert_eq!(host_location(&local), "this machine");
+        let ssh = Host {
+            id: LOCAL_HOST_ID,
+            name: "forge".into(),
+            kind: HostKind::Ssh {
+                user: "malloc".into(),
+                hostname: "forge.lan".into(),
+                port: 22,
+                auth: agentum_core::SshAuth::Agent,
+            },
+            created_at: now,
+            updated_at: now,
+            last_seen_at: None,
+        };
+        assert_eq!(host_location(&ssh), "the remote host forge.lan");
+    }
 
     #[test]
     fn worktree_id_splits_repo_and_path() {
