@@ -153,6 +153,14 @@ pub enum ActionKind {
     /// Confirm-stop a running session. Mirrors `s` / `Shift-S` from
     /// tree focus.
     StopSession(Uuid),
+
+    // ── Host CRUD ─────────────────────────────────────────────────
+    /// Open the hosts overlay with the edit form pre-filled for this host.
+    /// Mirrors `e` in the Ctrl-H overlay.
+    EditHost(Uuid),
+    /// Open the destructive-confirm overlay for removing this host.
+    /// Mirrors `d` in the Ctrl-H overlay.
+    DeleteHost(Uuid),
 }
 
 pub struct Catalog {
@@ -186,6 +194,7 @@ impl Catalog {
     pub fn build(
         lazygit_open: bool,
         sessions: &[(Uuid, String, String, bool)], // (id, name, workdir, is_running)
+        hosts: &[(Uuid, String, String)],          // (id, name, target_label) — SSH hosts only
         selected: Option<Uuid>,
         view: ViewState,
         prefs: &super::prefs::Prefs,
@@ -376,6 +385,25 @@ impl Catalog {
             group: "general",
             kind: ActionKind::OpenHosts,
         });
+        // Per-host edit + delete, so both are reachable from the palette
+        // (type "host", "edit", or the host's name). The `target_label`
+        // (user@hostname:port) rides along as the hint so duplicate-named
+        // hosts are still distinguishable. Group "general" keeps them in
+        // the `>` (commands) and default views.
+        for (id, name, target) in hosts {
+            a.push(Action {
+                label: format!("Edit host: {name}"),
+                hint: target.clone(),
+                group: "general",
+                kind: ActionKind::EditHost(*id),
+            });
+            a.push(Action {
+                label: format!("Delete host: {name}"),
+                hint: target.clone(),
+                group: "general",
+                kind: ActionKind::DeleteHost(*id),
+            });
+        }
         a.push(Action {
             label: format!("Sound: master [{}]", onoff(prefs.sound_master)),
             hint: "".into(),

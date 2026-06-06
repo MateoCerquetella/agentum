@@ -481,6 +481,27 @@ impl Client {
         Ok(resp.json::<Host>().await?)
     }
 
+    /// `PUT /api/hosts/{id}` — edit an existing SSH host's connection
+    /// settings. Sends the same `NewHost` body as create; the daemon
+    /// rewrites the row in place (same id, so attached sessions are
+    /// preserved) and returns the refreshed host.
+    pub async fn update_host(&self, id: Uuid, new: &NewHost) -> Result<Host> {
+        let url = self.base.join(&format!("/api/hosts/{id}"))?;
+        let resp = self
+            .http
+            .put(url)
+            .bearer_auth(&self.token)
+            .json(new)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("{status} — {body}");
+        }
+        Ok(resp.json::<Host>().await?)
+    }
+
     pub async fn test_host(&self, id: Uuid) -> Result<HostProbe> {
         let url = self.base.join(&format!("/api/hosts/{id}/test"))?;
         let resp = self.http.post(url).bearer_auth(&self.token).send().await?;

@@ -2231,7 +2231,7 @@ fn draw_hosts_overlay(
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  ↑↓ move · Enter check (again to close) · t recheck · i set up · a add · Esc close"
+        "  ↑↓ move · Enter check · t recheck · i set up · a add · e edit · d delete · Esc close"
             .to_string(),
         Style::default().fg(p.muted),
     )));
@@ -2242,8 +2242,16 @@ fn draw_hosts_overlay(
 /// Render the add-host form (Ctrl-H → `a`). Collects the SSH fields plus an
 /// auth toggle (key/agent or password). The password value is masked.
 fn draw_hosts_add_form(f: &mut Frame<'_>, area: Rect, form: &AddHostForm, p: &Palette) {
+    let editing = form.editing.is_some();
     let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(head("Add an SSH host", p));
+    lines.push(head(
+        if editing {
+            "Edit SSH host"
+        } else {
+            "Add an SSH host"
+        },
+        p,
+    ));
     lines.push(Line::from(""));
     push_form_field(
         &mut lines,
@@ -2348,6 +2356,8 @@ fn draw_hosts_add_form(f: &mut Frame<'_>, area: Rect, form: &AddHostForm, p: &Pa
     lines.push(Line::from(""));
     let footer = if form.submitting {
         "  saving…".to_string()
+    } else if editing {
+        "  Tab next · Enter save · Esc back".to_string()
     } else {
         "  Tab next · Enter save & scan · Esc back".to_string()
     };
@@ -2355,7 +2365,14 @@ fn draw_hosts_add_form(f: &mut Frame<'_>, area: Rect, form: &AddHostForm, p: &Pa
         footer,
         Style::default().fg(p.muted),
     )));
-    overlay_box(f, area, " add host ", lines, 80, p);
+    overlay_box(
+        f,
+        area,
+        if editing { " edit host " } else { " add host " },
+        lines,
+        80,
+        p,
+    );
 }
 
 /// Push one `[x]/[ ] label — hint` dependency row into a line buffer,

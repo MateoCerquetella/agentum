@@ -262,6 +262,10 @@ pub struct AddHostForm {
     pub secret: String,
     pub error: Option<String>,
     pub submitting: bool,
+    /// When `Some(id)` the form is editing that existing host (PUT) rather
+    /// than adding a new one (POST). Drives the title, footer, and which
+    /// API call the submit handler makes. Mirrors [`AddProfileForm::editing`].
+    pub editing: Option<Uuid>,
     /// When `Some`, the folder picker is browsing the daemon's filesystem
     /// for the SSH key path (key auth only). Mirrors
     /// [`NewSessionForm::picker`]; held on the form so closing the picker
@@ -291,8 +295,48 @@ impl AddHostForm {
             secret: String::new(),
             error: None,
             submitting: false,
+            editing: None,
             picker: None,
         }
+    }
+
+    /// Pre-fill the form from an existing SSH host so the user edits in
+    /// place. The `editing` id routes the submit to PUT instead of POST.
+    /// Auth maps back to the form's key/password toggle: `Agent` shows an
+    /// empty key path (blank = ssh-agent), `Key` shows the path, `Password`
+    /// pre-fills the stored secret (masked at render). A `Local` host has no
+    /// SSH fields — it's never offered for edit, but we degrade to an empty
+    /// SSH form rather than panic.
+    pub fn edit(host: &agentum_core::Host) -> Self {
+        let mut form = Self::new();
+        form.editing = Some(host.id);
+        form.name = host.name.clone();
+        if let agentum_core::HostKind::Ssh {
+            user,
+            hostname,
+            port,
+            auth,
+        } = &host.kind
+        {
+            form.user = user.clone();
+            form.hostname = hostname.clone();
+            form.port = port.to_string();
+            match auth {
+                SshAuth::Agent => {
+                    form.auth = HostAuthChoice::Key;
+                    form.secret = String::new();
+                }
+                SshAuth::Key { path } => {
+                    form.auth = HostAuthChoice::Key;
+                    form.secret = path.clone();
+                }
+                SshAuth::Password { password } => {
+                    form.auth = HostAuthChoice::Password;
+                    form.secret = password.clone();
+                }
+            }
+        }
+        form
     }
 
     pub fn next_field(&mut self) {
@@ -886,6 +930,15 @@ pub enum PendingAction {
         deps: Vec<String>,
         agents: Vec<String>,
     },
+    /// Remove an SSH host from the daemon's host list (Ctrl-H → `d`, or the
+    /// palette's "Delete host"). Only the connection entry is dropped; the
+    /// remote box is untouched. Gated behind this confirm because the daemon
+    /// rejects deleting a host that still owns sessions — better to ask first
+    /// than to surface that error after an accidental keypress.
+    DeleteHost {
+        id: Uuid,
+        name: String,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -941,6 +994,11 @@ impl PendingAction {
                 format!(
                     "set up `{name}` — install {} over SSH? Needs passwordless sudo for tmux/git.",
                     parts.join(" and ")
+                )
+            }
+            PendingAction::DeleteHost { name, .. } => {
+                format!(
+                    "remove host `{name}`? Drops the connection entry; the remote box is untouched."
                 )
             }
         }
@@ -5432,7 +5490,7 @@ fn open_hosts_overlay(app: &mut App) {
     app.status_msg = Some(if empty {
         "no SSH hosts yet · a add a host · Esc close".into()
     } else {
-        "hosts · ↑↓ move · Enter check (again to close) · t recheck · i set up · a add · Esc close"
+        "hosts · ↑↓ move · Enter check · t recheck · i set up · a add · e edit · d delete · Esc close"
             .into()
     });
 }
@@ -5481,6 +5539,12 @@ async fn handle_hosts_key(app: &mut App, key: KeyEvent, client: &Client) {
                     HostAuthChoice::Key => HostAuthChoice::Password,
                     HostAuthChoice::Password => HostAuthChoice::Key,
                 };
+                // The secret means different things per auth (key path vs
+                // password), so a leftover value from the other mode would
+                // be submitted as the wrong kind — e.g. a pre-filled
+                // password becoming a bogus key path on a password→key
+                // flip. Clear it so the field always matches its label.
+                form.secret.clear();
             }
             KeyCode::Backspace => {
                 if let Some(v) = form.field_value_mut() {
@@ -5510,18 +5574,34 @@ async fn handle_hosts_key(app: &mut App, key: KeyEvent, client: &Client) {
                     Ok(new) => {
                         form.error = None;
                         form.submitting = true;
-                        match client.create_host(&new).await {
-                            Ok(created) => {
-                                // Refresh the host list so the new row shows,
-                                // then reopen the overlay positioned on it.
+                        // Edit (PUT, in-place) vs add (POST, new row). Both
+                        // refresh the list and land the cursor on the host;
+                        // the edit path keeps the same id so the row simply
+                        // re-renders with the new settings.
+                        let result = match form.editing {
+                            Some(id) => client.update_host(id, &new).await,
+                            None => client.create_host(&new).await,
+                        };
+                        match result {
+                            Ok(saved) => {
                                 if let Ok(hosts) = client.list_hosts().await {
                                     app.hosts = hosts;
                                 }
-                                reopen_hosts_overlay_at(app, created.id);
-                                app.status_msg = Some(format!(
-                                    "added `{}` · Enter/t to check · i to install deps + agents",
-                                    created.name
-                                ));
+                                // A connection-setting change can invalidate
+                                // the cached readiness — drop it so the next
+                                // check re-probes against the new target.
+                                if form.editing.is_some() {
+                                    app.host_readiness_cache.remove(&saved.id);
+                                }
+                                reopen_hosts_overlay_at(app, saved.id);
+                                app.status_msg = Some(if form.editing.is_some() {
+                                    format!("saved `{}` · Enter/t to check", saved.name)
+                                } else {
+                                    format!(
+                                        "added `{}` · Enter/t to check · i to install deps + agents",
+                                        saved.name
+                                    )
+                                });
                                 return;
                             }
                             Err(e) => {
@@ -5630,29 +5710,34 @@ async fn handle_hosts_key(app: &mut App, key: KeyEvent, client: &Client) {
                 }
             }
         }
+        // `e` edits the selected SSH host in place. Pre-fills the add-host
+        // form from the host's current settings; submit routes to PUT.
+        KeyCode::Char('e') | KeyCode::Char('E') => {
+            if let Some(id) = overlay.selected()
+                && let Some(host) = app.hosts.iter().find(|h| h.id == id)
+            {
+                overlay.add_form = Some(AddHostForm::edit(host));
+                overlay.error = None;
+            }
+        }
         // `d` removes the selected SSH host. Only SSH hosts are in
         // `host_ids` (the local host is filtered out), so this can never
         // delete "this machine". The remote box is untouched — we just
-        // drop the connection entry from the daemon's host list.
+        // drop the connection entry from the daemon's host list. Routed
+        // through the Confirm overlay so an accidental keypress can't drop
+        // a host (and so the "host still has sessions" rejection is asked
+        // about up front rather than surfaced as a surprise error).
         KeyCode::Char('d') | KeyCode::Char('D') => {
             if let Some(id) = overlay.selected() {
-                match client.delete_host(id).await {
-                    Ok(()) => {
-                        app.hosts = client.list_hosts().await.unwrap_or_default();
-                        app.host_readiness_cache.remove(&id);
-                        overlay.host_ids = app
-                            .hosts
-                            .iter()
-                            .filter(|h| h.id != agentum_core::LOCAL_HOST_ID)
-                            .map(|h| h.id)
-                            .collect();
-                        if overlay.cursor >= overlay.host_ids.len() {
-                            overlay.cursor = overlay.host_ids.len().saturating_sub(1);
-                        }
-                        overlay.error = None;
-                    }
-                    Err(e) => overlay.error = Some(format!("delete failed: {e}")),
-                }
+                let name = app
+                    .hosts
+                    .iter()
+                    .find(|h| h.id == id)
+                    .map(|h| h.name.clone())
+                    .unwrap_or_else(|| "host".into());
+                // Hand off to Confirm; don't restore the Hosts overlay.
+                app.overlay = Overlay::Confirm(PendingAction::DeleteHost { id, name });
+                return;
             }
         }
         _ => {}
@@ -6499,7 +6584,13 @@ async fn handle_confirm_key(app: &mut App, key: KeyEvent, client: &Client) {
             execute_action(app, action, client).await;
         }
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-            // Cancelled — overlay already cleared via mem::replace.
+            // Cancelled — overlay already cleared via mem::replace. A host
+            // delete is launched from the Ctrl-H overlay, so return the
+            // user there (on the host they backed out of) rather than
+            // dropping them to the bare TUI — mirrors the post-delete path.
+            if let PendingAction::DeleteHost { id, .. } = action {
+                reopen_hosts_overlay_at(app, id);
+            }
         }
         _ => {
             // Other keys: keep prompt up.
@@ -6637,6 +6728,26 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         return;
     }
 
+    // Host removal also talks to the daemon (not a session) and refreshes
+    // the host list + readiness cache. Handle it before the session-id
+    // match below, which would panic on this variant.
+    if let PendingAction::DeleteHost { id, name } = &action {
+        match client.delete_host(*id).await {
+            Ok(()) => {
+                app.hosts = client.list_hosts().await.unwrap_or_default();
+                app.host_readiness_cache.remove(id);
+                let label = format!("removed `{name}`");
+                app.status_msg = Some(label.clone());
+                push_notification(app, label, None, NotifKind::Info);
+            }
+            Err(e) => app.push_error(format!("remove `{name}`: {e}")),
+        }
+        // Reopen the hosts overlay so the user sees the updated list
+        // (whether the delete succeeded or the daemon rejected it).
+        open_hosts_overlay(app);
+        return;
+    }
+
     // Lifecycle ops (start/stop/kill) target a specific session id, so
     // they have to talk to whichever server owns that session — not
     // the default. Look up the owner's client; fall back to `client`
@@ -6646,7 +6757,9 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         PendingAction::Start { id, .. }
         | PendingAction::Stop { id, .. }
         | PendingAction::Kill { id, .. } => *id,
-        PendingAction::Bulk { .. } | PendingAction::ProvisionHost { .. } => unreachable!(),
+        PendingAction::Bulk { .. }
+        | PendingAction::ProvisionHost { .. }
+        | PendingAction::DeleteHost { .. } => unreachable!(),
     };
     let owner = app.client_for_session(session_id).cloned();
     let target = owner.unwrap_or_else(|| client.clone());
@@ -6685,7 +6798,9 @@ async fn execute_action(app: &mut App, action: PendingAction, client: &Client) {
         PendingAction::Start { name, .. } => format!("started `{name}`"),
         PendingAction::Stop { name, .. } => format!("stopped `{name}`"),
         PendingAction::Kill { name, .. } => format!("killed `{name}`"),
-        PendingAction::Bulk { .. } | PendingAction::ProvisionHost { .. } => unreachable!(),
+        PendingAction::Bulk { .. }
+        | PendingAction::ProvisionHost { .. }
+        | PendingAction::DeleteHost { .. } => unreachable!(),
     };
     match result {
         Ok(()) => {
@@ -6721,6 +6836,26 @@ pub fn palette_catalog(app: &App) -> Catalog {
             )
         })
         .collect();
+    // SSH hosts only (the local pseudo-host isn't editable/removable, so it
+    // contributes no palette entries). `target` = user@hostname:port, used
+    // as the entry hint to disambiguate same-named hosts.
+    let hosts: Vec<(Uuid, String, String)> = app
+        .hosts
+        .iter()
+        .filter_map(|h| match &h.kind {
+            agentum_core::HostKind::Ssh {
+                user,
+                hostname,
+                port,
+                ..
+            } => Some((
+                h.id,
+                h.name.clone(),
+                format!("ssh {user}@{hostname}:{port}"),
+            )),
+            agentum_core::HostKind::Local => None,
+        })
+        .collect();
     let view = ViewState {
         sidebar_hidden: app.sidebar_hidden,
         right_panel_visible: app.right_panel_visible,
@@ -6732,6 +6867,7 @@ pub fn palette_catalog(app: &App) -> Catalog {
     Catalog::build(
         app.lazygit_open(),
         &sessions,
+        &hosts,
         app.selected,
         view,
         &app.prefs,
@@ -7650,6 +7786,28 @@ async fn run_palette_action(
                 app.overlay = Overlay::Confirm(PendingAction::Stop {
                     id,
                     name: s.name.clone(),
+                });
+            }
+        }
+        ActionKind::EditHost(id) => {
+            // Open the hosts overlay positioned on this host, then drop the
+            // pre-filled edit form on top — same end state as Ctrl-H → `e`.
+            if let Some(host) = app.hosts.iter().find(|h| h.id == id) {
+                let form = AddHostForm::edit(host);
+                reopen_hosts_overlay_at(app, id);
+                if let Overlay::Hosts(ref mut o) = app.overlay {
+                    o.add_form = Some(form);
+                    // Drop any stale list-level error so it doesn't show
+                    // behind the form (the Ctrl-H → `e` path clears it too).
+                    o.error = None;
+                }
+            }
+        }
+        ActionKind::DeleteHost(id) => {
+            if let Some(host) = app.hosts.iter().find(|h| h.id == id) {
+                app.overlay = Overlay::Confirm(PendingAction::DeleteHost {
+                    id,
+                    name: host.name.clone(),
                 });
             }
         }
@@ -9050,6 +9208,92 @@ mod cycle_host_tests {
                 auth: agentum_core::SshAuth::default(),
             },
         )
+    }
+
+    #[test]
+    fn add_host_form_edit_prefills_password_and_routes_to_update() {
+        // Editing a password-auth host pre-fills every field, flips the
+        // auth toggle to Password, surfaces the stored secret, and tags
+        // the form with the host id so submit routes to PUT.
+        let id = Uuid::from_u128(7);
+        let h = host(
+            id,
+            agentum_core::HostKind::Ssh {
+                user: "root".into(),
+                hostname: "remote.example".into(),
+                port: 2222,
+                auth: agentum_core::SshAuth::Password {
+                    password: "s3cret".into(),
+                },
+            },
+        );
+        let form = AddHostForm::edit(&h);
+        assert_eq!(form.editing, Some(id));
+        assert_eq!(form.name, "host");
+        assert_eq!(form.user, "root");
+        assert_eq!(form.hostname, "remote.example");
+        assert_eq!(form.port, "2222");
+        assert!(matches!(form.auth, HostAuthChoice::Password));
+        assert_eq!(form.secret, "s3cret");
+
+        // The pre-filled form rebuilds the same SSH host on submit.
+        let new = build_new_host(&form).unwrap();
+        assert_eq!(new.name, "host");
+        assert!(matches!(
+            new.kind,
+            HostKind::Ssh {
+                auth: SshAuth::Password { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn add_host_form_edit_agent_auth_shows_blank_key_path() {
+        // Agent auth maps to the key/agent toggle with an empty secret
+        // (blank = ssh-agent), so the round trip stays on agent auth.
+        let id = Uuid::from_u128(8);
+        let form = AddHostForm::edit(&ssh(id));
+        assert_eq!(form.editing, Some(id));
+        assert!(matches!(form.auth, HostAuthChoice::Key));
+        assert_eq!(form.secret, "");
+        let new = build_new_host(&form).unwrap();
+        assert!(matches!(
+            new.kind,
+            HostKind::Ssh {
+                auth: SshAuth::Agent,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn add_host_form_edit_key_auth_prefills_path() {
+        // Key auth pre-fills the path into the secret under the key/agent
+        // toggle; the round trip preserves the same key path.
+        let id = Uuid::from_u128(9);
+        let h = host(
+            id,
+            agentum_core::HostKind::Ssh {
+                user: "me".into(),
+                hostname: "box".into(),
+                port: 22,
+                auth: agentum_core::SshAuth::Key {
+                    path: "~/.ssh/id_ed25519".into(),
+                },
+            },
+        );
+        let form = AddHostForm::edit(&h);
+        assert!(matches!(form.auth, HostAuthChoice::Key));
+        assert_eq!(form.secret, "~/.ssh/id_ed25519");
+        let new = build_new_host(&form).unwrap();
+        assert!(matches!(
+            new.kind,
+            HostKind::Ssh {
+                auth: SshAuth::Key { .. },
+                ..
+            }
+        ));
     }
 
     #[test]

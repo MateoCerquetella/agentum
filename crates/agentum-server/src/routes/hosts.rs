@@ -14,7 +14,7 @@ use crate::host_runtime::HostProbe;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/hosts", get(list).post(create))
-        .route("/api/hosts/{id}", get(get_one).delete(remove))
+        .route("/api/hosts/{id}", get(get_one).put(update).delete(remove))
         .route("/api/hosts/{id}/test", post(test))
         .route("/api/hosts/{id}/readiness", get(readiness))
         .route("/api/hosts/{id}/bootstrap", post(bootstrap))
@@ -38,10 +38,13 @@ async fn get_one(
     Ok(Json(host))
 }
 
-async fn create(
-    State(state): State<AppState>,
-    Json(new): Json<NewHost>,
-) -> Result<(StatusCode, Json<Host>), ApiError> {
+/// Validate + normalise an incoming host payload (shared by create and
+/// update). Trims the name/user/hostname, rejects empty required fields and
+/// out-of-range ports, collapses a blank key path to ssh-agent, and refuses
+/// `HostKind::Local` (the local host is a singleton, never created/edited).
+/// Passwords are kept verbatim (they may carry meaningful whitespace); only
+/// an entirely empty one is rejected.
+fn validate_host(new: NewHost) -> Result<NewHost, ApiError> {
     let name = new.name.trim().to_string();
     if name.is_empty() {
         return Err(ApiError::BadRequest("host name is required".into()));
@@ -77,9 +80,6 @@ async fn create(
                     path: path.trim().to_string(),
                 },
                 SshAuth::Agent => SshAuth::Agent,
-                // Password is kept verbatim (not trimmed): passwords may
-                // legitimately contain leading/trailing spaces. Reject only
-                // an entirely empty one.
                 SshAuth::Password { password } if password.is_empty() => {
                     return Err(ApiError::BadRequest("ssh password is required".into()));
                 }
@@ -93,9 +93,30 @@ async fn create(
             }
         }
     };
-    let new = NewHost { name, kind };
+    Ok(NewHost { name, kind })
+}
+
+async fn create(
+    State(state): State<AppState>,
+    Json(new): Json<NewHost>,
+) -> Result<(StatusCode, Json<Host>), ApiError> {
+    let new = validate_host(new)?;
     let host = state.store.create_host(new).await?;
     Ok((StatusCode::CREATED, Json(host)))
+}
+
+/// `PUT /api/hosts/{id}` — edit an existing SSH host's connection settings.
+/// Same validation as create; the store rewrites the row in place (keeping
+/// the id so sessions stay attached) and returns the refreshed host.
+async fn update(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(new): Json<NewHost>,
+) -> Result<Json<Host>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let new = validate_host(new)?;
+    let host = state.store.update_host(id, new).await?;
+    Ok(Json(host))
 }
 
 async fn remove(
