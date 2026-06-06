@@ -28,7 +28,8 @@ import {
   Unlink,
   Workflow,
   FolderInput,
-  FolderPlus
+  FolderPlus,
+  SquareTerminal
 } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { useRepoById, useRepoMap, useWorktreeMap } from '@/store/selectors'
@@ -40,6 +41,10 @@ import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { tabHasLivePty } from '@/lib/tab-has-live-pty'
 import { VIRTUALIZED_SCROLL_ANCHOR_RECORD_EVENT } from '@/hooks/useVirtualizedScrollAnchor'
 import { getLineageRenderInfo } from './worktree-list-groups'
+import { buildTmuxAttachCommand } from './tmux-attach'
+import { listSessions } from '@/runtime/agentum-server-client'
+import { listServerHosts } from '@/runtime/server-host-client'
+import { toast } from 'sonner'
 import { getWorkspaceStatus, getWorkspaceStatusVisualMeta } from './workspace-status'
 import { WorktreeOpenInSubMenu } from './WorktreeOpenInMenu'
 import { ProjectGroupNameDialog } from './ProjectGroupNameDialog'
@@ -299,6 +304,34 @@ const WorktreeContextMenu = React.memo(function WorktreeContextMenu({
     api.ui.writeClipboardText(worktree.path)
   }, [worktree.path])
 
+  // Copy the `tmux attach` command for this workspace's live agent session, so
+  // the user can drop into the detached tmux (local or over SSH) that keeps the
+  // agent running after agentum is closed. Picks the workspace's running session
+  // (matched by workdir); resolves SSH coords from the session's host.
+  const handleCopyTmuxAttach = useCallback(async () => {
+    try {
+      const [sessions, hosts] = await Promise.all([listSessions(), listServerHosts()])
+      const candidates = sessions.filter(
+        (session) => session.workdir === worktree.path && session.tmux_target
+      )
+      const target = candidates[0]
+      const command = target
+        ? buildTmuxAttachCommand(
+            target,
+            hosts.find((host) => host.id === target.host_id)
+          )
+        : null
+      if (!command) {
+        toast.error('No running tmux session for this workspace')
+        return
+      }
+      api.ui.writeClipboardText(command)
+      toast.success('tmux attach command copied', { description: command })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not build attach command')
+    }
+  }, [worktree.path])
+
   const handleToggleRead = useCallback(() => {
     updateWorktreeMeta(worktree.id, { isUnread: !worktree.isUnread })
   }, [worktree.id, worktree.isUnread, updateWorktreeMeta])
@@ -508,6 +541,10 @@ const WorktreeContextMenu = React.memo(function WorktreeContextMenu({
               <DropdownMenuItem onSelect={handleCopyPath} disabled={isDeleting}>
                 <Copy className="size-3.5" />
                 Copy Path
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={handleCopyTmuxAttach} disabled={isDeleting}>
+                <SquareTerminal className="size-3.5" />
+                Copy tmux attach command
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={handleTogglePin} disabled={isDeleting}>
