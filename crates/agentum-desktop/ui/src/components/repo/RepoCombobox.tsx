@@ -17,6 +17,20 @@ import { useMountedRef } from '@/hooks/useMountedRef'
 import type { Repo } from '../../../../shared/types'
 import RepoBadgeLabel from './RepoBadgeLabel'
 
+/** Per-row presentation for a repo in the combobox list. Extracted as a pure
+ *  fn so the disabled-row rule (spec 006) is unit-testable without a DOM: a repo
+ *  in `disabledRepoIds` is non-selectable and shows its reason in place of the
+ *  path; otherwise it shows the path and is selectable. */
+export function getRepoRowDisplay(
+  repo: Pick<Repo, 'id' | 'path'>,
+  disabledRepoIds?: Map<string, string>
+): { isDisabled: boolean; detailText: string } {
+  const reason = disabledRepoIds?.get(repo.id)
+  return reason !== undefined
+    ? { isDisabled: true, detailText: reason }
+    : { isDisabled: false, detailText: repo.path }
+}
+
 type RepoComboboxProps = {
   repos: Repo[]
   value: string
@@ -26,6 +40,9 @@ type RepoComboboxProps = {
   triggerClassName?: string
   autoOpenOnMount?: boolean
   showStandaloneAddButton?: boolean
+  /** repoId → reason for rows that can't be selected (spec 006: not a git repo
+   *  on the selected host). Rendered disabled with the reason as a hint. */
+  disabledRepoIds?: Map<string, string>
 }
 
 export default function RepoCombobox({
@@ -36,7 +53,8 @@ export default function RepoCombobox({
   placeholder = 'Select repo...',
   triggerClassName,
   autoOpenOnMount = false,
-  showStandaloneAddButton = true
+  showStandaloneAddButton = true,
+  disabledRepoIds
 }: RepoComboboxProps): React.JSX.Element {
   const [open, setOpen] = useState(autoOpenOnMount)
   const [query, setQuery] = useState('')
@@ -110,12 +128,17 @@ export default function RepoCombobox({
 
   const handleSelect = useCallback(
     (repoId: string) => {
+      // Non-selectable rows (e.g. not a git repo on the selected host) must not
+      // commit a selection even if cmdk routes an onSelect to them.
+      if (disabledRepoIds?.has(repoId)) {
+        return
+      }
       onValueChange(repoId)
       setOpen(false)
       setQuery('')
       onValueSelected?.(repoId)
     },
-    [onValueChange, onValueSelected]
+    [disabledRepoIds, onValueChange, onValueSelected]
   )
 
   // Why: the button-style trigger treats the current value as a confirmed
@@ -230,37 +253,46 @@ export default function RepoCombobox({
             />
             <CommandList>
               <CommandEmpty>No projects/folders match your search.</CommandEmpty>
-              {filteredRepos.map((repo) => (
-                <CommandItem
-                  key={repo.id}
-                  value={repo.id}
-                  onSelect={() => handleSelect(repo.id)}
-                  className="items-center gap-2 px-3 py-2"
-                >
-                  <Check
-                    className={cn(
-                      'size-4 text-foreground',
-                      value === repo.id ? 'opacity-100' : 'opacity-0'
-                    )}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <span className="inline-flex items-center gap-1.5">
-                      <RepoBadgeLabel
-                        name={repo.displayName}
-                        color={repo.badgeColor}
-                        className="max-w-full"
-                      />
-                      {repo.connectionId && (
-                        <span className="shrink-0 inline-flex items-center gap-0.5 rounded bg-muted px-1 py-0.5 text-[9px] font-medium leading-none text-muted-foreground">
-                          <Server className="size-2.5" />
-                          SSH
-                        </span>
+              {filteredRepos.map((repo) => {
+                const { isDisabled, detailText } = getRepoRowDisplay(repo, disabledRepoIds)
+                return (
+                  <CommandItem
+                    key={repo.id}
+                    value={repo.id}
+                    disabled={isDisabled}
+                    onSelect={() => handleSelect(repo.id)}
+                    className="items-center gap-2 px-3 py-2"
+                  >
+                    <Check
+                      className={cn(
+                        'size-4 text-foreground',
+                        value === repo.id ? 'opacity-100' : 'opacity-0'
                       )}
-                    </span>
-                    <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{repo.path}</p>
-                  </div>
-                </CommandItem>
-              ))}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <span className="inline-flex items-center gap-1.5">
+                        <RepoBadgeLabel
+                          name={repo.displayName}
+                          color={repo.badgeColor}
+                          className="max-w-full"
+                        />
+                        {repo.connectionId && (
+                          <span className="shrink-0 inline-flex items-center gap-0.5 rounded bg-muted px-1 py-0.5 text-[9px] font-medium leading-none text-muted-foreground">
+                            <Server className="size-2.5" />
+                            SSH
+                          </span>
+                        )}
+                      </span>
+                      {/* Why: a disabled repo shows why it can't be picked (not a
+                          git repo on the selected host) instead of its path, so
+                          the reason is visible rather than the user guessing. */}
+                      <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                        {detailText}
+                      </p>
+                    </div>
+                  </CommandItem>
+                )
+              })}
             </CommandList>
             {/* Why: keep the in-list add action available for users who open
                 the picker expecting the historical footer affordance, while
