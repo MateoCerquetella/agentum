@@ -311,22 +311,35 @@ const WorktreeContextMenu = React.memo(function WorktreeContextMenu({
   const handleCopyTmuxAttach = useCallback(async () => {
     try {
       const [sessions, hosts] = await Promise.all([listSessions(), listServerHosts()])
-      const candidates = sessions.filter(
-        (session) => session.workdir === worktree.path && session.tmux_target
-      )
-      const target = candidates[0]
-      const command = target
-        ? buildTmuxAttachCommand(
-            target,
-            hosts.find((host) => host.id === target.host_id)
+      // Every agent in the workspace is its own tmux session — cover them all so
+      // multi-agent workspaces (e.g. Claude + OpenCode) aren't reduced to one.
+      const lines = sessions
+        .filter((session) => session.workdir === worktree.path && session.tmux_target)
+        .map((session) => ({
+          tool: session.tool,
+          command: buildTmuxAttachCommand(
+            session,
+            hosts.find((host) => host.id === session.host_id)
           )
-        : null
-      if (!command) {
+        }))
+        .filter((entry): entry is { tool: string; command: string } => entry.command !== null)
+      if (lines.length === 0) {
         toast.error('No running tmux session for this workspace')
         return
       }
-      api.ui.writeClipboardText(command)
-      toast.success('tmux attach command copied', { description: command })
+      // One agent: copy the bare command. Several: label each by tool so the
+      // pasted block is self-explanatory.
+      const text =
+        lines.length === 1
+          ? lines[0].command
+          : lines.map((entry) => `# ${entry.tool}\n${entry.command}`).join('\n\n')
+      api.ui.writeClipboardText(text)
+      toast.success(
+        lines.length === 1
+          ? 'tmux attach command copied'
+          : `Copied ${lines.length} tmux attach commands`,
+        { description: lines.length === 1 ? lines[0].command : undefined }
+      )
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not build attach command')
     }
