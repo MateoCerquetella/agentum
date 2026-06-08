@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
-import { X, Minimize2, Columns2, Rows2, Pin, PinOff } from 'lucide-react'
+import { X, Minimize2, Columns2, Rows2, Pin, PinOff, SquareTerminal } from 'lucide-react'
 import { ShellIcon } from './shell-icons'
+import { isTabTmuxBacked } from '@/lib/tab-tmux'
 import { AgentIcon } from '@/lib/agent-catalog'
 import { stripLeadingAgentTitleDecoration } from '@/lib/agent-title-decoration'
 import { useTabAgent } from '@/lib/use-tab-agent'
@@ -84,6 +85,14 @@ export default function SortableTab({
   // map in TabBar would invalidate every SortableTab on every bell event
   // because the slice returns a fresh object reference on each mark/clear.
   const hasUnreadActivity = useAppStore((s) => s.unreadTerminalTabs[tab.id] === true)
+
+  // Why: TRUTHFUL tmux signal — true iff one of this tab's panes is bound to a
+  // real tmux session (`tmux_target` non-null), recorded by the server-session
+  // connection path. Local PTY tabs never record themselves, so they stay
+  // icon-less. Subscribe to the derived boolean (not the whole map) so only the
+  // tab whose tmux backing actually flipped re-renders. Mirrors the host-header
+  // emerald tmux glyph; never derived from the persistTmux intent flag.
+  const isTmuxBacked = useAppStore((s) => isTabTmuxBacked(s.tmuxByPaneKey, tab.id))
 
   // Why: createTab stamps the shell used at creation time, so changing the
   // default shell later does not repaint existing tabs as a different shell.
@@ -350,6 +359,24 @@ export default function SortableTab({
         />
       ) : (
         <span className="truncate max-w-[72px] mr-1">{displayTitle}</span>
+      )}
+      {isTmuxBacked && !isEditing && (
+        // Why: small emerald terminal glyph echoing the per-host tmux indicator,
+        // shown ONLY when this tab's session genuinely runs in tmux. Subtle but
+        // visible; no "TMUX" text chip.
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              data-testid="tab-tmux-icon"
+              className="mr-1 inline-flex shrink-0 text-emerald-500"
+            >
+              <SquareTerminal className="size-3" aria-label="Running in tmux" />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={6}>
+            Running in tmux
+          </TooltipContent>
+        </Tooltip>
       )}
       {tab.color && !isEditing && (
         <span

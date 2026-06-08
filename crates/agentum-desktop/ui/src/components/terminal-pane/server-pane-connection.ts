@@ -217,6 +217,15 @@ export function connectPaneServerSession(
         // Mark the tab as having a live PTY so title-derived agent rows render.
         registeredPtyId = `server:${session.id}:${pane.leafId}`
         deps.updateTabPtyId(deps.tabId, registeredPtyId)
+        // Why: TRUTHFUL tmux signal for the tab bar. Record this pane as
+        // tmux-backed ONLY when the session is genuinely running in a real tmux
+        // session (`tmux_target` non-null) — the same truth the host-header glyph
+        // uses. The local-PTY fallback path never reaches here, so PTY tabs stay
+        // icon-less. (Never derive this from persistTmux — that intent flag lied
+        // about local PTYs and is explicitly not used.)
+        if (session.status === 'running' && session.tmux_target) {
+          useAppStore.getState().markPaneTmux(paneKey)
+        }
       } catch (error) {
         if (!disposed) {
           fallBackToLocal(String(error))
@@ -230,6 +239,9 @@ export function connectPaneServerSession(
       disposed = true
       clearIdleHold()
       useAppStore.getState().clearServerAgentDone(paneKey)
+      // Pane is gone — drop its tmux marker so the tab's glyph clears the moment
+      // the session detaches (kept in lockstep with the done marker above).
+      useAppStore.getState().clearPaneTmux(paneKey)
       if (registeredPtyId) {
         deps.clearTabPtyId(deps.tabId, registeredPtyId)
         deps.clearRuntimePaneTitle(deps.tabId, pane.id)

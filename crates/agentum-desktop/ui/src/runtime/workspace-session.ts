@@ -80,6 +80,17 @@ export async function ensureWorkspaceSession(req: WorkspaceSessionRequest): Prom
   // ignore "already running" so a reattach to a live pane still succeeds.
   if (session.status !== 'running') {
     await startSession(session.id).catch(() => {})
+    // Why: the `session` object above predates the start, so its `status` /
+    // `tmux_target` are stale (idle, null). Re-read once so callers see the
+    // TRUTHFUL post-start state — notably `tmux_target`, which only the running
+    // session carries and which the tab-bar tmux glyph depends on. Best-effort:
+    // a failed re-read just keeps the pre-start snapshot.
+    const refreshed = (await listSessions().catch(() => [] as Session[])).find(
+      (s) => s.id === session.id
+    )
+    if (refreshed) {
+      return refreshed
+    }
   }
   return session
 }
