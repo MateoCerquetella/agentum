@@ -334,6 +334,20 @@ impl ToolAdapter for PassthroughAdapter {
         push_user_flags(&mut argv, session, self.yolo_flag());
         LaunchCommand::argv_only(argv)
     }
+
+    // Hookless agents that route through this catch-all (opencode, aider —
+    // see `PASSTHROUGH_PROBED`) still need change-based Working/Idle
+    // detection: they have no first-class adapter, so `busy_signature()`
+    // is `None`, and the watchdog only applies its no-busy-signature
+    // fallback when `is_agent()` is true. Without this, an actively
+    // rendering remote OpenCode pane classified as `Unknown` forever —
+    // never `Working`, never `Idle` — so the sidebar dot showed "Idle"
+    // while the agent was visibly streaming output. A truly unknown
+    // binary (a one-off shell command typed as a "tool") stays `false`
+    // and `Unknown`, preserving the "don't auto-fire on shells" rule.
+    fn is_agent(&self) -> bool {
+        crate::PASSTHROUGH_PROBED.contains(&self.tool.as_str())
+    }
 }
 
 #[cfg(test)]
@@ -580,5 +594,32 @@ mod tests {
         let s = fixture("cursor", Some("auto"), &[]);
         let cmd = CursorAdapter.launch(&s);
         assert_eq!(cmd.argv, vec!["cursor-agent", "--model=auto"]);
+    }
+
+    #[test]
+    fn passthrough_probed_agents_report_is_agent() {
+        // opencode / aider are hookless coding agents that route through
+        // PassthroughAdapter (they're in PASSTHROUGH_PROBED, not FIRST_CLASS).
+        // They must report is_agent() == true so the watchdog applies its
+        // change-based Working/Idle detection — otherwise classify_activity
+        // pins them at Unknown forever and the sidebar dot shows "Idle"
+        // while the agent is visibly working. Regression for the remote
+        // OpenCode "stuck on Idle" bug.
+        for &tool in crate::PASSTHROUGH_PROBED {
+            let a = adapter_for(tool);
+            assert!(
+                a.is_agent(),
+                "passthrough-probed agent {tool:?} must report is_agent() == true"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_passthrough_binary_is_not_agent() {
+        // A truly unknown binary (a one-off shell command typed as a "tool")
+        // must stay is_agent() == false so the watchdog leaves it Unknown and
+        // never auto-fires an agent.finished/idle for what may be a shell.
+        let a = adapter_for("some-random-binary");
+        assert!(!a.is_agent());
     }
 }

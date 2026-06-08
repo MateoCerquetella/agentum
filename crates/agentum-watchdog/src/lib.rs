@@ -1103,6 +1103,57 @@ mod tests {
     }
 
     #[test]
+    fn classify_activity_hookless_passthrough_agent_via_real_adapter() {
+        // Root-cause regression for the remote OpenCode "stuck on Idle"
+        // bug. OpenCode is a hookless agent that routes through
+        // PassthroughAdapter (it's in PASSTHROUGH_PROBED, not FIRST_CLASS),
+        // so it has no busy_signature(). Before the fix PassthroughAdapter
+        // inherited the default is_agent() == false, so classify_activity
+        // hit the `None =>` arm and returned Unknown forever — the session
+        // never transitioned to Working or Idle and the sidebar dot showed
+        // "Idle" while the agent was visibly streaming output.
+        //
+        // This test pulls the real adapter values straight from
+        // `adapter_for("opencode")` (rather than hardcoding is_agent=true)
+        // so it stays coupled to the actual wiring: if someone flips
+        // PassthroughAdapter back to is_agent() == false, this fails.
+        let adapter = agentum_executor::adapter_for("opencode");
+        let busy_sig = adapter.busy_signature();
+        let awaiting_sigs = adapter.awaiting_input_signatures();
+        let is_agent = adapter.is_agent();
+        assert!(busy_sig.is_none(), "opencode is hookless: no busy_signature");
+        assert!(is_agent, "opencode must be treated as an agent");
+
+        // Actively redrawing pane (footer just changed this tick) → Working.
+        let just_changed = Duration::from_millis(100);
+        assert_eq!(
+            classify_activity(
+                "Build · Big Pickle\ngenerating tests...",
+                busy_sig,
+                awaiting_sigs,
+                is_agent,
+                just_changed,
+            ),
+            ActivityState::Working,
+            "an actively-changing OpenCode pane must classify as Working"
+        );
+
+        // Stable pane (footer quiet past the idle threshold) → Idle.
+        let quiet_long = IDLE_AFTER_QUIET + Duration::from_millis(500);
+        assert_eq!(
+            classify_activity(
+                "opencode ready\n> ",
+                busy_sig,
+                awaiting_sigs,
+                is_agent,
+                quiet_long,
+            ),
+            ActivityState::Idle,
+            "a stable OpenCode pane past the quiet threshold must classify as Idle"
+        );
+    }
+
+    #[test]
     fn classify_activity_multichoice_menu() {
         // Regression: Claude Code multi-choice menus (plan mode,
         // subagent picks) show `Enter to select · ↑/↓ to navigate`
