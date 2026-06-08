@@ -42,12 +42,23 @@ function Sidebar({
   const fetchAllWorktrees = useAppStore((s) => s.fetchAllWorktrees)
   const { nativeDropTarget, dropHandlers, affordance } = useSidebarProjectDrop()
   const hydrateHosts = useAppStore((s) => s.hydrateHosts)
+  const refreshHostsTmux = useAppStore((s) => s.refreshHostsTmux)
   const sshConnectedGeneration = useAppStore((s) => s.sshConnectedGeneration)
 
   // Hydrate host metadata (label, OS) on mount and whenever an SSH target connects.
   useEffect(() => {
     void hydrateHosts()
   }, [hydrateHosts, sshConnectedGeneration])
+
+  // Keep the per-host tmux glyph truthful as sessions reattach/start/stop: the
+  // mount-time hydrate snapshot misses sessions that come up afterward, so poll
+  // the cheap session-list recompute. refreshHostsTmux only swaps state when
+  // membership changes, so this won't churn renders.
+  useEffect(() => {
+    void refreshHostsTmux()
+    const id = window.setInterval(() => void refreshHostsTmux(), 4000)
+    return () => window.clearInterval(id)
+  }, [refreshHostsTmux])
 
   const setLiveSidebarWidth = React.useCallback((width: number) => {
     document.documentElement.style.setProperty('--workspace-sidebar-live-width', `${width}px`)

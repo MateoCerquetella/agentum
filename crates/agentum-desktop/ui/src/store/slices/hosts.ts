@@ -39,6 +39,11 @@ export type HostsSlice = {
   /** Populate label + OS detail for the local host and every known SSH target.
    *  Best-effort: never throws into the UI. */
   hydrateHosts: () => Promise<void>
+  /** Recompute `hostsWithTmux` from the live session list only — cheap (a daemon
+   *  DB read + cached host-id resolves, no SSH readiness probes). Polled on an
+   *  interval so the glyph appears once sessions reattach and updates live, rather
+   *  than reflecting a single stale snapshot from `hydrateHosts` at mount. */
+  refreshHostsTmux: () => Promise<void>
 }
 
 /** Compose a host's OS detail line: `<transport> · <uname>` when the readiness
@@ -108,10 +113,33 @@ export const createHostsSlice: StateCreator<AppState, [], [], HostsSlice> = (set
       }
     }
 
-    // Truthful per-host tmux: which hosts actually have a live tmux-backed
-    // session right now. Best-effort — a session-list failure leaves the prior
-    // set untouched rather than blanking the glyph.
+    // Truthful per-host tmux: recompute from the live session list. Delegated
+    // to refreshHostsTmux (also polled on an interval) so the glyph reflects
+    // sessions that reattach AFTER this initial hydrate, not just a mount-time
+    // snapshot. (`serverHostIdToHostKey` above is rebuilt there from cached
+    // resolves — cheap — so this stays a single source of truth.)
+    void serverHostIdToHostKey
+    await get().refreshHostsTmux()
+  },
+
+  refreshHostsTmux: async () => {
     try {
+      // Rebuild server-host-id → sidebar-host-key cheaply: cached connection
+      // resolves + one daemon host list. NO SSH readiness probes (that's what
+      // makes this safe to poll, unlike hydrateHosts).
+      const serverHostIdToHostKey = new Map<string, string>()
+      const hosts: ServerHost[] = await listServerHosts()
+      const local = hosts.find((h) => h.kind === 'local')
+      if (local) {
+        serverHostIdToHostKey.set(local.id, 'local')
+      }
+      const labels = get().sshTargetLabels
+      for (const [connectionId] of labels) {
+        const hostId = await resolveServerHostIdForConnection(connectionId)
+        if (hostId) {
+          serverHostIdToHostKey.set(hostId, `ssh:${connectionId}`)
+        }
+      }
       const sessions = await listSessions()
       const hostKeys = new Set<HostKey>([
         'local',
@@ -123,9 +151,15 @@ export const createHostsSlice: StateCreator<AppState, [], [], HostsSlice> = (set
           next.add(hostKey)
         }
       }
-      set({ hostsWithTmux: next })
+      // Only swap the Set when membership changed, so the ~interval poll doesn't
+      // hand the sidebar a fresh reference (and re-render) on every tick.
+      const prev = get().hostsWithTmux
+      const changed = prev.size !== next.size || [...next].some((k) => !prev.has(k))
+      if (changed) {
+        set({ hostsWithTmux: next })
+      }
     } catch (err) {
-      console.warn('[agentum] hydrateHosts: session tmux probe failed', err)
+      console.warn('[agentum] refreshHostsTmux failed', err)
     }
   }
 })
