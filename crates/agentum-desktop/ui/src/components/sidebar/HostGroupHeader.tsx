@@ -1,6 +1,7 @@
 import type React from 'react'
 import { ChevronDown, Monitor, Server, SquareTerminal } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { SidebarHost } from './worktree-list-groups'
 
 const STATUS_DOT: Record<NonNullable<SidebarHost['status']>, string> = {
@@ -10,13 +11,27 @@ const STATUS_DOT: Record<NonNullable<SidebarHost['status']>, string> = {
   unknown: 'bg-zinc-300'
 }
 
-// Mask IPv4/IPv6 literals in the host detail so the address isn't exposed at a
-// glance (screenshots / screenshares). The full detail (real IP) stays on the
-// element's `title`, so hovering still reveals it.
+// Drop IPv4/IPv6 literals from the host detail so the address isn't exposed at a
+// glance (screenshots / screenshares), then tidy the leftover separators so the
+// line reads cleanly (e.g. "ssh 172.30.66.4 · Linux 6.9" → "ssh · Linux 6.9").
+// The full detail (real IP) is shown on hover via a tooltip.
 const IPV4_RE = /\b\d{1,3}(?:\.\d{1,3}){3}\b/g
 const IPV6_RE = /\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{0,4}\b/g
-function maskIps(text: string): string {
-  return text.replace(IPV4_RE, '•••.•••.•••.•••').replace(IPV6_RE, '••••')
+function redactDetail(text: string): string {
+  const redacted = text.replace(IPV4_RE, '').replace(IPV6_RE, '')
+  // Collapse the double space the removed token leaves, and drop a now-dangling
+  // leading separator (e.g. "ssh  · Linux" → "ssh · Linux"; " · Linux" → "Linux").
+  return redacted
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+·/g, ' ·')
+    .replace(/^\s*·\s*/, '')
+    .trim()
+}
+
+/** Whether redaction actually removed an address (so we only offer the
+ *  hover-to-reveal tooltip when there's something hidden). */
+function hasRedactedIp(text: string): boolean {
+  return redactDetail(text) !== text.trim()
 }
 
 export function HostGroupHeader({
@@ -68,14 +83,21 @@ export function HostGroupHeader({
           ) : null}
         </span>
         {host.detail ? (
-          // IP masked by default; the real address is on `title`, so hovering
-          // the line reveals it.
-          <span
-            className="truncate text-[11px] text-muted-foreground"
-            title={host.detail}
-          >
-            {maskIps(host.detail)}
-          </span>
+          hasRedactedIp(host.detail) ? (
+            // IP dropped from the line; hover reveals the real address.
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="w-fit max-w-full cursor-help truncate text-[11px] text-muted-foreground">
+                  {redactDetail(host.detail)}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={4}>
+                {host.detail}
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            <span className="truncate text-[11px] text-muted-foreground">{host.detail}</span>
+          )
         ) : null}
       </div>
       <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-sidebar-accent px-1.5 py-0.5 text-[11px] text-muted-foreground">
