@@ -27,17 +27,49 @@ use crate::{Result, TmuxError};
 /// watchdog's tick loop (`tokio::time::timeout` bounds every SSH round trip).
 const SSH_TIMEOUT: Duration = Duration::from_secs(12);
 
-/// Directory holding the OpenSSH ControlMaster sockets. Kept short (unix socket
-/// paths cap at ~104 chars and `%C` is already a fixed-length hash of
-/// host+port+user) and created on demand. We ignore an `AlreadyExists` error so
-/// concurrent ops racing to create it don't fail; any other error is swallowed
-/// — ssh just falls back to a fresh connection per op rather than panicking.
-fn control_path_template() -> String {
-    let dir: PathBuf = std::env::temp_dir().join("agentum-ssh");
-    // Best-effort: if this fails, ControlPath points at a missing dir and ssh
-    // simply doesn't multiplex (it logs and connects directly). Never panic.
-    let _ = std::fs::create_dir_all(&dir);
-    dir.join("agentum-cm-%C").to_string_lossy().into_owned()
+/// Private base dir for ControlMaster sockets: `$XDG_RUNTIME_DIR/agentum-ssh`
+/// (preferred — short and user-private on Linux) else `$HOME/.agentum/ssh`.
+/// Never the world-writable temp dir: the socket backs an *authenticated* SSH
+/// channel, so a hijackable location is a real risk (and macOS's `$TMPDIR` is
+/// long enough to blow the unix-socket path cap once `%C` is appended).
+fn control_socket_dir() -> Option<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
+        let p = PathBuf::from(xdg);
+        if p.is_absolute() {
+            return Some(p.join("agentum-ssh"));
+        }
+    }
+    let home = std::env::var_os("HOME")?;
+    Some(PathBuf::from(home).join(".agentum").join("ssh"))
+}
+
+/// `ControlPath` template for OpenSSH multiplexing, or `None` when no safe,
+/// short-enough socket dir exists (then `ssh_command` skips multiplexing and
+/// connects fresh each op rather than risk a too-long path or an unsafe socket).
+/// Created `0700` on demand. `%C` is a fixed-length host+port+user hash; we bail
+/// if the expanded path would breach the ~104-byte unix socket cap.
+fn control_path_template() -> Option<String> {
+    let dir = control_socket_dir()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        // recursive(true) ⇒ Ok if it already exists; 0700 keeps it owner-only.
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)
+            .ok()?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(&dir).ok()?;
+    }
+    let template = dir.join("cm-%C").to_string_lossy().into_owned();
+    // `%C` (2 chars here) expands to a 40-char hex hash at connect time.
+    if template.len() - 2 + 40 > 100 {
+        return None;
+    }
+    Some(template)
 }
 
 /// Build the `ssh`/`sshpass` argv for running `script` on `host`. Returns a
@@ -91,19 +123,24 @@ pub fn ssh_command(host: &Host, script: &str) -> Command {
         .arg("ServerAliveCountMax=1")
         .arg("-o")
         .arg("StrictHostKeyChecking=accept-new")
-        // ControlMaster connection pooling: the first op authenticates and opens
-        // a master socket; subsequent ops within ControlPersist reuse it, skipping
-        // the TCP+auth handshake entirely. This is the big remote-latency win —
-        // each tmux/git/fs round trip would otherwise pay a full SSH handshake.
-        // Applies to both key/agent and password (sshpass) auth.
-        .arg("-o")
-        .arg("ControlMaster=auto")
-        .arg("-o")
-        .arg(format!("ControlPath={}", control_path_template()))
-        .arg("-o")
-        .arg("ControlPersist=30s")
         .arg("-p")
         .arg(port.to_string());
+
+    // ControlMaster connection pooling: the first op authenticates and opens a
+    // master socket; subsequent ops within ControlPersist reuse it, skipping the
+    // TCP+auth handshake entirely — the big remote-latency win (each tmux/git/fs
+    // round trip would otherwise pay a full SSH handshake). Applies to both
+    // key/agent and password (sshpass) auth. Only enabled when we have a private,
+    // short-enough socket dir; otherwise we connect fresh rather than risk a
+    // too-long ControlPath (ssh exits 255) or an unsafe socket location.
+    if let Some(control_path) = control_path_template() {
+        cmd.arg("-o")
+            .arg("ControlMaster=auto")
+            .arg("-o")
+            .arg(format!("ControlPath={control_path}"))
+            .arg("-o")
+            .arg("ControlPersist=30s");
+    }
 
     match auth {
         SshAuth::Key { path } if !path.trim().is_empty() => {
@@ -320,11 +357,11 @@ mod tests {
         // `%C` is a fixed-length host+port+user hash; keep the socket name short
         // so the unix socket path stays under the ~104-char cap.
         assert!(
-            control_path.ends_with("agentum-cm-%C"),
+            control_path.ends_with("cm-%C"),
             "unexpected ControlPath: {control_path}"
         );
         // The socket dir must exist (we create it on demand) — strip the
-        // `ControlPath=` prefix and the `/agentum-cm-%C` leaf.
+        // `ControlPath=` prefix and the `/cm-%C` leaf.
         let path = control_path.trim_start_matches("ControlPath=");
         let dir = std::path::Path::new(path).parent().expect("control dir");
         assert!(dir.is_dir(), "control dir not created: {}", dir.display());
@@ -366,7 +403,10 @@ mod tests {
         let first = control_path_template();
         let second = control_path_template();
         assert_eq!(first, second);
-        let dir = std::path::Path::new(&first).parent().expect("dir");
+        // HOME is set in the test environment, so a path is available.
+        let path = first.expect("control path available with HOME set");
+        assert!(path.ends_with("cm-%C"));
+        let dir = std::path::Path::new(&path).parent().expect("dir");
         assert!(dir.is_dir());
     }
 }
