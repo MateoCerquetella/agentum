@@ -14,6 +14,7 @@
 //! auth handling).
 
 use std::borrow::Cow;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use agentum_core::{Host, HostKind, SshAuth};
@@ -25,6 +26,19 @@ use crate::{Result, TmuxError};
 /// Matches `host_runtime`'s probe budget so a hung remote can't wedge the
 /// watchdog's tick loop (`tokio::time::timeout` bounds every SSH round trip).
 const SSH_TIMEOUT: Duration = Duration::from_secs(12);
+
+/// Directory holding the OpenSSH ControlMaster sockets. Kept short (unix socket
+/// paths cap at ~104 chars and `%C` is already a fixed-length hash of
+/// host+port+user) and created on demand. We ignore an `AlreadyExists` error so
+/// concurrent ops racing to create it don't fail; any other error is swallowed
+/// — ssh just falls back to a fresh connection per op rather than panicking.
+fn control_path_template() -> String {
+    let dir: PathBuf = std::env::temp_dir().join("agentum-ssh");
+    // Best-effort: if this fails, ControlPath points at a missing dir and ssh
+    // simply doesn't multiplex (it logs and connects directly). Never panic.
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("agentum-cm-%C").to_string_lossy().into_owned()
+}
 
 /// Build the `ssh`/`sshpass` argv for running `script` on `host`. Returns a
 /// plain tokio [`Command`]; the caller drives `.output()` / `.status()`.
@@ -77,6 +91,17 @@ pub fn ssh_command(host: &Host, script: &str) -> Command {
         .arg("ServerAliveCountMax=1")
         .arg("-o")
         .arg("StrictHostKeyChecking=accept-new")
+        // ControlMaster connection pooling: the first op authenticates and opens
+        // a master socket; subsequent ops within ControlPersist reuse it, skipping
+        // the TCP+auth handshake entirely. This is the big remote-latency win —
+        // each tmux/git/fs round trip would otherwise pay a full SSH handshake.
+        // Applies to both key/agent and password (sshpass) auth.
+        .arg("-o")
+        .arg("ControlMaster=auto")
+        .arg("-o")
+        .arg(format!("ControlPath={}", control_path_template()))
+        .arg("-o")
+        .arg("ControlPersist=30s")
         .arg("-p")
         .arg(port.to_string());
 
@@ -276,6 +301,41 @@ mod tests {
         assert!(!args.contains(&"PreferredAuthentications=password".to_string()));
     }
 
+    /// ControlMaster pooling must be present on every connection so repeated
+    /// remote ops reuse one authenticated socket. Shared assertion for both auth
+    /// paths (key/agent and password).
+    fn assert_control_master(args: &[String]) {
+        assert!(
+            args.contains(&"ControlMaster=auto".to_string()),
+            "missing ControlMaster=auto: {args:?}"
+        );
+        assert!(
+            args.contains(&"ControlPersist=30s".to_string()),
+            "missing ControlPersist=30s: {args:?}"
+        );
+        let control_path = args
+            .iter()
+            .find(|a| a.starts_with("ControlPath="))
+            .unwrap_or_else(|| panic!("missing ControlPath=: {args:?}"));
+        // `%C` is a fixed-length host+port+user hash; keep the socket name short
+        // so the unix socket path stays under the ~104-char cap.
+        assert!(
+            control_path.ends_with("agentum-cm-%C"),
+            "unexpected ControlPath: {control_path}"
+        );
+        // The socket dir must exist (we create it on demand) — strip the
+        // `ControlPath=` prefix and the `/agentum-cm-%C` leaf.
+        let path = control_path.trim_start_matches("ControlPath=");
+        let dir = std::path::Path::new(path).parent().expect("control dir");
+        assert!(dir.is_dir(), "control dir not created: {}", dir.display());
+    }
+
+    #[test]
+    fn ssh_command_key_enables_control_master_pooling() {
+        let cmd = ssh_command(&ssh_host(SshAuth::Agent), "echo hi");
+        assert_control_master(&arg_strings(&cmd));
+    }
+
     #[test]
     fn ssh_command_password_shells_through_sshpass() {
         let cmd = ssh_command(
@@ -296,5 +356,17 @@ mod tests {
         assert!(!args.contains(&"BatchMode=yes".to_string()));
         assert!(args.contains(&"PreferredAuthentications=password".to_string()));
         assert!(args.iter().any(|a| a == "me@box.local"));
+        // Pooling applies to the sshpass path too.
+        assert_control_master(&args);
+    }
+
+    #[test]
+    fn control_path_template_creates_dir_idempotently() {
+        // Calling twice must not panic even though the dir already exists.
+        let first = control_path_template();
+        let second = control_path_template();
+        assert_eq!(first, second);
+        let dir = std::path::Path::new(&first).parent().expect("dir");
+        assert!(dir.is_dir());
     }
 }
