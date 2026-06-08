@@ -72,14 +72,22 @@ export function HostGroupHeader({
           <span className="truncate text-sm font-semibold text-foreground">{host.label}</span>
           {host.hasTmux ? (
             // Truthful per-host marker: this host has at least one live
-            // tmux-backed session. Visible (emerald, the "active/tmux" colour)
-            // but small — a clear at-a-glance "tmux is running here".
-            <SquareTerminal
-              className="size-3.5 shrink-0 text-emerald-500"
-              aria-label="Has tmux sessions"
-            >
-              <title>Has tmux sessions</title>
-            </SquareTerminal>
+            // tmux-backed session. Emerald + small; hover explains it.
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex cursor-help">
+                  <SquareTerminal
+                    className="size-3.5 shrink-0 text-emerald-500"
+                    aria-label="This machine is using tmux"
+                  />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={4}>
+                {host.kind === 'ssh'
+                  ? 'This host is running sessions in tmux'
+                  : 'This machine is running sessions in tmux'}
+              </TooltipContent>
+            </Tooltip>
           ) : null}
         </span>
         {host.detail ? (
