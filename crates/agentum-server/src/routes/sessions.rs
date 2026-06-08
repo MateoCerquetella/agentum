@@ -422,20 +422,23 @@ async fn start(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    if matches!(session.status, Status::Running) && already {
-        return Ok(Json(session));
-    }
     if already {
-        // Orphaned tmux session — kill it and respawn fresh instead of
-        // erroring. Happens when agentum is killed/restarted while
-        // sessions are still in tmux.
-        tracing::warn!(
-            target = %target,
-            "orphaned tmux session found; killing before respawn"
-        );
-        crate::host_runtime::kill_session(&host, &target)
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        // The tmux session is still alive — REATTACH to it instead of killing
+        // and respawning. This is what makes a session survive an agentum
+        // restart (persist): the live pane and the agent running in it are
+        // preserved; we just mark the session Running and stream it again. The
+        // stored status may be stale (e.g. crashed/idle from before the restart,
+        // or never updated because agentum was killed) — but a live tmux session
+        // is reattachable regardless, and the watchdog reconciles the real state
+        // on its next tick. Previously this branch killed the "orphan", which
+        // destroyed exactly the session the user wanted to keep across a restart.
+        if !matches!(session.status, Status::Running) {
+            state
+                .store
+                .update_status_and_target(id, Status::Running, Some(&target))
+                .await?;
+        }
+        return Ok(Json(load(&state, id).await?));
     }
 
     // Older sessions (pre-tilde-expansion fix) may have `~/...` stored
