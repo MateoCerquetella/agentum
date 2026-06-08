@@ -72,10 +72,10 @@ export function HostGroupHeader({
           <span className="truncate text-sm font-semibold text-foreground">{host.label}</span>
           {host.hasTmux ? (
             // Truthful per-host marker: this host has at least one live
-            // tmux-backed session. Understated by design — muted, small, and
-            // sized to be easy to ignore (mock-up: "present but easy to ignore").
+            // tmux-backed session. Visible (emerald, the "active/tmux" colour)
+            // but small — a clear at-a-glance "tmux is running here".
             <SquareTerminal
-              className="size-3 shrink-0 text-muted-foreground/70"
+              className="size-3.5 shrink-0 text-emerald-500"
               aria-label="Has tmux sessions"
             >
               <title>Has tmux sessions</title>

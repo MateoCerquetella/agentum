@@ -7,7 +7,6 @@ import {
   type ServerHost
 } from '@/runtime/server-host-client'
 import { listSessions } from '@/runtime/agentum-server-client'
-import { hasTmuxForHost } from '@/components/sidebar/worktree-list-groups'
 
 /** Stable key identifying a host in the sidebar tree. `local` for the daemon's
  *  own machine; `ssh:<connectionId>` for a remote repo's native SSH target. */
@@ -135,16 +134,16 @@ export const createHostsSlice: StateCreator<AppState, [], [], HostsSlice> = (set
           serverHostIdToHostKey.set(repo.hostId, `ssh:${repo.connectionId}`)
         }
       }
-      const labels = get().sshTargetLabels
       const sessions = await listSessions()
-      const hostKeys = new Set<HostKey>([
-        'local',
-        ...[...labels.keys()].map((id) => `ssh:${id}`)
-      ])
+      // Bucket each LIVE tmux session under its host key directly — no hostKey
+      // enumeration (which depended on sshTargetLabels and could key-mismatch the
+      // tree). A remote session maps via the repos map; anything else is local.
+      // The key here is the SAME `ssh:<connectionId>` the sidebar tree derives
+      // from repo.connectionId, so they always match.
       const next = new Set<HostKey>()
-      for (const hostKey of hostKeys) {
-        if (hasTmuxForHost(sessions, hostKey, serverHostIdToHostKey)) {
-          next.add(hostKey)
+      for (const s of sessions) {
+        if (s.status === 'running' && s.tmux_target) {
+          next.add((s.host_id ? serverHostIdToHostKey.get(s.host_id) : undefined) ?? 'local')
         }
       }
       // Only swap the Set when membership changed, so the ~interval poll doesn't
