@@ -83,6 +83,48 @@ export function hasTmuxForHost(
     return sessionHostKey === hostKey
   })
 }
+
+/** Extract the `tabId` portion (`${tabId}:${leafId}`) from a pane key. Returns
+ *  the whole string when there is no separator, so a malformed key still maps
+ *  through the lookups (and is harmlessly skipped when no tab matches). */
+function tabIdFromPaneKey(paneKey: string): string {
+  const sep = paneKey.indexOf(':')
+  return sep <= 0 ? paneKey : paneKey.slice(0, sep)
+}
+
+/**
+ * Derive the set of host keys that have at least one OPEN, tmux-backed pane.
+ *
+ * Unlike `hasTmuxForHost` (which reads the persisted session list and so keeps
+ * marking a host for sessions the user already closed), this is computed from
+ * `tmuxByPaneKey` — the renderer's "this open pane is bound to a real tmux
+ * session right now" map, cleared on pane dispose. That makes the host glyph
+ * consistent with the per-tab tmux icon and truthful about open panes only.
+ *
+ * Each pane key (`${tabId}:${leafId}`) is resolved tab → worktree → host key
+ * via the two lookup maps the caller assembles from the store. A pane whose tab
+ * (or worktree) no longer exists is skipped rather than bucketed to local.
+ */
+export function hostKeysWithOpenTmux(
+  tmuxByPaneKey: Readonly<Record<string, true>>,
+  tabIdToWorktreeId: ReadonlyMap<string, string>,
+  worktreeIdToHostKey: ReadonlyMap<string, string>
+): Set<string> {
+  const hosts = new Set<string>()
+  for (const paneKey of Object.keys(tmuxByPaneKey)) {
+    const worktreeId = tabIdToWorktreeId.get(tabIdFromPaneKey(paneKey))
+    if (worktreeId === undefined) {
+      continue
+    }
+    const hostKey = worktreeIdToHostKey.get(worktreeId)
+    if (hostKey === undefined) {
+      continue
+    }
+    hosts.add(hostKey)
+  }
+  return hosts
+}
+
 export type ProjectGroupOrdering = 'manual' | 'visible-worktree-order'
 
 export function getProjectGroupOrdering(

@@ -14,6 +14,7 @@ import {
   getProjectGroupOrdering,
   groupRowsByHost,
   hasTmuxForHost,
+  hostKeysWithOpenTmux,
   LOCAL_HOST_KEY,
   hostKeyForRepo,
   PINNED_GROUP_KEY,
@@ -109,6 +110,69 @@ describe('hasTmuxForHost', () => {
 
   it('returns false for an empty session list', () => {
     expect(hasTmuxForHost([], 'local', serverHostIdToHostKey)).toBe(false)
+  })
+})
+
+describe('hostKeysWithOpenTmux', () => {
+  // tabId → worktreeId, as WorktreeList assembles from tabsByWorktree.
+  const tabIdToWorktreeId = new Map<string, string>([
+    ['tab-local', 'wt-local'],
+    ['tab-remote', 'wt-remote']
+  ])
+  // worktreeId → host key, as WorktreeList assembles from worktree → repo.
+  const worktreeIdToHostKey = new Map<string, string>([
+    ['wt-local', 'local'],
+    ['wt-remote', 'ssh:conn-omarchy']
+  ])
+
+  it('maps a local tab pane key to the local host', () => {
+    const out = hostKeysWithOpenTmux({ 'tab-local:leaf-1': true }, tabIdToWorktreeId, worktreeIdToHostKey)
+    expect(out).toEqual(new Set(['local']))
+  })
+
+  it('maps a remote tab pane key to its ssh host key', () => {
+    const out = hostKeysWithOpenTmux(
+      { 'tab-remote:leaf-1': true },
+      tabIdToWorktreeId,
+      worktreeIdToHostKey
+    )
+    expect(out).toEqual(new Set(['ssh:conn-omarchy']))
+  })
+
+  it('collapses multiple open panes on the same host into one key', () => {
+    const out = hostKeysWithOpenTmux(
+      { 'tab-local:leaf-1': true, 'tab-local:leaf-2': true },
+      tabIdToWorktreeId,
+      worktreeIdToHostKey
+    )
+    expect(out).toEqual(new Set(['local']))
+  })
+
+  it('returns both hosts when open tmux panes span local and remote', () => {
+    const out = hostKeysWithOpenTmux(
+      { 'tab-local:leaf-1': true, 'tab-remote:leaf-9': true },
+      tabIdToWorktreeId,
+      worktreeIdToHostKey
+    )
+    expect(out).toEqual(new Set(['local', 'ssh:conn-omarchy']))
+  })
+
+  it('skips a pane key whose tab no longer exists (closed/persisted leftover)', () => {
+    const out = hostKeysWithOpenTmux({ 'tab-gone:leaf-1': true }, tabIdToWorktreeId, worktreeIdToHostKey)
+    expect(out).toEqual(new Set())
+  })
+
+  it('skips a pane key whose worktree has no host mapping', () => {
+    const out = hostKeysWithOpenTmux(
+      { 'tab-orphan:leaf-1': true },
+      new Map([['tab-orphan', 'wt-unmapped']]),
+      worktreeIdToHostKey
+    )
+    expect(out).toEqual(new Set())
+  })
+
+  it('returns an empty set for an empty tmux map', () => {
+    expect(hostKeysWithOpenTmux({}, tabIdToWorktreeId, worktreeIdToHostKey)).toEqual(new Set())
   })
 })
 

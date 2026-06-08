@@ -79,7 +79,9 @@ import {
   getProjectGroupOrdering,
   getLineageGroupKey,
   groupRowsByHost,
-  getHostHeaderKey
+  getHostHeaderKey,
+  hostKeyForRepo,
+  hostKeysWithOpenTmux
 } from './worktree-list-groups'
 import { HostGroupHeader } from './HostGroupHeader'
 import { SessionActivityCard } from './SessionActivityCard'
@@ -3399,7 +3401,14 @@ const WorktreeList = React.memo(function WorktreeList({
   const activeWorktreeId = useAppStore((s) => s.activeWorktreeId)
   const groupBy = useAppStore((s) => s.groupBy)
   const hostMetaByKey = useAppStore((s) => s.hostMetaByKey)
-  const hostsWithTmux = useAppStore((s) => s.hostsWithTmux)
+  // Why: the per-host tmux glyph must reflect only OPEN, tmux-backed panes —
+  // not persisted-but-closed tmux sessions (those keep showing in listSessions
+  // by design). tmuxByPaneKey is the renderer's truthful "this open pane is in
+  // tmux right now" signal (set on bind, cleared on dispose; it also backs the
+  // per-tab tmux icon, so the two surfaces stay consistent). We derive
+  // hostsWithTmux from it below instead of polling the session list.
+  const tmuxByPaneKey = useAppStore((s) => s.tmuxByPaneKey)
+  const hostTmuxTabsByWorktree = useAppStore((s) => s.tabsByWorktree)
   const sshConnectionStates = useAppStore((s) => s.sshConnectionStates)
   const sshTargetLabels = useAppStore((s) => s.sshTargetLabels)
   const workspaceStatuses = useAppStore((s) => s.workspaceStatuses)
@@ -3910,6 +3919,24 @@ const WorktreeList = React.memo(function WorktreeList({
       worktrees
     ]
   )
+
+  // Reactive per-host "open tmux pane" set. Recomputes whenever a pane binds or
+  // disposes a tmux session (tmuxByPaneKey) or the tab/worktree/repo topology
+  // shifts — no session-list poll. tabId → worktreeId → hostKey, where the host
+  // key is derived from the worktree's repo connection (local vs ssh:<id>).
+  const hostsWithTmux = useMemo(() => {
+    const tabIdToWorktreeId = new Map<string, string>()
+    for (const tabs of Object.values(hostTmuxTabsByWorktree)) {
+      for (const tab of tabs) {
+        tabIdToWorktreeId.set(tab.id, tab.worktreeId)
+      }
+    }
+    const worktreeIdToHostKey = new Map<string, string>()
+    for (const worktree of worktreeMap.values()) {
+      worktreeIdToHostKey.set(worktree.id, hostKeyForRepo(repoMap.get(worktree.repoId)))
+    }
+    return hostKeysWithOpenTmux(tmuxByPaneKey, tabIdToWorktreeId, worktreeIdToHostKey)
+  }, [tmuxByPaneKey, hostTmuxTabsByWorktree, worktreeMap, repoMap])
 
   const hostForKey = useCallback(
     (hostKey: string): SidebarHost => {
