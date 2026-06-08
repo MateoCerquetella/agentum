@@ -41,6 +41,47 @@ export type SidebarHost = {
   /** Whether `tmux` is installed on the host (sessions run inside it). Drives
    *  the host header's tmux indicator. Undefined until readiness resolves. */
   tmuxInstalled?: boolean
+  /** Whether this host currently has at least one RUNNING session whose agent
+   *  actually spawned in tmux (`tmux_target` non-null). This is the truthful
+   *  per-host "in tmux right now" signal — distinct from `tmuxInstalled`
+   *  ("tmux is available") — and drives the muted glyph on the host header. */
+  hasTmux?: boolean
+}
+
+/** Minimal session shape the per-host tmux check needs. Mirrors the relevant
+ *  fields of `agentum_core::Session` (see runtime/agentum-server-client.ts)
+ *  without depending on the full client type, so this stays pure + testable. */
+export type HostTmuxSession = {
+  status: string
+  /** Set by the server only when the agent really spawned in a tmux session;
+   *  null for local-PTY tabs and crashed sessions. The truthful tmux signal. */
+  tmux_target?: string | null
+  /** Server host UUID the session runs on (null/absent = the local host). */
+  host_id?: string | null
+}
+
+/**
+ * Truthful per-host tmux check: is any session RUNNING with a real `tmux_target`
+ * on the host identified by `hostKey`? A session's `host_id` is the server host
+ * UUID, while sidebar host keys are `local` / `ssh:<connectionId>`, so callers
+ * pass `serverHostIdToHostKey` (built from the resolved host mappings) to bridge
+ * the two. Sessions whose `host_id` isn't in the map bucket under the local host
+ * (matching how `hostKeyForRepo` treats an absent connection).
+ */
+export function hasTmuxForHost(
+  sessions: readonly HostTmuxSession[],
+  hostKey: string,
+  serverHostIdToHostKey: ReadonlyMap<string, string>
+): boolean {
+  return sessions.some((session) => {
+    if (session.status !== 'running' || !session.tmux_target) {
+      return false
+    }
+    const sessionHostKey = session.host_id
+      ? (serverHostIdToHostKey.get(session.host_id) ?? LOCAL_HOST_KEY)
+      : LOCAL_HOST_KEY
+    return sessionHostKey === hostKey
+  })
 }
 export type ProjectGroupOrdering = 'manual' | 'visible-worktree-order'
 

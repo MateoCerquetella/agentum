@@ -1,5 +1,5 @@
 import type React from 'react'
-import { ChevronDown, Monitor, Server } from 'lucide-react'
+import { ChevronDown, Monitor, Server, SquareTerminal } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { SidebarHost } from './worktree-list-groups'
 
@@ -44,7 +44,20 @@ export function HostGroupHeader({
       />
       <Icon className="size-4 shrink-0 text-muted-foreground" />
       <div className="flex min-w-0 flex-1 flex-col leading-tight">
-        <span className="truncate text-sm font-semibold text-foreground">{host.label}</span>
+        <span className="flex min-w-0 items-center gap-1">
+          <span className="truncate text-sm font-semibold text-foreground">{host.label}</span>
+          {host.hasTmux ? (
+            // Truthful per-host marker: this host has at least one live
+            // tmux-backed session. Understated by design — muted, small, and
+            // sized to be easy to ignore (mock-up: "present but easy to ignore").
+            <SquareTerminal
+              className="size-3 shrink-0 text-muted-foreground/70"
+              aria-label="Has tmux sessions"
+            >
+              <title>Has tmux sessions</title>
+            </SquareTerminal>
+          ) : null}
+        </span>
         {host.detail ? (
           <span className="truncate text-[11px] text-muted-foreground">{host.detail}</span>
         ) : null}

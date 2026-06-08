@@ -13,9 +13,11 @@ import {
   getPRGroupKey,
   getProjectGroupOrdering,
   groupRowsByHost,
+  hasTmuxForHost,
   LOCAL_HOST_KEY,
   hostKeyForRepo,
   PINNED_GROUP_KEY,
+  type HostTmuxSession,
   type Row,
   type SidebarHost
 } from './worktree-list-groups'
@@ -56,6 +58,59 @@ const worktree: Worktree = {
 }
 
 const repoMap = new Map([[repo.id, repo]])
+
+describe('hasTmuxForHost', () => {
+  // server host UUID → sidebar host key, as hydrateHosts builds it.
+  const serverHostIdToHostKey = new Map<string, string>([
+    ['local-uuid', 'local'],
+    ['omarchy-uuid', 'ssh:conn-omarchy']
+  ])
+
+  const running = (over: Partial<HostTmuxSession>): HostTmuxSession => ({
+    status: 'running',
+    tmux_target: 'agentum-feature-claude-abc',
+    host_id: null,
+    ...over
+  })
+
+  it('includes a running session with a tmux_target on the matching host', () => {
+    const sessions = [running({ host_id: 'omarchy-uuid' })]
+    expect(hasTmuxForHost(sessions, 'ssh:conn-omarchy', serverHostIdToHostKey)).toBe(true)
+  })
+
+  it('buckets a null host_id under the local host', () => {
+    const sessions = [running({ host_id: null })]
+    expect(hasTmuxForHost(sessions, 'local', serverHostIdToHostKey)).toBe(true)
+    expect(hasTmuxForHost(sessions, 'ssh:conn-omarchy', serverHostIdToHostKey)).toBe(false)
+  })
+
+  it('excludes a session whose tmux_target is null or absent (local PTY / crashed)', () => {
+    expect(hasTmuxForHost([running({ tmux_target: null })], 'local', serverHostIdToHostKey)).toBe(
+      false
+    )
+    expect(
+      hasTmuxForHost([running({ tmux_target: undefined })], 'local', serverHostIdToHostKey)
+    ).toBe(false)
+  })
+
+  it('excludes a non-running session even with a tmux_target', () => {
+    expect(
+      hasTmuxForHost([running({ status: 'stopped' })], 'local', serverHostIdToHostKey)
+    ).toBe(false)
+    expect(
+      hasTmuxForHost([running({ status: 'crashed' })], 'local', serverHostIdToHostKey)
+    ).toBe(false)
+  })
+
+  it('excludes a tmux session that belongs to a different host', () => {
+    const sessions = [running({ host_id: 'omarchy-uuid' })]
+    expect(hasTmuxForHost(sessions, 'local', serverHostIdToHostKey)).toBe(false)
+  })
+
+  it('returns false for an empty session list', () => {
+    expect(hasTmuxForHost([], 'local', serverHostIdToHostKey)).toBe(false)
+  })
+})
 
 describe('hostKeyForRepo', () => {
   it('buckets a local repo (no host association) under the synthetic local key', () => {

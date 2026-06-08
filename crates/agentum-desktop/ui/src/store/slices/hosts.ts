@@ -6,6 +6,8 @@ import {
   getServerHostReadinessInfo,
   type ServerHost
 } from '@/runtime/server-host-client'
+import { listSessions } from '@/runtime/agentum-server-client'
+import { hasTmuxForHost } from '@/components/sidebar/worktree-list-groups'
 
 /** Stable key identifying a host in the sidebar tree. `local` for the daemon's
  *  own machine; `ssh:<connectionId>` for a remote repo's native SSH target. */
@@ -30,6 +32,10 @@ export type HostsSlice = {
    *  derived from the repo list; this slice holds only what isn't derivable. */
   hostMetaByKey: Record<HostKey, HostMeta>
   setHostMeta: (key: HostKey, meta: HostMeta) => void
+  /** Host keys that currently have at least one RUNNING session backed by a real
+   *  tmux session (`tmux_target` non-null). The truthful "in tmux right now"
+   *  per-host signal — refreshed on the same triggers as host metadata. */
+  hostsWithTmux: Set<HostKey>
   /** Populate label + OS detail for the local host and every known SSH target.
    *  Best-effort: never throws into the UI. */
   hydrateHosts: () => Promise<void>
@@ -44,15 +50,24 @@ export function unameDetail(prefix: string, uname: string | null): string {
 
 export const createHostsSlice: StateCreator<AppState, [], [], HostsSlice> = (set, get) => ({
   hostMetaByKey: {},
+  hostsWithTmux: new Set<HostKey>(),
 
   setHostMeta: (key, meta) =>
     set((s) => ({ hostMetaByKey: { ...s.hostMetaByKey, [key]: meta } })),
 
   hydrateHosts: async () => {
+    // Build server-host-id → sidebar-host-key as we resolve each host, so the
+    // tmux pass below can bucket a session's `host_id` (a server UUID) under the
+    // right sidebar key (`local` / `ssh:<connectionId>`).
+    const serverHostIdToHostKey = new Map<string, string>()
+
     // Local host: find the daemon's own host in the registry, read its uname.
     try {
       const hosts: ServerHost[] = await listServerHosts()
       const local = hosts.find((h) => h.kind === 'local')
+      if (local) {
+        serverHostIdToHostKey.set(local.id, 'local')
+      }
       const localInfo = local
         ? await getServerHostReadinessInfo(local.id)
         : { uname: null as string | null, tmuxInstalled: undefined }
@@ -76,6 +91,7 @@ export const createHostsSlice: StateCreator<AppState, [], [], HostsSlice> = (set
       try {
         const hostId = await resolveServerHostIdForConnection(connectionId)
         if (!hostId) continue
+        serverHostIdToHostKey.set(hostId, key)
         const hosts: ServerHost[] = await listServerHosts()
         const host = hosts.find((h) => h.id === hostId)
         const info = await getServerHostReadinessInfo(hostId)
@@ -90,6 +106,26 @@ export const createHostsSlice: StateCreator<AppState, [], [], HostsSlice> = (set
       } catch (err) {
         console.warn('[agentum] hydrateHosts: ssh host failed', connectionId, err)
       }
+    }
+
+    // Truthful per-host tmux: which hosts actually have a live tmux-backed
+    // session right now. Best-effort — a session-list failure leaves the prior
+    // set untouched rather than blanking the glyph.
+    try {
+      const sessions = await listSessions()
+      const hostKeys = new Set<HostKey>([
+        'local',
+        ...[...labels.keys()].map((id) => `ssh:${id}`)
+      ])
+      const next = new Set<HostKey>()
+      for (const hostKey of hostKeys) {
+        if (hasTmuxForHost(sessions, hostKey, serverHostIdToHostKey)) {
+          next.add(hostKey)
+        }
+      }
+      set({ hostsWithTmux: next })
+    } catch (err) {
+      console.warn('[agentum] hydrateHosts: session tmux probe failed', err)
     }
   }
 })

@@ -3399,6 +3399,7 @@ const WorktreeList = React.memo(function WorktreeList({
   const activeWorktreeId = useAppStore((s) => s.activeWorktreeId)
   const groupBy = useAppStore((s) => s.groupBy)
   const hostMetaByKey = useAppStore((s) => s.hostMetaByKey)
+  const hostsWithTmux = useAppStore((s) => s.hostsWithTmux)
   const sshConnectionStates = useAppStore((s) => s.sshConnectionStates)
   const sshTargetLabels = useAppStore((s) => s.sshTargetLabels)
   const workspaceStatuses = useAppStore((s) => s.workspaceStatuses)
@@ -3939,10 +3940,13 @@ const WorktreeList = React.memo(function WorktreeList({
             : 'This Mac'),
         detail: meta?.detail,
         status,
-        tmuxInstalled: meta?.tmuxInstalled
+        tmuxInstalled: meta?.tmuxInstalled,
+        // Truthful per-host signal: this host has a live tmux-backed session
+        // right now (computed from the session list in the hosts slice).
+        hasTmux: hostsWithTmux.has(hostKey)
       }
     },
-    [hostMetaByKey, sshConnectionStates, sshTargetLabels]
+    [hostMetaByKey, hostsWithTmux, sshConnectionStates, sshTargetLabels]
   )
 
   // Build flat row list for rendering
