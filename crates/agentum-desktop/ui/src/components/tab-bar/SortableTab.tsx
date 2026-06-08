@@ -307,6 +307,20 @@ export default function SortableTab({
       {isPinned && !isEditing && (
         <Pin className="mr-1 size-3 shrink-0 text-muted-foreground" aria-hidden />
       )}
+      {tab.persistTmux !== false && !isEditing && (
+        // Why: a small "tmux" chip marks the tab as persistent — it runs in a
+        // tmux session that survives closing agentum and auto-reattaches on
+        // reopen (spec 005-C). `!== false` so it also covers existing tabs
+        // (undefined) that are tmux-backed by default; only explicitly
+        // ephemeral tabs (persistTmux === false) hide it.
+        <span
+          className="mr-1 shrink-0 rounded bg-muted/70 px-1 text-[9px] font-medium uppercase leading-[1.4] tracking-wide text-muted-foreground/80"
+          title="Persistent — runs in tmux and survives closing agentum"
+          aria-label="persistent tmux session"
+        >
+          tmux
+        </span>
+      )}
       {isEditing ? (
         <Input
           ref={setRenameInputElement}
