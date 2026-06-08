@@ -45,8 +45,15 @@ export type FsEntries = {
 
 /**
  * `GET /api/fs/entries` — list a directory's dirs AND files (for a server-backed
- * file explorer). Local host only. `show_hidden` includes dotfiles.
+ * file explorer). Host-aware: pass `hostId` to list over SSH on a remote host
+ * (the server runs `find` on the host); omit it for the local machine.
+ * `show_hidden` includes dotfiles.
  */
-export function fsListEntries(path?: string, opts?: { hidden?: boolean }): Promise<FsEntries> {
-  return getJson<FsEntries>(`/api/fs/entries${qs({ path, show_hidden: opts?.hidden })}`)
+export function fsListEntries(
+  path?: string,
+  opts?: { hidden?: boolean; hostId?: string }
+): Promise<FsEntries> {
+  return getJson<FsEntries>(
+    `/api/fs/entries${qs({ path, show_hidden: opts?.hidden, host_id: opts?.hostId })}`
+  )
 }

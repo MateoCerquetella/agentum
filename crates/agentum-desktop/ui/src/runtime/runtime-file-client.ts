@@ -22,6 +22,8 @@ import {
   isWindowsAbsolutePathLike,
   relativePathInsideRoot
 } from '../../../shared/cross-platform-path'
+import { fsListEntries } from './server-fs-client'
+import { resolveServerHostIdForConnection } from './server-host-client'
 
 export type RuntimeReadableFileContent = {
   content: string
@@ -181,6 +183,15 @@ export async function readRuntimeDirectory(
 ): Promise<DirEntry[]> {
   const remoteArgs = getRemoteFileArgs(context, dirPath)
   if (!remoteArgs) {
+    // SSH workspaces have no runtime environment but carry a connectionId; the
+    // native fs commands ignore it and would read this remote path on the local
+    // machine (→ ENOENT). Route the listing through the embedded server's
+    // host-aware fs/entries endpoint instead. Local workspaces (no connectionId)
+    // stay on the native path.
+    const remoteEntries = await readRemoteSshDirectory(context, dirPath)
+    if (remoteEntries) {
+      return remoteEntries
+    }
     assertLocalFilesystemFallbackAllowed(context)
     return api.fs.readDir({ dirPath, connectionId: context.connectionId })
   }
@@ -190,6 +201,35 @@ export async function readRuntimeDirectory(
     { worktree: remoteArgs.worktreeId, relativePath: remoteArgs.relativePath },
     { timeoutMs: 15_000 }
   )
+}
+
+/**
+ * List `dirPath` on the SSH host behind `context.connectionId` via the embedded
+ * server's `GET /api/fs/entries?host_id=…` (the server runs `find` on the host).
+ * Returns `DirEntry[]` on success, or `null` when this isn't a remote-SSH
+ * workspace (no connectionId, or the connection can't be resolved to a server
+ * host) so the caller falls back to the native local read.
+ */
+async function readRemoteSshDirectory(
+  context: RuntimeFileOperationArgs,
+  dirPath: string
+): Promise<DirEntry[] | null> {
+  // Runtime environments own their own remote transport (callRuntimeRpc);
+  // the host-aware server fs path is only for desktop SSH workspaces, which
+  // have a connectionId but no active environment.
+  if (!context.connectionId || getActiveRuntimeTarget(context.settings).kind === 'environment') {
+    return null
+  }
+  const hostId = await resolveServerHostIdForConnection(context.connectionId)
+  if (!hostId) {
+    return null
+  }
+  const listing = await fsListEntries(dirPath, { hidden: true, hostId })
+  return listing.entries.map((entry) => ({
+    name: entry.name,
+    isDirectory: entry.kind === 'dir',
+    isSymlink: entry.kind === 'symlink'
+  }))
 }
 
 export async function writeRuntimeFile(

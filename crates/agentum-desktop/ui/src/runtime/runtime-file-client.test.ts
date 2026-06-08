@@ -2,6 +2,10 @@
 preload API plus remote fallbacks; keeping route coverage together makes local
 versus environment behavior easy to audit. */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('./server-fs-client', () => ({ fsListEntries: vi.fn() }))
+vi.mock('./server-host-client', () => ({ resolveServerHostIdForConnection: vi.fn() }))
+
 import {
   copyRuntimePath,
   createRuntimePath,
@@ -19,6 +23,8 @@ import {
   subscribeRuntimeFileChanges,
   type RuntimeReadableFileContent
 } from './runtime-file-client'
+import { fsListEntries } from './server-fs-client'
+import { resolveServerHostIdForConnection } from './server-host-client'
 import { clearRuntimeCompatibilityCacheForTests } from './runtime-rpc-client'
 import {
   MIN_COMPATIBLE_RUNTIME_CLIENT_VERSION,
@@ -26,6 +32,7 @@ import {
 } from '../../../shared/protocol-version'
 
 const fsReadFile = vi.fn()
+const fsReadDir = vi.fn()
 const fsOnChanged = vi.fn()
 const fsCopy = vi.fn()
 const fsCreateDir = vi.fn()
@@ -44,7 +51,10 @@ beforeEach(() => {
   delete (globalThis as { __AGENTUM_WEB_CLIENT__?: boolean }).__AGENTUM_WEB_CLIENT__
   clearRuntimeCompatibilityCacheForTests()
   fsReadFile.mockReset()
+  fsReadDir.mockReset()
   fsOnChanged.mockReset()
+  vi.mocked(fsListEntries).mockReset()
+  vi.mocked(resolveServerHostIdForConnection).mockReset()
   fsCopy.mockReset()
   fsCreateDir.mockReset()
   fsCreateFile.mockReset()
@@ -75,6 +85,7 @@ beforeEach(() => {
     api: {
       fs: {
         readFile: fsReadFile,
+        readDir: fsReadDir,
         onFsChanged: fsOnChanged,
         copy: fsCopy,
         createDir: fsCreateDir,
@@ -364,6 +375,78 @@ describe('runtime file client', () => {
       params: { worktree: 'wt-1', relativePath: '' },
       timeoutMs: 15_000
     })
+  })
+
+  it('routes a remote SSH workspace directory read through the host-aware server fs endpoint', async () => {
+    vi.mocked(resolveServerHostIdForConnection).mockResolvedValue('host-9')
+    vi.mocked(fsListEntries).mockResolvedValue({
+      path: '/srv/app/src',
+      parent: '/srv/app',
+      entries: [
+        { name: 'components', path: '/srv/app/src/components', kind: 'dir' },
+        { name: 'index.ts', path: '/srv/app/src/index.ts', kind: 'file' },
+        { name: 'link', path: '/srv/app/src/link', kind: 'symlink' }
+      ]
+    })
+
+    await expect(
+      readRuntimeDirectory(
+        {
+          settings: { activeRuntimeEnvironmentId: null },
+          worktreeId: 'wt-1',
+          worktreePath: '/srv/app',
+          connectionId: 'ssh-7'
+        },
+        '/srv/app/src'
+      )
+    ).resolves.toEqual([
+      { name: 'components', isDirectory: true, isSymlink: false },
+      { name: 'index.ts', isDirectory: false, isSymlink: false },
+      { name: 'link', isDirectory: false, isSymlink: true }
+    ])
+
+    expect(resolveServerHostIdForConnection).toHaveBeenCalledWith('ssh-7')
+    expect(fsListEntries).toHaveBeenCalledWith('/srv/app/src', { hidden: true, hostId: 'host-9' })
+    expect(fsReadDir).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the native local read when the SSH connection cannot resolve a host', async () => {
+    vi.mocked(resolveServerHostIdForConnection).mockResolvedValue(null)
+    fsReadDir.mockResolvedValue([{ name: 'a.ts', isDirectory: false, isSymlink: false }])
+
+    await expect(
+      readRuntimeDirectory(
+        {
+          settings: { activeRuntimeEnvironmentId: null },
+          worktreeId: 'wt-1',
+          worktreePath: '/srv/app',
+          connectionId: 'ssh-unknown'
+        },
+        '/srv/app'
+      )
+    ).resolves.toEqual([{ name: 'a.ts', isDirectory: false, isSymlink: false }])
+
+    expect(fsListEntries).not.toHaveBeenCalled()
+    expect(fsReadDir).toHaveBeenCalledWith({ dirPath: '/srv/app', connectionId: 'ssh-unknown' })
+  })
+
+  it('keeps local workspaces (no connectionId) on the native directory read', async () => {
+    fsReadDir.mockResolvedValue([{ name: 'src', isDirectory: true, isSymlink: false }])
+
+    await expect(
+      readRuntimeDirectory(
+        {
+          settings: { activeRuntimeEnvironmentId: null },
+          worktreeId: 'wt-1',
+          worktreePath: '/repo'
+        },
+        '/repo'
+      )
+    ).resolves.toEqual([{ name: 'src', isDirectory: true, isSymlink: false }])
+
+    expect(resolveServerHostIdForConnection).not.toHaveBeenCalled()
+    expect(fsListEntries).not.toHaveBeenCalled()
+    expect(fsReadDir).toHaveBeenCalledWith({ dirPath: '/repo', connectionId: undefined })
   })
 
   it('does not fall back to client-local directory reads for remote-owned paths outside the worktree', async () => {
