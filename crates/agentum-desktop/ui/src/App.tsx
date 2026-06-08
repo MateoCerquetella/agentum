@@ -1454,14 +1454,19 @@ function App(): React.JSX.Element {
     // prevents Windows Chromium from shrinking the app name down to one glyph.
     <div
       ref={titlebarLeftControlsRef}
+      // Why: shared by both layouts, so marking it drag-enables the
+      // traffic-light area in the non-workspace titlebar AND the workspace
+      // left header. The nav buttons inside carry their own no-drag and are
+      // not marked here, so they keep clicking.
+      data-tauri-drag-region
       className={`flex h-full shrink-0 items-center${
         workspaceActive && !sidebarOpen ? ' w-max' : ' w-full'
       }`}
     >
-      <div className="flex h-full items-center">
+      <div data-tauri-drag-region className="flex h-full items-center">
         {isMac && !isFullScreen ? (
           <>
-            <div className="titlebar-traffic-light-pad" />
+            <div className="titlebar-traffic-light-pad" data-tauri-drag-region />
             {/* Ag logo identity anchor next to the traffic lights (matches the design). */}
             <img src={logo} alt="" aria-hidden className="titlebar-logo" />
           </>
@@ -1614,8 +1619,15 @@ function App(): React.JSX.Element {
                 header above the sidebar. Settings, landing, and the tasks
                 page keep the titlebar. */}
                 {!workspaceActive ? (
-                  <div className="titlebar">
+                  // Why: Tauri v2 only drags from elements carrying
+                  // data-tauri-drag-region (it ignores the -webkit-app-region
+                  // CSS this codebase also sets). Mark the titlebar background
+                  // and its empty spacers; interactive children are NOT marked,
+                  // so Tauri starts a drag only when the empty strip is the
+                  // mousedown target — buttons/tabs/inputs keep clicking.
+                  <div className="titlebar" data-tauri-drag-region>
                     <div
+                      data-tauri-drag-region
                       className={`flex items-center${showSidebar && sidebarOpen ? ' overflow-hidden shrink-0' : ' shrink-0 mr-2'}`}
                       style={{ width: showSidebar && sidebarOpen ? sidebarWidth : undefined }}
                     >
@@ -1626,6 +1638,7 @@ function App(): React.JSX.Element {
                     ) : (
                       <div
                         id="titlebar-tabs"
+                        data-tauri-drag-region
                         className={`flex flex-1 min-w-0 self-stretch${activeView !== 'terminal' || !activeWorktreeId ? ' invisible pointer-events-none' : ''}`}
                       />
                     )}
@@ -1678,6 +1691,10 @@ function App(): React.JSX.Element {
                           // stays visible in both states. w-max keeps the floating
                           // header sized to its own controls instead of the w-0
                           // sidebar wrapper.
+                          // Why: workspace-view left header — Tauri drags only
+                          // from data-tauri-drag-region, so mark this strip so
+                          // the traffic-light/nav band is window-draggable.
+                          data-tauri-drag-region
                           className={`titlebar-left${
                             sidebarOpen
                               ? ''

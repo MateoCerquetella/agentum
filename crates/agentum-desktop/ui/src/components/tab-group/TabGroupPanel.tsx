@@ -212,10 +212,16 @@ export default function TabGroupPanel({
           this, the empty space after tabs in the center column is dead — the
           user can only drag from the tiny left-sidebar header strip. */}
       <div
+        // Why: Tauri v2 drags only from data-tauri-drag-region (it ignores the
+        // -webkit-app-region kept here for parity). Marking the center-column
+        // top strip makes the empty space around the tab row window-draggable.
+        // The tab strip, "+" button, and pane-actions chrome below carry their
+        // own no-drag and are not marked, so they keep clicking.
+        data-tauri-drag-region
         className="h-[32px] shrink-0 bg-sidebar"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        <div className="flex h-full items-stretch pr-1.5">
+        <div data-tauri-drag-region className="flex h-full items-stretch pr-1.5">
           {/* Why: Electron's native drag hit-test only respects no-drag on DOM
               descendants, not z-index siblings. When the left sidebar is
               collapsed, its header floats absolutely (z-10) over this tab row

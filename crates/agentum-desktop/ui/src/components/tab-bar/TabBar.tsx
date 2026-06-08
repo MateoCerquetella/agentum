@@ -719,6 +719,13 @@ function TabBarInner({
   return (
     <div
       ref={clearPendingNewTabMenuFocusOnUnmount}
+      // Why: Tauri v2 drags the window only from data-tauri-drag-region. The
+      // TabBar fills the center top strip, so the empty space after the tab
+      // scroll area (and around the "+") lives here — mark the outer container
+      // so that gap is window-draggable. The terminal-tab-strip scroll area and
+      // the "+" button below are NOT marked (they keep their no-drag), so tabs
+      // and the new-tab menu still click normally.
+      data-tauri-drag-region
       className="flex items-stretch h-full overflow-hidden flex-1 min-w-0"
       // Why: only drops aimed at the top tab/session strip should open files in
       // Agentum's editor. Terminal-pane drops need to keep inserting file paths
