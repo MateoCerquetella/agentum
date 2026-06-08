@@ -54,6 +54,7 @@ import type { EffectiveMacOptionAsAlt } from '@/lib/keyboard-layout/detect-optio
 import { resolveEffectiveTerminalAppearance } from '@/lib/terminal-theme'
 import { connectPanePty } from './pty-connection'
 import { connectPaneServerSession, shouldUseServerTerminals } from './server-pane-connection'
+import { resolvePaneUsesServerSession } from './resolve-pane-persist'
 import type { PtyTransport } from './pty-transport'
 import { getRemoteRuntimePtyEnvironmentId } from '@/runtime/runtime-terminal-stream'
 import { getConnectionId } from '@/lib/connection-context'
@@ -712,9 +713,21 @@ export function useTerminalPaneLifecycle({
           }
         }
         applyAppearance(manager)
-        // Option A (opt-in): route new terminals through the embedded server's
-        // tmux sessions instead of a local PTY. Same PanePtyBinding contract.
-        const connectPane = shouldUseServerTerminals() ? connectPaneServerSession : connectPanePty
+        // Spec 005-C: route the pane through the embedded server's tmux sessions
+        // (persistent, auto-reattaches on relaunch) or a local PTY (ephemeral)
+        // per the tab's "Run in tmux (persist)" choice. The per-tab choice is
+        // stamped at creation and persisted across relaunch; tabs without an
+        // explicit choice fall back to the global default. Same PanePtyBinding
+        // contract either way, so the rest of the lifecycle is path-agnostic.
+        const tabPersistTmux = useAppStore
+          .getState()
+          .tabsByWorktree[worktreeId]?.find((t) => t.id === tabId)?.persistTmux
+        const connectPane = resolvePaneUsesServerSession({
+          tabPersistTmux,
+          globalDefault: shouldUseServerTerminals()
+        })
+          ? connectPaneServerSession
+          : connectPanePty
         const panePtyBinding = connectPane(pane, manager, {
           ...ptyDeps,
           // Why: spread order matters — spawnHints.cwd (inherited from the

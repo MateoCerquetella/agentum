@@ -492,6 +492,13 @@ export type TerminalTab = {
    *  hook status overrides this once the agent does anything. Plain terminals
    *  and manually-started agents omit it. */
   launchAgent?: TuiAgent
+  /** Spec 005-C: the tab's "Run in tmux (persist)" choice, stamped at creation.
+   *  `true` → the pane runs in a persistent tmux session (server-backed) that
+   *  silently auto-reattaches on relaunch; `false` → ephemeral local PTY that
+   *  does not survive a quit. Omitted on older persisted tabs and panes created
+   *  outside the New Terminal / New Agent flows, which fall back to the global
+   *  default (`shouldUseServerTerminals`, on). */
+  persistTmux?: boolean
   /** Why: when `setActiveWorktree` bumps generation on all-dead tabs to drive a
    *  TerminalPane remount, the fresh PTY that results is caused by navigation,
    *  not by the user doing work. Without this flag the resulting

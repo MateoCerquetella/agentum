@@ -76,7 +76,12 @@ const terminalTabSchema = z.object({
   launchAgent: z
     .custom<TuiAgent>((v) => isTuiAgent(v))
     .optional()
-    .catch(undefined)
+    .catch(undefined),
+  // Spec 005-C: persist the tab's "Run in tmux (persist)" choice so a restored
+  // pane reattaches (or stays ephemeral) per the user's original decision.
+  // `.catch(undefined)` keeps a malformed value from failing the whole-session
+  // parse, falling back to the global default on restore.
+  persistTmux: z.boolean().optional().catch(undefined)
 })
 
 // ─── Unified tab model ──────────────────────────────────────────────

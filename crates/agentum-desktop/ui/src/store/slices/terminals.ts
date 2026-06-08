@@ -35,6 +35,7 @@ import {
   unregisterPtyDataHandlers
 } from '@/components/terminal-pane/pty-transport'
 import { normalizeTerminalLayoutSnapshot } from '@/components/terminal-pane/terminal-layout-leaf-ids'
+import { getPersistTmuxDefault } from '@/components/terminal-pane/resolve-pane-persist'
 import { shutdownBufferCaptures } from '@/components/terminal-pane/shutdown-buffer-captures'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { parseRemoteRuntimePtyId } from '@/runtime/runtime-terminal-stream'
@@ -315,6 +316,10 @@ export type TerminalSlice = {
       /** Coding-harness agent being launched in this tab, recorded so the tab
        *  bar can show the provider icon before the agent's first hook event. */
       launchAgent?: TuiAgent
+      /** Spec 005-C: the tab's "Run in tmux (persist)" choice. `true` → the
+       *  pane runs in a persistent tmux session that auto-reattaches; `false` →
+       *  ephemeral local PTY. Omitted → global default. */
+      persistTmux?: boolean
     }
   ) => TerminalTab
   openNewTerminalTabInActiveWorkspace: (groupId: string) => Promise<void>
@@ -601,6 +606,12 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
         createdAt: Date.now(),
         ...(createdShellOverride !== undefined ? { shellOverride: createdShellOverride } : {}),
         ...(options?.launchAgent ? { launchAgent: options.launchAgent } : {}),
+        // Spec 005-C: stamp the persist choice so the lifecycle branch and a
+        // later relaunch honor it. An explicit option wins; otherwise seed from
+        // the New Terminal / New Agent toggle's remembered default (on). This
+        // funnels every creation path (the `+` menu, agent quick-launch, the
+        // unified launcher) through one stamp without prop-drilling the flag.
+        persistTmux: options?.persistTmux ?? getPersistTmuxDefault(),
         // Why: when Terminal.tsx's activation fallback auto-creates a tab for a
         // first-visit worktree, the resulting PTY spawn is caused by the user
         // clicking the worktree, not by work happening in it. Tagging the tab
