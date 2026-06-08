@@ -124,22 +124,18 @@ export const createHostsSlice: StateCreator<AppState, [], [], HostsSlice> = (set
 
   refreshHostsTmux: async () => {
     try {
-      // Rebuild server-host-id → sidebar-host-key cheaply: cached connection
-      // resolves + one daemon host list. NO SSH readiness probes (that's what
-      // makes this safe to poll, unlike hydrateHosts).
+      // Map session host_id → sidebar host key straight from the repo list:
+      // every remote repo already carries BOTH `hostId` (the server UUID a
+      // session reports) and `connectionId` (the sidebar key). No async resolve,
+      // no readiness probe — just the data the store already holds. Sessions
+      // whose host_id isn't here (local) bucket under `local` via hasTmuxForHost.
       const serverHostIdToHostKey = new Map<string, string>()
-      const hosts: ServerHost[] = await listServerHosts()
-      const local = hosts.find((h) => h.kind === 'local')
-      if (local) {
-        serverHostIdToHostKey.set(local.id, 'local')
-      }
-      const labels = get().sshTargetLabels
-      for (const [connectionId] of labels) {
-        const hostId = await resolveServerHostIdForConnection(connectionId)
-        if (hostId) {
-          serverHostIdToHostKey.set(hostId, `ssh:${connectionId}`)
+      for (const repo of get().repos) {
+        if (repo.hostId && repo.connectionId) {
+          serverHostIdToHostKey.set(repo.hostId, `ssh:${repo.connectionId}`)
         }
       }
+      const labels = get().sshTargetLabels
       const sessions = await listSessions()
       const hostKeys = new Set<HostKey>([
         'local',
