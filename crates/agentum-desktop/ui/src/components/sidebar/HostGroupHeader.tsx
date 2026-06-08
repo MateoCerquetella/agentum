@@ -10,6 +10,15 @@ const STATUS_DOT: Record<NonNullable<SidebarHost['status']>, string> = {
   unknown: 'bg-zinc-300'
 }
 
+// Mask IPv4/IPv6 literals in the host detail so the address isn't exposed at a
+// glance (screenshots / screenshares). The full detail (real IP) stays on the
+// element's `title`, so hovering still reveals it.
+const IPV4_RE = /\b\d{1,3}(?:\.\d{1,3}){3}\b/g
+const IPV6_RE = /\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{0,4}\b/g
+function maskIps(text: string): string {
+  return text.replace(IPV4_RE, '•••.•••.•••.•••').replace(IPV6_RE, '••••')
+}
+
 export function HostGroupHeader({
   host,
   count,
@@ -59,7 +68,14 @@ export function HostGroupHeader({
           ) : null}
         </span>
         {host.detail ? (
-          <span className="truncate text-[11px] text-muted-foreground">{host.detail}</span>
+          // IP masked by default; the real address is on `title`, so hovering
+          // the line reveals it.
+          <span
+            className="truncate text-[11px] text-muted-foreground"
+            title={host.detail}
+          >
+            {maskIps(host.detail)}
+          </span>
         ) : null}
       </div>
       <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-sidebar-accent px-1.5 py-0.5 text-[11px] text-muted-foreground">
