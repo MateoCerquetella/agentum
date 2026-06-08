@@ -1483,13 +1483,21 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       //     'recent' sort keep it across restarts.
       const sortBy = ui.sortBy
       const migratedStatusBarItems = migrateStatusBarItems(ui.statusBarItems)
-      const statusBarItems =
-        ui._portsStatusBarDefaultAdded || migratedStatusBarItems.includes('ports')
-          ? migratedStatusBarItems
-          : [...migratedStatusBarItems, 'ports' as const]
-      if (!ui._portsStatusBarDefaultAdded && typeof window !== 'undefined') {
+      const portsAdded = ui._portsStatusBarDefaultAdded || migratedStatusBarItems.includes('ports')
+      const withPorts = portsAdded
+        ? migratedStatusBarItems
+        : [...migratedStatusBarItems, 'ports' as const]
+      // Add the default-on I/O speed chip once for existing users whose persisted
+      // statusBarItems predate it (same one-shot pattern as the Ports default).
+      const ioAdded = ui._ioStatusBarDefaultAdded || withPorts.includes('io')
+      const statusBarItems = ioAdded ? withPorts : [...withPorts, 'io' as const]
+      if ((!portsAdded || !ioAdded) && typeof window !== 'undefined') {
         api.ui
-          .set({ statusBarItems, _portsStatusBarDefaultAdded: true })
+          .set({
+            statusBarItems,
+            _portsStatusBarDefaultAdded: true,
+            _ioStatusBarDefaultAdded: true
+          })
           .catch(console.error)
       }
       return {

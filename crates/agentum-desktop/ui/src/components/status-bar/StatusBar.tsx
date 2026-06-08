@@ -4,6 +4,7 @@ interaction menus, and compact-layout behavior together so the hover/click
 states stay consistent across Claude and Codex. */
 import {
   AlertTriangle,
+  Gauge,
   Plug,
   ChevronDown,
   ChevronRight,
@@ -42,6 +43,7 @@ import { markLiveCodexSessionsForRestart } from '@/lib/codex-session-restart'
 import { SshStatusSegment } from './SshStatusSegment'
 import { UpdateStatusSegment } from './UpdateStatusSegment'
 import { PortsStatusSegment } from './PortsStatusSegment'
+import { IoStatusSegment } from './IoStatusSegment'
 import { isStatusBarItemAvailable } from './status-bar-agent-gating'
 import { isProviderConfigured } from './status-bar-provider-visibility'
 import { shouldOpenStatusBarContextMenu } from './status-bar-context-menu-policy'
@@ -1576,6 +1578,7 @@ function StatusBarInner({ floatingTerminalOpen }: StatusBarProps): React.JSX.Ele
   const showOpencodeGo = isProviderConfigured(opencodeGo) && statusBarItems.includes('opencode-go')
   const showSsh = statusBarItems.includes('ssh')
   const showPorts = statusBarItems.includes('ports')
+  const showIo = statusBarItems.includes('io')
   const showFloatingTerminalToggle =
     floatingTerminalEnabled && floatingTerminalTriggerLocation === 'status-bar'
   const anyVisible = showClaude || showCodex || showGemini || showOpencodeGo
@@ -1658,6 +1661,7 @@ function StatusBarInner({ floatingTerminalOpen }: StatusBarProps): React.JSX.Ele
       <div className="flex items-center gap-3">
         <UpdateStatusSegment compact={compact} iconOnly={iconOnly} />
         {petEnabled && <PetStatusSegment />}
+        {showIo && <IoStatusSegment compact={compact} iconOnly={iconOnly} />}
         {showPorts && <PortsStatusSegment compact={compact} iconOnly={iconOnly} />}
         {showSsh && <SshStatusSegment compact={compact} iconOnly={iconOnly} />}
         {showFloatingTerminalToggle && (
@@ -1758,6 +1762,16 @@ function StatusBarInner({ floatingTerminalOpen }: StatusBarProps): React.JSX.Ele
           >
             <Plug className="size-3.5" />
             Ports
+          </DropdownMenuCheckboxItem>
+          <DropdownMenuCheckboxItem
+            checked={statusBarItems.includes('io')}
+            onCheckedChange={() => {
+              recordFeatureInteraction('ssh')
+              toggleStatusBarItem('io')
+            }}
+          >
+            <Gauge className="size-3.5" />
+            I/O Speed
           </DropdownMenuCheckboxItem>
         </DropdownMenuContent>
       </DropdownMenu>

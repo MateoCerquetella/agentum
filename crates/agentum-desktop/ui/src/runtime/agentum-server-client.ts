@@ -4,6 +4,7 @@
 // loopback endpoint resolved in server-endpoint.ts. Mirrors the TUI client in
 // crates/agentum-cli/src/commands/terminal/api.rs.
 import { apiUrl, wsUrl, getServerEndpoint } from './server-endpoint'
+import { record as recordHostIo, LOCAL_HOST_KEY, type HostKey } from './io-meter'
 
 export type SessionStatus = 'idle' | 'running' | 'stopped' | 'crashed'
 
@@ -179,7 +180,10 @@ export function deleteSession(id: string, force = false): Promise<void> {
 export async function openSessionStream(
   id: string,
   initial: { cols: number; rows: number },
-  handlers: SessionStreamHandlers
+  handlers: SessionStreamHandlers,
+  // Which host bucket this stream's WS bytes count toward (status-bar I/O meter).
+  // Omitted → local host. This is the per-host data rate the TUI also shows.
+  hostKey: HostKey = LOCAL_HOST_KEY
 ): Promise<SessionStream> {
   const { token } = await getServerEndpoint()
   const base = await wsUrl(`/api/sessions/${id}/stream`)
@@ -196,6 +200,8 @@ export async function openSessionStream(
   ws.addEventListener('open', () => sendResize(initial.cols, initial.rows))
   ws.addEventListener('message', (event) => {
     if (event.data instanceof ArrayBuffer) {
+      // Inbound pane bytes — meter before handing off to the renderer.
+      recordHostIo(hostKey, { in: event.data.byteLength })
       handlers.onData(new Uint8Array(event.data))
     }
     // Text frames are control/no-op for the renderer; ignore.
@@ -206,7 +212,10 @@ export async function openSessionStream(
   return {
     send: (data) => {
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(typeof data === 'string' ? new TextEncoder().encode(data) : data)
+        const frame = typeof data === 'string' ? new TextEncoder().encode(data) : data
+        // Outbound keystrokes/data over the same WS — meter the wire bytes.
+        recordHostIo(hostKey, { out: frame.byteLength })
+        ws.send(frame)
       }
     },
     resize: sendResize,

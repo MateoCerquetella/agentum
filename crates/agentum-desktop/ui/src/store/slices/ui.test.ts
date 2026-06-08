@@ -627,7 +627,7 @@ describe('createUISlice hydratePersistedUI', () => {
     expect(store.getState().worktreeCardProperties).toEqual(['status', 'unread', 'inline-agents'])
   })
 
-  it('adds the default-on Ports status item once for older persisted UI', () => {
+  it('adds the default-on Ports + I/O status items once for older persisted UI', () => {
     const setUI = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('window', { api: { ui: { set: setUI } } })
     const store = createUIStore()
@@ -639,14 +639,35 @@ describe('createUISlice hydratePersistedUI', () => {
       })
     )
 
-    expect(store.getState().statusBarItems).toEqual(['claude', 'gemini', 'ports'])
+    expect(store.getState().statusBarItems).toEqual(['claude', 'gemini', 'ports', 'io'])
     expect(setUI).toHaveBeenCalledWith({
-      statusBarItems: ['claude', 'gemini', 'ports'],
-      _portsStatusBarDefaultAdded: true
+      statusBarItems: ['claude', 'gemini', 'ports', 'io'],
+      _portsStatusBarDefaultAdded: true,
+      _ioStatusBarDefaultAdded: true
     })
   })
 
-  it('preserves a user-hidden Ports status item after the one-shot migration ran', () => {
+  it('adds the default-on I/O status item once even after the Ports migration ran', () => {
+    const setUI = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('window', { api: { ui: { set: setUI } } })
+    const store = createUIStore()
+
+    store.getState().hydratePersistedUI(
+      makePersistedUI({
+        statusBarItems: ['claude', 'gemini', 'ports'],
+        _portsStatusBarDefaultAdded: true
+      })
+    )
+
+    expect(store.getState().statusBarItems).toEqual(['claude', 'gemini', 'ports', 'io'])
+    expect(setUI).toHaveBeenCalledWith({
+      statusBarItems: ['claude', 'gemini', 'ports', 'io'],
+      _portsStatusBarDefaultAdded: true,
+      _ioStatusBarDefaultAdded: true
+    })
+  })
+
+  it('preserves user-hidden Ports + I/O status items after both one-shot migrations ran', () => {
     const setUI = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('window', { api: { ui: { set: setUI } } })
     const store = createUIStore()
@@ -654,7 +675,8 @@ describe('createUISlice hydratePersistedUI', () => {
     store.getState().hydratePersistedUI(
       makePersistedUI({
         statusBarItems: ['claude', 'gemini'],
-        _portsStatusBarDefaultAdded: true
+        _portsStatusBarDefaultAdded: true,
+        _ioStatusBarDefaultAdded: true
       })
     )
 

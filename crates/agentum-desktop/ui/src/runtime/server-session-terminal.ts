@@ -24,6 +24,9 @@ export type BindServerSessionTerminalOptions = {
    *  tmux-backed agent. The bytes carry the title via the pipe-pane tail; we
    *  extract it here and let the caller route it into runtimePaneTitlesByTabId. */
   onTitle?: (title: string) => void
+  /** Host bucket this session's WS throughput counts toward in the status-bar
+   *  I/O meter (`'local'` or `'ssh:<connectionId>'`). Omitted → local host. */
+  hostKey?: string
 }
 
 /**
@@ -81,7 +84,8 @@ export async function bindServerSessionTerminal(
         scanForTitles(bytes)
       },
       onClose: () => term.write('\r\n\x1b[2m[agentum: session stream closed]\x1b[0m\r\n')
-    }
+    },
+    opts?.hostKey
   )
 
   const dataSub = term.onData((data) => stream.send(data))

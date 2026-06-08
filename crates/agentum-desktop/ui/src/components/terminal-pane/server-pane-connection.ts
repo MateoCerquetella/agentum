@@ -203,7 +203,11 @@ export function connectPaneServerSession(
         }
         binding = await bindServerSessionTerminal(session.id, pane.terminal, {
           startupCommand,
-          onTitle: handleServerSessionTitle
+          onTitle: handleServerSessionTitle,
+          // Bucket this pane's WS throughput by host so the status-bar I/O chip
+          // can show per-host rates. Mirrors the hosts-slice HostKey scheme:
+          // `local` for the daemon's machine, `ssh:<connectionId>` for a remote.
+          hostKey: connectionId ? `ssh:${connectionId}` : 'local'
         })
         if (disposed) {
           binding.dispose()
