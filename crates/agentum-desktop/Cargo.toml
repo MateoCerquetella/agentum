@@ -19,7 +19,7 @@ name = "agentum-desktop"
 path = "src/main.rs"
 
 [build-dependencies]
-tauri-build = { version = "2" }
+tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # Embedded backend: the desktop boots agentum-server in-process (loopback) so
