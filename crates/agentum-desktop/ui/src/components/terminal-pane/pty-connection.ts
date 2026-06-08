@@ -83,7 +83,10 @@ const AGENT_TASK_COMPLETE_NOTIFICATION_MAX_WAIT_MS = 1500
 const AGENT_TASK_COMPLETE_NOTIFICATION_DETAIL_MAX_AGE_MS = 10_000
 const COMMAND_CODE_OUTPUT_DONE_SETTLE_MS = 1500
 const HIDDEN_OUTPUT_RESTORE_SCROLLBACK_ROWS = 5000
-const HIDDEN_OUTPUT_RESTORE_PENDING_CHARS = 512 * 1024
+// Why: live PTY bytes buffered while a main-buffer snapshot is in flight. On
+// overflow the pane re-snapshots (no loss), but a larger window avoids needless
+// re-snapshot churn for bursty agents. Stays bounded for renderer-memory safety.
+const HIDDEN_OUTPUT_RESTORE_PENDING_CHARS = 2 * 1024 * 1024
 const HIDDEN_STARTUP_RENDERER_QUERY_WINDOW_MS = 10_000
 const STARTUP_COMMAND_EXTENSION_RE = /\.(?:exe|cmd|bat|ps1)$/i
 const TERMINAL_RENDERER_RISK_SCAN_TAIL_CHARS = 256
@@ -94,7 +97,7 @@ const FOREGROUND_INTERACTIVE_REDRAW_WINDOW_MS = 150
 // Why: this is only shown if renderer backlog overflowed and main-owned
 // terminal state is unavailable, so the user has an explicit loss signal.
 const HIDDEN_OUTPUT_RESTORE_UNAVAILABLE_WARNING =
-  '\x18\x1b[0m\r\n[Agentum skipped hidden terminal output because the backlog exceeded 2 MB and main recovery was unavailable.]\r\n'
+  '\x18\x1b[0m\r\n[Agentum skipped hidden terminal output because the backlog exceeded 8 MB and main recovery was unavailable.]\r\n'
 
 function firstStartupCommandToken(command: string): string {
   const trimmed = command.trim()
@@ -1458,6 +1461,16 @@ export function connectPanePty(
     let hiddenOutputRestorePendingChars = 0
     let hiddenOutputRestorePendingOverflow = false
     let hiddenOutputRestoreFreshSnapshotNeeded = false
+    // Why: a PTY is only structurally snapshot-capable (local/daemon, not
+    // remote), but some hosts — notably the desktop's local PTY shell — do not
+    // actually retain a main-side buffer and answer getMainBufferSnapshot with
+    // null. While hidden, we still defer xterm work, but we now also retain the
+    // skipped bytes in the bounded pending buffer so that, if the snapshot turns
+    // out to be unavailable, we can replay them instead of printing a loss
+    // warning. `mainBufferSnapshotUnavailable` latches once a null snapshot
+    // proves the host keeps nothing, switching the pane fully to the lossless
+    // scheduler path.
+    let mainBufferSnapshotUnavailable = false
     // Why: hidden recovery state belongs to one PTY stream. Reattach/restart
     // can reuse the pane object for a different session before visibility.
     let hiddenOutputRestorePtyId: string | null = null
@@ -1472,8 +1485,16 @@ export function connectPanePty(
       return Boolean(ptyId) && !isRemoteRuntimePtyId(ptyId)
     }
 
+    // Why: structural capability AND a host we have not proven buffer-less. The
+    // skip-render and pause-output optimizations only pay off when a later
+    // snapshot can rebuild the screen; once a null snapshot proves the host keeps
+    // nothing, stop dropping/pausing and let the scheduler own the backlog.
+    function shouldUseMainBufferSnapshot(ptyId: string | null): ptyId is string {
+      return canUseMainBufferSnapshot(ptyId) && !mainBufferSnapshotUnavailable
+    }
+
     function canPauseRendererOutput(ptyId: string | null): ptyId is string {
-      return canUseMainBufferSnapshot(ptyId) && typeof api.pty.pauseOutput === 'function'
+      return shouldUseMainBufferSnapshot(ptyId) && typeof api.pty.pauseOutput === 'function'
     }
 
     function setRendererOutputPaused(ptyId: string, paused: boolean): void {
@@ -1618,20 +1639,29 @@ export function connectPanePty(
       )
     }
 
-    function writePtyOutputToXterm(data: string, foreground: boolean): void {
+    function writePtyOutputToXterm(data: string, foreground: boolean, meta?: PtyDataMeta): void {
       const parseHiddenStartupOutput =
         !foreground &&
-        canUseMainBufferSnapshot(transport.getPtyId()) &&
+        shouldUseMainBufferSnapshot(transport.getPtyId()) &&
         isHiddenStartupRendererQueryWindowActive()
       if (
         !foreground &&
-        canUseMainBufferSnapshot(transport.getPtyId()) &&
+        shouldUseMainBufferSnapshot(transport.getPtyId()) &&
         !parseHiddenStartupOutput
       ) {
         respondToSkippedMode2031Subscribe(data)
-        // Why: hidden panes do not need live xterm parsing. Main already
-        // retains the PTY buffer, so defer display work until the pane is
-        // visible and restore from that snapshot instead.
+        // Why: hidden panes do not need live xterm parsing. Main retains the PTY
+        // buffer, so defer display until the pane is visible and restore from the
+        // snapshot. We still keep the skipped bytes in the bounded pending buffer
+        // so that, if the snapshot turns out to be unavailable, they can be
+        // replayed instead of lost. drainPendingLiveChunksAfterSnapshot dedups
+        // them against the snapshot seq when the snapshot does arrive. A single
+        // chunk larger than the pending cap cannot be buffered; leave it to the
+        // snapshot (available host) or the bounded warning (overflow fallback)
+        // rather than letting it trip the overflow flag and discard newer bytes.
+        if (hiddenOutputRestorePendingChars + data.length <= HIDDEN_OUTPUT_RESTORE_PENDING_CHARS) {
+          queueLiveChunkDuringRestore(data, meta)
+        }
         markHiddenOutputRestoreNeeded()
         return
       }
@@ -1661,7 +1691,10 @@ export function connectPanePty(
 
     function markHiddenOutputRestoreNeeded(): void {
       const ptyId = transport.getPtyId()
-      if (!canUseMainBufferSnapshot(ptyId)) {
+      if (!shouldUseMainBufferSnapshot(ptyId)) {
+        // Why: a host we have proven keeps no retained buffer must not loop
+        // snapshot requests; the bounded scheduler queue (and its registered
+        // recovery) now owns the hidden backlog and recovers it on resume.
         return
       }
       if (hiddenOutputRestorePtyId !== null && hiddenOutputRestorePtyId !== ptyId) {
@@ -1862,7 +1895,10 @@ export function connectPanePty(
       if (!hiddenOutputRestoreNeeded && hiddenOutputRestorePendingChunks.length === 0) {
         return false
       }
-      if (!canUseMainBufferSnapshot(ptyId)) {
+      if (!shouldUseMainBufferSnapshot(ptyId)) {
+        // Why: returning false tells the scheduler this pane has no snapshot
+        // recovery, so it keeps the bounded queue (lossless on resume) rather
+        // than dropping it for a snapshot that will never arrive.
         return false
       }
       hiddenOutputRestorePtyId = ptyId
@@ -1916,14 +1952,41 @@ export function connectPanePty(
             return
           }
           if (!snapshot) {
+            // Why: a null snapshot proves this host keeps no retained buffer
+            // (e.g. the desktop's local PTY shell). Latch that so future hidden
+            // bytes flow through the bounded scheduler, and recover the bytes we
+            // already retained in the pending buffer by replaying them now —
+            // without a snapshot seq, so nothing is skipped. Only when there is
+            // genuinely nothing buffered do we keep the explicit loss warning.
+            mainBufferSnapshotUnavailable = true
+            const recoveredPending =
+              hiddenOutputRestorePendingChunks.length > 0 && !hiddenOutputRestorePendingOverflow
+            if (recoveredPending) {
+              // Replay the retained hidden bytes (snapshotSeq undefined => keep
+              // all of them), then clear so nothing double-writes on resume.
+              drainPendingLiveChunksAfterSnapshot(undefined)
+              clearHiddenOutputRestoreState()
+              return
+            }
+            const droppedOverflow = hiddenOutputRestorePendingOverflow
             clearHiddenOutputRestoreState()
-            writeRestoreUnavailableWarning()
+            // Only the genuinely-lossy case (the bounded pending buffer
+            // overflowed) still surfaces the warning.
+            if (droppedOverflow) {
+              writeRestoreUnavailableWarning()
+            }
             return
           }
           applyMainBufferSnapshot(snapshot)
           const needsFreshSnapshot = hiddenOutputRestoreFreshSnapshotNeeded
           hiddenOutputRestoreFreshSnapshotNeeded = false
-          if (drainPendingLiveChunksAfterSnapshot(snapshot.seq) && !needsFreshSnapshot) {
+          // Why: only paint the buffered live chunks when the pane is visible and
+          // no fresh snapshot is owed. While hidden, or when bytes arrived during
+          // the in-flight snapshot, keep them buffered so a throttled tab does not
+          // paint mid-flight and so the next snapshot supersedes them.
+          const canDrainPending =
+            !needsFreshSnapshot && shouldWritePtyOutputForeground(deps.isVisibleRef.current)
+          if (canDrainPending && drainPendingLiveChunksAfterSnapshot(snapshot.seq)) {
             hiddenOutputRestoreNeeded = false
             hiddenOutputRestorePtyId = null
             return
@@ -1995,11 +2058,15 @@ export function connectPanePty(
           queueLiveChunkDuringRestore(data, meta)
           requestHiddenOutputRestoreIfNeeded()
         } else if (hiddenOutputRestoreInFlight) {
+          // Why: keep the hidden bytes in the bounded pending buffer instead of
+          // dropping them, so a snapshot that never arrives (buffer-less host)
+          // can still be recovered losslessly when the pane is shown.
+          queueLiveChunkDuringRestore(data, meta)
           hiddenOutputRestoreNeeded = true
           hiddenOutputRestoreFreshSnapshotNeeded = true
         }
       } else {
-        writePtyOutputToXterm(data, foreground)
+        writePtyOutputToXterm(data, foreground, meta)
       }
 
       if (pendingStartupCommand) {

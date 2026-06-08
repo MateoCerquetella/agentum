@@ -304,7 +304,9 @@ describe('pane terminal output scheduler', () => {
     const terminal = createTerminal()
     const chunk = 'x'.repeat(512 * 1024)
 
-    for (let i = 0; i < 5; i++) {
+    // Why: the bounded hidden-backlog cap is 8 MB; 17 × 512 KB (8.5 MB) crosses
+    // it so the lossy warning replaces the retained bytes.
+    for (let i = 0; i < 17; i++) {
       writeTerminalOutput(terminal, chunk, { foreground: false })
     }
     writeTerminalOutput(terminal, 'after-cap\r\n', { foreground: false })
@@ -317,12 +319,32 @@ describe('pane terminal output scheduler', () => {
     expect(output).not.toContain('x'.repeat(1024))
   })
 
+  it('retains an under-cap hidden backlog instead of warning', async () => {
+    vi.useFakeTimers()
+    const { writeTerminalOutput } = await loadScheduler()
+    const terminal = createTerminal()
+    const chunk = 'x'.repeat(512 * 1024)
+
+    // Why: 4 MB stays under the 8 MB cap. Where 2 MB used to trip the warning,
+    // the larger cap now lets snapshot-less hidden panes keep their output.
+    for (let i = 0; i < 8; i++) {
+      writeTerminalOutput(terminal, chunk, { foreground: false })
+    }
+
+    vi.runAllTimers()
+
+    const output = terminal.write.mock.calls.map(([data]) => data).join('')
+    expect(output).not.toContain('Agentum skipped hidden terminal output')
+    expect(output).toContain('x'.repeat(1024))
+  })
+
   it('caps hidden backlog chunk count even when each chunk is tiny', async () => {
     vi.useFakeTimers()
     const { writeTerminalOutput } = await loadScheduler()
     const terminal = createTerminal()
 
-    for (let i = 0; i < 4097; i++) {
+    // Why: the chunk-count cap is 16384; one extra chunk forces the warning.
+    for (let i = 0; i < 16_385; i++) {
       writeTerminalOutput(terminal, 'x', { foreground: false })
     }
 
@@ -343,7 +365,9 @@ describe('pane terminal output scheduler', () => {
     const chunk = 'x'.repeat(512 * 1024)
 
     try {
-      for (let i = 0; i < 5; i++) {
+      // Why: cross the 8 MB cap so the backlog is dropped and recovery is the
+      // only way to repaint the pane.
+      for (let i = 0; i < 17; i++) {
         writeTerminalOutput(terminal, chunk, { foreground: false })
       }
 
@@ -351,6 +375,32 @@ describe('pane terminal output scheduler', () => {
 
       expect(requestRecovery).toHaveBeenCalledTimes(1)
       expect(terminal.write).not.toHaveBeenCalled()
+    } finally {
+      unregister()
+    }
+  })
+
+  it('flushes the bounded backlog on resume when recovery is unavailable', async () => {
+    vi.useFakeTimers()
+    const { flushTerminalOutput, registerTerminalBacklogRecovery, writeTerminalOutput } =
+      await loadScheduler()
+    const terminal = createTerminal()
+    // Why: a host with no snapshot source returns false from recovery. The
+    // scheduler must then flush whatever it bounded-queued rather than dropping
+    // it, so hidden output survives until the pane is shown.
+    const requestRecovery = vi.fn(() => false)
+    const unregister = registerTerminalBacklogRecovery(terminal, requestRecovery)
+
+    try {
+      writeTerminalOutput(terminal, 'hidden-1\r\n', { foreground: false })
+      writeTerminalOutput(terminal, 'hidden-2\r\n', { foreground: false })
+
+      flushTerminalOutput(terminal)
+
+      const output = terminal.write.mock.calls.map(([data]) => data).join('')
+      expect(output).toContain('hidden-1')
+      expect(output).toContain('hidden-2')
+      expect(output).not.toContain('Agentum skipped hidden terminal output')
     } finally {
       unregister()
     }
