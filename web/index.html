@@ -301,6 +301,31 @@
   @keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
   @keyframes thud { 0% { transform: translateY(-3px); } 60% { transform: translateY(2px); } 100% { transform: translateY(0); } }
   @media (prefers-reduced-motion: reduce) { .mascot { animation: none; } }
+
+  /* ---- hero product shot over a soft painting backdrop (ara-style) ---- */
+  .shot { position: relative; max-width: 1120px; margin: 0 auto; }
+  .shot-glow { position: absolute; inset: -30% -18%; z-index: 0; border-radius: 64px;
+    background: url('/assets/hero-backdrop.jpg') center/cover no-repeat;
+    filter: blur(52px) saturate(1.25); opacity: 0.82; transform: scale(1.04);
+    -webkit-mask-image: radial-gradient(ellipse 68% 64% at 50% 50%, #000 22%, transparent 82%);
+            mask-image: radial-gradient(ellipse 68% 64% at 50% 50%, #000 22%, transparent 82%); }
+  .shot-img { position: relative; z-index: 1; display: block; width: 100%; height: auto;
+    border: 1px solid var(--line-2); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); }
+
+  /* ---- terminal caret nod (superset) ---- */
+  .caret { display: inline-block; width: 3px; height: 0.86em; margin-left: 0.1em; vertical-align: -0.04em;
+    background: var(--text); border-radius: 1px; animation: caretblink 1.15s steps(1) infinite; }
+  @keyframes caretblink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+
+  /* ---- entrance + scroll reveals (branded fade/rise; inspired by onorca/superset).
+     Only active once JS adds body.reveals-on, so content is never stuck hidden. ---- */
+  /* reveals animate regardless of OS reduced-motion (owner request, like the bg) */
+  body.reveals-on [data-reveal] { opacity: 0; transform: translateY(22px); }
+  body.reveals-on [data-reveal].in { opacity: 1; transform: none;
+    transition: opacity .7s var(--ease-out), transform .7s var(--ease-out); }
+  body.reveals-on .shot[data-reveal] { transform: translateY(40px) scale(0.99); }
+  body.reveals-on .shot[data-reveal].in { transform: none;
+    transition: opacity 1s var(--ease-out), transform 1s var(--ease-out); }
 </style>
 
 <!-- JSON-LD Structured Data -->
@@ -393,10 +418,10 @@
 
   <header class="hero" id="top">
     <div class="wrap inner">
-      <img class="appicon" src="/assets/app-icon.png" alt="Agentum" />
-      <h1 class="head">Keep your agents running.</h1>
-      <p class="sub">Agentum spawns Claude, Codex, and Gemini in tmux on a host you control — and keeps them shipping when you close the lid.</p>
-      <div class="cta-row">
+      <img data-reveal class="appicon" src="/assets/app-icon.png" alt="Agentum" />
+      <h1 class="head" data-reveal>Keep your agents running.<span class="caret" aria-hidden="true"></span></h1>
+      <p class="sub" data-reveal>Agentum spawns Claude, Codex, and Gemini in tmux on a host you control — and keeps them shipping when you close the lid.</p>
+      <div class="cta-row" data-reveal>
         <a class="pill-cta cta-lg" href="#install">Download for macOS <span class="arr">→</span></a>
         <span class="winhint">Linux &amp; cargo install</span>
       </div>
@@ -405,59 +430,18 @@
 
   <div class="stage">
     <div class="wrap">
-      <div class="win">
-        <div class="chrome">
-          <div class="lights"><span></span><span></span><span></span></div>
-          <div class="ctitle">agentum · ~/Developer/agentum</div>
-          <div class="cmeta"><span class="live"></span>3 live</div>
-        </div>
-        <div class="appgrid">
-          <aside class="rail">
-            <div class="rsec">
-              <div class="h">Workspace</div>
-              <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect x="3" y="4" width="18" height="16" rx="1"/></svg> Sessions <span class="ct">3</span></div>
-              <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M9 4v16M15 4v16"/></svg> Board <span class="ct">7</span></div>
-              <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3h12l4 4v14H4z"/><path d="M14 3v5h5"/></svg> Notes</div>
-              <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg> Channels <span class="ct">2</span></div>
-            </div>
-            <div class="rsec">
-              <div class="h">Sessions</div>
-              <div class="srow live active"><span class="st"></span><span><span class="nm">alpha</span> <span class="tl">claude</span></span><span class="mt">78%</span></div>
-              <div class="srow run"><span class="st"></span><span><span class="nm">review-pr</span> <span class="tl">codex</span></span><span class="mt">ctx low</span></div>
-              <div class="srow"><span class="st"></span><span><span class="nm">docs-pass</span> <span class="tl">gemini</span></span><span class="mt">idle</span></div>
-            </div>
-            <div class="rfoot"><span class="d"></span> daemon · :8822 · loopback</div>
-          </aside>
-          <section class="pane">
-            <div class="ptool">
-              <div class="cr">alpha <span class="sep">/</span> claude <span class="sep">/</span> <span class="lf">tmux:0.1</span></div>
-              <span class="ppill live">streaming</span>
-              <span class="ppill">watchdog</span>
-            </div>
-            <div class="term">
-              <div class="ln"><span class="c3">$</span> agentum new alpha <span class="cb">--tool</span> claude <span class="cb">--dir</span> ~/Developer/agentum <span class="cb">--up</span></div>
-              <div class="ln"><span class="cg">✓</span> spawned tmux session <span class="cw">alpha</span> · pane 0.1 · watchdog attached</div>
-              <div class="ln"> </div>
-              <div class="ln"><span class="cc">claude</span><span class="c3"> · opus-4.8 · gateway</span></div>
-              <div class="ln">Reading the codebase. Found the login bug on staging — the session</div>
-              <div class="ln">token expires before the refresh call fires. Patching the guard now.</div>
-              <div class="ln"> </div>
-              <div class="ln"><span class="ca">●</span> edit <span class="cw">crates/agentum-server/src/auth.rs</span> <span class="c3">(+18 −4)</span></div>
-              <div class="ln"><span class="ca">●</span> run <span class="cw">cargo test --workspace</span> <span class="cg">→ 214 passed</span></div>
-              <div class="ln"><span class="cg">✓</span> opened PR <span class="cb">#412</span> · kept method as skill <span class="cw">fix-token-refresh</span></div>
-              <div class="ln"> </div>
-              <div class="ln"><span class="c3">watchdog:</span> context <span class="ca">48%</span> → issued <span class="cc">/compact</span></div>
-            </div>
-          </section>
-        </div>
+      <div class="shot" data-reveal>
+        <div class="shot-glow" aria-hidden="true"></div>
+        <img class="shot-img" src="/assets/app-hero.png" width="1537" height="918" loading="lazy"
+             alt="The Agentum desktop app — workspaces, sessions, and a live agent terminal." />
       </div>
     </div>
   </div>
 
   <section class="trust">
     <div class="wrap">
-      <div class="k">Drives every agent CLI you already run</div>
-      <div class="agents">
+      <div class="k" data-reveal>Drives every agent CLI you already run</div>
+      <div class="agents" data-reveal>
         <span class="ag"><span class="d" style="background:var(--agent-claude)"></span>Claude</span>
         <span class="ag"><span class="d" style="background:var(--agent-codex)"></span>Codex</span>
         <span class="ag"><span class="d" style="background:var(--agent-gemini)"></span>Gemini</span>
@@ -470,11 +454,11 @@
 
   <section class="band" id="loop">
     <div class="wrap">
-      <div class="eyebrow">The loop</div>
-      <h2 class="h2">Spawn. Watch. Hand off. Repeat.</h2>
-      <p class="blurb">Agentum runs your agents in a loop on a host you own. Each pass spawns work, watches the terminal, and hands the next task on — while the laptop sleeps in your bag.</p>
+      <div class="eyebrow" data-reveal>The loop</div>
+      <h2 class="h2" data-reveal>Spawn. Watch. Hand off. Repeat.</h2>
+      <p class="blurb" data-reveal>Agentum runs your agents in a loop on a host you own. Each pass spawns work, watches the terminal, and hands the next task on — while the laptop sleeps in your bag.</p>
 
-      <div class="feat">
+      <div class="feat" data-reveal>
         <div class="ftext">
           <div class="step">01 — Sessions</div>
           <h3>It spawns agents on a host you own.</h3>
@@ -495,7 +479,7 @@
         </div>
       </div>
 
-      <div class="feat flip">
+      <div class="feat flip" data-reveal>
         <div class="ftext">
           <div class="step">02 — Watchdog &amp; skills</div>
           <h3>It watches every terminal and recovers.</h3>
@@ -513,7 +497,7 @@
         </div>
       </div>
 
-      <div class="feat">
+      <div class="feat" data-reveal>
         <div class="ftext">
           <div class="step">03 — Board</div>
           <h3>It hands work between agents.</h3>
@@ -545,11 +529,11 @@
 
   <section class="band" id="mission">
     <div class="wrap">
-      <div class="eyebrow">Mission control</div>
-      <h2 class="h2">Watch every session, live.</h2>
-      <p class="blurb">One pane keeps every self-driving session visible across terminals, the board, and channels — so you supervise the agents improving your codebase instead of babysitting twenty tmux panes.</p>
+      <div class="eyebrow" data-reveal>Mission control</div>
+      <h2 class="h2" data-reveal>Watch every session, live.</h2>
+      <p class="blurb" data-reveal>One pane keeps every self-driving session visible across terminals, the board, and channels — so you supervise the agents improving your codebase instead of babysitting twenty tmux panes.</p>
       <a class="seehint" href="https://github.com/MateoCerquetella/agentum" target="_blank" rel="noreferrer">See the architecture <span class="ar">→</span></a>
-      <div class="mc">
+      <div class="mc" data-reveal>
         <div class="win">
           <div class="chrome">
             <div class="lights"><span></span><span></span><span></span></div>
@@ -577,11 +561,11 @@ bump deps + run suite
 
   <section class="band" id="install">
     <div class="wrap">
-      <div class="eyebrow">Install</div>
-      <h2 class="h2">Three commands and you're running.</h2>
-      <p class="blurb">Every step is a single <code style="font-family:var(--mono);color:var(--text)">cargo install</code>-friendly binary. No daemon to chase, no compose file, no Docker.</p>
+      <div class="eyebrow" data-reveal>Install</div>
+      <h2 class="h2" data-reveal>Three commands and you're running.</h2>
+      <p class="blurb" data-reveal>Every step is a single <code style="font-family:var(--mono);color:var(--text)">cargo install</code>-friendly binary. No daemon to chase, no compose file, no Docker.</p>
 
-      <div class="cli-grid">
+      <div class="cli-grid" data-reveal>
         <div class="cli-list" id="cli-list">
           <div class="cli-item active" data-step="0">
             <div class="step">01 — Install</div>
@@ -632,9 +616,9 @@ bump deps + run suite
 
   <section class="final">
     <div class="wrap inner">
-      <h2>Stop babysitting your agents.</h2>
-      <p class="sub" style="margin-top:22px">One install on your machine. Point it at the hosts you own. Let the loop run.</p>
-      <div class="cta-row">
+      <h2 data-reveal>Stop babysitting your agents.</h2>
+      <p class="sub" data-reveal style="margin-top:22px">One install on your machine. Point it at the hosts you own. Let the loop run.</p>
+      <div class="cta-row" data-reveal>
         <a class="pill-cta cta-lg" href="https://github.com/MateoCerquetella/agentum" target="_blank" rel="noreferrer">Get Agentum <span class="arr">→</span></a>
         <span class="winhint">cargo install · MIT · single binary</span>
       </div>
@@ -643,7 +627,7 @@ bump deps + run suite
 
   <footer>
     <div class="wrap">
-      <div class="grid">
+      <div class="grid" data-reveal>
         <div>
           <a class="brand" href="#top"><img src="/assets/mark.svg" alt="" style="width:22px;height:22px" />Agentum</a>
           <p class="bl">Self-hosted control plane for AI coding agents. One Rust binary, a fast TUI, and a native desktop app.</p>
@@ -889,6 +873,33 @@ bump deps + run suite
       for (var i = 0; i < n; i++) spawn(layer, i);
     }
     if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', init); } else { init(); }
+  })();
+
+  // ---- entrance + scroll reveals (branded, inspired by onorca/superset) ----
+  (function () {
+    var els = [].slice.call(document.querySelectorAll('[data-reveal]'));
+    if (!els.length) return;
+    try {
+      document.body.classList.add('reveals-on');
+      // stagger by index among reveal-siblings (caps so deep grids don't lag)
+      els.forEach(function (el) {
+        var sibs = [].slice.call(el.parentNode.children).filter(function (c) { return c.hasAttribute && c.hasAttribute('data-reveal'); });
+        el.style.transitionDelay = Math.min(sibs.indexOf(el) * 0.07, 0.28) + 's';
+      });
+      var shot = document.querySelector('.shot[data-reveal]');
+      if (shot) shot.style.transitionDelay = '0.38s';   // product shot rises just after the hero text
+      function aboveFold(el) { return el.closest('.hero') || el.closest('.stage'); }
+      var onLoad = els.filter(aboveFold), onScroll = els.filter(function (el) { return !aboveFold(el); });
+      // reveal hero on load (double rAF so the hidden state paints first)
+      requestAnimationFrame(function () { requestAnimationFrame(function () {
+        onLoad.forEach(function (el) { el.classList.add('in'); });
+      }); });
+      if (!('IntersectionObserver' in window)) { onScroll.forEach(function (el) { el.classList.add('in'); }); return; }
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+      }, { rootMargin: '0px 0px -8% 0px', threshold: 0.06 });
+      onScroll.forEach(function (el) { io.observe(el); });
+    } catch (err) { document.body.classList.remove('reveals-on'); els.forEach(function (el) { el.classList.add('in'); }); }
   })();
 </script>
 </body>
