@@ -4,6 +4,57 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] — 2026-06-09
+
+A desktop-focused release: remote SSH hosts get password auth and much faster
+file/terminal operations, tmux-backed sessions become persistent and visible
+throughout the UI, and the Linear connection is now live.
+
+### Added
+- **SSH hosts support password authentication.** Add a host with a password
+  instead of a key. The old relay keep-alive toggle was removed.
+- **Host-first New Workspace.** The New Workspace flow now leads with a host
+  selector, guards against pointing at a non-git directory, and surfaces a
+  friendly error when a workspace can't be created (spec 006).
+- **Opt-in tmux persistence with silent auto-reattach.** Sessions can opt into
+  running under tmux and will silently re-attach to the live tmux pane across
+  reloads and reconnects instead of being killed and respawned (spec 005-C).
+- **tmux is visible everywhere it matters.** Terminal tabs and host headers
+  show a tmux glyph when a session is backed by a live tmux pane, with a hover
+  tooltip listing the running sessions on that host. The status bar gained a
+  per-host I/O speed chip with a host selector so you can watch throughput per
+  machine.
+- **Cleaner remote-host display.** Host IPs are hidden in the sidebar header
+  and revealed on hover.
+- **Linear integration is live.** The Linear connection surface is wired to the
+  Linear GraphQL API, backed by an on-disk credential store.
+
+### Fixed
+- **Remote operations are much faster.** The remote file tree is host-aware and
+  SSH connections are pooled via ControlMaster — with the control socket kept in
+  a private `$XDG_RUNTIME_DIR`/`$HOME` dir rather than `$TMPDIR` — so repeated
+  remote git/file calls reuse one connection.
+- **Persistent terminals survive tab switches and reconnects.** Hidden panes are
+  recovered from a snapshot instead of dropping their output, and the server
+  reattaches to a live tmux session instead of killing + respawning it.
+- **The per-host tmux glyph is now truthful and live.** It reflects actual open
+  tmux panes (not persisted session rows), refreshes by polling, and maps
+  sessions to their sidebar host from the repo list.
+- **Hookless agents no longer look stuck.** Agents without status hooks (e.g.
+  OpenCode) are detected as Working via active-redraw change detection.
+- **Desktop polish.** The macOS dock icon is no longer oversized (the artwork is
+  padded to ~80%), the custom topbar is draggable again
+  (`data-tauri-drag-region` + `core:window:allow-start-dragging`), built-in
+  notification sounds play instead of 404-ing (served via a Vite glob), and
+  renderer error-boundary reports are persisted to `renderer-errors.log`.
+
+### Internal
+- **Repaired the release pipeline.** CI still built the standalone `dashboard/`
+  crate, which was removed in the v0.10.11 thin-shell refactor — so desktop
+  bundle builds failed and the v0.10.11 `.dmg`s had to be attached by hand. CI
+  now builds the embedded Tauri UI (`crates/agentum-desktop/ui`) for the
+  mac/linux desktop apps, and `tauri-build` features are pinned to `[]`.
+
 ## [0.10.11] — 2026-06-06
 
 ### Added

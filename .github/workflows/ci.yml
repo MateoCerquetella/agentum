@@ -33,18 +33,25 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
+      # agentum-desktop (a workspace member) embeds crates/agentum-desktop/ui/dist
+      # via generate_context! and links webkit2gtk on Linux at build time, so
+      # `cargo test --all` can't compile it without the UI bundle and the GTK/
+      # webkit dev libs. (Replaces the old dashboard/ rust-embed build, removed
+      # in the thin-shell refactor.)
+      - name: Install desktop build deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+            libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: dashboard/pnpm-lock.yaml
-
-      - name: Build dashboard bundle (needed for rust-embed)
-        run: pnpm --dir dashboard install --frozen-lockfile && pnpm --dir dashboard build
+          cache: npm
+          cache-dependency-path: crates/agentum-desktop/ui/package-lock.json
+      - name: Build desktop UI bundle (embedded via generate_context!)
+        run: npm ci --prefix crates/agentum-desktop/ui && npm run build --prefix crates/agentum-desktop/ui
 
       - name: cargo fmt
         run: cargo fmt --all -- --check
