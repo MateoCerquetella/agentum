@@ -55,20 +55,29 @@ own background implementation).
   no fill, `currentColor`). Replace any off-system glyphs.
 - **Brand assets:** new `favicon.svg`, `mark.svg`, `wordmark.svg`, `app-icon`.
 
-### 2. Animated glyph background (`web/ds/bg-glyphs.js` or inline)
-- A single vanilla-JS module, no dependencies.
-- Renders a `<canvas>` at `position:fixed; inset:0; z-index:-10` on the `#141414`
-  field, behind all content.
-- Draws a scattered field of faint monospace glyphs sampled from a terminal-ish set
-  (`$ › ● ✓ ⚠ { } [ ] / 0 1 _ — +`), placed on a jittered grid with per-cell random
-  opacity in the `rgba(255,255,255, 0.02–0.10)` range.
-- Radial alpha mask: denser toward the edges, dissolving behind the centered hero
-  (mirrors ara's mask).
-- Subtle slow animation: occasional per-glyph flicker / drift; cheap (throttled rAF,
-  off-DOM).
-- `prefers-reduced-motion: reduce` → render one static frame, no loop.
-- Re-renders on resize (debounced). DPR-aware for crisp glyphs.
-- Light mode: glyphs flip to `rgba(0,0,0, …)` over the white field.
+### 2. Animated Braille background — faithful port of ara.so (inline `<canvas>`)
+> **Decision change (per user):** rather than an original recreation, copy ara's
+> actual background. Extracted from the provided `ara.webarchive`
+> (`index-VAV34NYo.js`) and ported verbatim to vanilla JS.
+
+- A single vanilla-JS module, no dependencies; `<canvas id="bg-glyphs">` at
+  `position:fixed; inset:0` behind all content, DPR-aware.
+- ara's exact algorithm: an **80×80 grid** where each cell's field value is the sum
+  of **4 random sine-wave emitters** (placed in the central 50%, freq 0.2–0.5, amp
+  0.5–1.0, random phase/speed) **+ a wave that follows the cursor** + **click
+  ripples** (expanding rings, 4 s life). The field intensity selects a **Unicode
+  Braille glyph** (U+2800–U+28FF, ara's exact 361-char weighted set) and its opacity
+  (0.4–0.9).
+- Type: `350 <min(cellW,cellH)*0.8>px system-ui`; colour `rgba(190,190,190, …)` on
+  `#141414` (dark) / `rgba(120,120,120, …)` on `#f7f7f7` (light) — ara's values.
+- `animationSpeed 0.75`, frame-rate-independent phase advance.
+- **Animates regardless of `prefers-reduced-motion`** (matches ara; it's an
+  opacity-only ambient field, no transform/flashing). The user explicitly requested
+  motion; the earlier reduced-motion gate was the cause of the "not moving" report.
+- Paints one frame **synchronously** at load (never blank, even while the tab is
+  hidden); the rAF loop is **capped to ~30fps** to keep CPU/fans calm and pauses
+  automatically when the tab is backgrounded.
+- Re-renders on resize (debounced).
 
 ### 3. Rebuild `web/index.html` to the ara layout
 Structure (from the marketing kit, populated with real content):

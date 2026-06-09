@@ -79,7 +79,7 @@
     line-height: 1.5; overflow-x: hidden;
     transition: background var(--dur-slow) var(--ease-standard);
   }
-  body.light { background: #ffffff; }
+  body.light { background: #f7f7f7; }
   ::selection { background: var(--selection-bg); color: #fff; }
   :where(a) { color: inherit; text-decoration: none; }
   button { font: inherit; cursor: pointer; border: 0; background: none; color: inherit; }
@@ -656,76 +656,123 @@ bump deps + run suite
     });
   })();
 
-  // ---- the scattered-glyph background canvas (Agentum's own, ara-inspired) ----
+  // ---- background: ara.so's interference-wave Braille field ----
+  //   Ported faithfully from ara.so's own canvas component (extracted from the
+  //   webarchive): an 80x80 grid where the field value at each cell is the sum
+  //   of 4 random sine-wave emitters + a wave that follows the cursor + click
+  //   ripples. The field intensity picks a Braille glyph (U+2800-U+28FF) and its
+  //   opacity. weight-350 system-ui; grey 190 on #141414 (110/#f7f7f7 in light).
+  //   Matches ara's props: gridSize 80, animationSpeed 0.75, removeWaveLine.
   (function () {
     var canvas = document.getElementById('bg-glyphs');
     if (!canvas || !canvas.getContext) return;
     var ctx = canvas.getContext('2d');
-    var GLYPHS = '$›●✓⚠{}[]/01_—+<>#·•:;=*ƒλ→'.split('');
-    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-    var CELL = 30, DENSITY = 0.42;
-    var w, h, dpr, cells, raf, last = 0;
 
-    function build() {
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
-      w = window.innerWidth; h = window.innerHeight;
-      canvas.width = Math.floor(w * dpr); canvas.height = Math.floor(h * dpr);
-      canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+    var CHARS = "⣧⣩⣪⣫⣬⣭⣮⣯⣱⣲⣳⣴⣵⣶⣷⣹⣺⣻⣼⣽⣾⣿⣧⣩⣪⣫⣬⣭⣮⣯⣱⣲⣳⣴⣵⣶⣷⣹⣺⣻⣼⣽⣾⣿⣧⣩⣪⣫⣬⣭⣮⣯⣱⣲⣳⣴⣵⣶⣷⣹⣺⣻⣼⣽⣾⣿⣧⣩⣪⣫⣬⣭⣮⣯⣱⣲⣳⣴⣵⣶⣷⣹⣺⣻⣼⣽⣾⣿⣧⣩⣪⣫⣬⣭⣮⣯⣱⣲⣳⣴⣵⣶⣷⣹⣺⣻⣼⣽⣾⣿⣧⣩⣪⣫⣬⣭⣮⣯⣱⣲⣳⣴⣵⣶⣷⣹⣺⣻⣼⣽⣾⣿⠁⠂⠄⠈⠐⠠⡀⢀⠃⠅⠘⠨⠊⠋⠌⠍⠎⠏⠑⠒⠓⠔⠕⠖⠗⠙⠚⠛⠜⠝⠞⠟⠡⠢⠣⠤⠥⠦⠧⠩⠪⠫⠬⠭⠮⠯⠱⠲⠳⠴⠵⠶⠷⠹⠺⠻⠼⠽⠾⠿⡁⡂⡃⡄⡅⡆⡇⡉⡊⡋⡌⡍⡎⡏⡑⡒⡓⡔⡕⡖⡗⡙⡚⡛⡜⡝⡞⡟⡡⡢⡣⡤⡥⡦⡧⡩⡪⡫⡬⡭⡮⡯⡱⡲⡳⡴⡵⡶⡷⡹⡺⡻⡼⡽⡾⡿⢁⢂⢃⢄⢅⢆⢇⢉⢊⢋⢌⢍⢎⢏⢑⢒⢓⢔⢕⢖⢗⢙⢚⢛⢜⢝⢞⢟⢡⢢⢣⢤⢥⢦⢧⢩⢪⢫⢬⢭⢮⢯⢱⢲⢳⢴⢵⢶⢷⢹⢺⢻⢼⢽⢾⢿⣀⣁⣂⣃⣄⣅⣆⣇⣉⣊⣋⣌⣍⣎⣏⣑⣒⣓⣔⣕⣖⣗⣙⣚⣛⣜⣝⣞⣟⣡⣢⣣⣤⣥⣦⣧⣩⣪⣫⣬⣭⣮⣯⣱⣲⣳⣴⣵⣶⣷⣹⣺⣻⣼⣽⣾⣿";        // exact weighted braille set from ara
+    var GRID = 80;                    // gridSize
+    var SPEED = 0.75;                 // animationSpeed
+    var size = { w: 0, h: 0 }, phase = 0, raf;
+    var mouse = { x: 0, y: 0 };
+    var emitters = [], ripples = [];  // ripples in grid coords {x,y,time,intensity}
+
+    function theme() {
+      return document.body.classList.contains('light')
+        ? { bg: '#f7f7f7', text: '120, 120, 120' }
+        : { bg: '#141414', text: '190, 190, 190' };
+    }
+
+    function resize() {
+      size.w = window.innerWidth; size.h = window.innerHeight;
+      var dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(size.w * dpr); canvas.height = Math.floor(size.h * dpr);
+      canvas.style.width = size.w + 'px'; canvas.style.height = size.h + 'px';
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.font = '12px ' + MONO; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
-      cells = [];
-      var cols = Math.ceil(w / CELL) + 1, rows = Math.ceil(h / CELL) + 1;
-      for (var y = 0; y < rows; y++) {
-        for (var x = 0; x < cols; x++) {
-          if (Math.random() > DENSITY) continue;
-          // radial mask: faint behind the centered hero (~42% down), denser at edges
-          var cx = (x * CELL) / w - 0.5;
-          var cy = (y * CELL) / h - 0.42;
-          var d = Math.sqrt((cx * 1.25) * (cx * 1.25) + (cy * 1.45) * (cy * 1.45));
-          var edge = Math.min(1, d * 1.5);
-          var base = 0.015 + edge * edge * 0.09;
-          cells.push({
-            x: x * CELL + (Math.random() * 6 - 3),
-            y: y * CELL + (Math.random() * 6 - 3),
-            g: GLYPHS[(Math.random() * GLYPHS.length) | 0],
-            base: base,
-            ph: Math.random() * Math.PI * 2,
-            sp: 0.4 + Math.random() * 1.1
-          });
+    }
+
+    function rippleField(col, row, now) {
+      var sum = 0;
+      for (var k = 0; k < ripples.length; k++) {
+        var rp = ripples[k], age = now - rp.time, LIFE = 4000;
+        if (age >= LIFE) continue;
+        var dx = col - rp.x, dy = row - rp.y, dist = Math.sqrt(dx * dx + dy * dy);
+        var radius = age / LIFE * GRID * 0.8, ring = GRID * 0.15;
+        if (Math.abs(dist - radius) < ring) {
+          var inten = (1 - age / LIFE) * rp.intensity;
+          var prof = 1 - Math.abs(dist - radius) / ring;
+          sum += inten * prof * Math.sin((dist - radius) * 0.5);
+        }
+      }
+      return sum;
+    }
+
+    function frame(dt) {
+      var now = Date.now();
+      phase += SPEED * 0.016 * (dt / 16.6667);   // advance by elapsed time, frame-rate independent
+      var w = size.w, h = size.h;
+      if (w === 0 || h === 0) { raf = requestAnimationFrame(frame); return; }
+      var th = theme();
+      ctx.fillStyle = th.bg; ctx.fillRect(0, 0, w, h);
+
+      var cw = w / GRID, ch = h / GRID;
+      var mx = mouse.x / cw, my = mouse.y / ch;
+      var waves = emitters.concat([{ x: mx, y: my, frequency: 0.3, amplitude: 1, phase: phase * 2, speed: 1 }]);
+
+      var fontPx = Math.min(cw, ch) * 0.8;
+      ctx.font = '350 ' + fontPx + 'px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+
+      for (var row = 0; row < GRID; row++) {
+        for (var col = 0; col < GRID; col++) {
+          var val = 0;
+          for (var s = 0; s < waves.length; s++) {
+            var wv = waves[s], ox = col - wv.x, oy = row - wv.y, ra = Math.sqrt(ox * ox + oy * oy);
+            val += Math.sin(ra * wv.frequency - phase * wv.speed + wv.phase) * wv.amplitude * (1 / (1 + ra * 0.1));
+          }
+          val += rippleField(col, row, now);
+          var pd = Math.sqrt((col - mx) * (col - mx) + (row - my) * (row - my));
+          if (pd < GRID * 0.3) val += (1 - pd / (GRID * 0.3)) * 0.8 * Math.sin(phase * 3);
+          if (Math.abs(val) <= 0.2) continue;
+          var fe = (val + 2) / 4;
+          var idx = Math.min(CHARS.length - 1, Math.max(0, Math.floor(fe * (CHARS.length - 1))));
+          var op = Math.min(0.9, Math.max(0.4, 0.4 + fe * 0.5));
+          ctx.fillStyle = 'rgba(' + th.text + ', ' + op + ')';
+          ctx.fillText(CHARS.charAt(idx), col * cw + cw / 2, row * ch + ch / 2);
         }
       }
     }
 
-    function rgb() { return document.body.classList.contains('light') ? '0,0,0' : '255,255,255'; }
-
-    function draw(t) {
-      ctx.clearRect(0, 0, w, h);
-      var color = rgb();
-      for (var i = 0; i < cells.length; i++) {
-        var c = cells[i];
-        var a = reduce ? c.base : c.base * (0.55 + 0.45 * Math.sin(t * 0.0011 * c.sp + c.ph));
-        if (a < 0.004) continue;
-        ctx.fillStyle = 'rgba(' + color + ',' + a.toFixed(3) + ')';
-        ctx.fillText(c.g, c.x, c.y);
-      }
-    }
-
+    var last = 0;
     function loop(t) {
-      // throttle to ~24fps — it's ambient texture, not a game
-      if (t - last > 41) { draw(t); last = t; }
-      raf = requestAnimationFrame(loop);
+      if (!last) last = t;
+      if (t - last >= 32) { frame(t - last); last = t; }   // ~30fps cap; keeps CPU/fans calm
+      raf = requestAnimationFrame(loop);                   // animates regardless of reduced-motion, like ara
     }
 
-    function start() {
-      cancelAnimationFrame(raf);
-      build();
-      if (reduce) { draw(0); } else { raf = requestAnimationFrame(loop); }
+    function initEmitters() {
+      emitters = [];
+      for (var i = 0; i < 4; i++) emitters.push({
+        x: GRID * (0.25 + Math.random() * 0.5),
+        y: GRID * (0.25 + Math.random() * 0.5),
+        frequency: 0.2 + Math.random() * 0.3,
+        amplitude: 0.5 + Math.random() * 0.5,
+        phase: Math.random() * Math.PI * 2,
+        speed: 0.5 + Math.random() * 0.5
+      });
     }
 
+    window.addEventListener('mousemove', function (e) { mouse.x = e.clientX; mouse.y = e.clientY; }, { passive: true });
+    window.addEventListener('mousedown', function (e) {
+      var cw = size.w / GRID, ch = size.h / GRID, now = Date.now();
+      ripples.push({ x: e.clientX / cw, y: e.clientY / ch, time: now, intensity: 2 });
+      ripples = ripples.filter(function (rp) { return now - rp.time < 4000; });
+    });
     var to;
-    window.addEventListener('resize', function () { clearTimeout(to); to = setTimeout(start, 200); });
-    start();
+    window.addEventListener('resize', function () { clearTimeout(to); to = setTimeout(resize, 150); });
+
+    initEmitters();
+    resize();
+    frame(16.6667);                       // paint immediately so it's never blank (even while tab is hidden)
+    raf = requestAnimationFrame(loop);
   })();
 
   // ---- copy install command ----
