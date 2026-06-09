@@ -387,6 +387,36 @@
   .appinstall h3 { font-family: var(--uifont); font-size: clamp(22px, 2.4vw, 30px); font-weight: 500; letter-spacing: -0.02em; margin: 22px 0 0; color: var(--text); }
   .appinstall p { color: var(--text-2); font-size: 15.5px; line-height: 1.55; margin: 14px auto 0; max-width: 44ch; }
   .appinstall .i2-cta { margin-top: 28px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+
+  /* ---- mission control: live session monitor (real: hosts + status + metrics) ---- */
+  .monitor { background: #0e0e10; }
+  .mon-host { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 11px 16px; border-top: 1px solid var(--line); background: #121215; }
+  .mon-host:first-child { border-top: 0; }
+  .mh-name { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--text); font-weight: 500; }
+  .mh-name .hd { width: 8px; height: 8px; border-radius: 999px; background: var(--green-fb); box-shadow: var(--glow-green); }
+  .mh-os { font-family: var(--font-term); font-size: 10.5px; color: var(--text-3); font-weight: 400; }
+  .mh-meters { display: flex; gap: 16px; }
+  .meter { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-term); font-size: 10.5px; color: var(--text-3); }
+  .meter b { color: var(--text-2); font-weight: 500; }
+  .meter .bar { width: 54px; height: 4px; border-radius: 999px; background: rgba(255,255,255,0.1); overflow: hidden; }
+  .meter .bar i { display: block; height: 100%; background: var(--text-2); }
+  .mon-rows { padding: 6px 8px; }
+  .mon-row { display: grid; grid-template-columns: 9px 1fr auto auto; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 8px; transition: background .12s; }
+  .mon-row:hover { background: var(--surface); }
+  .mon-row .dot { width: 8px; height: 8px; border-radius: 999px; }
+  .mon-row .dot.run { background: var(--amber); box-shadow: 0 0 0 3px var(--tint-amber); }
+  .mon-row .dot.idle { background: var(--text-3); }
+  .mon-row .dot.crash { background: var(--red); box-shadow: 0 0 0 3px var(--tint-red); }
+  .mon-row .dot.await { background: var(--blue); box-shadow: 0 0 0 3px var(--tint-blue); }
+  .mr-id { font-family: var(--font-term); font-size: 11.5px; color: var(--text-3); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mr-id b { font-family: var(--uifont); font-size: 13.5px; font-weight: 500; color: var(--text); margin-right: 9px; }
+  .mr-meta { font-family: var(--font-term); font-size: 11px; color: var(--text-3); }
+  .pill { font-family: var(--font-term); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--text-2); white-space: nowrap; }
+  .pill.st-run { color: var(--amber); border-color: rgba(210,153,34,0.40); }
+  .pill.st-idle { color: var(--text-3); }
+  .pill.st-crash { color: var(--red); border-color: rgba(248,81,73,0.40); }
+  .pill.st-await { color: var(--blue); border-color: rgba(88,166,255,0.40); }
+  @media (max-width: 620px) { .mon-host { gap: 8px; } .mr-meta { display: none; } }
 </style>
 
 <!-- JSON-LD Structured Data -->
@@ -605,28 +635,39 @@
     <div class="wrap">
       <div class="eyebrow" data-reveal>Mission control</div>
       <h2 class="h2" data-reveal>Watch every session, live.</h2>
-      <p class="blurb" data-reveal>One pane keeps every self-driving session visible across terminals, the board, and channels — so you supervise the agents improving your codebase instead of babysitting twenty tmux panes.</p>
+      <p class="blurb" data-reveal>One pane keeps every session visible across local and SSH hosts — live status from the watchdog, context, and host CPU/RAM at a glance. Supervise the loop instead of babysitting twenty tmux panes.</p>
       <a class="seehint" href="https://github.com/MateoCerquetella/agentum" target="_blank" rel="noreferrer">See the architecture <span class="ar">→</span></a>
       <div class="mc" data-reveal>
         <div class="win">
           <div class="chrome">
             <div class="lights"><span></span><span></span><span></span></div>
-            <div class="ctitle">agentum — mission control · 3 hosts</div>
-            <div class="cmeta"><span class="live"></span>6 live</div>
+            <div class="ctitle">agentum — 2 hosts · 5 sessions</div>
+            <div class="cmeta"><span class="live"></span>3 running</div>
           </div>
-          <div class="mcgrid">
-            <div class="mcpane"><div class="ph"><span class="d" style="background:var(--green-fb);box-shadow:var(--glow-green)"></span>alpha · claude</div><div class="ll">● edit auth.rs (+18 −4)
-● cargo test → 214 ok
-✓ PR #412 opened
-watchdog: ctx 48% → /compact</div></div>
-            <div class="mcpane"><div class="ph"><span class="d" style="background:var(--amber)"></span>review-pr · codex</div><div class="ll">reviewing 6 files…
-● comment FeatureWall.tsx
-⚠ ctx 42% — nearing compact
-nit: debounce resize</div></div>
-            <div class="mcpane"><div class="ph"><span class="d" style="background:var(--magenta)"></span>cron · hermes</div><div class="ll">scheduled · 02:00
-bump deps + run suite
-✓ 3 patches, 0 breaks
-→ queued PR #413</div></div>
+          <div class="monitor">
+            <div class="mon-host">
+              <div class="mh-name"><span class="hd"></span>local <span class="mh-os">macOS · darwin-arm64</span></div>
+              <div class="mh-meters">
+                <span class="meter">CPU <b>18%</b><span class="bar"><i style="width:18%"></i></span></span>
+                <span class="meter">RAM <b>9.2 / 16 GB</b><span class="bar"><i style="width:57%"></i></span></span>
+              </div>
+            </div>
+            <div class="mon-rows">
+              <div class="mon-row"><span class="dot run"></span><span class="mr-id"><b>alpha</b> claude · opus-4.8</span><span class="mr-meta">ctx 78%</span><span class="pill st-run">running</span></div>
+              <div class="mon-row"><span class="dot await"></span><span class="mr-id"><b>review-pr</b> codex</span><span class="mr-meta">6 files</span><span class="pill st-await">awaiting input</span></div>
+              <div class="mon-row"><span class="dot idle"></span><span class="mr-id"><b>docs-pass</b> gemini</span><span class="mr-meta">idle 14m</span><span class="pill st-idle">idle</span></div>
+            </div>
+            <div class="mon-host">
+              <div class="mh-name"><span class="hd"></span>vps <span class="mh-os">linux · ssh</span></div>
+              <div class="mh-meters">
+                <span class="meter">CPU <b>41%</b><span class="bar"><i style="width:41%"></i></span></span>
+                <span class="meter">RAM <b>5.1 / 8 GB</b><span class="bar"><i style="width:64%"></i></span></span>
+              </div>
+            </div>
+            <div class="mon-rows">
+              <div class="mon-row"><span class="dot run"></span><span class="mr-id"><b>cron-nightly</b> hermes</span><span class="mr-meta">deps + tests</span><span class="pill st-run">running</span></div>
+              <div class="mon-row"><span class="dot crash"></span><span class="mr-id"><b>build-arm</b> claude</span><span class="mr-meta">watchdog · session.crashed</span><span class="pill st-crash">crashed</span></div>
+            </div>
           </div>
         </div>
       </div>
