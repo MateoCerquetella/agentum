@@ -396,9 +396,9 @@ const WORKTREE_GROUP_INDENT = 18
 const PROJECT_GROUP_HEADER_BASE_PADDING = 4
 const PROJECT_GROUP_HEADER_INDENT = 10
 // Why: in host-first grouping the host header is the top-level parent, so every
-// row beneath it (repo sub-headers + their worktrees) shifts one step right to
-// make the host → project → worktree nesting read visually.
-const HOST_CHILD_INDENT = 28
+// row beneath it (repo sub-headers + their worktrees) shifts right to make the
+// host → project → worktree nesting read clearly.
+const HOST_CHILD_INDENT = 40
 const SIDEBAR_POINTER_DRAG_THRESHOLD_PX = 4
 
 type VirtualizedWorktreeViewportProps = {
