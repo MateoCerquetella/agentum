@@ -122,7 +122,6 @@ crates/
   agentum-executor/  # ToolAdapter trait + Claude/Codex/Gemini/Hermes adapters
   agentum-store/     # sqlx + SQLite (WAL) + XDG paths + migrations
   agentum-core/      # shared domain types
-web/                 # static marketing landing page (deployed separately, not served by the daemon)
 docs/                # architecture, data model, API, CLI reference
 ```
 
