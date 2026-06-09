@@ -55,6 +55,7 @@
     --uifont: var(--font-sans);
     --mono: var(--font-mono);
     --panel: rgba(31,30,29,0.72);   /* ara section panel — translucent so braille shows through */
+    --panel-line: rgba(255,255,255,0.05);
   }
   body.light .ara, .ara.light {
     --bg: #ffffff;
@@ -68,6 +69,7 @@
     --cta-bg: #141414;
     --cta-text: #ffffff;
     --panel: rgba(255,255,255,0.78);
+    --panel-line: rgba(0,0,0,0.05);
   }
 
   *, *::before, *::after { box-sizing: border-box; }
@@ -199,9 +201,10 @@
      gaps + side gutters and faintly through the panel. Hero stays open. ---- */
   .band > .wrap, .trust > .wrap, .final > .wrap, footer > .wrap {
     background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 24px;
+    border: 1px solid var(--panel-line);
+    border-radius: 28px;
     padding: clamp(40px, 5.5vw, 80px) clamp(24px, 4vw, 56px);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 36px 90px -56px rgba(0,0,0,0.7);
   }
 
   /* ---- section scaffolding ---- */
@@ -289,7 +292,16 @@
   .cli-item p { font-size: 14px; color: var(--text-2); margin: 8px 0 0; line-height: 1.55; }
   .cli-item code { font-size: 12px; color: var(--text); background: var(--surface-2); padding: 1px 6px; border-radius: var(--radius-xs); border: 1px solid var(--line-2); }
   .codeblock { border: 1px solid var(--line-2); border-radius: var(--radius-lg); overflow: hidden; background: #050506; }
-  .codeblock .top { height: 36px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; border-bottom: 1px solid var(--line); background: #0e0e10; font-family: var(--mono); font-size: 11px; color: var(--text-3); }
+  .codeblock { box-shadow: var(--shadow-lg); }
+  .codeblock .top { height: 38px; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg,#161619,#0e0e10); font-family: var(--mono); font-size: 11.5px; color: var(--text-3); }
+  .codeblock .lights { display: inline-flex; gap: 7px; }
+  .codeblock .lights i { width: 11px; height: 11px; border-radius: 999px; background: #2f2f2f; }
+  .codeblock .lights i:nth-child(1){ background:#ff5f57; } .codeblock .lights i:nth-child(2){ background:#febc2e; } .codeblock .lights i:nth-child(3){ background:#28c840; }
+  .codeblock .title { flex: 1; text-align: center; }
+  .codeblock .copy { border: 1px solid var(--line-2); border-radius: var(--radius-pill); height: 24px; padding: 0 11px; font-family: var(--mono); font-size: 11px; color: var(--text-2); transition: color .15s, border-color .15s; }
+  .codeblock .copy:hover { color: var(--text); border-color: var(--text-3); }
+  .codeblock .copy.copy-flash { color: var(--green-fb); border-color: var(--green-fb); }
+  .codeblock .w { color: #fff; } .codeblock .prompt { color: var(--green-fb); }
   .codeblock pre { margin: 0; padding: 16px 18px; font-family: var(--mono); font-size: 12.5px; line-height: 1.7; color: var(--text-2); overflow-x: auto; }
   .codeblock .pr { color: var(--text-3); } .codeblock .kw { color: #fff; } .codeblock .ar { color: var(--blue-bright); } .codeblock .st { color: var(--agent-claude); } .codeblock .cm { color: var(--text-3); } .codeblock .ok { color: var(--green-fb); } .codeblock .url { color: var(--blue-bright); }
 
@@ -342,6 +354,23 @@
   body.reveals-on .shot[data-reveal] { transform: translateY(40px) scale(0.99); }
   body.reveals-on .shot[data-reveal].in { transform: none;
     transition: opacity 1s var(--ease-out), transform 1s var(--ease-out); }
+
+  /* ---- install: three step cards ---- */
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: clamp(34px, 4.5vw, 56px) 0 22px; }
+  @media (max-width: 760px) { .steps { grid-template-columns: 1fr; } }
+  .stepcard { display: flex; gap: 13px; padding: 18px 18px 20px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); transition: border-color .15s, transform .15s; }
+  .stepcard:hover { border-color: var(--border-strong); transform: translateY(-2px); }
+  .stepcard .n { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--text-3); line-height: 1.5; }
+  .stepcard h4 { font-size: 16px; font-weight: 500; margin: 0; color: var(--text); letter-spacing: -0.01em; }
+  .stepcard p { font-size: 13.5px; color: var(--text-2); margin: 6px 0 0; line-height: 1.5; }
+
+  /* ---- final CTA — generous spacing, dual action ---- */
+  .final .inner .eyebrow { margin-bottom: 20px; }
+  .final .sub { max-width: 44ch; margin: 22px auto 0; }
+  .final-cta { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 36px; }
+  .pill-line { display: inline-flex; align-items: center; gap: 7px; height: 50px; padding: 0 26px; border-radius: var(--radius-pill); border: 1px solid var(--line-2); color: var(--text); font-size: 15.5px; font-weight: 500; transition: border-color .15s, background .15s; }
+  .pill-line:hover { border-color: var(--border-strong); background: var(--surface-hover); color: var(--text); }
+  .final-meta { font-family: var(--mono); font-size: 11.5px; color: var(--text-3); margin-top: 28px; text-transform: uppercase; letter-spacing: 0.07em; }
 </style>
 
 <!-- JSON-LD Structured Data -->
@@ -592,65 +621,49 @@ bump deps + run suite
     <div class="wrap">
       <div class="eyebrow" data-reveal>Install</div>
       <h2 class="h2" data-reveal>Three commands and you're running.</h2>
-      <p class="blurb" data-reveal>Every step is a single <code style="font-family:var(--mono);color:var(--text)">cargo install</code>-friendly binary. No daemon to chase, no compose file, no Docker.</p>
+      <p class="blurb" data-reveal>One static binary — <code style="font-family:var(--mono);color:var(--text)">cargo install</code> or <code style="font-family:var(--mono);color:var(--text)">curl | sh</code>. No daemon to chase, no compose file, no Docker.</p>
 
-      <div class="cli-grid" data-reveal>
-        <div class="cli-list" id="cli-list">
-          <div class="cli-item active" data-step="0">
-            <div class="step">01 — Install</div>
-            <h4>One binary. Cargo or a native build.</h4>
-            <p>Build from source with cargo, or grab the native desktop app for macOS. Pre-built targets for darwin-arm64, darwin-x86_64, linux-x86_64 and linux-aarch64.</p>
-          </div>
-          <div class="cli-item" data-step="1">
-            <div class="step">02 — Spawn</div>
-            <h4>Spin up an agent in any directory.</h4>
-            <p><code>agentum new</code> creates a tmux pane, attaches the right adapter (claude / codex / gemini / hermes / passthrough), and starts the watchdog.</p>
-          </div>
-          <div class="cli-item" data-step="2">
-            <div class="step">03 — Serve</div>
-            <h4>Open the dashboard from your phone.</h4>
-            <p>HTTPS on <code>:8822</code> with a self-signed cert; trust-on-first-use over plain HTTP <code>:8823</code> so your phone can pin it once.</p>
-          </div>
-          <div style="margin-top:20px">
-            <div class="installbar">
-              <span class="pr">$</span><code id="install-cmd">cargo install --git https://github.com/mateocerquetella/agentum agentum</code>
-              <button class="copy" id="copy-btn" type="button">copy</button>
-            </div>
-          </div>
+      <div class="steps" data-reveal>
+        <div class="stepcard"><span class="n">01</span><div><h4>Install</h4><p>One static binary on your PATH. macOS &amp; Linux, arm64 &amp; x86_64.</p></div></div>
+        <div class="stepcard"><span class="n">02</span><div><h4>Spawn</h4><p>Point an agent at any repo — it lands in its own tmux pane with a watchdog.</p></div></div>
+        <div class="stepcard"><span class="n">03</span><div><h4>Serve</h4><p>One daemon. Drive it from the desktop app, the TUI, or your phone.</p></div></div>
+      </div>
+
+      <div class="codeblock" data-reveal>
+        <div class="top">
+          <span class="lights"><i></i><i></i><i></i></span>
+          <span class="title">zsh — ~/Developer/agentum</span>
+          <button class="copy" id="copy-btn" type="button" title="Copy install command">copy install</button>
         </div>
+<pre><span class="cm"># 1 · install — one static binary  (or: cargo install --git …/agentum agentum-cli)</span>
+<span class="pr">$</span> <span id="install-cmd">curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh | sh</span>
+<span class="ok">  ✓</span> agentum <span class="w">0.13.3</span> <span class="cm">→</span> ~/.local/bin/agentum
 
-        <div class="codeblock">
-          <div class="top"><span>~/Developer · zsh</span><span>tmux pane 0</span></div>
-<pre><span class="cm"># 1 — install (Cargo)</span>
-<span class="pr">$</span> <span class="kw">cargo install</span> <span class="ar">--git https://github.com/mateocerquetella/agentum agentum</span>
-<span class="cm">    Compiling agentum (✓ workspace)
-    Installed binary: ~/.cargo/bin/agentum</span>
+<span class="cm"># 2 · spawn an agent in any repo</span>
+<span class="pr">$</span> <span class="kw">agentum new</span> alpha <span class="ar">--tool</span> <span class="st">claude</span> <span class="ar">--dir</span> ~/Developer/agentum <span class="ar">--up</span>
+<span class="ok">  ✓</span> session <span class="w">alpha</span> <span class="cm">·</span> tmux pane <span class="w">agentum:alpha.0</span>
+<span class="ok">  ✓</span> adapter <span class="st">claude</span> <span class="cm">·</span> opus-4.8 <span class="cm">·</span> watchdog armed <span class="cm">(5s tick)</span>
 
-<span class="cm"># 2 — spawn an agent</span>
-<span class="pr">$</span> <span class="kw">agentum new</span> alpha <span class="ar">--tool</span> <span class="st">claude</span> <span class="ar">--dir</span> <span class="st">~/Developer/my-project</span> <span class="ar">--up</span>
-<span class="cm">  ✓ tmux session created       (alpha)
-  ✓ adapter attached           (claude · opus-4.8)
-  ✓ watchdog reconciler armed  (5s tick)
-  ✓ pane streaming             (ws://127.0.0.1:8822/api/sessions/alpha/stream)</span>
-
-<span class="cm"># 3 — open the dashboard</span>
+<span class="cm"># 3 · start the daemon — desktop app, TUI &amp; phone all attach here</span>
 <span class="pr">$</span> <span class="kw">agentum serve</span>
-<span class="cm">  → HTTPS</span>     <span class="url">https://127.0.0.1:8822</span>
-<span class="cm">  → cert TOFU</span>  <span class="url">http://127.0.0.1:8823/api/cert</span>
-<span class="cm">  → bearer</span>     <span class="ok">stored at $XDG_DATA_HOME/agentum/auth_token</span></pre>
-        </div>
+<span class="cm">  auth disabled — loopback bind, only this machine can reach the daemon</span>
+<span class="cm">  ▸ Dashboard</span>  <span class="url">https://127.0.0.1:8822</span>
+<span class="cm">  ▸ cert TOFU</span>  <span class="url">http://127.0.0.1:8823/api/cert</span>
+<span class="prompt">  ▌</span></pre>
       </div>
     </div>
   </section>
 
   <section class="final">
     <div class="wrap inner">
-      <h2 data-reveal>Stop babysitting your agents.</h2>
-      <p class="sub" data-reveal style="margin-top:22px">One install on your machine. Point it at the hosts you own. Let the loop run.</p>
-      <div class="cta-row" data-reveal>
-        <a class="pill-cta cta-lg" href="https://github.com/MateoCerquetella/agentum" target="_blank" rel="noreferrer">Get Agentum <span class="arr">→</span></a>
-        <span class="winhint">cargo install · MIT · single binary</span>
+      <div class="eyebrow" data-reveal>Get started</div>
+      <h2 data-reveal>Stop babysitting<br/>your agents.</h2>
+      <p class="sub" data-reveal>One install on your machine. Point it at the hosts you own — then let the loop run.</p>
+      <div class="final-cta" data-reveal>
+        <a class="pill-cta cta-lg" href="https://github.com/MateoCerquetella/agentum" target="_blank" rel="noreferrer">Download for macOS <span class="arr">→</span></a>
+        <a class="pill-line cta-lg" href="https://github.com/MateoCerquetella/agentum" target="_blank" rel="noreferrer">View source</a>
       </div>
+      <div class="final-meta" data-reveal>MIT · single binary · macOS &amp; Linux · no cloud</div>
     </div>
   </section>
 
