@@ -159,9 +159,7 @@ async fn status_entries(
     let id = parse_uuid(&id)?;
     let (host, cwd) = host_and_cwd_for(&state, id).await?;
     if !host_runtime::is_git_repo(&host, &cwd).await {
-        return Err(ApiError::BadRequest(format!(
-            "not a git repository: {cwd}"
-        )));
+        return Err(ApiError::BadRequest(format!("not a git repository: {cwd}")));
     }
     let raw = run_git_bytes(&host, &cwd, &["status", "--porcelain=v1", "-z"]).await?;
     Ok(Json(parse_status_entries(&raw)))
@@ -218,7 +216,8 @@ async fn commit_compare(
     let (host, cwd) = host_and_cwd_for(&state, id).await?;
     let commit = q.commit.trim().to_string();
     let commit_oid = match run_git(
-        &host, &cwd,
+        &host,
+        &cwd,
         &["rev-parse", "--verify", &format!("{commit}^{{commit}}")],
     )
     .await
@@ -239,10 +238,14 @@ async fn commit_compare(
         }
     };
     // First parent, if any. Root commits diff against the empty-tree object.
-    let parent_oid = run_git(&host, &cwd, &["rev-parse", "--verify", &format!("{commit_oid}^")])
-        .await
-        .ok()
-        .map(|s| s.trim().to_string());
+    let parent_oid = run_git(
+        &host,
+        &cwd,
+        &["rev-parse", "--verify", &format!("{commit_oid}^")],
+    )
+    .await
+    .ok()
+    .map(|s| s.trim().to_string());
     const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
     let base = parent_oid.clone().unwrap_or_else(|| EMPTY_TREE.to_string());
 
@@ -593,7 +596,8 @@ async fn upstream(
     let id = parse_uuid(&id)?;
     let (host, cwd) = host_and_cwd_for(&state, id).await?;
     let upstream = run_git(
-        &host, &cwd,
+        &host,
+        &cwd,
         &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
     )
     .await
@@ -603,7 +607,8 @@ async fn upstream(
     let (ahead, behind) = if upstream.is_some() {
         // `--left-right --count @{u}...HEAD` prints "<behind>\t<ahead>".
         match run_git(
-            &host, &cwd,
+            &host,
+            &cwd,
             &["rev-list", "--left-right", "--count", "@{u}...HEAD"],
         )
         .await
@@ -664,7 +669,8 @@ async fn branches(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty() && s != "HEAD");
     let raw = run_git(
-        &host, &cwd,
+        &host,
+        &cwd,
         &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
     )
     .await?;
@@ -892,9 +898,7 @@ async fn status(
     let id = parse_uuid(&id)?;
     let (host, cwd) = host_and_cwd_for(&state, id).await?;
     if !host_runtime::is_git_repo(&host, &cwd).await {
-        return Err(ApiError::BadRequest(format!(
-            "not a git repository: {cwd}"
-        )));
+        return Err(ApiError::BadRequest(format!("not a git repository: {cwd}")));
     }
 
     let raw = run_git_bytes(&host, &cwd, &["status", "--porcelain=v1", "-z"]).await?;
@@ -987,7 +991,14 @@ async fn diff(
         let synth = git_in_dir(
             &host,
             &cwd,
-            &["diff", "--no-color", "--no-index", "--", "/dev/null", &q.path],
+            &[
+                "diff",
+                "--no-color",
+                "--no-index",
+                "--",
+                "/dev/null",
+                &q.path,
+            ],
         )
         .await
         .map_err(|e| ApiError::Internal(format!("git diff --no-index: {e}")))?;
@@ -1095,7 +1106,11 @@ async fn stage(
     if !out.success {
         return Err(ApiError::BadRequest(format!(
             "git {} failed: {}",
-            if body.unstage { "restore --staged" } else { "add" },
+            if body.unstage {
+                "restore --staged"
+            } else {
+                "add"
+            },
             out.stderr
         )));
     }
@@ -1192,7 +1207,8 @@ async fn commit_staged(
         return Err(ApiError::BadRequest("commit message is empty".into()));
     }
     run_git(
-        &host, &cwd,
+        &host,
+        &cwd,
         &[
             "-c",
             "user.name=agentum-bot",
@@ -1509,7 +1525,8 @@ async fn history(
 
     // Upstream ahead/behind → incoming/outgoing. No upstream → false/false.
     let (incoming, outgoing) = match run_git(
-        &host, &cwd,
+        &host,
+        &cwd,
         &["rev-list", "--left-right", "--count", "@{u}...HEAD"],
     )
     .await

@@ -171,7 +171,12 @@ fn q(s: &str) -> Result<Cow<'_, str>> {
 async fn ssh_stdout(host: &Host, script: &str) -> Result<String> {
     let output = timeout(SSH_TIMEOUT, ssh_command(host, script).output())
         .await
-        .map_err(|_| TmuxError::Io(std::io::Error::new(std::io::ErrorKind::TimedOut, "ssh timed out")))??;
+        .map_err(|_| {
+            TmuxError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "ssh timed out",
+            ))
+        })??;
     if !output.status.success() {
         return Err(TmuxError::NonZero {
             status: output.status.code().unwrap_or(-1),

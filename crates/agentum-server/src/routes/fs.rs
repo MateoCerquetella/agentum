@@ -245,8 +245,7 @@ async fn list_remote_dir(
     } else {
         trimmed
     };
-    let quoted =
-        shlex::try_quote(trimmed).map_err(|_| ApiError::BadRequest("bad path".into()))?;
+    let quoted = shlex::try_quote(trimmed).map_err(|_| ApiError::BadRequest("bad path".into()))?;
     let hidden_filter = if q.show_hidden {
         ""
     } else {
@@ -495,7 +494,11 @@ mod tests {
         let resp = parse_remote_entries(out);
         assert_eq!(resp.path, "/srv/app");
         assert_eq!(resp.parent.as_deref(), Some("/srv"));
-        let names: Vec<_> = resp.entries.iter().map(|e| (e.name.as_str(), e.kind)).collect();
+        let names: Vec<_> = resp
+            .entries
+            .iter()
+            .map(|e| (e.name.as_str(), e.kind))
+            .collect();
         // Dirs first (assets, src), then files/symlinks case-insensitively
         // (App.tsx, dangling, README.md).
         assert_eq!(

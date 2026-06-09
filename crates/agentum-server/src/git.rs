@@ -175,6 +175,69 @@ pub async fn create_worktree(
     })
 }
 
+/// Recreate a worktree directory at a KNOWN path whose tree went missing
+/// (pruned out-of-band, removed by hand, or a registry row that outlived
+/// its checkout). Unlike [`create_worktree`], the caller already knows
+/// `target` — we just need the directory back on disk so git/terminal ops
+/// that open it stop failing.
+///
+/// Strategy: prune git's stale admin record, then try to re-attach the
+/// existing branch named after the directory (the desktop's default); if
+/// that branch is gone, fall back to creating a fresh one off `HEAD`. The
+/// `.claude/worktrees` parent is created first since `git worktree add`
+/// only makes the leaf.
+pub async fn recreate_worktree(repo: &Path, target: &Path) -> Result<(), GitError> {
+    if !is_git_repo(repo).await {
+        return Err(GitError::NotARepo(repo.to_path_buf()));
+    }
+    let name = target
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .ok_or_else(|| GitError::CommandFailed("worktree path has no final segment".into()))?;
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // Drop any stale "<target> is registered" bookkeeping so `worktree add`
+    // doesn't refuse with "already registered" for a tree that's gone.
+    let _ = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["worktree", "prune"])
+        .output()
+        .await;
+
+    // Re-attach the existing branch (common case: the branch survived, only
+    // the directory vanished).
+    let attach = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["worktree", "add"])
+        .arg(target)
+        .arg(&name)
+        .output()
+        .await?;
+    if attach.status.success() {
+        return Ok(());
+    }
+
+    // Branch is gone too → create a fresh one off HEAD so the workspace at
+    // least opens. The original branch (if any) still exists in the repo.
+    let created = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["worktree", "add", "-b"])
+        .arg(&name)
+        .arg(target)
+        .output()
+        .await?;
+    if created.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&created.stderr);
+    Err(GitError::CommandFailed(stderr.into_owned()))
+}
+
 /// Tear down a worktree. Pass `force = true` to abandon uncommitted
 /// changes (matches `git worktree remove --force`); otherwise git
 /// refuses when the worktree has dirty files.

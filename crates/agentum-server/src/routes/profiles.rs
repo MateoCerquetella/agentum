@@ -154,7 +154,9 @@ mod tests {
         // Shared crate-wide lock: AGENTUM_HOME is process-global, so this must
         // serialise against planner/board_goals too, not just this module.
         // `unwrap_or_else` recovers from a mutex poisoned by an earlier panic.
-        let guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         // SAFETY: `set_var` is unsound under multi-threaded access.
         // `TEST_LOCK` serialises this whole module so only one thread
