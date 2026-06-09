@@ -634,12 +634,78 @@ pub async fn pipe_pane(host: &Host, target: &str, out_path: &Path) -> Result<()>
     match &host.kind {
         HostKind::Local => Ok(agentum_tmux::pipe_pane(target, out_path).await?),
         HostKind::Ssh { .. } => {
-            // Remote sessions stream via capture-pane polling in the local
-            // daemon, so they don't need a remote pipe-pane sink.
-            let _ = (target, out_path);
-            Ok(())
+            // Push-based remote streaming, mirroring the local pipe-pane→tail
+            // path: tmux appends the pane's raw output to a per-session log on
+            // the *remote* host, which `spawn_remote_pane_tail` follows over one
+            // persistent SSH channel. This replaces the old capture-pane polling
+            // (700 ms full-screen snapshots), which was the source of the remote
+            // terminal lag and flicker. `-o` makes re-arming idempotent.
+            ssh_checked(host, &remote_pipe_script(target, out_path)?).await
         }
     }
+}
+
+/// Fixed remote directory for per-session pane logs, under the SSH user's home.
+/// Used as a `$HOME`-relative shell expression so it resolves on the remote
+/// without us having to round-trip for the home path first.
+const REMOTE_PANE_DIR: &str = "$HOME/.agentum/panes";
+
+/// Remote pane-log location as a double-quoted shell expression
+/// (`"$HOME/.agentum/panes/<uuid>.log"`). The basename is the session's local
+/// pane-log filename so the streaming tail addresses the identical file the
+/// session-start `pipe_pane` created. `$HOME` expands on the remote; the quotes
+/// keep a home dir with spaces a single token. The basename is a UUID
+/// (`paths::pane_log`), so it carries no shell-metacharacter risk.
+fn remote_pane_log_expr(out_path: &Path) -> Result<String> {
+    let name = out_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or(HostRuntimeError::Quote)?;
+    Ok(format!("\"{REMOTE_PANE_DIR}/{name}\""))
+}
+
+/// Build the `sh -c …` script that arms tmux pipe-pane on the remote, writing
+/// raw pane output to the per-session log. Factored out so the (untestable
+/// without a live host) quoting is at least covered by a string-shape unit test.
+fn remote_pipe_script(target: &str, out_path: &Path) -> Result<String> {
+    let log = remote_pane_log_expr(out_path)?;
+    // tmux runs this command via `/bin/sh -c` on every flush; single-quoting it
+    // keeps `$HOME` unexpanded through the outer shells so it resolves there.
+    let pipe = format!("cat >> {log}");
+    let inner = format!(
+        "mkdir -p \"{REMOTE_PANE_DIR}\" && tmux pipe-pane -o -t {} {}",
+        q(target)?,
+        q(&pipe)?
+    );
+    // Wrap in `sh -c` so a fish/zsh remote login shell still runs POSIX syntax.
+    Ok(format!("sh -c {}", q(&inner)?))
+}
+
+/// Build the `sh -c …` script that follows the remote pane log. `tail -n 0 -f`
+/// starts at EOF and streams subsequent pane bytes (the current screen arrives
+/// separately via an initial `capture-pane` snapshot). `touch` avoids a race
+/// where the log doesn't exist yet; `exec` lets a kill of the ssh child reap
+/// the remote tail cleanly.
+fn remote_tail_script(out_path: &Path) -> Result<String> {
+    let log = remote_pane_log_expr(out_path)?;
+    let inner = format!("touch {log} 2>/dev/null; exec tail -n 0 -f {log}");
+    Ok(format!("sh -c {}", q(&inner)?))
+}
+
+/// Spawn a long-lived `tail -f` of the remote pane log over a single persistent
+/// SSH channel. The caller reads `child.stdout` for raw pane bytes and kills the
+/// child on disconnect (also guarded by `kill_on_drop`). SSH hosts only — local
+/// sessions tail the on-disk log directly via [`stream_session`].
+pub fn spawn_remote_pane_tail(host: &Host, out_path: &Path) -> Result<tokio::process::Child> {
+    let script = remote_tail_script(out_path)?;
+    let mut cmd = ssh_command(host, &script);
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        // If the WS task drops the child without an explicit kill, still reap the
+        // local ssh (which SIGHUPs the remote tail) rather than leak a process.
+        .kill_on_drop(true);
+    Ok(cmd.spawn()?)
 }
 
 pub async fn ssh_stdout(host: &Host, script: &str) -> Result<String> {
@@ -935,6 +1001,56 @@ mod tests {
         for pm in ["apt-get", "dnf", "pacman", "brew"] {
             assert!(script.contains(pm), "script probes {pm}");
         }
+    }
+
+    // ── remote pane streaming (SSH push path) ─────────────────────────────
+    // The SSH backend needs a live host to truly validate, but the shell
+    // scripts these build are pure functions of (target, log path) — cover
+    // their shape so a quoting regression can't silently break remote streams.
+
+    #[test]
+    fn remote_pane_log_expr_is_home_relative_and_keeps_basename() {
+        let p = std::path::Path::new("/home/me/.cache/agentum/sessions/abc-123.log");
+        let expr = remote_pane_log_expr(p).unwrap();
+        // `$HOME` so it resolves on the remote; quoted so a home dir with
+        // spaces stays one token; basename is the session's local log name.
+        assert_eq!(expr, "\"$HOME/.agentum/panes/abc-123.log\"");
+    }
+
+    #[test]
+    fn remote_pipe_script_arms_pipe_pane_to_session_log() {
+        let p = std::path::Path::new("/x/sessions/sess-1.log");
+        let script = remote_pipe_script("agentum-demo", p).unwrap();
+        // Wrapped for fish/zsh logins, makes the dir, idempotently arms the
+        // pipe, and routes raw pane output into the home-relative session log.
+        assert!(script.starts_with("sh -c "), "not sh-wrapped: {script}");
+        assert!(script.contains("mkdir -p"), "no mkdir: {script}");
+        assert!(
+            script.contains("tmux pipe-pane -o -t"),
+            "no idempotent pipe-pane: {script}"
+        );
+        assert!(script.contains("agentum-demo"), "target missing: {script}");
+        assert!(
+            script.contains("sess-1.log"),
+            "log basename missing: {script}"
+        );
+        assert!(script.contains("cat >>"), "not an append sink: {script}");
+        assert!(script.contains("$HOME"), "log not home-relative: {script}");
+    }
+
+    #[test]
+    fn remote_tail_script_follows_log_from_eof() {
+        let p = std::path::Path::new("/x/sessions/sess-2.log");
+        let script = remote_tail_script(p).unwrap();
+        assert!(script.starts_with("sh -c "), "not sh-wrapped: {script}");
+        // `-n 0` starts at EOF (current screen comes from the snapshot, not the
+        // tail); `exec` lets a child kill reap the remote tail cleanly.
+        assert!(script.contains("tail -n 0 -f"), "wrong tail mode: {script}");
+        assert!(script.contains("exec tail"), "tail not exec'd: {script}");
+        assert!(
+            script.contains("sess-2.log"),
+            "log basename missing: {script}"
+        );
     }
 
     // ── host-aware git/fs, Local backend ──────────────────────────────────
