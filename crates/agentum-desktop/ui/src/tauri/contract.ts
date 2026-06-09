@@ -27,22 +27,6 @@ export interface AgentumApi {
     restart: ApiMethod
     setUnreadDockBadgeCount: ApiMethod
   }
-  automations: {
-    create: ApiMethod
-    createExternal: ApiMethod
-    delete: ApiMethod
-    list: ApiMethod
-    listExternalManagers: ApiMethod
-    listRuns: ApiMethod
-    markDispatchResult: ApiMethod
-    rendererReady: ApiMethod
-    runExternalAction: ApiMethod
-    runNow: ApiMethod
-    runPrecheck: ApiMethod
-    update: ApiMethod
-    updateExternal: ApiMethod
-    onDispatchRequested: ApiEvent
-  }
   browser: {
     acceptDownload: ApiMethod
     awaitGrabSelection: ApiMethod
@@ -590,9 +574,6 @@ export interface AgentumApi {
     kill: ApiMethod
     scan: ApiMethod
     onAdvertisedUrlChanged: ApiEvent
-  }
-  workspaceSpace: {
-    cancel: ApiMethod
   }
   worktrees: {
     create: ApiMethod

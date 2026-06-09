@@ -80,6 +80,10 @@ const AddRepoDialog = React.memo(function AddRepoDialog() {
   const [existingWorkspaceSource, setExistingWorkspaceSource] =
     useState<AddRepoExistingWorkspaceSource | null>(null)
   const [isAdding, setIsAdding] = useState(false)
+  // Why: the native folder picker can silently return nothing on some Linux
+  // setups (no xdg-desktop-portal), leaving "Add project" feeling broken. A
+  // manual path field is a reliable fallback that always works.
+  const [manualPath, setManualPath] = useState('')
   const [serverPath, setServerPath] = useState('')
   const [isAddingServerPath, setIsAddingServerPath] = useState(false)
   const [cloneUrl, setCloneUrl] = useState('')
@@ -259,6 +263,7 @@ const AddRepoDialog = React.memo(function AddRepoDialog() {
     setAddedRepo(null)
     setExistingWorkspaceSource(null)
     setIsAdding(false)
+    setManualPath('')
     setServerPath('')
     setIsAddingServerPath(false)
     setCloneUrl('')
@@ -999,6 +1004,32 @@ const AddRepoDialog = React.memo(function AddRepoDialog() {
                 <Lightbulb className="size-3.5" />
               </span>
               <span>Want to import many repos at once? Select the parent folder.</span>
+            </div>
+
+            {/* Why: a reliable fallback when the native folder picker doesn't
+               open (e.g. Linux without a desktop portal) — paste/type a path. */}
+            <div className="flex items-center gap-2">
+              <Input
+                value={manualPath}
+                onChange={(event) => setManualPath(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && manualPath.trim() && !isAdding) {
+                    void handleAddLocalPath(manualPath.trim(), 'local_folder_picker')
+                  }
+                }}
+                placeholder="…or paste a folder path"
+                className="h-9 text-sm font-mono"
+                disabled={isAdding}
+                spellCheck={false}
+              />
+              <Button
+                onClick={() => void handleAddLocalPath(manualPath.trim(), 'local_folder_picker')}
+                disabled={!manualPath.trim() || isAdding}
+                variant="outline"
+                className="h-9 shrink-0"
+              >
+                Add
+              </Button>
             </div>
 
             {/* Secondary link rather than a fourth card — create-from-scratch

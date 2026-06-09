@@ -11,11 +11,11 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
-import { useMountedRef } from '@/hooks/useMountedRef'
 import { cn } from '@/lib/utils'
 import type { GitHubViewer } from '../../../../shared/types'
 
 const GITHUB_ISSUES_URL = 'https://github.com/mateocerquetella/agentum/issues/'
+const GITHUB_NEW_ISSUE_URL = 'https://github.com/mateocerquetella/agentum/issues/new'
 const DISCORD_URL = 'https://discord.gg/fzjDKHxv8Q'
 const X_URL = 'https://x.com/agentum_build'
 
@@ -52,11 +52,9 @@ export function SidebarFeedbackDialog({
   onOpenChange
 }: SidebarFeedbackDialogProps): React.JSX.Element {
   const [feedback, setFeedback] = useState('')
-  const [isSubmitting, setIsSubmitting] = useState(false)
   const [viewer, setViewer] = useState<GitHubViewer | null>(null)
   const [isViewerLoading, setIsViewerLoading] = useState(false)
   const [submitAnonymously, setSubmitAnonymously] = useState(false)
-  const mountedRef = useMountedRef()
 
   React.useEffect(() => {
     if (!open) {
@@ -89,48 +87,30 @@ export function SidebarFeedbackDialog({
     }
   }, [open])
 
-  const handleSubmit = async (): Promise<void> => {
+  const handleSubmit = (): void => {
     const trimmed = feedback.trim()
     if (!trimmed) {
       toast.warning('Please enter feedback before submitting.')
       return
     }
 
-    setIsSubmitting(true)
-    try {
-      const identity = getSubmitIdentity(viewer, submitAnonymously)
-      // Why: submission is proxied through the main process via IPC because
-      // the packaged Mac build loads the renderer from file://, which makes
-      // cross-origin fetch() fail CORS preflight. Electron's net module in
-      // the main process has no CORS restrictions and works uniformly in dev
-      // and prod.
-      const result = await api.feedback.submit({
-        feedback: trimmed,
-        submitAnonymously,
-        githubLogin: identity.githubLogin,
-        githubEmail: identity.githubEmail
-      })
-
-      if (!result.ok) {
-        throw new Error(`Feedback request failed: ${result.error}`)
-      }
-
-      if (mountedRef.current) {
-        toast.success('Thanks for the feedback.')
-        setFeedback('')
-        setSubmitAnonymously(false)
-        onOpenChange(false)
-      }
-    } catch (err) {
-      if (mountedRef.current) {
-        toast.error('Failed to submit feedback. Please try again.')
-      }
-      console.error('Failed to submit feedback:', err)
-    } finally {
-      if (mountedRef.current) {
-        setIsSubmitting(false)
-      }
-    }
+    // Why: there's no hosted feedback endpoint, so route feedback straight to
+    // the project's GitHub issues where the maintainer actually sees it. We open
+    // a prefilled "new issue" form (no auth/token/CORS needed) instead of
+    // POSTing to a backend that isn't wired up.
+    const identity = getSubmitIdentity(viewer, submitAnonymously)
+    const firstLine = trimmed.split('\n')[0]?.slice(0, 70).trim() || 'Feedback'
+    const title = `Feedback: ${firstLine}`
+    const attribution = identity.githubLogin ? `\n\n— reported by @${identity.githubLogin}` : ''
+    const url =
+      `${GITHUB_NEW_ISSUE_URL}?labels=feedback` +
+      `&title=${encodeURIComponent(title)}` +
+      `&body=${encodeURIComponent(`${trimmed}${attribution}`)}`
+    openExternalUrl(url)
+    toast.success('Opening GitHub to send your feedback…')
+    setFeedback('')
+    setSubmitAnonymously(false)
+    onOpenChange(false)
   }
 
   return (
@@ -227,11 +207,11 @@ export function SidebarFeedbackDialog({
           )}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={() => void handleSubmit()} disabled={isSubmitting || !feedback.trim()}>
-            {isSubmitting ? 'Sending…' : 'Send'}
+          <Button onClick={handleSubmit} disabled={!feedback.trim()}>
+            Send
           </Button>
         </DialogFooter>
       </DialogContent>

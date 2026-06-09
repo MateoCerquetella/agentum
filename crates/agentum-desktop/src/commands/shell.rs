@@ -102,7 +102,9 @@ pub async fn shell_copy_file(src_path: String, dest_path: String) -> Result<(), 
     if let Some(parent) = Path::new(&dest_path).parent() {
         tokio::fs::create_dir_all(parent).await.map_err(map_err)?;
     }
-    tokio::fs::copy(src_path, dest_path).await.map_err(map_err)?;
+    tokio::fs::copy(src_path, dest_path)
+        .await
+        .map_err(map_err)?;
     Ok(())
 }
 

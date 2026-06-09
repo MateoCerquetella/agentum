@@ -574,7 +574,10 @@ pub async fn pane_title(host: &Host, target: &str) -> Result<String> {
         HostKind::Ssh { .. } => {
             let out = ssh_stdout(
                 host,
-                &format!("tmux display-message -p -t {} '#{{pane_title}}'", q(target)?),
+                &format!(
+                    "tmux display-message -p -t {} '#{{pane_title}}'",
+                    q(target)?
+                ),
             )
             .await?;
             Ok(out.trim_matches(|c| c == '\n' || c == '\r').to_string())

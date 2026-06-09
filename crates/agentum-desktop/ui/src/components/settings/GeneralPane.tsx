@@ -444,25 +444,6 @@ export function GeneralPane({ settings, updateSettings }: GeneralPaneProps): Rea
           </SearchableSetting>
         </div>
 
-        <div id="general-skip-delete-automation-confirm" className="scroll-mt-6">
-          <SearchableSetting
-            title="Ask Before Deleting Automations"
-            description="Show a confirmation dialog before deleting an automation and its run history."
-            keywords={['delete', 'automation', 'confirm', 'dialog', 'skip', 'prompt']}
-          >
-            <SettingsSwitchRow
-              label="Ask Before Deleting Automations"
-              description="Show a confirmation before deleting automations and their run history."
-              checked={!settings.skipDeleteAutomationConfirm}
-              onChange={() =>
-                updateSettings({
-                  skipDeleteAutomationConfirm: !settings.skipDeleteAutomationConfirm
-                })
-              }
-            />
-          </SearchableSetting>
-        </div>
-
         <SearchableSetting
           title="Open In Menu"
           description="Add custom launchers to the workspace Open in menu."

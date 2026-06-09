@@ -3,15 +3,12 @@ mod path_env;
 mod state;
 
 use commands::{
-    accounts, agent_status, app, automations, browser, cache, claude_usage, cli, clipboard,
-    codex_usage,
-    crash_reports, diagnostics, feedback, fs, gh, gl, hooks, hosted_review, html_export,
-    keybindings, linear, notebook, notifications, onboarding, open_code_usage, permissions,
-    pet, project_groups, pty,
-    rate_limits, remote_workspace, repos, runtime, server, session, settings, shell, sparse_presets,
-    speech,
-    shell_runtimes, skills, ssh, star_nag, ui, updater, window, workspace_cleanup, workspace_ports,
-    e2e, mobile, stats, telemetry, workspace_space,
+    accounts, agent_status, app, browser, cache, claude_usage, cli, clipboard, codex_usage,
+    crash_reports, diagnostics, e2e, feedback, fs, gh, gl, hooks, hosted_review, html_export,
+    keybindings, linear, mobile, notebook, notifications, onboarding, open_code_usage, permissions,
+    pet, project_groups, pty, rate_limits, remote_workspace, repos, runtime, server, session,
+    settings, shell, shell_runtimes, skills, sparse_presets, speech, ssh, star_nag, stats,
+    telemetry, ui, updater, window, workspace_cleanup, workspace_ports, workspace_space,
 };
 use state::AppState;
 use tauri::Manager;
@@ -276,15 +273,6 @@ pub fn run() {
             crash_reports::crash_reports_copy_latest_diagnostics,
             workspace_ports::workspace_ports_scan,
             workspace_ports::workspace_ports_kill,
-            automations::automations_list,
-            automations::automations_list_runs,
-            automations::automations_list_external_managers,
-            automations::automations_run_precheck,
-            automations::automations_delete,
-            automations::automations_renderer_ready,
-            automations::automations_create_external,
-            automations::automations_update_external,
-            automations::automations_run_external_action,
             browser::browser_unregister_guest,
             browser::browser_open_dev_tools,
             browser::browser_cancel_download,
@@ -446,10 +434,6 @@ pub fn run() {
             linear::linear_create_issue,
             linear::linear_update_issue,
             linear::linear_add_issue_comment,
-            automations::automations_mark_dispatch_result,
-            automations::automations_run_now,
-            automations::automations_create,
-            automations::automations_update,
             gl::gl_resolve_mr_discussion,
             gl::gl_update_mr_reviewers,
             gl::gl_add_mr_inline_comment,

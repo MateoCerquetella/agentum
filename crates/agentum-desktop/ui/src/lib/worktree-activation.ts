@@ -414,10 +414,6 @@ setWorktreeNavActivator(activateAndRevealWorktree)
 // (not open*Page) so back/forward does not mutate previousViewBefore* or
 // append duplicate history. See navigateToIndex for the replay branch.
 setWorktreeNavViewActivator((entry) => {
-  if (entry === 'automations') {
-    useAppStore.getState().setActiveView(entry)
-    return
-  }
   if (entry === 'tasks') {
     useAppStore.setState((state) => ({
       activeView: 'tasks',

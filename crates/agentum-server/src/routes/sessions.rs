@@ -26,6 +26,24 @@ use crate::error::ApiError;
 
 const GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// When a Local session's `workdir` is missing, decide whether it's a desktop
+/// git-worktree workspace we can safely recreate. Matches the desktop layout
+/// `<repo>/.claude/worktrees/<name>` and returns the parent repo path (when it
+/// still exists on disk) so the caller can `git worktree add` the tree back.
+/// Returns `None` for any other shape — we never auto-create arbitrary paths.
+fn worktree_repo_for_missing(workdir: &std::path::Path) -> Option<PathBuf> {
+    let worktrees_dir = workdir.parent()?; // <repo>/.claude/worktrees
+    if worktrees_dir.file_name()?.to_str()? != "worktrees" {
+        return None;
+    }
+    let claude_dir = worktrees_dir.parent()?; // <repo>/.claude
+    if claude_dir.file_name()?.to_str()? != ".claude" {
+        return None;
+    }
+    let repo = claude_dir.parent()?; // <repo>
+    repo.is_dir().then(|| repo.to_path_buf())
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/sessions", get(list).post(create))
@@ -130,10 +148,32 @@ async fn create(
         HostKind::Local => {
             let workdir = super::util::expand_workdir(&new.workdir)?;
             if !workdir.exists() {
-                return Err(ApiError::BadRequest(format!(
-                    "workdir does not exist: {}",
-                    workdir.display()
-                )));
+                // Self-heal a desktop git-worktree workspace
+                // (`<repo>/.claude/worktrees/<name>`) whose directory went
+                // missing (pruned out-of-band, removed by hand, or a registry
+                // row that outlived its checkout). A hard 400 here breaks
+                // branch-compare and every git/terminal op that opens the
+                // worktree, so recreate it from the intact parent repo instead.
+                // Only the worktrees layout is auto-created; any other missing
+                // path stays a hard error.
+                match worktree_repo_for_missing(&workdir) {
+                    Some(repo) => {
+                        crate::git::recreate_worktree(&repo, &workdir)
+                            .await
+                            .map_err(|e| {
+                                ApiError::BadRequest(format!(
+                                    "workdir does not exist and could not be recreated: {} ({e})",
+                                    workdir.display()
+                                ))
+                            })?;
+                    }
+                    None => {
+                        return Err(ApiError::BadRequest(format!(
+                            "workdir does not exist: {}",
+                            workdir.display()
+                        )));
+                    }
+                }
             }
             new.workdir = workdir.to_string_lossy().into_owned();
             workdir
@@ -452,10 +492,28 @@ async fn start(
         HostKind::Local => {
             let workdir = super::util::expand_workdir(session.effective_cwd())?;
             if !workdir.exists() {
-                return Err(ApiError::BadRequest(format!(
-                    "workdir does not exist: {}",
-                    workdir.display()
-                )));
+                // Same self-heal as create: a started session whose isolated
+                // worktree directory vanished should be recoverable, not a dead
+                // 400. Recreate the `<repo>/.claude/worktrees/<name>` tree from
+                // the parent repo; any other missing path is still a hard error.
+                match worktree_repo_for_missing(&workdir) {
+                    Some(repo) => {
+                        crate::git::recreate_worktree(&repo, &workdir)
+                            .await
+                            .map_err(|e| {
+                                ApiError::BadRequest(format!(
+                                    "workdir does not exist and could not be recreated: {} ({e})",
+                                    workdir.display()
+                                ))
+                            })?;
+                    }
+                    None => {
+                        return Err(ApiError::BadRequest(format!(
+                            "workdir does not exist: {}",
+                            workdir.display()
+                        )));
+                    }
+                }
             }
             workdir
         }

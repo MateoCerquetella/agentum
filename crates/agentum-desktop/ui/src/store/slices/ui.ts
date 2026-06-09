@@ -2,10 +2,7 @@ import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
-import {
-  findPrevLiveNonTaskStackHistoryIndex,
-  findPrevLiveWorktreeHistoryIndex
-} from './worktree-nav-history'
+import { findPrevLiveNonTaskStackHistoryIndex } from './worktree-nav-history'
 import type {
   ChangelogData,
   CustomPet,
@@ -439,56 +436,11 @@ export type UISlice = {
   acknowledgedAgentsByPaneKey: Record<string, number>
   acknowledgeAgents: (paneKeys: string[]) => void
   unacknowledgeAgents: (paneKeys: string[]) => void
-  activeView:
-    | 'terminal'
-    | 'settings'
-    | 'tasks'
-    | 'activity'
-    | 'automations'
-    | 'space'
-    | 'skills'
-  previousViewBeforeTasks:
-    | 'terminal'
-    | 'settings'
-    | 'activity'
-    | 'automations'
-    | 'space'
-    | 'skills'
-  previousViewBeforeSettings:
-    | 'terminal'
-    | 'tasks'
-    | 'activity'
-    | 'automations'
-    | 'space'
-    | 'skills'
-  previousViewBeforeActivity:
-    | 'terminal'
-    | 'settings'
-    | 'tasks'
-    | 'automations'
-    | 'space'
-    | 'skills'
-  previousViewBeforeAutomations:
-    | 'terminal'
-    | 'settings'
-    | 'tasks'
-    | 'activity'
-    | 'space'
-    | 'skills'
-  previousViewBeforeSpace:
-    | 'terminal'
-    | 'settings'
-    | 'tasks'
-    | 'activity'
-    | 'automations'
-    | 'skills'
-  previousViewBeforeSkills:
-    | 'terminal'
-    | 'settings'
-    | 'tasks'
-    | 'activity'
-    | 'automations'
-    | 'space'
+  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills'
+  previousViewBeforeTasks: 'terminal' | 'settings' | 'activity' | 'skills'
+  previousViewBeforeSettings: 'terminal' | 'tasks' | 'activity' | 'skills'
+  previousViewBeforeActivity: 'terminal' | 'settings' | 'tasks' | 'skills'
+  previousViewBeforeSkills: 'terminal' | 'settings' | 'tasks' | 'activity'
   setActiveView: (view: UISlice['activeView']) => void
   taskPageData: {
     preselectedRepoId?: string
@@ -535,12 +487,6 @@ export type UISlice = {
   closeTaskPage: () => void
   openActivityPage: () => void
   closeActivityPage: () => void
-  selectedAutomationId: string | null
-  setSelectedAutomationId: (id: string | null) => void
-  openAutomationsPage: () => void
-  closeAutomationsPage: () => void
-  openSpacePage: () => void
-  closeSpacePage: () => void
   openSkillsPage: () => void
   closeSkillsPage: () => void
   setNewWorkspaceDraft: (draft: NonNullable<UISlice['newWorkspaceDraft']>) => void
@@ -881,8 +827,6 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   previousViewBeforeTasks: 'terminal',
   previousViewBeforeSettings: 'terminal',
   previousViewBeforeActivity: 'terminal',
-  previousViewBeforeAutomations: 'terminal',
-  previousViewBeforeSpace: 'terminal',
   previousViewBeforeSkills: 'terminal',
   setActiveView: (view) => set({ activeView: view }),
   taskPageData: {},
@@ -1047,44 +991,6 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   closeActivityPage: () =>
     set((state) => ({
       activeView: state.previousViewBeforeActivity
-    })),
-  selectedAutomationId: null,
-  setSelectedAutomationId: (id) => set({ selectedAutomationId: id }),
-  openAutomationsPage: () => {
-    get().recordFeatureInteraction?.('automations')
-    get().recordViewVisit('automations')
-    set((state) => ({
-      activeView: 'automations',
-      previousViewBeforeAutomations:
-        state.activeView === 'automations' ? state.previousViewBeforeAutomations : state.activeView
-    }))
-  },
-  closeAutomationsPage: () =>
-    set((state) => {
-      const currentEntry = state.worktreeNavHistory[state.worktreeNavHistoryIndex]
-      let nextHistoryIndex = state.worktreeNavHistoryIndex
-      if (currentEntry === 'automations') {
-        const prev = findPrevLiveWorktreeHistoryIndex(state)
-        if (prev !== null) {
-          nextHistoryIndex = prev
-        }
-      }
-      return {
-        activeView: state.previousViewBeforeAutomations,
-        worktreeNavHistoryIndex: nextHistoryIndex
-      }
-    }),
-  openSpacePage: () => {
-    get().recordFeatureInteraction?.('workspace-cleanup')
-    set((state) => ({
-      activeView: 'space',
-      previousViewBeforeSpace:
-        state.activeView === 'space' ? state.previousViewBeforeSpace : state.activeView
-    }))
-  },
-  closeSpacePage: () =>
-    set((state) => ({
-      activeView: state.previousViewBeforeSpace
     })),
   openSkillsPage: () =>
     set((state) => ({

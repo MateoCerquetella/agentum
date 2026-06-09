@@ -17,11 +17,6 @@ export const GENERAL_WORKSPACE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
     keywords: ['delete', 'worktree', 'confirm', 'dialog', 'skip', 'prompt']
   },
   {
-    title: 'Ask Before Deleting Automations',
-    description: 'Show a confirmation dialog before deleting an automation and its run history.',
-    keywords: ['delete', 'automation', 'confirm', 'dialog', 'skip', 'prompt']
-  },
-  {
     title: 'Open In Menu',
     description: 'Add custom launchers to the workspace Open in menu.',
     keywords: ['open in', 'editor', 'launcher', 'cursor', 'zed', 'command', 'vscode']

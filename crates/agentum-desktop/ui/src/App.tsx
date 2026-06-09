@@ -37,7 +37,6 @@ import {
 import { useAppStore } from './store'
 import { useShallow } from 'zustand/react/shallow'
 import { isRemoteWorkspaceSnapshotApplyInProgress, useIpcEvents } from './hooks/useIpcEvents'
-import { useAutomationDispatchEvents } from './hooks/useAutomationDispatchEvents'
 import RetainedAgentsSyncGate from './components/dashboard/RetainedAgentsSyncGate'
 import { ActivityTitlebarControls } from './components/activity/ActivityTitlebarControls'
 import Sidebar from './components/Sidebar'
@@ -221,11 +220,9 @@ function WindowControls(): React.JSX.Element {
 
 const Landing = lazy(() => import('./components/Landing'))
 const TaskPage = lazy(() => import('./components/TaskPage'))
-const AutomationsPage = lazy(() => import('./components/automations/AutomationsPage'))
 const ActivityPrototypePage = lazy(() => import('./components/activity/ActivityPrototypePage'))
 const Settings = lazy(() => import('./components/settings/Settings'))
 const SkillsPage = lazy(() => import('./components/skills/SkillsPage'))
-const WorkspaceSpacePage = lazy(() => import('./components/workspace-space/WorkspaceSpacePage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
 const WorktreeJumpPalette = lazy(() => import('./components/WorktreeJumpPalette'))
 const NewWorkspaceComposerModal = lazy(() => import('./components/NewWorkspaceComposerModal'))
@@ -504,7 +501,6 @@ function App(): React.JSX.Element {
 
   // Subscribe to IPC push events
   useIpcEvents()
-  useAutomationDispatchEvents()
   // Why: retention must run at App level so the inline per-card agents list
   // always sees retained entries. If retention ran inside the sidebar-card
   // subtree, "done" agents would vanish any time the user collapsed a card's
@@ -1138,7 +1134,6 @@ function App(): React.JSX.Element {
   const showSidebar =
     activeView !== 'settings' &&
     activeView !== 'activity' &&
-    activeView !== 'space' &&
     activeView !== 'skills'
   // Why: only the terminal workspace replaces the full-width titlebar with
   // split-column chrome. Full-page navigation views keep the draggable app
@@ -1318,6 +1313,33 @@ function App(): React.JSX.Element {
         notifyTerminalCapture('sidebar.left.toggle')
         actions.toggleSidebar()
         return
+      }
+
+      // Command palette + quick-open — the "search" palettes. In the Electron
+      // build these fired from the main-process before-input-event; the Tauri
+      // shell has no equivalent, so without these renderer handlers the search
+      // shortcuts never opened anything. Mirrors the (now inert) IPC handlers in
+      // useIpcEvents.ts (onToggleWorktreePalette / onOpenQuickOpen).
+      if (matchShortcut('worktree.palette')) {
+        e.preventDefault()
+        notifyTerminalCapture('worktree.palette')
+        const store = useAppStore.getState()
+        if (store.activeModal === 'worktree-palette') {
+          store.closeModal()
+        } else {
+          store.openModal('worktree-palette')
+        }
+        return
+      }
+
+      if (matchShortcut('worktree.quickOpen')) {
+        const store = useAppStore.getState()
+        if (store.activeView === 'terminal' && store.activeWorktreeId !== null) {
+          e.preventDefault()
+          notifyTerminalCapture('worktree.quickOpen')
+          store.openModal('quick-open')
+          return
+        }
       }
 
       // Why: Cmd/Ctrl+N is handled via the main-process before-input-event
@@ -1802,9 +1824,7 @@ function App(): React.JSX.Element {
                           {activeView === 'settings' ? <Settings /> : null}
                           {activeView === 'skills' ? <SkillsPage /> : null}
                           {activeView === 'tasks' ? <TaskPage /> : null}
-                          {activeView === 'automations' ? <AutomationsPage /> : null}
                           {activeView === 'activity' ? <ActivityPrototypePage /> : null}
-                          {activeView === 'space' ? <WorkspaceSpacePage /> : null}
                           {activeView === 'terminal' && !activeWorktreeId ? <Landing /> : null}
                         </RecoverableRenderErrorBoundary>
                       </Suspense>

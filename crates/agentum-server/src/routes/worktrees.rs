@@ -12,10 +12,10 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agentum_core::{Host, HostKind};
+use axum::Json;
 use axum::Router;
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -33,7 +33,10 @@ pub fn router() -> Router<crate::AppState> {
         .route("/api/worktrees/create", post(create))
         .route("/api/worktrees/remove", post(remove))
         .route("/api/worktrees/sort-order", post(persist_sort_order))
-        .route("/api/worktrees/force-delete-branch", post(force_delete_branch))
+        .route(
+            "/api/worktrees/force-delete-branch",
+            post(force_delete_branch),
+        )
         .route("/api/worktrees/resolve-pr-base", get(resolve_pr_base))
 }
 
@@ -114,15 +117,18 @@ fn enrich_worktree(mut wt: Worktree) -> Worktree {
             .filter(|s| !s.is_empty())
     };
     if !wt.extra.contains_key("path") {
-        wt.extra.insert("path".into(), Value::String(wt_path.clone()));
+        wt.extra
+            .insert("path".into(), Value::String(wt_path.clone()));
     }
     if !wt.extra.contains_key("branch") {
         let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|| "HEAD".into());
         wt.extra.insert("branch".into(), Value::String(branch));
     }
     if !wt.extra.contains_key("head") {
-        wt.extra
-            .insert("head".into(), Value::String(git(&["rev-parse", "HEAD"]).unwrap_or_default()));
+        wt.extra.insert(
+            "head".into(),
+            Value::String(git(&["rev-parse", "HEAD"]).unwrap_or_default()),
+        );
     }
     if !wt.extra.contains_key("isBare") {
         wt.extra.insert("isBare".into(), Value::Bool(false));
@@ -138,7 +144,9 @@ fn enrich_worktree(mut wt: Worktree) -> Worktree {
 /// a shared daemon, so this matters more than it did in the desktop-local command.
 fn reject_dashed(label: &str, value: &str) -> Result<(), ApiError> {
     if value.starts_with('-') {
-        return Err(ApiError::BadRequest(format!("{label} must not start with '-'")));
+        return Err(ApiError::BadRequest(format!(
+            "{label} must not start with '-'"
+        )));
     }
     Ok(())
 }
@@ -157,7 +165,11 @@ fn host_location(host: &Host) -> String {
 /// `fatal: not a git repository` line that means nothing to a user — replace it
 /// with one that names the path + host and points at the fix. Returns `None` for
 /// every other failure so the caller keeps surfacing the raw git stderr.
-fn non_git_create_error_message(stderr: &str, repo_path: &str, host_location: &str) -> Option<String> {
+fn non_git_create_error_message(
+    stderr: &str,
+    repo_path: &str,
+    host_location: &str,
+) -> Option<String> {
     if stderr.contains("not a git repository") {
         Some(format!(
             "{repo_path} on {host_location} is not a git repository — re-add the project with the correct path"
@@ -288,16 +300,13 @@ async fn create(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let worktree_path_string = format!("{worktrees_root}/{}", body.name);
-    let branch = body.branch_name_override.clone().unwrap_or_else(|| body.name.clone());
+    let branch = body
+        .branch_name_override
+        .clone()
+        .unwrap_or_else(|| body.name.clone());
 
     // Try to create a NEW branch; if it already exists, attach to it instead.
-    let mut new_branch_args = vec![
-        "worktree",
-        "add",
-        "-b",
-        &branch,
-        &worktree_path_string,
-    ];
+    let mut new_branch_args = vec!["worktree", "add", "-b", &branch, &worktree_path_string];
     if let Some(base) = body.base_branch.as_deref() {
         new_branch_args.push(base);
     }
@@ -380,10 +389,9 @@ async fn remove(
     State(state): State<AppState>,
     Json(body): Json<RemoveBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let (repo_id, worktree_path) = body
-        .worktree_id
-        .split_once("::")
-        .ok_or_else(|| ApiError::BadRequest(format!("invalid worktree id: {}", body.worktree_id)))?;
+    let (repo_id, worktree_path) = body.worktree_id.split_once("::").ok_or_else(|| {
+        ApiError::BadRequest(format!("invalid worktree id: {}", body.worktree_id))
+    })?;
     reject_dashed("worktree path", worktree_path)?;
     let repo_path = resolve_repo_path(repo_id)?;
     let host = load_host_for_repo(&state, repo_id).await?;
@@ -428,8 +436,8 @@ async fn persist_sort_order(Json(body): Json<SortOrderBody>) -> Result<Json<Valu
         .ok_or_else(|| ApiError::Internal("no home directory".into()))?;
     let dir = home.join(".agentum");
     std::fs::create_dir_all(&dir).map_err(|e| ApiError::Internal(e.to_string()))?;
-    let serialized =
-        serde_json::to_string_pretty(&body.ordered_ids).map_err(|e| ApiError::Internal(e.to_string()))?;
+    let serialized = serde_json::to_string_pretty(&body.ordered_ids)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     std::fs::write(dir.join("worktree-sort-order.json"), serialized)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(serde_json::json!({ "status": "ok" })))
@@ -464,9 +472,13 @@ async fn force_delete_branch(
         .unwrap_or(&body.worktree_id);
     let repo_path = resolve_repo_path(repo_id)?;
     let host = load_host_for_repo(&state, repo_id).await?;
-    let output = git_in_dir(&host, &repo_path, &["branch", "-D", "--", &body.branch_name])
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let output = git_in_dir(
+        &host,
+        &repo_path,
+        &["branch", "-D", "--", &body.branch_name],
+    )
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
     if output.success {
         Ok(Json(serde_json::json!({ "deleted": true })))
     } else {
@@ -553,7 +565,9 @@ async fn detected(
         .repo_id
         .ok_or_else(|| ApiError::BadRequest("repoId is required".into()))?;
     let host = load_host_for_repo(&state, &repo_id).await?;
-    let worktrees = scan_git_worktrees(&host, &repo_id).await.unwrap_or_default();
+    let worktrees = scan_git_worktrees(&host, &repo_id)
+        .await
+        .unwrap_or_default();
     let authoritative = !worktrees.is_empty();
     Ok(Json(serde_json::json!({
         "repoId": repo_id,

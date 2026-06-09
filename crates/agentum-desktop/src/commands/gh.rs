@@ -10,7 +10,10 @@ use serde_json::{json, Value};
 fn owner_repo_from_remote(remote: &str) -> Option<(String, String)> {
     let url = remote.trim();
     let url = url.strip_suffix(".git").unwrap_or(url);
-    let parts: Vec<&str> = url.split(['/', ':']).filter(|part| !part.is_empty()).collect();
+    let parts: Vec<&str> = url
+        .split(['/', ':'])
+        .filter(|part| !part.is_empty())
+        .collect();
     (parts.len() >= 2).then(|| {
         (
             parts[parts.len() - 2].to_string(),
@@ -189,7 +192,10 @@ fn map_issue(item: &Value) -> Value {
 }
 
 fn map_pr(item: &Value) -> Value {
-    let is_draft = item.get("isDraft").and_then(Value::as_bool).unwrap_or(false);
+    let is_draft = item
+        .get("isDraft")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let raw_state = item.get("state").and_then(Value::as_str).unwrap_or("OPEN");
     // GitHubWorkItem.state encodes draft as its own variant; only an *open* PR
     // can be a draft, so don't let a draft flag mask a closed/merged state.
@@ -217,7 +223,10 @@ fn map_pr(item: &Value) -> Value {
     });
     // Pass through only the values that match the renderer's PRReviewDecision union.
     if let Some(decision) = item.get("reviewDecision").and_then(Value::as_str) {
-        if matches!(decision, "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED") {
+        if matches!(
+            decision,
+            "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED"
+        ) {
             mapped["reviewDecision"] = json!(decision);
         }
     }

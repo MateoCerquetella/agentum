@@ -12,7 +12,6 @@ import type { LinearSlice } from './slices/linear'
 import type { PreflightSlice } from './slices/preflight'
 import type { EditorSlice } from './slices/editor'
 import type { StatsSlice } from './slices/stats'
-import type { WorkspaceSpaceSlice } from './slices/workspace-space'
 import type { ClaudeUsageSlice } from './slices/claude-usage'
 import type { CodexUsageSlice } from './slices/codex-usage'
 import type { OpenCodeUsageSlice } from './slices/opencode-usage'
@@ -41,7 +40,6 @@ export type AppState = RepoSlice &
   PreflightSlice &
   EditorSlice &
   StatsSlice &
-  WorkspaceSpaceSlice &
   ClaudeUsageSlice &
   CodexUsageSlice &
   OpenCodeUsageSlice &

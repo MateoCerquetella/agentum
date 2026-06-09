@@ -1121,7 +1121,10 @@ mod tests {
         let busy_sig = adapter.busy_signature();
         let awaiting_sigs = adapter.awaiting_input_signatures();
         let is_agent = adapter.is_agent();
-        assert!(busy_sig.is_none(), "opencode is hookless: no busy_signature");
+        assert!(
+            busy_sig.is_none(),
+            "opencode is hookless: no busy_signature"
+        );
         assert!(is_agent, "opencode must be treated as an agent");
 
         // Actively redrawing pane (footer just changed this tick) → Working.

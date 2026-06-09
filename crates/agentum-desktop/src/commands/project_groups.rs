@@ -108,8 +108,7 @@ pub fn project_groups_update(
         }
     }
     object.insert("updatedAt".into(), Value::from(now_millis()));
-    let updated: ProjectGroup =
-        serde_json::from_value(Value::Object(object)).map_err(map_err)?;
+    let updated: ProjectGroup = serde_json::from_value(Value::Object(object)).map_err(map_err)?;
     groups[index] = updated.clone();
     write_groups(&groups)?;
     Ok(Some(updated))
@@ -144,9 +143,10 @@ pub fn project_groups_move_project(
         let Some(array) = repos.as_array_mut() else {
             return Ok(Value::Null);
         };
-        let Some(repo) = array.iter_mut().find(|repo| {
-            repo.get("id").and_then(Value::as_str) == Some(project_id.as_str())
-        }) else {
+        let Some(repo) = array
+            .iter_mut()
+            .find(|repo| repo.get("id").and_then(Value::as_str) == Some(project_id.as_str()))
+        else {
             return Ok(Value::Null);
         };
         if let Some(object) = repo.as_object_mut() {
@@ -160,8 +160,11 @@ pub fn project_groups_move_project(
         }
         repo.clone()
     };
-    std::fs::write(&path, serde_json::to_string_pretty(&repos).map_err(map_err)?)
-        .map_err(map_err)?;
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&repos).map_err(map_err)?,
+    )
+    .map_err(map_err)?;
     Ok(updated)
 }
 

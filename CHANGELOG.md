@@ -4,6 +4,45 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] — 2026-06-09
+
+A cleanup-and-repair release: two unused surfaces are gone, several
+half-wired features now actually work, and a class of worktree errors that
+broke source control is self-healed.
+
+### Removed
+- **Automations.** The scheduled/cron automations feature (page, sidebar
+  entry, dispatch hooks, and backend commands) was removed — it was unused.
+- **Toolbox + Space Analyzer.** The Toolbox dropdown and the disk-usage
+  "Space Analyzer" were removed. **Skills** moved into the Help menu, where
+  it stays one click away.
+
+### Added
+- **CLI registration actually registers now.** "Register `agentum`" locates a
+  real `agentum` CLI binary (next to the app, on `PATH`, or in cargo/Homebrew
+  dirs) and symlinks it into `/usr/local/bin` (macOS) or `~/.local/bin`
+  (Linux). When no binary exists it stays honest and tells you how to install
+  one, instead of the old fixed "not available in this build" stub.
+- **Add Project: paste-a-path fallback.** The add-project dialog gained a
+  manual folder-path field, so adding a project still works when the native
+  folder picker can't open (e.g. Linux without a desktop portal).
+
+### Fixed
+- **"Branch compare failed" / `400 workdir does not exist`.** A session whose
+  `…/.claude/worktrees/<name>` directory went missing (pruned out-of-band or a
+  registry row that outlived its checkout) is now recreated from the parent
+  repo instead of hard-failing — restoring branch compare and every git/
+  terminal operation that opens the worktree. Applied at both session create
+  and start.
+- **Search shortcuts work again.** The command palette and quick-open
+  shortcuts relied on an Electron main-process key path that the Tauri shell
+  never replaced, so none of them fired. They're now handled in the renderer.
+- **Send feedback reaches a human.** "Send feedback" opens a prefilled GitHub
+  issue on the project repo instead of POSTing to a backend that wasn't wired
+  up and always failed.
+- **Docs link.** The Help → Docs link now points at the project README on
+  GitHub (there is no hosted docs site).
+
 ## [0.11.0] — 2026-06-09
 
 A desktop-focused release: remote SSH hosts get password auth and much faster

@@ -6,7 +6,6 @@ import type { AgentumApi } from './contract'
 import { agentStatus } from './agentStatus'
 import { agentTrust } from './agentTrust'
 import { app } from './app'
-import { automations } from './automations'
 import { browser } from './browser'
 import { cache } from './cache'
 import { claudeAccounts } from './claudeAccounts'
@@ -57,7 +56,6 @@ import { ui } from './ui'
 import { updater } from './updater'
 import { workspaceCleanup } from './workspaceCleanup'
 import { workspacePorts } from './workspacePorts'
-import { workspaceSpace } from './workspaceSpace'
 import { worktrees } from './worktrees'
 import { wsl } from './wsl'
 
@@ -67,7 +65,6 @@ export const api: AgentumApi = {
   agentStatus,
   agentTrust,
   app,
-  automations,
   browser,
   cache,
   claudeAccounts,
@@ -118,7 +115,6 @@ export const api: AgentumApi = {
   updater,
   workspaceCleanup,
   workspacePorts,
-  workspaceSpace,
   worktrees,
   wsl,
   telemetryAcknowledgeBanner: (...args: any[]) => call('telemetry_acknowledge_banner', args),

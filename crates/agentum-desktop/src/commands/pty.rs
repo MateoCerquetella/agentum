@@ -103,7 +103,13 @@ fn open_pty(app: tauri::AppHandle, id: String, cfg: SpawnConfig) -> Result<PtyHa
             .ok()
             .map(|status| status.exit_code() as i32)
             .unwrap_or(0);
-        let _ = app_reader.emit("pty-exit", PtyExitEvent { id: id_reader, code });
+        let _ = app_reader.emit(
+            "pty-exit",
+            PtyExitEvent {
+                id: id_reader,
+                code,
+            },
+        );
     });
 
     let writer = pair.master.take_writer().map_err(map_err)?;
@@ -167,12 +173,13 @@ pub async fn pty_spawn(
     request: tauri::ipc::Request<'_>,
 ) -> Result<Value, String> {
     // Take an owned copy of the options before any await — Request borrows the
-    // invoke message and must not be held across the await point.
+    // invoke message and must not be held across the await point. `request` has
+    // no use after this match, so NLL ends its borrow here (before any await);
+    // an explicit `drop` is a clippy-flagged no-op on this non-Drop type.
     let opts: Value = match request.body() {
         tauri::ipc::InvokeBody::Json(value) => value.clone(),
         _ => Value::Null,
     };
-    drop(request);
 
     let cols = opts.get("cols").and_then(Value::as_u64).unwrap_or(80) as u16;
     let rows = opts.get("rows").and_then(Value::as_u64).unwrap_or(24) as u16;
@@ -255,7 +262,9 @@ pub fn pty_write(
         .ok_or_else(|| "pty_write: missing id".to_string())?;
     let data = args.get(1).and_then(Value::as_str).unwrap_or_default();
     let mut ptys = state.ptys.lock();
-    let handle = ptys.get_mut(id).ok_or_else(|| format!("unknown pty: {id}"))?;
+    let handle = ptys
+        .get_mut(id)
+        .ok_or_else(|| format!("unknown pty: {id}"))?;
     handle.writer.write_all(data.as_bytes()).map_err(map_err)?;
     handle.writer.flush().map_err(map_err)
 }
@@ -273,7 +282,9 @@ pub fn pty_resize(
     let cols = args.get(1).and_then(Value::as_u64).unwrap_or(80) as u16;
     let rows = args.get(2).and_then(Value::as_u64).unwrap_or(24) as u16;
     let mut ptys = state.ptys.lock();
-    let handle = ptys.get_mut(id).ok_or_else(|| format!("unknown pty: {id}"))?;
+    let handle = ptys
+        .get_mut(id)
+        .ok_or_else(|| format!("unknown pty: {id}"))?;
     handle
         .master
         .resize(PtySize {
@@ -318,7 +329,9 @@ pub fn pty_write_accepted(
         .ok_or_else(|| "pty_write_accepted: missing id".to_string())?;
     let data = args.get(1).and_then(Value::as_str).unwrap_or_default();
     let mut ptys = state.ptys.lock();
-    let handle = ptys.get_mut(id).ok_or_else(|| format!("unknown pty: {id}"))?;
+    let handle = ptys
+        .get_mut(id)
+        .ok_or_else(|| format!("unknown pty: {id}"))?;
     handle.writer.write_all(data.as_bytes()).map_err(map_err)?;
     handle.writer.flush().map_err(map_err)?;
     Ok(true)
@@ -517,10 +530,7 @@ pub fn pty_signal() {}
 pub fn pty_send_serialized_buffer() {}
 
 #[tauri::command]
-pub fn pty_get_cwd(
-    state: State<'_, AppState>,
-    request: tauri::ipc::Request<'_>,
-) -> Option<String> {
+pub fn pty_get_cwd(state: State<'_, AppState>, request: tauri::ipc::Request<'_>) -> Option<String> {
     let args = positional_args(&request);
     let id = args.first().and_then(Value::as_str)?;
     // The pty's direct child is the shell; its cwd reflects `cd` (a shell builtin).

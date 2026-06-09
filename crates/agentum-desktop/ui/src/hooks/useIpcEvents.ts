@@ -638,7 +638,6 @@ export function useIpcEvents(): void {
             removed
           )
           afterState.purgeWorktreeTerminalState(removed)
-          afterState.removeWorkspaceSpaceWorktrees(removed)
         }
       })
     )
@@ -1775,15 +1774,6 @@ export function useIpcEvents(): void {
         useAppStore.getState().setRateLimitsFromPush(state as RateLimitState)
       })
     )
-
-    const unsubscribeWorkspaceSpaceProgress = api.workspaceSpace?.onProgress?.(
-      (progress) => {
-        useAppStore.getState().applyWorkspaceSpaceProgress(progress)
-      }
-    )
-    if (unsubscribeWorkspaceSpaceProgress) {
-      unsubs.push(unsubscribeWorkspaceSpaceProgress)
-    }
 
     // Track SSH connection state changes so the renderer can show
     // disconnected indicators on remote worktrees.

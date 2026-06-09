@@ -178,7 +178,10 @@ async fn fetch_viewer(token: &str) -> Result<StoredViewer, String> {
         return Err(message.to_string());
     }
     if !http_status.is_success() {
-        return Err(format!("Linear API returned HTTP {}.", http_status.as_u16()));
+        return Err(format!(
+            "Linear API returned HTTP {}.",
+            http_status.as_u16()
+        ));
     }
     let viewer = payload
         .get("data")
@@ -225,7 +228,10 @@ async fn graphql(token: &str, query: &str, variables: Value) -> Result<Value, St
         return Err(message.to_string());
     }
     if !http_status.is_success() {
-        return Err(format!("Linear API returned HTTP {}.", http_status.as_u16()));
+        return Err(format!(
+            "Linear API returned HTTP {}.",
+            http_status.as_u16()
+        ));
     }
     payload
         .get("data")
