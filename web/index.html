@@ -373,6 +373,20 @@
   .pill-line { display: inline-flex; align-items: center; gap: 7px; height: 50px; padding: 0 26px; border-radius: var(--radius-pill); border: 1px solid var(--line-2); color: var(--text); font-size: 15.5px; font-weight: 500; transition: border-color .15s, background .15s; }
   .pill-line:hover { border-color: var(--border-strong); background: var(--surface-hover); color: var(--text); }
   .final-meta { font-family: var(--mono); font-size: 11.5px; color: var(--text-3); margin-top: 28px; text-transform: uppercase; letter-spacing: 0.07em; }
+
+  /* ---- install: two-path tabs (desktop app + terminal) ---- */
+  .tabs { display: inline-flex; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface); margin: clamp(28px, 3.5vw, 44px) 0 26px; }
+  .tab { height: 36px; padding: 0 20px; border-radius: var(--radius-pill); font-size: 14px; font-weight: 500; color: var(--text-2); transition: color .15s, background .15s; }
+  .tab.active { background: var(--surface-3); color: var(--text); }
+  .tab:not(.active):hover { color: var(--text); }
+  .tabpanel.hidden { display: none; }
+  .tabnote { color: var(--text-2); font-size: 14.5px; line-height: 1.55; margin: 0 0 22px; max-width: 62ch; }
+  .tabnote code { font-size: 0.88em; color: var(--text); }
+  .appinstall { text-align: center; max-width: 560px; margin: 0 auto; padding: clamp(18px, 2.4vw, 32px) 0; }
+  .appinstall .i2-icon { width: 76px; height: 76px; border-radius: 18px; box-shadow: var(--shadow-md); }
+  .appinstall h3 { font-family: var(--uifont); font-size: clamp(22px, 2.4vw, 30px); font-weight: 500; letter-spacing: -0.02em; margin: 22px 0 0; color: var(--text); }
+  .appinstall p { color: var(--text-2); font-size: 15.5px; line-height: 1.55; margin: 14px auto 0; max-width: 44ch; }
+  .appinstall .i2-cta { margin-top: 28px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
 </style>
 
 <!-- JSON-LD Structured Data -->
@@ -622,16 +636,35 @@ bump deps + run suite
   <section class="band" id="install">
     <div class="wrap">
       <div class="eyebrow" data-reveal>Install</div>
-      <h2 class="h2" data-reveal>Three commands and you're running.</h2>
-      <p class="blurb" data-reveal>One static binary — <code style="font-family:var(--mono);color:var(--text)">cargo install</code> or <code style="font-family:var(--mono);color:var(--text)">curl | sh</code>. No daemon to chase, no compose file, no Docker.</p>
+      <h2 class="h2" data-reveal>Two ways to run it.</h2>
+      <p class="blurb" data-reveal>Start with the desktop app — the full agent environment. Keyboard-first? It ships a daemon, a fast TUI, and a complete CLI too.</p>
 
-      <div class="steps" data-reveal>
+      <div class="tabs" data-reveal role="tablist" aria-label="Install method">
+        <button class="tab active" data-tab="app" type="button">Desktop app</button>
+        <button class="tab" data-tab="cli" type="button">Terminal</button>
+      </div>
+
+      <div class="tabpanel" data-panel="app">
+        <div class="appinstall">
+          <img class="i2-icon" src="/assets/app-icon.png" alt="Agentum" />
+          <h3>The agent environment, native.</h3>
+          <p>Workspaces, the board, channels, and live agent terminals — one app on macOS &amp; Linux. The fastest way in.</p>
+          <div class="i2-cta">
+            <a class="pill-cta cta-lg" href="https://github.com/MateoCerquetella/agentum/releases" target="_blank" rel="noreferrer">Download for macOS <span class="arr">→</span></a>
+            <span class="winhint">Apple silicon &amp; Intel · Linux build</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="tabpanel hidden" data-panel="cli">
+        <p class="tabnote">Prefer the keyboard? One static binary ships the daemon, a fast TUI (<code>agentum terminal</code>), and the full CLI.</p>
+        <div class="steps">
         <div class="stepcard"><span class="n">01</span><div><h4>Install</h4><p>One static binary on your PATH. macOS &amp; Linux, arm64 &amp; x86_64.</p></div></div>
         <div class="stepcard"><span class="n">02</span><div><h4>Spawn</h4><p>Point an agent at any repo — it lands in its own tmux pane with a watchdog.</p></div></div>
         <div class="stepcard"><span class="n">03</span><div><h4>Serve</h4><p>One daemon. Drive it from the desktop app, the TUI, or your phone.</p></div></div>
       </div>
 
-      <div class="codeblock" data-reveal>
+        <div class="codeblock">
         <div class="top">
           <span class="lights"><i></i><i></i><i></i></span>
           <span class="title">zsh — ~/Developer/agentum</span>
@@ -652,6 +685,7 @@ bump deps + run suite
 <span class="cm">  ▸ Dashboard</span>  <span class="url">https://127.0.0.1:8822</span>
 <span class="cm">  ▸ cert TOFU</span>  <span class="url">http://127.0.0.1:8823/api/cert</span>
 <span class="prompt">  ▌</span></pre>
+        </div>
       </div>
     </div>
   </section>
@@ -944,6 +978,21 @@ bump deps + run suite
       }, { rootMargin: '0px 0px -8% 0px', threshold: 0.06 });
       onScroll.forEach(function (el) { io.observe(el); });
     } catch (err) { document.body.classList.remove('reveals-on'); els.forEach(function (el) { el.classList.add('in'); }); }
+  })();
+
+  // ---- install method tabs (desktop app / terminal) ----
+  (function () {
+    var tabs = [].slice.call(document.querySelectorAll('.tab[data-tab]'));
+    if (!tabs.length) return;
+    tabs.forEach(function (t) {
+      t.addEventListener('click', function () {
+        var key = t.getAttribute('data-tab');
+        tabs.forEach(function (x) { x.classList.toggle('active', x === t); });
+        document.querySelectorAll('.tabpanel[data-panel]').forEach(function (p) {
+          p.classList.toggle('hidden', p.getAttribute('data-panel') !== key);
+        });
+      });
+    });
   })();
 </script>
 </body>
