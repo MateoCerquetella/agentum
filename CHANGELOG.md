@@ -52,8 +52,8 @@ throughout the UI, and the Linear connection is now live.
 - **Repaired the release pipeline.** CI still built the standalone `dashboard/`
   crate, which was removed in the v0.10.11 thin-shell refactor — so desktop
   bundle builds failed and the v0.10.11 `.dmg`s had to be attached by hand. CI
-  now builds the embedded Tauri UI (`crates/agentum-desktop/ui`) for the
-  mac/linux desktop apps, and `tauri-build` features are pinned to `[]`.
+  now builds the embedded Tauri UI (`crates/agentum-desktop/ui`) with bun for
+  the mac/linux desktop apps, and `tauri-build` features are pinned to `[]`.
 
 ## [0.10.11] — 2026-06-06
 

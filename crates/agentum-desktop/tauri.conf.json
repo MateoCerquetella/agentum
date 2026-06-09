@@ -4,8 +4,8 @@
   "identifier": "dev.agentum.app",
   "build": {
     "frontendDist": "ui/dist",
-    "beforeDevCommand": "npm --prefix ui run dev",
-    "beforeBuildCommand": "npm --prefix ui run build"
+    "beforeDevCommand": "bun run dev",
+    "beforeBuildCommand": "bun run build"
   },
   "app": {
     "windows": [
