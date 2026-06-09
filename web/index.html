@@ -225,7 +225,7 @@
   .mini .mchrome { height: 32px; display: flex; align-items: center; gap: 7px; padding: 0 12px; border-bottom: 1px solid var(--line); background: #121215; }
   .mini .mchrome span { width: 9px; height: 9px; border-radius: 999px; background: #2f2f2f; }
   .mini .mchrome span:nth-child(1){ background:#ff5f57;} .mini .mchrome span:nth-child(2){ background:#febc2e;} .mini .mchrome span:nth-child(3){ background:#28c840;}
-  .mini .mchrome .mt { margin-left: 6px; font-family: var(--mono); font-size: 11px; color: var(--text-3); }
+  .mini .mchrome .mt { margin-left: 6px; font-family: var(--mono); font-size: 11px; color: var(--text-3); white-space: nowrap; }
   .mbody { padding: 16px; }
 
   /* agent card grid */
@@ -244,14 +244,30 @@
   .skill .nm { color: var(--text); } .skill .sub { color: var(--text-3); font-family: var(--mono); font-size: 10.5px; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.03em; }
   .skill .ct { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--green-fb); }
 
-  /* board mini */
-  .bcols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
-  .bcol .bh { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-3); margin-bottom: 8px; display: flex; justify-content: space-between; }
-  .bcard { background: var(--surface); border: 1px solid var(--line-2); border-radius: 7px; padding: 9px; margin-bottom: 7px; }
-  .bcard .k { font-family: var(--mono); font-size: 9.5px; color: var(--text-3); }
-  .bcard .t { color: var(--text); font-size: 11.5px; margin-top: 4px; line-height: 1.3; }
-  .bcard .a { margin-top: 8px; display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 9px; text-transform: uppercase; color: var(--text-3); }
-  .bcard .a .d { width: 6px; height: 6px; border-radius: 999px; }
+  /* board kanban — tasks synced from GitHub + Linear, claimed by agents */
+  .src-name { color: var(--text); }
+  .kbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-bottom: 13px; padding-bottom: 11px; border-bottom: 1px solid var(--line); }
+  .kbar-l { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); }
+  .srcchip { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 11px; color: var(--text-2); }
+  .srcchip.lin { color: var(--magenta); }
+  .srcchip svg { width: 13px; height: 13px; flex: none; }
+  .synced { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 11px; color: var(--green-fb); }
+  .synced .d { width: 6px; height: 6px; border-radius: 999px; background: var(--green-fb); box-shadow: var(--glow-green); }
+  .kb { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .kcol { display: flex; flex-direction: column; gap: 7px; }
+  .kh { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); display: flex; justify-content: space-between; margin-bottom: 1px; }
+  .kcard { background: var(--surface); border: 1px solid var(--line-2); border-radius: 8px; padding: 9px 10px; transition: border-color .15s, transform .15s; }
+  .kcard:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+  .kref { display: flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 10px; color: var(--text-3); }
+  .kref svg { width: 11px; height: 11px; flex: none; }
+  .kref .gh { color: var(--fg-2); }
+  .kref .lin { color: var(--magenta); }
+  .kt { color: var(--text); font-size: 12px; margin-top: 6px; line-height: 1.32; }
+  .kclaim { margin-top: 9px; display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-2); }
+  .kclaim .d { width: 6px; height: 6px; border-radius: 999px; flex: none; }
+  .kclaim.unclaimed { color: var(--text-3); }
+  .kclaim.unclaimed::before { content: ""; width: 6px; height: 6px; border-radius: 999px; border: 1px dashed var(--text-3); }
+  @media (max-width: 560px) { .srcchip .lbl, .synced .lbl { display: none; } }
 
   /* mission control — wide window */
   .mc { margin-top: clamp(40px, 5vw, 72px); }
@@ -501,23 +517,36 @@
         <div class="ftext">
           <div class="step">03 — Board</div>
           <h3>It hands work between agents.</h3>
-          <p>An atomic-claim kanban for cross-agent handoff. Drag columns, optimistic updates, a 409 on contention — so two agents never grab the same task. Channels broadcast 1:1 between sessions over a live event bus.</p>
+          <p>Pull issues and PRs from <span class="src-name">GitHub</span> and <span class="src-name">Linear</span> onto an atomic-claim board, then hand them to agents. Optimistic drag, a 409 on contention — so two agents never grab the same task.</p>
         </div>
         <div class="fvis">
+          <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+            <symbol id="i-gh" viewBox="0 0 16 16"><path fill="currentColor" d="M8 .2A8 8 0 0 0 .2 8a8 8 0 0 0 5.5 7.6c.4.1.5-.2.5-.4v-1.5c-2.2.5-2.7-.9-2.7-.9-.4-.9-.9-1.2-.9-1.2-.7-.5.1-.5.1-.5.8.1 1.2.8 1.2.8.7 1.3 2 .9 2.4.7.1-.5.3-.9.5-1.1-1.8-.2-3.6-.9-3.6-3.9 0-.9.3-1.6.8-2.1-.1-.2-.4-1 .1-2.1 0 0 .7-.2 2.2.8a7.7 7.7 0 0 1 4 0c1.5-1 2.2-.8 2.2-.8.4 1.1.2 1.9.1 2.1.5.5.8 1.2.8 2.1 0 3-1.8 3.7-3.6 3.9.3.3.6.7.6 1.5v2.2c0 .2.1.5.5.4A8 8 0 0 0 15.8 8 8 8 0 0 0 8 .2z"/></symbol>
+            <symbol id="i-linear" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M7 13.5 13.5 7M9.5 16.5 16.5 9.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+          </svg>
           <div class="mini">
             <div class="mchrome"><span></span><span></span><span></span><span class="mt">board · atomic-claim</span></div>
             <div class="mbody">
-              <div class="bcols">
-                <div class="bcol"><div class="bh"><span>Todo</span><span>2</span></div>
-                  <div class="bcard"><div class="k">AGM-22</div><div class="t">Trace +1 user dropout</div><div class="a"><span class="d" style="background:var(--text-3)"></span>unclaimed</div></div>
-                  <div class="bcard"><div class="k">AGM-25</div><div class="t">Draft API reference</div><div class="a"><span class="d" style="background:var(--text-3)"></span>unclaimed</div></div>
+              <div class="kbar">
+                <span class="kbar-l">synced from</span>
+                <span class="srcchip"><svg class="gh" aria-hidden="true"><use href="#i-gh"/></svg>GitHub</span>
+                <span class="srcchip lin"><svg class="lin" aria-hidden="true"><use href="#i-linear"/></svg>Linear</span>
+                <span class="synced"><span class="d"></span>synced</span>
+              </div>
+              <div class="kb">
+                <div class="kcol">
+                  <div class="kh">Todo <span>2</span></div>
+                  <div class="kcard"><div class="kref"><svg class="gh" aria-hidden="true"><use href="#i-gh"/></svg> #318</div><div class="kt">Fix token refresh on staging</div><div class="kclaim unclaimed">unclaimed</div></div>
+                  <div class="kcard"><div class="kref"><svg class="lin" aria-hidden="true"><use href="#i-linear"/></svg> AGM-22</div><div class="kt">Trace +1 user dropout</div><div class="kclaim unclaimed">unclaimed</div></div>
                 </div>
-                <div class="bcol"><div class="bh"><span>Doing</span><span>1</span></div>
-                  <div class="bcard"><div class="k">AGM-18</div><div class="t">Fix token guard</div><div class="a"><span class="d" style="background:var(--agent-claude)"></span>alpha</div></div>
+                <div class="kcol">
+                  <div class="kh">Doing <span>1</span></div>
+                  <div class="kcard"><div class="kref"><svg class="lin" aria-hidden="true"><use href="#i-linear"/></svg> AGM-18</div><div class="kt">Draft the HTTP API reference</div><div class="kclaim"><span class="d" style="background:var(--agent-claude)"></span>claude</div></div>
                 </div>
-                <div class="bcol"><div class="bh"><span>Done</span><span>2</span></div>
-                  <div class="bcard"><div class="k">AGM-12</div><div class="t">Watchdog compacts</div><div class="a"><span class="d" style="background:var(--agent-claude)"></span>alpha</div></div>
-                  <div class="bcard"><div class="k">AGM-09</div><div class="t">TLS trust-on-first-use</div><div class="a"><span class="d" style="background:var(--magenta)"></span>hermes</div></div>
+                <div class="kcol">
+                  <div class="kh">Done <span>2</span></div>
+                  <div class="kcard"><div class="kref"><svg class="gh" aria-hidden="true"><use href="#i-gh"/></svg> #412</div><div class="kt">Watchdog auto-compacts</div><div class="kclaim"><span class="d" style="background:var(--agent-claude)"></span>claude</div></div>
+                  <div class="kcard"><div class="kref"><svg class="lin" aria-hidden="true"><use href="#i-linear"/></svg> AGM-09</div><div class="kt">TLS trust-on-first-use</div><div class="kclaim"><span class="d" style="background:var(--magenta)"></span>hermes</div></div>
                 </div>
               </div>
             </div>
