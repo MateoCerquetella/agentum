@@ -1,0 +1,75 @@
+/* ============================================================
+   Agentum — Light mode  (ara.so "white" mode)
+   ara serves light/dark from prefers-color-scheme. Apply explicitly
+   with class="theme-light" on a wrapper, or opt the whole document
+   into auto-switching via the @media block at the bottom.
+   Light inverts the monochrome system: white field, near-black text,
+   black pill CTAs.
+   ============================================================ */
+
+.theme-light {
+  color-scheme: light;
+
+  --void:        #fafafa;
+  --bg:          #ffffff;
+  --bg-raised:   #fafafa;
+  --surface-1:   #ffffff;
+  --surface-2:   #f7f7f7;
+  --surface-3:   #f0f0f0;
+  --surface-hover: #f2f2f2;
+
+  --border-1:      rgba(0,0,0,0.08);
+  --border-2:      rgba(0,0,0,0.14);
+  --border-strong: rgba(0,0,0,0.24);
+
+  --fg:    #141414;
+  --fg-1:  #1a1a1a;
+  --fg-2:  #5a5a5a;
+  --fg-3:  #8a8a8a;
+  --fg-on-accent: #ffffff;
+
+  --cta-bg:   #141414;
+  --cta-ink:  #ffffff;
+  --accent-primary: #141414;
+  --accent-ink:     #ffffff;
+
+  --focus: rgba(0,0,0,0.45);
+
+  --green:   #1a7f37;
+  --green-fb:#1a7f37;
+  --amber:   #9a6700;
+  --red:     #cf222e;
+  --blue:    #0969da;
+  --blue-bright: #0969da;
+  --magenta: #8250df;
+
+  --agent-claude:   #b5563a;
+  --agent-codex:    #57606a;
+  --agent-gemini:   #0969da;
+  --agent-opencode: #57606a;
+  --agent-hermes:   #8250df;
+
+  --tint-fg:    rgba(0,0,0,0.05);
+  --tint-green: rgba(26,127,55,0.12);
+  --tint-amber: rgba(154,103,0,0.12);
+  --tint-red:   rgba(207,34,46,0.12);
+  --tint-blue:  rgba(9,105,218,0.12);
+
+  --selection-bg: rgba(0,0,0,0.12);
+  --coral: var(--fg);
+}
+
+/* Opt-in auto-switch: add data-theme-auto to <html> to follow the OS.
+   (Kept opt-in so dark-first tools stay dark by default.) */
+@media (prefers-color-scheme: light) {
+  :root[data-theme-auto] {
+    color-scheme: light;
+    --void: #fafafa; --bg: #ffffff; --bg-raised: #fafafa;
+    --surface-1: #ffffff; --surface-2: #f7f7f7; --surface-3: #f0f0f0; --surface-hover: #f2f2f2;
+    --border-1: rgba(0,0,0,0.08); --border-2: rgba(0,0,0,0.14); --border-strong: rgba(0,0,0,0.24);
+    --fg: #141414; --fg-1: #1a1a1a; --fg-2: #5a5a5a; --fg-3: #8a8a8a; --fg-on-accent: #ffffff;
+    --cta-bg: #141414; --cta-ink: #ffffff; --accent-primary: #141414; --accent-ink: #ffffff;
+    --green: #1a7f37; --green-fb: #1a7f37; --amber: #9a6700; --red: #cf222e; --blue: #0969da; --blue-bright: #0969da; --magenta: #8250df;
+    --selection-bg: rgba(0,0,0,0.12);
+  }
+}

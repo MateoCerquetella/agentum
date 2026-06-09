@@ -1,0 +1,86 @@
+/* ============================================================
+   Agentum — Color tokens  (ara.so monochrome direction)
+   Warm-neutral dark field (#141414), white text, white pill CTAs.
+   No loud brand accent — the system is monochrome; a small set of
+   MUTED signals (GitHub-ish) is reserved strictly for terminals
+   and true session state, never for decoration.
+   Default = dark. Light mode lives in themes.css (.theme-light).
+   ============================================================ */
+
+:root {
+  color-scheme: dark;
+
+  /* ---- Base neutrals (ara dark field) ---- */
+  --void:        #0e0e0e;   /* deepest wells: terminals, insets */
+  --bg:          #141414;   /* page background (sampled from ara.so) */
+  --bg-raised:   #181818;   /* sidebars, raised chrome */
+  --surface-1:   #1c1c1c;   /* card */
+  --surface-2:   #222222;   /* raised card, popover, menu */
+  --surface-3:   #2a2a2a;   /* input, secondary button */
+  --surface-hover: #242424; /* row / control hover */
+
+  /* ---- Borders & hairlines (subtle white, ara-style) ---- */
+  --border-1:      rgba(255,255,255,0.08);  /* default hairline */
+  --border-2:      rgba(255,255,255,0.14);  /* interactive / stronger */
+  --border-strong: rgba(255,255,255,0.24);  /* hover emphasis */
+
+  /* ---- Text ---- */
+  --fg:    #ffffff;  /* primary */
+  --fg-1:  #f2f2f2;  /* primary, in dense UI */
+  --fg-2:  #a3a3a3;  /* secondary / body */
+  --fg-3:  #6e6e6e;  /* muted / mono labels */
+  --fg-on-accent: #141414;
+
+  /* ---- Brand action = monochrome inversion (the ara pill) ---- */
+  --cta-bg:   #ffffff;   /* CTA fill */
+  --cta-ink:  #141414;   /* CTA text */
+  --accent-primary: #ffffff;  /* "primary" is white in dark mode */
+  --accent-ink:     #141414;
+
+  /* ---- Focus ---- */
+  --focus:   rgba(255,255,255,0.55);
+
+  /* ---- Muted signals — terminals & true state only ---- */
+  --green:   #3fb950;  /* live / success (muted, GitHub-ish) */
+  --green-fb:#3fb950;
+  --amber:   #d29922;  /* running / attention */
+  --red:     #f85149;  /* crash / destructive */
+  --blue:    #58a6ff;  /* links / info / focus accent */
+  --blue-bright: #79c0ff;
+  --magenta: #bc8cff;  /* AI action (muted violet) */
+
+  /* ---- Agent hues (product terminals only; muted) ---- */
+  --agent-claude:   #d08770;
+  --agent-codex:    #c9c9c9;
+  --agent-gemini:   #6ea8fe;
+  --agent-opencode: #c9c9c9;
+  --agent-hermes:   #bc8cff;
+
+  /* ---- Tints ---- */
+  --tint-fg:    rgba(255,255,255,0.06);
+  --tint-green: rgba(63,185,80,0.16);
+  --tint-amber: rgba(210,153,34,0.16);
+  --tint-red:   rgba(248,81,73,0.16);
+  --tint-blue:  rgba(88,166,255,0.16);
+
+  /* ---- Semantic aliases ---- */
+  --text-primary:    var(--fg);
+  --text-secondary:  var(--fg-2);
+  --text-muted:      var(--fg-3);
+  --surface-page:    var(--bg);
+  --surface-card:    var(--surface-1);
+  --surface-raised:  var(--surface-2);
+  --surface-input:   var(--surface-3);
+  --border-subtle:   var(--border-1);
+  --border-default:  var(--border-2);
+  --link:            var(--blue);
+  --focus-ring:      var(--focus);
+  --status-live:     var(--green);
+  --status-running:  var(--amber);
+  --status-idle:     var(--fg-3);
+  --status-error:    var(--red);
+  --selection-bg:    rgba(255,255,255,0.18);
+
+  /* ---- Back-compat: legacy coral token now maps to the mono accent ---- */
+  --coral: var(--fg);
+}

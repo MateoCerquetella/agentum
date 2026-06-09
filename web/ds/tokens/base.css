@@ -1,0 +1,42 @@
+/* ============================================================
+   Agentum — Base helpers
+   Tiny, optional utilities shared by specimen cards and kits.
+   Components reference tokens directly; these just save repetition
+   for the signature ara-style background textures and mono labels.
+   ============================================================ */
+
+::selection { background: var(--selection-bg); color: #fff; }
+
+/* Signature lattice — faint grid masked to a soft ellipse */
+.ds-grid-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-size: var(--grid-size) var(--grid-size);
+  -webkit-mask-image: radial-gradient(ellipse 75% 65% at 50% 35%, #000 35%, transparent 80%);
+          mask-image: radial-gradient(ellipse 75% 65% at 50% 35%, #000 35%, transparent 80%);
+}
+
+/* Dot field — scattered terminal dots (the ara hero texture) */
+.ds-dot-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(var(--grid-line) 1px, transparent 1px);
+  background-size: 22px 22px;
+  -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 40%, #000 25%, transparent 75%);
+          mask-image: radial-gradient(ellipse 80% 70% at 50% 40%, #000 25%, transparent 75%);
+}
+
+/* Uppercase mono eyebrow / label */
+.mono-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--fg-3);
+}
