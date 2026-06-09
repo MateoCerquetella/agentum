@@ -5,9 +5,10 @@ use std::sync::Mutex;
 
 // Connection surface (connect/status/test/disconnect/selectWorkspace) is wired to
 // the real Linear GraphQL API + a small on-disk credential store, so the
-// Integrations config pane can actually connect a workspace. The data-read surface
-// (issues/projects/custom views) is still stubbed below and returns empty/null
-// until those GraphQL queries are ported.
+// Integrations config pane can actually connect a workspace. The core data-read
+// surface (issues / search / projects / teams) is wired to GraphQL below using
+// the stored token. The remaining reads (custom views, comments, single gets)
+// and the mutations stay stubbed pending their queries.
 
 // ─── Credential store ───────────────────────────────────────────────────────
 // Linear personal API keys + the resolved viewer per workspace. Persisted next to
@@ -196,6 +197,179 @@ async fn fetch_viewer(token: &str) -> Result<StoredViewer, String> {
     })
 }
 
+// Run an authenticated GraphQL query and return the `data` object. Mirrors
+// fetch_viewer's auth + error handling (personal keys go in the raw
+// Authorization header, no "Bearer"). GraphQL errors and non-2xx both surface
+// as Err so list commands can reject the IPC promise instead of looking empty.
+async fn graphql(token: &str, query: &str, variables: Value) -> Result<Value, String> {
+    let body = json!({ "query": query, "variables": variables });
+    let response = reqwest::Client::new()
+        .post("https://api.linear.app/graphql")
+        .header("Authorization", token)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn’t reach Linear: {e}"))?;
+    let http_status = response.status();
+    let payload: Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Unexpected Linear response: {e}"))?;
+    if let Some(errors) = payload.get("errors").and_then(|e| e.as_array()) {
+        let message = errors
+            .first()
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("Linear rejected the query.");
+        return Err(message.to_string());
+    }
+    if !http_status.is_success() {
+        return Err(format!("Linear API returned HTTP {}.", http_status.as_u16()));
+    }
+    payload
+        .get("data")
+        .cloned()
+        .ok_or_else(|| "Linear response had no data.".to_string())
+}
+
+// Resolve (token, workspace_id, workspace_name) for a read. Mirrors pick_token's
+// "explicit id → selected → first" precedence but also returns the workspace
+// identity so list rows can be stamped with workspaceId/workspaceName (the UI
+// needs these to route a row back to the right workspace in "all" mode).
+fn active_workspace(
+    creds: &LinearCreds,
+    workspace_id: Option<&str>,
+) -> Option<(String, String, String)> {
+    let identify = |w: &StoredWorkspace| {
+        (
+            w.token.clone(),
+            w.id.clone(),
+            w.viewer.organization_name.clone(),
+        )
+    };
+    if let Some(id) = workspace_id {
+        if id != "all" {
+            return creds.workspaces.iter().find(|w| w.id == id).map(identify);
+        }
+    }
+    if let Some(sel) = creds.selected_workspace_id.as_deref() {
+        if sel != "all" {
+            if let Some(w) = creds.workspaces.iter().find(|w| w.id == sel) {
+                return Some(identify(w));
+            }
+        }
+    }
+    creds.workspaces.first().map(identify)
+}
+
+// Fields shared by every issue list/search read. The filter is the only thing
+// that varies, so the query string is reused.
+const ISSUES_QUERY: &str = "query($filter: IssueFilter, $first: Int) { \
+    issues(filter: $filter, first: $first, orderBy: updatedAt) { nodes { \
+        id identifier title description url priority estimate updatedAt \
+        state { name type color } team { id name key } \
+        assignee { id displayName avatarUrl } \
+        labels { nodes { id name } } project { id name url color } } } }";
+
+fn map_issue_node(node: &Value, ws_id: &str, ws_name: &str) -> Value {
+    let label_nodes = node
+        .pointer("/labels/nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let labels: Vec<String> = label_nodes
+        .iter()
+        .filter_map(|l| l.get("name").and_then(Value::as_str).map(String::from))
+        .collect();
+    let label_ids: Vec<String> = label_nodes
+        .iter()
+        .filter_map(|l| l.get("id").and_then(Value::as_str).map(String::from))
+        .collect();
+    let mut item = json!({
+        "id": node.get("id").and_then(Value::as_str).unwrap_or_default(),
+        "workspaceId": ws_id,
+        "workspaceName": ws_name,
+        "identifier": node.get("identifier").and_then(Value::as_str).unwrap_or_default(),
+        "title": node.get("title").and_then(Value::as_str).unwrap_or_default(),
+        "url": node.get("url").and_then(Value::as_str).unwrap_or_default(),
+        "state": {
+            "name": node.pointer("/state/name").and_then(Value::as_str).unwrap_or_default(),
+            "type": node.pointer("/state/type").and_then(Value::as_str).unwrap_or_default(),
+            "color": node.pointer("/state/color").and_then(Value::as_str).unwrap_or_default(),
+        },
+        "team": {
+            "id": node.pointer("/team/id").and_then(Value::as_str).unwrap_or_default(),
+            "name": node.pointer("/team/name").and_then(Value::as_str).unwrap_or_default(),
+            "key": node.pointer("/team/key").and_then(Value::as_str).unwrap_or_default(),
+        },
+        "labels": labels,
+        "labelIds": label_ids,
+        "priority": node.get("priority").and_then(Value::as_i64).unwrap_or(0),
+        "updatedAt": node.get("updatedAt").and_then(Value::as_str).unwrap_or_default(),
+    });
+    if let Some(description) = node.get("description").and_then(Value::as_str) {
+        item["description"] = json!(description);
+    }
+    if let Some(estimate) = node.get("estimate").and_then(Value::as_f64) {
+        item["estimate"] = json!(estimate);
+    }
+    if node.get("assignee").map(Value::is_object).unwrap_or(false) {
+        let assignee = &node["assignee"];
+        item["assignee"] = json!({
+            "id": assignee.get("id").and_then(Value::as_str).unwrap_or_default(),
+            "displayName": assignee.get("displayName").and_then(Value::as_str).unwrap_or_default(),
+            "avatarUrl": assignee.get("avatarUrl").and_then(Value::as_str),
+        });
+    }
+    if node.get("project").map(Value::is_object).unwrap_or(false) {
+        let project = &node["project"];
+        item["project"] = json!({
+            "id": project.get("id").and_then(Value::as_str).unwrap_or_default(),
+            "workspaceId": ws_id,
+            "workspaceName": ws_name,
+            "name": project.get("name").and_then(Value::as_str).unwrap_or_default(),
+            "url": project.get("url").and_then(Value::as_str),
+            "color": project.get("color").and_then(Value::as_str),
+        });
+    }
+    item
+}
+
+// Build the GraphQL IssueFilter for the renderer's simple filter enum.
+fn issue_filter(filter: &str) -> Value {
+    match filter {
+        "created" => json!({ "creator": { "isMe": { "eq": true } } }),
+        "completed" => json!({ "state": { "type": { "eq": "completed" } } }),
+        "all" => json!({}),
+        // Default ("assigned"): issues assigned to the connected viewer.
+        _ => json!({ "assignee": { "isMe": { "eq": true } } }),
+    }
+}
+
+async fn run_issue_query(
+    workspace_id: Option<String>,
+    filter: Value,
+    limit: u32,
+) -> Result<Vec<Value>, String> {
+    let creds = read_creds();
+    // Not connected → empty (no error); connection is gated by linear_status.
+    let Some((token, ws_id, ws_name)) = active_workspace(&creds, workspace_id.as_deref()) else {
+        return Ok(Vec::new());
+    };
+    let vars = json!({ "filter": filter, "first": limit.clamp(1, 100) });
+    let data = graphql(&token, ISSUES_QUERY, vars).await?;
+    let nodes = data
+        .pointer("/issues/nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Ok(nodes
+        .iter()
+        .map(|node| map_issue_node(node, &ws_id, &ws_name))
+        .collect())
+}
+
 // ─── Connection commands ────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -276,26 +450,75 @@ pub fn linear_disconnect(workspace_id: Option<String>) {
     });
 }
 
-// ─── Data-read surface (still stubbed) ───────────────────────────────────────
-// List/search return empty, gets return null, until the GraphQL queries land.
+// ─── Data-read surface ───────────────────────────────────────────────────────
+// Core lists (issues/search/projects/teams) hit GraphQL with the stored token.
+// The rest (custom views, comments, single gets) stay stubbed below.
 
 fn empty_collection() -> Value {
     json!({ "items": [] })
 }
 
 #[tauri::command]
-pub fn linear_list_issues() -> Vec<Value> {
-    Vec::new()
+pub async fn linear_list_issues(
+    filter: Option<String>,
+    limit: Option<u32>,
+    workspace_id: Option<String>,
+) -> Result<Vec<Value>, String> {
+    let filter = issue_filter(filter.as_deref().unwrap_or("assigned"));
+    run_issue_query(workspace_id, filter, limit.unwrap_or(20)).await
 }
 
 #[tauri::command]
-pub fn linear_search_issues() -> Vec<Value> {
-    Vec::new()
+pub async fn linear_search_issues(
+    query: Option<String>,
+    limit: Option<u32>,
+    workspace_id: Option<String>,
+) -> Result<Vec<Value>, String> {
+    let term = query.unwrap_or_default();
+    let term = term.trim();
+    if term.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Match title or description; broad enough for the board's search box
+    // without depending on Linear's separate full-text search endpoint.
+    let filter = json!({
+        "or": [
+            { "title": { "containsIgnoreCase": term } },
+            { "description": { "containsIgnoreCase": term } },
+        ]
+    });
+    run_issue_query(workspace_id, filter, limit.unwrap_or(20)).await
 }
 
 #[tauri::command]
-pub fn linear_list_teams() -> Vec<Value> {
-    Vec::new()
+pub async fn linear_list_teams(workspace_id: Option<String>) -> Result<Vec<Value>, String> {
+    let creds = read_creds();
+    let Some((token, ws_id, ws_name)) = active_workspace(&creds, workspace_id.as_deref()) else {
+        return Ok(Vec::new());
+    };
+    let data = graphql(
+        &token,
+        "query { teams(first: 250) { nodes { id name key } } }",
+        json!({}),
+    )
+    .await?;
+    let nodes = data
+        .pointer("/teams/nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Ok(nodes
+        .iter()
+        .map(|team| {
+            json!({
+                "id": team.get("id").and_then(Value::as_str).unwrap_or_default(),
+                "name": team.get("name").and_then(Value::as_str).unwrap_or_default(),
+                "key": team.get("key").and_then(Value::as_str).unwrap_or_default(),
+                "workspaceId": ws_id,
+                "workspaceName": ws_name,
+            })
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -319,8 +542,69 @@ pub fn linear_issue_comments() -> Vec<Value> {
 }
 
 #[tauri::command]
-pub fn linear_list_projects() -> Value {
-    empty_collection()
+pub async fn linear_list_projects(
+    query: Option<String>,
+    limit: Option<u32>,
+    workspace_id: Option<String>,
+) -> Result<Value, String> {
+    let creds = read_creds();
+    let Some((token, ws_id, ws_name)) = active_workspace(&creds, workspace_id.as_deref()) else {
+        return Ok(empty_collection());
+    };
+    let vars = json!({ "first": limit.unwrap_or(50).clamp(1, 100) });
+    let data = graphql(
+        &token,
+        "query($first: Int) { projects(first: $first, orderBy: updatedAt) { nodes { \
+            id name url description color icon progress startDate targetDate createdAt updatedAt } } }",
+        vars,
+    )
+    .await?;
+    let nodes = data
+        .pointer("/projects/nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    // Linear's project query has no name filter param; apply the search term
+    // client-side so the board's project search still narrows results.
+    let needle = query.unwrap_or_default().trim().to_lowercase();
+    let items: Vec<Value> = nodes
+        .iter()
+        .filter(|project| {
+            needle.is_empty()
+                || project
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(|name| name.to_lowercase().contains(&needle))
+                    .unwrap_or(false)
+        })
+        .map(|project| {
+            let mut mapped = json!({
+                "id": project.get("id").and_then(Value::as_str).unwrap_or_default(),
+                "workspaceId": ws_id,
+                "workspaceName": ws_name,
+                "name": project.get("name").and_then(Value::as_str).unwrap_or_default(),
+            });
+            for key in [
+                "url",
+                "description",
+                "color",
+                "icon",
+                "startDate",
+                "targetDate",
+                "createdAt",
+                "updatedAt",
+            ] {
+                if let Some(value) = project.get(key).filter(|v| !v.is_null()) {
+                    mapped[key] = value.clone();
+                }
+            }
+            if let Some(progress) = project.get("progress").and_then(Value::as_f64) {
+                mapped["progress"] = json!(progress);
+            }
+            mapped
+        })
+        .collect();
+    Ok(json!({ "items": items }))
 }
 
 #[tauri::command]
