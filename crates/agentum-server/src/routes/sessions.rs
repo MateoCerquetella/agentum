@@ -753,7 +753,7 @@ async fn stream(
         if matches!(host.kind, HostKind::Local) {
             stream_session(socket, id, target, positions, resume).await;
         } else {
-            stream_remote_session(socket, host, target).await;
+            stream_remote_session(socket, host, id, target).await;
         }
     }))
 }
@@ -786,6 +786,40 @@ const SETTLE_POLL_INTERVAL: Duration = Duration::from_millis(40);
 /// max-budget on a no-op wait. Long enough that a slow ratatui app has
 /// time to start emitting bytes.
 const POST_RESIZE_NO_ACTIVITY_BAIL: Duration = Duration::from_millis(180);
+
+/// Upper bound on a single coalesced WS frame. Caps the work of merging a large
+/// backlog and keeps any one `term.write` on the client bounded.
+const COALESCE_MAX: usize = 256 * 1024;
+
+/// Merge any pane chunks *already queued* in `rx` into `first`, producing one WS
+/// frame instead of many. This adds **no latency** — it only drains what's
+/// instantly available via `try_recv` — so a client keeping up still sees one
+/// frame per chunk, while a client falling behind (a weak laptop, a slow link)
+/// gets fewer, larger frames. That directly cuts the per-frame cost the new
+/// push stream would otherwise pile on a slow client: each frame is an
+/// `onmessage` dispatch + `Uint8Array` alloc + `term.write` + OSC-title scan, so
+/// collapsing a burst of tiny tmux writes into one frame is a large win exactly
+/// when the client is the bottleneck. The single-chunk path returns `first`
+/// untouched (no copy).
+fn coalesce_queued(first: Bytes, rx: &mut tokio::sync::mpsc::Receiver<Bytes>) -> Bytes {
+    use tokio::sync::mpsc::error::TryRecvError;
+    match rx.try_recv() {
+        // Nothing else waiting → forward the lone chunk as-is (zero-copy).
+        Err(_) => first,
+        Ok(second) => {
+            let mut buf = Vec::with_capacity(first.len() + second.len());
+            buf.extend_from_slice(&first);
+            buf.extend_from_slice(&second);
+            while buf.len() < COALESCE_MAX {
+                match rx.try_recv() {
+                    Ok(more) => buf.extend_from_slice(&more),
+                    Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+                }
+            }
+            Bytes::from(buf)
+        }
+    }
+}
 
 async fn stream_session(
     mut socket: WebSocket,
@@ -1116,8 +1150,11 @@ async fn stream_session(
             }
             chunk = tail_rx.recv() => match chunk {
                 Some(bytes) => {
-                    let len = bytes.len() as u64;
-                    if socket.send(Message::Binary(bytes)).await.is_err() {
+                    // Coalesce any backlog into one frame (no added latency).
+                    // Byte total is unchanged, so the checkpoint stays accurate.
+                    let frame = coalesce_queued(bytes, &mut tail_rx);
+                    let len = frame.len() as u64;
+                    if socket.send(Message::Binary(frame)).await.is_err() {
                         break;
                     }
                     bytes_forwarded += len;
@@ -1224,14 +1261,102 @@ async fn stream_session(
     );
 }
 
-async fn stream_remote_session(mut socket: WebSocket, host: Host, target: String) {
-    let mut ticker = tokio::time::interval(Duration::from_millis(700));
-    let mut last_snapshot: Vec<u8> = Vec::new();
+/// Remote (SSH) session stream — the push-based mirror of [`stream_session`].
+///
+/// Previously this polled `capture-pane` over SSH every 700 ms and re-sent a
+/// full-screen snapshot (RIS + whole pane) on any change, which made remote
+/// terminals lag up to 700 ms behind and flicker as the client cleared and
+/// repainted on every tick. Now we follow the remote pane log incrementally:
+/// `pipe_pane` (armed at session start, re-armed here for safety) appends raw
+/// pane bytes to a per-session log on the host, and a single persistent
+/// `ssh tail -f` streams those bytes as they appear — the same incremental
+/// model as the local file tail, just sourced over one long-lived SSH channel.
+async fn stream_remote_session(mut socket: WebSocket, host: Host, id: Uuid, target: String) {
+    let log = match paths::pane_log(&id.to_string()) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = socket
+                .send(Message::Text(format!("[path error: {e}]").into()))
+                .await;
+            return;
+        }
+    };
+
+    // Re-arm pipe-pane on connect (idempotent `-o`). Cheap insurance: a session
+    // started by a pre-this-fix daemon never set up the remote sink, and without
+    // it the tail below would follow an empty file forever.
+    if let Err(e) = crate::host_runtime::pipe_pane(&host, &target, &log).await {
+        let _ = socket
+            .send(Message::Text(format!("[remote pipe error: {e}]").into()))
+            .await;
+        return;
+    }
+
+    // Current screen state: pipe-pane only carries output produced *after* it was
+    // armed, so a fresh connect (or an idle pane) needs one snapshot to paint
+    // what's already there. RIS (`\x1bc`) resets the client parser first — same
+    // payload shape as a fresh local connect. The follow tail then takes over for
+    // everything new; a few bytes emitted in the window between this snapshot and
+    // the tail attaching may be missed, which a client `{"refresh":true}` heals.
+    match crate::host_runtime::capture_pane_ansi(&host, &target).await {
+        Ok(snap) if !snap.is_empty() => {
+            let mut payload = Vec::with_capacity(snap.len() + 2);
+            payload.extend_from_slice(b"\x1bc");
+            payload.extend_from_slice(&snap);
+            if socket
+                .send(Message::Binary(Bytes::from(payload)))
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+        _ => {}
+    }
+
+    // Persistent `ssh tail -f` of the remote pane log. Its stdout is pumped
+    // through an mpsc so the select loop below multiplexes output against
+    // keystrokes — a chatty pane never starves input, and vice versa.
+    let mut child = match crate::host_runtime::spawn_remote_pane_tail(&host, &log) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = socket
+                .send(Message::Text(format!("[remote tail error: {e}]").into()))
+                .await;
+            return;
+        }
+    };
+    let Some(mut stdout) = child.stdout.take() else {
+        let _ = child.kill().await;
+        return;
+    };
+    let (tail_tx, mut tail_rx) = tokio::sync::mpsc::channel::<Bytes>(64);
+    let tail_handle = tokio::spawn(async move {
+        let mut buf = vec![0u8; READ_CHUNK];
+        loop {
+            match stdout.read(&mut buf).await {
+                // 0 = ssh/tail exited (channel/host dropped). Unlike a local file
+                // tail this never means "caught up"; end the task so the loop
+                // tears the connection down.
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tail_tx
+                        .send(Bytes::copy_from_slice(&buf[..n]))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
     // Why: like the local stream, the remote pane's OSC title is consumed by tmux
-    // on the host and never crosses capture-pane — so the desktop's title-derived
-    // agent status would be blank for SSH sessions. Poll the remote pane_title and
-    // re-inject it as a synthetic OSC title on change. Slower cadence than local
-    // (1s) since each poll is a round-trip SSH exec.
+    // on the host and never crosses the pane byte stream — so the desktop's
+    // title-derived agent status would be blank for SSH sessions. Poll the remote
+    // pane_title and re-inject it as a synthetic OSC title on change. Slower
+    // cadence than local (1s) since each poll is a round-trip SSH exec.
     let mut title_ticker = tokio::time::interval(Duration::from_millis(1000));
     let mut last_pane_title = String::new();
     loop {
@@ -1251,25 +1376,18 @@ async fn stream_remote_session(mut socket: WebSocket, host: Host, target: String
                     }
                 }
             }
-            _ = ticker.tick() => {
-                match crate::host_runtime::capture_pane_ansi(&host, &target).await {
-                    Ok(snap) if snap != last_snapshot => {
-                        last_snapshot = snap.clone();
-                        let mut payload = Vec::with_capacity(snap.len() + 4);
-                        payload.extend_from_slice(b"\x1bc");
-                        payload.extend_from_slice(&snap);
-                        if socket.send(Message::Binary(Bytes::from(payload))).await.is_err() {
-                            break;
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        if socket.send(Message::Text(format!("[remote pane error: {e}]").into())).await.is_err() {
-                            break;
-                        }
+            chunk = tail_rx.recv() => match chunk {
+                Some(bytes) => {
+                    // Coalesce a backlog of small SSH-tail reads into one frame
+                    // (no added latency) so a weak client isn't woken once per
+                    // tiny chunk of a chatty remote agent.
+                    let frame = coalesce_queued(bytes, &mut tail_rx);
+                    if socket.send(Message::Binary(frame)).await.is_err() {
+                        break;
                     }
                 }
-            }
+                None => break, // tail task ended (ssh died / host unreachable)
+            },
             msg = socket.recv() => match msg {
                 Some(Ok(Message::Binary(b))) if !b.is_empty() => {
                     if let Err(e) = crate::host_runtime::send_bytes(&host, &target, &b).await
@@ -1286,7 +1404,18 @@ async fn stream_remote_session(mut socket: WebSocket, host: Host, target: String
                             break;
                         }
                     } else if parse_refresh(&t) {
-                        last_snapshot.clear();
+                        // Re-paint the current screen on demand (same shape as the
+                        // initial snapshot). Heals any bytes missed at connect.
+                        if let Ok(snap) = crate::host_runtime::capture_pane_ansi(&host, &target).await
+                            && !snap.is_empty()
+                        {
+                            let mut payload = Vec::with_capacity(snap.len() + 2);
+                            payload.extend_from_slice(b"\x1bc");
+                            payload.extend_from_slice(&snap);
+                            if socket.send(Message::Binary(Bytes::from(payload))).await.is_err() {
+                                break;
+                            }
+                        }
                     } else if let Err(e) = crate::host_runtime::send_bytes(&host, &target, t.as_bytes()).await
                         && socket.send(Message::Text(format!("[input dropped: {e}]").into())).await.is_err()
                     {
@@ -1298,6 +1427,8 @@ async fn stream_remote_session(mut socket: WebSocket, host: Host, target: String
             },
         }
     }
+    tail_handle.abort();
+    let _ = child.kill().await;
 }
 
 // ---------- GET /api/sessions/{id}/pane ----------
@@ -1464,7 +1595,29 @@ fn parse_refresh(t: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_refresh, parse_resize};
+    use super::{coalesce_queued, parse_refresh, parse_resize};
+    use bytes::Bytes;
+
+    #[tokio::test]
+    async fn coalesce_queued_forwards_lone_chunk_unchanged() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Bytes>(8);
+        drop(tx); // empty + closed: nothing to drain
+        let out = coalesce_queued(Bytes::from_static(b"abc"), &mut rx);
+        assert_eq!(&out[..], b"abc");
+    }
+
+    #[tokio::test]
+    async fn coalesce_queued_merges_backlog_into_one_frame() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Bytes>(8);
+        // Simulate a weak-client backlog: several tiny chunks already queued.
+        tx.send(Bytes::from_static(b"two")).await.unwrap();
+        tx.send(Bytes::from_static(b"three")).await.unwrap();
+        let out = coalesce_queued(Bytes::from_static(b"one"), &mut rx);
+        // Byte total is preserved and ordered — only the framing changes.
+        assert_eq!(&out[..], b"onetwothree");
+        // Drained everything that was waiting.
+        assert!(rx.try_recv().is_err());
+    }
 
     #[test]
     fn parse_resize_recognises_envelope() {
