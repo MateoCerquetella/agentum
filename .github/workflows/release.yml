@@ -53,17 +53,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
+      # Desktop targets build the Tauri UI (crates/agentum-desktop/ui), which is
+      # embedded into the binary via generate_context!. The old standalone
+      # dashboard/ was removed in the thin-shell refactor (v0.10.11), so the
+      # daemon/CLI no longer embeds web assets and CLI-only targets need no node.
+      # cargo tauri build runs the UI's `npm run build` via beforeBuildCommand,
+      # but node_modules must exist first — hence the explicit `npm ci`.
       - uses: actions/setup-node@v4
+        if: ${{ matrix.desktop != '' }}
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: dashboard/pnpm-lock.yaml
-      - name: Build dashboard bundle (embedded into the binary)
-        run: pnpm --dir dashboard install --frozen-lockfile && pnpm --dir dashboard build
+          cache: npm
+          cache-dependency-path: crates/agentum-desktop/ui/package-lock.json
+      - name: Install desktop UI deps
+        if: ${{ matrix.desktop != '' }}
+        run: npm ci --prefix crates/agentum-desktop/ui
 
       # Pin to 1.94.1 to match rust-toolchain.toml (and ci.yml). @stable sets
       # RUSTUP_TOOLCHAIN=stable and would add the matrix target to *stable* —
