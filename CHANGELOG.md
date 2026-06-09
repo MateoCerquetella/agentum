@@ -7,7 +7,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.13.3] — 2026-06-09
 
 ### Changed
-- **Marketing landing page redesign** (`web/`): ara.so-style background and
+- **Marketing landing page redesign** (`web/`): a new animated background and
   design-system polish. The app itself is unchanged from 0.13.2; `web/` deploys
   to Netlify independently of the desktop/CLI artifacts.
 
