@@ -4,6 +4,15 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] — 2026-06-09
+
+### Fixed
+- **macOS desktop bundles build again.** The macOS CI runner's node@22 aborted
+  (SIGABRT) while closing file handles during the Vite UI build, which failed
+  `beforeBuildCommand` and blocked every macOS release since v0.11.0 (Linux +
+  CLI artifacts were unaffected). The desktop UI now builds under bun's runtime
+  (`bun run --bun build`), sidestepping the node bug. No app behavior changes.
+
 ## [0.13.0] — 2026-06-09
 
 A cleanup-and-repair release: two unused surfaces are gone, several
