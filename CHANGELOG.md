@@ -4,6 +4,13 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.3] — 2026-06-09
+
+### Changed
+- **Marketing landing page redesign** (`web/`): ara.so-style background and
+  design-system polish. The app itself is unchanged from 0.13.2; `web/` deploys
+  to Netlify independently of the desktop/CLI artifacts.
+
 ## [0.13.2] — 2026-06-09
 
 ### Fixed
