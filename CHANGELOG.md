@@ -4,6 +4,22 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.2] — 2026-06-09
+
+### Fixed
+- **Files in remote (SSH) workspaces open again.** Opening a file in an SSH
+  workspace showed *"Unable to load file — No such file or directory (os error
+  2)"*: the file *tree* listed over SSH, but the file *read* fell back to the
+  local filesystem and ENOENT'd on the remote path. Added a host-aware
+  `GET /api/fs/read` endpoint (reads over the connection via the daemon) and
+  routed the editor's read through it, mirroring how directory listing already
+  works.
+- **The status-bar I/O-speed chip remembers its host.** The saved host was
+  clobbered on reload: SSH host labels hydrate asynchronously, so the saved SSH
+  choice was momentarily "unknown" and a fallback reset it to local *and
+  persisted that*. The selection is now preserved and the chip snaps back to the
+  chosen host once it reappears.
+
 ## [0.13.1] — 2026-06-09
 
 ### Fixed

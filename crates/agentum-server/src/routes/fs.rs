@@ -22,6 +22,67 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/fs/list", get(list_dir))
         .route("/api/fs/entries", get(list_entries))
+        .route("/api/fs/read", get(read_file))
+}
+
+#[derive(Deserialize)]
+struct ReadQuery {
+    /// Absolute path of the file to read (on `host_id`'s filesystem).
+    path: String,
+    /// Host the file lives on. Missing means the daemon's local machine.
+    #[serde(default)]
+    host_id: Option<Uuid>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadResp {
+    /// UTF-8 text content; empty when `is_binary`.
+    content: String,
+    /// True for non-UTF-8 / NUL-containing files (the editor shows a binary
+    /// placeholder instead of mojibake).
+    is_binary: bool,
+}
+
+/// `GET /api/fs/read?path=…&host_id=` — read a file's text content. Host-aware:
+/// a local host reads from disk; an SSH host reads over the connection (`cat`)
+/// via [`host_runtime::read_file_bytes`]. This backs opening files in a remote
+/// SSH workspace — the desktop's native `fs_read_file` is local-only, so without
+/// this the renderer reads the remote path on the *local* machine (→ ENOENT,
+/// "No such file or directory"). Mirrors how `/api/fs/entries` lists remote dirs.
+async fn read_file(
+    State(state): State<AppState>,
+    Query(q): Query<ReadQuery>,
+) -> Result<Json<ReadResp>, ApiError> {
+    let host_id = q.host_id.unwrap_or(LOCAL_HOST_ID);
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown host: {host_id}")))?;
+    // Local paths get `~`/relative expansion like the listing routes; a remote
+    // path is already absolute on its own host, so pass it through untouched.
+    let abs = match host.kind {
+        HostKind::Local => resolve(&q.path)?.to_string_lossy().into_owned(),
+        HostKind::Ssh { .. } => q.path.clone(),
+    };
+    let bytes = crate::host_runtime::read_file_bytes(&host, &abs)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::BadRequest(format!("file does not exist: {abs}")))?;
+    // A NUL byte or invalid UTF-8 marks the file binary; the editor then shows
+    // its binary placeholder rather than corrupted text.
+    let resp = match String::from_utf8(bytes) {
+        Ok(text) if !text.contains('\0') => ReadResp {
+            content: text,
+            is_binary: false,
+        },
+        _ => ReadResp {
+            content: String::new(),
+            is_binary: true,
+        },
+    };
+    Ok(Json(resp))
 }
 
 #[derive(Serialize)]

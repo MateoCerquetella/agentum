@@ -57,3 +57,20 @@ export function fsListEntries(
     `/api/fs/entries${qs({ path, show_hidden: opts?.hidden, host_id: opts?.hostId })}`
   )
 }
+
+export type FsFileContent = {
+  /** UTF-8 text content; empty when `isBinary`. */
+  content: string
+  /** True for non-UTF-8 / NUL-containing files. */
+  isBinary: boolean
+}
+
+/**
+ * `GET /api/fs/read` — read a file's text content. Host-aware: pass `hostId` to
+ * read over SSH on a remote host (`cat`); omit it for the local machine. Backs
+ * opening files in a remote SSH workspace, where the native local read would
+ * ENOENT on the remote path.
+ */
+export function fsReadFile(path: string, opts: { hostId: string }): Promise<FsFileContent> {
+  return getJson<FsFileContent>(`/api/fs/read${qs({ path, host_id: opts.hostId })}`)
+}

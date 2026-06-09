@@ -22,7 +22,7 @@ import {
   isWindowsAbsolutePathLike,
   relativePathInsideRoot
 } from '../../../shared/cross-platform-path'
-import { fsListEntries } from './server-fs-client'
+import { fsListEntries, fsReadFile } from './server-fs-client'
 import { resolveServerHostIdForConnection } from './server-host-client'
 
 export type RuntimeReadableFileContent = {
@@ -135,6 +135,14 @@ export async function readRuntimeFileContent({
 }: RuntimeFileReadArgs): Promise<RuntimeReadableFileContent> {
   const target = getActiveRuntimeTarget(settings)
   if (target.kind !== 'environment') {
+    // SSH workspaces have no runtime environment but carry a connectionId; the
+    // native fs read ignores it and would read this remote path on the local
+    // machine (→ ENOENT, "No such file or directory"). Route through the
+    // server's host-aware read endpoint, mirroring readRemoteSshDirectory.
+    const remote = await readRemoteSshFile(settings, connectionId, filePath)
+    if (remote) {
+      return remote
+    }
     return api.fs.readFile({ filePath, connectionId })
   }
   if (!worktreeId) {
@@ -156,6 +164,29 @@ export async function readRuntimeFileContent({
     throw new Error(`Remote file is too large to open in the editor (${result.byteLength} bytes)`)
   }
   return { content: result.content, isBinary: false }
+}
+
+/**
+ * Read `filePath` from the SSH host behind `connectionId` via the embedded
+ * server's host-aware `GET /api/fs/read` (the server `cat`s the file on the
+ * host). Returns `null` when this isn't a remote-SSH workspace (no connectionId,
+ * an active runtime environment owns the transport, or the connection can't be
+ * resolved to a server host) so the caller falls back to the native local read.
+ */
+async function readRemoteSshFile(
+  settings: RuntimeFileReadArgs['settings'],
+  connectionId: string | undefined,
+  filePath: string
+): Promise<RuntimeReadableFileContent | null> {
+  if (!connectionId || getActiveRuntimeTarget(settings).kind === 'environment') {
+    return null
+  }
+  const hostId = await resolveServerHostIdForConnection(connectionId)
+  if (!hostId) {
+    return null
+  }
+  const { content, isBinary } = await fsReadFile(filePath, { hostId })
+  return { content, isBinary }
 }
 
 export async function readRuntimeFilePreview(

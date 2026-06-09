@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useMemo, useState } from 'react'
 import { ArrowDown, ArrowUp, Check, Gauge, Monitor, Server } from 'lucide-react'
 import {
   DropdownMenu,
@@ -69,18 +69,20 @@ export function IoStatusSegment({
     return out
   }, [hostMetaByKey, sshTargetLabels])
 
-  // If the selected host disappears (SSH target removed), fall back to local so
-  // the chip never points at a host that no longer exists.
-  useEffect(() => {
-    if (!options.some((o) => o.key === selectedHostKey)) {
-      setSelectedHostKey(LOCAL_HOST_KEY)
-      persistSelectedHostKey(LOCAL_HOST_KEY)
-    }
-  }, [options, selectedHostKey])
+  // Effective host for live rates + display: the saved choice when it's a known
+  // host, else local. We deliberately do NOT persist this fallback or mutate the
+  // saved selection. On reload, SSH host labels hydrate asynchronously, so a
+  // saved SSH choice is briefly "unknown" — the old effect reset to local AND
+  // persisted it, clobbering the user's remembered host (the "doesn't remember
+  // my I/O host" bug). Keeping the saved key intact lets the chip snap back to
+  // it the moment its option appears.
+  const effectiveHostKey = options.some((o) => o.key === selectedHostKey)
+    ? selectedHostKey
+    : LOCAL_HOST_KEY
 
-  const { inRate, outRate } = useHostIoRate(selectedHostKey)
+  const { inRate, outRate } = useHostIoRate(effectiveHostKey)
 
-  const selected = options.find((o) => o.key === selectedHostKey) ?? options[0]
+  const selected = options.find((o) => o.key === effectiveHostKey) ?? options[0]
 
   const handleSelect = useCallback((key: HostKey): void => {
     setSelectedHostKey(key)
