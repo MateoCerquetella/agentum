@@ -3,13 +3,7 @@
 **/*.rs.bk
 Cargo.lock.bak
 
-# SvelteKit / Node
-web/node_modules
-web/.svelte-kit
-web/build
-web/.vercel
-web/.netlify
-web/dist
+# Node
 .pnpm-store
 
 # Desktop UI (React/Vite) — build artifacts, not source.

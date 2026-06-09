@@ -24,7 +24,7 @@ React/Vite UI in `ui/`) boots
 `agentum-server` *in-process* on a loopback port (see
 `agentum_server::serve_embedded_loopback`) so the webview drives the
 exact same core. The daemon is API-only — there is no embedded web UI.
-The marketing landing page lives in `web/` and is deployed separately
+The marketing landing page lives in its own private repo (`agentum-www`), deployed separately
 (Netlify), not served by the daemon.
 
 ---
@@ -45,8 +45,6 @@ crates/
                        #   native commands (window, dialogs, clipboard, local PTY) to the webview.
     ui/                #   React + Vite SPA the webview loads; talks to native Tauri commands and,
                        #   increasingly, to the embedded agentum-server over HTTP/WS.
-
-web/                   # Static marketing landing page. Deployed to Netlify; NOT served by the daemon.
 ```
 
 Each `crates/<x>/Cargo.toml` declares its deps; the workspace root
@@ -259,6 +257,16 @@ listed in `auth.rs::is_public`. WS clients pass the bearer token as
 - **Cargo.lock drift**: `Cargo.lock` gets updated whenever a dep
   changes. Commit it; we ship binaries from CI and reproducibility
   matters.
+- **Session streaming is push-based, never poll**: both local and
+  remote `/stream` WS feed the client raw incremental pane bytes from
+  a `tmux pipe-pane` log (RIS + one `capture-pane` snapshot on connect,
+  then live deltas). Local tails the on-disk log; remote (SSH) tails a
+  per-session log under `$HOME/.agentum/panes/<uuid>.log` over one
+  persistent `ssh tail -f` channel (`host_runtime::spawn_remote_pane_tail`).
+  Do **not** reintroduce the old `capture-pane`-every-N-ms full-snapshot
+  poll for remote — it lagged ~700 ms and flickered (full-screen RIS
+  repaint each tick). `pipe_pane` is armed at session start and re-armed
+  idempotently (`-o`) on each connect.
 
 ---
 
