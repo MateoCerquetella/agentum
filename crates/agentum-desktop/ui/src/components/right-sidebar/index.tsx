@@ -135,7 +135,7 @@ function RightSidebarInner(): React.JSX.Element {
   const topActivityStripRef = useMeasuredWidth(setTopActivityStripWidth)
 
   const panelContent = (
-    <div className="flex flex-col flex-1 min-h-0 overflow-hidden scrollbar-sleek-parent">
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden scrollbar-sleek-parent sidebar-hide-scrollbars">
       {/* Why: sidebar panels no longer use key={activeWorktreeId} because
           the full unmount/remount cycle on every worktree switch triggered
           an IPC storm (watchWorktree + readDir + git:branchCompare + …)
