@@ -1,4 +1,5 @@
 mod commands;
+mod path_env;
 mod state;
 
 use commands::{
@@ -17,6 +18,13 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // GUI launches (Finder/Dock, .desktop/AppImage) inherit a minimal PATH that
+    // omits ~/.local/bin, Homebrew, and node version-manager shims where the
+    // agent CLIs and gh/glab live. Hydrate from the login shell before anything
+    // (plugins, the embedded server's `which` probes, child PTYs) reads PATH,
+    // otherwise detection reports "No agents detected" on installed tools.
+    path_env::hydrate_path_from_login_shell();
+
     tauri::Builder::default()
         .plugin(
             tauri_plugin_log::Builder::default()
