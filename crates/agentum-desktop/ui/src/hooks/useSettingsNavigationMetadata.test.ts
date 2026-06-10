@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { buildSettingsNavigationMetadata } from './useSettingsNavigationMetadata'
+import { buildCmdJSettingsResults } from '../components/cmd-j/palette-results'
 import type { Repo } from '../../../shared/types'
 
 const repo = {
@@ -57,6 +58,22 @@ describe('settings navigation metadata', () => {
     expect(webIds).not.toContain('voice')
     expect(webIds).not.toContain('servers')
     expect(webIds).toContain('repo-repo-1')
+  })
+
+  it('Cmd+J / Cmd+Shift+P settings results exclude Phase-1-removed sections', () => {
+    // Why: SettingsCommandPalette (Cmd+Shift+P) reuses buildCmdJSettingsResults
+    // over the single navigation registry, so removing a section from the
+    // registry must drop it from the palette automatically.
+    const sections = buildSettingsNavigationMetadata({
+      isMac: false,
+      isWindows: false,
+      isWebClient: false,
+      repos: [repo]
+    })
+    const resultSectionIds = buildCmdJSettingsResults(sections).map((result) => result.sectionId)
+    expect(resultSectionIds).not.toContain('floating-workspace')
+    expect(resultSectionIds).not.toContain('servers')
+    expect(resultSectionIds).not.toContain('privacy')
   })
 
   it('keeps macOS permissions mac-only', () => {

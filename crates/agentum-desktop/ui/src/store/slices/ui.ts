@@ -536,6 +536,7 @@ export type UISlice = {
     | 'add-repo'
     | 'quick-open'
     | 'worktree-palette'
+    | 'settings-command-palette'
     | 'workspace-cleanup'
     | 'project-added'
     | 'worktree-visibility'

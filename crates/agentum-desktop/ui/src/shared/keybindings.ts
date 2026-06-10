@@ -25,6 +25,7 @@ export type KeybindingMatchOptions = {
 export type KeybindingActionId =
   | 'worktree.quickOpen'
   | 'worktree.palette'
+  | 'settings.commandPalette'
   | 'worktree.navigateUp'
   | 'worktree.navigateDown'
   | 'app.settings'
@@ -204,6 +205,14 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
       linux: ['Mod+Shift+J'],
       win32: ['Mod+Shift+J']
     }
+  },
+  {
+    id: 'settings.commandPalette',
+    title: 'Open Settings Search',
+    group: 'Global',
+    scope: 'global',
+    searchKeywords: ['shortcut', 'settings', 'search', 'palette', 'preferences'],
+    defaultBindings: platformBindings(['Mod+Shift+P'])
   },
   {
     id: 'worktree.navigateUp',

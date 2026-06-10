@@ -213,6 +213,7 @@ const Settings = lazy(() => import('./components/settings/Settings'))
 const SkillsPage = lazy(() => import('./components/skills/SkillsPage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
 const WorktreeJumpPalette = lazy(() => import('./components/WorktreeJumpPalette'))
+const SettingsCommandPalette = lazy(() => import('./components/settings/SettingsCommandPalette'))
 const NewWorkspaceComposerModal = lazy(() => import('./components/NewWorkspaceComposerModal'))
 const WorkspaceCleanupDialog = lazy(
   () => import('./components/workspace-cleanup/WorkspaceCleanupDialog')
@@ -1172,6 +1173,20 @@ function App(): React.JSX.Element {
         return
       }
 
+      // Cmd+Shift+P — settings command palette. Mirrors the worktree.palette
+      // toggle above; the proven Cmd+J path drives navigation from here.
+      if (matchShortcut('settings.commandPalette')) {
+        e.preventDefault()
+        notifyTerminalCapture('settings.commandPalette')
+        const store = useAppStore.getState()
+        if (store.activeModal === 'settings-command-palette') {
+          store.closeModal()
+        } else {
+          store.openModal('settings-command-palette')
+        }
+        return
+      }
+
       if (matchShortcut('worktree.quickOpen')) {
         const store = useAppStore.getState()
         if (store.activeView === 'terminal' && store.activeWorktreeId !== null) {
@@ -1740,6 +1755,16 @@ function App(): React.JSX.Element {
                 compact
               >
                 <WorktreeJumpPalette />
+              </RecoverableRenderErrorBoundary>
+            ) : null}
+            {resolvedMountedLazyModalIds.has('settings-command-palette') ? (
+              <RecoverableRenderErrorBoundary
+                boundaryId="modal.settings-command-palette"
+                surface="modal"
+                resetKey={activeModal === 'settings-command-palette'}
+                compact
+              >
+                <SettingsCommandPalette />
               </RecoverableRenderErrorBoundary>
             ) : null}
             {resolvedMountedLazyModalIds.has('feature-wall') ? (
