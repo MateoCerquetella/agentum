@@ -147,6 +147,14 @@ fn askpass_script_path() -> Option<PathBuf> {
 /// watchdog (which can't depend on the server) and the server share one
 /// builder and password hosts need nothing installed.
 pub fn ssh_command(host: &Host, script: &str) -> Command {
+    ssh_command_opts(host, script, true)
+}
+
+/// Like [`ssh_command`] but lets the caller turn off ControlMaster multiplexing.
+/// [`ssh_output`]'s retry rebuilds with `use_mux = false` so a stale/racing
+/// pooled master (broken-pipe / "failed to connect to new control master")
+/// can't keep failing an op — the replay connects fresh instead.
+pub fn ssh_command_opts(host: &Host, script: &str, use_mux: bool) -> Command {
     let HostKind::Ssh {
         user,
         hostname,
@@ -182,7 +190,13 @@ pub fn ssh_command(host: &Host, script: &str) -> Command {
         .arg("-o")
         .arg("ServerAliveInterval=5")
         .arg("-o")
-        .arg("ServerAliveCountMax=1")
+        // CountMax=3 (≈15s grace), not 1: with ControlMaster pooling a single
+        // missed keepalive used to tear down the *shared* master on any transient
+        // stall, orphaning its socket — the next op then hit "read from master
+        // failed: Broken pipe" / "Failed to connect to new control master" and
+        // ssh exited 255. Tolerating a few missed beats keeps the master alive;
+        // ssh_output still retries unmultiplexed if it dies anyway.
+        .arg("ServerAliveCountMax=3")
         .arg("-o")
         .arg("StrictHostKeyChecking=accept-new")
         .arg("-p")
@@ -195,13 +209,15 @@ pub fn ssh_command(host: &Host, script: &str) -> Command {
     // key/agent and password (sshpass) auth. Only enabled when we have a private,
     // short-enough socket dir; otherwise we connect fresh rather than risk a
     // too-long ControlPath (ssh exits 255) or an unsafe socket location.
-    if let Some(control_path) = control_path_template() {
-        cmd.arg("-o")
-            .arg("ControlMaster=auto")
-            .arg("-o")
-            .arg(format!("ControlPath={control_path}"))
-            .arg("-o")
-            .arg("ControlPersist=30s");
+    if use_mux {
+        if let Some(control_path) = control_path_template() {
+            cmd.arg("-o")
+                .arg("ControlMaster=auto")
+                .arg("-o")
+                .arg(format!("ControlPath={control_path}"))
+                .arg("-o")
+                .arg("ControlPersist=30s");
+        }
     }
 
     match auth {
@@ -237,6 +253,62 @@ pub fn ssh_command(host: &Host, script: &str) -> Command {
     cmd
 }
 
+/// True when ssh's stderr says the *pooled ControlMaster* socket was stale or
+/// racing (the shared master died mid-op), not that the remote command failed.
+/// Such a failure happens at the multiplex layer *before* the script runs, so
+/// the op never executed remotely and is safe to replay on a fresh, unpooled
+/// connection — even a mutating one (e.g. `git worktree add`).
+pub fn is_mux_transport_error(stderr: &str) -> bool {
+    let s = stderr.to_ascii_lowercase();
+    s.contains("mux_client")              // mux_client_request_session: …
+        || s.contains("control master")  // Failed to connect to new control master
+        || s.contains("controlpath")
+        || s.contains("read from master") // read from master failed: Broken pipe
+        || s.contains("multiplexing")
+}
+
+/// Run `script` over SSH with `.output()`, bounded by `dur`, transparently
+/// retrying ONCE on a stale/racing-ControlMaster transport failure with
+/// multiplexing disabled. The pooled master can die mid-flight (keepalive
+/// timeout on a transient stall, or its ControlPersist window expiring exactly
+/// as a new op connects), leaving a dead socket; the next op then exits 255 at
+/// the mux layer *without having run the remote script*, which makes a replay
+/// on a fresh connection safe. Returns the raw [`Output`] so each caller keeps
+/// its own non-zero-exit semantics; only transport/timeout failures are `Err`.
+///
+/// [`Output`]: std::process::Output
+pub async fn ssh_output(
+    host: &Host,
+    script: &str,
+    dur: Duration,
+) -> std::io::Result<std::process::Output> {
+    let first = run_ssh_once(host, script, dur, true).await?;
+    if first.status.code() == Some(255) {
+        let stderr = String::from_utf8_lossy(&first.stderr);
+        if is_mux_transport_error(&stderr) {
+            return run_ssh_once(host, script, dur, false).await;
+        }
+    }
+    Ok(first)
+}
+
+/// One `.output()` attempt, bounded by `dur`. A timeout surfaces as an
+/// `io::Error` of kind `TimedOut` so callers can map it to their own variant.
+async fn run_ssh_once(
+    host: &Host,
+    script: &str,
+    dur: Duration,
+    use_mux: bool,
+) -> std::io::Result<std::process::Output> {
+    match timeout(dur, ssh_command_opts(host, script, use_mux).output()).await {
+        Ok(result) => result,
+        Err(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "ssh timed out",
+        )),
+    }
+}
+
 /// shell-quote `s`, mapping a quoting failure to [`TmuxError::Quote`].
 fn q(s: &str) -> Result<Cow<'_, str>> {
     shlex::try_quote(s).map_err(|_| TmuxError::Quote)
@@ -245,14 +317,9 @@ fn q(s: &str) -> Result<Cow<'_, str>> {
 /// Run `script` over SSH and return its stdout, erroring on a non-zero exit
 /// or timeout. Mirrors `host_runtime::ssh_stdout`.
 async fn ssh_stdout(host: &Host, script: &str) -> Result<String> {
-    let output = timeout(SSH_TIMEOUT, ssh_command(host, script).output())
+    let output = ssh_output(host, script, SSH_TIMEOUT)
         .await
-        .map_err(|_| {
-            TmuxError::Io(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "ssh timed out",
-            ))
-        })??;
+        .map_err(TmuxError::Io)?;
     if !output.status.success() {
         return Err(TmuxError::NonZero {
             status: output.status.code().unwrap_or(-1),
@@ -266,28 +333,18 @@ async fn ssh_stdout(host: &Host, script: &str) -> Result<String> {
 /// failure or timeout (a non-zero remote exit is reported via the bool/`()`
 /// the caller maps from `success`).
 async fn ssh_status(host: &Host, script: &str) -> Result<std::process::ExitStatus> {
-    timeout(SSH_TIMEOUT, ssh_command(host, script).status())
+    Ok(ssh_output(host, script, SSH_TIMEOUT)
         .await
-        .map_err(|_| {
-            TmuxError::Io(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "ssh timed out",
-            ))
-        })?
-        .map_err(TmuxError::Io)
+        .map_err(TmuxError::Io)?
+        .status)
 }
 
 /// Run `script` over SSH and error on a non-zero exit (or transport
 /// failure / timeout). Mirrors `host_runtime::ssh_checked`.
 async fn ssh_checked(host: &Host, script: &str) -> Result<()> {
-    let output = timeout(SSH_TIMEOUT, ssh_command(host, script).output())
+    let output = ssh_output(host, script, SSH_TIMEOUT)
         .await
-        .map_err(|_| {
-            TmuxError::Io(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "ssh timed out",
-            ))
-        })??;
+        .map_err(TmuxError::Io)?;
     if output.status.success() {
         Ok(())
     } else {
@@ -466,6 +523,38 @@ mod tests {
     fn ssh_command_key_enables_control_master_pooling() {
         let cmd = ssh_command(&ssh_host(SshAuth::Agent), "echo hi");
         assert_control_master(&arg_strings(&cmd));
+    }
+
+    #[test]
+    fn ssh_command_no_mux_omits_control_master() {
+        // The retry connection must NOT reuse the (stale) pooled socket, so the
+        // ControlMaster flags are absent when `use_mux = false`.
+        let cmd = ssh_command_opts(&ssh_host(SshAuth::Agent), "echo hi", false);
+        let args = arg_strings(&cmd);
+        assert!(
+            !args.iter().any(|a| a == "ControlMaster=auto"),
+            "ControlMaster must be off on the unmultiplexed retry: {args:?}"
+        );
+        assert!(!args.iter().any(|a| a.starts_with("ControlPath=")));
+    }
+
+    #[test]
+    fn keepalive_tolerates_a_few_missed_beats() {
+        // CountMax=1 orphaned the shared master on any transient stall; 3 gives
+        // ~15s grace so the pooled socket survives a blip.
+        let cmd = ssh_command(&ssh_host(SshAuth::Agent), "echo hi");
+        assert!(arg_strings(&cmd).contains(&"ServerAliveCountMax=3".to_string()));
+    }
+
+    #[test]
+    fn detects_stale_control_master_stderr() {
+        // The exact stderr from the reported `/api/fs/list` 400.
+        let bug = "mux_client_request_session: read from master failed: Broken pipe\r\n\
+                   Failed to connect to new control master";
+        assert!(is_mux_transport_error(bug));
+        // An ordinary remote failure must NOT trigger a replay (it really ran).
+        assert!(!is_mux_transport_error("not a directory: /home/x/nope"));
+        assert!(!is_mux_transport_error("Permission denied (publickey)."));
     }
 
     /// Password auth feeds the secret through OpenSSH's own SSH_ASKPASS helper
