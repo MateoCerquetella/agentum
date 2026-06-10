@@ -1374,12 +1374,9 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       const validRepoIds = new Set(s.repos.map((repo) => repo.id))
       // Why: persisted UI from pre-rename builds used sidekick* keys. Read
       // those only as fallbacks so new pet* writes win immediately after upgrade.
-      const customPets = Array.isArray(ui.customPets)
-        ? ui.customPets
-        : Array.isArray(ui.customSidekicks)
-          ? ui.customSidekicks
-          : []
-      const petId = ui.petId ?? ui.sidekickId
+      // Why: clear all custom pets and force Argo (agentum-agent) as the only pet.
+      const customPets: CustomPet[] = []
+      const petId = DEFAULT_PET_ID
       // Migration history:
       // v1: sort was called 'smart' internally
       // v2: renamed 'smart' → 'recent' (same weighted-score behavior)
@@ -1408,6 +1405,17 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
           })
           .catch(console.error)
       }
+      // Why: force-write cleared customPets and DEFAULT_PET_ID back to disk so
+      // old custom mascots (claudino, etc.) don't reload on restart.
+      if (Array.isArray(ui.customPets) && ui.customPets.length > 0) {
+        void api.ui
+          .set({
+            customPets: [],
+            petId: DEFAULT_PET_ID
+          })
+          .catch(console.error)
+      }
+
       return {
         // Why: persisted UI data comes from disk and may be stale, corrupted,
         // or manually edited. Clamp widths during hydration so invalid values
