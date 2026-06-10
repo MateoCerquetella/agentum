@@ -1,5 +1,6 @@
 import React, { useCallback, useRef } from 'react'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, SquareTerminal } from 'lucide-react'
+import { useAppStore } from '@/store'
 import { AgentStateDot, agentStateLabel, type AgentDotState } from '@/components/AgentStateDot'
 import type { DashboardAgentRow as DashboardAgentRowData } from '@/components/dashboard/useDashboardData'
 import { AgentIcon } from '@/lib/agent-catalog'
@@ -315,6 +316,10 @@ export const CompactAgentRow = React.memo(function CompactAgentRow({
     childAgentCount > 0 &&
     typeof onToggleChildAgents === 'function'
   const dotState = getAgentDotState(agent)
+  // Per-agent tmux marker: the pane runs in a real tmux session (recorded in
+  // tmuxByPaneKey by the server-session layer), mirroring the host header and
+  // terminal-tab glyphs. Never derived from the persist *intent* flag.
+  const isTmuxBacked = useAppStore((s) => s.tmuxByPaneKey[agent.paneKey] === true)
   const primary = getCompactAgentPrimary(agent)
   const assistantMessage = agent.entry.lastAssistantMessage?.trim() ?? ''
   const hasAssistantImage = MARKDOWN_IMAGE_PATTERN.test(assistantMessage)
@@ -368,6 +373,14 @@ export const CompactAgentRow = React.memo(function CompactAgentRow({
       {!hideIdentityIcon && (
         <span className="inline-flex shrink-0" title={formatAgentTypeLabel(agent.agentType)}>
           <AgentIcon agent={agentTypeToIconAgent(agent.agentType)} size={13} />
+        </span>
+      )}
+      {isTmuxBacked && (
+        <span
+          className="inline-flex shrink-0 text-emerald-500"
+          title="Running in tmux"
+        >
+          <SquareTerminal className="size-3" aria-label="Running in tmux" />
         </span>
       )}
       <span className="min-w-0 flex-1 truncate">

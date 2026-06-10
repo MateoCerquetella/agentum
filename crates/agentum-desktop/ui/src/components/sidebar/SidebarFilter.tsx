@@ -157,9 +157,9 @@ const SidebarFilter = React.memo(function SidebarFilter({
         />
         <FilterToggleRow
           icon={<GitBranch className="size-3.5" />}
-          label="Hide default branch"
-          checked={hideDefaultBranchWorkspace}
-          onChange={setHideDefaultBranchWorkspace}
+          label="Show default branches"
+          checked={!hideDefaultBranchWorkspace}
+          onChange={(showDefault) => setHideDefaultBranchWorkspace(!showDefault)}
         />
 
         {canFilterRepos && (

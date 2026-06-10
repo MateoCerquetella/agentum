@@ -4,6 +4,22 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.6] — 2026-06-10
+
+### Added
+- **Per-agent "running in tmux" indicator.** Agents in the sidebar now show a
+  small green terminal glyph when their pane is backed by a real tmux session
+  (mirrors the existing host-header and terminal-tab tmux markers).
+
+### Changed
+- **Sidebar filter: "Show default branches" (on by default).** The default-branch
+  workspace filter is now framed positively and is *on* by default, so the
+  default branch shows out of the box and the filter badge no longer reads "1"
+  on a fresh launch. Turning it off hides default-branch workspaces. The server
+  now reports `isMainWorktree` per worktree so the filter can actually identify
+  the default branch (previously it defaulted to false for every row and the
+  filter silently did nothing).
+
 ## [0.13.5] — 2026-06-10
 
 ### Changed
