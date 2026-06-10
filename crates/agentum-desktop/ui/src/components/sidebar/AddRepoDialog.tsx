@@ -1092,6 +1092,9 @@ const AddRepoDialog = React.memo(function AddRepoDialog() {
               openSettingsPage()
             }}
             onConnectTarget={handleConnectTarget}
+            // Why: when opened from "Add project" on an SSH host, land directly
+            // in that host's remote file browser instead of a path field.
+            autoBrowse={Boolean(initialConnectionId)}
           />
         ) : step === 'clone' ? (
           <CloneStep

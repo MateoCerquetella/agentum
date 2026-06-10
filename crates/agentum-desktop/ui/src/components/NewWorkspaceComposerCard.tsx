@@ -462,6 +462,13 @@ export default function NewWorkspaceComposerCard({
             // focus state.
             triggerClassName="h-9 w-full border-input text-sm focus:border-ring focus:ring-[3px] focus:ring-ring/50"
             showStandaloneAddButton={false}
+            // Why: when an SSH host is selected, "Add project" must add a project
+            // on that host (its connectionId), not browse the local machine.
+            addProjectConnectionId={
+              selectedHostKey.startsWith('ssh:')
+                ? selectedHostKey.slice('ssh:'.length)
+                : undefined
+            }
           />
           {selectedRepoRequiresConnection && selectedRepoConnectionId ? (
             <div

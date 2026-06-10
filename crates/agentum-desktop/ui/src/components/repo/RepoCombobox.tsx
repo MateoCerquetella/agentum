@@ -43,6 +43,12 @@ type RepoComboboxProps = {
   /** repoId → reason for rows that can't be selected (spec 006: not a git repo
    *  on the selected host). Rendered disabled with the reason as a hint. */
   disabledRepoIds?: Map<string, string>
+  /** SSH connectionId of the host the picker is scoped to, when that host is a
+   *  remote SSH target. When set, "Add project" adds a project *on that host*
+   *  (the add-repo dialog's Remote step) instead of invoking the local OS folder
+   *  picker, which would browse the operator's own machine. Empty/undefined for
+   *  the local host keeps the existing inline local-picker flow. */
+  addProjectConnectionId?: string
 }
 
 export default function RepoCombobox({
@@ -54,7 +60,8 @@ export default function RepoCombobox({
   triggerClassName,
   autoOpenOnMount = false,
   showStandaloneAddButton = true,
-  disabledRepoIds
+  disabledRepoIds,
+  addProjectConnectionId
 }: RepoComboboxProps): React.JSX.Element {
   const [open, setOpen] = useState(autoOpenOnMount)
   const [query, setQuery] = useState('')
@@ -63,6 +70,7 @@ export default function RepoCombobox({
   // the last-hovered repo visually selected while the mouse is on the footer.
   const [commandValue, setCommandValue] = useState(() => (autoOpenOnMount ? value : ''))
   const addRepo = useAppStore((s) => s.addRepo)
+  const openModal = useAppStore((s) => s.openModal)
   const fetchWorktrees = useAppStore((s) => s.fetchWorktrees)
   const [isAdding, setIsAdding] = useState(false)
   const triggerRef = React.useRef<HTMLButtonElement | null>(null)
@@ -177,6 +185,17 @@ export default function RepoCombobox({
     if (isAdding) {
       return
     }
+    // Why: when the picker is scoped to an SSH host, adding a project must add
+    // one that lives *on that host*. The store's addRepo() invokes the local OS
+    // folder picker (browses the operator's own machine), so for an SSH host we
+    // route to the add-repo dialog's Remote step with the host preselected
+    // instead. Local host keeps the quick inline picker below.
+    if (addProjectConnectionId) {
+      openModal('add-repo', { connectionId: addProjectConnectionId })
+      setOpen(false)
+      setQuery('')
+      return
+    }
     setIsAdding(true)
     try {
       const repo = await addRepo()
@@ -196,7 +215,15 @@ export default function RepoCombobox({
         setIsAdding(false)
       }
     }
-  }, [addRepo, fetchWorktrees, isAdding, mountedRef, onValueChange])
+  }, [
+    addRepo,
+    addProjectConnectionId,
+    openModal,
+    fetchWorktrees,
+    isAdding,
+    mountedRef,
+    onValueChange
+  ])
 
   return (
     <div className="flex w-full items-center gap-1.5">

@@ -242,6 +242,10 @@ type RemoteStepProps = {
   onAdd: () => void
   onOpenSshSettings: () => void
   onConnectTarget: (id: string) => Promise<void>
+  /** When true (opened from "Add project" on an SSH host), jump straight into
+   *  the remote file browser once a target is selected, so the user lands on the
+   *  SSH host's directories instead of a bare path field. */
+  autoBrowse?: boolean
 }
 
 export function RemoteStep({
@@ -254,9 +258,22 @@ export function RemoteStep({
   onRemotePathChange,
   onAdd,
   onOpenSshSettings,
-  onConnectTarget
+  onConnectTarget,
+  autoBrowse = false
 }: RemoteStepProps): React.JSX.Element {
   const [browsing, setBrowsing] = useState(false)
+  const autoBrowsedRef = useRef(false)
+
+  // Why: launched from "Add project" on an SSH host — open the remote file
+  // browser directly so the user sees that host's directories, not the local
+  // machine's. One-shot (ref-guarded): canceling the browser returns to the
+  // target/path view rather than immediately reopening it.
+  useEffect(() => {
+    if (autoBrowse && selectedTargetId && !autoBrowsedRef.current) {
+      autoBrowsedRef.current = true
+      setBrowsing(true)
+    }
+  }, [autoBrowse, selectedTargetId])
 
   if (browsing && selectedTargetId) {
     return (
