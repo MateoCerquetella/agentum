@@ -92,7 +92,7 @@ function PetStatusSegmentInner(): React.JSX.Element {
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="group inline-flex items-center cursor-pointer pl-1 pr-[6.5rem] py-0.5"
+          className="group inline-flex items-center cursor-pointer px-1 py-0.5"
           aria-label="Pet menu"
         >
           <span

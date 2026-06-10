@@ -379,8 +379,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   )
   // Default to the active workspace/project's host, else the first eligible host
   // (local-first), else local — resolved once when the composer mounts.
+  // Why: when initialRepoId is passed (e.g. from Add Project dialog opening a
+  // workspace composer for an SSH project), use that repo's host, not activeRepoId.
   const [selectedHostKey, setSelectedHostKey] = useState<string>(() =>
-    resolveDefaultHostKey(eligibleRepos, activeRepoId, deriveEligibleHosts(eligibleRepos, {}))
+    resolveDefaultHostKey(eligibleRepos, initialRepoId ?? activeRepoId, deriveEligibleHosts(eligibleRepos, {}))
   )
   const hostScopedRepos = useMemo(
     () => (hostScopingEnabled ? filterReposForHost(eligibleRepos, selectedHostKey) : eligibleRepos),

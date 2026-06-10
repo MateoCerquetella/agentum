@@ -15,7 +15,6 @@ import {
   Keyboard,
   ListChecks,
   Mic,
-  MousePointerClick,
   Network,
   Palette,
   Play,
@@ -98,24 +97,21 @@ export function buildSettingsNavigationMetadata({
       badge: 'Optional'
     },
     {
-      id: 'orchestration',
-      title: 'Orchestration',
-      description: 'Coordinate multiple coding agents through Agentum.',
+      // Why: Orchestration (cross-platform) and Computer Use (desktop-only) are one
+      // "let agents do more" surface, so they share a single page. Computer Use is
+      // folded in as a subsection of this pane; its search keywords ride along on
+      // desktop so "computer use" still resolves here.
+      id: 'agents-automation',
+      title: 'Agents & Automation',
+      description: 'Coordinate multiple agents and let them operate desktop apps.',
       icon: Network,
-      searchEntries: ORCHESTRATION_PANE_SEARCH_ENTRIES,
+      searchEntries: showDesktopOnlySettings
+        ? [...ORCHESTRATION_PANE_SEARCH_ENTRIES, ...COMPUTER_USE_PANE_SEARCH_ENTRIES]
+        : ORCHESTRATION_PANE_SEARCH_ENTRIES,
       group: 'capabilities'
     },
     ...(showDesktopOnlySettings
       ? [
-          {
-            id: 'computer-use',
-            title: 'Computer Use',
-            description: 'Enable agents to control any app on your computer.',
-            icon: MousePointerClick,
-            searchEntries: COMPUTER_USE_PANE_SEARCH_ENTRIES,
-            group: 'capabilities',
-            badge: 'Beta'
-          },
           {
             id: 'voice',
             title: 'Voice',

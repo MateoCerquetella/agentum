@@ -1,10 +1,15 @@
 mod commands;
 mod path_env;
+// The Voice STT engine. Named `speech_engine` (not `speech`) to avoid colliding
+// with the `commands::speech` module imported below for the invoke_handler.
+#[path = "speech/mod.rs"]
+mod speech_engine;
 mod state;
 
 use commands::{
     accounts, agent_status, app, browser, cache, claude_usage, cli, clipboard, codex_usage,
-    crash_reports, diagnostics, e2e, feedback, fs, gh, gl, hooks, hosted_review, html_export,
+    crash_reports, diagnostics, e2e, feedback, fs, gh, gh_projects, gl, hooks, hosted_review,
+    html_export,
     keybindings, linear, mobile, notebook, notifications, onboarding, open_code_usage, permissions,
     pet, project_groups, pty, rate_limits, remote_workspace, repos, runtime, server, session,
     settings, shell, shell_runtimes, skills, sparse_presets, speech, ssh, star_nag, stats,
@@ -55,6 +60,21 @@ pub fn run() {
                 url: format!("http://{addr}"),
                 token: None,
             });
+
+            // On-device speech-to-text state (Voice dictation). Models live under
+            // the app data dir; failing to resolve it must not block app boot, so
+            // fall back to a temp dir and let downloads surface any error.
+            let models_dir = app
+                .path()
+                .app_data_dir()
+                .map(|d| d.join("speech-models"))
+                .unwrap_or_else(|_| std::env::temp_dir().join("agentum-speech-models"));
+            match speech_engine::SpeechState::new(models_dir) {
+                Ok(speech_state) => {
+                    app.manage(speech_state);
+                }
+                Err(error) => log::error!("speech state init failed: {error}"),
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -368,18 +388,18 @@ pub fn run() {
             gh::gh_add_issue_comment,
             gh::gh_add_pr_review_comment_reply,
             gh::gh_add_pr_review_comment,
-            gh::gh_list_project_views,
+            gh_projects::gh_list_project_views,
             gh::gh_list_work_items,
             gh::gh_refresh_pr_now,
-            gh::gh_list_accessible_projects,
-            gh::gh_resolve_project_ref,
+            gh_projects::gh_list_accessible_projects,
+            gh_projects::gh_resolve_project_ref,
             gh::gh_delete_issue_comment_by_slug,
             gh::gh_update_issue_comment_by_slug,
             gh::gh_add_issue_comment_by_slug,
             gh::gh_list_issue_types_by_slug,
             gh::gh_list_labels_by_slug,
             gh::gh_list_assignable_users_by_slug,
-            gh::gh_get_project_view_table,
+            gh_projects::gh_get_project_view_table,
             gh::gh_update_project_item_field,
             gh::gh_clear_project_item_field,
             gh::gh_update_issue_type_by_slug,

@@ -716,7 +716,9 @@ function Settings(): React.JSX.Element {
     if (!(await confirmDiscardSourceControlAiPromptChanges())) {
       return
     }
-    pendingNavSectionRef.current = 'computer-use'
+    // Computer Use is now a subsection of the combined Agents & Automation pane;
+    // navigate to that section, then scroll to the computer-use anchor inside it.
+    pendingNavSectionRef.current = 'agents-automation'
     pendingScrollTargetRef.current = 'computer-use'
     if (settingsSearchQuery !== '') {
       setSettingsSearchQuery('')
@@ -833,49 +835,64 @@ function Settings(): React.JSX.Element {
                 </SettingsSection>
 
                 <SettingsSection
-                  id="orchestration"
-                  title="Orchestration"
-                  description="Coordinate multiple coding agents through Agentum."
-                  searchEntries={getSectionSearchEntries('orchestration')}
+                  id="agents-automation"
+                  title="Agents & Automation"
+                  description="Coordinate multiple agents and let them operate desktop apps."
+                  searchEntries={getSectionSearchEntries('agents-automation')}
                 >
-                  {isSectionMounted('orchestration') ? <OrchestrationPane /> : null}
+                  {isSectionMounted('agents-automation') ? (
+                    <div className="space-y-10">
+                      <OrchestrationPane />
+
+                      {showDesktopOnlySettings ? (
+                        // Why: Computer Use lives inside this pane as a subsection. The
+                        // data-settings-section anchor keeps existing deep links (the
+                        // browser "open computer use" jump, Cmd+J) scrolling here.
+                        <div
+                          data-settings-section="computer-use"
+                          className="space-y-5 border-t border-border/60 pt-8 scroll-mt-8"
+                        >
+                          <div className="space-y-1.5">
+                            <h3 className="flex flex-wrap items-center gap-2 text-lg font-semibold text-foreground">
+                              Computer Use
+                              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.05em] text-muted-foreground">
+                                Beta
+                              </span>
+                              {showComputerUsePreviewTooltip ? (
+                                <TooltipProvider delayDuration={250}>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <button
+                                        type="button"
+                                        className="text-muted-foreground transition-colors hover:text-foreground"
+                                        aria-label={`${computerUsePlatform} Computer Use preview details`}
+                                      >
+                                        <Info className="size-3.5" />
+                                      </button>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" sideOffset={6} className="max-w-72">
+                                      <span>
+                                        {computerUsePlatform} Computer Use is an early preview. Some
+                                        apps and desktop environments may behave inconsistently.
+                                      </span>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                              ) : null}
+                            </h3>
+                            <p className="text-sm leading-6 text-muted-foreground">
+                              Enable agents to control any app on your computer.
+                            </p>
+                          </div>
+                          <ComputerUsePane />
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </SettingsSection>
 
                 {showDesktopOnlySettings ? (
                   <>
-                    <SettingsSection
-                      id="computer-use"
-                      title="Computer Use"
-                      badge="Beta"
-                      badgeAccessory={
-                        showComputerUsePreviewTooltip ? (
-                          <TooltipProvider delayDuration={250}>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <button
-                                  type="button"
-                                  className="text-muted-foreground transition-colors hover:text-foreground"
-                                  aria-label={`${computerUsePlatform} Computer Use preview details`}
-                                >
-                                  <Info className="size-3.5" />
-                                </button>
-                              </TooltipTrigger>
-                              <TooltipContent side="top" sideOffset={6} className="max-w-72">
-                                <span>
-                                  {computerUsePlatform} Computer Use is an early preview. Some apps
-                                  and desktop environments may behave inconsistently.
-                                </span>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        ) : null
-                      }
-                      description="Enable agents to control any app on your computer."
-                      searchEntries={getSectionSearchEntries('computer-use')}
-                    >
-                      {isSectionMounted('computer-use') ? <ComputerUsePane /> : null}
-                    </SettingsSection>
-
                     <SettingsSection
                       id="voice"
                       title="Voice"

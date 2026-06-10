@@ -1,10 +1,22 @@
-import { api } from '@/tauri'
+import { invoke } from '@tauri-apps/api/core'
 import { useRef, useCallback } from 'react'
 
 type BufferedAudioChunk = {
   samples: Float32Array
   sampleRate: number
   sessionId: string
+}
+
+// Send one audio chunk to the backend as the raw IPC body (the Float32 bytes),
+// with the rate + session id in headers. This skips JSON entirely — no array
+// stringify/parse and no per-sample boxing on this ~12×/sec hot path. The bytes
+// are the platform-native little-endian layout the Rust side reinterprets.
+function feedAudioChunk(samples: Float32Array, sampleRate: number, sessionId: string): Promise<unknown> {
+  // Copy out the exact bytes (the view may be offset into a larger buffer).
+  const bytes = new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength).slice()
+  return invoke('speech_feed_audio', bytes, {
+    headers: { 'x-sample-rate': String(sampleRate), 'x-session-id': sessionId }
+  })
 }
 
 type StartAudioCaptureOptions = {
@@ -168,9 +180,7 @@ export function useAudioCapture() {
             })
             return
           }
-          void api.speech
-            .feedAudio(samples, actualRate, sessionIdRef.current)
-            .catch(() => undefined)
+          void feedAudioChunk(samples, actualRate, sessionIdRef.current).catch(() => undefined)
         }
 
         source.connect(processor)
@@ -225,7 +235,7 @@ export function useAudioCapture() {
           break
         }
         removeOldestBufferedAudioChunk()
-        await api.speech.feedAudio(chunk.samples, chunk.sampleRate, chunk.sessionId)
+        await feedAudioChunk(chunk.samples, chunk.sampleRate, chunk.sessionId)
       }
     } finally {
       if (bufferedAudioGenerationRef.current === flushGeneration) {

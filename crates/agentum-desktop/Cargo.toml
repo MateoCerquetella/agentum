@@ -44,10 +44,35 @@ portable-pty = "0.9"
 base64 = "0.22"
 notify = "7"
 rusqlite = { version = "0.32", features = ["bundled"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 which = "7"
 parking_lot = "0.12"
 crossbeam-channel = "0.5"
+
+# On-device speech-to-text (Voice dictation). sherpa-rs wraps libsherpa-onnx;
+# `download-binaries` fetches prebuilt onnxruntime/sherpa libs at build time and
+# dynamically links them (copied next to the binary). `tts` is disabled — we only
+# do ASR. Streaming (online) recognizers are reached through the re-exported
+# `sherpa_rs_sys` FFI; offline recognizers use the safe wrappers.
+# `sys` re-exports `sherpa_rs_sys` so the streaming (online) recognizer is
+# reachable via raw FFI (the safe API only exposes offline recognizers).
+sherpa-rs = { version = "0.6", default-features = false, features = ["download-binaries", "sys"] }
+# Model archive download + integrity + extraction (sherpa models ship as tar.bz2).
+sha2 = "0.10"
+tar = "0.4"
+bzip2 = "0.4"
+futures-util = "0.3"
+
+# macOS Computer Use permission probing: CGPreflight/RequestScreenCaptureAccess
+# (screen recording) lives in core-graphics behind the `link` feature; the
+# Accessibility (AX) grant is read/requested via a direct ApplicationServices FFI
+# in commands/permissions.rs. core-foundation builds the options dict required by
+# AXIsProcessTrustedWithOptions — the call that registers the app in the
+# Accessibility list and shows the system prompt. Pin to 0.10 to match the
+# core-foundation-sys that core-graphics 0.25 links against.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = { version = "0.25", features = ["link"] }
+core-foundation = "0.10"

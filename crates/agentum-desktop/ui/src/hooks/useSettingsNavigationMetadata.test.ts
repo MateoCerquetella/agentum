@@ -25,11 +25,10 @@ function ids(args: { isMac?: boolean; isWindows?: boolean; isWebClient?: boolean
 
 describe('settings navigation metadata', () => {
   it('puts AI capability panes at the top on desktop', () => {
-    expect(ids().slice(0, 8)).toEqual([
+    expect(ids().slice(0, 7)).toEqual([
       'agents',
       'accounts',
-      'orchestration',
-      'computer-use',
+      'agents-automation',
       'voice',
       'general',
       'integrations',
@@ -41,7 +40,7 @@ describe('settings navigation metadata', () => {
     expect(ids({ isWebClient: true }).slice(0, 6)).toEqual([
       'agents',
       'accounts',
-      'orchestration',
+      'agents-automation',
       'general',
       'integrations',
       'git'

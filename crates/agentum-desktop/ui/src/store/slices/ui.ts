@@ -517,6 +517,7 @@ export type UISlice = {
       | 'voice'
       | 'experimental'
       | 'orchestration'
+      | 'agents-automation'
       | 'servers'
       | 'ssh'
     repoId: string | null
