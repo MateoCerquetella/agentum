@@ -14,7 +14,6 @@ import {
   Globe,
   Keyboard,
   ListChecks,
-  Lock,
   Mic,
   MousePointerClick,
   Network,
@@ -49,7 +48,6 @@ import { SSH_PANE_SEARCH_ENTRIES } from '@/components/settings/ssh-search'
 import { COMPUTER_USE_PANE_SEARCH_ENTRIES } from '@/components/settings/computer-use-search'
 import { VOICE_PANE_SEARCH_ENTRIES } from '@/components/settings/voice-pane-search'
 import { DEVELOPER_PERMISSIONS_PANE_SEARCH_ENTRIES } from '@/components/settings/developer-permissions-search'
-import { PRIVACY_PANE_SEARCH_ENTRIES } from '@/components/settings/privacy-search'
 import { SHORTCUTS_PANE_SEARCH_ENTRIES } from '@/components/settings/shortcuts-search'
 import { STATS_PANE_SEARCH_ENTRIES } from '@/components/stats/stats-search'
 import { EXPERIMENTAL_PANE_SEARCH_ENTRIES } from '@/components/settings/experimental-search'
@@ -259,14 +257,6 @@ export function buildSettingsNavigationMetadata({
           }
         ]
       : []),
-    {
-      id: 'privacy',
-      title: 'Privacy & Telemetry',
-      description: 'Anonymous usage data and telemetry controls.',
-      icon: Lock,
-      searchEntries: PRIVACY_PANE_SEARCH_ENTRIES,
-      group: 'security'
-    },
     {
       id: 'experimental',
       title: 'Experimental',

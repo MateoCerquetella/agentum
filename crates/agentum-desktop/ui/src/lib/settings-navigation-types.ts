@@ -15,7 +15,6 @@ export type SettingsNavTarget =
   | 'notifications'
   | 'computer-use'
   | 'developer-permissions'
-  | 'privacy'
   | 'voice'
   | 'shortcuts'
   | 'stats'

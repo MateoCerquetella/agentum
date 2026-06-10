@@ -41,7 +41,6 @@ import { TasksPane } from './TasksPane'
 import { QuickCommandsPane } from './QuickCommandsPane'
 import { DeveloperPermissionsPane } from './DeveloperPermissionsPane'
 import { ComputerUsePane } from './ComputerUsePane'
-import { PrivacyPane } from './PrivacyPane'
 import { SettingsSidebar } from './SettingsSidebar'
 import { ActiveSettingsSectionProvider, SettingsSection } from './SettingsSection'
 import { matchesSettingsSearch } from './settings-search'
@@ -1099,15 +1098,6 @@ function Settings(): React.JSX.Element {
                     ) : null}
                   </SettingsSection>
                 ) : null}
-
-                <SettingsSection
-                  id="privacy"
-                  title="Privacy & Telemetry"
-                  description="Anonymous usage data and telemetry controls."
-                  searchEntries={getSectionSearchEntries('privacy')}
-                >
-                  {isSectionMounted('privacy') ? <PrivacyPane settings={settings} /> : null}
-                </SettingsSection>
 
                 <SettingsSection
                   id="experimental"
