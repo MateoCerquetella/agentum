@@ -11,7 +11,8 @@ use agentum_core::{AgentDepCheck, DepCheck, Host, HostKind, HostReadiness, HostS
 use agentum_executor::{binary_for, probed_tools};
 // The SSH connection builder lives in the shared lower crate so the watchdog
 // (which can't depend on agentum-server) shares one source of truth for the
-// ssh/sshpass flags. Every `ssh_command(host, …)` call site below is unchanged.
+// ssh flags + the SSH_ASKPASS password helper. Every `ssh_command(host, …)`
+// call site below is unchanged.
 use agentum_tmux::ssh::ssh_command;
 use tokio::process::Command;
 use tokio::time::{sleep, timeout};

@@ -240,8 +240,8 @@ pub enum HostAuthChoice {
     /// SSH key / agent. The secret field holds an optional key path;
     /// blank means "use ssh-agent".
     Key,
-    /// Password auth (via `sshpass` on the daemon). The secret field holds
-    /// the password and is required.
+    /// Password auth (fed to ssh via the daemon's SSH_ASKPASS helper). The
+    /// secret field holds the password and is required.
     Password,
 }
 

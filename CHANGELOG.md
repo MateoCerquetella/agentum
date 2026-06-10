@@ -4,6 +4,20 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.5] — 2026-06-10
+
+### Changed
+- **Password SSH hosts no longer need `sshpass` installed.** The daemon used to
+  shell out to an external `sshpass` binary to feed a host's password to `ssh` —
+  so a password host on a machine without `sshpass` failed at connect time with
+  a bare *"No such file or directory (os error 2)"*. Password auth now goes
+  through OpenSSH's own `SSH_ASKPASS` helper (`SSH_ASKPASS_REQUIRE=force`),
+  which the stock `ssh` on every modern macOS/Linux supports — nothing to
+  install. The password travels in the child process environment instead of on
+  the command line, so it no longer appears in `ps` (a small security
+  improvement over `sshpass -p`). `agentum doctor` no longer probes for
+  `sshpass`.
+
 ## [0.13.3] — 2026-06-09
 
 ### Changed

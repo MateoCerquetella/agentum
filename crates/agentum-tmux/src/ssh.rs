@@ -10,8 +10,9 @@
 //!
 //! `agentum-server`'s `host_runtime` imports [`ssh_command`] from here rather
 //! than re-deriving the argv, so there is a single source of truth for the
-//! `ssh`/`sshpass` flags (BatchMode / ConnectTimeout / StrictHostKeyChecking /
-//! auth handling).
+//! `ssh` flags (BatchMode / ConnectTimeout / StrictHostKeyChecking / auth
+//! handling — key, agent, and SSH_ASKPASS-based password, no external
+//! `sshpass`).
 
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -72,12 +73,79 @@ fn control_path_template() -> Option<String> {
     Some(template)
 }
 
-/// Build the `ssh`/`sshpass` argv for running `script` on `host`. Returns a
-/// plain tokio [`Command`]; the caller drives `.output()` / `.status()`.
+/// Env var the askpass helper reads the password from. It lives only in the
+/// child process environment (same-user-readable) and — unlike `sshpass -p
+/// <pw>` — never appears on a command line where `ps` could read it.
+const ASKPASS_PW_ENV: &str = "AGENTUM_SSH_ASKPASS_PW";
+
+/// Path to a tiny SSH_ASKPASS helper that prints the password from
+/// [`ASKPASS_PW_ENV`] on stdout — OpenSSH's askpass protocol. This is how we
+/// feed a password to `ssh` non-interactively *without* the external `sshpass`
+/// binary: the stock `ssh` on every modern macOS/Linux runs this helper when
+/// `SSH_ASKPASS_REQUIRE=force` is set (OpenSSH 8.4+, 2020). Created `0700` on
+/// demand in the same private dir as the ControlMaster sockets. Returns `None`
+/// (caller then skips askpass wiring) when no safe dir exists or the write
+/// fails — mirroring how [`control_path_template`] degrades.
+#[cfg(unix)]
+fn askpass_script_path() -> Option<PathBuf> {
+    use std::io::Write;
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    let dir = control_socket_dir()?;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)
+        .ok()?;
+    let path = dir.join("askpass.sh");
+    // The helper carries no secret itself — it just echoes the env var ssh
+    // inherits. `\\n` in the Rust source is a literal backslash-n for printf.
+    let script = format!("#!/bin/sh\nprintf '%s\\n' \"${ASKPASS_PW_ENV}\"\n");
+    // Skip the write when the helper is already present and current.
+    if std::fs::read_to_string(&path).map(|c| c == script).unwrap_or(false) {
+        return Some(path);
+    }
+    // Write to a uniquely-named temp then atomically rename into place, so a
+    // concurrent ssh always sees either the old helper or the fully-written new
+    // one — never a truncated/half-written file. The unique suffix keeps two
+    // concurrent writers from clobbering each other's temp.
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let tmp = dir.join(format!(
+        "askpass.{}.{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o700)
+        .open(&tmp)
+        .ok()?;
+    f.write_all(script.as_bytes()).ok()?;
+    f.sync_all().ok()?;
+    drop(f);
+    std::fs::rename(&tmp, &path).ok()?;
+    Some(path)
+}
+
+/// Non-unix: the askpass helper is a POSIX shell script, so SSH_ASKPASS-based
+/// password auth isn't wired there (`sshpass` was essentially never present on
+/// Windows either). The caller falls back to a plain `ssh` with no helper.
+#[cfg(not(unix))]
+fn askpass_script_path() -> Option<PathBuf> {
+    None
+}
+
+/// Build the `ssh` argv for running `script` on `host`. Returns a plain tokio
+/// [`Command`]; the caller drives `.output()` / `.status()`.
 ///
-/// This is the single source of truth for our SSH connection flags. Moved
-/// verbatim from `agentum-server::host_runtime` so the watchdog (which can't
-/// depend on the server) and the server share one builder.
+/// This is the single source of truth for our SSH connection flags. Password
+/// auth is fed through OpenSSH's own SSH_ASKPASS helper (see
+/// [`askpass_script_path`]) rather than an external `sshpass` binary, so the
+/// watchdog (which can't depend on the server) and the server share one
+/// builder and password hosts need nothing installed.
 pub fn ssh_command(host: &Host, script: &str) -> Command {
     let HostKind::Ssh {
         user,
@@ -89,26 +157,20 @@ pub fn ssh_command(host: &Host, script: &str) -> Command {
         return Command::new("false");
     };
 
-    // Password auth shells through `sshpass`, which answers ssh's password
-    // prompt. That requires BatchMode=no (BatchMode=yes suppresses the
-    // prompt entirely, so sshpass would have nothing to answer). Key/agent
-    // auth keeps BatchMode=yes so it never blocks waiting on a prompt.
-    let password = match auth {
-        SshAuth::Password { password } if !password.trim().is_empty() => Some(password.as_str()),
-        _ => None,
-    };
+    // Password auth feeds the secret through OpenSSH's SSH_ASKPASS helper (set
+    // up in the `match auth` block below), so ssh must actually prompt for it —
+    // that requires BatchMode=no (BatchMode=yes suppresses the prompt entirely).
+    // Key/agent auth keeps BatchMode=yes so it never blocks waiting on a prompt.
+    let password = matches!(
+        auth,
+        SshAuth::Password { password } if !password.trim().is_empty()
+    );
 
-    let mut cmd = match password {
-        Some(pw) => {
-            let mut c = Command::new("sshpass");
-            c.arg("-p").arg(pw).arg("ssh");
-            c
-        }
-        None => Command::new("ssh"),
-    };
+    // Always invoke `ssh` directly now — no external `sshpass`.
+    let mut cmd = Command::new("ssh");
 
     cmd.arg("-o")
-        .arg(if password.is_some() {
+        .arg(if password {
             "BatchMode=no"
         } else {
             "BatchMode=yes"
@@ -146,13 +208,27 @@ pub fn ssh_command(host: &Host, script: &str) -> Command {
         SshAuth::Key { path } if !path.trim().is_empty() => {
             cmd.arg("-i").arg(path);
         }
-        SshAuth::Password { .. } => {
+        SshAuth::Password { password } if !password.trim().is_empty() => {
             // Force password auth so ssh doesn't silently try a key first
-            // (which would bypass sshpass and fail confusingly).
+            // (which would bypass the askpass prompt and fail confusingly).
             cmd.arg("-o")
                 .arg("PreferredAuthentications=password")
                 .arg("-o")
                 .arg("PubkeyAuthentication=no");
+            // Feed the password via OpenSSH's SSH_ASKPASS protocol: ssh runs the
+            // helper and reads the password from its stdout. `force` makes ssh
+            // use the helper even when a tty is present (OpenSSH 8.4+). The
+            // secret travels in the child env, never on the argv.
+            if let Some(askpass) = askpass_script_path() {
+                cmd.env("SSH_ASKPASS", &askpass)
+                    .env("SSH_ASKPASS_REQUIRE", "force")
+                    .env(ASKPASS_PW_ENV, password);
+                // Pre-8.4 ssh only consults askpass when DISPLAY is set; a
+                // placeholder is harmless (our helper never touches X).
+                if std::env::var_os("DISPLAY").is_none() {
+                    cmd.env("DISPLAY", ":0");
+                }
+            }
         }
         _ => {}
     }
@@ -332,6 +408,20 @@ mod tests {
             .collect()
     }
 
+    // Env vars explicitly set on the Command (vars only cleared/inherited are
+    // skipped) — lets the tests assert the SSH_ASKPASS wiring.
+    fn env_map(cmd: &Command) -> std::collections::HashMap<String, String> {
+        cmd.as_std()
+            .get_envs()
+            .filter_map(|(k, v)| {
+                Some((
+                    k.to_string_lossy().into_owned(),
+                    v?.to_string_lossy().into_owned(),
+                ))
+            })
+            .collect()
+    }
+
     #[test]
     fn ssh_command_key_uses_plain_ssh_with_batchmode() {
         let cmd = ssh_command(&ssh_host(SshAuth::Agent), "echo hi");
@@ -378,28 +468,89 @@ mod tests {
         assert_control_master(&arg_strings(&cmd));
     }
 
+    /// Password auth feeds the secret through OpenSSH's own SSH_ASKPASS helper
+    /// (no external `sshpass`): plain `ssh`, the password method forced, and the
+    /// secret carried in the child env — never on the argv, where `ps` could
+    /// read it (a strict improvement over `sshpass -p <pw>`).
+    #[cfg(unix)]
     #[test]
-    fn ssh_command_password_shells_through_sshpass() {
+    fn ssh_command_password_uses_askpass_not_sshpass() {
         let cmd = ssh_command(
             &ssh_host(SshAuth::Password {
                 password: "s3cret".into(),
             }),
             "echo hi",
         );
-        assert_eq!(cmd.as_std().get_program().to_string_lossy(), "sshpass");
+        // Plain ssh now — sshpass is gone.
+        assert_eq!(cmd.as_std().get_program().to_string_lossy(), "ssh");
         let args = arg_strings(&cmd);
-        // `sshpass -p <pw> ssh …`
-        assert_eq!(args[0], "-p");
-        assert_eq!(args[1], "s3cret");
-        assert_eq!(args[2], "ssh");
-        // Password auth must NOT use BatchMode=yes (it suppresses the
-        // prompt sshpass needs to answer) and must force password auth.
+        assert!(
+            !args.iter().any(|a| a.contains("sshpass")),
+            "must not shell through sshpass: {args:?}"
+        );
+        // BatchMode=no so ssh actually prompts (firing the askpass helper);
+        // force the password method so it never silently tries a key first.
         assert!(args.contains(&"BatchMode=no".to_string()));
         assert!(!args.contains(&"BatchMode=yes".to_string()));
         assert!(args.contains(&"PreferredAuthentications=password".to_string()));
+        assert!(args.contains(&"PubkeyAuthentication=no".to_string()));
         assert!(args.iter().any(|a| a == "me@box.local"));
-        // Pooling applies to the sshpass path too.
+        // The password rides in the env for the askpass helper — NOT in argv.
+        assert!(
+            !args.iter().any(|a| a == "s3cret"),
+            "password must never reach the argv: {args:?}"
+        );
+        let envs = env_map(&cmd);
+        assert_eq!(
+            envs.get("SSH_ASKPASS_REQUIRE").map(String::as_str),
+            Some("force")
+        );
+        assert_eq!(
+            envs.get(ASKPASS_PW_ENV).map(String::as_str),
+            Some("s3cret")
+        );
+        let askpass = envs
+            .get("SSH_ASKPASS")
+            .expect("SSH_ASKPASS set for password auth");
+        assert!(
+            askpass.ends_with("askpass.sh"),
+            "unexpected askpass path: {askpass}"
+        );
+        // Pooling still applies on the password path.
         assert_control_master(&args);
+    }
+
+    /// Key/agent auth must NOT wire up the askpass env (it never prompts, so
+    /// there is no password to feed).
+    #[cfg(unix)]
+    #[test]
+    fn ssh_command_key_sets_no_askpass_env() {
+        let cmd = ssh_command(&ssh_host(SshAuth::Agent), "echo hi");
+        let envs = env_map(&cmd);
+        assert!(
+            !envs.contains_key("SSH_ASKPASS"),
+            "key/agent auth must not set SSH_ASKPASS"
+        );
+        assert!(!envs.contains_key(ASKPASS_PW_ENV));
+    }
+
+    /// The askpass helper is written executable (0700) and idempotently — a
+    /// static POSIX script that echoes the password env var to ssh on stdout.
+    #[cfg(unix)]
+    #[test]
+    fn askpass_script_written_executable_and_idempotent() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = askpass_script_path().expect("askpass path available with HOME set");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.starts_with("#!/bin/sh"), "missing shebang: {content}");
+        assert!(
+            content.contains(ASKPASS_PW_ENV),
+            "script must echo the pw env var: {content}"
+        );
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "askpass must be owner-only executable");
+        // Idempotent: a second call returns the same path without error.
+        assert_eq!(askpass_script_path(), Some(path));
     }
 
     #[test]

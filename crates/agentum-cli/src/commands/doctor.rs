@@ -30,7 +30,6 @@ impl Check {
 pub async fn run() -> Result<()> {
     let checks = vec![
         check_tmux().await,
-        check_sshpass().await,
         check_dir("data dir", paths::data_dir),
         check_dir("config dir", paths::config_dir),
         check_db().await,
@@ -74,38 +73,6 @@ async fn check_tmux() -> Check {
         }
         Ok(_) => Check::fail("tmux", "tmux found but returned an error"),
         Err(_) => Check::fail("tmux", "not found \u{2014} install with: apt install tmux"),
-    }
-}
-
-/// `sshpass` is OPTIONAL — it's only needed for SSH hosts that use password
-/// auth (key/agent hosts never touch it). So a missing binary is reported
-/// for visibility but never fails the doctor run; otherwise everyone who
-/// only uses keys would see a spurious red ✗.
-async fn check_sshpass() -> Check {
-    match Command::new("sshpass").arg("-V").output().await {
-        Ok(out) if out.status.success() => {
-            // sshpass prints e.g. "sshpass 1.09 (C) 2006-2011 …" — take the
-            // first line, fall back to a plain "installed" if it's empty.
-            let ver = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            Check::ok(
-                "sshpass",
-                if ver.is_empty() {
-                    "installed".to_string()
-                } else {
-                    ver
-                },
-            )
-        }
-        _ => Check::ok(
-            "sshpass",
-            "not found \u{2014} only needed for password SSH hosts \
-             (install: apt/pacman/brew install sshpass)",
-        ),
     }
 }
 
