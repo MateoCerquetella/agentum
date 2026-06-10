@@ -4,7 +4,7 @@
 // (a native SSH target id); to run its sessions on the remote we need the
 // matching server host id. This module create-or-gets that host by SSH
 // coordinates and caches the mapping for the session lifetime.
-import { getJson, postJson } from './server-http'
+import { getJson, postJson, putJson } from './server-http'
 import { api } from '@/tauri'
 import type { SshTarget } from '../../../shared/ssh-types'
 
@@ -152,25 +152,63 @@ function targetHostname(target: SshTarget): string {
   return target.host
 }
 
-function createServerHost(name: string, target: SshTarget): Promise<ServerHost> {
-  // `auth` is an internally-tagged SshAuth on the server (tag = "auth"), so it
-  // must be a nested object — {auth:'agent'}, {auth:'key', path}, or
-  // {auth:'password', password} — NOT a flat field. Precedence: an explicit
-  // password wins (host only allows password login), then an identity file,
-  // else the SSH agent.
-  const auth = target.password
+// `auth` is an internally-tagged SshAuth on the server (tag = "auth"), so it
+// must be a nested object — {auth:'agent'}, {auth:'key', path}, or
+// {auth:'password', password} — NOT a flat field. Precedence: an explicit
+// password wins (host only allows password login), then an identity file, else
+// the SSH agent.
+function authFromTarget(target: SshTarget) {
+  return target.password
     ? { auth: 'password' as const, password: target.password }
     : target.identityFile
       ? { auth: 'key' as const, path: target.identityFile }
       : { auth: 'agent' as const }
-  return postJson<ServerHost>('/api/hosts', {
+}
+
+function hostBody(name: string, target: SshTarget) {
+  return {
     name,
-    kind: 'ssh',
+    kind: 'ssh' as const,
     user: target.username,
     hostname: targetHostname(target),
     port: target.port,
-    auth
-  })
+    auth: authFromTarget(target)
+  }
+}
+
+function createServerHost(name: string, target: SshTarget): Promise<ServerHost> {
+  return postJson<ServerHost>('/api/hosts', hostBody(name, target))
+}
+
+// PUT the host's connection settings — crucially its auth — so a re-entered or
+// changed password (or key) on the target reaches the host the daemon actually
+// authenticates with. The host's stored secret isn't returned by GET, so we
+// can't diff it; we always push the target's current auth. This closes the bug
+// where a host, once created with a wrong password, kept it forever because the
+// resolver matched by host/user/port only and never refreshed the secret.
+function updateServerHost(id: string, name: string, target: SshTarget): Promise<ServerHost> {
+  return putJson<ServerHost>(`/api/hosts/${encodeURIComponent(id)}`, hostBody(name, target))
+}
+
+/**
+ * Push a saved target's auth to its matching server host so a re-entered or
+ * changed password takes effect immediately. Updates an existing host only —
+ * it does not eagerly create one (the resolver creates it lazily on first
+ * session, with this same current auth). Best-effort: never throws into the
+ * save flow.
+ */
+export async function syncServerHostAuthForTarget(target: SshTarget): Promise<void> {
+  try {
+    const hosts = await listServerHosts()
+    const existing = hosts.find((h) => sameSshCoords(h, target))
+    if (!existing) {
+      return
+    }
+    const host = await updateServerHost(existing.id, target.label || target.host, target)
+    hostIdByConnectionId.set(target.id, host.id)
+  } catch (err) {
+    console.warn('[agentum] failed to sync server host auth for target', target.id, err)
+  }
 }
 
 // connectionId (native ssh target id) → resolved server host id. Bounded by the
@@ -208,7 +246,11 @@ export async function resolveServerHostIdForConnection(
     }
     const hosts = await listServerHosts()
     const existing = hosts.find((h) => sameSshCoords(h, target))
-    const host = existing ?? (await createServerHost(target.label || target.host, target))
+    // Refresh an existing host's auth from the target (not just reuse it) so a
+    // password changed since the host was created actually takes effect.
+    const host = existing
+      ? await updateServerHost(existing.id, target.label || target.host, target)
+      : await createServerHost(target.label || target.host, target)
     hostIdByConnectionId.set(connectionId, host.id)
     return host.id
   } catch (err) {

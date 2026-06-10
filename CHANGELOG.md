@@ -4,6 +4,21 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.8] — 2026-06-10
+
+### Fixed
+- **Re-entering an SSH password now actually takes effect.** The embedded host
+  the daemon authenticates with was matched to a native SSH target by
+  host/user/port only and **never had its stored secret refreshed** — so once a
+  host was created with a wrong password, editing the password (or even deleting
+  and re-adding the target) reused the same host and kept failing with
+  "Permission denied", even though the same password worked in a terminal.
+  Saving a target now pushes its current auth to the matching host, and the
+  connection resolver refreshes an existing host's auth instead of blindly
+  reusing it. Verified end-to-end: a host with a wrong password is rejected, and
+  PUT-ing the correct password makes it authenticate. (Re-enter the password
+  once on an affected host to store the correct value.)
+
 ## [0.13.7] — 2026-06-10
 
 ### Fixed

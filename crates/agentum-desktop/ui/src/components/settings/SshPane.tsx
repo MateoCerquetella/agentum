@@ -10,6 +10,7 @@ import { Button } from '../ui/button'
 import { removeSshTargetWithBestEffortCleanup } from './ssh-target-remove'
 import {
   resolveServerHostIdForConnection,
+  syncServerHostAuthForTarget,
   testServerHost
 } from '@/runtime/server-host-client'
 import { SshTargetCard } from './SshTargetCard'
@@ -105,10 +106,17 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
     }
 
     try {
-      await (editingId
+      const saved = (await (editingId
         ? api.ssh.updateTarget({ id: editingId, updates: target })
-        : api.ssh.addTarget({ target }))
+        : api.ssh.addTarget({ target }))) as SshTarget | undefined
       recordFeatureInteraction('ssh')
+      // Push the (possibly re-entered) password/key to the embedded server host
+      // so the daemon authenticates with the current secret, not a stale one.
+      // The host is created/matched by host/user/port and otherwise never has
+      // its secret refreshed — this is what makes "fix the password" actually work.
+      if (saved?.id) {
+        void syncServerHostAuthForTarget(saved)
+      }
       if (!mountedRef.current) {
         return
       }
