@@ -129,6 +129,10 @@ const AddRepoDialog = React.memo(function AddRepoDialog() {
   // Why: a dropped path is modal data, so ordinary state updates must not
   // re-run the import while the Add Project dialog advances through steps.
   const droppedLocalPathHandledRef = useRef<string | null>(null)
+  // Why: when the workspace composer opens this dialog for an SSH host it passes
+  // that host's connectionId; this guards the one-time jump-to-remote-step so a
+  // re-render doesn't keep re-opening the remote step after the user navigates.
+  const remoteAutoOpenHandledRef = useRef<string | null>(null)
   // Why: track whether we've already auto-filled for this entry into the clone step,
   // so a late settings hydration still gets a chance to set the default.
   const cloneStepAutoFilledRef = useRef(false)
@@ -215,6 +219,10 @@ const AddRepoDialog = React.memo(function AddRepoDialog() {
   const isOpen = activeModal === 'add-repo'
   const droppedLocalPath =
     typeof modalData.droppedLocalPath === 'string' ? modalData.droppedLocalPath : ''
+  // Composer-supplied SSH host (`ssh:<connectionId>` → connectionId). When set,
+  // the dialog opens directly into the remote step with this target preselected.
+  const initialConnectionId =
+    typeof modalData.connectionId === 'string' ? modalData.connectionId : ''
   const projectId = addedRepo?.id ?? ''
   const isRuntimeEnvironmentActive = Boolean(settings?.activeRuntimeEnvironmentId?.trim())
 
@@ -285,9 +293,24 @@ const AddRepoDialog = React.memo(function AddRepoDialog() {
   useEffect(() => {
     if (!isOpen) {
       droppedLocalPathHandledRef.current = null
+      remoteAutoOpenHandledRef.current = null
       resetState()
     }
   }, [isOpen, resetState])
+
+  // Why: opened from the composer for an SSH host — jump straight to the remote
+  // step with that host preselected. Ref-guarded so it fires once per open, not
+  // on every render. A dropped local path takes precedence (it's a local add).
+  useEffect(() => {
+    if (!isOpen || !initialConnectionId || droppedLocalPath) {
+      return
+    }
+    if (remoteAutoOpenHandledRef.current === initialConnectionId) {
+      return
+    }
+    remoteAutoOpenHandledRef.current = initialConnectionId
+    void handleOpenRemoteStep(initialConnectionId)
+  }, [isOpen, initialConnectionId, droppedLocalPath, handleOpenRemoteStep])
 
   const isInputStep =
     step === 'add' ||

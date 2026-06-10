@@ -11,9 +11,11 @@ use agentum_core::{AgentDepCheck, DepCheck, Host, HostKind, HostReadiness, HostS
 use agentum_executor::{binary_for, probed_tools};
 // The SSH connection builder lives in the shared lower crate so the watchdog
 // (which can't depend on agentum-server) shares one source of truth for the
-// ssh flags + the SSH_ASKPASS password helper. Every `ssh_command(host, …)`
-// call site below is unchanged.
-use agentum_tmux::ssh::ssh_command;
+// ssh flags + the SSH_ASKPASS password helper. `ssh_output` is the resilient
+// runner: it replays an op on a fresh, unmultiplexed connection when a pooled
+// ControlMaster socket goes stale, so a flaky master never hard-fails a remote
+// op that never actually ran.
+use agentum_tmux::ssh::{ssh_command, ssh_output};
 use tokio::process::Command;
 use tokio::time::{sleep, timeout};
 
@@ -45,6 +47,17 @@ pub enum HostRuntimeError {
 }
 
 pub type Result<T> = std::result::Result<T, HostRuntimeError>;
+
+/// Map [`ssh_output`]'s `io::Error` to a [`HostRuntimeError`], preserving the
+/// distinct `Timeout` variant (the runner reports a timeout as `ErrorKind::
+/// TimedOut`) that callers and the UI surface separately from other I/O.
+fn map_ssh_io(e: std::io::Error) -> HostRuntimeError {
+    if e.kind() == std::io::ErrorKind::TimedOut {
+        HostRuntimeError::Timeout
+    } else {
+        HostRuntimeError::Io(e)
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct HostProbe {
@@ -187,9 +200,7 @@ pub async fn install_agents(host: &Host, tools: &[String]) -> Result<HostReadine
 /// `stderr` on a non-zero exit. (`ssh_checked` hard-codes `SSH_TIMEOUT`;
 /// bootstrap needs a longer budget.)
 async fn run_checked_ssh(host: &Host, script: &str, dur: Duration) -> Result<()> {
-    let output = timeout(dur, ssh_command(host, script).output())
-        .await
-        .map_err(|_| HostRuntimeError::Timeout)??;
+    let output = ssh_output(host, script, dur).await.map_err(map_ssh_io)?;
     if output.status.success() {
         Ok(())
     } else {
@@ -464,10 +475,10 @@ pub async fn has_session(host: &Host, target: &str) -> Result<bool> {
         HostKind::Local => Ok(agentum_tmux::has_session(target).await?),
         HostKind::Ssh { .. } => {
             let script = format!("tmux has-session -t {}", q(&format!("={target}"))?);
-            let status = timeout(SSH_TIMEOUT, ssh_command(host, &script).status())
+            let output = ssh_output(host, &script, SSH_TIMEOUT)
                 .await
-                .map_err(|_| HostRuntimeError::Timeout)??;
-            Ok(status.success())
+                .map_err(map_ssh_io)?;
+            Ok(output.status.success())
         }
     }
 }
@@ -710,9 +721,9 @@ pub fn spawn_remote_pane_tail(host: &Host, out_path: &Path) -> Result<tokio::pro
 }
 
 pub async fn ssh_stdout(host: &Host, script: &str) -> Result<String> {
-    let output = timeout(SSH_TIMEOUT, ssh_command(host, script).output())
+    let output = ssh_output(host, script, SSH_TIMEOUT)
         .await
-        .map_err(|_| HostRuntimeError::Timeout)??;
+        .map_err(map_ssh_io)?;
     if !output.status.success() {
         return Err(HostRuntimeError::NonZero {
             status: output.status.code(),
@@ -785,9 +796,9 @@ pub async fn git_in_dir(host: &Host, cwd: &str, args: &[&str]) -> Result<HostCom
                 inner.push_str(&q(a)?);
             }
             let script = format!("sh -c {}", q(&inner)?);
-            let out = timeout(GIT_TIMEOUT, ssh_command(host, &script).output())
+            let out = ssh_output(host, &script, GIT_TIMEOUT)
                 .await
-                .map_err(|_| HostRuntimeError::Timeout)??;
+                .map_err(map_ssh_io)?;
             Ok(HostCommandOutput {
                 success: out.status.success(),
                 code: out.status.code(),
@@ -836,9 +847,9 @@ pub async fn read_file_bytes(host: &Host, abs_path: &str) -> Result<Option<Vec<u
         },
         HostKind::Ssh { .. } => {
             let script = format!("sh -c {}", q(&format!("cat {}", q(abs_path)?))?);
-            let out = timeout(GIT_TIMEOUT, ssh_command(host, &script).output())
+            let out = ssh_output(host, &script, GIT_TIMEOUT)
                 .await
-                .map_err(|_| HostRuntimeError::Timeout)??;
+                .map_err(map_ssh_io)?;
             Ok(out.status.success().then_some(out.stdout))
         }
     }
@@ -852,18 +863,18 @@ pub async fn path_exists(host: &Host, abs_path: &str) -> Result<bool> {
         HostKind::Local => Ok(tokio::fs::try_exists(abs_path).await.unwrap_or(false)),
         HostKind::Ssh { .. } => {
             let script = format!("sh -c {}", q(&format!("test -e {}", q(abs_path)?))?);
-            let out = timeout(SSH_TIMEOUT, ssh_command(host, &script).output())
+            let out = ssh_output(host, &script, SSH_TIMEOUT)
                 .await
-                .map_err(|_| HostRuntimeError::Timeout)??;
+                .map_err(map_ssh_io)?;
             Ok(out.status.success())
         }
     }
 }
 
 async fn ssh_checked(host: &Host, script: &str) -> Result<()> {
-    let output = timeout(SSH_TIMEOUT, ssh_command(host, script).output())
+    let output = ssh_output(host, script, SSH_TIMEOUT)
         .await
-        .map_err(|_| HostRuntimeError::Timeout)??;
+        .map_err(map_ssh_io)?;
     if output.status.success() {
         Ok(())
     } else {

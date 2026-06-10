@@ -370,8 +370,16 @@ export default function NewWorkspaceComposerCard({
   }, [detectedAgentIds, disabledTuiAgents])
 
   const handleAddRepo = React.useCallback((): void => {
-    openModal('add-repo')
-  }, [openModal])
+    // Why: the composer's host selector decides *where* the new project lives.
+    // An SSH host key is `ssh:<connectionId>` (the SSH target id); forward that
+    // so the add-repo dialog opens straight into its Remote step with the host
+    // preselected, instead of defaulting to the local "Browse folder" picker on
+    // the operator's own machine.
+    const connectionId = selectedHostKey.startsWith('ssh:')
+      ? selectedHostKey.slice('ssh:'.length)
+      : ''
+    openModal('add-repo', connectionId ? { connectionId } : {})
+  }, [openModal, selectedHostKey])
 
   return (
     <div
