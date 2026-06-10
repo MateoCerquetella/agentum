@@ -191,7 +191,9 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     group: 'Global',
     scope: 'global',
     searchKeywords: ['shortcut', 'export', 'pdf', 'markdown'],
-    defaultBindings: platformBindings(['Mod+Shift+E']),
+    // Why: Mod+Shift+E is VS Code's "Show Explorer" — kept for sidebar.explorer.toggle
+    // (spec 007 C4b). Export PDF stays reachable via the menu (onExportPdfRequested IPC).
+    defaultBindings: platformBindings([]),
     conflictGroup: 'menu'
   },
   {

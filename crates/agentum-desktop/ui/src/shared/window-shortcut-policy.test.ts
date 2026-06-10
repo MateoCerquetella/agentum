@@ -160,12 +160,9 @@ describe('resolveWindowShortcutAction', () => {
   })
 
   it('routes menu-backed actions through the same window shortcut policy', () => {
-    expect(
-      resolveWindowShortcutAction(
-        { code: 'KeyE', key: 'e', meta: true, control: false, alt: false, shift: true },
-        'darwin'
-      )
-    ).toEqual({ type: 'exportPdf' })
+    // Why: file.exportPdf was unassigned in spec 007 C4b (Mod+Shift+E now belongs
+    // to sidebar.explorer.toggle), so it no longer resolves through this policy.
+    // forceReload remains a menu-backed action with a default chord.
     expect(
       resolveWindowShortcutAction(
         { code: 'KeyR', key: 'r', meta: false, control: true, alt: false, shift: true },
