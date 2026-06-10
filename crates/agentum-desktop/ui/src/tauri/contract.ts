@@ -494,7 +494,6 @@ export interface AgentumApi {
     requestClose: ApiMethod
     saveClipboardImageAsTempFile: ApiMethod
     set: ApiMethod
-    setFloatingTerminalInputFocused: ApiMethod
     setMarkdownEditorFocused: ApiMethod
     setShortcutRecorderFocused: ApiMethod
     setTerminalInputFocused: ApiMethod
@@ -547,7 +546,6 @@ export interface AgentumApi {
     onSwitchTerminalTab: ApiEvent
     onTerminalShortcutCaptured: ApiEvent
     onTerminalZoom: ApiEvent
-    onToggleFloatingTerminal: ApiEvent
     onToggleLeftSidebar: ApiEvent
     onToggleRightSidebar: ApiEvent
     onToggleStatusBar: ApiEvent

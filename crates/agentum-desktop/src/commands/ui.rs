@@ -151,11 +151,6 @@ pub fn ui_set_markdown_editor_focused(value: bool) {
 }
 
 #[tauri::command]
-pub fn ui_set_floating_terminal_input_focused(value: bool) {
-    let _ = value;
-}
-
-#[tauri::command]
 pub fn ui_set_terminal_input_focused(value: bool) {
     let _ = value;
 }

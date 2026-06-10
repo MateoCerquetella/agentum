@@ -50,7 +50,6 @@ import {
   shouldSuppressInheritedTerminalStatus
 } from '../../../shared/agent-status-identity'
 import { isGitRepoKind } from '../../../shared/repo-kind'
-import { TOGGLE_FLOATING_TERMINAL_EVENT } from '@/lib/floating-terminal'
 import { focusTerminalTabSurface } from '@/lib/focus-terminal-tab-surface'
 import { activateTabAndFocusPane } from '@/lib/activate-tab-and-focus-pane'
 import { focusRuntimeTerminalSurface } from '@/runtime/sync-runtime-graph'
@@ -71,14 +70,6 @@ import {
   createWebRuntimeSessionTerminal,
   isWebRuntimeSessionActive
 } from '@/runtime/web-runtime-session'
-import {
-  createFloatingWorkspaceBrowserTab,
-  createFloatingWorkspaceMarkdownTab,
-  createFloatingWorkspaceTerminalTab,
-  isEmptyFloatingWorkspacePanelVisible,
-  isFloatingWorkspacePanelFocused,
-  switchFloatingWorkspaceTab
-} from '@/lib/floating-workspace-terminal-actions'
 import {
   observeAgentHookCompletionForNotification,
   resetAgentHookCompletionNotificationCoordinators,
@@ -736,12 +727,6 @@ export function useIpcEvents(): void {
           return
         }
         store.openModal('worktree-palette')
-      })
-    )
-
-    unsubs.push(
-      api.ui.onToggleFloatingTerminal(() => {
-        window.dispatchEvent(new CustomEvent(TOGGLE_FLOATING_TERMINAL_EVENT))
       })
     )
 
@@ -1404,10 +1389,6 @@ export function useIpcEvents(): void {
     unsubs.push(
       api.ui.onNewBrowserTab(() => {
         const store = useAppStore.getState()
-        if (isFloatingWorkspacePanelFocused()) {
-          void createFloatingWorkspaceBrowserTab(store)
-          return
-        }
         const worktreeId = store.activeWorktreeId
         if (worktreeId) {
           if (isRuntimeEnvironmentActive()) {
@@ -1441,14 +1422,6 @@ export function useIpcEvents(): void {
     unsubs.push(
       api.ui.onNewMarkdownTab(() => {
         const store = useAppStore.getState()
-        if (isFloatingWorkspacePanelFocused()) {
-          void createFloatingWorkspaceMarkdownTab(store).catch((err) => {
-            toast.error(
-              err instanceof Error ? err.message : 'Failed to create untitled markdown file.'
-            )
-          })
-          return
-        }
         const worktreeId = store.activeWorktreeId
         if (!worktreeId) {
           return
@@ -1652,10 +1625,6 @@ export function useIpcEvents(): void {
     unsubs.push(
       api.ui.onNewTerminalTab(() => {
         const store = useAppStore.getState()
-        if (isFloatingWorkspacePanelFocused()) {
-          void createFloatingWorkspaceTerminalTab(store)
-          return
-        }
         const worktreeId = store.activeWorktreeId
         if (!worktreeId) {
           return
@@ -1701,10 +1670,6 @@ export function useIpcEvents(): void {
 
     unsubs.push(
       api.ui.onCloseActiveTab(() => {
-        if (isEmptyFloatingWorkspacePanelVisible()) {
-          window.dispatchEvent(new Event(TOGGLE_FLOATING_TERMINAL_EVENT))
-          return
-        }
         const store = useAppStore.getState()
         if (store.activeTabType === 'browser' && store.activeBrowserTabId) {
           if (
@@ -1734,32 +1699,17 @@ export function useIpcEvents(): void {
 
     unsubs.push(
       api.ui.onSwitchTab((direction) => {
-        const store = useAppStore.getState()
-        if (isFloatingWorkspacePanelFocused()) {
-          switchFloatingWorkspaceTab(store, direction, 'same-type')
-          return
-        }
         handleSwitchTab(direction)
       })
     )
     unsubs.push(
       api.ui.onSwitchTabAcrossAllTypes((direction) => {
-        const store = useAppStore.getState()
-        if (isFloatingWorkspacePanelFocused()) {
-          switchFloatingWorkspaceTab(store, direction, 'all-types')
-          return
-        }
         handleSwitchTabAcrossAllTypes(direction)
       })
     )
     unsubs.push(api.ui.onSwitchRecentTab(handleSwitchRecentTab))
     unsubs.push(
       api.ui.onSwitchTerminalTab((direction) => {
-        const store = useAppStore.getState()
-        if (isFloatingWorkspacePanelFocused()) {
-          switchFloatingWorkspaceTab(store, direction, 'terminal')
-          return
-        }
         handleSwitchTerminalTab(direction)
       })
     )

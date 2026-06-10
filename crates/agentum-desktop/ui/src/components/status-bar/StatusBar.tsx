@@ -9,7 +9,6 @@ import {
   ChevronDown,
   ChevronRight,
   Loader2,
-  PanelsTopLeft,
   RefreshCw,
   Server
 } from 'lucide-react'
@@ -48,18 +47,12 @@ import { isStatusBarItemAvailable } from './status-bar-agent-gating'
 import { isProviderConfigured } from './status-bar-provider-visibility'
 import { shouldOpenStatusBarContextMenu } from './status-bar-context-menu-policy'
 import { PetStatusSegment } from './PetStatusSegment'
-import { TOGGLE_FLOATING_TERMINAL_EVENT } from '@/lib/floating-terminal'
-import { useShortcutLabel } from '@/hooks/useShortcutLabel'
-import { FloatingTerminalIconContextMenu } from '@/components/floating-terminal/FloatingTerminalIconContextMenu'
 import { summarizeCodexRestartStatus } from './codex-restart-status-summary'
 import {
   getWindowsTerminalCapabilityOwnerKey,
   useWindowsTerminalCapabilities
 } from '@/lib/windows-terminal-capabilities'
 
-type StatusBarProps = {
-  floatingTerminalOpen: boolean
-}
 
 export type CodexStatusRuntimeTarget = {
   runtime: 'host' | 'wsl'
@@ -1460,17 +1453,12 @@ function ProviderDetailsMenu({
 
 const CLOSE_ALL_CONTEXT_MENUS_EVENT = 'agentum-close-all-context-menus'
 
-function StatusBarInner({ floatingTerminalOpen }: StatusBarProps): React.JSX.Element | null {
-  const floatingTerminalShortcut = useShortcutLabel('floatingTerminal.toggle')
+function StatusBarInner(): React.JSX.Element | null {
   const rateLimits = useAppStore((s) => s.rateLimits)
   const refreshRateLimits = useAppStore((s) => s.refreshRateLimits)
   const statusBarVisible = useAppStore((s) => s.statusBarVisible)
   const statusBarItems = useAppStore((s) => s.statusBarItems)
   const recordFeatureInteraction = useAppStore((s) => s.recordFeatureInteraction)
-  const floatingTerminalEnabled = useAppStore((s) => s.settings?.floatingTerminalEnabled === true)
-  const floatingTerminalTriggerLocation = useAppStore(
-    (s) => s.settings?.floatingTerminalTriggerLocation ?? 'floating-button'
-  )
   // Why: usage bars exist to surface CLI rate limits — showing one for an
   // agent that isn't on the user's PATH is just noise (e.g. a fresh Ubuntu
   // install showing "Gemini Usage" with no Gemini CLI installed). We gate
@@ -1579,8 +1567,6 @@ function StatusBarInner({ floatingTerminalOpen }: StatusBarProps): React.JSX.Ele
   const showSsh = statusBarItems.includes('ssh')
   const showPorts = statusBarItems.includes('ports')
   const showIo = statusBarItems.includes('io')
-  const showFloatingTerminalToggle =
-    floatingTerminalEnabled && floatingTerminalTriggerLocation === 'status-bar'
   const anyVisible = showClaude || showCodex || showGemini || showOpencodeGo
   const anyFetching =
     claude?.status === 'fetching' ||
@@ -1590,9 +1576,6 @@ function StatusBarInner({ floatingTerminalOpen }: StatusBarProps): React.JSX.Ele
 
   const compact = containerWidth < 900
   const iconOnly = containerWidth < 500
-  const floatingTerminalActionLabel = floatingTerminalOpen
-    ? 'Minimize Floating Workspace'
-    : 'Show Floating Workspace'
 
   return (
     <div
@@ -1664,27 +1647,6 @@ function StatusBarInner({ floatingTerminalOpen }: StatusBarProps): React.JSX.Ele
         {showIo && <IoStatusSegment compact={compact} iconOnly={iconOnly} />}
         {showPorts && <PortsStatusSegment compact={compact} iconOnly={iconOnly} />}
         {showSsh && <SshStatusSegment compact={compact} iconOnly={iconOnly} />}
-        {showFloatingTerminalToggle && (
-          <FloatingTerminalIconContextMenu currentLocation="status-bar" className="relative">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  className="inline-flex size-5 cursor-pointer items-center justify-center rounded border border-border bg-secondary text-secondary-foreground shadow-xs transition-colors hover:bg-accent hover:text-accent-foreground"
-                  aria-label={floatingTerminalActionLabel}
-                  onClick={() => {
-                    window.dispatchEvent(new CustomEvent(TOGGLE_FLOATING_TERMINAL_EVENT))
-                  }}
-                >
-                  <PanelsTopLeft className="size-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="top" sideOffset={6}>
-                {floatingTerminalActionLabel} ({floatingTerminalShortcut})
-              </TooltipContent>
-            </Tooltip>
-          </FloatingTerminalIconContextMenu>
-        )}
       </div>
 
       <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen} modal={false}>

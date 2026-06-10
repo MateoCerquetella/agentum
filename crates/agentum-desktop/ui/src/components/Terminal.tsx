@@ -75,14 +75,6 @@ import {
   isWebRuntimeSessionActive
 } from '@/runtime/web-runtime-session'
 import {
-  createFloatingWorkspaceBrowserTab,
-  createFloatingWorkspaceMarkdownTab,
-  createFloatingWorkspaceTerminalTab,
-  handleEmptyFloatingWorkspacePanelCloseShortcut,
-  isFloatingWorkspacePanelFocused,
-  switchFloatingWorkspaceTab
-} from '@/lib/floating-workspace-terminal-actions'
-import {
   keybindingMatchesAction,
   type KeybindingActionId,
   type KeybindingContext
@@ -1224,7 +1216,6 @@ function Terminal(): React.JSX.Element | null {
         : 'linux'
     const onKeyDown = (e: KeyboardEvent): void => {
       const context = getKeybindingContext(e.target)
-      const floatingWorkspaceFocused = isFloatingWorkspacePanelFocused()
       const matchShortcut = (actionId: KeybindingActionId): boolean =>
         keybindingMatchesAction(actionId, e, shortcutPlatform, keybindings, {
           context,
@@ -1247,10 +1238,6 @@ function Terminal(): React.JSX.Element | null {
       if (!e.repeat && matchShortcut('tab.newTerminal')) {
         e.preventDefault()
         notifyTerminalCapture('tab.newTerminal')
-        if (floatingWorkspaceFocused) {
-          void createFloatingWorkspaceTerminalTab(useAppStore.getState())
-          return
-        }
         handleNewTab()
         return
       }
@@ -1276,10 +1263,6 @@ function Terminal(): React.JSX.Element | null {
       if (!e.repeat && matchShortcut('tab.newBrowser')) {
         e.preventDefault()
         notifyTerminalCapture('tab.newBrowser')
-        if (floatingWorkspaceFocused) {
-          void createFloatingWorkspaceBrowserTab(useAppStore.getState())
-          return
-        }
         handleNewBrowserTab()
         return
       }
@@ -1308,19 +1291,7 @@ function Terminal(): React.JSX.Element | null {
       if (!e.repeat && matchShortcut('tab.newMarkdown')) {
         e.preventDefault()
         notifyTerminalCapture('tab.newMarkdown')
-        if (floatingWorkspaceFocused) {
-          void createFloatingWorkspaceMarkdownTab(useAppStore.getState()).catch((err) => {
-            toast.error(
-              err instanceof Error ? err.message : 'Failed to create untitled markdown file.'
-            )
-          })
-          return
-        }
         void handleNewFile()
-        return
-      }
-
-      if (handleEmptyFloatingWorkspacePanelCloseShortcut(e, shortcutPlatform, keybindings)) {
         return
       }
 
@@ -1397,13 +1368,7 @@ function Terminal(): React.JSX.Element | null {
               ? 'tab.nextSameType'
               : 'tab.previousSameType'
         )
-        if (floatingWorkspaceFocused) {
-          switchFloatingWorkspaceTab(
-            useAppStore.getState(),
-            switchAllTypesDirection ?? switchSameTypeDirection ?? 1,
-            switchAllTypesDirection !== null ? 'all-types' : 'same-type'
-          )
-        } else if (switchAllTypesDirection !== null) {
+        if (switchAllTypesDirection !== null) {
           handleSwitchTabAcrossAllTypes(switchAllTypesDirection)
         } else {
           handleSwitchTab(switchSameTypeDirection ?? 1)
@@ -1437,11 +1402,7 @@ function Terminal(): React.JSX.Element | null {
         e.preventDefault()
         e.stopPropagation()
         e.stopImmediatePropagation()
-        if (floatingWorkspaceFocused) {
-          switchFloatingWorkspaceTab(useAppStore.getState(), terminalTabDirection, 'terminal')
-        } else {
-          handleSwitchTerminalTab(terminalTabDirection)
-        }
+        handleSwitchTerminalTab(terminalTabDirection)
       }
     }
     window.addEventListener('keydown', onKeyDown, { capture: true })

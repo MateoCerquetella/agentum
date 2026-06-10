@@ -253,15 +253,6 @@ describe('keybindings', () => {
 
     expect(
       keybindingMatchesAction(
-        'floatingTerminal.toggle',
-        { key: 'a', code: 'KeyA', control: true, meta: false, alt: true, shift: false },
-        'linux',
-        undefined,
-        { context: 'terminal', terminalShortcutPolicy: 'terminal-first' }
-      )
-    ).toBe(true)
-    expect(
-      keybindingMatchesAction(
         'tab.previousRecent',
         { key: 'Tab', code: 'Tab', control: true, meta: false, alt: false, shift: false },
         'linux',

@@ -10,7 +10,6 @@ export type SettingsNavTarget =
   | 'tasks'
   | 'appearance'
   | 'input'
-  | 'floating-workspace'
   | 'terminal'
   | 'quick-commands'
   | 'notifications'

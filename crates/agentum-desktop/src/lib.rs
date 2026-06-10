@@ -151,7 +151,6 @@ pub fn run() {
             ui::ui_get_zoom_level,
             ui::ui_set_zoom_level,
             ui::ui_set_markdown_editor_focused,
-            ui::ui_set_floating_terminal_input_focused,
             ui::ui_set_terminal_input_focused,
             ui::ui_set_shortcut_recorder_focused,
             ui::ui_reply_tab_create,

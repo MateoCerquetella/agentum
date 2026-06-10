@@ -19,7 +19,6 @@ import {
   MousePointerClick,
   Network,
   Palette,
-  PanelsTopLeft,
   Play,
   Server,
   ShieldCheck,
@@ -40,7 +39,6 @@ import { INTEGRATIONS_PANE_SEARCH_ENTRIES } from '@/components/settings/integrat
 import { GIT_PANE_SEARCH_ENTRIES } from '@/components/settings/git-search'
 import { COMMIT_MESSAGE_AI_PANE_SEARCH_ENTRIES } from '@/components/settings/commit-message-ai-search'
 import { TASKS_PANE_SEARCH_ENTRIES } from '@/components/settings/tasks-search'
-import { FLOATING_WORKSPACE_SEARCH_ENTRIES } from '@/components/settings/floating-workspace-search'
 import { APPEARANCE_PANE_SEARCH_ENTRIES } from '@/components/settings/appearance-search'
 import { INPUT_PANE_SEARCH_ENTRIES } from '@/components/settings/input-search'
 import { getTerminalPaneSearchEntries } from '@/components/settings/terminal-search'
@@ -202,14 +200,6 @@ export function buildSettingsNavigationMetadata({
           }
         ]
       : []),
-    {
-      id: 'floating-workspace',
-      title: 'Floating Workspace',
-      description: 'Global terminal, browser, and markdown tabs.',
-      icon: PanelsTopLeft,
-      searchEntries: FLOATING_WORKSPACE_SEARCH_ENTRIES,
-      group: 'workflows'
-    },
     {
       id: 'appearance',
       title: 'Appearance',
