@@ -52,6 +52,7 @@ import { onOnboardingReopened } from './components/onboarding/show-onboarding-ev
 import { shouldShowOnboarding } from './components/onboarding/should-show-onboarding'
 import { SshPassphraseDialog } from './components/settings/SshPassphraseDialog'
 import DeleteWorktreeDialog from './components/sidebar/DeleteWorktreeDialog'
+import { runWorktreeDelete } from './components/sidebar/delete-worktree-flow'
 import { MarkdownTemplatePicker } from './components/editor/MarkdownTemplatePicker'
 import { DictationController } from './components/dictation/DictationController'
 import { WorkspacePortScanner } from './components/ports/WorkspacePortScanner'
@@ -1197,11 +1198,47 @@ function App(): React.JSX.Element {
         }
       }
 
-      // Why: Cmd/Ctrl+N is handled via the main-process before-input-event
-      // allowlist (see window-shortcut-policy.ts / useIpcEvents.ts) so it works
-      // globally — including when focus lives inside the markdown rich editor
-      // (contentEditable) or a browser guest webContents, both of which bypass
-      // this renderer-side window keydown listener.
+      // Menu-group Global shortcuts. In the Electron build these fired from the
+      // main-process before-input-event allowlist (window-shortcut-policy.ts);
+      // the Tauri shell has no equivalent, so without these renderer branches the
+      // chords never fired. The matching IPC handlers in useIpcEvents.ts stay as
+      // inert mirrors for any future native-menu dispatch. Placed before the
+      // right-sidebar early-return below so they fire on every view.
+      if (matchShortcut('app.settings')) {
+        e.preventDefault()
+        notifyTerminalCapture('app.settings')
+        useAppStore.getState().openSettingsPage()
+        return
+      }
+
+      // Cmd/Ctrl+N — new workspace. Mirrors onOpenNewWorkspace: stay quiet on a
+      // fresh install (no repos) and no-op while the composer is already open.
+      if (matchShortcut('workspace.create')) {
+        e.preventDefault()
+        notifyTerminalCapture('workspace.create')
+        const store = useAppStore.getState()
+        if (store.repos.length > 0 && store.activeModal !== 'new-workspace-composer') {
+          store.openModal('new-workspace-composer', { telemetrySource: 'shortcut' })
+        }
+        return
+      }
+
+      // Cmd/Ctrl+Shift+Backspace — delete the current workspace. Mirrors
+      // onDeleteCurrentWorkspace: only from the terminal view with no other modal
+      // open; runWorktreeDelete gates the actual deletion behind a confirmation.
+      if (matchShortcut('workspace.delete')) {
+        e.preventDefault()
+        notifyTerminalCapture('workspace.delete')
+        const store = useAppStore.getState()
+        if (
+          store.activeModal === 'none' &&
+          store.activeView === 'terminal' &&
+          store.activeWorktreeId
+        ) {
+          runWorktreeDelete(store.activeWorktreeId)
+        }
+        return
+      }
 
       // Why: full-page navigation surfaces should not reveal the right sidebar;
       // they are designed as distraction-free content areas.
