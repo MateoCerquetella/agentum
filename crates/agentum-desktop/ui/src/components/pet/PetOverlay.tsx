@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion'
 import { usePetUrl } from './usePetUrl'
+import { AgentRoamer } from './AgentRoamer'
+import { useDocumentVisible } from './useDocumentVisible'
 import type { DetectedSpriteCacheEntry } from './pet-blob-cache'
 import type { CustomPet } from '../../../../shared/types'
 import { useAppStore } from '../../store'
@@ -51,6 +53,10 @@ function SpriteFrame({
     (sprite.defaultAnimation && sprite.animations?.[sprite.defaultAnimation]) ||
     (sprite.animations ? Object.values(sprite.animations)[0] : undefined)
   const row = anim?.row ?? 0
+  // Why: `col` lets a single-row sheet of distinct poses map each state to one
+  // cell (the bundled agent mascot does this); defaults to 0 so multi-frame
+  // strips that play from the left are unaffected.
+  const col = anim?.col ?? 0
   // Why: clamp to >=1 so an empty/invalid manifest can't produce steps(0),
   // which is rejected as invalid CSS and freezes the animation.
   const frames = Math.max(1, anim?.frames ?? sprite.columns ?? 1)
@@ -61,9 +67,9 @@ function SpriteFrame({
   const renderedH = sprite.frameHeight * scale
   const bgW = sprite.sheetWidth * scale
   const bgH = sprite.sheetHeight * scale
-  const startX = 0
+  const startX = -(col * sprite.frameWidth * scale)
   const startY = -(row * sprite.frameHeight * scale)
-  const endX = -(frames * sprite.frameWidth * scale)
+  const endX = startX - frames * sprite.frameWidth * scale
   const duration = Math.max(0.1, frames / Math.max(0.1, sprite.fps))
   return (
     <>
@@ -163,20 +169,6 @@ function DetectedSpriteFrame({
   )
 }
 
-function useDocumentVisible(): boolean {
-  const [visible, setVisible] = useState(() =>
-    typeof document === 'undefined' ? true : document.visibilityState === 'visible'
-  )
-  useEffect(() => {
-    const onChange = (): void => {
-      setVisible(document.visibilityState === 'visible')
-    }
-    document.addEventListener('visibilitychange', onChange)
-    return () => document.removeEventListener('visibilitychange', onChange)
-  }, [])
-  return visible
-}
-
 // Why: keep a default for the cached helpers below; the live size now comes
 // from the store so the user can resize from the status-bar menu.
 const SIZE = 180
@@ -255,10 +247,19 @@ function defaultPosition(size: number = SIZE): Position {
   )
 }
 
-export function PetOverlay(): React.JSX.Element {
+// Pinned, draggable overlay for flat-image and frame-cycle (custom) pets. The
+// bundled agent mascot uses AgentRoamer instead (see the PetOverlay chooser).
+function PinnedPetOverlay({
+  url,
+  sprite,
+  detected
+}: {
+  url: string
+  sprite: Sprite | null
+  detected: DetectedSpriteCacheEntry | null
+}): React.JSX.Element {
   const documentVisible = useDocumentVisible()
   const reducedMotion = usePrefersReducedMotion()
-  const { url, sprite, detected } = usePetUrl()
   const size = useAppStore((s) => s.petSize)
 
   const [positionState, setPositionState] = useState<{
@@ -408,6 +409,16 @@ export function PetOverlay(): React.JSX.Element {
       </div>
     </div>
   )
+}
+
+export function PetOverlay(): React.JSX.Element {
+  const { url, sprite, detected, behavior } = usePetUrl()
+  // The bundled agent mascot roams the whole window (walks, hops, trips) via
+  // AgentRoamer; every other pet is the pinned, draggable overlay.
+  if (behavior === 'agent' && sprite) {
+    return <AgentRoamer url={url} sprite={sprite} />
+  }
+  return <PinnedPetOverlay url={url} sprite={sprite} detected={detected} />
 }
 
 export default PetOverlay

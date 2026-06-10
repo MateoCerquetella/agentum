@@ -2161,8 +2161,8 @@ export type GlobalSettings = {
    *  on read into [5_000ms, 60min] to defend against bad config.
    *  See docs/mobile-fit-hold.md. */
   mobileAutoRestoreFitMs: number | null
-  /** Experimental: floating animated pet (claude.webp) in the bottom-right
-   *  corner. Opt-in because it's a cosmetic joke feature; users who leave it
+  /** Experimental: floating animated pet (the agentum-www agent mascot) in
+   *  the bottom-right corner. Opt-in because it's a cosmetic joke feature; users who leave it
    *  off never mount the overlay. Toggling takes effect immediately in the
    *  current session (no relaunch) because it is purely renderer-side. */
   experimentalPet: boolean
@@ -2612,7 +2612,7 @@ export type PersistedUIState = {
 
 export const PET_SIZE_MIN = 60
 export const PET_SIZE_MAX = 360
-export const PET_SIZE_DEFAULT = 180
+export const PET_SIZE_DEFAULT = 120
 
 /** Metadata for a user-uploaded pet image. `id` is the stable identifier;
  *  the on-disk filename (preserving the original extension) lives in `fileName`.
@@ -2652,10 +2652,15 @@ export type CustomPet = {
 }
 
 /** One animation strip within a sprite sheet: `row` is the y-index (0-based)
- *  and `frames` is the number of consecutive cells played left-to-right. */
+ *  and `frames` is the number of consecutive cells played left-to-right.
+ *  `col` is the 0-based starting x-index (defaults to 0) so a single-row
+ *  sheet of distinct poses can map each state to one cell — used by the
+ *  bundled agent mascot, whose poses (walk/blink/happy/jump/…) all live in
+ *  row 0. */
 export type SpriteAnimation = {
   row: number
   frames: number
+  col?: number
 }
 
 export type PersistedTrustedAgentumHookEntry = {

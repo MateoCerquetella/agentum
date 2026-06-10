@@ -13,15 +13,15 @@ import {
 // keep working without knowing about the cache module split.
 export { revokeCustomPetBlobUrl } from './pet-blob-cache'
 
-export type ResolvedPet =
-  | { url: string; ready: boolean; sprite: null; detected: null }
-  | {
-      url: string
-      ready: boolean
-      sprite: NonNullable<CustomPet['sprite']>
-      detected: null
-    }
-  | { url: string; ready: boolean; sprite: null; detected: DetectedSpriteCacheEntry }
+export type ResolvedPet = {
+  url: string
+  ready: boolean
+  sprite: NonNullable<CustomPet['sprite']> | null
+  detected: DetectedSpriteCacheEntry | null
+  // Why: when set, the overlay routes to the dedicated behavior renderer
+  // (AgentRoamer) instead of the CSS frame-step / flat-image paths.
+  behavior: 'agent' | null
+}
 
 /** Resolve the active pet to a URL the overlay can render.
  *
@@ -93,7 +93,17 @@ export function usePetUrl(): ResolvedPet {
 
   if (bundled) {
     const pet = findBundledPet(petId) ?? BUNDLED_PET
-    return { url: pet.url, ready: true, sprite: null, detected: null }
+    // Why: bundled pets may ship sprite-sheet metadata (the agent mascot does)
+    // so the overlay can crop poses; `behavior` routes it to the dedicated
+    // behavior renderer. Flat-image bundles leave both undefined and fall
+    // through to the <img> branch.
+    return {
+      url: pet.url,
+      ready: true,
+      sprite: pet.sprite ?? null,
+      detected: null,
+      behavior: pet.behavior ?? null
+    }
   }
   if (customMeta && customUrl) {
     // Why: guard against manifest entries with zero/negative dims or fps —
@@ -104,13 +114,22 @@ export function usePetUrl(): ResolvedPet {
       customMeta.sprite.frameHeight > 0 &&
       customMeta.sprite.fps > 0
     ) {
-      return { url: customUrl, ready: true, sprite: customMeta.sprite, detected: null }
+      return { url: customUrl, ready: true, sprite: customMeta.sprite, detected: null, behavior: null }
     }
     const detected = detectedSpriteCache.get(customMeta.id)
     if (detected) {
-      return { url: customUrl, ready: true, sprite: null, detected }
+      return { url: customUrl, ready: true, sprite: null, detected, behavior: null }
     }
-    return { url: customUrl, ready: true, sprite: null, detected: null }
+    return { url: customUrl, ready: true, sprite: null, detected: null, behavior: null }
   }
-  return { url: BUNDLED_PET.url, ready: false, sprite: null, detected: null }
+  // Why: while a custom pet's blob is still loading we fall back to the bundled
+  // default. Surface its sprite + behavior too so the loading window animates
+  // the same way instead of flashing the raw multi-pose strip.
+  return {
+    url: BUNDLED_PET.url,
+    ready: false,
+    sprite: BUNDLED_PET.sprite ?? null,
+    detected: null,
+    behavior: BUNDLED_PET.behavior ?? null
+  }
 }

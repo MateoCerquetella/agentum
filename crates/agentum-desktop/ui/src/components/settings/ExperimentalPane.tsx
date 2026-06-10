@@ -51,10 +51,9 @@ export function ExperimentalPane({
             <div className="min-w-0 shrink space-y-1.5">
               <Label>Pet</Label>
               <p className="text-xs text-muted-foreground">
-                Shows a small animated pet pinned to the bottom-right corner. Pick a character
-                (Claudino, OpenCode, Gremlin) or upload your own PNG, APNG, GIF, WebP, JPG, or SVG
-                from the status-bar pet menu. Hide it any time from the same menu without disabling
-                this setting.
+                Shows a small animated pet pinned to the bottom-right corner. Use the bundled Agent
+                mascot or upload your own PNG, APNG, GIF, WebP, JPG, or SVG from the status-bar pet
+                menu. Hide it any time from the same menu without disabling this setting.
               </p>
             </div>
             <button
