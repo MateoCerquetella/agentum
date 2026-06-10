@@ -1372,18 +1372,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   hydratePersistedUI: (ui) =>
     set((s) => {
       const validRepoIds = new Set(s.repos.map((repo) => repo.id))
-      // Why: persisted UI from pre-rename builds used sidekick* keys. Read
-      // those only as fallbacks so new pet* writes win immediately after upgrade.
-      // Why: clear all custom pets (claudino, gremlin, opencode, etc.) and force
-      // Argo (agentum-agent) as the only pet. Filter aggressively to remove any
-      // persisted old mascots on hydration.
-      const oldPetIds = new Set(['claudino', 'gremlin', 'opencode', 'claude', 'orca'])
-      const customPets: CustomPet[] = (Array.isArray(ui.customPets)
-        ? ui.customPets.filter((pet) => !oldPetIds.has(pet.id))
-        : Array.isArray(ui.customSidekicks)
-          ? ui.customSidekicks.filter((pet) => !oldPetIds.has(pet.id))
-          : []
-      ).slice(0, 0) // Force empty array
+      const customPets: CustomPet[] = []
       const petId = DEFAULT_PET_ID
       // Migration history:
       // v1: sort was called 'smart' internally
