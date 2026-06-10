@@ -102,11 +102,12 @@ pub enum SshAuth {
     Key {
         path: String,
     },
-    /// Password auth. The daemon shells out to `sshpass` to feed this
-    /// password to `ssh` non-interactively. Stored on the local host's
-    /// SQLite DB (`agentum-store` `hosts.secret`). Less secure than
-    /// key/agent (the secret lives at rest) — offered because users with
-    /// fresh boxes that only have password login asked for it.
+    /// Password auth. The daemon feeds this password to `ssh` non-interactively
+    /// via OpenSSH's own SSH_ASKPASS helper (no external `sshpass` binary —
+    /// works with the stock `ssh` on every modern macOS/Linux). Stored on the
+    /// local host's SQLite DB (`agentum-store` `hosts.secret`). Less secure than
+    /// key/agent (the secret lives at rest) — offered because users with fresh
+    /// boxes that only have password login asked for it.
     Password {
         password: String,
     },
