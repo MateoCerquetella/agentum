@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agentum_core::{
-    Event, Host, HostKind, LOCAL_HOST_ID, NewSession, Session, Status, WorktreeSpec,
+    EXTERNAL_TMUX_FLAG, Event, Host, HostKind, LOCAL_HOST_ID, NewSession, Session, Status,
+    WorktreeSpec,
 };
 use agentum_store::paths;
 use axum::Json;
@@ -441,9 +442,15 @@ async fn delete(
             ));
         }
         let target = tmux_target(&session);
-        crate::host_runtime::kill_session(&host, &target)
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        if is_external(&session) {
+            // Removing the record must leave the user's tmux session
+            // running; just stop piping its output to our log.
+            let _ = crate::host_runtime::unpipe_pane(&host, &target).await;
+        } else {
+            crate::host_runtime::kill_session(&host, &target)
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+        }
     }
     state.store.delete_session(id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -456,7 +463,16 @@ async fn start(
     let id = parse_uuid(&id)?;
     let session = load(&state, id).await?;
     let host = load_host_for_session(&state, &session).await?;
-    let target = agentum_tmux::target_for(&session.name);
+    // External sessions keep their (non-agentum) target across stop, so
+    // start can only ever reattach to it — never derive a fresh
+    // `agentum-*` name, which would spawn a parallel session.
+    let target = if is_external(&session) {
+        session.tmux_target.clone().ok_or_else(|| {
+            ApiError::BadRequest("external session has lost its tmux target".into())
+        })?
+    } else {
+        agentum_tmux::target_for(&session.name)
+    };
 
     let already = crate::host_runtime::has_session(&host, &target)
         .await
@@ -479,6 +495,15 @@ async fn start(
                 .await?;
         }
         return Ok(Json(load(&state, id).await?));
+    }
+
+    // The underlying tmux session of an external attach is owned by the
+    // user, not agentum — if it's gone, there is nothing to respawn (and
+    // launching would run TerminalAdapter with the marker flag in argv).
+    if is_external(&session) {
+        return Err(ApiError::BadRequest(
+            "the external tmux session no longer exists on its host".into(),
+        ));
     }
 
     // Older sessions (pre-tilde-expansion fix) may have `~/...` stored
@@ -593,13 +618,23 @@ async fn stop(
     let session = load(&state, id).await?;
     let host = load_host_for_session(&state, &session).await?;
     let target = tmux_target(&session);
-    crate::host_runtime::graceful_stop(&host, &target, GRACEFUL_STOP_TIMEOUT)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    state
-        .store
-        .update_status_and_target(id, Status::Stopped, None)
-        .await?;
+    if is_external(&session) {
+        // Detach only: the tmux session belongs to the user. Disarm the
+        // log pipe and keep the target so a later start can reattach.
+        let _ = crate::host_runtime::unpipe_pane(&host, &target).await;
+        state
+            .store
+            .update_status_and_target(id, Status::Stopped, Some(&target))
+            .await?;
+    } else {
+        crate::host_runtime::graceful_stop(&host, &target, GRACEFUL_STOP_TIMEOUT)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        state
+            .store
+            .update_status_and_target(id, Status::Stopped, None)
+            .await?;
+    }
     state.hook_tokens.lock().unwrap().remove(&id);
     emit_stopped(&state, &session, "stop").await;
     Ok(Json(load(&state, id).await?))
@@ -613,13 +648,23 @@ async fn kill(
     let session = load(&state, id).await?;
     let host = load_host_for_session(&state, &session).await?;
     let target = tmux_target(&session);
-    crate::host_runtime::kill_session(&host, &target)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    state
-        .store
-        .update_status_and_target(id, Status::Stopped, None)
-        .await?;
+    if is_external(&session) {
+        // Even a kill must not destroy a user-owned tmux session —
+        // detach (disarm the pipe) and keep the target for reattach.
+        let _ = crate::host_runtime::unpipe_pane(&host, &target).await;
+        state
+            .store
+            .update_status_and_target(id, Status::Stopped, Some(&target))
+            .await?;
+    } else {
+        crate::host_runtime::kill_session(&host, &target)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        state
+            .store
+            .update_status_and_target(id, Status::Stopped, None)
+            .await?;
+    }
     state.hook_tokens.lock().unwrap().remove(&id);
     emit_stopped(&state, &session, "kill").await;
     Ok(Json(load(&state, id).await?))
@@ -663,6 +708,14 @@ fn tmux_target(session: &Session) -> String {
         .tmux_target
         .clone()
         .unwrap_or_else(|| agentum_tmux::target_for(&session.name))
+}
+
+/// True when this record was created by attaching to a pre-existing
+/// (non-agentum) tmux session. The whole lifecycle must be
+/// non-destructive for these: never kill the tmux session, never respawn
+/// it — only arm/disarm the stream.
+fn is_external(session: &Session) -> bool {
+    session.flags.iter().any(|f| f == EXTERNAL_TMUX_FLAG)
 }
 
 // ---------- /send ----------
