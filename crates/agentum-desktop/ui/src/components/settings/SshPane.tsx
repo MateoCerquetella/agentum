@@ -94,7 +94,12 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
       username,
       relayGracePeriodSeconds: graceSeconds,
       ...(form.identityFile.trim() ? { identityFile: form.identityFile.trim() } : {}),
-      ...(form.password.trim() ? { password: form.password.trim() } : {}),
+      // Send the password verbatim — never trimmed. Leading/trailing whitespace
+      // can be a real part of it (and pasting from a password manager often
+      // carries it), so trimming would silently store the wrong secret and every
+      // login would fail with "Permission denied". Guard on the trimmed value
+      // only to treat a whitespace-only field as empty (→ omit it).
+      ...(form.password.trim() ? { password: form.password } : {}),
       ...(form.proxyCommand.trim() ? { proxyCommand: form.proxyCommand.trim() } : {}),
       ...(form.jumpHost.trim() ? { jumpHost: form.jumpHost.trim() } : {})
     }

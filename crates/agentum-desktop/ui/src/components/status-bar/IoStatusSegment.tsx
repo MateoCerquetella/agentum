@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react'
-import { ArrowDown, ArrowUp, Check, Gauge, Monitor, Server } from 'lucide-react'
+import { ArrowDown, ArrowUp, Check, Gauge, Server } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,14 +35,15 @@ function persistSelectedHostKey(key: HostKey): void {
 type IoHostOption = {
   key: HostKey
   label: string
-  kind: 'local' | 'ssh'
 }
 
 /**
- * Single status-bar chip showing live ↓ in / ↑ out WS throughput for one host,
- * with a dropdown to pick which host (local + each SSH host). Mirrors the TUI's
- * I/O meter; the byte rates come from per-host counters fed by the session WS
- * stream (see io-meter.ts), sampled on an interval by useHostIoRate.
+ * Single status-bar chip showing live ↓ in / ↑ out WS throughput for one SSH
+ * host, with a dropdown to pick which one. I/O throughput is only meaningful for
+ * remote hosts — local sessions stream over loopback — so the local device is
+ * not offered and the chip hides entirely when no SSH host is configured.
+ * Mirrors the TUI's I/O meter; byte rates come from per-host counters fed by the
+ * session WS stream (see io-meter.ts), sampled on an interval by useHostIoRate.
  */
 export function IoStatusSegment({
   compact,
@@ -50,35 +51,32 @@ export function IoStatusSegment({
 }: {
   compact: boolean
   iconOnly: boolean
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const sshTargetLabels = useAppStore((s) => s.sshTargetLabels)
-  const hostMetaByKey = useAppStore((s) => s.hostMetaByKey)
   const recordFeatureInteraction = useAppStore((s) => s.recordFeatureInteraction)
 
   const [selectedHostKey, setSelectedHostKey] = useState<HostKey>(loadSelectedHostKey)
 
-  // local first, then every configured SSH host. SSH labels are the source of
-  // truth for which hosts exist (same source SshStatusSegment uses); host meta
-  // refines the local label when readiness has resolved.
+  // Every configured SSH host (no local — I/O speed is a remote-only metric).
+  // SSH labels are the source of truth for which hosts exist (same source
+  // SshStatusSegment uses).
   const options = useMemo<IoHostOption[]>(() => {
-    const localLabel = hostMetaByKey[LOCAL_HOST_KEY]?.label || 'This device'
-    const out: IoHostOption[] = [{ key: LOCAL_HOST_KEY, label: localLabel, kind: 'local' }]
+    const out: IoHostOption[] = []
     for (const [connectionId, label] of sshTargetLabels.entries()) {
-      out.push({ key: `ssh:${connectionId}`, label, kind: 'ssh' })
+      out.push({ key: `ssh:${connectionId}`, label })
     }
     return out
-  }, [hostMetaByKey, sshTargetLabels])
+  }, [sshTargetLabels])
 
   // Effective host for live rates + display: the saved choice when it's a known
-  // host, else local. We deliberately do NOT persist this fallback or mutate the
-  // saved selection. On reload, SSH host labels hydrate asynchronously, so a
-  // saved SSH choice is briefly "unknown" — the old effect reset to local AND
-  // persisted it, clobbering the user's remembered host (the "doesn't remember
-  // my I/O host" bug). Keeping the saved key intact lets the chip snap back to
-  // it the moment its option appears.
+  // SSH host, else the first one. We deliberately do NOT persist this fallback or
+  // mutate the saved selection. On reload, SSH host labels hydrate asynchronously,
+  // so a saved choice is briefly "unknown" — keeping the saved key intact lets
+  // the chip snap back to it the moment its option appears (the "doesn't remember
+  // my I/O host" bug).
   const effectiveHostKey = options.some((o) => o.key === selectedHostKey)
     ? selectedHostKey
-    : LOCAL_HOST_KEY
+    : (options[0]?.key ?? selectedHostKey)
 
   const { inRate, outRate } = useHostIoRate(effectiveHostKey)
 
@@ -91,6 +89,12 @@ export function IoStatusSegment({
 
   const down = formatRate(inRate)
   const up = formatRate(outRate)
+
+  // I/O speed only applies to remote (SSH) hosts; with none configured there is
+  // nothing to show, so the chip disappears rather than render an empty picker.
+  if (options.length === 0) {
+    return null
+  }
 
   return (
     <DropdownMenu
@@ -113,9 +117,7 @@ export function IoStatusSegment({
             </span>
           ) : (
             <span className="inline-flex items-center gap-1.5 tabular-nums">
-              {!compact && selected?.kind === 'ssh' && (
-                <Server className="size-3 text-muted-foreground" />
-              )}
+              {!compact && <Server className="size-3 text-muted-foreground" />}
               <span className="inline-flex items-center gap-0.5 text-muted-foreground">
                 <ArrowDown className="size-3" />
                 <span>{down}</span>
@@ -141,11 +143,7 @@ export function IoStatusSegment({
               handleSelect(option.key)
             }}
           >
-            {option.kind === 'local' ? (
-              <Monitor className="size-3.5 text-muted-foreground" />
-            ) : (
-              <Server className="size-3.5 text-muted-foreground" />
-            )}
+            <Server className="size-3.5 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate">{option.label}</span>
             {option.key === selectedHostKey ? (
               <Check className="ml-auto size-3.5 text-foreground" />

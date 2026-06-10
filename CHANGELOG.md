@@ -4,6 +4,22 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.7] — 2026-06-10
+
+### Fixed
+- **Password SSH hosts no longer fail with a trimmed password.** The SSH form
+  trimmed the password before saving, so a password with a leading or trailing
+  space (common when pasting from a password manager) was stored wrong and every
+  login failed with "Permission denied" — even though the same password worked
+  in a terminal. The password is now stored and sent verbatim. (Re-enter the
+  password on an affected host to refresh the stored value.)
+
+### Changed
+- **The status-bar I/O-speed chip is SSH-only.** I/O throughput is only
+  meaningful for remote hosts (local sessions stream over loopback), so the chip
+  no longer offers the local device and hides entirely when no SSH host is
+  configured.
+
 ## [0.13.6] — 2026-06-10
 
 ### Added
