@@ -3,9 +3,7 @@ import React, { useState } from 'react'
 import {
   BookOpen,
   CircleHelp,
-  ExternalLink,
   FolderPlus,
-  MessageSquareText,
   RotateCw,
   School,
   Settings
@@ -23,21 +21,12 @@ import {
 import { toast } from 'sonner'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { showOnboardingFromRenderer } from '../onboarding/show-onboarding-event'
-import { SidebarFeedbackDialog } from './SidebarFeedbackDialog'
 import { ScrollToCurrentWorkspaceToolbarButton } from './ScrollToCurrentWorkspaceToolbarButton'
-
-// No hosted docs site yet — the README on GitHub is the canonical documentation.
-const DOCS_URL = 'https://github.com/mateocerquetella/agentum#readme'
-
-function openExternalUrl(url: string): void {
-  void api.shell.openUrl(url)
-}
 
 const SidebarToolbar = React.memo(function SidebarToolbar() {
   const openModal = useAppStore((s) => s.openModal)
   const openSettingsPage = useAppStore((s) => s.openSettingsPage)
   const openSkillsPage = useAppStore((s) => s.openSkillsPage)
-  const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [helpMenuOpen, setHelpMenuOpen] = useState(false)
   const [showAdminHelpOptions, setShowAdminHelpOptions] = useState(false)
   const [isRestartingAgentum, setIsRestartingAgentum] = useState(false)
@@ -138,14 +127,6 @@ const SidebarToolbar = React.memo(function SidebarToolbar() {
                 <BookOpen className="size-3.5" />
                 Skills
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setFeedbackOpen(true)}>
-                <MessageSquareText className="size-3.5" />
-                Send feedback
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => openExternalUrl(DOCS_URL)}>
-                <ExternalLink className="size-3.5" />
-                Docs
-              </DropdownMenuItem>
               {showAdminHelpOptions ? (
                 <>
                   <DropdownMenuSeparator />
@@ -174,7 +155,6 @@ const SidebarToolbar = React.memo(function SidebarToolbar() {
           </Tooltip>
         </div>
       </div>
-      <SidebarFeedbackDialog open={feedbackOpen} onOpenChange={setFeedbackOpen} />
     </div>
   )
 })
