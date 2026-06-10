@@ -763,6 +763,15 @@ pub fn validate_username(name: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// Marker stored in `Session::flags` when the session was created by
+/// attaching to a pre-existing (non-agentum) tmux session on its host.
+/// Sessions carrying it must never have their tmux session killed by
+/// agentum — stop/kill only detach (disarm pipe-pane and keep the stored
+/// `tmux_target`), and start may only reattach, never respawn. The flag
+/// also never reaches an adapter `launch()` because external sessions are
+/// blocked from the spawn path.
+pub const EXTERNAL_TMUX_FLAG: &str = "--agentum-external-tmux";
+
 /// Validate a session name: lowercase alphanumeric, dash, underscore. 1..=64 chars.
 pub fn validate_name(name: &str) -> Result<(), CoreError> {
     if name.is_empty() || name.len() > 64 {

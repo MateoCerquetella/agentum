@@ -264,6 +264,34 @@ pub async fn pipe_pane(target: &str, out_path: &Path) -> Result<()> {
     run_checked(&mut c).await
 }
 
+/// Disarm `pipe-pane` on a pane — running `tmux pipe-pane` with no shell
+/// command closes the existing pipe. Used when detaching from an external
+/// (non-agentum) tmux session so its output stops accumulating in our log.
+pub async fn unpipe_pane(target: &str) -> Result<()> {
+    let mut c = Command::new("tmux");
+    c.arg("pipe-pane").arg("-t").arg(target);
+    run_checked(&mut c).await
+}
+
+/// `tmux list-panes -a -F <format>` raw stdout across every session on the
+/// server. Returns `Ok("")` when tmux is not installed or no tmux server is
+/// running — for discovery both simply mean "no sessions", not an error.
+pub async fn list_panes_all(format: &str) -> Result<String> {
+    let out = match Command::new("tmux")
+        .args(["list-panes", "-a", "-F", format])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(e) => return Err(e.into()),
+    };
+    if !out.status.success() {
+        return Ok(String::new());
+    }
+    Ok(String::from_utf8(out.stdout)?)
+}
+
 /// Basename of the foreground process inside the pane (tmux's
 /// `pane_current_command` format token). Useful for figuring out which
 /// adapter the user is currently running — e.g. tells us "codex" vs

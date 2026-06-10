@@ -720,6 +720,114 @@ pub fn spawn_remote_pane_tail(host: &Host, out_path: &Path) -> Result<tokio::pro
     Ok(cmd.spawn()?)
 }
 
+/// Disarm `pipe-pane` on a pane (a bare `tmux pipe-pane` closes the pipe).
+/// Used when detaching from an external tmux session: the underlying
+/// session must stay alive, but its output should stop feeding our log.
+pub async fn unpipe_pane(host: &Host, target: &str) -> Result<()> {
+    match &host.kind {
+        HostKind::Local => Ok(agentum_tmux::unpipe_pane(target).await?),
+        HostKind::Ssh { .. } => {
+            ssh_checked(host, &format!("tmux pipe-pane -t {}", q(target)?)).await
+        }
+    }
+}
+
+// ───────────────────── external tmux session discovery ─────────────────────
+
+/// One pane of a discovered (non-agentum) tmux session.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DiscoveredPane {
+    /// Foreground process basename (`pane_current_command`).
+    pub command: String,
+    /// Pane working directory (`pane_current_path`).
+    pub cwd: String,
+}
+
+/// A tmux session found on a host that agentum does not manage.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DiscoveredTmuxSession {
+    pub name: String,
+    /// At least one tmux client is currently attached.
+    pub attached: bool,
+    /// Session creation time, unix seconds (`session_created`).
+    pub created_at: Option<i64>,
+    pub panes: Vec<DiscoveredPane>,
+}
+
+/// Discovery format: one line per pane, tab-delimited. `list-panes -a`
+/// covers every session in a single round trip, so sessions and their
+/// pane cwds (used for "related to this project" ranking) come from one
+/// SSH exchange.
+const TMUX_DISCOVER_FORMAT: &str =
+    "#{session_name}\t#{session_attached}\t#{session_created}\t#{pane_current_command}\t#{pane_current_path}";
+
+/// List the tmux sessions running on `host` that agentum does not manage
+/// (anything not named `agentum-*`). "tmux missing" and "no server
+/// running" both return an empty list — for discovery they mean the same
+/// thing; only transport failures (SSH unreachable/timeout) are errors.
+pub async fn list_tmux_sessions(host: &Host) -> Result<Vec<DiscoveredTmuxSession>> {
+    let stdout = match &host.kind {
+        HostKind::Local => agentum_tmux::list_panes_all(TMUX_DISCOVER_FORMAT).await?,
+        HostKind::Ssh { .. } => {
+            let script = format!("tmux list-panes -a -F {}", q(TMUX_DISCOVER_FORMAT)?);
+            let output = ssh_output(host, &script, SSH_TIMEOUT)
+                .await
+                .map_err(map_ssh_io)?;
+            if !output.status.success() {
+                // tmux exits 1 for "no server running", the shell exits 127
+                // when tmux isn't installed; ssh itself exits 255 on
+                // transport failure — only the latter should surface.
+                return match output.status.code() {
+                    Some(1) | Some(127) => Ok(Vec::new()),
+                    code => Err(HostRuntimeError::NonZero {
+                        status: code,
+                        stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                    }),
+                };
+            }
+            String::from_utf8(output.stdout)?
+        }
+    };
+    Ok(parse_tmux_panes(&stdout))
+}
+
+/// Parse [`TMUX_DISCOVER_FORMAT`] pane lines into sessions, preserving
+/// tmux's order and dropping `agentum-*` (managed) sessions. Tolerant of
+/// trailing `\r` and malformed lines.
+fn parse_tmux_panes(stdout: &str) -> Vec<DiscoveredTmuxSession> {
+    let mut sessions: Vec<DiscoveredTmuxSession> = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
+            continue;
+        }
+        let mut it = line.splitn(5, '\t');
+        let (Some(name), Some(attached), Some(created), Some(command), Some(cwd)) =
+            (it.next(), it.next(), it.next(), it.next(), it.next())
+        else {
+            continue;
+        };
+        if name.starts_with("agentum-") {
+            continue;
+        }
+        let pane = DiscoveredPane {
+            command: command.to_string(),
+            cwd: cwd.to_string(),
+        };
+        match sessions.iter_mut().find(|s| s.name == name) {
+            Some(s) => s.panes.push(pane),
+            None => sessions.push(DiscoveredTmuxSession {
+                name: name.to_string(),
+                // `session_attached` is the count of attached clients.
+                attached: attached.trim().parse::<u32>().map(|n| n > 0).unwrap_or(false),
+                created_at: created.trim().parse().ok(),
+                panes: vec![pane],
+            }),
+        }
+    }
+    sessions
+}
+
 pub async fn ssh_stdout(host: &Host, script: &str) -> Result<String> {
     let output = ssh_output(host, script, SSH_TIMEOUT)
         .await
@@ -1063,6 +1171,41 @@ mod tests {
             script.contains("sess-2.log"),
             "log basename missing: {script}"
         );
+    }
+
+    // ── external tmux session discovery ───────────────────────────────────
+
+    #[test]
+    fn parse_tmux_panes_groups_panes_and_skips_agentum_sessions() {
+        // Three sessions on the host: a 2-pane dev session, an attached
+        // detached-name edge case, and an agentum-managed one to exclude.
+        let stdout = "dev\t1\t1718000000\tnvim\t/home/me/proj\n\
+             dev\t1\t1718000000\tcargo\t/home/me/proj/crates\n\
+             scratch\t0\t1718001234\tbash\t/tmp\n\
+             agentum-alpha\t0\t1718002222\tclaude\t/home/me/proj\n";
+        let sessions = parse_tmux_panes(stdout);
+        assert_eq!(sessions.len(), 2, "agentum-* must be excluded");
+        let dev = &sessions[0];
+        assert_eq!(dev.name, "dev");
+        assert!(dev.attached);
+        assert_eq!(dev.created_at, Some(1718000000));
+        assert_eq!(dev.panes.len(), 2);
+        assert_eq!(dev.panes[1].command, "cargo");
+        assert_eq!(dev.panes[1].cwd, "/home/me/proj/crates");
+        let scratch = &sessions[1];
+        assert!(!scratch.attached);
+        assert_eq!(scratch.panes.len(), 1);
+    }
+
+    #[test]
+    fn parse_tmux_panes_handles_empty_crlf_and_malformed_lines() {
+        assert!(parse_tmux_panes("").is_empty());
+        // CRLF endings and a short (malformed) line must not panic or leak in.
+        let stdout = "dev\t2\t1718000000\tzsh\t/srv/app\r\n\nbroken-line\n";
+        let sessions = parse_tmux_panes(stdout);
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].attached, "2 attached clients counts as attached");
+        assert_eq!(sessions[0].panes[0].cwd, "/srv/app");
     }
 
     // ── host-aware git/fs, Local backend ──────────────────────────────────
