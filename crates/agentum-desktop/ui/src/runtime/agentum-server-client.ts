@@ -115,6 +115,11 @@ export function listSessions(): Promise<Session[]> {
   return request<Session[]>('/api/sessions')
 }
 
+/** `GET /api/sessions/{id}` — one session by id. */
+export function getSession(id: string): Promise<Session> {
+  return request<Session>(`/api/sessions/${id}`)
+}
+
 /** `POST /api/sessions` — create a session (optionally in a dedicated worktree). */
 export function createSession(input: CreateSessionInput): Promise<Session> {
   const body: Record<string, unknown> = {

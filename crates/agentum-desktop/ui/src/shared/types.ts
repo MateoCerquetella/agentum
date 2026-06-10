@@ -491,6 +491,12 @@ export type TerminalTab = {
    *  hook status overrides this once the agent does anything. Plain terminals
    *  and manually-started agents omit it. */
   launchAgent?: TuiAgent
+  /** Pin this tab to a specific embedded-server session id instead of the
+   *  workdir-keyed find-or-create (`ensureWorkspaceSession`). Set when the tab
+   *  was opened by attaching to a discovered external tmux session on a host —
+   *  the pane must stream exactly that session, and closing the tab must never
+   *  kill the underlying (user-owned) tmux session. */
+  serverSessionId?: string
   /** Spec 005-C: the tab's "Run in tmux (persist)" choice, stamped at creation.
    *  `true` → the pane runs in a persistent tmux session (server-backed) that
    *  silently auto-reattaches on relaunch; `false` → ephemeral local PTY that

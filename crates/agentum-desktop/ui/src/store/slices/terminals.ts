@@ -320,6 +320,9 @@ export type TerminalSlice = {
        *  pane runs in a persistent tmux session that auto-reattaches; `false` →
        *  ephemeral local PTY. Omitted → global default. */
       persistTmux?: boolean
+      /** Pin the pane to a specific embedded-server session (an external tmux
+       *  attach) instead of the workdir-keyed find-or-create. */
+      serverSessionId?: string
     }
   ) => TerminalTab
   openNewTerminalTabInActiveWorkspace: (groupId: string) => Promise<void>
@@ -606,6 +609,7 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
         createdAt: Date.now(),
         ...(createdShellOverride !== undefined ? { shellOverride: createdShellOverride } : {}),
         ...(options?.launchAgent ? { launchAgent: options.launchAgent } : {}),
+        ...(options?.serverSessionId ? { serverSessionId: options.serverSessionId } : {}),
         // Spec 005-C: stamp the persist choice so the lifecycle branch and a
         // later relaunch honor it. An explicit option wins; otherwise seed from
         // the New Terminal / New Agent toggle's remembered default (on). This

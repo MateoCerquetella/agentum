@@ -4,6 +4,7 @@
 // lifecycle treats both identically. Off by default — see shouldUseServerTerminals.
 import type { PaneManager, ManagedPane } from '@/lib/pane-manager/pane-manager'
 import { connectPanePty, type PanePtyBinding } from './pty-connection'
+import { getSession } from '@/runtime/agentum-server-client'
 import type { PtyConnectionDeps } from './pty-connection-types'
 import { useAppStore } from '@/store'
 import { ensureWorkspaceSession } from '@/runtime/workspace-session'
@@ -23,6 +24,15 @@ function resolveSessionTool(deps: PtyConnectionDeps): string {
     .getState()
     .tabsByWorktree[deps.worktreeId]?.find((t) => t.id === deps.tabId)
   return tab?.launchAgent ?? 'terminal'
+}
+
+/** The tab's pinned server session id, when it was opened by attaching to a
+ *  discovered external tmux session. Such panes must stream exactly that
+ *  session — never the workdir-keyed find-or-create. */
+function resolvePinnedSessionId(deps: PtyConnectionDeps): string | undefined {
+  return useAppStore
+    .getState()
+    .tabsByWorktree[deps.worktreeId]?.find((t) => t.id === deps.tabId)?.serverSessionId
 }
 
 /**
@@ -172,15 +182,18 @@ export function connectPaneServerSession(
   }
 
   const workdir = deps.cwd ?? ''
-  if (!workdir) {
+  const pinnedSessionId = resolvePinnedSessionId(deps)
+  if (!workdir && !pinnedSessionId) {
     fallBackToLocal('no workdir')
   } else {
     const tool = resolveSessionTool(deps)
     // The desktop launches agents by typing a command into a shell (e.g.
     // `claude`). For a shell session, forward that startup command so the agent
     // actually attaches. For an agent-tool session the server launches it, so
-    // sending the command again would double-launch — skip it.
-    const startupCommand = tool === 'terminal' ? deps.startup?.command : undefined
+    // sending the command again would double-launch — skip it. A pinned
+    // external session already runs whatever the user left in it; never inject.
+    const startupCommand =
+      tool === 'terminal' && !pinnedSessionId ? deps.startup?.command : undefined
     void (async () => {
       try {
         // Why: a remote (SSH) worktree's repo carries a `connectionId` (native
@@ -197,7 +210,14 @@ export function connectPaneServerSession(
         if (disposed) {
           return
         }
-        const session = await ensureWorkspaceSession({ workdir, tool, hostId })
+        // A pinned tab streams exactly its (externally-attached) session; the
+        // workdir find-or-create would bind a different pane. If the pinned
+        // session record is gone (deleted server-side), surface the error —
+        // falling back to a fresh local shell here would silently masquerade
+        // as the remote session.
+        const session = pinnedSessionId
+          ? await getSession(pinnedSessionId)
+          : await ensureWorkspaceSession({ workdir, tool, hostId })
         if (disposed) {
           return
         }
@@ -228,7 +248,15 @@ export function connectPaneServerSession(
         }
       } catch (error) {
         if (!disposed) {
-          fallBackToLocal(String(error))
+          if (pinnedSessionId) {
+            // No local fallback for an external attach — a fresh local shell
+            // would silently impersonate the remote session.
+            pane.terminal.write(
+              `\r\n\x1b[2m[agentum: could not attach to remote tmux session — ${String(error)}]\x1b[0m\r\n`
+            )
+          } else {
+            fallBackToLocal(String(error))
+          }
         }
       }
     })()

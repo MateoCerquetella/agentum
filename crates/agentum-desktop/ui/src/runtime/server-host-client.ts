@@ -97,6 +97,45 @@ export async function getServerHostReadinessInfo(hostId: string): Promise<HostRe
   }
 }
 
+/** One pane of a discovered (non-agentum) tmux session on a host. */
+export type DiscoveredTmuxPane = { command: string; cwd: string }
+
+/** A tmux session running on a host that agentum does not manage, as returned
+ *  by `GET /api/hosts/{id}/tmux-sessions`. `related` is true when any pane's
+ *  cwd is at or under the `path` passed in the query. */
+export type DiscoveredTmuxSession = {
+  name: string
+  attached: boolean
+  created_at?: number | null
+  panes: DiscoveredTmuxPane[]
+  related: boolean
+}
+
+/** `GET /api/hosts/{id}/tmux-sessions?path=…` — tmux sessions on the host that
+ *  agentum does not manage. One SSH round trip; "no tmux server" is `[]`. */
+export function listHostTmuxSessions(
+  hostId: string,
+  path?: string
+): Promise<DiscoveredTmuxSession[]> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : ''
+  return getJson<DiscoveredTmuxSession[]>(
+    `/api/hosts/${encodeURIComponent(hostId)}/tmux-sessions${query}`
+  )
+}
+
+/** `POST /api/hosts/{id}/tmux-sessions/{name}/attach` — bind a discovered tmux
+ *  session to an agentum session record (running, externally-flagged) so it can
+ *  stream like any managed session. Idempotent per (host, tmux name). Returns
+ *  the server Session wire shape (see runtime/agentum-server-client.ts). */
+export function attachHostTmuxSession(
+  hostId: string,
+  name: string
+): Promise<import('./agentum-server-client').Session> {
+  return postJson(
+    `/api/hosts/${encodeURIComponent(hostId)}/tmux-sessions/${encodeURIComponent(name)}/attach`
+  )
+}
+
 /**
  * Shared "Connect" for any SSH connect button (settings, status bar, add-repo
  * remote step). The native ssh_connect transport was never ported; with the
