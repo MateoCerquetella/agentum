@@ -451,9 +451,56 @@ pub fn gh_add_pr_review_comment() -> Value {
     not_available()
 }
 
+// True when `gh auth status` succeeds. False when gh is missing or not logged
+// in — both surface as `auth_required` so the renderer shows GhAuthErrorHelp
+// (the `gh auth login` remediation) instead of a silent blank.
+async fn gh_authenticated() -> bool {
+    tokio::process::Command::new("gh")
+        .args(["auth", "status"])
+        .output()
+        .await
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+// The classified `{ ok:false, error }` envelopes the ProjectV2 surfaces expect
+// (GetProjectViewTableResult / ListProjectViewsResult / ListAccessibleProjectsResult /
+// ResolveProjectRefResult all share `{ ok:false, error: GitHubProjectViewError }`).
+fn project_auth_required_error() -> Value {
+    json!({
+        "ok": false,
+        "error": {
+            "type": "auth_required",
+            "message": "Authenticate the GitHub CLI to load Projects: run `gh auth login`, then `gh auth refresh -s project -s read:org` for project access."
+        }
+    })
+}
+
+// Why: the ProjectV2 read still needs a GraphQL client (see this file's header);
+// `gh project item-list --format json` can't produce the GraphQL-shaped
+// GitHubProjectTable the renderer requires. Until that lands, an authenticated
+// user gets a clear "not available yet" state rather than a silent blank.
+fn project_unavailable_error() -> Value {
+    json!({
+        "ok": false,
+        "error": {
+            "type": "unknown",
+            "message": "GitHub Projects aren't available in this build yet — open the project on github.com for now."
+        }
+    })
+}
+
+async fn project_read_result() -> Value {
+    if gh_authenticated().await {
+        project_unavailable_error()
+    } else {
+        project_auth_required_error()
+    }
+}
+
 #[tauri::command]
-pub fn gh_list_project_views() -> Vec<Value> {
-    Vec::new()
+pub async fn gh_list_project_views() -> Value {
+    project_read_result().await
 }
 
 // Fans out to `gh issue list` / `gh pr list` for the repo's origin and returns
@@ -516,13 +563,13 @@ pub fn gh_refresh_pr_now() -> bool {
 }
 
 #[tauri::command]
-pub fn gh_list_accessible_projects() -> Vec<Value> {
-    Vec::new()
+pub async fn gh_list_accessible_projects() -> Value {
+    project_read_result().await
 }
 
 #[tauri::command]
-pub fn gh_resolve_project_ref() -> Option<Value> {
-    None
+pub async fn gh_resolve_project_ref() -> Value {
+    project_read_result().await
 }
 
 #[tauri::command]
@@ -556,8 +603,8 @@ pub fn gh_list_assignable_users_by_slug() -> Vec<Value> {
 }
 
 #[tauri::command]
-pub fn gh_get_project_view_table() -> Option<Value> {
-    None
+pub async fn gh_get_project_view_table() -> Value {
+    project_read_result().await
 }
 
 #[tauri::command]
