@@ -23,7 +23,6 @@ export type SettingsNavTarget =
   | 'experimental'
   | 'agents'
   | 'orchestration'
-  | 'servers'
   | 'mobile'
   | 'repo'
 

@@ -20,7 +20,6 @@ import {
   Network,
   Palette,
   Play,
-  Server,
   ShieldCheck,
   SlidersHorizontal,
   SquareTerminal,
@@ -46,10 +45,6 @@ import { QUICK_COMMANDS_PANE_SEARCH_ENTRIES } from '@/components/settings/quick-
 import { BROWSER_PANE_SEARCH_ENTRIES } from '@/components/settings/browser-pane-search'
 import { NOTIFICATIONS_PANE_SEARCH_ENTRIES } from '@/components/settings/notifications-search'
 import { ORCHESTRATION_PANE_SEARCH_ENTRIES } from '@/components/settings/orchestration-search'
-import {
-  RUNTIME_ENVIRONMENTS_SEARCH_ENTRY,
-  WEB_RUNTIME_ENVIRONMENTS_SEARCH_ENTRY
-} from '@/components/settings/runtime-environments-search'
 import { SSH_PANE_SEARCH_ENTRIES } from '@/components/settings/ssh-search'
 import { COMPUTER_USE_PANE_SEARCH_ENTRIES } from '@/components/settings/computer-use-search'
 import { VOICE_PANE_SEARCH_ENTRIES } from '@/components/settings/voice-pane-search'
@@ -83,10 +78,6 @@ export function buildSettingsNavigationMetadata({
     isWindows,
     isMac
   })
-  const runtimeEnvironmentsSearchEntry = isWebClient
-    ? WEB_RUNTIME_ENVIRONMENTS_SEARCH_ENTRY
-    : RUNTIME_ENVIRONMENTS_SEARCH_ENTRY
-
   return [
     // Why: this array's order must mirror SETTINGS_NAV_GROUPS so the Settings
     // sidebar and the Cmd+J palette both read top-to-bottom in the same grouped
@@ -243,17 +234,6 @@ export function buildSettingsNavigationMetadata({
       icon: BarChart3,
       searchEntries: STATS_PANE_SEARCH_ENTRIES,
       group: 'interface'
-    },
-    {
-      id: 'servers',
-      title: 'Remote Agentum Servers',
-      description: isWebClient
-        ? 'Connect this browser to a saved Agentum server.'
-        : 'Switch between local desktop mode and paired remote Agentum runtimes.',
-      icon: Server,
-      searchEntries: [runtimeEnvironmentsSearchEntry],
-      group: 'remote',
-      badge: 'Beta'
     },
     ...(showDesktopOnlySettings
       ? [
