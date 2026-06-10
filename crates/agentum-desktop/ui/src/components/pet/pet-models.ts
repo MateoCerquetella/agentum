@@ -44,7 +44,7 @@ const AGENT_SPRITE: Sprite = {
 export const BUNDLED_PETS: readonly BundledPet[] = [
   {
     id: DEFAULT_PET_ID,
-    label: 'Agent',
+    label: 'Argo',
     url: agentUrl,
     sprite: AGENT_SPRITE,
     behavior: 'agent'
