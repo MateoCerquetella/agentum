@@ -5,6 +5,7 @@ import { IntegrationStatusPill } from '../integration-status-pill'
 import { OnboardingInlineCommandTerminal } from '../onboarding/OnboardingInlineCommandTerminal'
 import { Button } from '../ui/button'
 import { useMountedRef } from '@/hooks/useMountedRef'
+import { notifyInstalledAgentSkillsChanged } from '@/hooks/useInstalledAgentSkills'
 import { isAgentumCliAvailableOnPath } from '@/lib/agent-skill-cli-prerequisite'
 import { cn } from '@/lib/utils'
 
@@ -190,6 +191,12 @@ export function AgentSkillSetupPanel({
             terminalHeightPx={terminalHeightPx}
             terminalTopMarginPx={0}
             autoScrollIntoView={false}
+            onExit={() => {
+              // Why: the install shell exited — invalidate the cached skill
+              // scan so every useInstalledAgentSkill re-probes and flips to
+              // "Installed" without a window refocus or manual re-check.
+              notifyInstalledAgentSkillsChanged()
+            }}
           />
         </div>
       ) : null}
