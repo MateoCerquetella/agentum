@@ -550,6 +550,11 @@ async fn scan_git_worktrees(host: &Host, repo_id: &str) -> Result<Vec<Value>, Ap
                 "branch": branch,
                 "ownership": "self",
                 "selectedCheckout": is_primary,
+                // The first `git worktree list` entry is the repo's primary
+                // worktree. The sidebar's "Hide default branch" filter keys off
+                // this; without it the flag defaulted to false for every row and
+                // the filter silently did nothing.
+                "isMainWorktree": is_primary,
                 "visible": true
             })
         })
