@@ -460,14 +460,31 @@ pub fn pty_management() -> Option<Value> {
 
 // Manage-Sessions panel (Settings). The renderer reaches these via the nested
 // `pty.management.*` namespace, which maps to `pty_management_*` commands.
+// Why: the renderer reads `result.sessions` and renders status dots from
+// `isAlive`/`shellState`/`state`, so we return the wrapped `{ sessions: [...] }`
+// shape (not a bare array — that made `result.sessions` undefined and crashed
+// the pane on `sessions.length`) with liveness derived from the child via
+// try_wait, matching how pty_management_kill_one reaches the child.
 #[tauri::command]
-pub fn pty_management_list_sessions(state: State<'_, AppState>) -> Vec<Value> {
-    state
-        .ptys
-        .lock()
-        .keys()
-        .map(|id| serde_json::json!({ "id": id, "sessionId": id, "cwd": "", "title": "" }))
-        .collect()
+pub fn pty_management_list_sessions(state: State<'_, AppState>) -> Value {
+    let ptys = state.ptys.lock();
+    let sessions: Vec<Value> = ptys
+        .iter()
+        .map(|(id, handle)| {
+            // try_wait → Ok(None) means the child is still running.
+            let is_alive = matches!(handle.child.lock().try_wait(), Ok(None));
+            serde_json::json!({
+                "id": id,
+                "sessionId": id,
+                "cwd": "",
+                "title": "",
+                "isAlive": is_alive,
+                "shellState": if is_alive { "ready" } else { "exited" },
+                "state": if is_alive { "running" } else { "exited" },
+            })
+        })
+        .collect();
+    serde_json::json!({ "sessions": sessions })
 }
 
 #[tauri::command]
