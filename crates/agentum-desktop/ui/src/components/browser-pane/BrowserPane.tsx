@@ -727,9 +727,24 @@ export default function BrowserPane({
   browserTab: BrowserWorkspaceState
   isActive: boolean
 }): React.JSX.Element {
-  const activeRuntimeEnvironmentId = useAppStore(
-    (s) => s.settings?.activeRuntimeEnvironmentId ?? null
-  )
+  const activeRuntimeEnvironmentId = useAppStore((s) => {
+    // Why: browser pages belong to their worktree's environment, not the
+    // global activeRuntimeEnvironmentId setting. Look up the worktree's repo
+    // to determine the correct environment (local or SSH-based).
+    const worktree = Array.from(s.worktreesByRepo.values())
+      .flat()
+      .find((w) => w.id === browserTab.worktreeId)
+    if (!worktree) {
+      return s.settings?.activeRuntimeEnvironmentId ?? null
+    }
+    const repo = s.repos?.find((r) => r.id === worktree.repoId)
+    if (!repo) {
+      return s.settings?.activeRuntimeEnvironmentId ?? null
+    }
+    // If repo has a connectionId (SSH), use that as the environmentId.
+    // Otherwise use the global setting (local environment).
+    return repo.connectionId || (s.settings?.activeRuntimeEnvironmentId ?? null)
+  })
   const browserPages = useAppStore((s) =>
     getBrowserPagesForWorkspace(s.browserPagesByWorkspace, browserTab.id)
   )
