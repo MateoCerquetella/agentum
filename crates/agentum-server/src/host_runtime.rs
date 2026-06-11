@@ -574,17 +574,23 @@ pub async fn capture_pane_ansi(host: &Host, target: &str) -> Result<Vec<u8>> {
 }
 
 /// SSH only: one round trip returning the remote pane-log's current byte size
-/// AND a cursor-anchored capture-pane snapshot, sampled back-to-back in a
-/// single remote shell. The caller starts the streaming tail from that byte
-/// offset (`tail -c +N -f`), so however long the tail's own SSH handshake
-/// takes (it deliberately doesn't ride the ControlMaster — see
-/// [`spawn_remote_pane_tail`]), no pane bytes are lost in between. Bytes
-/// emitted in the sub-millisecond window between the statements are replayed
-/// *and* present in the snapshot — and because the snapshot restores the
-/// pane's cursor position ([`agentum_tmux::assemble_anchored_snapshot`]), a
-/// replayed redraw cycle starts and ends at the same cursor and repaints
-/// idempotently, vs. anchoring rows too low and stranding stale spinner lines
-/// (the old behavior).
+/// AND a cursor-anchored capture-pane snapshot. The caller paints the snapshot,
+/// then starts the streaming tail from the byte offset (`tail -c +N -f`).
+///
+/// Ordering is load-bearing: the offset is sampled *after* `capture-pane`, so
+/// the tail resumes just past the bytes the snapshot already reflects. The tail
+/// therefore never replays a byte the snapshot painted. That matters because
+/// agent TUIs that render on the *normal* screen (cursor-agent) redraw with
+/// RELATIVE motion (`ESC[1A` cursor-up + `ESC[2K` erase). Replaying even a
+/// partial redraw frame on top of the snapshot desyncs the cursor, and since
+/// every following frame is relative, the desync compounds into stacked spinner
+/// lines ("Composing… Composing…"). Alt-screen apps (Claude/Codex) reposition
+/// absolutely and were immune, which is why only cursor-agent corrupted.
+///
+/// The flip side is a sub-millisecond GAP (bytes emitted *during* the
+/// capture-pane exec are in neither snapshot nor tail). For a redraw app the
+/// next frame (~100 ms) repaints it; for a streaming pane it's a few dropped
+/// bytes, far cheaper than the permanent stacking a duplicate caused.
 ///
 /// The size and cursor halves are fallback-guarded so a not-yet-rendered pane
 /// still yields the offset (with an empty snapshot) instead of failing the
@@ -604,6 +610,8 @@ pub async fn capture_pane_with_log_offset(
     let grid = parts.next().unwrap_or("");
     // BSD `wc` left-pads with spaces; an unparsable size degrades to 0, which
     // only risks a duplicate replay, never a gap.
+    // An unparsable size degrades to 0, which only risks a duplicate replay of
+    // the whole log, never a gap. (BSD `wc` left-pads with spaces — trimmed.)
     let size = size_line.trim().parse::<u64>().unwrap_or(0);
     let snap = agentum_tmux::assemble_anchored_snapshot(
         grid.as_bytes(),
@@ -612,15 +620,26 @@ pub async fn capture_pane_with_log_offset(
     Ok((size, snap))
 }
 
-/// Build the remote shell script behind [`capture_pane_with_log_offset`]:
-/// line 1 is the pane log's byte size ("0" when the log doesn't exist yet —
-/// the `{ ...; }` group suppresses the failed-redirection error and `||`
-/// supplies the 0), line 2 the cursor sample ("X" → no anchor when
-/// display-message fails), then the raw ANSI grid.
+/// Build the remote shell script behind [`capture_pane_with_log_offset`].
+/// Output is three sections: the pane-log byte size, the cursor sample, then
+/// the raw ANSI grid (rest of stdout).
+///
+/// The cursor is sampled then the grid captured (both ≈ the same instant), and
+/// the log size is read LAST — after `capture-pane` — so the tail resumes just
+/// past what the snapshot covers and never replays a painted byte (see
+/// [`capture_pane_with_log_offset`] for why that ordering prevents the
+/// relative-redraw stacking). The grid is buffered to a temp file so the size
+/// can still be emitted on line 1 despite being computed last; fallbacks
+/// (`echo 0` / `echo X`) keep the three-section shape when the log or pane
+/// isn't there yet.
 fn snapshot_with_offset_script(target: &str, out_path: &Path) -> Result<String> {
     let log = remote_pane_log_expr(out_path)?;
     let inner = format!(
-        "{{ wc -c < {log}; }} 2>/dev/null || echo 0; tmux display-message -p -t {t} {fmt} 2>/dev/null || echo X; tmux capture-pane -p -e -t {t} 2>/dev/null || true",
+        "c=$(tmux display-message -p -t {t} {fmt} 2>/dev/null || echo X); \
+         f=$(mktemp 2>/dev/null || echo /tmp/agentum-snap.$$); \
+         tmux capture-pane -p -e -t {t} > \"$f\" 2>/dev/null || true; \
+         o=$({{ wc -c < {log}; }} 2>/dev/null || echo 0); \
+         printf \"%s\\n%s\\n\" \"$o\" \"$c\"; cat \"$f\" 2>/dev/null; rm -f \"$f\"",
         t = q(target)?,
         fmt = q(agentum_tmux::CURSOR_SAMPLE_FORMAT)?,
     );
@@ -1299,18 +1318,20 @@ mod tests {
         let p = std::path::Path::new("/x/sessions/sess-4.log");
         let script = snapshot_with_offset_script("agentum-demo", p).unwrap();
         assert!(script.starts_with("sh -c "), "not sh-wrapped: {script}");
-        // Three statements, in stream order: log size, cursor sample, grid.
-        // The tail replays from the size; the cursor anchors the snapshot so
-        // replayed redraw cycles land where the pane really drew them.
-        let wc = script.find("wc -c").expect("no size probe");
+        // Load-bearing ordering: the log size (`wc -c`) is read AFTER
+        // `capture-pane`, so the tail resumes past what the snapshot painted and
+        // never replays a byte — the fix for cursor-agent's relative-redraw
+        // stacking. The cursor is sampled with the capture to anchor the grid.
         let cur = script.find("display-message").expect("no cursor sample");
         let cap = script.find("capture-pane").expect("no grid capture");
-        assert!(wc < cur && cur < cap, "statements out of order: {script}");
+        let wc = script.find("wc -c").expect("no size probe");
+        assert!(cap < wc, "size sampled before capture (would re-replay): {script}");
+        assert!(cur < cap, "cursor sampled after capture: {script}");
         assert!(
             script.contains("cursor_x") && script.contains("cursor_flag"),
             "cursor formats missing: {script}"
         );
-        // Fallbacks keep the 3-line structure when the log or pane is absent.
+        // Fallbacks keep the 3-section shape when the log or pane is absent.
         assert!(script.contains("echo 0"), "no size fallback: {script}");
         assert!(script.contains("echo X"), "no cursor fallback: {script}");
         assert!(script.contains("sess-4.log"), "log missing: {script}");
