@@ -868,15 +868,20 @@ fn remote_input_script(target: &str) -> Result<String> {
 /// keystroke is just a one-way write down an already-open stream: ~1 RTT
 /// (~150 ms) to delivery, no per-key channel setup, no master-channel churn.
 ///
-/// Dedicated (unmultiplexed) for the same reason as [`spawn_remote_pane_tail`]:
-/// a persistent held-open channel must not consume the shared master's limited
-/// `MaxSessions` budget.
+/// Rides the SHARED ControlMaster (`use_mux = true`), unlike the tail. The
+/// master is kept hot by the boot-time/periodic warmer, so opening this channel
+/// is ~1 RTT — whereas a dedicated connection pays a full TCP+auth handshake
+/// (~2 s over a distant host), which landed entirely on the FIRST keystroke and
+/// made opening a remote session feel frozen. Input is low-volume, so its
+/// channel barely dents the master's `MaxSessions` budget (the high-volume tail
+/// stays dedicated); if the master ever refuses the channel, the writer dies and
+/// the caller falls back to per-exec `send_bytes`.
 pub fn spawn_remote_input_writer(host: &Host, target: &str) -> Result<tokio::process::Child> {
     if !matches!(host.kind, HostKind::Ssh { .. }) {
         return Err(HostRuntimeError::Unsupported);
     }
     let script = remote_input_script(target)?;
-    let mut cmd = ssh_command_opts(host, &script, false);
+    let mut cmd = ssh_command_opts(host, &script, true);
     cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
