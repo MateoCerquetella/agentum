@@ -29,7 +29,9 @@ agentum-store = { workspace = true }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2", features = ["tray-icon"] }
+# `unstable` enables multiwebview (Window::add_child) — the native in-window
+# browser pane embeds one child webview per browser page.
+tauri = { version = "2", features = ["tray-icon", "unstable"] }
 tauri-plugin-log = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-clipboard-manager = "2"
@@ -60,6 +62,10 @@ crossbeam-channel = "0.5"
 # `sys` re-exports `sherpa_rs_sys` so the streaming (online) recognizer is
 # reachable via raw FFI (the safe API only exposes offline recognizers).
 sherpa-rs = { version = "0.6", default-features = false, features = ["download-binaries", "sys"] }
+# Native microphone capture for dictation. macOS WKWebView does not expose
+# navigator.mediaDevices/getUserMedia, so audio is captured in Rust (CoreAudio
+# via cpal) and fed straight into the STT engine instead of through the webview.
+cpal = "0.15"
 # Model archive download + integrity + extraction (sherpa models ship as tar.bz2).
 sha2 = "0.10"
 tar = "0.4"

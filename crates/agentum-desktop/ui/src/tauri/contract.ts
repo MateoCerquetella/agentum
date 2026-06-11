@@ -67,7 +67,9 @@ export interface AgentumApi {
   }
   claudeAccounts: {
     add: ApiMethod
+    beginAdd: ApiMethod
     list: ApiMethod
+    liveLogin: ApiMethod
     reauthenticate: ApiMethod
     remove: ApiMethod
     select: ApiMethod

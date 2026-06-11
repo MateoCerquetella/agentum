@@ -5,7 +5,6 @@ import { useSidebarResize } from '@/hooks/useSidebarResize'
 import SidebarHeader from './SidebarHeader'
 import SidebarNav from './SidebarNav'
 import SetupScriptPromptCard from './SetupScriptPromptCard'
-import RemoteTmuxSection from './RemoteTmuxSection'
 import WorktreeList from './WorktreeList'
 import SidebarToolbar from './SidebarToolbar'
 import WorktreeMetaDialog from './WorktreeMetaDialog'
@@ -93,8 +92,6 @@ function Sidebar({
               scrollOffsetRef={worktreeScrollOffsetRef}
               scrollAnchorRef={worktreeScrollAnchorRef}
             />
-
-            <RemoteTmuxSection />
 
             <SetupScriptPromptCard />
 

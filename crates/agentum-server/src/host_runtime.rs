@@ -15,7 +15,7 @@ use agentum_executor::{binary_for, probed_tools};
 // runner: it replays an op on a fresh, unmultiplexed connection when a pooled
 // ControlMaster socket goes stale, so a flaky master never hard-fails a remote
 // op that never actually ran.
-use agentum_tmux::ssh::{ssh_command, ssh_output};
+use agentum_tmux::ssh::{ssh_command_opts, ssh_output};
 use tokio::process::Command;
 use tokio::time::{sleep, timeout};
 
@@ -551,16 +551,94 @@ pub async fn capture_pane_ansi(host: &Host, target: &str) -> Result<Vec<u8>> {
     match &host.kind {
         HostKind::Local => Ok(agentum_tmux::capture_pane_ansi(target).await?),
         HostKind::Ssh { .. } => {
-            let out =
-                ssh_stdout(host, &format!("tmux capture-pane -p -e -t {}", q(target)?)).await?;
-            let mut buf = Vec::with_capacity(out.len() + 64);
-            for line in out.split('\n') {
-                buf.extend_from_slice(line.as_bytes());
-                buf.extend_from_slice(b"\r\n");
-            }
-            Ok(buf)
+            // Cursor sample + grid in one remote shell so the anchor can't
+            // drift from the content it anchors (same contract as the local
+            // `capture_pane_ansi`). The `|| echo X` keeps the line structure
+            // if display-message fails — "X" parses to no anchor, degrading
+            // to the legacy unanchored snapshot instead of misparsing the
+            // grid's first row as coordinates. `sh -c`-wrapped like every
+            // other remote script: the login shell may be fish/zsh.
+            let inner = format!(
+                "tmux display-message -p -t {t} {fmt} 2>/dev/null || echo X; tmux capture-pane -p -e -t {t}",
+                t = q(target)?,
+                fmt = q(agentum_tmux::CURSOR_SAMPLE_FORMAT)?,
+            );
+            let out = ssh_stdout(host, &format!("sh -c {}", q(&inner)?)).await?;
+            let (cursor_line, grid) = out.split_once('\n').unwrap_or((out.as_str(), ""));
+            Ok(agentum_tmux::assemble_anchored_snapshot(
+                grid.as_bytes(),
+                agentum_tmux::parse_cursor_sample(cursor_line),
+            ))
         }
     }
+}
+
+/// SSH only: one round trip returning the remote pane-log's current byte size
+/// AND a cursor-anchored capture-pane snapshot, sampled back-to-back in a
+/// single remote shell. The caller starts the streaming tail from that byte
+/// offset (`tail -c +N -f`), so however long the tail's own SSH handshake
+/// takes (it deliberately doesn't ride the ControlMaster — see
+/// [`spawn_remote_pane_tail`]), no pane bytes are lost in between. Bytes
+/// emitted in the sub-millisecond window between the statements are replayed
+/// *and* present in the snapshot — and because the snapshot restores the
+/// pane's cursor position ([`agentum_tmux::assemble_anchored_snapshot`]), a
+/// replayed redraw cycle starts and ends at the same cursor and repaints
+/// idempotently, vs. anchoring rows too low and stranding stale spinner lines
+/// (the old behavior).
+///
+/// The size and cursor halves are fallback-guarded so a not-yet-rendered pane
+/// still yields the offset (with an empty snapshot) instead of failing the
+/// connect.
+pub async fn capture_pane_with_log_offset(
+    host: &Host,
+    target: &str,
+    out_path: &Path,
+) -> Result<(u64, Vec<u8>)> {
+    if !matches!(host.kind, HostKind::Ssh { .. }) {
+        return Err(HostRuntimeError::Unsupported);
+    }
+    let out = ssh_stdout(host, &snapshot_with_offset_script(target, out_path)?).await?;
+    let mut parts = out.splitn(3, '\n');
+    let size_line = parts.next().unwrap_or("");
+    let cursor_line = parts.next().unwrap_or("");
+    let grid = parts.next().unwrap_or("");
+    // BSD `wc` left-pads with spaces; an unparsable size degrades to 0, which
+    // only risks a duplicate replay, never a gap.
+    let size = size_line.trim().parse::<u64>().unwrap_or(0);
+    let snap = agentum_tmux::assemble_anchored_snapshot(
+        grid.as_bytes(),
+        agentum_tmux::parse_cursor_sample(cursor_line),
+    );
+    Ok((size, snap))
+}
+
+/// Build the remote shell script behind [`capture_pane_with_log_offset`]:
+/// line 1 is the pane log's byte size ("0" when the log doesn't exist yet —
+/// the `{ ...; }` group suppresses the failed-redirection error and `||`
+/// supplies the 0), line 2 the cursor sample ("X" → no anchor when
+/// display-message fails), then the raw ANSI grid.
+fn snapshot_with_offset_script(target: &str, out_path: &Path) -> Result<String> {
+    let log = remote_pane_log_expr(out_path)?;
+    let inner = format!(
+        "{{ wc -c < {log}; }} 2>/dev/null || echo 0; tmux display-message -p -t {t} {fmt} 2>/dev/null || echo X; tmux capture-pane -p -e -t {t} 2>/dev/null || true",
+        t = q(target)?,
+        fmt = q(agentum_tmux::CURSOR_SAMPLE_FORMAT)?,
+    );
+    Ok(format!("sh -c {}", q(&inner)?))
+}
+
+/// Open (or refresh) the pooled SSH ControlMaster for `host` with a no-op
+/// remote command. The boot-time/periodic warmer calls this so interactive
+/// remote ops find a live master instead of paying the 1-3s TCP+auth
+/// handshake. No-op for local hosts.
+pub async fn warm_ssh_master(host: &Host) -> Result<()> {
+    if !matches!(host.kind, HostKind::Ssh { .. }) {
+        return Ok(());
+    }
+    let _ = ssh_output(host, "true", SSH_TIMEOUT)
+        .await
+        .map_err(map_ssh_io)?;
+    Ok(())
 }
 
 pub async fn capture_pane_visible(host: &Host, target: &str) -> Result<String> {
@@ -693,14 +771,24 @@ fn remote_pipe_script(target: &str, out_path: &Path) -> Result<String> {
     Ok(format!("sh -c {}", q(&inner)?))
 }
 
-/// Build the `sh -c …` script that follows the remote pane log. `tail -n 0 -f`
-/// starts at EOF and streams subsequent pane bytes (the current screen arrives
-/// separately via an initial `capture-pane` snapshot). `touch` avoids a race
-/// where the log doesn't exist yet; `exec` lets a kill of the ssh child reap
-/// the remote tail cleanly.
-fn remote_tail_script(out_path: &Path) -> Result<String> {
+/// Build the `sh -c …` script that follows the remote pane log.
+///
+/// With `from_offset = Some(n)` the tail replays from byte `n` (0-based; `tail
+/// -c +N` is 1-based) — the caller sampled `n` together with the capture-pane
+/// snapshot ([`capture_pane_with_log_offset`]), so every byte the pane emits
+/// while this tail's SSH connection is still handshaking is delivered once it
+/// attaches instead of being lost. `None` falls back to `tail -n 0 -f` (start
+/// at EOF), for callers with no snapshot to anchor against.
+///
+/// `touch` avoids a race where the log doesn't exist yet; `exec` lets a kill
+/// of the ssh child reap the remote tail cleanly.
+fn remote_tail_script(out_path: &Path, from_offset: Option<u64>) -> Result<String> {
     let log = remote_pane_log_expr(out_path)?;
-    let inner = format!("touch {log} 2>/dev/null; exec tail -n 0 -f {log}");
+    let mode = match from_offset {
+        Some(n) => format!("-c +{}", n.saturating_add(1)),
+        None => "-n 0".to_string(),
+    };
+    let inner = format!("touch {log} 2>/dev/null; exec tail {mode} -f {log}");
     Ok(format!("sh -c {}", q(&inner)?))
 }
 
@@ -708,12 +796,28 @@ fn remote_tail_script(out_path: &Path) -> Result<String> {
 /// SSH channel. The caller reads `child.stdout` for raw pane bytes and kills the
 /// child on disconnect (also guarded by `kill_on_drop`). SSH hosts only — local
 /// sessions tail the on-disk log directly via [`stream_session`].
-pub fn spawn_remote_pane_tail(host: &Host, out_path: &Path) -> Result<tokio::process::Child> {
-    let script = remote_tail_script(out_path)?;
-    let mut cmd = ssh_command(host, &script);
+pub fn spawn_remote_pane_tail(
+    host: &Host,
+    out_path: &Path,
+    from_offset: Option<u64>,
+) -> Result<tokio::process::Child> {
+    let script = remote_tail_script(out_path, from_offset)?;
+    // Why: a persistent tail must NOT ride the shared ControlMaster. Each tail
+    // holds one channel open for the whole session lifetime, and the remote sshd
+    // caps channels *per connection* at `MaxSessions` (default 10). Multiplexing
+    // every session's tail (plus the 1 s title-poll execs) over one master means
+    // that once enough sessions are open, the next session's tail gets
+    // "Session open refused by peer" → its ssh exits immediately → the WS reads
+    // EOF and the client shows "[session stream closed]". A dedicated
+    // (unmultiplexed) connection per tail gives each its own MaxSessions budget,
+    // leaving the shared master free for the brief execs (title/capture/input).
+    let mut cmd = ssh_command_opts(host, &script, false);
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        // Piped (not null) so a transport failure that ends the tail — e.g. the
+        // remote refusing the channel — is logged by the caller instead of
+        // vanishing behind a bare "stream closed".
+        .stderr(std::process::Stdio::piped())
         // If the WS task drops the child without an explicit kill, still reap the
         // local ssh (which SIGHUPs the remote tail) rather than leak a process.
         .kill_on_drop(true);
@@ -758,8 +862,7 @@ pub struct DiscoveredTmuxSession {
 /// covers every session in a single round trip, so sessions and their
 /// pane cwds (used for "related to this project" ranking) come from one
 /// SSH exchange.
-const TMUX_DISCOVER_FORMAT: &str =
-    "#{session_name}\t#{session_attached}\t#{session_created}\t#{pane_current_command}\t#{pane_current_path}";
+const TMUX_DISCOVER_FORMAT: &str = "#{session_name}\t#{session_attached}\t#{session_created}\t#{pane_current_command}\t#{pane_current_path}";
 
 /// List the tmux sessions running on `host` that agentum does not manage
 /// (anything not named `agentum-*`). "tmux missing" and "no server
@@ -819,7 +922,11 @@ fn parse_tmux_panes(stdout: &str) -> Vec<DiscoveredTmuxSession> {
             None => sessions.push(DiscoveredTmuxSession {
                 name: name.to_string(),
                 // `session_attached` is the count of attached clients.
-                attached: attached.trim().parse::<u32>().map(|n| n > 0).unwrap_or(false),
+                attached: attached
+                    .trim()
+                    .parse::<u32>()
+                    .map(|n| n > 0)
+                    .unwrap_or(false),
                 created_at: created.trim().parse().ok(),
                 panes: vec![pane],
             }),
@@ -1159,18 +1266,54 @@ mod tests {
     }
 
     #[test]
-    fn remote_tail_script_follows_log_from_eof() {
+    fn remote_tail_script_follows_log_from_eof_without_offset() {
         let p = std::path::Path::new("/x/sessions/sess-2.log");
-        let script = remote_tail_script(p).unwrap();
+        let script = remote_tail_script(p, None).unwrap();
         assert!(script.starts_with("sh -c "), "not sh-wrapped: {script}");
-        // `-n 0` starts at EOF (current screen comes from the snapshot, not the
-        // tail); `exec` lets a child kill reap the remote tail cleanly.
+        // No anchor → `-n 0` starts at EOF; `exec` lets a child kill reap the
+        // remote tail cleanly.
         assert!(script.contains("tail -n 0 -f"), "wrong tail mode: {script}");
         assert!(script.contains("exec tail"), "tail not exec'd: {script}");
         assert!(
             script.contains("sess-2.log"),
             "log basename missing: {script}"
         );
+    }
+
+    #[test]
+    fn remote_tail_script_replays_from_snapshot_offset() {
+        let p = std::path::Path::new("/x/sessions/sess-3.log");
+        // Offset 41 (0-based bytes already covered by the snapshot) → tail's
+        // 1-based `-c +42`, so byte 41 onward replays once the tail attaches —
+        // nothing emitted during the tail's SSH handshake is lost.
+        let script = remote_tail_script(p, Some(41)).unwrap();
+        assert!(
+            script.contains("tail -c +42 -f"),
+            "wrong tail mode: {script}"
+        );
+        assert!(script.contains("exec tail"), "tail not exec'd: {script}");
+    }
+
+    #[test]
+    fn snapshot_with_offset_script_samples_size_cursor_then_grid() {
+        let p = std::path::Path::new("/x/sessions/sess-4.log");
+        let script = snapshot_with_offset_script("agentum-demo", p).unwrap();
+        assert!(script.starts_with("sh -c "), "not sh-wrapped: {script}");
+        // Three statements, in stream order: log size, cursor sample, grid.
+        // The tail replays from the size; the cursor anchors the snapshot so
+        // replayed redraw cycles land where the pane really drew them.
+        let wc = script.find("wc -c").expect("no size probe");
+        let cur = script.find("display-message").expect("no cursor sample");
+        let cap = script.find("capture-pane").expect("no grid capture");
+        assert!(wc < cur && cur < cap, "statements out of order: {script}");
+        assert!(
+            script.contains("cursor_x") && script.contains("cursor_flag"),
+            "cursor formats missing: {script}"
+        );
+        // Fallbacks keep the 3-line structure when the log or pane is absent.
+        assert!(script.contains("echo 0"), "no size fallback: {script}");
+        assert!(script.contains("echo X"), "no cursor fallback: {script}");
+        assert!(script.contains("sess-4.log"), "log missing: {script}");
     }
 
     // ── external tmux session discovery ───────────────────────────────────
@@ -1204,7 +1347,10 @@ mod tests {
         let stdout = "dev\t2\t1718000000\tzsh\t/srv/app\r\n\nbroken-line\n";
         let sessions = parse_tmux_panes(stdout);
         assert_eq!(sessions.len(), 1);
-        assert!(sessions[0].attached, "2 attached clients counts as attached");
+        assert!(
+            sessions[0].attached,
+            "2 attached clients counts as attached"
+        );
         assert_eq!(sessions[0].panes[0].cwd, "/srv/app");
     }
 

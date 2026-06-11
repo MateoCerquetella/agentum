@@ -41,6 +41,11 @@ import {
   DialogTitle
 } from '../ui/dialog'
 import { getCodexAccountAuthWarning } from './codex-account-auth-warning'
+import {
+  decideClaudeAddAccount,
+  isClaudeLoginCaptureReady,
+  type ClaudeLiveLogin
+} from './claude-add-account-flow'
 
 export { ACCOUNTS_PANE_SEARCH_ENTRIES }
 
@@ -267,6 +272,12 @@ export function AccountsPane({
   >('idle')
   const [removeAccountId, setRemoveAccountId] = useState<string | null>(null)
   const [removeClaudeAccountId, setRemoveClaudeAccountId] = useState<string | null>(null)
+  // "Add a different account" hand-off: confirm the sign-out, then wait for
+  // the user to finish a fresh `claude` sign-in and capture it automatically.
+  const [claudeAddFlow, setClaudeAddFlow] = useState<
+    { phase: 'confirm'; email: string } | { phase: 'waiting'; stashedAccountId: string | null } | null
+  >(null)
+  const [claudeSigningOut, setClaudeSigningOut] = useState(false)
   const visibleClaudeAccounts = claudeAccounts.accounts.filter((account) =>
     accountMatchesRuntime(account, accountRuntime)
   )
@@ -488,6 +499,105 @@ export function AccountsPane({
     }
   }
 
+  const captureClaudeLiveLogin = (): Promise<ClaudeRateLimitAccountsState> =>
+    api.claudeAccounts.add({
+      runtime: accountRuntime.runtime,
+      wslDistro: accountRuntime.wslDistro
+    })
+
+  // "Add Account" captures the live login, so adding a *different* account
+  // needs the sign-out hand-off first. Route the click accordingly.
+  const startClaudeAddAccount = async (): Promise<void> => {
+    try {
+      const live = (await api.claudeAccounts.liveLogin()) as ClaudeLiveLogin
+      const decision = decideClaudeAddAccount(
+        live,
+        claudeAccounts.accounts.map((account) => account.email)
+      )
+      if (decision.kind === 'capture') {
+        void runClaudeAccountAction('adding', captureClaudeLiveLogin)
+      } else if (decision.kind === 'confirm-signout') {
+        setClaudeAddFlow({ phase: 'confirm', email: decision.email })
+      } else {
+        setClaudeAddFlow({ phase: 'waiting', stashedAccountId: null })
+      }
+    } catch (error) {
+      toast.error('Claude account update failed.', {
+        description: getClaudeAccountErrorDescription(error)
+      })
+    }
+  }
+
+  const confirmClaudeSignOut = async (): Promise<void> => {
+    setClaudeSigningOut(true)
+    try {
+      const result = await api.claudeAccounts.beginAdd()
+      await syncClaudeAccounts(result.state as ClaudeRateLimitAccountsState)
+      setClaudeAddFlow({
+        phase: 'waiting',
+        stashedAccountId: (result.stashedAccountId as string | null) ?? null
+      })
+    } catch (error) {
+      toast.error('Could not sign out the current Claude login.', {
+        description: getClaudeAccountErrorDescription(error)
+      })
+    } finally {
+      setClaudeSigningOut(false)
+    }
+  }
+
+  const cancelClaudeAddFlow = (): void => {
+    const flow = claudeAddFlow
+    setClaudeAddFlow(null)
+    if (flow?.phase === 'waiting' && flow.stashedAccountId) {
+      // Put back the login we signed out at "Sign out & continue".
+      const stashedAccountId = flow.stashedAccountId
+      void runClaudeAccountAction(`select:${stashedAccountId}`, () =>
+        api.claudeAccounts.select({
+          accountId: stashedAccountId,
+          runtime: accountRuntime.runtime,
+          wslDistro: accountRuntime.wslDistro
+        })
+      )
+    }
+  }
+
+  const waitingForClaudeLogin = claudeAddFlow?.phase === 'waiting'
+  useEffect(() => {
+    if (!waitingForClaudeLogin) {
+      return
+    }
+    let cancelled = false
+    let capturing = false
+    const tick = async (): Promise<void> => {
+      if (cancelled || capturing) {
+        return
+      }
+      try {
+        const live = (await api.claudeAccounts.liveLogin()) as ClaudeLiveLogin
+        // Re-check `capturing` after the await: two in-flight ticks may both
+        // have passed the entry guard, and only one may capture.
+        if (cancelled || capturing || !isClaudeLoginCaptureReady(live)) {
+          return
+        }
+        capturing = true
+        setClaudeAddFlow(null)
+        await runClaudeAccountAction('adding', captureClaudeLiveLogin)
+      } catch {
+        // Transient IPC failure — keep polling until the user cancels.
+      }
+    }
+    const interval = setInterval(() => void tick(), 2000)
+    void tick()
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+    // Why: only the waiting flag should restart the poll; re-subscribing on
+    // every render would reset the 2s interval mid-wait.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waitingForClaudeLogin])
+
   const visibleSections = [
     matchesSettingsSearch(searchQuery, ACCOUNTS_LOCATION_SEARCH_ENTRIES) ? (
       <section key="account-runtime" id="accounts-runtime" className="space-y-3 scroll-mt-6">
@@ -523,16 +633,12 @@ export function AccountsPane({
             <Button
               variant="outline"
               size="xs"
-              onClick={() =>
-                void runClaudeAccountAction('adding', () =>
-                  api.claudeAccounts.add({
-                    runtime: accountRuntime.runtime,
-                    wslDistro: accountRuntime.wslDistro
-                  })
-                )
-              }
+              onClick={() => void startClaudeAddAccount()}
               disabled={
-                claudeAction !== 'idle' || wslCapabilitiesLoading || accountRuntimeUnavailable
+                claudeAction !== 'idle' ||
+                claudeAddFlow !== null ||
+                wslCapabilitiesLoading ||
+                accountRuntimeUnavailable
               }
               className="gap-1.5"
             >
@@ -1135,6 +1241,61 @@ export function AccountsPane({
               Remove Account
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={claudeAddFlow !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            cancelClaudeAddFlow()
+          }
+        }}
+      >
+        <DialogContent showCloseButton={false}>
+          {claudeAddFlow?.phase === 'confirm' ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>Add a different Claude account</DialogTitle>
+                <DialogDescription>
+                  {claudeAddFlow.email} is already saved. To add another account, Agentum will
+                  sign Claude out on this device so you can sign in with the other one. Your
+                  saved logins are kept and you can switch back anytime; live Claude terminals
+                  keep working until they restart.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button variant="outline" onClick={cancelClaudeAddFlow} disabled={claudeSigningOut}>
+                  Cancel
+                </Button>
+                <Button onClick={() => void confirmClaudeSignOut()} disabled={claudeSigningOut}>
+                  {claudeSigningOut ? <Loader2 className="size-3 animate-spin" /> : null}
+                  Sign out &amp; continue
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle>Waiting for Claude sign-in</DialogTitle>
+                <DialogDescription>
+                  Open a terminal, run <code className="text-xs">claude</code>, and sign in with
+                  the account you want to add (use <code className="text-xs">/login</code> if a
+                  session is already open). Agentum captures the new login automatically.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="size-3.5 animate-spin" />
+                Watching for a new Claude login…
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={cancelClaudeAddFlow}>
+                  {claudeAddFlow?.phase === 'waiting' && claudeAddFlow.stashedAccountId
+                    ? 'Cancel & restore previous login'
+                    : 'Cancel'}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
       <Dialog

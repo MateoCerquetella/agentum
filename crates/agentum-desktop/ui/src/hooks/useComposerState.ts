@@ -198,6 +198,9 @@ export type ComposerCardProps = {
   onCreate: () => void
   note: string
   onNoteChange: (value: string) => void
+  /** When true, create the worktree only — no tmux session/agent is launched. */
+  skipSession: boolean
+  onSkipSessionChange: (value: boolean) => void
   baseBranch: string | undefined
   onBaseBranchChange: (next: string | undefined) => void
   /** Called when a PR is selected in the Start-from picker. Updates both
@@ -576,6 +579,13 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   const [setupDecision, setSetupDecision] = useState<'run' | 'skip' | null>(null)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<WorkspaceCreateErrorDisplay | null>(null)
+  // Why: "create the worktree only, don't start a tmux session/agent right now".
+  // When set, create + reveal the worktree but skip activation+launch; opening it
+  // later runs the normal activation (its remembered agent, or the picker). Held
+  // in a ref so the submit callbacks read the latest value without dep churn.
+  const [skipSession, setSkipSession] = useState(false)
+  const skipSessionRef = useRef(skipSession)
+  skipSessionRef.current = skipSession
   const [advancedOpen, setAdvancedOpen] = useState(
     persistDraft ? Boolean((newWorkspaceDraft?.note ?? '').trim()) : false
   )
@@ -2251,6 +2261,20 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         const trimmedNote = note.trim()
         await applyWorktreeMeta(worktree.id, trimmedNote ? { comment: trimmedNote } : {})
 
+        // Why: "Don't start a session" — the worktree is created (and remembers
+        // its agent via createdWithAgent) but no tmux session/agent is launched
+        // and we don't switch to it. It just appears in the sidebar; opening it
+        // later runs the normal activation (its agent, or the empty-state picker).
+        if (skipSessionRef.current) {
+          useAppStore.getState().revealWorktreeInSidebar(worktree.id, { behavior: 'auto' })
+          setSidebarOpen(true)
+          if (persistDraft) {
+            clearNewWorkspaceDraft()
+          }
+          onCreated?.()
+          return
+        }
+
         // Why: quick create should draft linked source data for review instead
         // of auto-executing it. Rich linked context wins over URL fallback;
         // typed-only Linear entries still use the note as the startup prompt.
@@ -2514,6 +2538,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     startFromResetHint,
     note,
     onNoteChange: setNote,
+    skipSession,
+    onSkipSessionChange: setSkipSession,
     setupConfig,
     requiresExplicitSetupChoice,
     setupDecision,

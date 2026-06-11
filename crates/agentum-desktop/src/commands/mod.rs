@@ -2,6 +2,7 @@ pub mod accounts;
 pub mod agent_status;
 pub mod app;
 pub mod browser;
+pub mod browser_native;
 pub mod cache;
 pub mod claude_usage;
 pub mod cli;

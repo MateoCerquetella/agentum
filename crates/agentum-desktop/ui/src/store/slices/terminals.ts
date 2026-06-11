@@ -235,6 +235,12 @@ export type TerminalSlice = {
     string,
     {
       command: string
+      /** Only type the command into a FRESHLY spawned pane (bare shell). Set
+       *  by the worktree-reopen agent relaunch: reattaching to a surviving
+       *  tmux pane means the agent may still be running in it, and the command
+       *  text would land in its composer as a prompt. Explicit user commands
+       *  (quick commands, setup scripts) leave this unset and always run. */
+      onlyIfFresh?: boolean
       /** Renderer-delivered startup input for callers that need xterm paste
        *  semantics before the submit Enter. */
       delivery?: 'terminal-paste'
@@ -376,6 +382,7 @@ export type TerminalSlice = {
     tabId: string,
     startup: {
       command: string
+      onlyIfFresh?: boolean
       delivery?: 'terminal-paste'
       env?: Record<string, string>
       initialAgentStatus?: { agent: TuiAgent; prompt: string }

@@ -50,14 +50,18 @@ fn home() -> Result<PathBuf, String> {
 }
 
 /// Per-provider secret store: `<app-data>/Agentum/managed-accounts/<provider>`.
+/// `AGENTUM_HOME` overrides the base so tests never write into real app data
+/// (same isolation convention as the CLI crates).
 fn store_base(provider: &str) -> Result<PathBuf, String> {
+    if let Some(home) = std::env::var_os("AGENTUM_HOME") {
+        return Ok(PathBuf::from(home)
+            .join("managed-accounts")
+            .join(provider));
+    }
     let base = dirs::data_local_dir()
         .or_else(dirs::data_dir)
         .ok_or_else(|| "no app data directory".to_string())?;
-    Ok(base
-        .join("Agentum")
-        .join("managed-accounts")
-        .join(provider))
+    Ok(base.join("Agentum").join("managed-accounts").join(provider))
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +123,9 @@ fn write_atomic_secret(path: &Path, contents: &str) -> Result<(), String> {
 /// recoverable from `<store>/.backups/`.
 fn backup_live(provider: &str, contents: &str) {
     if let Ok(base) = store_base(provider) {
-        let path = base.join(".backups").join(format!("live-{}.json", now_ms()));
+        let path = base
+            .join(".backups")
+            .join(format!("live-{}.json", now_ms()));
         let _ = write_atomic_secret(&path, contents);
     }
 }
@@ -191,6 +197,15 @@ fn keychain_write_password(service: &str, password: &str) -> Result<(), String> 
     Ok(())
 }
 
+/// Remove the keychain item entirely so Claude Code prompts a fresh login.
+/// A missing item is fine — we only need it gone.
+#[cfg(target_os = "macos")]
+fn keychain_delete_password(service: &str) {
+    let _ = std::process::Command::new("security")
+        .args(["delete-generic-password", "-s", service])
+        .output();
+}
+
 #[cfg(not(target_os = "macos"))]
 fn keychain_read_password(_service: &str) -> Option<String> {
     None
@@ -200,6 +215,9 @@ fn keychain_read_password(_service: &str) -> Option<String> {
 fn keychain_write_password(_service: &str, _password: &str) -> Result<(), String> {
     Ok(())
 }
+
+#[cfg(not(target_os = "macos"))]
+fn keychain_delete_password(_service: &str) {}
 
 // ---------------------------------------------------------------------------
 // Claude capture / restore
@@ -259,6 +277,50 @@ fn restore_live_claude(blob: &str, oauth_account: &Value) -> Result<(), String> 
     // 3) patch ~/.claude.json oauthAccount so /status + usage show this account.
     if oauth_account.is_object() {
         patch_claude_config_oauth(oauth_account)?;
+    }
+    Ok(())
+}
+
+/// Sign Claude out on this machine so the next `claude` run prompts a fresh
+/// login. The live material is backed up first; managed copies are untouched.
+/// Live terminals keep their in-memory token until restarted.
+fn sign_out_live_claude() -> Result<(), String> {
+    if let Some(current) = read_live_claude_blob() {
+        backup_live("claude", &current);
+    }
+    keychain_delete_password(CLAUDE_KEYCHAIN_SERVICE);
+    let cred = claude_credentials_file()?;
+    if cred.exists() {
+        std::fs::remove_file(&cred).map_err(err)?;
+    }
+    // Verify the sign-out actually took (a locked keychain can refuse the
+    // delete). Without this, the renderer's "waiting for sign-in" poll would
+    // immediately re-capture the very account the user is trying to replace.
+    if read_live_claude_blob().is_some() {
+        return Err(
+            "Could not sign out: Claude credentials are still present (keychain delete failed)."
+                .to_string(),
+        );
+    }
+    clear_claude_config_oauth()
+}
+
+/// Drop `oauthAccount` from `~/.claude.json` so a signed-out machine doesn't
+/// keep advertising the previous identity to /status and the usage fetcher.
+fn clear_claude_config_oauth() -> Result<(), String> {
+    let Ok(path) = claude_config_file() else {
+        return Ok(());
+    };
+    let Some(mut root) = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+    else {
+        return Ok(());
+    };
+    if let Value::Object(map) = &mut root {
+        if map.remove("oauthAccount").is_some() {
+            return write_atomic_secret(&path, &root.to_string());
+        }
     }
     Ok(())
 }
@@ -410,7 +472,12 @@ fn codex_summary(account: &Value) -> Value {
     })
 }
 
-fn account_state(conn: &Connection, accounts_key: &str, active_key: &str, summarize: fn(&Value) -> Value) -> Value {
+fn account_state(
+    conn: &Connection,
+    accounts_key: &str,
+    active_key: &str,
+    summarize: fn(&Value) -> Value,
+) -> Value {
     let accounts = read_accounts_array(conn, accounts_key);
     let active = read_setting(conn, active_key);
     let active_id = active.as_str();
@@ -439,7 +506,12 @@ fn codex_state(conn: &Connection) -> Value {
     )
 }
 
-fn set_active(conn: &Connection, active_key: &str, runtime_key: &str, id: Option<&str>) -> Result<(), String> {
+fn set_active(
+    conn: &Connection,
+    active_key: &str,
+    runtime_key: &str,
+    id: Option<&str>,
+) -> Result<(), String> {
     let id_value = id.map(|s| json!(s)).unwrap_or(Value::Null);
     write_setting(conn, active_key, &id_value)?;
     write_setting(conn, runtime_key, &json!({ "host": id_value, "wsl": {} }))?;
@@ -463,6 +535,45 @@ fn claude_add(conn: &Connection) -> Result<Value, String> {
         "No Claude login found on this machine. Sign in with Claude Code first, then add the account.",
     )?;
     let oauth = read_live_claude_oauth_account();
+    claude_capture_account(conn, &blob, &oauth)?;
+    Ok(claude_state(conn))
+}
+
+/// "Add a different account", step 1: stash the live login as a managed
+/// account, then sign Claude out so the user can sign in with another account.
+/// Step 2 is the regular `claude_add` capture once the new login appears
+/// (the renderer polls `claude_accounts_live_login` for it).
+fn claude_begin_add(conn: &Connection) -> Result<Value, String> {
+    let blob = read_live_claude_blob().ok_or(
+        "No Claude login found on this machine. Sign in with Claude Code first.",
+    )?;
+    let oauth = read_live_claude_oauth_account();
+    let (id, email) = claude_capture_account(conn, &blob, &oauth)?;
+    sign_out_live_claude()?;
+    Ok(json!({
+        "state": claude_state(conn),
+        "stashedAccountId": id,
+        "stashedEmail": email,
+    }))
+}
+
+/// What login is live on this machine right now (identity only, no secrets).
+fn claude_live_login() -> Value {
+    let has_credentials = read_live_claude_blob().is_some();
+    let email = read_live_claude_oauth_account()
+        .get("emailAddress")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    json!({ "hasCredentials": has_credentials, "email": email })
+}
+
+/// Upsert `blob`/`oauth` as a managed account keyed by email and make it
+/// active. Returns `(id, email)` of the captured account.
+fn claude_capture_account(
+    conn: &Connection,
+    blob: &str,
+    oauth: &Value,
+) -> Result<(String, String), String> {
     let email = oauth
         .get("emailAddress")
         .and_then(|v| v.as_str())
@@ -482,7 +593,7 @@ fn claude_add(conn: &Connection) -> Result<Value, String> {
         .and_then(|i| accounts[i].get("createdAt").cloned())
         .unwrap_or(json!(now));
 
-    let path = write_claude_secret(&id, &blob, &oauth)?;
+    let path = write_claude_secret(&id, blob, oauth)?;
     let account = json!({
         "id": id,
         "email": email,
@@ -508,7 +619,7 @@ fn claude_add(conn: &Connection) -> Result<Value, String> {
         "activeClaudeManagedAccountIdsByRuntime",
         Some(&id),
     )?;
-    Ok(claude_state(conn))
+    Ok((id, email))
 }
 
 fn claude_select(conn: &Connection, account_id: Option<&str>) -> Result<Value, String> {
@@ -528,7 +639,8 @@ fn claude_select(conn: &Connection, account_id: Option<&str>) -> Result<Value, S
         .iter()
         .find(|a| string_field(a, "id") == Some(id))
         .ok_or("Unknown Claude account")?;
-    let path = string_field(account, "managedAuthPath").ok_or("Account has no stored credential")?;
+    let path =
+        string_field(account, "managedAuthPath").ok_or("Account has no stored credential")?;
     let (blob, oauth) = load_claude_secret(path)?;
     restore_live_claude(&blob, &oauth)?;
     set_active(
@@ -578,11 +690,17 @@ fn claude_reauthenticate(conn: &Connection, account_id: &str) -> Result<Value, S
         }
         map.insert(
             "organizationName".into(),
-            oauth.get("organizationName").cloned().unwrap_or(Value::Null),
+            oauth
+                .get("organizationName")
+                .cloned()
+                .unwrap_or(Value::Null),
         );
         map.insert(
             "organizationUuid".into(),
-            oauth.get("organizationUuid").cloned().unwrap_or(Value::Null),
+            oauth
+                .get("organizationUuid")
+                .cloned()
+                .unwrap_or(Value::Null),
         );
     }
     write_setting(conn, "claudeManagedAccounts", &Value::Array(accounts))?;
@@ -663,7 +781,8 @@ fn codex_select(conn: &Connection, account_id: Option<&str>) -> Result<Value, St
         .iter()
         .find(|a| string_field(a, "id") == Some(id))
         .ok_or("Unknown Codex account")?;
-    let path = string_field(account, "managedHomePath").ok_or("Account has no stored credential")?;
+    let path =
+        string_field(account, "managedHomePath").ok_or("Account has no stored credential")?;
     let blob = load_codex_secret(path)?;
     restore_live_codex(&blob)?;
     set_active(
@@ -711,7 +830,9 @@ fn codex_reauthenticate(conn: &Connection, account_id: &str) -> Result<Value, St
         }
         map.insert(
             "providerAccountId".into(),
-            codex_account_id_from_blob(&blob).map(|v| json!(v)).unwrap_or(Value::Null),
+            codex_account_id_from_blob(&blob)
+                .map(|v| json!(v))
+                .unwrap_or(Value::Null),
         );
     }
     write_setting(conn, "codexManagedAccounts", &Value::Array(accounts))?;
@@ -731,10 +852,9 @@ fn codex_reauthenticate(conn: &Connection, account_id: &str) -> Result<Value, St
 /// A string field on the JSON request body; `null`/absent → `None`.
 fn body_str(request: &tauri::ipc::Request<'_>, key: &str) -> Option<String> {
     match request.body() {
-        tauri::ipc::InvokeBody::Json(value) => value
-            .get(key)
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
+        tauri::ipc::InvokeBody::Json(value) => {
+            value.get(key).and_then(|v| v.as_str()).map(str::to_string)
+        }
         _ => None,
     }
 }
@@ -768,6 +888,20 @@ pub async fn claude_accounts_add(state: State<'_, AppState>) -> Result<Value, St
 }
 
 #[tauri::command]
+pub async fn claude_accounts_begin_add(state: State<'_, AppState>) -> Result<Value, String> {
+    run_blocking(&state, claude_begin_add).await
+}
+
+/// No DB involved — reads the live keychain/files only. Polled by the renderer
+/// while it waits for the user to finish a fresh `claude` sign-in.
+#[tauri::command]
+pub async fn claude_accounts_live_login() -> Result<Value, String> {
+    tokio::task::spawn_blocking(claude_live_login)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
 pub async fn claude_accounts_select(
     state: State<'_, AppState>,
     request: tauri::ipc::Request<'_>,
@@ -794,10 +928,7 @@ pub async fn claude_accounts_reauthenticate(
     request: tauri::ipc::Request<'_>,
 ) -> Result<Value, String> {
     let account_id = body_str(&request, "accountId").ok_or("accountId is required")?;
-    run_blocking(&state, move |conn| {
-        claude_reauthenticate(conn, &account_id)
-    })
-    .await
+    run_blocking(&state, move |conn| claude_reauthenticate(conn, &account_id)).await
 }
 
 #[tauri::command]
@@ -837,10 +968,7 @@ pub async fn codex_accounts_reauthenticate(
     request: tauri::ipc::Request<'_>,
 ) -> Result<Value, String> {
     let account_id = body_str(&request, "accountId").ok_or("accountId is required")?;
-    run_blocking(&state, move |conn| {
-        codex_reauthenticate(conn, &account_id)
-    })
-    .await
+    run_blocking(&state, move |conn| codex_reauthenticate(conn, &account_id)).await
 }
 
 #[cfg(test)]
@@ -849,10 +977,8 @@ mod tests {
 
     fn mem_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
-        )
-        .unwrap();
+        conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .unwrap();
         conn
     }
 
@@ -894,7 +1020,10 @@ mod tests {
             Some("a1"),
         )
         .unwrap();
-        assert_eq!(read_setting(&conn, "activeClaudeManagedAccountId"), json!("a1"));
+        assert_eq!(
+            read_setting(&conn, "activeClaudeManagedAccountId"),
+            json!("a1")
+        );
         assert_eq!(
             read_setting(&conn, "activeClaudeManagedAccountIdsByRuntime")["host"],
             json!("a1")
@@ -910,15 +1039,62 @@ mod tests {
             "tokens": { "id_token": format!("h.{payload}.s"), "account_id": "acct_123" }
         })
         .to_string();
-        assert_eq!(codex_email_from_blob(&blob).as_deref(), Some("dev@example.com"));
-        assert_eq!(codex_account_id_from_blob(&blob).as_deref(), Some("acct_123"));
+        assert_eq!(
+            codex_email_from_blob(&blob).as_deref(),
+            Some("dev@example.com")
+        );
+        assert_eq!(
+            codex_account_id_from_blob(&blob).as_deref(),
+            Some("acct_123")
+        );
+    }
+
+    #[test]
+    fn capture_upserts_by_email_and_sets_active() {
+        // Isolate the secret store; this is the only test in the crate that
+        // sets AGENTUM_HOME, so there is no cross-test race.
+        let tmp = std::env::temp_dir().join(format!("agentum-accounts-test-{}", std::process::id()));
+        std::env::set_var("AGENTUM_HOME", &tmp);
+        let conn = mem_db();
+
+        let oauth_a = json!({ "emailAddress": "a@example.com" });
+        let (id_a, email_a) = claude_capture_account(&conn, r#"{"blob":1}"#, &oauth_a).unwrap();
+        assert_eq!(email_a, "a@example.com");
+
+        // Capturing the same email again must reuse the slot, not duplicate it
+        // (the "Add gave me the same account twice" bug class).
+        let (id_a2, _) = claude_capture_account(&conn, r#"{"blob":2}"#, &oauth_a).unwrap();
+        assert_eq!(id_a, id_a2);
+        assert_eq!(read_accounts_array(&conn, "claudeManagedAccounts").len(), 1);
+
+        // A different email gets its own slot and becomes the active account.
+        let oauth_b = json!({ "emailAddress": "b@example.com" });
+        let (id_b, _) = claude_capture_account(&conn, r#"{"blob":3}"#, &oauth_b).unwrap();
+        assert_ne!(id_a, id_b);
+        let accounts = read_accounts_array(&conn, "claudeManagedAccounts");
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(
+            read_setting(&conn, "activeClaudeManagedAccountId"),
+            json!(id_b)
+        );
+
+        // The stored secret round-trips for the new account.
+        let path = string_field(&accounts[1], "managedAuthPath").unwrap();
+        let (blob, _) = load_claude_secret(path).unwrap();
+        assert_eq!(blob, r#"{"blob":3}"#);
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn select_system_default_clears_active_without_touching_accounts() {
         let conn = mem_db();
-        write_setting(&conn, "claudeManagedAccounts", &json!([{ "id": "a1", "email": "x" }]))
-            .unwrap();
+        write_setting(
+            &conn,
+            "claudeManagedAccounts",
+            &json!([{ "id": "a1", "email": "x" }]),
+        )
+        .unwrap();
         write_setting(&conn, "activeClaudeManagedAccountId", &json!("a1")).unwrap();
         let state = claude_select(&conn, None).unwrap();
         assert_eq!(state["activeAccountId"], Value::Null);

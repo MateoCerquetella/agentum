@@ -180,7 +180,21 @@ export type HostHeaderRow = {
   count: number
 }
 
-export type Row = GroupHeaderRow | WorktreeRow | ImportedWorktreesCardRow | HostHeaderRow
+// Trailing row inside each SSH repo group: lists the host's pre-existing tmux
+// sessions (not agentum-managed) so they can be attached from the project they
+// belong to, instead of a detached global sidebar section.
+export type RemoteTmuxCardRow = {
+  type: 'remote-tmux-card'
+  key: string
+  repo: Repo
+}
+
+export type Row =
+  | GroupHeaderRow
+  | WorktreeRow
+  | ImportedWorktreesCardRow
+  | HostHeaderRow
+  | RemoteTmuxCardRow
 
 export type PRGroupKey = 'done' | 'in-review' | 'in-progress' | 'closed'
 
@@ -724,6 +738,13 @@ export function buildRows(
           nestLineage,
           collapsedGroups
         })
+        if (groupBy === 'repo' && repo?.connectionId) {
+          result.push({
+            type: 'remote-tmux-card',
+            key: `remote-tmux-card:${repo.id}`,
+            repo
+          })
+        }
       }
     }
   }

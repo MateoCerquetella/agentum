@@ -85,6 +85,9 @@ type NewWorkspaceComposerCardProps = {
   onCreate: () => void
   note: string
   onNoteChange: (value: string) => void
+  /** When true, create the worktree only — no tmux session/agent is launched. */
+  skipSession: boolean
+  onSkipSessionChange: (value: boolean) => void
   setupConfig: SetupConfig | null
   requiresExplicitSetupChoice: boolean
   setupDecision: 'run' | 'skip' | null
@@ -255,6 +258,8 @@ export default function NewWorkspaceComposerCard({
   onCreate,
   note,
   onNoteChange,
+  skipSession,
+  onSkipSessionChange,
   setupConfig,
   requiresExplicitSetupChoice,
   setupDecision,
@@ -570,6 +575,26 @@ export default function NewWorkspaceComposerCard({
             triggerClassName="h-9 w-full border-input text-sm focus:border-ring focus:ring-[3px] focus:ring-ring/50"
             onTriggerEnter={createDisabled ? undefined : onCreate}
           />
+
+          {/* No-tmux option, right under the agent selector: create the worktree
+              without launching any session/agent. Opening it later starts the
+              chosen agent (or shows the session picker). */}
+          <label className="mt-2 flex cursor-pointer items-start gap-2.5">
+            <input
+              type="checkbox"
+              checked={skipSession}
+              onChange={(event) => onSkipSessionChange(event.target.checked)}
+              className="mt-0.5 size-4 shrink-0 cursor-pointer accent-foreground"
+            />
+            <span className="min-w-0">
+              <span className="block text-xs font-medium text-foreground">
+                Don&apos;t start a session
+              </span>
+              <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                Create the worktree only — no tmux session or agent is launched.
+              </span>
+            </span>
+          </label>
         </div>
 
         <div>

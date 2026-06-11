@@ -51,7 +51,7 @@ import {
   handleSwitchTerminalTab
 } from '../hooks/ipc-tab-switch'
 import TabGroupSplitLayout from './tab-group/TabGroupSplitLayout'
-import { shouldAutoCreateInitialTerminal } from './terminal/initial-terminal'
+import WorkspaceAgentLauncher from './WorkspaceAgentLauncher'
 import { shouldRepairActiveTerminalTab } from './terminal/active-terminal-repair'
 import { addBackgroundMountedTerminalWorktree } from './terminal/background-terminal-worktree-mount'
 import {
@@ -261,6 +261,16 @@ function Terminal(): React.JSX.Element | null {
   const worktreeBrowserTabs = activeWorktreeId
     ? (browserTabsByWorktree[activeWorktreeId] ?? [])
     : []
+  // Why: an active worktree with no renderable surface (no terminal tab, no
+  // browser tab, no open editor file) no longer auto-spawns a blank terminal —
+  // it shows the WorkspaceAgentLauncher picker so the user chooses what to start.
+  // Uses the same three slices the close-handlers use to decide a worktree is
+  // "empty", so the picker shows exactly when the workspace truly has no session.
+  const activeWorktreeHasNoSurface =
+    !!activeWorktreeId &&
+    tabs.length === 0 &&
+    worktreeBrowserTabs.length === 0 &&
+    worktreeFiles.length === 0
   const getEffectiveLayoutForWorktree = useCallback(
     (worktreeId: string) =>
       getEffectiveLayout(worktreeId, layoutByWorktree, groupsByWorktree, activeGroupIdByWorktree),
@@ -713,24 +723,17 @@ function Terminal(): React.JSX.Element | null {
       return
     }
 
-    // Why: this fallback exists to give a newly activated/restored worktree a
-    // focusable surface when the reconciled tab model has nothing renderable.
-    // Re-running it on ordinary tab-count changes would recreate a terminal
-    // immediately after the user intentionally closed the last visible one.
-    const { renderableTabCount } = reconcileWorktreeTabModel(activeWorktreeId)
-    if (!shouldAutoCreateInitialTerminal(renderableTabCount)) {
-      return
-    }
-    // Why: this tab only exists because the user clicked a never-visited
-    // worktree. Tag it so the PTY spawn it triggers does not count as
-    // activity and reshuffle the sidebar. Explicit "New Tab" actions
-    // (handleNewTab below) still bump normally.
-    createTab(activeWorktreeId, undefined, undefined, { pendingActivationSpawn: true })
+    // Why: a worktree with no renderable session no longer auto-spawns a blank
+    // terminal — the user asked to choose which agent to start first. We still
+    // reconcile here to prune stale tab-model state, but the empty surface is now
+    // the WorkspaceAgentLauncher picker (rendered below when zero tabs remain).
+    // Flows that *should* launch something (new-workspace, reopen-with-agent,
+    // setup/default-tabs) still create their tab via ensureWorktreeHasInitialTerminal.
+    reconcileWorktreeTabModel(activeWorktreeId)
   }, [
     workspaceSessionReady,
     activeWorktreeId,
     activeRuntimeEnvironmentId,
-    createTab,
     reconcileWorktreeTabModel
   ])
 
@@ -1536,9 +1539,20 @@ function Terminal(): React.JSX.Element | null {
 
   return (
     <div
-      className={`flex flex-col flex-1 min-w-0 min-h-0 overflow-hidden${activeWorktreeId ? '' : ' hidden'}`}
+      className={`relative flex flex-col flex-1 min-w-0 min-h-0 overflow-hidden${activeWorktreeId ? '' : ' hidden'}`}
     >
       <EditorAutosaveController />
+
+      {/* Empty-state: an active workspace with no open session shows the agent
+          launcher (pick what to start) instead of auto-spawning a blank terminal.
+          Rendered as an absolute, viewport-bounded overlay (z-above the empty
+          surfaces) so it always fills exactly the content area — never growing it
+          past the window — regardless of sibling flex sizing. */}
+      {activeView === 'terminal' && activeWorktreeId && activeWorktreeHasNoSurface ? (
+        <div className="absolute inset-0 z-20">
+          <WorkspaceAgentLauncher worktreeId={activeWorktreeId} />
+        </div>
+      ) : null}
 
       {/* Why: once split groups are enabled, each group owns its own tab strip
           inline. The old titlebar portal stays only as a fallback

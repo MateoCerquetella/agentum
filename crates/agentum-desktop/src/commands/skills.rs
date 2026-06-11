@@ -26,7 +26,10 @@ fn read_skill_description(skill_file: &Path) -> Option<String> {
             break;
         }
         if let Some(rest) = trimmed.strip_prefix("description:") {
-            let value = rest.trim().trim_matches(|c| c == '"' || c == '\'').to_string();
+            let value = rest
+                .trim()
+                .trim_matches(|c| c == '"' || c == '\'')
+                .to_string();
             if !value.is_empty() {
                 return Some(value);
             }

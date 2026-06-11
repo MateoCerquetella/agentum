@@ -181,8 +181,8 @@ fn resample_to_rate(samples: &[f32], input_rate: u32, output_rate: u32) -> Vec<f
     if samples.is_empty() || input_rate == 0 || output_rate == 0 || input_rate == output_rate {
         return samples.to_vec();
     }
-    let output_len = (((samples.len() as f64) * (output_rate as f64) / (input_rate as f64))
-        .round() as usize)
+    let output_len = (((samples.len() as f64) * (output_rate as f64) / (input_rate as f64)).round()
+        as usize)
         .max(1);
     let ratio = input_rate as f64 / output_rate as f64;
     let mut out = vec![0.0f32; output_len];

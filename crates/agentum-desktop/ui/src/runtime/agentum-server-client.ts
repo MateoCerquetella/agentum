@@ -137,9 +137,12 @@ export function createSession(input: CreateSessionInput): Promise<Session> {
   return request<Session>('/api/sessions', { method: 'POST', body: JSON.stringify(body) })
 }
 
-/** `POST /api/sessions/{id}/start` — bring the tmux pane up. */
-export function startSession(id: string): Promise<void> {
-  return request<void>(`/api/sessions/${id}/start`, { method: 'POST' })
+/** `POST /api/sessions/{id}/start` — bring the tmux pane up. The response is
+ *  the session plus `spawned`: `true` for a freshly created pane (bare shell),
+ *  `false` when start reattached to a live tmux session that still runs
+ *  whatever was in it (possibly an agent). */
+export function startSession(id: string): Promise<Session & { spawned?: boolean }> {
+  return request<Session & { spawned?: boolean }>(`/api/sessions/${id}/start`, { method: 'POST' })
 }
 
 /** `POST /api/sessions/{id}/stop` — graceful stop (pane survives). */

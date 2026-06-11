@@ -73,6 +73,24 @@ pub async fn speech_start_dictation(
         .map_err(|e| e.to_string())
 }
 
+// startCapture(sessionId): open the default microphone natively and stream its
+// samples into the engine. Replaces the renderer's getUserMedia pipeline, which
+// macOS WKWebView does not provide (navigator.mediaDevices is undefined there).
+#[tauri::command]
+pub fn speech_start_capture(
+    app: AppHandle,
+    state: State<'_, SpeechState>,
+    value: String,
+) -> Result<(), String> {
+    state.capture.start(app, state.service.clone(), value)
+}
+
+// stopCapture(): stop the native microphone stream. Idempotent.
+#[tauri::command]
+pub fn speech_stop_capture(state: State<'_, SpeechState>) {
+    state.capture.stop();
+}
+
 // feedAudio: the hottest path (~12 chunks/sec during dictation). The renderer
 // sends the Float32 samples as the raw IPC body (the ArrayBuffer) with the sample
 // rate + session id in headers, so there is zero JSON (de)serialization and no
@@ -107,7 +125,11 @@ pub fn speech_feed_audio(
             let Some(samples) = args.first().and_then(parse_samples) else {
                 return;
             };
-            let sample_rate = args.get(1).and_then(Value::as_f64).map(|n| n as u32).unwrap_or(0);
+            let sample_rate = args
+                .get(1)
+                .and_then(Value::as_f64)
+                .map(|n| n as u32)
+                .unwrap_or(0);
             let Some(session_id) = args.get(2).or_else(|| args.last()).and_then(Value::as_str)
             else {
                 return;

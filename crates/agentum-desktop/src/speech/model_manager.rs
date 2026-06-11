@@ -159,8 +159,16 @@ impl ModelManager {
 
         let cancel = Arc::new(AtomicBool::new(false));
         self.active.lock().insert(model_id.to_string());
-        self.cancels.lock().insert(model_id.to_string(), cancel.clone());
-        self.set_state(app, model_id, SpeechModelStatus::Downloading, Some(0.0), None);
+        self.cancels
+            .lock()
+            .insert(model_id.to_string(), cancel.clone());
+        self.set_state(
+            app,
+            model_id,
+            SpeechModelStatus::Downloading,
+            Some(0.0),
+            None,
+        );
 
         let archive_path = self.models_dir.join(format!("{model_id}.tar.bz2"));
         let result = self
@@ -213,7 +221,8 @@ impl ModelManager {
         model_dir: &Path,
         cancel: &Arc<AtomicBool>,
     ) -> Result<()> {
-        self.download_file(app, manifest, archive_path, cancel).await?;
+        self.download_file(app, manifest, archive_path, cancel)
+            .await?;
         if cancel.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -223,7 +232,13 @@ impl ModelManager {
             return Ok(());
         }
 
-        self.set_state(app, manifest.id, SpeechModelStatus::Extracting, Some(0.95), None);
+        self.set_state(
+            app,
+            manifest.id,
+            SpeechModelStatus::Extracting,
+            Some(0.95),
+            None,
+        );
         extract_tar_bz2_stripped(archive_path, model_dir)?;
         if cancel.load(Ordering::SeqCst) {
             return Ok(());

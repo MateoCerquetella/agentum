@@ -7,13 +7,13 @@ mod speech_engine;
 mod state;
 
 use commands::{
-    accounts, agent_status, app, browser, cache, claude_usage, cli, clipboard, codex_usage,
-    crash_reports, diagnostics, e2e, feedback, fs, gh, gh_projects, gl, hooks, hosted_review,
-    html_export,
-    keybindings, linear, mobile, notebook, notifications, onboarding, open_code_usage, permissions,
-    pet, project_groups, pty, rate_limits, remote_workspace, repos, runtime, server, session,
-    settings, shell, shell_runtimes, skills, sparse_presets, speech, ssh, star_nag, stats,
-    telemetry, ui, updater, window, workspace_cleanup, workspace_ports, workspace_space,
+    accounts, agent_status, app, browser, browser_native, cache, claude_usage, cli, clipboard,
+    codex_usage, crash_reports, diagnostics, e2e, feedback, fs, gh, gh_projects, gl, hooks,
+    hosted_review, html_export, keybindings, linear, mobile, notebook, notifications, onboarding,
+    open_code_usage, permissions, pet, project_groups, pty, rate_limits, remote_workspace, repos,
+    runtime, server, session, settings, shell, shell_runtimes, skills, sparse_presets, speech, ssh,
+    star_nag, stats, telemetry, ui, updater, window, workspace_cleanup, workspace_ports,
+    workspace_space,
 };
 use state::AppState;
 use tauri::Manager;
@@ -274,6 +274,8 @@ pub fn run() {
             speech::speech_cancel_download,
             speech::speech_delete_model,
             speech::speech_start_dictation,
+            speech::speech_start_capture,
+            speech::speech_stop_capture,
             speech::speech_feed_audio,
             speech::speech_stop_dictation,
             diagnostics::diagnostics_open_trace_folder,
@@ -292,6 +294,13 @@ pub fn run() {
             crash_reports::crash_reports_copy_latest_diagnostics,
             workspace_ports::workspace_ports_scan,
             workspace_ports::workspace_ports_kill,
+            browser_native::browser_webview_open,
+            browser_native::browser_webview_navigate,
+            browser_native::browser_webview_history,
+            browser_native::browser_webview_set_bounds,
+            browser_native::browser_webview_set_visible,
+            browser_native::browser_webview_close,
+            browser_native::browser_webview_state,
             browser::browser_unregister_guest,
             browser::browser_open_dev_tools,
             browser::browser_cancel_download,
@@ -345,6 +354,8 @@ pub fn run() {
             accounts::claude_accounts_list,
             accounts::claude_accounts_select,
             accounts::claude_accounts_add,
+            accounts::claude_accounts_begin_add,
+            accounts::claude_accounts_live_login,
             accounts::claude_accounts_reauthenticate,
             accounts::claude_accounts_remove,
             accounts::codex_accounts_list,

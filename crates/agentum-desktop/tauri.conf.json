@@ -41,9 +41,9 @@
     "macOS": {
       "infoPlist": "Info.plist",
       "frameworks": [
-        "target/release/libsherpa-onnx-c-api.dylib",
-        "target/release/libsherpa-onnx-cxx-api.dylib",
-        "target/release/libonnxruntime.1.17.1.dylib"
+        "../../target/release/libsherpa-onnx-c-api.dylib",
+        "../../target/release/libsherpa-onnx-cxx-api.dylib",
+        "../../target/release/libonnxruntime.1.17.1.dylib"
       ]
     }
   }

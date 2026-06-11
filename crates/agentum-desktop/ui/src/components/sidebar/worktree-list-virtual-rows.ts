@@ -6,6 +6,11 @@ import { PINNED_GROUP_KEY } from './worktree-list-groups'
 export const GROUP_HEADER_ROW_HEIGHT = 28
 const SECONDARY_GROUP_HEADER_TOP_MARGIN = 4
 const IMPORTED_WORKTREES_LINE_ROW_HEIGHT = 36
+// Host headers: pt-1 wrapper + min-h-8 row (single line). SSH hosts add a second
+// `detail` line, so they estimate taller. Measured size still corrects this, but
+// a correct seed keeps off-screen rows positioned right when the list is long.
+const HOST_HEADER_ROW_HEIGHT = 36
+const HOST_HEADER_DETAIL_LINE_HEIGHT = 8
 
 type WorktreeItemRow = Extract<Row, { type: 'item' }>
 export type RenderRow = Row | { type: 'lineage-group'; key: string; rows: WorktreeItemRow[] }
@@ -40,11 +45,18 @@ export function estimateRenderRowSize(
         : 0)
     )
   }
+  if (row?.type === 'host-header') {
+    return HOST_HEADER_ROW_HEIGHT + (row.host.detail ? HOST_HEADER_DETAIL_LINE_HEIGHT : 0)
+  }
   if (row?.type === 'lineage-group') {
     return 100 + Math.max(0, row.rows.length - 1) * 96
   }
   if (row?.type === 'imported-worktrees-card') {
     return IMPORTED_WORKTREES_LINE_ROW_HEIGHT
+  }
+  if (row?.type === 'remote-tmux-card') {
+    // Collapsed disclosure row; expansion is corrected by measurement.
+    return 28
   }
   return 116
 }

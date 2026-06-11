@@ -395,7 +395,9 @@ mod tests {
     #[ignore]
     fn streaming_engine_smoke() {
         let manifest = get_catalog_model("zipformer-streaming-zh-14m").unwrap();
-        let dir = std::env::temp_dir().join("agentum-speech-test").join(manifest.id);
+        let dir = std::env::temp_dir()
+            .join("agentum-speech-test")
+            .join(manifest.id);
         download_and_extract(manifest, &dir);
 
         let mut engine = Engine::load(&dir, manifest).expect("load streaming engine");
@@ -537,7 +539,8 @@ mod tests {
         if input == output || samples.is_empty() {
             return samples.to_vec();
         }
-        let out_len = ((samples.len() as f64 * output as f64 / input as f64).round() as usize).max(1);
+        let out_len =
+            ((samples.len() as f64 * output as f64 / input as f64).round() as usize).max(1);
         let ratio = input as f64 / output as f64;
         let last = samples.len() - 1;
         (0..out_len)

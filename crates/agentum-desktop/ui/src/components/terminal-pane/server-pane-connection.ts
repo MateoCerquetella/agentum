@@ -192,8 +192,11 @@ export function connectPaneServerSession(
     // actually attaches. For an agent-tool session the server launches it, so
     // sending the command again would double-launch — skip it. A pinned
     // external session already runs whatever the user left in it; never inject.
-    const startupCommand =
-      tool === 'terminal' && !pinnedSessionId ? deps.startup?.command : undefined
+    // This is only a CANDIDATE: an `onlyIfFresh` startup (the worktree-reopen
+    // agent relaunch) is additionally gated on `freshPane` below, so a reattach
+    // to a surviving tmux pane (agent likely still running in it) never gets
+    // the command typed into the agent's composer.
+    const startup = tool === 'terminal' && !pinnedSessionId ? deps.startup : undefined
     void (async () => {
       try {
         // Why: a remote (SSH) worktree's repo carries a `connectionId` (native
@@ -221,6 +224,14 @@ export function connectPaneServerSession(
         if (disposed) {
           return
         }
+        // Only type an `onlyIfFresh` launch command into a FRESHLY spawned
+        // pane (bare shell). Reattached panes still run whatever was in them —
+        // typing `claude` again would submit the word as a prompt to the
+        // already running agent. Explicit user commands (quick commands) have
+        // no `onlyIfFresh` and always run.
+        const freshPane = 'freshPane' in session && session.freshPane === true
+        const startupCommand =
+          startup && (!startup.onlyIfFresh || freshPane) ? startup.command : undefined
         binding = await bindServerSessionTerminal(session.id, pane.terminal, {
           startupCommand,
           onTitle: handleServerSessionTitle,

@@ -148,10 +148,12 @@ async fn graphql(query: &str, vars: &[(&str, Scalar)]) -> Result<Value, ProjectE
         }
     }
 
-    let output = cmd
-        .output()
-        .await
-        .map_err(|_| ProjectError::new("auth_required", "GitHub CLI (`gh`) is not installed or not on PATH."))?;
+    let output = cmd.output().await.map_err(|_| {
+        ProjectError::new(
+            "auth_required",
+            "GitHub CLI (`gh`) is not installed or not on PATH.",
+        )
+    })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     // gh prints the JSON body on both success and GraphQL errors; parse it first.
@@ -163,7 +165,12 @@ async fn graphql(query: &str, vars: &[(&str, Scalar)]) -> Result<Value, ProjectE
         }
         match body.get("data") {
             Some(data) if !data.is_null() => return Ok(data.clone()),
-            _ => return Err(ProjectError::new("unknown", "GitHub returned an empty response.")),
+            _ => {
+                return Err(ProjectError::new(
+                    "unknown",
+                    "GitHub returned an empty response.",
+                ))
+            }
         }
     }
     // No JSON body → gh failed before the request (auth/scope/network).
@@ -264,7 +271,7 @@ fn opt_str(value: &Value, key: &str) -> Value {
 fn nodes_map<F: Fn(&Value) -> Value>(conn: Option<&Value>, f: F) -> Vec<Value> {
     conn.and_then(|c| c.get("nodes"))
         .and_then(Value::as_array)
-        .map(|nodes| nodes.iter().map(|n| f(n)).collect())
+        .map(|nodes| nodes.iter().map(f).collect())
         .unwrap_or_default()
 }
 
@@ -314,10 +321,20 @@ fn map_field(node: &Value) -> Value {
         "ITERATION" => {
             let mut iterations = Vec::new();
             if let Some(cfg) = node.get("configuration") {
-                for it in cfg.get("iterations").and_then(Value::as_array).into_iter().flatten() {
+                for it in cfg
+                    .get("iterations")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
                     iterations.push(iteration_obj(it, false));
                 }
-                for it in cfg.get("completedIterations").and_then(Value::as_array).into_iter().flatten() {
+                for it in cfg
+                    .get("completedIterations")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
                     iterations.push(iteration_obj(it, true));
                 }
             }
@@ -414,10 +431,17 @@ fn issue_type(content: &Value) -> Value {
 }
 
 fn map_content(content: &Value) -> Value {
-    let typename = content.get("__typename").and_then(Value::as_str).unwrap_or("");
+    let typename = content
+        .get("__typename")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     // isDraft is meaningful only for PRs; null for issues/drafts.
     let is_draft = if typename == "PullRequest" {
-        content.get("isDraft").and_then(Value::as_bool).map(Value::from).unwrap_or(Value::Null)
+        content
+            .get("isDraft")
+            .and_then(Value::as_bool)
+            .map(Value::from)
+            .unwrap_or(Value::Null)
     } else {
         Value::Null
     };
@@ -502,17 +526,26 @@ fn select_view(
     view_name: Option<&str>,
 ) -> Option<Value> {
     if let Some(id) = view_id {
-        if let Some(v) = views.iter().find(|v| v.get("id").and_then(Value::as_str) == Some(id)) {
+        if let Some(v) = views
+            .iter()
+            .find(|v| v.get("id").and_then(Value::as_str) == Some(id))
+        {
             return Some(v.clone());
         }
     }
     if let Some(number) = view_number {
-        if let Some(v) = views.iter().find(|v| v.get("number").and_then(Value::as_i64) == Some(number)) {
+        if let Some(v) = views
+            .iter()
+            .find(|v| v.get("number").and_then(Value::as_i64) == Some(number))
+        {
             return Some(v.clone());
         }
     }
     if let Some(name) = view_name {
-        if let Some(v) = views.iter().find(|v| v.get("name").and_then(Value::as_str) == Some(name)) {
+        if let Some(v) = views
+            .iter()
+            .find(|v| v.get("name").and_then(Value::as_str) == Some(name))
+        {
             return Some(v.clone());
         }
     }
@@ -538,7 +571,11 @@ fn parse_project_ref(input: &str) -> Option<(Option<&'static str>, String, i64, 
         let segs: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
         // orgs/{login}/projects/{n}[...]  or  users/{login}/projects/{n}[...]
         if segs.len() >= 4 && (segs[0] == "orgs" || segs[0] == "users") && segs[2] == "projects" {
-            let owner_type = if segs[0] == "orgs" { "organization" } else { "user" };
+            let owner_type = if segs[0] == "orgs" {
+                "organization"
+            } else {
+                "user"
+            };
             let number = segs[3].parse::<i64>().ok()?;
             let view_number = (segs.len() >= 6 && segs[4] == "views")
                 .then(|| segs[5].parse::<i64>().ok())
@@ -586,7 +623,11 @@ pub async fn gh_resolve_project_ref(input: String) -> Value {
             Ok(data) => {
                 let project = data.get(node).and_then(|n| n.get("projectV2"));
                 if let Some(project) = project.filter(|p| !p.is_null()) {
-                    let owner_type_out = if node == "organization" { "organization" } else { "user" };
+                    let owner_type_out = if node == "organization" {
+                        "organization"
+                    } else {
+                        "user"
+                    };
                     let mut result = json!({
                         "ok": true,
                         "owner": owner,
@@ -792,7 +833,9 @@ pub async fn gh_get_project_view_table(
     if too_large {
         let mut envelope = ProjectError::new(
             "too_large",
-            format!("This view has {total_count} items — too many to load here. Open it on github.com."),
+            format!(
+                "This view has {total_count} items — too many to load here. Open it on github.com."
+            ),
         )
         .envelope();
         envelope["totalCount"] = json!(total_count);
@@ -822,7 +865,10 @@ pub async fn gh_get_project_view_table(
 // retry without (parent / issueType / sub-issues).
 fn mentions_optional_field(message: &str) -> bool {
     let lower = message.to_lowercase();
-    lower.contains("parent") || lower.contains("issuetype") || lower.contains("sub_issue") || lower.contains("subissue")
+    lower.contains("parent")
+        || lower.contains("issuetype")
+        || lower.contains("sub_issue")
+        || lower.contains("subissue")
 }
 
 // Page through ProjectV2.items. Returns (rows, totalCount, parentDropped=false,
@@ -874,9 +920,17 @@ async fn fetch_rows(
         let Some(items) = items else {
             return Err(ProjectError::new("not_found", "Project not found."));
         };
-        total_count = items.get("totalCount").and_then(Value::as_i64).unwrap_or(total_count);
+        total_count = items
+            .get("totalCount")
+            .and_then(Value::as_i64)
+            .unwrap_or(total_count);
 
-        for node_item in items.get("nodes").and_then(Value::as_array).into_iter().flatten() {
+        for node_item in items
+            .get("nodes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             rows.push(map_row(node_item, rows.len()));
             if rows.len() >= MAX_ITEMS {
                 // Past the cap: signal too_large with the real total.
@@ -920,14 +974,22 @@ mod tests {
 
     #[test]
     fn classifies_not_found() {
-        let errors = json!([{ "type": "NOT_FOUND", "message": "Could not resolve to a ProjectV2" }]);
-        assert_eq!(classify_graphql_errors(errors.as_array().unwrap()).kind, "not_found");
+        let errors =
+            json!([{ "type": "NOT_FOUND", "message": "Could not resolve to a ProjectV2" }]);
+        assert_eq!(
+            classify_graphql_errors(errors.as_array().unwrap()).kind,
+            "not_found"
+        );
     }
 
     #[test]
     fn classifies_scope_message_without_type() {
-        let errors = json!([{ "message": "requires one of the following scopes: ['read:project']" }]);
-        assert_eq!(classify_graphql_errors(errors.as_array().unwrap()).kind, "scope_missing");
+        let errors =
+            json!([{ "message": "requires one of the following scopes: ['read:project']" }]);
+        assert_eq!(
+            classify_graphql_errors(errors.as_array().unwrap()).kind,
+            "scope_missing"
+        );
     }
 
     #[test]
@@ -936,13 +998,19 @@ mod tests {
             classify_stderr("error: your token has not been granted the required scopes").kind,
             "scope_missing"
         );
-        assert_eq!(classify_stderr("gh auth login required").kind, "auth_required");
+        assert_eq!(
+            classify_stderr("gh auth login required").kind,
+            "auth_required"
+        );
     }
 
     #[test]
     fn parses_org_project_url_with_view() {
         let parsed = parse_project_ref("https://github.com/orgs/acme/projects/7/views/3").unwrap();
-        assert_eq!(parsed, (Some("organization"), "acme".to_string(), 7, Some(3)));
+        assert_eq!(
+            parsed,
+            (Some("organization"), "acme".to_string(), 7, Some(3))
+        );
     }
 
     #[test]
@@ -1068,25 +1136,37 @@ mod tests {
             json!({ "id": "v2", "number": 2, "name": "Table", "layout": "TABLE_LAYOUT" }),
         ];
         // Explicit id wins.
-        assert_eq!(select_view(&views, Some("v1"), None, None).unwrap()["id"], "v1");
+        assert_eq!(
+            select_view(&views, Some("v1"), None, None).unwrap()["id"],
+            "v1"
+        );
         // Number next.
-        assert_eq!(select_view(&views, None, Some(2), None).unwrap()["number"], 2);
+        assert_eq!(
+            select_view(&views, None, Some(2), None).unwrap()["number"],
+            2
+        );
         // Name next.
-        assert_eq!(select_view(&views, None, None, Some("Board")).unwrap()["name"], "Board");
+        assert_eq!(
+            select_view(&views, None, None, Some("Board")).unwrap()["name"],
+            "Board"
+        );
         // Fallback prefers the first TABLE_LAYOUT.
         assert_eq!(select_view(&views, None, None, None).unwrap()["id"], "v2");
     }
 
     #[test]
     fn select_view_falls_back_to_first_when_no_table() {
-        let views = vec![json!({ "id": "v1", "number": 1, "name": "Board", "layout": "BOARD_LAYOUT" })];
+        let views =
+            vec![json!({ "id": "v1", "number": 1, "name": "Board", "layout": "BOARD_LAYOUT" })];
         assert_eq!(select_view(&views, None, None, None).unwrap()["id"], "v1");
         assert!(select_view(&[], None, None, None).is_none());
     }
 
     #[test]
     fn optional_field_error_detection() {
-        assert!(mentions_optional_field("Field 'parent' doesn't exist on type 'Issue'"));
+        assert!(mentions_optional_field(
+            "Field 'parent' doesn't exist on type 'Issue'"
+        ));
         assert!(mentions_optional_field("Field 'issueType' doesn't exist"));
         assert!(!mentions_optional_field("Some unrelated error"));
     }

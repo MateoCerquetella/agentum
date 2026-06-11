@@ -90,12 +90,12 @@ mod macos {
     }
 
     pub fn screenshots_granted() -> bool {
-        ScreenCaptureAccess::default().preflight()
+        ScreenCaptureAccess.preflight()
     }
 
     // Fire the OS screen-recording prompt on first run; a no-op once granted.
     pub fn request_screenshots() {
-        let _ = ScreenCaptureAccess::default().request();
+        let _ = ScreenCaptureAccess.request();
     }
 
     pub fn status_str(granted: bool) -> &'static str {

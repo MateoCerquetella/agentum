@@ -52,13 +52,19 @@ function sessionName(workdir: string, tool: string): string {
   return `${base}-${t}-${shortHash(workdir)}`.slice(0, 64).replace(/-+$/, '')
 }
 
+/** A workspace session plus whether THIS call spawned its pane. `freshPane`
+ *  is true only when start created a brand-new pane (a bare shell) — the only
+ *  state where typing a launch command is safe. A reattach (the pane survived
+ *  in tmux, possibly with an agent still running) reports false. */
+export type WorkspaceSession = Session & { freshPane: boolean }
+
 /**
  * Return a RUNNING server session for `(workdir, tool)`: reuse the existing one,
  * else create it, and start it (spawn its tmux pane) if it isn't already running
  * so the terminal stream has live output. Matching on workdir+tool keeps one
  * tmux pane per workspace surface instead of spawning a duplicate each reopen.
  */
-export async function ensureWorkspaceSession(req: WorkspaceSessionRequest): Promise<Session> {
+export async function ensureWorkspaceSession(req: WorkspaceSessionRequest): Promise<WorkspaceSession> {
   const sessions = await listSessions()
   // Why: match on host too. The server reports a session's host as `hostId`
   // (absent/null = local), so a remote SSH session and a local one at the same
@@ -77,20 +83,19 @@ export async function ensureWorkspaceSession(req: WorkspaceSessionRequest): Prom
       host_id: req.hostId ?? undefined
     }))
   // Spawn the tmux pane if the session isn't live yet. Idempotent server-side;
-  // ignore "already running" so a reattach to a live pane still succeeds.
+  // a reattach to a live pane still succeeds (the server reports spawned=false).
   if (session.status !== 'running') {
-    await startSession(session.id).catch(() => {})
-    // Why: the `session` object above predates the start, so its `status` /
-    // `tmux_target` are stale (idle, null). Re-read once so callers see the
-    // TRUTHFUL post-start state — notably `tmux_target`, which only the running
-    // session carries and which the tab-bar tmux glyph depends on. Best-effort:
-    // a failed re-read just keeps the pre-start snapshot.
-    const refreshed = (await listSessions().catch(() => [] as Session[])).find(
-      (s) => s.id === session.id
-    )
-    if (refreshed) {
-      return refreshed
+    const started = await startSession(session.id).catch(() => null)
+    if (started) {
+      // The start response carries the TRUTHFUL post-start state (status,
+      // tmux_target — the tab-bar tmux glyph depends on it), so no re-read is
+      // needed. `spawned === true` is the server's word that the pane is a
+      // fresh bare shell; anything else (reattach, or an older daemon that
+      // doesn't report it) must be treated as possibly-live — fail safe by
+      // never auto-typing into it.
+      return { ...started, freshPane: started.spawned === true }
     }
+    return { ...session, freshPane: false }
   }
-  return session
+  return { ...session, freshPane: false }
 }

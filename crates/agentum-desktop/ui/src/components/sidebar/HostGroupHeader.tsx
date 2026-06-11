@@ -58,7 +58,10 @@ export function HostGroupHeader({
           onToggle()
         }
       }}
-      className="group flex h-8 w-full cursor-pointer items-center gap-1.5 px-1 text-left"
+      // Why: min-h (not fixed h-8) — SSH hosts render a second `detail` line, so
+      // a one-line height clipped the two-line content and bled it onto the row
+      // below. min-h keeps single-line hosts at 32px while letting SSH headers grow.
+      className="group flex min-h-8 w-full cursor-pointer items-center gap-1.5 px-1 py-0.5 text-left"
     >
       <ChevronDown
         className={cn(

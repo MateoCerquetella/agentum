@@ -382,6 +382,37 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
     // Host-metrics ticker: publishes CPU+RAM onto the bus so one sampler feeds
     // every connected client over the events WS.
     routes::host::spawn_ticker(bus.clone());
+
+    // SSH ControlMaster warmer: a no-op exec per known SSH host opens the
+    // pooled master at boot (interval's first tick is immediate) and refreshes
+    // it just inside the ControlPersist window (600s), so interactive remote
+    // ops — sidebar git, session spawn, file browse — never pay the 1-3s
+    // TCP+auth handshake. Unreachable hosts cost one bounded (ConnectTimeout=8)
+    // background attempt per tick.
+    {
+        const SSH_MASTER_WARM_INTERVAL: std::time::Duration = std::time::Duration::from_secs(480);
+        let store = state.store.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(SSH_MASTER_WARM_INTERVAL);
+            loop {
+                tick.tick().await;
+                let hosts = match store.list_hosts().await {
+                    Ok(hosts) => hosts,
+                    Err(_) => continue,
+                };
+                for host in hosts
+                    .into_iter()
+                    .filter(|h| matches!(h.kind, agentum_core::HostKind::Ssh { .. }))
+                {
+                    // Per-host spawn: one slow/dead host must not delay warming
+                    // the others.
+                    tokio::spawn(async move {
+                        let _ = crate::host_runtime::warm_ssh_master(&host).await;
+                    });
+                }
+            }
+        });
+    }
 }
 
 /// Boot the API server in-process on an ephemeral loopback port with auth

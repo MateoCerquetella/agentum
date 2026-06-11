@@ -188,6 +188,7 @@ import {
   type ImportedWorktreeCardActionState
 } from './imported-worktrees-card-actions'
 import { buildImportedWorktreesCardCandidates } from './imported-worktrees-card-candidates'
+import RemoteTmuxRepoCard from './RemoteTmuxRepoCard'
 import {
   buildWorktreeSectionActivitySummaries,
   EMPTY_WORKTREE_SECTION_ACTIVITY,
@@ -718,6 +719,9 @@ export function getRenderRowKey(row: RenderRow): string {
   if (row.type === 'host-header') {
     return `host:${row.key}`
   }
+  if (row.type === 'remote-tmux-card') {
+    return `remote-tmux:${row.key}`
+  }
   return `wt:${row.worktree.id}`
 }
 
@@ -737,6 +741,9 @@ export function getWorktreeDragGroups(rows: Row[]): WorktreeDragGroup[] {
     // Host-header rows are a super-level above repo groups — not a drag group
     // boundary and not a worktree item; skip so they don't pollute drag ids.
     if (row.type === 'host-header') {
+      continue
+    }
+    if (row.type === 'remote-tmux-card') {
       continue
     }
     if (!current) {
@@ -2572,9 +2579,15 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                   role="presentation"
                   data-worktree-virtual-row
                   data-worktree-virtual-row-key={String(vItem.key)}
+                  data-worktree-virtual-row-start={vItem.start}
                   data-index={vItem.index}
                   ref={measureVirtualRowElement}
-                  className="absolute left-0 right-0 pt-1"
+                  // Why: top-0 is load-bearing — while a repo header is pinned,
+                  // that sticky sibling is in normal flow, so an absolute row
+                  // with top:auto resolves its static position *below* it and
+                  // renders ~28px past its virtual slot, bleeding under the
+                  // next row.
+                  className="absolute left-0 right-0 top-0 pt-1"
                   style={{ transform: getVirtualRowTransform(vItem.start) }}
                 >
                   <HostGroupHeader
@@ -3322,6 +3335,24 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                         : undefined
                     }
                   />
+                </div>
+              )
+            }
+
+            if (row.type === 'remote-tmux-card') {
+              return (
+                <div
+                  key={vItem.key}
+                  role="presentation"
+                  data-worktree-virtual-row
+                  data-worktree-virtual-row-key={String(vItem.key)}
+                  data-worktree-virtual-row-start={vItem.start}
+                  data-index={vItem.index}
+                  ref={measureVirtualRowElement}
+                  className="absolute left-0 right-0 top-0"
+                  style={{ transform: getVirtualRowTransform(vItem.start) }}
+                >
+                  <RemoteTmuxRepoCard repo={row.repo} />
                 </div>
               )
             }

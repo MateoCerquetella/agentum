@@ -10,6 +10,7 @@
 //! [`SpeechState`] is held in Tauri's managed state and driven by the commands
 //! in `commands/speech.rs`.
 
+mod capture;
 pub mod catalog;
 mod engine;
 mod ffi_util;
@@ -21,12 +22,15 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
+pub use capture::AudioCapture;
 pub use model_manager::ModelManager;
 pub use service::SttService;
 
 pub struct SpeechState {
     pub models: Arc<ModelManager>,
     pub service: Arc<SttService>,
+    /// Native microphone capture (replaces the webview's absent getUserMedia).
+    pub capture: AudioCapture,
 }
 
 impl SpeechState {
@@ -34,6 +38,7 @@ impl SpeechState {
         Ok(Self {
             models: Arc::new(ModelManager::new(models_dir)?),
             service: Arc::new(SttService::default()),
+            capture: AudioCapture::default(),
         })
     }
 }

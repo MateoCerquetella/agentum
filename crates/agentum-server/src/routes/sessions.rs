@@ -456,10 +456,24 @@ async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Session JSON + a `spawned` flag: `true` when start created a fresh pane
+/// (bare shell), `false` when it reattached to a live tmux session. Clients
+/// that type a launch command into the pane (the desktop's agent-tab reopen)
+/// must skip it on reattach — the command would land inside whatever is
+/// already running there (e.g. an agent's composer). Additive field: clients
+/// deserializing plain `Session` ignore it.
+fn session_with_spawned(session: Session, spawned: bool) -> serde_json::Value {
+    let mut value = serde_json::to_value(&session).unwrap_or(serde_json::Value::Null);
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("spawned".into(), serde_json::Value::Bool(spawned));
+    }
+    value
+}
+
 async fn start(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Session>, ApiError> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let id = parse_uuid(&id)?;
     let session = load(&state, id).await?;
     let host = load_host_for_session(&state, &session).await?;
@@ -494,7 +508,7 @@ async fn start(
                 .update_status_and_target(id, Status::Running, Some(&target))
                 .await?;
         }
-        return Ok(Json(load(&state, id).await?));
+        return Ok(Json(session_with_spawned(load(&state, id).await?, false)));
     }
 
     // The underlying tmux session of an external attach is owned by the
@@ -607,7 +621,7 @@ async fn start(
         .store
         .update_status_and_target(id, Status::Running, Some(&target))
         .await?;
-    Ok(Json(load(&state, id).await?))
+    Ok(Json(session_with_spawned(load(&state, id).await?, true)))
 }
 
 async fn stop(
@@ -1078,6 +1092,15 @@ async fn stream_session(
             snapshot_sent = true;
         }
     }
+    if !snapshot_sent {
+        // Pin the tail's replay point BEFORE capturing: the file cursor stays at
+        // this offset while the log grows, so bytes the pane emits during the
+        // capture and the (possibly slow) socket send are replayed by the tail —
+        // a brief duplicate repaint at worst. The old order seeked to End AFTER
+        // the send, silently skipping those bytes; a chunk dropped mid-escape-
+        // sequence corrupted the client parser until the next full snapshot.
+        let _ = file.seek(std::io::SeekFrom::End(0)).await;
+    }
     if !snapshot_sent
         && let Ok(snap) = agentum_tmux::capture_pane_ansi(&target).await
         && !snap.is_empty()
@@ -1109,10 +1132,8 @@ async fn stream_session(
             return;
         }
         snapshot_sent = true;
-        // Skip past the existing log so tailing only emits NEW bytes —
-        // otherwise the snapshot and the log replay would render the same
-        // content twice (cosmetic, but visible as flicker).
-        let _ = file.seek(std::io::SeekFrom::End(0)).await;
+        // The file cursor was pinned at the pre-capture end above; no re-seek —
+        // anything appended since then replays through the tail.
     }
 
     // Fallback: if capture-pane didn't yield anything (early in session
@@ -1348,29 +1369,40 @@ async fn stream_remote_session(mut socket: WebSocket, host: Host, id: Uuid, targ
     // Current screen state: pipe-pane only carries output produced *after* it was
     // armed, so a fresh connect (or an idle pane) needs one snapshot to paint
     // what's already there. RIS (`\x1bc`) resets the client parser first — same
-    // payload shape as a fresh local connect. The follow tail then takes over for
-    // everything new; a few bytes emitted in the window between this snapshot and
-    // the tail attaching may be missed, which a client `{"refresh":true}` heals.
-    match crate::host_runtime::capture_pane_ansi(&host, &target).await {
-        Ok(snap) if !snap.is_empty() => {
-            let mut payload = Vec::with_capacity(snap.len() + 2);
-            payload.extend_from_slice(b"\x1bc");
-            payload.extend_from_slice(&snap);
-            if socket
-                .send(Message::Binary(Bytes::from(payload)))
-                .await
-                .is_err()
-            {
-                return;
+    // payload shape as a fresh local connect.
+    //
+    // The log's byte size is sampled in the SAME remote exec as the snapshot, and
+    // the tail below replays from that offset. Previously the tail started at EOF
+    // *at attach time*, and its (deliberately unmultiplexed) SSH connection takes
+    // a full handshake to attach — every byte a busy agent emitted in that
+    // multi-second window was silently dropped, and a chunk lost mid-escape-
+    // sequence left the terminal corrupted until a manual refresh.
+    let log_offset =
+        match crate::host_runtime::capture_pane_with_log_offset(&host, &target, &log).await {
+            Ok((offset, snap)) => {
+                if !snap.is_empty() {
+                    let mut payload = Vec::with_capacity(snap.len() + 2);
+                    payload.extend_from_slice(b"\x1bc");
+                    payload.extend_from_slice(&snap);
+                    if socket
+                        .send(Message::Binary(Bytes::from(payload)))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                Some(offset)
             }
-        }
-        _ => {}
-    }
+            // No snapshot and no offset anchor: fall back to tail-from-EOF; a client
+            // `{"refresh":true}` heals whatever the attach window missed.
+            Err(_) => None,
+        };
 
     // Persistent `ssh tail -f` of the remote pane log. Its stdout is pumped
     // through an mpsc so the select loop below multiplexes output against
     // keystrokes — a chatty pane never starves input, and vice versa.
-    let mut child = match crate::host_runtime::spawn_remote_pane_tail(&host, &log) {
+    let mut child = match crate::host_runtime::spawn_remote_pane_tail(&host, &log, log_offset) {
         Ok(c) => c,
         Err(e) => {
             let _ = socket
@@ -1383,6 +1415,27 @@ async fn stream_remote_session(mut socket: WebSocket, host: Host, id: Uuid, targ
         let _ = child.kill().await;
         return;
     };
+    // Drain + log the tail's stderr so a transport failure that ends the stream
+    // (e.g. the remote sshd refusing the channel under MaxSessions pressure:
+    // "Session open refused by peer") is recorded instead of silently surfacing
+    // as a bare "[session stream closed]". Also keeps the pipe from filling.
+    if let Some(mut stderr) = child.stderr.take() {
+        let label = log
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("?")
+            .to_string();
+        tokio::spawn(async move {
+            let mut buf = Vec::new();
+            if stderr.read_to_end(&mut buf).await.is_ok() && !buf.is_empty() {
+                tracing::warn!(
+                    session = %label,
+                    "remote pane tail ended: {}",
+                    String::from_utf8_lossy(&buf).trim()
+                );
+            }
+        });
+    }
     let (tail_tx, mut tail_rx) = tokio::sync::mpsc::channel::<Bytes>(64);
     let tail_handle = tokio::spawn(async move {
         let mut buf = vec![0u8; READ_CHUNK];
@@ -1405,12 +1458,49 @@ async fn stream_remote_session(mut socket: WebSocket, host: Host, id: Uuid, targ
         }
     });
 
+    // Input writer: keystrokes leave the select loop through an mpsc and a
+    // dedicated task issues the `send-keys` execs. Two wins over the previous
+    // inline `send_bytes(...).await` in the loop:
+    //   * no head-of-line blocking — the loop used to await a full SSH round
+    //     trip per keystroke, stalling pane-output forwarding while typing;
+    //   * burst coalescing — frames that queue while an exec is in flight
+    //     (fast typing, paste) merge into one exec instead of one
+    //     ControlMaster channel open/close per keystroke.
+    // Delivery failures are logged rather than echoed to the client: the
+    // pane not echoing already signals a dropped key, and the channel keeps
+    // working for subsequent input.
+    let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+    let input_handle = {
+        let host = host.clone();
+        let target = target.clone();
+        tokio::spawn(async move {
+            while let Some(first) = input_rx.recv().await {
+                let mut buf = first;
+                // Drain whatever queued while the previous exec was in
+                // flight, up to the send-keys 4 KB chunk size.
+                while buf.len() < 4096 {
+                    match input_rx.try_recv() {
+                        Ok(more) => buf.extend_from_slice(&more),
+                        Err(_) => break,
+                    }
+                }
+                if let Err(e) = crate::host_runtime::send_bytes(&host, &target, &buf).await {
+                    tracing::warn!(target = %target, error = ?e, "remote input send failed");
+                }
+            }
+        })
+    };
+
     // Why: like the local stream, the remote pane's OSC title is consumed by tmux
     // on the host and never crosses the pane byte stream — so the desktop's
     // title-derived agent status would be blank for SSH sessions. Poll the remote
-    // pane_title and re-inject it as a synthetic OSC title on change. Slower
-    // cadence than local (1s) since each poll is a round-trip SSH exec.
-    let mut title_ticker = tokio::time::interval(Duration::from_millis(1000));
+    // pane_title and re-inject it as a synthetic OSC title on change. Each poll is
+    // a round-trip SSH exec over the *shared* ControlMaster, and that master is
+    // also what carries keystroke `send_keys` — so a too-fast cadence across many
+    // open sessions churns the master's limited channels (remote MaxSessions) and
+    // can starve input. 2.5 s keeps agent-status lag imperceptible while leaving
+    // the master headroom.
+    let mut title_ticker = tokio::time::interval(Duration::from_millis(2500));
     let mut last_pane_title = String::new();
     loop {
         tokio::select! {
@@ -1443,11 +1533,10 @@ async fn stream_remote_session(mut socket: WebSocket, host: Host, id: Uuid, targ
             },
             msg = socket.recv() => match msg {
                 Some(Ok(Message::Binary(b))) if !b.is_empty() => {
-                    if let Err(e) = crate::host_runtime::send_bytes(&host, &target, &b).await
-                        && socket.send(Message::Text(format!("[input dropped: {e}]").into())).await.is_err()
-                    {
-                        break;
-                    }
+                    // Channel-full (writer wedged on a dead host for 256
+                    // frames) drops the key; the 12 s ssh timeout unwedges
+                    // the writer long before that backlog accrues.
+                    let _ = input_tx.try_send(b.to_vec());
                 }
                 Some(Ok(Message::Text(t))) => {
                     if let Some((cols, rows)) = parse_resize(&t) {
@@ -1469,10 +1558,8 @@ async fn stream_remote_session(mut socket: WebSocket, host: Host, id: Uuid, targ
                                 break;
                             }
                         }
-                    } else if let Err(e) = crate::host_runtime::send_bytes(&host, &target, t.as_bytes()).await
-                        && socket.send(Message::Text(format!("[input dropped: {e}]").into())).await.is_err()
-                    {
-                        break;
+                    } else {
+                        let _ = input_tx.try_send(t.as_bytes().to_vec());
                     }
                 }
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
@@ -1481,6 +1568,7 @@ async fn stream_remote_session(mut socket: WebSocket, host: Host, id: Uuid, targ
         }
     }
     tail_handle.abort();
+    input_handle.abort();
     let _ = child.kill().await;
 }
 

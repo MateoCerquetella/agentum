@@ -196,6 +196,15 @@ export function moveFocusToRendererBeforeWebviewDetach(webview: Electron.Webview
 }
 
 export function destroyPersistentWebview(browserTabId: string): void {
+  // The page may live as a native Tauri child webview (NativeBrowserPagePane)
+  // rather than a DOM guest; close it via the shell. No-op if it never existed.
+  void (
+    api.browser as unknown as {
+      webviewClose: (args: { browserPageId: string }) => Promise<void>
+    }
+  )
+    .webviewClose({ browserPageId: browserTabId })
+    .catch(() => {})
   const webview = webviewRegistry.get(browserTabId)
   if (!webview) {
     registeredWebContentsIds.delete(browserTabId)
