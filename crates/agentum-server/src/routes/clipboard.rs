@@ -349,6 +349,7 @@ mod tests {
             clipboard_request_bus: clip_bus,
             hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             api_base_url: None,
+            desktop_bridge: None,
         }
     }
 

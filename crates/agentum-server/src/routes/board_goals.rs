@@ -405,6 +405,7 @@ mod tests {
             clipboard_request_bus: broadcast::channel(64).0,
             hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             api_base_url: None,
+            desktop_bridge: None,
         }
     }
 
