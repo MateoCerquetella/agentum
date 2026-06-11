@@ -1395,20 +1395,15 @@ async fn stream_remote_session(mut socket: WebSocket, host: Host, id: Uuid, targ
         }
     };
 
-    // Re-arm pipe-pane on connect (idempotent `-o`). Cheap insurance: a session
-    // started by a pre-this-fix daemon never set up the remote sink, and without
-    // it the tail below would follow an empty file forever.
-    if let Err(e) = crate::host_runtime::pipe_pane(&host, &target, &log).await {
-        let _ = socket
-            .send(Message::Text(format!("[remote pipe error: {e}]").into()))
-            .await;
-        return;
-    }
-
     // Current screen state: pipe-pane only carries output produced *after* it was
     // armed, so a fresh connect (or an idle pane) needs one snapshot to paint
     // what's already there. RIS (`\x1bc`) resets the client parser first — same
     // payload shape as a fresh local connect.
+    //
+    // `capture_pane_with_log_offset` ALSO re-arms pipe-pane (idempotent `-o`) in
+    // the same remote exec, so the old separate arm round-trip is gone — one
+    // SSH call at connect instead of two, halving the time-to-first-paint on a
+    // distant host.
     //
     // The log's byte size is sampled in the SAME remote exec as the snapshot, and
     // the tail below replays from that offset. Previously the tail started at EOF
@@ -1912,6 +1907,7 @@ mod tests {
                 clipboard_request_bus: broadcast::channel(64).0,
                 hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
                 api_base_url: None,
+                desktop_bridge: None,
             }
         }
 
@@ -2054,6 +2050,7 @@ mod tests {
                 clipboard_request_bus: broadcast::channel(64).0,
                 hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
                 api_base_url: None,
+                desktop_bridge: None,
             }
         }
 
