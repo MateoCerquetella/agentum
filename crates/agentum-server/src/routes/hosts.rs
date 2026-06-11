@@ -1,8 +1,8 @@
 //! `/api/hosts` — machines controlled directly by this daemon.
 
 use agentum_core::{
-    EXTERNAL_TMUX_FLAG, Host, HostKind, HostReadiness, LOCAL_HOST_ID, NewHost, NewSession,
-    Session, SshAuth, Status,
+    EXTERNAL_TMUX_FLAG, Host, HostKind, HostReadiness, LOCAL_HOST_ID, NewHost, NewSession, Session,
+    SshAuth, Status,
 };
 use agentum_store::paths;
 use axum::extract::{Path, Query, State};
@@ -446,8 +446,8 @@ async fn attach_tmux_session(
 
     // Arm the pane log pipe and mark the record running with the external
     // target. `pipe-pane -o` is idempotent, so re-attach is harmless.
-    let log = paths::pane_log(&session.id.to_string())
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let log =
+        paths::pane_log(&session.id.to_string()).map_err(|e| ApiError::Internal(e.to_string()))?;
     crate::host_runtime::pipe_pane(&host, &name, &log)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;

@@ -248,9 +248,22 @@ async fn watch_session(
     loop {
         tick.tick().await;
 
-        match agentum_tmux::ssh::has_session(&host, &target).await {
-            Ok(true) => {}
-            Ok(false) => {
+        // One sample per tick: existence + both captures + foreground command
+        // in a single round trip (on SSH hosts, one exec instead of four —
+        // the per-call channel churn on the shared ControlMaster was the
+        // dominant remote load and competed with interactive keystrokes).
+        //
+        // Two captures:
+        //   `pane`      — 100 lines incl. scrollback; for crash + context-low
+        //                 matches that can scroll slightly off-screen and
+        //                 still need to fire.
+        //   `viewport`  — currently-visible cells only; for activity
+        //                 classification, where stale "esc to interrupt"
+        //                 text in scrollback would otherwise pin the
+        //                 session as Working forever after a turn ended.
+        let sample = match agentum_tmux::ssh::sample_pane(&host, &target, 100).await {
+            Ok(Some(s)) => s,
+            Ok(None) => {
                 // Pane is gone. Distinguish "user killed it" from "it
                 // crashed": if the DB already reflects Stopped (set by the
                 // /stop or /kill API route), the disappearance was
@@ -269,38 +282,12 @@ async fn watch_session(
                 return;
             }
             Err(e) => {
-                tracing::warn!(target = %target, error = ?e, "has_session check failed");
-                continue;
-            }
-        }
-
-        // Two captures per tick:
-        //   `pane`      — 100 lines incl. scrollback; for crash + context-low
-        //                 matches that can scroll slightly off-screen and
-        //                 still need to fire.
-        //   `viewport`  — currently-visible cells only; for activity
-        //                 classification, where stale "esc to interrupt"
-        //                 text in scrollback would otherwise pin the
-        //                 session as Working forever after a turn ended.
-        //                 That was the v0.7.47-and-earlier bug where the
-        //                 sidebar dot stayed green long after Claude
-        //                 finished — the scrollback retained the spinner
-        //                 footer from the prior turn, so `pane.contains
-        //                 ("esc to interrupt")` kept matching.
-        let pane = match agentum_tmux::ssh::capture_pane(&host, &target, 100).await {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(target = %target, error = ?e, "capture_pane failed");
+                tracing::warn!(target = %target, error = ?e, "pane sample failed");
                 continue;
             }
         };
-        let viewport = match agentum_tmux::ssh::capture_pane_visible(&host, &target).await {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(target = %target, error = ?e, "capture_pane_visible failed");
-                continue;
-            }
-        };
+        let pane = sample.pane;
+        let viewport = sample.viewport;
 
         // Crash signatures first — exiting wins over compacting.
         if let Some(sig) = crash_sigs.iter().find(|s| pane.contains(*s)) {
@@ -344,15 +331,13 @@ async fn watch_session(
             }
         }
 
-        // Tool drift → `session.tool_changed`. Cheap: one extra
-        // `tmux display-message` per tick. We map the foreground command
-        // to a known adapter id and only commit on the second
-        // consecutive observation of the same NEW value, so a brief
-        // shell-out (git, ls, …) doesn't get latched as the active tool.
-        // The `tool_candidate` slot is reset whenever the observation
-        // doesn't match it.
-        if let Ok(cmd) = agentum_tmux::ssh::pane_current_command(&host, &target).await
-            && let Some(detected) = canonical_tool_from_command(&cmd)
+        // Tool drift → `session.tool_changed`. The foreground command rides
+        // the combined sample (no extra round trip). We map it to a known
+        // adapter id and only commit on the second consecutive observation
+        // of the same NEW value, so a brief shell-out (git, ls, …) doesn't
+        // get latched as the active tool. The `tool_candidate` slot is reset
+        // whenever the observation doesn't match it.
+        if let Some(detected) = canonical_tool_from_command(&sample.current_command)
             && detected != current_tool
         {
             if tool_candidate.as_deref() == Some(detected) {
