@@ -17,7 +17,7 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::time::sleep;
 use uuid::Uuid;
 
@@ -1481,32 +1481,51 @@ async fn stream_remote_session(mut socket: WebSocket, host: Host, id: Uuid, targ
     });
 
     // Input writer: keystrokes leave the select loop through an mpsc and a
-    // dedicated task issues the `send-keys` execs. Two wins over the previous
-    // inline `send_bytes(...).await` in the loop:
-    //   * no head-of-line blocking — the loop used to await a full SSH round
-    //     trip per keystroke, stalling pane-output forwarding while typing;
-    //   * burst coalescing — frames that queue while an exec is in flight
-    //     (fast typing, paste) merge into one exec instead of one
-    //     ControlMaster channel open/close per keystroke.
-    // Delivery failures are logged rather than echoed to the client: the
-    // pane not echoing already signals a dropped key, and the channel keeps
-    // working for subsequent input.
+    // dedicated task delivers them. The fast path is a PERSISTENT SSH channel
+    // ([`spawn_remote_input_writer`]): each keystroke is a one-way write down an
+    // already-open stream (~1 RTT, ~150 ms to a distant host) instead of the old
+    // exec-per-keystroke (a fresh `tmux send-keys` channel open + round-trip,
+    // ~450 ms measured — which made typing into a remote agent unusable). If the
+    // persistent writer can't spawn (or dies), we fall back to the per-exec
+    // `send_bytes` so input still works, just slower.
+    //
+    // Either way the loop coalesces whatever queued while the previous write was
+    // in flight (fast typing, paste) into one write, and delivery failures are
+    // logged rather than echoed — the pane not echoing already signals a drop.
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
     let input_handle = {
         let host = host.clone();
         let target = target.clone();
         tokio::spawn(async move {
+            // Persistent keystroke channel + its stdin; None → use per-exec fallback.
+            let mut writer = crate::host_runtime::spawn_remote_input_writer(&host, &target).ok();
+            let mut stdin = writer.as_mut().and_then(|c| c.stdin.take());
             while let Some(first) = input_rx.recv().await {
                 let mut buf = first;
-                // Drain whatever queued while the previous exec was in
-                // flight, up to the send-keys 4 KB chunk size.
+                // Drain whatever queued while the previous write was in flight,
+                // up to the send-keys 4 KB chunk size.
                 while buf.len() < 4096 {
                     match input_rx.try_recv() {
                         Ok(more) => buf.extend_from_slice(&more),
                         Err(_) => break,
                     }
                 }
-                if let Err(e) = crate::host_runtime::send_bytes(&host, &target, &buf).await {
+                let mut delivered = false;
+                if let Some(si) = stdin.as_mut() {
+                    let line = crate::host_runtime::encode_input_hex_line(&buf);
+                    if si.write_all(&line).await.is_ok() && si.flush().await.is_ok() {
+                        delivered = true;
+                    } else {
+                        // Persistent channel broke — drop the child (kills the
+                        // dead ssh) and fall back to per-exec for this and every
+                        // subsequent keystroke.
+                        stdin = None;
+                        drop(writer.take());
+                    }
+                }
+                if !delivered
+                    && let Err(e) = crate::host_runtime::send_bytes(&host, &target, &buf).await
+                {
                     tracing::warn!(target = %target, error = ?e, "remote input send failed");
                 }
             }
