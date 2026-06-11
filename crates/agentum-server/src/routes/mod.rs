@@ -17,6 +17,7 @@ pub mod health;
 pub mod host;
 pub mod hosts;
 pub mod notes;
+pub mod orchestration;
 pub mod preferences;
 pub mod preflight;
 pub mod profiles;
