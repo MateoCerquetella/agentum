@@ -10,6 +10,7 @@ pub mod kill;
 pub mod ls;
 pub mod new;
 pub mod open;
+pub mod orchestration;
 pub mod profiles;
 pub mod rm;
 pub mod send;

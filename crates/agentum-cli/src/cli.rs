@@ -212,6 +212,13 @@ pub enum Cmd {
         action: WorktreeCmd,
     },
 
+    /// Inter-agent orchestration: mail (send/check/reply/inbox), a task DAG
+    /// (task-create/list/update), and dispatch. Backed by /api/orchestration.
+    Orchestration {
+        #[command(subcommand)]
+        action: OrchestrationCmd,
+    },
+
     /// Run a shell command in a terminal session and capture its output.
     /// Best-effort: sends the command + a done-marker and reads the pane back.
     Exec {
@@ -434,6 +441,126 @@ pub enum BoardCmd {
         /// Named connection profile to use. Defaults to `local`.
         #[arg(long, default_value = "local")]
         profile: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum OrchestrationCmd {
+    /// Send a message to a handle or group (`@all`/`@idle`/`@claude`/…).
+    Send {
+        #[arg(long)]
+        to: String,
+        #[arg(long)]
+        subject: String,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        body: Option<String>,
+        #[arg(long = "type")]
+        msg_type: Option<String>,
+        #[arg(long)]
+        priority: Option<String>,
+        #[arg(long)]
+        thread_id: Option<String>,
+        /// JSON payload string.
+        #[arg(long)]
+        payload: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read (and by default consume) this terminal's messages.
+    Check {
+        /// Recipient handle; defaults to $AGENTUM_TERMINAL_HANDLE.
+        #[arg(long)]
+        terminal: Option<String>,
+        #[arg(long)]
+        unread: bool,
+        /// Filter by message type(s), comma-separated.
+        #[arg(long, value_delimiter = ',')]
+        types: Vec<String>,
+        /// Leave messages unread (peek instead of consume).
+        #[arg(long)]
+        no_mark_read: bool,
+        /// Block until a matching message arrives or the timeout elapses.
+        #[arg(long)]
+        wait: bool,
+        #[arg(long, default_value_t = 120_000)]
+        timeout_ms: u64,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reply to a message by id (goes back to its sender on the same thread).
+    Reply {
+        #[arg(long)]
+        id: i64,
+        #[arg(long)]
+        body: String,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List this terminal's mailbox without consuming it.
+    Inbox {
+        #[arg(long)]
+        terminal: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a task (optionally depending on other task ids).
+    TaskCreate {
+        #[arg(long)]
+        spec: String,
+        /// JSON array of dependency task ids, e.g. `[1,2]`.
+        #[arg(long)]
+        deps: Option<String>,
+        #[arg(long)]
+        parent: Option<i64>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List tasks, optionally by status or only `--ready` ones.
+    TaskList {
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        ready: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Update a task's status (DAG dependents auto-promote on `completed`).
+    TaskUpdate {
+        #[arg(long)]
+        id: i64,
+        #[arg(long)]
+        status: String,
+        /// JSON result string.
+        #[arg(long)]
+        result: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Assign a task to a handle; `--inject` also sends the spec to its pane.
+    Dispatch {
+        #[arg(long)]
+        task: i64,
+        #[arg(long)]
+        to: String,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        inject: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a task and its dispatch contexts.
+    DispatchShow {
+        #[arg(long)]
+        task: i64,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -709,6 +836,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 .await
             }
         },
+        Cmd::Orchestration { action } => dispatch_orchestration(action).await,
         Cmd::Exec {
             session,
             command,
@@ -749,6 +877,70 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
 }
 
 /// Convert `--arg key=value` entries into `--key=value` shell flags.
+/// Route an `orchestration` subcommand to its handler. Kept separate from the
+/// main `dispatch` match so that large variant set stays readable.
+async fn dispatch_orchestration(action: OrchestrationCmd) -> Result<()> {
+    use crate::commands::orchestration as orch;
+    match action {
+        OrchestrationCmd::Send {
+            to,
+            subject,
+            from,
+            body,
+            msg_type,
+            priority,
+            thread_id,
+            payload,
+            json,
+        } => orch::send(to, subject, from, body, msg_type, priority, thread_id, payload, json).await,
+        OrchestrationCmd::Check {
+            terminal,
+            unread,
+            types,
+            no_mark_read,
+            wait,
+            timeout_ms,
+            json,
+        } => orch::check(terminal, unread, types, no_mark_read, wait, timeout_ms, json).await,
+        OrchestrationCmd::Reply {
+            id,
+            body,
+            from,
+            json,
+        } => orch::reply(id, body, from, json).await,
+        OrchestrationCmd::Inbox {
+            terminal,
+            limit,
+            json,
+        } => orch::inbox(terminal, limit, json).await,
+        OrchestrationCmd::TaskCreate {
+            spec,
+            deps,
+            parent,
+            json,
+        } => orch::task_create(spec, deps, parent, json).await,
+        OrchestrationCmd::TaskList {
+            status,
+            ready,
+            json,
+        } => orch::task_list(status, ready, json).await,
+        OrchestrationCmd::TaskUpdate {
+            id,
+            status,
+            result,
+            json,
+        } => orch::task_update(id, status, result, json).await,
+        OrchestrationCmd::Dispatch {
+            task,
+            to,
+            from,
+            inject,
+            json,
+        } => orch::dispatch(task, to, from, inject, json).await,
+        OrchestrationCmd::DispatchShow { task, json } => orch::dispatch_show(task, json).await,
+    }
+}
+
 /// `key=true` becomes a bare `--key` switch.
 pub fn arg_to_flag(raw: &str) -> String {
     match raw.split_once('=') {

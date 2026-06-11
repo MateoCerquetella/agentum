@@ -477,10 +477,22 @@ fn session_with_spawned(session: Session, spawned: bool) -> serde_json::Value {
 /// URL when known, else the standalone daemon's conventional `127.0.0.1:8822`. The
 /// hook URL is DERIVED from the same base — never a separate hardcoded port, which
 /// previously pointed every hook at 8822 regardless of where the server actually was.
-fn pane_env(api_base: Option<&str>, session_id: Uuid, hook_token: &str) -> Vec<(String, String)> {
+fn pane_env(
+    api_base: Option<&str>,
+    session_id: Uuid,
+    session_name: &str,
+    hook_token: &str,
+) -> Vec<(String, String)> {
     let base = api_base.unwrap_or("http://127.0.0.1:8822");
     vec![
         ("AGENTUM_API_URL".to_string(), base.to_string()),
+        // The orchestration handle for an agent running in this pane: its session
+        // name. `agentum orchestration send/check` default `--from`/`--terminal`
+        // to this, so an agent can mail siblings without knowing its own name.
+        (
+            "AGENTUM_TERMINAL_HANDLE".to_string(),
+            session_name.to_string(),
+        ),
         (
             "AGENTUM_HOOK_URL".to_string(),
             format!("{base}/api/sessions/{session_id}/hook"),
@@ -588,7 +600,12 @@ async fn start(
         // AGENTUM_API_URL + the hook URL/token, all anchored to THIS server's
         // own base (ephemeral port for the embedded desktop server) so an
         // in-pane `agentum` CLI and the agent's hook both reach the right place.
-        for kv in pane_env(state.api_base_url.as_deref(), session.id, &hook_token) {
+        for kv in pane_env(
+            state.api_base_url.as_deref(),
+            session.id,
+            &session.name,
+            &hook_token,
+        ) {
             launch.env.push(kv);
         }
 
@@ -1783,7 +1800,7 @@ mod tests {
     #[test]
     fn pane_env_publishes_api_url_and_derives_hook_from_it() {
         let sid = uuid::Uuid::nil();
-        let env = pane_env(Some("http://127.0.0.1:5544"), sid, "tok");
+        let env = pane_env(Some("http://127.0.0.1:5544"), sid, "build-agent", "tok");
         let get = |k: &str| {
             env.iter()
                 .find(|(key, _)| key == k)
@@ -1796,12 +1813,14 @@ mod tests {
             Some(format!("http://127.0.0.1:5544/api/sessions/{sid}/hook").as_str())
         );
         assert_eq!(get("AGENTUM_HOOK_TOKEN"), Some("tok"));
+        // The orchestration handle is the session name.
+        assert_eq!(get("AGENTUM_TERMINAL_HANDLE"), Some("build-agent"));
     }
 
     #[test]
     fn pane_env_falls_back_to_8822_when_base_unknown() {
         // A standalone daemon (no embedded api_base_url) keeps the conventional port.
-        let env = pane_env(None, uuid::Uuid::nil(), "tok");
+        let env = pane_env(None, uuid::Uuid::nil(), "sh", "tok");
         let url = env.iter().find(|(k, _)| k == "AGENTUM_API_URL").unwrap();
         assert_eq!(url.1, "http://127.0.0.1:8822");
     }
