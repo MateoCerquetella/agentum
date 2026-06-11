@@ -24,6 +24,12 @@ export type BindServerSessionTerminalOptions = {
    *  tmux-backed agent. The bytes carry the title via the pipe-pane tail; we
    *  extract it here and let the caller route it into runtimePaneTitlesByTabId. */
   onTitle?: (title: string) => void
+  /** Called on every server → client byte chunk. Why: agents whose OSC title
+   *  carries no working/idle signal (OpenCode, Codex) leave the title path
+   *  blind, so the sidebar would show them idle while they stream output. Byte
+   *  arrival is the same "pane is redrawing" signal the daemon watchdog polls
+   *  for; the caller debounces it into a working/idle state. */
+  onActivity?: () => void
   /** Host bucket this session's WS throughput counts toward in the status-bar
    *  I/O meter (`'local'` or `'ssh:<connectionId>'`). Omitted → local host. */
   hostKey?: string
@@ -82,6 +88,7 @@ export async function bindServerSessionTerminal(
       onData: (bytes) => {
         term.write(bytes)
         scanForTitles(bytes)
+        opts?.onActivity?.()
       },
       onClose: () => term.write('\r\n\x1b[2m[agentum: session stream closed]\x1b[0m\r\n')
     },
