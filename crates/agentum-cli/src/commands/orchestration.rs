@@ -70,10 +70,8 @@ pub async fn send(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn check(
     terminal: Option<String>,
-    unread: bool,
     types: Vec<String>,
     no_mark_read: bool,
     wait: bool,
@@ -82,9 +80,12 @@ pub async fn check(
 ) -> Result<()> {
     let client = ApiClient::from_env();
     let recipient = self_handle(terminal);
+    // `check` is the "show me my new mail" command: always unread-only, and
+    // consume (mark read) by default so a second check doesn't re-show the same
+    // messages. Use `inbox` for a non-consuming view of everything.
     let body = json!({
         "recipient": recipient,
-        "unread": unread,
+        "unread": true,
         "types": types,
         "mark_read": !no_mark_read,
     });

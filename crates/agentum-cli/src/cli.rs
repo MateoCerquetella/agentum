@@ -468,13 +468,12 @@ pub enum OrchestrationCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Read (and by default consume) this terminal's messages.
+    /// Read this terminal's NEW (unread) messages and consume them. Use `inbox`
+    /// for a non-consuming view of the whole mailbox.
     Check {
         /// Recipient handle; defaults to $AGENTUM_TERMINAL_HANDLE.
         #[arg(long)]
         terminal: Option<String>,
-        #[arg(long)]
-        unread: bool,
         /// Filter by message type(s), comma-separated.
         #[arg(long, value_delimiter = ',')]
         types: Vec<String>,
@@ -895,13 +894,12 @@ async fn dispatch_orchestration(action: OrchestrationCmd) -> Result<()> {
         } => orch::send(to, subject, from, body, msg_type, priority, thread_id, payload, json).await,
         OrchestrationCmd::Check {
             terminal,
-            unread,
             types,
             no_mark_read,
             wait,
             timeout_ms,
             json,
-        } => orch::check(terminal, unread, types, no_mark_read, wait, timeout_ms, json).await,
+        } => orch::check(terminal, types, no_mark_read, wait, timeout_ms, json).await,
         OrchestrationCmd::Reply {
             id,
             body,
