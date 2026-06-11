@@ -843,6 +843,61 @@ pub fn spawn_remote_pane_tail(
     Ok(cmd.spawn()?)
 }
 
+/// Build the `sh -c …` script behind [`spawn_remote_input_writer`]: a remote
+/// read-loop that turns each newline-terminated line of space-separated hex on
+/// stdin into one `tmux send-keys -H` for the pane. `$line` is intentionally
+/// unquoted so the hex pairs split into separate `send-keys` args. Errors per
+/// line (e.g. the pane briefly gone) are swallowed so one bad write never ends
+/// the loop. `exec` lets a kill of the ssh child reap it cleanly.
+fn remote_input_script(target: &str) -> Result<String> {
+    let inner = format!(
+        "exec sh -c 'while IFS= read -r l; do tmux send-keys -H -t {} $l 2>/dev/null; done'",
+        q(target)?
+    );
+    Ok(format!("sh -c {}", q(&inner)?))
+}
+
+/// Spawn a long-lived keystroke writer over one persistent SSH channel: the
+/// caller writes hex-encoded keystroke lines to `child.stdin` and a remote
+/// read-loop feeds them to the pane.
+///
+/// Why this exists: the old path ran one `ssh … tmux send-keys` *exec per
+/// keystroke*. Each exec opens a fresh ControlMaster channel and round-trips a
+/// command — ~450 ms against a distant host (measured to a 150 ms-RTT box) —
+/// so typing into a remote agent was unusable. With a persistent channel a
+/// keystroke is just a one-way write down an already-open stream: ~1 RTT
+/// (~150 ms) to delivery, no per-key channel setup, no master-channel churn.
+///
+/// Dedicated (unmultiplexed) for the same reason as [`spawn_remote_pane_tail`]:
+/// a persistent held-open channel must not consume the shared master's limited
+/// `MaxSessions` budget.
+pub fn spawn_remote_input_writer(host: &Host, target: &str) -> Result<tokio::process::Child> {
+    if !matches!(host.kind, HostKind::Ssh { .. }) {
+        return Err(HostRuntimeError::Unsupported);
+    }
+    let script = remote_input_script(target)?;
+    let mut cmd = ssh_command_opts(host, &script, false);
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    Ok(cmd.spawn()?)
+}
+
+/// Encode raw keystroke bytes as one space-separated lowercase-hex line
+/// (newline-terminated) for the [`spawn_remote_input_writer`] remote loop.
+pub fn encode_input_hex_line(bytes: &[u8]) -> Vec<u8> {
+    let mut line = Vec::with_capacity(bytes.len() * 3 + 1);
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 {
+            line.push(b' ');
+        }
+        line.extend_from_slice(format!("{b:02x}").as_bytes());
+    }
+    line.push(b'\n');
+    line
+}
+
 /// Disarm `pipe-pane` on a pane (a bare `tmux pipe-pane` closes the pipe).
 /// Used when detaching from an external tmux session: the underlying
 /// session must stay alive, but its output should stop feeding our log.
@@ -1311,6 +1366,28 @@ mod tests {
             "wrong tail mode: {script}"
         );
         assert!(script.contains("exec tail"), "tail not exec'd: {script}");
+    }
+
+    #[test]
+    fn remote_input_script_feeds_hex_lines_to_send_keys() {
+        let script = remote_input_script("agentum-demo").unwrap();
+        assert!(script.starts_with("sh -c "), "not sh-wrapped: {script}");
+        // A read-loop turning stdin hex lines into send-keys; $l unquoted so the
+        // hex pairs split into separate args. exec lets a kill reap it.
+        assert!(script.contains("while IFS= read -r l"), "no read loop: {script}");
+        assert!(script.contains("send-keys -H -t"), "no hex send-keys: {script}");
+        assert!(script.contains("agentum-demo"), "target missing: {script}");
+        assert!(script.contains("exec sh -c"), "loop not exec'd: {script}");
+    }
+
+    #[test]
+    fn encode_input_hex_line_is_space_separated_and_newline_terminated() {
+        // "hi" → "68 69\n"; the remote `send-keys -H 68 69` reproduces the bytes.
+        assert_eq!(encode_input_hex_line(b"hi"), b"68 69\n");
+        // Control bytes (e.g. CR, ESC) encode the same way — raw, lossless.
+        assert_eq!(encode_input_hex_line(b"\r"), b"0d\n");
+        assert_eq!(encode_input_hex_line(&[0x1b, 0x5b, 0x41]), b"1b 5b 41\n");
+        assert_eq!(encode_input_hex_line(b""), b"\n");
     }
 
     #[test]
