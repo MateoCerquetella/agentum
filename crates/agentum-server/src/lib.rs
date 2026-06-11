@@ -21,6 +21,7 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 
 pub mod auth;
+pub mod bridge;
 mod error;
 pub mod git;
 mod headers;
@@ -149,6 +150,10 @@ pub struct AppState {
     /// port. `None` for the standalone `agentum serve` daemon (clients use 8822 / their
     /// profile). It also anchors the PostToolUse hook URL, replacing a hardcoded 8822.
     pub api_base_url: Option<String>,
+    /// Hook into the host desktop process for ops only it can do (browser
+    /// webview automation, macOS computer-use). `None` for the standalone
+    /// daemon — `/api/browser/*` and `/api/computer/*` then return 501.
+    pub desktop_bridge: Option<std::sync::Arc<dyn crate::bridge::DesktopBridge>>,
 }
 
 impl AppState {
@@ -185,6 +190,8 @@ impl AppState {
             // Only the embedded loopback server knows its own URL (it binds an
             // ephemeral port); the standalone daemon leaves this None.
             api_base_url: None,
+            // Set only by the desktop via serve_embedded_loopback_with_bridge.
+            desktop_bridge: None,
         }
     }
 }
@@ -237,6 +244,8 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::profiles::router())
         .merge(routes::channels::router())
         .merge(routes::orchestration::router())
+        .merge(routes::browser::router())
+        .merge(routes::computer::router())
         .merge(routes::clipboard::router())
         .merge(routes::events::router())
         .merge(routes::watchdog::router())
@@ -447,6 +456,34 @@ fn embedded_app_state(store: Store, addr: SocketAddr) -> (AppState, broadcast::S
     state.no_auth = true;
     state.api_base_url = Some(format!("http://{addr}"));
     (state, bus)
+}
+
+/// As [`serve_embedded_loopback`], but installs a [`bridge::DesktopBridge`] so
+/// `/api/browser/*` and `/api/computer/*` can drive the host desktop process.
+/// The desktop calls this with a bridge holding its Tauri `AppHandle`.
+pub async fn serve_embedded_loopback_with_bridge(
+    store: Store,
+    bridge: Arc<dyn bridge::DesktopBridge>,
+) -> anyhow::Result<SocketAddr> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let addr = listener.local_addr()?;
+    let (mut state, bus) = embedded_app_state(store, addr);
+    state.desktop_bridge = Some(bridge);
+    spawn_background_workers(&state, &bus);
+    let app = router(state);
+    tracing::info!(%addr, "agentum-server listening (embedded loopback, desktop bridge)");
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        {
+            tracing::error!("embedded agentum-server exited: {e}");
+        }
+    });
+    Ok(addr)
 }
 
 /// As [`serve_embedded_loopback`], but also returns the `AppState` the router was
