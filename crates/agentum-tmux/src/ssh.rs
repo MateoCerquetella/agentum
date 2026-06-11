@@ -199,6 +199,11 @@ pub fn ssh_command_opts(host: &Host, script: &str, use_mux: bool) -> Command {
         .arg("ServerAliveCountMax=3")
         .arg("-o")
         .arg("StrictHostKeyChecking=accept-new")
+        .arg("-o")
+        // GSSAPI is never used for these hosts, but when the server advertises
+        // it the client-side attempt can stall a cold connect for seconds
+        // (Kerberos/DNS lookups). Disabling it shaves that off every handshake.
+        .arg("GSSAPIAuthentication=no")
         .arg("-p")
         .arg(port.to_string());
 
@@ -216,7 +221,13 @@ pub fn ssh_command_opts(host: &Host, script: &str, use_mux: bool) -> Command {
                 .arg("-o")
                 .arg(format!("ControlPath={control_path}"))
                 .arg("-o")
-                .arg("ControlPersist=30s");
+                // 10m, not 30s: the master idles cheaply (one ssh process, a
+                // keepalive every 5s), but re-establishing it costs a full
+                // TCP+auth handshake — 1-3s on WAN. 30s expired between normal
+                // user interactions, so nearly every sidebar click paid that
+                // handshake again. ssh_output's unmuxed retry still covers a
+                // master that dies mid-window.
+                .arg("ControlPersist=600s");
         }
     }
 
@@ -499,8 +510,8 @@ mod tests {
             "missing ControlMaster=auto: {args:?}"
         );
         assert!(
-            args.contains(&"ControlPersist=30s".to_string()),
-            "missing ControlPersist=30s: {args:?}"
+            args.contains(&"ControlPersist=600s".to_string()),
+            "missing ControlPersist=600s: {args:?}"
         );
         let control_path = args
             .iter()
