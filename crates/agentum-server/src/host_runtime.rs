@@ -624,6 +624,14 @@ pub async fn capture_pane_with_log_offset(
 /// Output is three sections: the pane-log byte size, the cursor sample, then
 /// the raw ANSI grid (rest of stdout).
 ///
+/// This ALSO (idempotently) arms `pipe-pane` first — folding what used to be a
+/// separate connect-time round-trip into this one. On a distant host each SSH
+/// exec is ~450 ms even over the warm master, so doing arm-then-capture as two
+/// sequential calls cost ~900 ms of blank screen before the first paint; one
+/// combined exec halves that. A pipe-pane failure here is swallowed (the
+/// snapshot still paints; only live updates would be missing) rather than
+/// failing the connect.
+///
 /// The cursor is sampled then the grid captured (both ≈ the same instant), and
 /// the log size is read LAST — after `capture-pane` — so the tail resumes just
 /// past what the snapshot covers and never replays a painted byte (see
@@ -634,8 +642,10 @@ pub async fn capture_pane_with_log_offset(
 /// isn't there yet.
 fn snapshot_with_offset_script(target: &str, out_path: &Path) -> Result<String> {
     let log = remote_pane_log_expr(out_path)?;
+    let pipe = q(&format!("cat >> {log}"))?.into_owned();
     let inner = format!(
-        "c=$(tmux display-message -p -t {t} {fmt} 2>/dev/null || echo X); \
+        "mkdir -p \"{REMOTE_PANE_DIR}\" 2>/dev/null; tmux pipe-pane -o -t {t} {pipe} 2>/dev/null; \
+         c=$(tmux display-message -p -t {t} {fmt} 2>/dev/null || echo X); \
          f=$(mktemp 2>/dev/null || echo /tmp/agentum-snap.$$); \
          tmux capture-pane -p -e -t {t} > \"$f\" 2>/dev/null || true; \
          o=$({{ wc -c < {log}; }} 2>/dev/null || echo 0); \
@@ -1404,9 +1414,13 @@ mod tests {
         // `capture-pane`, so the tail resumes past what the snapshot painted and
         // never replays a byte — the fix for cursor-agent's relative-redraw
         // stacking. The cursor is sampled with the capture to anchor the grid.
+        let pipe = script.find("pipe-pane").expect("no pipe-pane arm");
         let cur = script.find("display-message").expect("no cursor sample");
         let cap = script.find("capture-pane").expect("no grid capture");
         let wc = script.find("wc -c").expect("no size probe");
+        // pipe-pane armed first (folded into this exec to save a round trip),
+        // then cursor+capture, then the size LAST (no-overlap ordering).
+        assert!(pipe < cur, "pipe-pane not armed before capture: {script}");
         assert!(cap < wc, "size sampled before capture (would re-replay): {script}");
         assert!(cur < cap, "cursor sampled after capture: {script}");
         assert!(
