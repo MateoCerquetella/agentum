@@ -435,23 +435,32 @@ pub async fn serve_embedded_loopback(store: Store) -> anyhow::Result<SocketAddr>
     Ok(addr)
 }
 
-/// As [`serve_embedded_loopback`], but also returns the `AppState` the router was
-/// built from. The desktop only needs the address; tests assert on the state
-/// (e.g. that `api_base_url` carries the bound URL).
-pub async fn serve_embedded_loopback_state(store: Store) -> anyhow::Result<(SocketAddr, AppState)> {
-    // rustls provider selection is process-global; harmless if already set.
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
-    // Bind first so we know the ephemeral port BEFORE building the router — the
-    // state must carry its own URL so the session-start handler can inject it
-    // into pane env (AGENTUM_API_URL) and anchor the hook URL.
-    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
-    let addr = listener.local_addr()?;
-
+/// Build the embedded-server `AppState` for a given bound address: no-auth, with
+/// `api_base_url` set so the session-start handler can inject `AGENTUM_API_URL`
+/// into panes and anchor the hook URL. Pure (no spawning / no serving) so the
+/// construction can be unit-tested without standing up the full server. Returns
+/// the bus alongside so the caller can wire background workers.
+fn embedded_app_state(store: Store, addr: SocketAddr) -> (AppState, broadcast::Sender<Event>) {
     let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
     let mut state = AppState::with_fingerprint(store, bus.clone(), String::new());
     state.no_auth = true;
     state.api_base_url = Some(format!("http://{addr}"));
+    (state, bus)
+}
+
+/// As [`serve_embedded_loopback`], but also returns the `AppState` the router was
+/// built from. The desktop only needs the address; this exists so the boot path
+/// has a single source of truth for the embedded state.
+pub async fn serve_embedded_loopback_state(store: Store) -> anyhow::Result<(SocketAddr, AppState)> {
+    // rustls provider selection is process-global; harmless if already set.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    // Bind first so we know the ephemeral port BEFORE building the state — it
+    // must carry its own URL.
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let addr = listener.local_addr()?;
+
+    let (state, bus) = embedded_app_state(store, addr);
 
     spawn_background_workers(&state, &bus);
 
@@ -505,18 +514,17 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn embedded_loopback_sets_api_base_url() {
+    async fn embedded_app_state_carries_its_url_and_is_no_auth() {
+        // Use the pure builder, NOT serve_embedded_loopback_state — the latter
+        // spawns the server + background workers, which would keep the test
+        // process alive and hang the suite.
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("t.db")).await.unwrap();
-        let (addr, state) = serve_embedded_loopback_state(store).await.unwrap();
-        // The state the router was built with must carry its own URL, anchored
-        // to the actually-bound ephemeral port.
-        assert_eq!(
-            state.api_base_url.as_deref(),
-            Some(format!("http://{addr}").as_str())
-        );
-        assert_ne!(addr.port(), 0, "an ephemeral bind resolves to a real port");
-        // Embedded loopback is always no-auth.
+        let addr: SocketAddr = "127.0.0.1:5544".parse().unwrap();
+        let (state, _bus) = embedded_app_state(store, addr);
+        // The embedded state must carry its own URL (so panes get AGENTUM_API_URL)
+        // and be no-auth (loopback bind).
+        assert_eq!(state.api_base_url.as_deref(), Some("http://127.0.0.1:5544"));
         assert!(state.no_auth);
     }
 
