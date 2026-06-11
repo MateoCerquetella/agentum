@@ -205,6 +205,13 @@ pub enum Cmd {
         json: bool,
     },
 
+    /// Inspect the worktrees the control plane knows about. Reaches the same
+    /// server as `status` (the desktop's embedded server inside a pane).
+    Worktree {
+        #[command(subcommand)]
+        action: WorktreeCmd,
+    },
+
     /// Launch the interactive terminal dashboard.
     ///
     /// Aliased as `tui` for back-compat. The standalone `lazyagentum` binary
@@ -411,6 +418,22 @@ pub enum BoardCmd {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum WorktreeCmd {
+    /// List all known worktrees (name + branch).
+    List {
+        /// Emit the raw worktree JSON array instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the worktree the current directory (or `$AGENTUM_WORKTREE_PATH`)
+    /// belongs to. Exits with the worktree's name, or a "not inside" notice.
+    Current {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 pub enum HostsCmd {
     /// List SSH-agentless hosts controlled by the local daemon.
     List,
@@ -590,6 +613,10 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Cmd::Config { action } => crate::commands::config::run(action).await,
         Cmd::Doctor => crate::commands::doctor::run().await,
         Cmd::Status { json } => crate::commands::status::run(json).await,
+        Cmd::Worktree { action } => match action {
+            WorktreeCmd::List { json } => crate::commands::worktree::list(json).await,
+            WorktreeCmd::Current { json } => crate::commands::worktree::current(json).await,
+        },
         Cmd::Terminal {
             api,
             fingerprint,

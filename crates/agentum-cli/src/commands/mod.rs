@@ -16,6 +16,7 @@ pub mod send;
 pub mod serve;
 pub mod status;
 pub mod tail;
+pub mod worktree;
 pub mod terminal;
 pub mod uninstall;
 pub mod up;
