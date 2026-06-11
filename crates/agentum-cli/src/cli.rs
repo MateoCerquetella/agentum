@@ -212,12 +212,32 @@ pub enum Cmd {
         action: WorktreeCmd,
     },
 
-    /// Launch the interactive terminal dashboard.
+    /// Run a shell command in a terminal session and capture its output.
+    /// Best-effort: sends the command + a done-marker and reads the pane back.
+    Exec {
+        /// Target session (name or id prefix). See `agentum terminal list`.
+        #[arg(long)]
+        session: String,
+        /// The shell command to run.
+        #[arg(long)]
+        command: String,
+        /// Seconds to wait for the command to finish.
+        #[arg(long, default_value_t = 30)]
+        timeout: u64,
+    },
+
+    /// Launch the interactive terminal dashboard — OR, with a subcommand
+    /// (`list`/`read`/`send`/`wait`), drive agentum-managed terminal sessions
+    /// over the API. Bare `agentum terminal` still opens the TUI (back-compat).
     ///
     /// Aliased as `tui` for back-compat. The standalone `lazyagentum` binary
     /// drops you straight into the same UI.
     #[command(alias = "tui")]
     Terminal {
+        /// Terminal-control verb. Omitted → launch the interactive TUI.
+        #[command(subcommand)]
+        action: Option<TerminalCmd>,
+
         /// Override API base URL (defaults to https://127.0.0.1:8822 → http fallback).
         /// To connect to a remote agentum, e.g. `--api https://my-vps:8822`.
         /// Wins over `--profile` when both are given.
@@ -414,6 +434,43 @@ pub enum BoardCmd {
         /// Named connection profile to use. Defaults to `local`.
         #[arg(long, default_value = "local")]
         profile: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TerminalCmd {
+    /// List terminal sessions (name, status, tool).
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the last N lines of a session's pane.
+    Read {
+        /// Session name or id prefix.
+        name: String,
+        #[arg(long, default_value_t = 40)]
+        lines: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Send text to a session (Enter appended unless `--no-enter`).
+    Send {
+        /// Session name or id prefix.
+        name: String,
+        /// Text to send (joined with spaces).
+        #[arg(required = true)]
+        text: Vec<String>,
+        #[arg(long)]
+        no_enter: bool,
+    },
+    /// Block until a session's pane contains TEXT, or `--timeout` elapses.
+    Wait {
+        /// Session name or id prefix.
+        name: String,
+        #[arg(long)]
+        text: String,
+        #[arg(long, default_value_t = 30)]
+        timeout: u64,
     },
 }
 
@@ -618,21 +675,45 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             WorktreeCmd::Current { json } => crate::commands::worktree::current(json).await,
         },
         Cmd::Terminal {
+            action,
             api,
             fingerprint,
             insecure,
             no_sound,
             profile,
-        } => {
-            crate::commands::terminal::run(crate::commands::terminal::Options {
-                api,
-                fingerprint,
-                insecure,
-                no_sound,
-                profile,
-            })
-            .await
-        }
+        } => match action {
+            // A control verb drives a session over the API; no subcommand opens
+            // the TUI (the original behaviour, preserved for back-compat).
+            Some(TerminalCmd::List { json }) => crate::commands::terminal_control::list(json).await,
+            Some(TerminalCmd::Read { name, lines, json }) => {
+                crate::commands::terminal_control::read(name, lines, json).await
+            }
+            Some(TerminalCmd::Send {
+                name,
+                text,
+                no_enter,
+            }) => crate::commands::terminal_control::send(name, text, no_enter).await,
+            Some(TerminalCmd::Wait {
+                name,
+                text,
+                timeout,
+            }) => crate::commands::terminal_control::wait(name, text, timeout).await,
+            None => {
+                crate::commands::terminal::run(crate::commands::terminal::Options {
+                    api,
+                    fingerprint,
+                    insecure,
+                    no_sound,
+                    profile,
+                })
+                .await
+            }
+        },
+        Cmd::Exec {
+            session,
+            command,
+            timeout,
+        } => crate::commands::terminal_control::exec(session, command, timeout).await,
         Cmd::Hosts { action } => crate::commands::hosts::run(action).await,
         Cmd::Profiles { action } => crate::commands::profiles::run(action).await,
         Cmd::Board { cmd } => crate::commands::board::run(cmd).await,
@@ -721,12 +802,14 @@ mod tests {
         ]);
         match cli.command {
             Cmd::Terminal {
+                action,
                 api,
                 fingerprint,
                 insecure,
                 no_sound,
                 profile,
             } => {
+                assert!(action.is_none(), "no subcommand → TUI launch");
                 assert_eq!(api.as_deref(), Some("https://vps:8822"));
                 assert_eq!(fingerprint.as_deref(), Some("AB:CD"));
                 assert!(insecure);
