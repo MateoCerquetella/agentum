@@ -291,6 +291,17 @@ export function AccountsPane({
     cleanup: () => void
     stashedAccountId: string | null
   } | null>(null)
+  // Codex add-account flow. Same shape as Claude, but `codex login` uses a
+  // localhost callback that completes on its own — no paste-code step.
+  const [codexAddFlow, setCodexAddFlow] = useState<
+    { phase: 'confirm'; email: string } | { phase: 'signing-in'; url: string | null } | null
+  >(null)
+  const [codexSigningOut, setCodexSigningOut] = useState(false)
+  const codexSignInRef = useRef<{
+    ptyId: string
+    cleanup: () => void
+    stashedAccountId: string | null
+  } | null>(null)
   const visibleClaudeAccounts = claudeAccounts.accounts.filter((account) =>
     accountMatchesRuntime(account, accountRuntime)
   )
@@ -308,8 +319,6 @@ export function AccountsPane({
         accountId: activeCodexAccountId
       })
     : null
-  const systemCodexNeedsReauthentication =
-    activeCodexAccountId === null && Boolean(activeCodexAuthWarning)
   const accountRuntimeUnavailable =
     accountRuntime.runtime === 'wsl' && !wslAvailable && !wslCapabilitiesLoading
 
@@ -326,7 +335,9 @@ export function AccountsPane({
 
     const loadCodexAccounts = async (): Promise<void> => {
       try {
-        const nextCodex = await api.codexAccounts.list()
+        // syncCurrent saves the live login (if new) and marks it active, so the
+        // real account shows by email instead of a "system default" row.
+        const nextCodex = await api.codexAccounts.syncCurrent()
         if (!stale) {
           setCodexAccounts(nextCodex)
           setCodexAccountsLoaded(true)
@@ -658,6 +669,115 @@ export function AccountsPane({
     }
   }
 
+  // ---- Codex sign-in (mirrors Claude; localhost callback, no paste-code) ----
+
+  const captureCodexLiveLogin = (): Promise<CodexRateLimitAccountsState> =>
+    api.codexAccounts.add({
+      runtime: accountRuntime.runtime,
+      wslDistro: accountRuntime.wslDistro
+    })
+
+  const endCodexSignIn = (restore: boolean): void => {
+    const ref = codexSignInRef.current
+    codexSignInRef.current = null
+    ref?.cleanup()
+    setCodexAddFlow(null)
+    if (restore && ref?.stashedAccountId) {
+      const accountId = ref.stashedAccountId
+      void runCodexAccountAction(`select:${accountId}`, () =>
+        api.codexAccounts.select({
+          accountId,
+          runtime: accountRuntime.runtime,
+          wslDistro: accountRuntime.wslDistro
+        })
+      )
+    }
+  }
+
+  const beginCodexSignIn = async (stash: boolean): Promise<void> => {
+    setCodexSigningOut(true)
+    try {
+      let stashedAccountId: string | null = null
+      if (stash) {
+        const result = await api.codexAccounts.beginAdd()
+        await syncCodexAccounts(result.state as CodexRateLimitAccountsState)
+        stashedAccountId = (result.stashedAccountId as string | null) ?? null
+      }
+
+      const spawned = (await api.pty.spawn({ command: 'codex login' })) as { id: string }
+      const ptyId = spawned.id
+      setCodexAddFlow({ phase: 'signing-in', url: null })
+
+      let buffer = ''
+      let openedUrl = false
+      const unsub = api.pty.onData((payload: { id: string; data: string }) => {
+        if (payload.id !== ptyId) {
+          return
+        }
+        buffer += payload.data
+        const url = extractClaudeLoginUrl(buffer)
+        if (url && !openedUrl) {
+          openedUrl = true
+          setCodexAddFlow({ phase: 'signing-in', url })
+        }
+      })
+
+      const interval = setInterval(() => {
+        void (async () => {
+          try {
+            const live = (await api.codexAccounts.liveLogin()) as ClaudeLiveLogin
+            if (isClaudeLoginCaptureReady(live)) {
+              endCodexSignIn(false)
+              await runCodexAccountAction('adding', captureCodexLiveLogin)
+            }
+          } catch {
+            // Transient IPC failure — keep polling until login lands or cancel.
+          }
+        })()
+      }, 2000)
+
+      codexSignInRef.current = {
+        ptyId,
+        stashedAccountId,
+        cleanup: () => {
+          unsub()
+          clearInterval(interval)
+          void api.pty.kill(ptyId)
+        }
+      }
+    } catch (error) {
+      setCodexAddFlow(null)
+      toast.error('Could not start Codex sign-in.', {
+        description: getCodexAccountErrorDescription(error)
+      })
+    } finally {
+      setCodexSigningOut(false)
+    }
+  }
+
+  useEffect(() => () => codexSignInRef.current?.cleanup(), [])
+
+  const startCodexAddAccount = async (): Promise<void> => {
+    try {
+      const live = (await api.codexAccounts.liveLogin()) as ClaudeLiveLogin
+      const decision = decideClaudeAddAccount(
+        live,
+        codexAccounts.accounts.map((account) => account.email)
+      )
+      if (decision.kind === 'capture') {
+        void runCodexAccountAction('adding', captureCodexLiveLogin)
+      } else if (decision.kind === 'confirm-signout') {
+        setCodexAddFlow({ phase: 'confirm', email: decision.email })
+      } else {
+        void beginCodexSignIn(false)
+      }
+    } catch (error) {
+      toast.error('Codex account update failed.', {
+        description: getCodexAccountErrorDescription(error)
+      })
+    }
+  }
+
   const visibleSections = [
     matchesSettingsSearch(searchQuery, ACCOUNTS_LOCATION_SEARCH_ENTRIES) ? (
       <section key="account-runtime" id="accounts-runtime" className="space-y-3 scroll-mt-6">
@@ -868,16 +988,12 @@ export function AccountsPane({
             <Button
               variant="outline"
               size="xs"
-              onClick={() =>
-                void runCodexAccountAction('adding', () =>
-                  api.codexAccounts.add({
-                    runtime: accountRuntime.runtime,
-                    wslDistro: accountRuntime.wslDistro
-                  })
-                )
-              }
+              onClick={() => void startCodexAddAccount()}
               disabled={
-                codexAction !== 'idle' || wslCapabilitiesLoading || accountRuntimeUnavailable
+                codexAction !== 'idle' ||
+                codexAddFlow !== null ||
+                wslCapabilitiesLoading ||
+                accountRuntimeUnavailable
               }
               className="gap-1.5"
             >
@@ -891,61 +1007,11 @@ export function AccountsPane({
           </div>
 
           <div className="space-y-2">
-            <button
-              type="button"
-              onClick={() =>
-                void runCodexAccountAction('select:system', () =>
-                  api.codexAccounts.select({
-                    accountId: null,
-                    runtime: accountRuntime.runtime,
-                    wslDistro: accountRuntime.wslDistro
-                  })
-                )
-              }
-              disabled={codexAction !== 'idle' || accountRuntimeUnavailable}
-              className={`flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2.5 text-left transition-colors ${
-                systemCodexNeedsReauthentication
-                  ? 'border-destructive/50 bg-destructive/5'
-                  : activeCodexAccountId === null
-                    ? 'border-foreground/20 bg-accent/15'
-                    : 'border-border/70 hover:border-border hover:bg-accent/8'
-              } disabled:cursor-default disabled:opacity-100`}
-            >
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="truncate text-sm font-medium">System default</span>
-                  {activeCodexAccountId === null ? (
-                    <Badge
-                      variant="outline"
-                      className="h-4 shrink-0 rounded px-1.5 text-[10px] font-medium leading-none text-foreground/80"
-                    >
-                      Active
-                    </Badge>
-                  ) : null}
-                  {systemCodexNeedsReauthentication ? (
-                    <Badge
-                      variant="destructive"
-                      className="h-4 shrink-0 rounded px-1.5 text-[10px] font-medium leading-none"
-                    >
-                      Needs sign-in
-                    </Badge>
-                  ) : null}
-                </div>
-                <span
-                  className={`truncate text-[11px] ${
-                    systemCodexNeedsReauthentication ? 'text-destructive' : 'text-muted-foreground'
-                  }`}
-                >
-                  {systemCodexNeedsReauthentication
-                    ? `Codex reported this ${accountRuntime.label} login is out of date.`
-                    : `Use your current ${accountRuntime.label} Codex login.`}
-                </span>
-              </div>
-            </button>
             {visibleCodexAccounts.length === 0 ? (
               <div className="rounded-md border border-dashed border-border/70 px-3 py-4 text-xs text-muted-foreground">
-                No managed Codex accounts for {accountRuntime.label}. Agentum will use that
-                environment&apos;s system default Codex login until you add one here.
+                No Codex account saved for {accountRuntime.label}. Sign in with{' '}
+                <code className="text-[11px]">codex login</code>, then reopen this page — Agentum
+                will save it here automatically.
               </div>
             ) : (
               visibleCodexAccounts.map((account) => {
@@ -1357,6 +1423,74 @@ export function AccountsPane({
               )}
               <DialogFooter>
                 <Button variant="outline" onClick={() => endClaudeSignIn(true)}>
+                  Cancel
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={codexAddFlow !== null}
+        onOpenChange={(open) => {
+          if (!open && !codexSigningOut) {
+            endCodexSignIn(true)
+          }
+        }}
+      >
+        <DialogContent showCloseButton={false}>
+          {codexAddFlow?.phase === 'confirm' ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>Add another Codex account</DialogTitle>
+                <DialogDescription>
+                  Agentum keeps {codexAddFlow.email} saved and signs Codex out here, then gives you
+                  a sign-in link to log in with a different account. Codex finishes automatically in
+                  your browser — no code to paste. Saved logins are never deleted; live Codex
+                  terminals keep working until they restart.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setCodexAddFlow(null)}
+                  disabled={codexSigningOut}
+                >
+                  Cancel
+                </Button>
+                <Button onClick={() => void beginCodexSignIn(true)} disabled={codexSigningOut}>
+                  {codexSigningOut ? <Loader2 className="size-3 animate-spin" /> : null}
+                  Get sign-in link
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle>Sign in to Codex</DialogTitle>
+                <DialogDescription>
+                  {codexAddFlow?.url
+                    ? 'Open the link and sign in with the account you want to add. Codex completes in your browser automatically and this window updates when it finishes.'
+                    : 'Preparing your Codex sign-in link…'}
+                </DialogDescription>
+              </DialogHeader>
+              {codexAddFlow?.url ? (
+                <div className="flex flex-col gap-1.5">
+                  <Button onClick={() => void api.shell.openUrl(codexAddFlow.url as string)}>
+                    Open Codex sign-in
+                  </Button>
+                  <p className="break-all text-[11px] text-muted-foreground">
+                    Or copy this link: {codexAddFlow.url}
+                  </p>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="size-3.5 animate-spin" />
+                  Starting Codex sign-in…
+                </div>
+              )}
+              <DialogFooter>
+                <Button variant="outline" onClick={() => endCodexSignIn(true)}>
                   Cancel
                 </Button>
               </DialogFooter>

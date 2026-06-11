@@ -385,6 +385,23 @@ fn restore_live_codex(blob: &str) -> Result<(), String> {
     write_atomic_secret(&codex_auth_file()?, blob)
 }
 
+/// Sign Codex out on this machine (back up first) so a fresh `codex login`
+/// prompts a different account. Verified so the renderer's poll can't re-capture
+/// the same account.
+fn sign_out_live_codex() -> Result<(), String> {
+    if let Some(current) = read_live_codex_blob() {
+        backup_live("codex", &current);
+    }
+    let path = codex_auth_file()?;
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(err)?;
+    }
+    if read_live_codex_blob().is_some() {
+        return Err("Could not sign out: Codex credentials are still present.".to_string());
+    }
+    Ok(())
+}
+
 fn codex_secret_path(id: &str) -> Result<PathBuf, String> {
     Ok(store_base("codex")?.join(format!("{id}.json")))
 }
@@ -759,8 +776,15 @@ fn codex_add(conn: &Connection) -> Result<Value, String> {
     let blob = read_live_codex_blob().ok_or(
         "No Codex login found on this machine. Sign in with Codex first, then add the account.",
     )?;
-    let email = codex_email_from_blob(&blob).unwrap_or_else(|| "Codex account".to_string());
-    let provider_account_id = codex_account_id_from_blob(&blob);
+    codex_capture_account(conn, &blob)?;
+    Ok(codex_state(conn))
+}
+
+/// Upsert the live Codex `blob` as a managed account keyed by email and make it
+/// active. Returns `(id, email)`. Mirrors `claude_capture_account`.
+fn codex_capture_account(conn: &Connection, blob: &str) -> Result<(String, String), String> {
+    let email = codex_email_from_blob(blob).unwrap_or_else(|| "Codex account".to_string());
+    let provider_account_id = codex_account_id_from_blob(blob);
 
     let mut accounts = read_accounts_array(conn, "codexManagedAccounts");
     let now = now_ms();
@@ -775,7 +799,7 @@ fn codex_add(conn: &Connection) -> Result<Value, String> {
         .and_then(|i| accounts[i].get("createdAt").cloned())
         .unwrap_or(json!(now));
 
-    let path = write_codex_secret(&id, &blob)?;
+    let path = write_codex_secret(&id, blob)?;
     let account = json!({
         "id": id,
         "email": email,
@@ -801,6 +825,52 @@ fn codex_add(conn: &Connection) -> Result<Value, String> {
         "activeCodexManagedAccountIdsByRuntime",
         Some(&id),
     )?;
+    Ok((id, email))
+}
+
+/// "Add a different Codex account": stash the live login, then sign Codex out so
+/// `codex login` (localhost-callback flow) can sign in with another account.
+fn codex_begin_add(conn: &Connection) -> Result<Value, String> {
+    let blob = read_live_codex_blob()
+        .ok_or("No Codex login found on this machine. Sign in with Codex first.")?;
+    let (id, email) = codex_capture_account(conn, &blob)?;
+    sign_out_live_codex()?;
+    Ok(json!({
+        "state": codex_state(conn),
+        "stashedAccountId": id,
+        "stashedEmail": email,
+    }))
+}
+
+/// What Codex login is live right now (identity only, no secrets).
+fn codex_live_login() -> Value {
+    match read_live_codex_blob() {
+        Some(blob) => json!({ "hasCredentials": true, "email": codex_email_from_blob(&blob) }),
+        None => json!({ "hasCredentials": false, "email": Value::Null }),
+    }
+}
+
+/// Save the live Codex login if new and mark it active, so the real account
+/// shows by email on pane open (mirrors `claude_sync_current`).
+fn codex_sync_current(conn: &Connection) -> Result<Value, String> {
+    let Some(blob) = read_live_codex_blob() else {
+        return Ok(codex_state(conn));
+    };
+    if let Some(email) = codex_email_from_blob(&blob) {
+        let accounts = read_accounts_array(conn, "codexManagedAccounts");
+        if let Some(i) = find_index_by(&accounts, "email", &email) {
+            if let Some(id) = string_field(&accounts[i], "id").map(str::to_string) {
+                set_active(
+                    conn,
+                    "activeCodexManagedAccountId",
+                    "activeCodexManagedAccountIdsByRuntime",
+                    Some(&id),
+                )?;
+                return Ok(codex_state(conn));
+            }
+        }
+    }
+    codex_capture_account(conn, &blob)?;
     Ok(codex_state(conn))
 }
 
@@ -984,6 +1054,23 @@ pub async fn codex_accounts_list(state: State<'_, AppState>) -> Result<Value, St
 #[tauri::command]
 pub async fn codex_accounts_add(state: State<'_, AppState>) -> Result<Value, String> {
     run_blocking(&state, codex_add).await
+}
+
+#[tauri::command]
+pub async fn codex_accounts_begin_add(state: State<'_, AppState>) -> Result<Value, String> {
+    run_blocking(&state, codex_begin_add).await
+}
+
+#[tauri::command]
+pub async fn codex_accounts_live_login() -> Result<Value, String> {
+    tokio::task::spawn_blocking(codex_live_login)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn codex_accounts_sync_current(state: State<'_, AppState>) -> Result<Value, String> {
+    run_blocking(&state, codex_sync_current).await
 }
 
 #[tauri::command]

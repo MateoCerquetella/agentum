@@ -94,10 +94,13 @@ export interface AgentumApi {
   }
   codexAccounts: {
     add: ApiMethod
+    beginAdd: ApiMethod
     list: ApiMethod
+    liveLogin: ApiMethod
     reauthenticate: ApiMethod
     remove: ApiMethod
     select: ApiMethod
+    syncCurrent: ApiMethod
   }
   codexUsage: {
     getBreakdown: ApiMethod
