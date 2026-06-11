@@ -39,3 +39,30 @@ export function decideClaudeAddAccount(
 export function isClaudeLoginCaptureReady(live: ClaudeLiveLogin): boolean {
   return live.hasCredentials && Boolean(live.email)
 }
+
+// Strip ANSI/OSC escape sequences so a URL split across color codes still
+// matches. Covers CSI (`\x1b[…`) and OSC (`\x1b]…`) runs.
+// eslint-disable-next-line no-control-regex
+const ANSI_ESCAPE = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g
+
+const LOGIN_URL_HOST_HINTS = ['oauth', 'authorize', 'claude.ai', 'anthropic.com', 'console.anthropic']
+
+/**
+ * Pull the OAuth sign-in URL out of `claude auth login` output so it can be
+ * surfaced as a clickable link. Returns the first https URL that points at a
+ * Claude/Anthropic login host, or null if none has been printed yet (the
+ * caller keeps accumulating output until one appears).
+ */
+export function extractClaudeLoginUrl(output: string): string | null {
+  const clean = output.replace(ANSI_ESCAPE, '')
+  const matches = clean.match(/https?:\/\/[^\s'"`<>()[\]]+/g)
+  if (!matches) {
+    return null
+  }
+  const hit = matches.find((url) => {
+    const lower = url.toLowerCase()
+    return LOGIN_URL_HOST_HINTS.some((hint) => lower.includes(hint))
+  })
+  // Trim trailing punctuation the terminal may have appended (".", ",", etc.).
+  return hit ? hit.replace(/[.,;:]+$/, '') : null
+}

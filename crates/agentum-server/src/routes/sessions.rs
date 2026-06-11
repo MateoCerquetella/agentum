@@ -470,6 +470,25 @@ fn session_with_spawned(session: Session, spawned: bool) -> serde_json::Value {
     value
 }
 
+/// The loopback env every LOCAL pane is launched with. `AGENTUM_API_URL` lets an
+/// `agentum` CLI run inside the pane find THIS server (the embedded desktop server
+/// binds an ephemeral port, so a hardcoded guess would miss it); the hook URL/token
+/// let the agent curl lifecycle events back. `api_base` is the embedded server's own
+/// URL when known, else the standalone daemon's conventional `127.0.0.1:8822`. The
+/// hook URL is DERIVED from the same base — never a separate hardcoded port, which
+/// previously pointed every hook at 8822 regardless of where the server actually was.
+fn pane_env(api_base: Option<&str>, session_id: Uuid, hook_token: &str) -> Vec<(String, String)> {
+    let base = api_base.unwrap_or("http://127.0.0.1:8822");
+    vec![
+        ("AGENTUM_API_URL".to_string(), base.to_string()),
+        (
+            "AGENTUM_HOOK_URL".to_string(),
+            format!("{base}/api/sessions/{session_id}/hook"),
+        ),
+        ("AGENTUM_HOOK_TOKEN".to_string(), hook_token.to_string()),
+    ]
+}
+
 async fn start(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -566,13 +585,12 @@ async fn start(
         // Loopback hook URLs only work for local panes. SSH-hosted agents
         // run on another machine, where 127.0.0.1 points at the VPS.
         let hook_token = crate::auth::new_token();
-        let hook_url = format!("http://127.0.0.1:8822/api/sessions/{}/hook", session.id);
-        launch
-            .env
-            .push(("AGENTUM_HOOK_URL".into(), hook_url.clone()));
-        launch
-            .env
-            .push(("AGENTUM_HOOK_TOKEN".into(), hook_token.clone()));
+        // AGENTUM_API_URL + the hook URL/token, all anchored to THIS server's
+        // own base (ephemeral port for the embedded desktop server) so an
+        // in-pane `agentum` CLI and the agent's hook both reach the right place.
+        for kv in pane_env(state.api_base_url.as_deref(), session.id, &hook_token) {
+            launch.env.push(kv);
+        }
 
         if session.tool == "claude" {
             // Claude Code has no `--hook-post-tool-use` flag; hooks are
@@ -1092,19 +1110,23 @@ async fn stream_session(
             snapshot_sent = true;
         }
     }
-    if !snapshot_sent {
-        // Pin the tail's replay point BEFORE capturing: the file cursor stays at
-        // this offset while the log grows, so bytes the pane emits during the
-        // capture and the (possibly slow) socket send are replayed by the tail —
-        // a brief duplicate repaint at worst. The old order seeked to End AFTER
-        // the send, silently skipping those bytes; a chunk dropped mid-escape-
-        // sequence corrupted the client parser until the next full snapshot.
-        let _ = file.seek(std::io::SeekFrom::End(0)).await;
-    }
     if !snapshot_sent
         && let Ok(snap) = agentum_tmux::capture_pane_ansi(&target).await
         && !snap.is_empty()
     {
+        // Pin the tail's replay point AFTER capturing, BEFORE sending: the
+        // snapshot reflects pane state at capture time, so the tail must resume
+        // just past it. Bytes emitted during the (possibly slow) socket send
+        // land after this offset and stream through the tail exactly once. The
+        // earlier order pinned End BEFORE the capture, replaying the
+        // capture-window bytes on top of the snapshot — harmless for an
+        // alt-screen app, but for a normal-screen agent that redraws with
+        // RELATIVE cursor motion (cursor-agent: ESC[1A + ESC[2K) that duplicate
+        // desynced the cursor and stacked spinner lines ("Composing…
+        // Composing…"). The trade is a sub-ms gap (bytes emitted *during*
+        // capture-pane), self-healed by the agent's next redraw — far cheaper
+        // than permanent stacking.
+        let _ = file.seek(std::io::SeekFrom::End(0)).await;
         // Reset the client parser before painting the snapshot so EVERY
         // bit of stale state from the previous session is discarded —
         // not just the visible grid.
@@ -1132,8 +1154,8 @@ async fn stream_session(
             return;
         }
         snapshot_sent = true;
-        // The file cursor was pinned at the pre-capture end above; no re-seek —
-        // anything appended since then replays through the tail.
+        // The file cursor was pinned at the post-capture end above; no re-seek —
+        // anything appended since then replays through the tail exactly once.
     }
 
     // Fallback: if capture-pane didn't yield anything (early in session
@@ -1736,8 +1758,34 @@ fn parse_refresh(t: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{coalesce_queued, parse_refresh, parse_resize};
+    use super::{coalesce_queued, pane_env, parse_refresh, parse_resize};
     use bytes::Bytes;
+
+    #[test]
+    fn pane_env_publishes_api_url_and_derives_hook_from_it() {
+        let sid = uuid::Uuid::nil();
+        let env = pane_env(Some("http://127.0.0.1:5544"), sid, "tok");
+        let get = |k: &str| {
+            env.iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(get("AGENTUM_API_URL"), Some("http://127.0.0.1:5544"));
+        // Hook URL is anchored to the SAME base — never a separate hardcoded 8822.
+        assert_eq!(
+            get("AGENTUM_HOOK_URL"),
+            Some(format!("http://127.0.0.1:5544/api/sessions/{sid}/hook").as_str())
+        );
+        assert_eq!(get("AGENTUM_HOOK_TOKEN"), Some("tok"));
+    }
+
+    #[test]
+    fn pane_env_falls_back_to_8822_when_base_unknown() {
+        // A standalone daemon (no embedded api_base_url) keeps the conventional port.
+        let env = pane_env(None, uuid::Uuid::nil(), "tok");
+        let url = env.iter().find(|(k, _)| k == "AGENTUM_API_URL").unwrap();
+        assert_eq!(url.1, "http://127.0.0.1:8822");
+    }
 
     #[tokio::test]
     async fn coalesce_queued_forwards_lone_chunk_unchanged() {
@@ -1825,6 +1873,7 @@ mod tests {
                 ),
                 clipboard_request_bus: broadcast::channel(64).0,
                 hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+                api_base_url: None,
             }
         }
 
@@ -1966,6 +2015,7 @@ mod tests {
                 ),
                 clipboard_request_bus: broadcast::channel(64).0,
                 hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+                api_base_url: None,
             }
         }
 

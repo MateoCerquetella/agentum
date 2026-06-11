@@ -225,13 +225,18 @@ export function buildCodexStatusSwitchGroups(
       key: getCodexStatusRuntimeKey(target),
       label: getCodexStatusRuntimeLabel(target),
       runtimeTarget: target,
+      // System default only as a fallback when nothing is saved (see Claude).
       targets: [
-        {
-          id: null,
-          label: 'System default',
-          active: activeId === null,
-          runtimeTarget: target
-        },
+        ...(accountsForTarget.length === 0
+          ? [
+              {
+                id: null,
+                label: 'System default',
+                active: activeId === null,
+                runtimeTarget: target
+              }
+            ]
+          : []),
         ...accountsForTarget.map((account) => ({
           id: account.id,
           label: getCodexAccountDisplayLabel(account),
@@ -384,13 +389,20 @@ export function buildClaudeStatusSwitchGroups(
       key: getCodexStatusRuntimeKey(target),
       label: getCodexStatusRuntimeLabel(target),
       runtimeTarget: target,
+      // Only offer "System default" as a fallback when nothing is saved yet —
+      // once the user has a managed account it's shown by email, no redundant
+      // passthrough row (matches the Settings → Accounts redesign).
       targets: [
-        {
-          id: null,
-          label: 'System default',
-          active: activeId === null,
-          runtimeTarget: target
-        },
+        ...(accountsForTarget.length === 0
+          ? [
+              {
+                id: null,
+                label: 'System default',
+                active: activeId === null,
+                runtimeTarget: target
+              }
+            ]
+          : []),
         ...accountsForTarget.map((account) => ({
           id: account.id,
           label: account.email,

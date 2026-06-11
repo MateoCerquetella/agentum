@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   decideClaudeAddAccount,
+  extractClaudeLoginUrl,
   isClaudeLoginCaptureReady,
   type ClaudeLiveLogin
 } from './claude-add-account-flow'
@@ -48,5 +49,34 @@ describe('isClaudeLoginCaptureReady', () => {
     expect(isClaudeLoginCaptureReady(signedOut)).toBe(false)
     expect(isClaudeLoginCaptureReady(signedIn(null))).toBe(false)
     expect(isClaudeLoginCaptureReady(signedIn('a@example.com'))).toBe(true)
+  })
+})
+
+describe('extractClaudeLoginUrl', () => {
+  it('returns null until a login URL is printed', () => {
+    expect(extractClaudeLoginUrl('')).toBeNull()
+    expect(extractClaudeLoginUrl('Starting sign-in…\n')).toBeNull()
+    // A non-login URL must not be mistaken for the sign-in link.
+    expect(extractClaudeLoginUrl('See https://docs.claude.com/help for details')).toBeNull()
+  })
+
+  it('extracts the Claude OAuth URL from typical output', () => {
+    const out =
+      'Opening browser to sign in.\nIf it does not open, visit:\n' +
+      'https://claude.ai/oauth/authorize?code=true&client_id=abc&scope=org\n'
+    expect(extractClaudeLoginUrl(out)).toBe(
+      'https://claude.ai/oauth/authorize?code=true&client_id=abc&scope=org'
+    )
+  })
+
+  it('survives ANSI color codes around the URL', () => {
+    const out = '\x1b[2mVisit \x1b[0m\x1b[4mhttps://claude.ai/oauth/authorize?x=1\x1b[0m to continue'
+    expect(extractClaudeLoginUrl(out)).toBe('https://claude.ai/oauth/authorize?x=1')
+  })
+
+  it('trims trailing sentence punctuation', () => {
+    expect(extractClaudeLoginUrl('Go to https://console.anthropic.com/oauth?y=2.')).toBe(
+      'https://console.anthropic.com/oauth?y=2'
+    )
   })
 })

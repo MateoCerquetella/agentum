@@ -22,4 +22,34 @@ describe('resolvePaneUsesServerSession', () => {
     expect(resolvePaneUsesServerSession({ tabPersistTmux: null, globalDefault: true })).toBe(true)
     expect(resolvePaneUsesServerSession({ tabPersistTmux: null, globalDefault: false })).toBe(false)
   })
+
+  it('forces the server path for agent tabs even when persist=false', () => {
+    // The local PTY stub injects the launch command into a shell, which for an
+    // agent gets typed into the agent's own composer. Agents must use the
+    // server path (which launches via the tool adapter) no matter the toggle.
+    expect(
+      resolvePaneUsesServerSession({
+        tabPersistTmux: false,
+        globalDefault: false,
+        isAgentTab: true
+      })
+    ).toBe(true)
+    expect(
+      resolvePaneUsesServerSession({
+        tabPersistTmux: undefined,
+        globalDefault: false,
+        isAgentTab: true
+      })
+    ).toBe(true)
+  })
+
+  it('leaves plain terminals on their explicit/default choice', () => {
+    expect(
+      resolvePaneUsesServerSession({
+        tabPersistTmux: false,
+        globalDefault: true,
+        isAgentTab: false
+      })
+    ).toBe(false)
+  })
 })

@@ -205,6 +205,14 @@ export function launchAgentInNewTab(args: LaunchAgentInNewTabArgs): LaunchAgentI
   const tab = store.createTab(worktreeId, groupId, undefined, { launchAgent: agent })
   store.queueTabStartupCommand(tab.id, {
     command: startupPlan.launchCommand,
+    // Why: an agent LAUNCH command (`claude`, `codex`, …) must only fire into a
+    // freshly spawned pane. If the pane reattaches to a surviving tmux session
+    // that already has the agent running (server path, freshPane === false), the
+    // launch text lands in the agent's composer as a prompt ("claude" submitted
+    // to Claude). Unlike arbitrary user quick-commands, a launch command is never
+    // meant to run twice — gate it on a fresh pane. Mirrors the worktree-reopen
+    // relaunch, which already sets this for the same reason.
+    onlyIfFresh: true,
     ...(startupPlan.env ? { env: startupPlan.env } : {}),
     ...(agent === 'command-code' && hasPrompt && promptDelivery === 'auto-submit'
       ? { initialAgentStatus: { agent, prompt: trimmedPrompt } }

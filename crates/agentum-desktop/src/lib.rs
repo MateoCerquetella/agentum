@@ -356,6 +356,7 @@ pub fn run() {
             accounts::claude_accounts_add,
             accounts::claude_accounts_begin_add,
             accounts::claude_accounts_live_login,
+            accounts::claude_accounts_sync_current,
             accounts::claude_accounts_reauthenticate,
             accounts::claude_accounts_remove,
             accounts::codex_accounts_list,

@@ -195,6 +195,16 @@ pub enum Cmd {
     /// Check system health (tmux, dirs, db, certs, port).
     Doctor,
 
+    /// One-glance summary of the control plane this CLI is pointed at
+    /// (sessions, worktrees, hosts). Reaches the desktop's embedded server when
+    /// run inside an agentum pane (`$AGENTUM_API_URL`), else the configured
+    /// profile or `127.0.0.1:8822`.
+    Status {
+        /// Emit machine-readable JSON instead of the human summary.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Launch the interactive terminal dashboard.
     ///
     /// Aliased as `tui` for back-compat. The standalone `lazyagentum` binary
@@ -579,6 +589,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Cmd::Auth { action } => crate::commands::auth::run(action).await,
         Cmd::Config { action } => crate::commands::config::run(action).await,
         Cmd::Doctor => crate::commands::doctor::run().await,
+        Cmd::Status { json } => crate::commands::status::run(json).await,
         Cmd::Terminal {
             api,
             fingerprint,

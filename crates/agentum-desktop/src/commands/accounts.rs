@@ -567,6 +567,44 @@ fn claude_live_login() -> Value {
     json!({ "hasCredentials": has_credentials, "email": email })
 }
 
+/// Reconcile the managed-account list with whatever Claude login is live right
+/// now: if that login isn't saved yet, capture it (keyed by email); either way
+/// mark it the active account. This is what lets the user's real account show
+/// up by email on its own — there is no separate "system default" passthrough
+/// to reason about. No live login → no-op (signed-out empty state).
+///
+/// When the live email is already saved we only flip `active` and leave the
+/// stored snapshot and its timestamps alone, so "last used" stays meaningful
+/// and opening the pane doesn't churn the credential file every time.
+fn claude_sync_current(conn: &Connection) -> Result<Value, String> {
+    let Some(blob) = read_live_claude_blob() else {
+        return Ok(claude_state(conn));
+    };
+    let oauth = read_live_claude_oauth_account();
+    let email = oauth
+        .get("emailAddress")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    if let Some(email) = email.as_deref() {
+        let accounts = read_accounts_array(conn, "claudeManagedAccounts");
+        if let Some(i) = find_index_by(&accounts, "email", email) {
+            if let Some(id) = string_field(&accounts[i], "id").map(str::to_string) {
+                set_active(
+                    conn,
+                    "activeClaudeManagedAccountId",
+                    "activeClaudeManagedAccountIdsByRuntime",
+                    Some(&id),
+                )?;
+                return Ok(claude_state(conn));
+            }
+        }
+    }
+
+    claude_capture_account(conn, &blob, &oauth)?;
+    Ok(claude_state(conn))
+}
+
 /// Upsert `blob`/`oauth` as a managed account keyed by email and make it
 /// active. Returns `(id, email)` of the captured account.
 fn claude_capture_account(
@@ -901,6 +939,13 @@ pub async fn claude_accounts_live_login() -> Result<Value, String> {
         .map_err(err)
 }
 
+/// Called when the accounts pane opens: saves the live login if needed and
+/// marks it active so the user's real account always shows up by email.
+#[tauri::command]
+pub async fn claude_accounts_sync_current(state: State<'_, AppState>) -> Result<Value, String> {
+    run_blocking(&state, claude_sync_current).await
+}
+
 #[tauri::command]
 pub async fn claude_accounts_select(
     state: State<'_, AppState>,
@@ -1084,6 +1129,44 @@ mod tests {
         assert_eq!(blob, r#"{"blob":3}"#);
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn sync_current_sets_active_for_already_saved_email_without_touching_timestamps() {
+        let conn = mem_db();
+        // An account saved earlier, currently NOT active.
+        write_setting(
+            &conn,
+            "claudeManagedAccounts",
+            &json!([{
+                "id": "a1",
+                "email": "a@example.com",
+                "managedAuthPath": "/tmp/none.json",
+                "updatedAt": 111,
+                "lastAuthenticatedAt": 111,
+            }]),
+        )
+        .unwrap();
+        write_setting(&conn, "activeClaudeManagedAccountId", &Value::Null).unwrap();
+
+        // Stand in for "this email is the live login" by exercising the
+        // already-saved branch directly (read_live_* hit the real machine).
+        let accounts = read_accounts_array(&conn, "claudeManagedAccounts");
+        let i = find_index_by(&accounts, "email", "a@example.com").unwrap();
+        let id = string_field(&accounts[i], "id").unwrap().to_string();
+        set_active(
+            &conn,
+            "activeClaudeManagedAccountId",
+            "activeClaudeManagedAccountIdsByRuntime",
+            Some(&id),
+        )
+        .unwrap();
+
+        // Active flipped, but the stored timestamps are untouched.
+        assert_eq!(read_setting(&conn, "activeClaudeManagedAccountId"), json!("a1"));
+        let after = read_accounts_array(&conn, "claudeManagedAccounts");
+        assert_eq!(after[0]["updatedAt"], json!(111));
+        assert_eq!(after[0]["lastAuthenticatedAt"], json!(111));
     }
 
     #[test]

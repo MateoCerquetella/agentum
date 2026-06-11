@@ -73,6 +73,7 @@ export interface AgentumApi {
     reauthenticate: ApiMethod
     remove: ApiMethod
     select: ApiMethod
+    syncCurrent: ApiMethod
   }
   claudeUsage: {
     getBreakdown: ApiMethod

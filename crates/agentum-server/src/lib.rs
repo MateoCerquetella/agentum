@@ -142,6 +142,13 @@ pub struct AppState {
     /// `std::sync::Mutex` because the critical section is a single HashMap
     /// lookup/insert/remove — no `.await` while holding the lock.
     pub hook_tokens: Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, String>>>,
+    /// The base URL this server is reachable at on loopback (`http://127.0.0.1:<port>`),
+    /// set only for the embedded desktop server (which binds an ephemeral port). The
+    /// session-start handler injects it into each pane's `AGENTUM_API_URL` so a CLI run
+    /// inside the pane can find THIS server instead of guessing the standalone-daemon
+    /// port. `None` for the standalone `agentum serve` daemon (clients use 8822 / their
+    /// profile). It also anchors the PostToolUse hook URL, replacing a hardcoded 8822.
+    pub api_base_url: Option<String>,
 }
 
 impl AppState {
@@ -175,6 +182,9 @@ impl AppState {
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             clipboard_request_bus,
             hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            // Only the embedded loopback server knows its own URL (it binds an
+            // ephemeral port); the standalone daemon leaves this None.
+            api_base_url: None,
         }
     }
 }
@@ -421,18 +431,31 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
 /// returning the bound `127.0.0.1:<port>` address. The desktop shell embeds the
 /// server this way so the webview drives the exact same core as the TUI.
 pub async fn serve_embedded_loopback(store: Store) -> anyhow::Result<SocketAddr> {
+    let (addr, _state) = serve_embedded_loopback_state(store).await?;
+    Ok(addr)
+}
+
+/// As [`serve_embedded_loopback`], but also returns the `AppState` the router was
+/// built from. The desktop only needs the address; tests assert on the state
+/// (e.g. that `api_base_url` carries the bound URL).
+pub async fn serve_embedded_loopback_state(store: Store) -> anyhow::Result<(SocketAddr, AppState)> {
     // rustls provider selection is process-global; harmless if already set.
     let _ = rustls::crypto::ring::default_provider().install_default();
+
+    // Bind first so we know the ephemeral port BEFORE building the router — the
+    // state must carry its own URL so the session-start handler can inject it
+    // into pane env (AGENTUM_API_URL) and anchor the hook URL.
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let addr = listener.local_addr()?;
 
     let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
     let mut state = AppState::with_fingerprint(store, bus.clone(), String::new());
     state.no_auth = true;
+    state.api_base_url = Some(format!("http://{addr}"));
 
     spawn_background_workers(&state, &bus);
 
-    let app = router(state);
-    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
-    let addr = listener.local_addr()?;
+    let app = router(state.clone());
     tracing::info!(%addr, "agentum-server listening (embedded loopback, no-auth)");
     tokio::spawn(async move {
         if let Err(e) = axum::serve(
@@ -444,7 +467,7 @@ pub async fn serve_embedded_loopback(store: Store) -> anyhow::Result<SocketAddr>
             tracing::error!("embedded agentum-server exited: {e}");
         }
     });
-    Ok(addr)
+    Ok((addr, state))
 }
 
 fn cert_server_router(cert_pem: String) -> Router {
@@ -475,4 +498,34 @@ async fn cert_redirect_hint(_: Request<Body>) -> impl IntoResponse {
         )],
         "agentum cert server. GET /api/cert for the PEM. The full app is on the TLS port.\n",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn embedded_loopback_sets_api_base_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("t.db")).await.unwrap();
+        let (addr, state) = serve_embedded_loopback_state(store).await.unwrap();
+        // The state the router was built with must carry its own URL, anchored
+        // to the actually-bound ephemeral port.
+        assert_eq!(
+            state.api_base_url.as_deref(),
+            Some(format!("http://{addr}").as_str())
+        );
+        assert_ne!(addr.port(), 0, "an ephemeral bind resolves to a real port");
+        // Embedded loopback is always no-auth.
+        assert!(state.no_auth);
+    }
+
+    #[tokio::test]
+    async fn standalone_app_state_has_no_api_base_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("t.db")).await.unwrap();
+        let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
+        let state = AppState::new(store, bus);
+        assert_eq!(state.api_base_url, None);
+    }
 }

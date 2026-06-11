@@ -1,9 +1,11 @@
 //! Library shim that exposes the CLI plumbing so multiple binaries
 //! (`agentum`, `lazyagentum`) can share it.
 
+pub mod api_base;
 pub mod cli;
 pub mod clipboard;
 pub mod commands;
+pub mod http;
 
 use std::path::Path;
 

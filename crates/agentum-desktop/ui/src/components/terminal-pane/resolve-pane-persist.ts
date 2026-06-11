@@ -16,14 +16,27 @@ export type PanePersistDecisionInput = {
   /** The global default to use when the tab has no explicit choice. Defaults
    *  to `shouldUseServerTerminals()` at the call site. */
   globalDefault: boolean
+  /** True when this tab launched an agent (claude/codex/cursor/…). Agents are
+   *  forced onto the server/tmux path regardless of the persist toggle. */
+  isAgentTab?: boolean
 }
 
 /**
  * Returns true when the pane should use the server/tmux (persistent) path,
- * false when it should use the ephemeral local PTY path. A tab's explicit
- * choice always wins; otherwise the global default decides.
+ * false when it should use the ephemeral local PTY path.
+ *
+ * Agent tabs ALWAYS use the server path: the server launches the agent through
+ * its tool adapter as one clean process, whereas the local PTY path spawns a
+ * shell and injects the launch command — which for an agent can land the
+ * command itself in the agent's composer ("claude" typed into Claude) and
+ * double-launch. The local PTY path is a half-ported stub; agents need the
+ * proven one. For plain terminals the tab's explicit choice wins; otherwise the
+ * global default decides.
  */
 export function resolvePaneUsesServerSession(input: PanePersistDecisionInput): boolean {
+  if (input.isAgentTab) {
+    return true
+  }
   if (input.tabPersistTmux === true) {
     return true
   }

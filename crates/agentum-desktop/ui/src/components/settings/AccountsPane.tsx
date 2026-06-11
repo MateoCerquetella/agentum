@@ -43,6 +43,7 @@ import {
 import { getCodexAccountAuthWarning } from './codex-account-auth-warning'
 import {
   decideClaudeAddAccount,
+  extractClaudeLoginUrl,
   isClaudeLoginCaptureReady,
   type ClaudeLiveLogin
 } from './claude-add-account-flow'
@@ -272,12 +273,24 @@ export function AccountsPane({
   >('idle')
   const [removeAccountId, setRemoveAccountId] = useState<string | null>(null)
   const [removeClaudeAccountId, setRemoveClaudeAccountId] = useState<string | null>(null)
-  // "Add a different account" hand-off: confirm the sign-out, then wait for
-  // the user to finish a fresh `claude` sign-in and capture it automatically.
+  // "Add a different account" hand-off: confirm → sign out → run `claude auth
+  // login` headlessly, scrape its OAuth URL, and surface it as a clickable
+  // sign-in link. A scoped poll captures the new account once login completes.
   const [claudeAddFlow, setClaudeAddFlow] = useState<
-    { phase: 'confirm'; email: string } | { phase: 'waiting'; stashedAccountId: string | null } | null
+    { phase: 'confirm'; email: string } | { phase: 'signing-in'; url: string | null } | null
   >(null)
   const [claudeSigningOut, setClaudeSigningOut] = useState(false)
+  // `claude auth login` uses a paste-code flow: after authorizing in the
+  // browser the user gets a code to paste back. This holds that input.
+  const [claudeLoginCode, setClaudeLoginCode] = useState('')
+  const [claudeSubmittingCode, setClaudeSubmittingCode] = useState(false)
+  // Holds the login PTY id + teardown (pty kill + unsubscribe + poll clear)
+  // plus the account we stashed, so Cancel can restore it.
+  const signInRef = useRef<{
+    ptyId: string
+    cleanup: () => void
+    stashedAccountId: string | null
+  } | null>(null)
   const visibleClaudeAccounts = claudeAccounts.accounts.filter((account) =>
     accountMatchesRuntime(account, accountRuntime)
   )
@@ -329,7 +342,9 @@ export function AccountsPane({
 
     const loadClaudeAccounts = async (): Promise<void> => {
       try {
-        const nextClaude = await api.claudeAccounts.list()
+        // syncCurrent saves the live login (if new) and marks it active, so the
+        // user's real account shows up by email instead of a "system default" row.
+        const nextClaude = await api.claudeAccounts.syncCurrent()
         if (!stale) {
           setClaudeAccounts(nextClaude)
         }
@@ -505,8 +520,123 @@ export function AccountsPane({
       wslDistro: accountRuntime.wslDistro
     })
 
-  // "Add Account" captures the live login, so adding a *different* account
-  // needs the sign-out hand-off first. Route the click accordingly.
+  // End the in-flight sign-in: kill the login process, unsubscribe, stop the
+  // poll, and (on cancel) restore the account we stashed. `restore` is false on
+  // success — the new account is now live and about to be captured.
+  const endClaudeSignIn = (restore: boolean): void => {
+    const ref = signInRef.current
+    signInRef.current = null
+    ref?.cleanup()
+    setClaudeAddFlow(null)
+    setClaudeLoginCode('')
+    if (restore && ref?.stashedAccountId) {
+      const accountId = ref.stashedAccountId
+      void runClaudeAccountAction(`select:${accountId}`, () =>
+        api.claudeAccounts.select({
+          accountId,
+          runtime: accountRuntime.runtime,
+          wslDistro: accountRuntime.wslDistro
+        })
+      )
+    }
+  }
+
+  // Sign out (optionally stashing the current account), then run
+  // `claude auth login --claudeai` headlessly. We scrape its OAuth URL from the
+  // PTY output and surface it as a clickable link; a 2s poll captures the new
+  // account once the login completes. No visible terminal, no "watching" copy.
+  const beginClaudeSignIn = async (stash: boolean): Promise<void> => {
+    setClaudeSigningOut(true)
+    try {
+      let stashedAccountId: string | null = null
+      if (stash) {
+        const result = await api.claudeAccounts.beginAdd()
+        await syncClaudeAccounts(result.state as ClaudeRateLimitAccountsState)
+        stashedAccountId = (result.stashedAccountId as string | null) ?? null
+      }
+
+      const spawned = (await api.pty.spawn({ command: 'claude auth login --claudeai' })) as {
+        id: string
+      }
+      const ptyId = spawned.id
+      setClaudeAddFlow({ phase: 'signing-in', url: null })
+
+      let buffer = ''
+      let openedUrl = false
+      const unsub = api.pty.onData((payload: { id: string; data: string }) => {
+        if (payload.id !== ptyId) {
+          return
+        }
+        buffer += payload.data
+        const url = extractClaudeLoginUrl(buffer)
+        if (url && !openedUrl) {
+          openedUrl = true
+          // Don't auto-open: the CLI already tries to open the browser, and the
+          // user explicitly wanted a link to click. Surface it; they open it.
+          setClaudeAddFlow({ phase: 'signing-in', url })
+        }
+      })
+
+      const interval = setInterval(() => {
+        void (async () => {
+          try {
+            const live = (await api.claudeAccounts.liveLogin()) as ClaudeLiveLogin
+            if (isClaudeLoginCaptureReady(live)) {
+              endClaudeSignIn(false)
+              await runClaudeAccountAction('adding', captureClaudeLiveLogin)
+            }
+          } catch {
+            // Transient IPC failure — keep polling until login lands or cancel.
+          }
+        })()
+      }, 2000)
+
+      signInRef.current = {
+        ptyId,
+        stashedAccountId,
+        cleanup: () => {
+          unsub()
+          clearInterval(interval)
+          void api.pty.kill(ptyId)
+        }
+      }
+    } catch (error) {
+      setClaudeAddFlow(null)
+      toast.error('Could not start Claude sign-in.', {
+        description: getClaudeAccountErrorDescription(error)
+      })
+    } finally {
+      setClaudeSigningOut(false)
+    }
+  }
+
+  // Feed the pasted OAuth code into the waiting `claude auth login` process.
+  // The completion poll then captures the new account once login finishes.
+  const submitClaudeLoginCode = async (): Promise<void> => {
+    const ref = signInRef.current
+    const code = claudeLoginCode.trim()
+    if (!ref || !code) {
+      return
+    }
+    setClaudeSubmittingCode(true)
+    try {
+      await api.pty.write(ref.ptyId, `${code}\r`)
+      setClaudeLoginCode('')
+    } catch (error) {
+      toast.error('Could not submit the sign-in code.', {
+        description: getClaudeAccountErrorDescription(error)
+      })
+    } finally {
+      setClaudeSubmittingCode(false)
+    }
+  }
+
+  // Kill any in-flight login PTY if the pane unmounts mid sign-in.
+  useEffect(() => () => signInRef.current?.cleanup(), [])
+
+  // "Add Account" routes on the live login: not-saved → capture it directly;
+  // already-saved → confirm, then sign out and open a fresh login link;
+  // signed-out → open a fresh login link straight away.
   const startClaudeAddAccount = async (): Promise<void> => {
     try {
       const live = (await api.claudeAccounts.liveLogin()) as ClaudeLiveLogin
@@ -519,7 +649,7 @@ export function AccountsPane({
       } else if (decision.kind === 'confirm-signout') {
         setClaudeAddFlow({ phase: 'confirm', email: decision.email })
       } else {
-        setClaudeAddFlow({ phase: 'waiting', stashedAccountId: null })
+        void beginClaudeSignIn(false)
       }
     } catch (error) {
       toast.error('Claude account update failed.', {
@@ -527,76 +657,6 @@ export function AccountsPane({
       })
     }
   }
-
-  const confirmClaudeSignOut = async (): Promise<void> => {
-    setClaudeSigningOut(true)
-    try {
-      const result = await api.claudeAccounts.beginAdd()
-      await syncClaudeAccounts(result.state as ClaudeRateLimitAccountsState)
-      setClaudeAddFlow({
-        phase: 'waiting',
-        stashedAccountId: (result.stashedAccountId as string | null) ?? null
-      })
-    } catch (error) {
-      toast.error('Could not sign out the current Claude login.', {
-        description: getClaudeAccountErrorDescription(error)
-      })
-    } finally {
-      setClaudeSigningOut(false)
-    }
-  }
-
-  const cancelClaudeAddFlow = (): void => {
-    const flow = claudeAddFlow
-    setClaudeAddFlow(null)
-    if (flow?.phase === 'waiting' && flow.stashedAccountId) {
-      // Put back the login we signed out at "Sign out & continue".
-      const stashedAccountId = flow.stashedAccountId
-      void runClaudeAccountAction(`select:${stashedAccountId}`, () =>
-        api.claudeAccounts.select({
-          accountId: stashedAccountId,
-          runtime: accountRuntime.runtime,
-          wslDistro: accountRuntime.wslDistro
-        })
-      )
-    }
-  }
-
-  const waitingForClaudeLogin = claudeAddFlow?.phase === 'waiting'
-  useEffect(() => {
-    if (!waitingForClaudeLogin) {
-      return
-    }
-    let cancelled = false
-    let capturing = false
-    const tick = async (): Promise<void> => {
-      if (cancelled || capturing) {
-        return
-      }
-      try {
-        const live = (await api.claudeAccounts.liveLogin()) as ClaudeLiveLogin
-        // Re-check `capturing` after the await: two in-flight ticks may both
-        // have passed the entry guard, and only one may capture.
-        if (cancelled || capturing || !isClaudeLoginCaptureReady(live)) {
-          return
-        }
-        capturing = true
-        setClaudeAddFlow(null)
-        await runClaudeAccountAction('adding', captureClaudeLiveLogin)
-      } catch {
-        // Transient IPC failure — keep polling until the user cancels.
-      }
-    }
-    const interval = setInterval(() => void tick(), 2000)
-    void tick()
-    return () => {
-      cancelled = true
-      clearInterval(interval)
-    }
-    // Why: only the waiting flag should restart the poll; re-subscribing on
-    // every render would reset the 2s interval mid-wait.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [waitingForClaudeLogin])
 
   const visibleSections = [
     matchesSettingsSearch(searchQuery, ACCOUNTS_LOCATION_SEARCH_ENTRIES) ? (
@@ -652,45 +712,11 @@ export function AccountsPane({
           </div>
 
           <div className="space-y-2">
-            <button
-              type="button"
-              onClick={() =>
-                void runClaudeAccountAction('select:system', () =>
-                  api.claudeAccounts.select({
-                    accountId: null,
-                    runtime: accountRuntime.runtime,
-                    wslDistro: accountRuntime.wslDistro
-                  })
-                )
-              }
-              disabled={claudeAction !== 'idle' || accountRuntimeUnavailable}
-              className={`flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2.5 text-left transition-colors ${
-                activeClaudeAccountId === null
-                  ? 'border-foreground/20 bg-accent/15'
-                  : 'border-border/70 hover:border-border hover:bg-accent/8'
-              } disabled:cursor-default disabled:opacity-100`}
-            >
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="truncate text-sm font-medium">System default</span>
-                  {activeClaudeAccountId === null ? (
-                    <Badge
-                      variant="outline"
-                      className="h-4 shrink-0 rounded px-1.5 text-[10px] font-medium leading-none text-foreground/80"
-                    >
-                      Active
-                    </Badge>
-                  ) : null}
-                </div>
-                <span className="truncate text-[11px] text-muted-foreground">
-                  Use your current {accountRuntime.label} Claude login.
-                </span>
-              </div>
-            </button>
             {visibleClaudeAccounts.length === 0 ? (
               <div className="rounded-md border border-dashed border-border/70 px-3 py-4 text-xs text-muted-foreground">
-                No managed Claude accounts for {accountRuntime.label}. Agentum will use that
-                environment&apos;s system default Claude login until you add one here.
+                No Claude account saved for {accountRuntime.label}. Sign in with{' '}
+                <code className="text-[11px]">claude</code>, then reopen this page — Agentum will
+                save it here automatically.
               </div>
             ) : (
               visibleClaudeAccounts.map((account) => {
@@ -740,9 +766,7 @@ export function AccountsPane({
                           ) : null}
                         </div>
                         <span className="truncate text-[11px] text-muted-foreground">
-                          {account.organizationName
-                            ? `${account.organizationName} · ${formatAccountTimestamp(account.lastAuthenticatedAt)}`
-                            : formatAccountTimestamp(account.lastAuthenticatedAt)}
+                          Last used {formatAccountTimestamp(account.lastAuthenticatedAt)}
                         </span>
                       </button>
                       <div className="flex shrink-0 items-center justify-end gap-1 max-md:w-full max-md:flex-wrap">
@@ -1246,8 +1270,9 @@ export function AccountsPane({
       <Dialog
         open={claudeAddFlow !== null}
         onOpenChange={(open) => {
-          if (!open) {
-            cancelClaudeAddFlow()
+          if (!open && !claudeSigningOut) {
+            // Closing mid sign-in cancels and restores the previous login.
+            endClaudeSignIn(true)
           }
         }}
       >
@@ -1255,43 +1280,84 @@ export function AccountsPane({
           {claudeAddFlow?.phase === 'confirm' ? (
             <>
               <DialogHeader>
-                <DialogTitle>Add a different Claude account</DialogTitle>
+                <DialogTitle>Add another Claude account</DialogTitle>
                 <DialogDescription>
-                  {claudeAddFlow.email} is already saved. To add another account, Agentum will
-                  sign Claude out on this device so you can sign in with the other one. Your
-                  saved logins are kept and you can switch back anytime; live Claude terminals
-                  keep working until they restart.
+                  Agentum keeps {claudeAddFlow.email} saved and signs Claude out here, then gives
+                  you a sign-in link to log in with a different account. Once you finish, your
+                  account is saved automatically and you can switch between them anytime. Saved
+                  logins are never deleted; live Claude terminals keep working until they restart.
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>
-                <Button variant="outline" onClick={cancelClaudeAddFlow} disabled={claudeSigningOut}>
+                <Button
+                  variant="outline"
+                  onClick={() => setClaudeAddFlow(null)}
+                  disabled={claudeSigningOut}
+                >
                   Cancel
                 </Button>
-                <Button onClick={() => void confirmClaudeSignOut()} disabled={claudeSigningOut}>
+                <Button onClick={() => void beginClaudeSignIn(true)} disabled={claudeSigningOut}>
                   {claudeSigningOut ? <Loader2 className="size-3 animate-spin" /> : null}
-                  Sign out &amp; continue
+                  Get sign-in link
                 </Button>
               </DialogFooter>
             </>
           ) : (
             <>
               <DialogHeader>
-                <DialogTitle>Waiting for Claude sign-in</DialogTitle>
+                <DialogTitle>Sign in to Claude</DialogTitle>
                 <DialogDescription>
-                  Open a terminal, run <code className="text-xs">claude</code>, and sign in with
-                  the account you want to add (use <code className="text-xs">/login</code> if a
-                  session is already open). Agentum captures the new login automatically.
+                  {claudeAddFlow?.url
+                    ? 'Open the link, sign in with the account you want to add, then paste the code Claude gives you back here. This window updates automatically once you finish.'
+                    : 'Preparing your Claude sign-in link…'}
                 </DialogDescription>
               </DialogHeader>
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="size-3.5 animate-spin" />
-                Watching for a new Claude login…
-              </div>
+              {claudeAddFlow?.url ? (
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <Button onClick={() => void api.shell.openUrl(claudeAddFlow.url as string)}>
+                      Open Claude sign-in
+                    </Button>
+                    <p className="break-all text-[11px] text-muted-foreground">
+                      Or copy this link: {claudeAddFlow.url}
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <Label className="text-xs">Paste the code from the browser</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        value={claudeLoginCode}
+                        onChange={(e) => setClaudeLoginCode(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            void submitClaudeLoginCode()
+                          }
+                        }}
+                        placeholder="Paste sign-in code"
+                        spellCheck={false}
+                        autoComplete="off"
+                        className="flex-1 text-xs"
+                      />
+                      <Button
+                        onClick={() => void submitClaudeLoginCode()}
+                        disabled={!claudeLoginCode.trim() || claudeSubmittingCode}
+                        className="shrink-0"
+                      >
+                        {claudeSubmittingCode ? <Loader2 className="size-3 animate-spin" /> : null}
+                        Submit
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="size-3.5 animate-spin" />
+                  Starting Claude sign-in…
+                </div>
+              )}
               <DialogFooter>
-                <Button variant="outline" onClick={cancelClaudeAddFlow}>
-                  {claudeAddFlow?.phase === 'waiting' && claudeAddFlow.stashedAccountId
-                    ? 'Cancel & restore previous login'
-                    : 'Cancel'}
+                <Button variant="outline" onClick={() => endClaudeSignIn(true)}>
+                  Cancel
                 </Button>
               </DialogFooter>
             </>

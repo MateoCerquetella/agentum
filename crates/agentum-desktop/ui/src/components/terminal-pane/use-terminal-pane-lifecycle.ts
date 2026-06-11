@@ -719,12 +719,16 @@ export function useTerminalPaneLifecycle({
         // stamped at creation and persisted across relaunch; tabs without an
         // explicit choice fall back to the global default. Same PanePtyBinding
         // contract either way, so the rest of the lifecycle is path-agnostic.
-        const tabPersistTmux = useAppStore
+        const lifecycleTab = useAppStore
           .getState()
-          .tabsByWorktree[worktreeId]?.find((t) => t.id === tabId)?.persistTmux
+          .tabsByWorktree[worktreeId]?.find((t) => t.id === tabId)
         const connectPane = resolvePaneUsesServerSession({
-          tabPersistTmux,
-          globalDefault: shouldUseServerTerminals()
+          tabPersistTmux: lifecycleTab?.persistTmux,
+          globalDefault: shouldUseServerTerminals(),
+          // Agent tabs must use the server path: the local PTY stub injects the
+          // launch command into a shell, which for an agent ends up typed into
+          // the agent's own composer ("claude" into Claude) and double-launches.
+          isAgentTab: Boolean(lifecycleTab?.launchAgent)
         })
           ? connectPaneServerSession
           : connectPanePty
