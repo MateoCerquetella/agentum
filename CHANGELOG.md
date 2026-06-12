@@ -4,6 +4,57 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] — 2026-06-11
+
+### Added
+- **The `agentum` CLI is now a control plane for the running app.** Commands run
+  inside an agentum-managed terminal auto-discover the desktop's embedded server
+  via the `AGENTUM_API_URL` injected into every pane (falling back to the active
+  profile, then `127.0.0.1:8822`). New commands: `agentum status`,
+  `agentum worktree list/current`, `agentum terminal list/read/send/wait`, and
+  `agentum exec` (run a shell command in a session and capture its output). Bare
+  `agentum terminal` still launches the TUI.
+- **Inter-agent orchestration.** A SQLite-backed mail store plus a task DAG and
+  dispatch, exposed as `agentum orchestration send/check/reply/inbox`,
+  `task-create/task-list/task-update`, and `dispatch/dispatch-show`. Handles are
+  session names (injected as `AGENTUM_TERMINAL_HANDLE`); group addresses
+  (`@all`/`@idle`/`@claude`/…/`@worktree:<id>`) fan out to one message per
+  recipient. Completing a task auto-promotes any dependents whose dependencies
+  are all done.
+- **Browser-pane automation.** `agentum tab list`, `navigate`, `click`, and
+  `fill` drive the desktop's native webviews. (DOM `snapshot` returns the URL;
+  full DOM read is still to come.)
+- **macOS computer-use.** `agentum computer list-apps/get-app-state/click/
+  set-value/type-text/press-key` inspects and drives local apps through the
+  Accessibility tree, running inside the desktop app (which holds the
+  Accessibility grant). Enable agentum under System Settings → Privacy →
+  Accessibility to use the read/act ops.
+- **Multi-account for Claude and Codex.** Capture and switch between several
+  signed-in accounts (email-only list, link sign-in, no forced System default).
+- **On-device Voice dictation** (sherpa-rs, offline) and **read-only GitHub
+  Projects**.
+- **Remote tmux discovery & attach.** Surface and attach to external tmux
+  sessions running on SSH hosts.
+
+### Changed
+- **Much faster SSH remoting.** Connection compression (~11× pane-stream
+  throughput on slow links), a persistent keystroke channel on the warm master
+  (~3× faster remote input), a shared streaming master for pane tails (kills the
+  per-session connect storm), and pipe-pane armed inside the snapshot exec
+  (~2× faster first paint).
+
+### Fixed
+- **Reopening an agent worktree no longer re-types `claude`** into the running
+  agent's composer — the launch command is only sent to a freshly spawned pane.
+- **agentum now registers in macOS Accessibility** when launched as the packaged
+  app (the registration is keyed to the `.app` bundle).
+- **Terminal "Composing…" snapshot corruption** fixed by anchoring capture-pane
+  snapshots to the pane cursor.
+- **Working state now surfaces for title-silent agents** (OpenCode, Codex) via
+  byte-flow detection.
+- The PostToolUse hook URL is derived from the server's actual base instead of a
+  hardcoded `127.0.0.1:8822`.
+
 ## [0.13.8] — 2026-06-10
 
 ### Fixed
