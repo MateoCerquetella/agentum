@@ -1411,9 +1411,27 @@ async fn stream_remote_session(mut socket: WebSocket, host: Host, id: Uuid, targ
     // a full handshake to attach — every byte a busy agent emitted in that
     // multi-second window was silently dropped, and a chunk lost mid-escape-
     // sequence left the terminal corrupted until a manual refresh.
-    let log_offset =
+    // Capture the snapshot, RETRYING while it comes back empty. A just-launched
+    // agent paints its first frame slowly — Claude Code spins up node and draws
+    // a "trust this folder?" prompt, which measured >3s to appear — and that
+    // first frame is often a STATIC screen (it waits for input, emitting nothing
+    // more), so the live tail has nothing to stream and the snapshot is the only
+    // way to paint it. A single capture at connect therefore returned a blank
+    // grid and the pane sat BLANK ("opened an agent, no response") until a manual
+    // refresh. Re-capturing every ~300ms until the pane has drawn something (or a
+    // 12s budget elapses — generous enough for a cold node/agent boot) makes a
+    // freshly-opened agent paint as soon as it renders. The loop breaks the
+    // instant a frame is non-empty, so a fast pane isn't delayed; each retry
+    // re-samples the offset so the tail still resumes exactly past what we paint.
+    const SNAPSHOT_RETRY_BUDGET: Duration = Duration::from_millis(12_000);
+    const SNAPSHOT_RETRY_GAP: Duration = Duration::from_millis(300);
+    let snap_deadline = tokio::time::Instant::now() + SNAPSHOT_RETRY_BUDGET;
+    let mut log_offset: Option<u64> = None;
+    loop {
+        let out_of_budget = tokio::time::Instant::now() >= snap_deadline;
         match crate::host_runtime::capture_pane_with_log_offset(&host, &target, &log).await {
             Ok((offset, snap)) => {
+                log_offset = Some(offset);
                 if !snap.is_empty() {
                     let mut payload = Vec::with_capacity(snap.len() + 2);
                     payload.extend_from_slice(b"\x1bc");
@@ -1425,13 +1443,26 @@ async fn stream_remote_session(mut socket: WebSocket, host: Host, id: Uuid, targ
                     {
                         return;
                     }
+                    break;
                 }
-                Some(offset)
+                // Empty grid: the agent hasn't painted yet. Keep retrying.
+                if out_of_budget {
+                    break;
+                }
+                sleep(SNAPSHOT_RETRY_GAP).await;
             }
-            // No snapshot and no offset anchor: fall back to tail-from-EOF; a client
-            // `{"refresh":true}` heals whatever the attach window missed.
-            Err(_) => None,
-        };
+            // A capture error early in a session's life is usually transient —
+            // the tmux pane is still being set up, or the streaming SSH channel
+            // is cold. RETRY within the budget instead of bailing to a blank
+            // pane; only give up (fall back to tail-from-EOF) once time's up.
+            Err(_) => {
+                if out_of_budget {
+                    break;
+                }
+                sleep(SNAPSHOT_RETRY_GAP).await;
+            }
+        }
+    }
 
     // Persistent `ssh tail -f` of the remote pane log. Its stdout is pumped
     // through an mpsc so the select loop below multiplexes output against
