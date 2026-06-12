@@ -44,12 +44,29 @@ fn control_socket_dir() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".agentum").join("ssh"))
 }
 
+/// Which pooled ControlMaster a connection attaches to. Two separate masters per
+/// host keep the bursty interactive traffic and the long-lived stream tails from
+/// starving each other on one connection's `MaxSessions` channel budget.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SshMux {
+    /// No pooling — a fresh TCP+auth connection. Used by the stale-master retry.
+    Off,
+    /// The interactive master (`cm-`): tmux/git/fs execs, keystrokes, input loop.
+    Interactive,
+    /// The streaming master (`cms-`): persistent pane-log `tail -f` channels.
+    /// One shared connection for ALL a host's tails — so opening the app fires
+    /// ONE connection per host instead of one-per-session (which overran sshd's
+    /// `MaxStartups` and timed tails out as "[session stream closed]").
+    Streaming,
+}
+
 /// `ControlPath` template for OpenSSH multiplexing, or `None` when no safe,
-/// short-enough socket dir exists (then `ssh_command` skips multiplexing and
-/// connects fresh each op rather than risk a too-long path or an unsafe socket).
-/// Created `0700` on demand. `%C` is a fixed-length host+port+user hash; we bail
-/// if the expanded path would breach the ~104-byte unix socket cap.
-fn control_path_template() -> Option<String> {
+/// short-enough socket dir exists (then we skip multiplexing and connect fresh
+/// rather than risk a too-long path or an unsafe socket). `prefix` namespaces
+/// the socket so the interactive and streaming masters never collide. Created
+/// `0700` on demand. `%C` is a fixed-length host+port+user hash; we bail if the
+/// expanded path would breach the ~104-byte unix socket cap.
+fn control_path_template_for(prefix: &str) -> Option<String> {
     let dir = control_socket_dir()?;
     #[cfg(unix)]
     {
@@ -65,12 +82,29 @@ fn control_path_template() -> Option<String> {
     {
         std::fs::create_dir_all(&dir).ok()?;
     }
-    let template = dir.join("cm-%C").to_string_lossy().into_owned();
-    // `%C` (2 chars here) expands to a 40-char hex hash at connect time.
+    let template = dir
+        .join(format!("{prefix}-%C"))
+        .to_string_lossy()
+        .into_owned();
+    // `%C` (2 chars) expands to a 40-char hex hash at connect time.
     if template.len() - 2 + 40 > 100 {
         return None;
     }
     Some(template)
+}
+
+/// The interactive master path — a named helper kept for the tests.
+#[cfg(test)]
+fn control_path_template() -> Option<String> {
+    control_path_template_for("cm")
+}
+
+fn control_path_for(mux: SshMux) -> Option<String> {
+    match mux {
+        SshMux::Off => None,
+        SshMux::Interactive => control_path_template_for("cm"),
+        SshMux::Streaming => control_path_template_for("cms"),
+    }
 }
 
 /// Env var the askpass helper reads the password from. It lives only in the
@@ -150,14 +184,14 @@ fn askpass_script_path() -> Option<PathBuf> {
 /// watchdog (which can't depend on the server) and the server share one
 /// builder and password hosts need nothing installed.
 pub fn ssh_command(host: &Host, script: &str) -> Command {
-    ssh_command_opts(host, script, true)
+    ssh_command_opts(host, script, SshMux::Interactive)
 }
 
-/// Like [`ssh_command`] but lets the caller turn off ControlMaster multiplexing.
-/// [`ssh_output`]'s retry rebuilds with `use_mux = false` so a stale/racing
-/// pooled master (broken-pipe / "failed to connect to new control master")
-/// can't keep failing an op — the replay connects fresh instead.
-pub fn ssh_command_opts(host: &Host, script: &str, use_mux: bool) -> Command {
+/// Like [`ssh_command`] but selects which pooled master (or none) the
+/// connection uses. [`ssh_output`]'s retry rebuilds with [`SshMux::Off`] so a
+/// stale/racing pooled master (broken-pipe / "failed to connect to new control
+/// master") can't keep failing an op — the replay connects fresh instead.
+pub fn ssh_command_opts(host: &Host, script: &str, mux: SshMux) -> Command {
     let HostKind::Ssh {
         user,
         hostname,
@@ -227,21 +261,19 @@ pub fn ssh_command_opts(host: &Host, script: &str, use_mux: bool) -> Command {
     // key/agent and password (sshpass) auth. Only enabled when we have a private,
     // short-enough socket dir; otherwise we connect fresh rather than risk a
     // too-long ControlPath (ssh exits 255) or an unsafe socket location.
-    if use_mux {
-        if let Some(control_path) = control_path_template() {
-            cmd.arg("-o")
-                .arg("ControlMaster=auto")
-                .arg("-o")
-                .arg(format!("ControlPath={control_path}"))
-                .arg("-o")
-                // 10m, not 30s: the master idles cheaply (one ssh process, a
-                // keepalive every 5s), but re-establishing it costs a full
-                // TCP+auth handshake — 1-3s on WAN. 30s expired between normal
-                // user interactions, so nearly every sidebar click paid that
-                // handshake again. ssh_output's unmuxed retry still covers a
-                // master that dies mid-window.
-                .arg("ControlPersist=600s");
-        }
+    if let Some(control_path) = control_path_for(mux) {
+        cmd.arg("-o")
+            .arg("ControlMaster=auto")
+            .arg("-o")
+            .arg(format!("ControlPath={control_path}"))
+            .arg("-o")
+            // 10m, not 30s: the master idles cheaply (one ssh process, a
+            // keepalive every 5s), but re-establishing it costs a full
+            // TCP+auth handshake — 1-3s on WAN. 30s expired between normal
+            // user interactions, so nearly every sidebar click paid that
+            // handshake again. ssh_output's unmuxed retry still covers a
+            // master that dies mid-window.
+            .arg("ControlPersist=600s");
     }
 
     match auth {
@@ -306,11 +338,11 @@ pub async fn ssh_output(
     script: &str,
     dur: Duration,
 ) -> std::io::Result<std::process::Output> {
-    let first = run_ssh_once(host, script, dur, true).await?;
+    let first = run_ssh_once(host, script, dur, SshMux::Interactive).await?;
     if first.status.code() == Some(255) {
         let stderr = String::from_utf8_lossy(&first.stderr);
         if is_mux_transport_error(&stderr) {
-            return run_ssh_once(host, script, dur, false).await;
+            return run_ssh_once(host, script, dur, SshMux::Off).await;
         }
     }
     Ok(first)
@@ -322,9 +354,9 @@ async fn run_ssh_once(
     host: &Host,
     script: &str,
     dur: Duration,
-    use_mux: bool,
+    mux: SshMux,
 ) -> std::io::Result<std::process::Output> {
-    match timeout(dur, ssh_command_opts(host, script, use_mux).output()).await {
+    match timeout(dur, ssh_command_opts(host, script, mux).output()).await {
         Ok(result) => result,
         Err(_) => Err(std::io::Error::new(
             std::io::ErrorKind::TimedOut,
@@ -653,14 +685,30 @@ mod tests {
     #[test]
     fn ssh_command_no_mux_omits_control_master() {
         // The retry connection must NOT reuse the (stale) pooled socket, so the
-        // ControlMaster flags are absent when `use_mux = false`.
-        let cmd = ssh_command_opts(&ssh_host(SshAuth::Agent), "echo hi", false);
+        // ControlMaster flags are absent for `SshMux::Off`.
+        let cmd = ssh_command_opts(&ssh_host(SshAuth::Agent), "echo hi", SshMux::Off);
         let args = arg_strings(&cmd);
         assert!(
             !args.iter().any(|a| a == "ControlMaster=auto"),
             "ControlMaster must be off on the unmultiplexed retry: {args:?}"
         );
         assert!(!args.iter().any(|a| a.starts_with("ControlPath=")));
+    }
+
+    #[test]
+    fn streaming_and_interactive_masters_use_distinct_sockets() {
+        // Tails (Streaming) must pool on a SEPARATE socket from interactive ops
+        // so they don't share one connection's MaxSessions channel budget.
+        let path_of = |mux| {
+            arg_strings(&ssh_command_opts(&ssh_host(SshAuth::Agent), "x", mux))
+                .into_iter()
+                .find(|a| a.starts_with("ControlPath="))
+        };
+        let interactive = path_of(SshMux::Interactive).expect("interactive path");
+        let streaming = path_of(SshMux::Streaming).expect("streaming path");
+        assert_ne!(interactive, streaming, "masters share a socket");
+        assert!(interactive.contains("/cm-"), "interactive not cm-: {interactive}");
+        assert!(streaming.contains("/cms-"), "streaming not cms-: {streaming}");
     }
 
     #[test]
@@ -674,13 +722,12 @@ mod tests {
     #[test]
     fn ssh_command_enables_compression_for_throughput() {
         // Pane streams compress ~10x; on a bandwidth-limited link that is an
-        // ~11x effective-throughput win. Both the pooled and unmultiplexed
-        // (tail) connections must carry it.
-        for use_mux in [true, false] {
-            let cmd = ssh_command_opts(&ssh_host(SshAuth::Agent), "echo hi", use_mux);
+        // ~11x effective-throughput win. Every mux mode must carry it.
+        for mux in [SshMux::Off, SshMux::Interactive, SshMux::Streaming] {
+            let cmd = ssh_command_opts(&ssh_host(SshAuth::Agent), "echo hi", mux);
             assert!(
                 arg_strings(&cmd).contains(&"Compression=yes".to_string()),
-                "compression missing (use_mux={use_mux})"
+                "compression missing (mux={mux:?})"
             );
         }
     }

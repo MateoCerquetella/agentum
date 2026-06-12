@@ -15,7 +15,7 @@ use agentum_executor::{binary_for, probed_tools};
 // runner: it replays an op on a fresh, unmultiplexed connection when a pooled
 // ControlMaster socket goes stale, so a flaky master never hard-fails a remote
 // op that never actually ran.
-use agentum_tmux::ssh::{ssh_command_opts, ssh_output};
+use agentum_tmux::ssh::{ssh_command_opts, ssh_output, SshMux};
 use tokio::process::Command;
 use tokio::time::{sleep, timeout};
 
@@ -656,17 +656,23 @@ fn snapshot_with_offset_script(target: &str, out_path: &Path) -> Result<String> 
     Ok(format!("sh -c {}", q(&inner)?))
 }
 
-/// Open (or refresh) the pooled SSH ControlMaster for `host` with a no-op
-/// remote command. The boot-time/periodic warmer calls this so interactive
-/// remote ops find a live master instead of paying the 1-3s TCP+auth
-/// handshake. No-op for local hosts.
+/// Open (or refresh) BOTH pooled SSH masters for `host` with a no-op remote
+/// command. The boot-time/periodic warmer calls this so interactive remote ops
+/// AND the first stream tail find a live master instead of paying the 1-3s
+/// TCP+auth handshake. Warming the streaming master matters most: it means the
+/// first session's `tail -f` multiplexes onto a hot connection instead of
+/// opening a cold one (~2s) and stalling the first live updates. No-op for local
+/// hosts. The streaming warm is best-effort — its failure never fails the call.
 pub async fn warm_ssh_master(host: &Host) -> Result<()> {
     if !matches!(host.kind, HostKind::Ssh { .. }) {
         return Ok(());
     }
-    let _ = ssh_output(host, "true", SSH_TIMEOUT)
-        .await
-        .map_err(map_ssh_io)?;
+    // Establish the streaming master (`cms-`) alongside the interactive one so
+    // both are hot before the user interacts. Run concurrently; the streaming
+    // leg is best-effort.
+    let stream_warm = ssh_command_opts(host, "true", SshMux::Streaming).output();
+    let (interactive, _) = tokio::join!(ssh_output(host, "true", SSH_TIMEOUT), stream_warm);
+    interactive.map_err(map_ssh_io)?;
     Ok(())
 }
 
@@ -831,16 +837,20 @@ pub fn spawn_remote_pane_tail(
     from_offset: Option<u64>,
 ) -> Result<tokio::process::Child> {
     let script = remote_tail_script(out_path, from_offset)?;
-    // Why: a persistent tail must NOT ride the shared ControlMaster. Each tail
-    // holds one channel open for the whole session lifetime, and the remote sshd
-    // caps channels *per connection* at `MaxSessions` (default 10). Multiplexing
-    // every session's tail (plus the 1 s title-poll execs) over one master means
-    // that once enough sessions are open, the next session's tail gets
-    // "Session open refused by peer" → its ssh exits immediately → the WS reads
-    // EOF and the client shows "[session stream closed]". A dedicated
-    // (unmultiplexed) connection per tail gives each its own MaxSessions budget,
-    // leaving the shared master free for the brief execs (title/capture/input).
-    let mut cmd = ssh_command_opts(host, &script, false);
+    // Tails ride a SEPARATE pooled master ([`SshMux::Streaming`], the `cms-`
+    // socket) — NOT the interactive one. Two reasons:
+    //   * Connection storm: a dedicated connection per tail meant opening the
+    //     app fired one fresh TCP+auth handshake PER remote session at once,
+    //     overrunning sshd's `MaxStartups` (10 concurrent) — surplus connects
+    //     timed out ("ssh: connect … Operation timed out") and the client showed
+    //     "[session stream closed]". One shared streaming master = one connection
+    //     per host no matter how many sessions, so no storm.
+    //   * Channel budget: keeping tails off the interactive master leaves its
+    //     `MaxSessions` channels for keystrokes/title/capture execs. The
+    //     streaming master's own budget (10 channels) caps concurrent tails per
+    //     host; past that a tail's channel is refused and it exits — far rarer
+    //     than the every-session storm the dedicated path caused.
+    let mut cmd = ssh_command_opts(host, &script, SshMux::Streaming);
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         // Piped (not null) so a transport failure that ends the tail — e.g. the
@@ -891,7 +901,7 @@ pub fn spawn_remote_input_writer(host: &Host, target: &str) -> Result<tokio::pro
         return Err(HostRuntimeError::Unsupported);
     }
     let script = remote_input_script(target)?;
-    let mut cmd = ssh_command_opts(host, &script, true);
+    let mut cmd = ssh_command_opts(host, &script, SshMux::Interactive);
     cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
