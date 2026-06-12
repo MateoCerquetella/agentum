@@ -219,6 +219,53 @@ pub enum Cmd {
         action: OrchestrationCmd,
     },
 
+    /// List the desktop's open browser tabs (label + url). Requires the desktop
+    /// app (the standalone daemon has no webviews).
+    Tab {
+        #[command(subcommand)]
+        action: TabCmd,
+    },
+
+    /// Read what's available from the active browser tab. Requires the desktop.
+    Snapshot {
+        #[arg(long)]
+        tab: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Navigate the active browser tab to a URL. Requires the desktop.
+    Navigate {
+        url: String,
+        #[arg(long)]
+        tab: Option<String>,
+    },
+
+    /// Click an element in the active browser tab by CSS selector. Requires the desktop.
+    Click {
+        #[arg(long)]
+        selector: String,
+        #[arg(long)]
+        tab: Option<String>,
+    },
+
+    /// Fill an input in the active browser tab by CSS selector. Requires the desktop.
+    Fill {
+        #[arg(long)]
+        selector: String,
+        #[arg(long)]
+        text: String,
+        #[arg(long)]
+        tab: Option<String>,
+    },
+
+    /// macOS computer-use: inspect and drive local desktop apps via the
+    /// Accessibility tree. Requires the desktop app on macOS.
+    Computer {
+        #[command(subcommand)]
+        action: ComputerCmd,
+    },
+
     /// Run a shell command in a terminal session and capture its output.
     /// Best-effort: sends the command + a done-marker and reads the pane back.
     Exec {
@@ -441,6 +488,65 @@ pub enum BoardCmd {
         /// Named connection profile to use. Defaults to `local`.
         #[arg(long, default_value = "local")]
         profile: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TabCmd {
+    /// List open browser tabs.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ComputerCmd {
+    /// Report which computer-use ops are available + whether AX is granted.
+    Capabilities,
+    /// Report the Accessibility permission status.
+    Permissions,
+    /// List on-screen apps (name + pid).
+    ListApps {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Dump an app's Accessibility element tree (role/title/value by index).
+    GetAppState {
+        #[arg(long)]
+        app: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Press the element at the given index (AXPress).
+    Click {
+        #[arg(long)]
+        app: String,
+        #[arg(long = "element-index")]
+        element_index: usize,
+    },
+    /// Set an element's value (AXValue).
+    SetValue {
+        #[arg(long)]
+        app: String,
+        #[arg(long = "element-index")]
+        element_index: usize,
+        #[arg(long)]
+        value: String,
+    },
+    /// Type text into an app.
+    TypeText {
+        #[arg(long)]
+        app: String,
+        #[arg(long)]
+        text: String,
+    },
+    /// Press a named key (Return/Tab/Escape/arrows/…) in an app.
+    PressKey {
+        #[arg(long)]
+        app: String,
+        #[arg(long)]
+        key: String,
     },
 }
 
@@ -836,6 +942,16 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             }
         },
         Cmd::Orchestration { action } => dispatch_orchestration(action).await,
+        Cmd::Tab { action } => match action {
+            TabCmd::List { json } => crate::commands::browser::tab_list(json).await,
+        },
+        Cmd::Snapshot { tab, json } => crate::commands::browser::snapshot(tab, json).await,
+        Cmd::Navigate { url, tab } => crate::commands::browser::navigate(url, tab).await,
+        Cmd::Click { selector, tab } => crate::commands::browser::click(selector, tab).await,
+        Cmd::Fill { selector, text, tab } => {
+            crate::commands::browser::fill(selector, text, tab).await
+        }
+        Cmd::Computer { action } => dispatch_computer(action).await,
         Cmd::Exec {
             session,
             command,
@@ -936,6 +1052,25 @@ async fn dispatch_orchestration(action: OrchestrationCmd) -> Result<()> {
             json,
         } => orch::dispatch(task, to, from, inject, json).await,
         OrchestrationCmd::DispatchShow { task, json } => orch::dispatch_show(task, json).await,
+    }
+}
+
+/// Route a `computer` subcommand to its handler.
+async fn dispatch_computer(action: ComputerCmd) -> Result<()> {
+    use crate::commands::computer as cu;
+    match action {
+        ComputerCmd::Capabilities => cu::capabilities().await,
+        ComputerCmd::Permissions => cu::permissions().await,
+        ComputerCmd::ListApps { json } => cu::list_apps(json).await,
+        ComputerCmd::GetAppState { app, json } => cu::get_app_state(app, json).await,
+        ComputerCmd::Click { app, element_index } => cu::click(app, element_index).await,
+        ComputerCmd::SetValue {
+            app,
+            element_index,
+            value,
+        } => cu::set_value(app, element_index, value).await,
+        ComputerCmd::TypeText { app, text } => cu::type_text(app, text).await,
+        ComputerCmd::PressKey { app, key } => cu::press_key(app, key).await,
     }
 }
 

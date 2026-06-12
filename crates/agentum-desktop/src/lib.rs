@@ -1,4 +1,6 @@
+mod bridge;
 mod commands;
+mod computer;
 mod path_env;
 // The Voice STT engine. Named `speech_engine` (not `speech`) to avoid colliding
 // with the `commands::speech` module imported below for the invoke_handler.
@@ -48,11 +50,16 @@ pub fn run() {
             // Boot agentum-server in-process on a loopback port and expose its
             // URL to the webview. Block here so the endpoint is ready before the
             // React app asks for it; the server itself runs on background tasks.
+            // Install a DesktopBridge so the embedded server's /api/browser and
+            // /api/computer routes can drive THIS process's webviews + the macOS
+            // AX engine (the only process that can). Standalone daemons get no
+            // bridge and 501 those routes.
+            let bridge = std::sync::Arc::new(bridge::TauriBridge::new(app.handle().clone()));
             let addr = tauri::async_runtime::block_on(async {
                 let (store, _db_path) = agentum_store::open_default()
                     .await
                     .map_err(|e| std::io::Error::other(e.to_string()))?;
-                agentum_server::serve_embedded_loopback(store)
+                agentum_server::serve_embedded_loopback_with_bridge(store, bridge)
                     .await
                     .map_err(|e| std::io::Error::other(e.to_string()))
             })?;
