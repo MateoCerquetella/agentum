@@ -476,14 +476,31 @@ pub(crate) fn pick_limit_pct(five_hour: Option<f64>, seven_day: Option<f64>) -> 
     }
 }
 
-/// Read the Claude OAuth bearer token from the host, trying the canonical
-/// sources in order. Returns `None` when none is available (API-key-only
-/// users, or no Claude install). NEVER logs the token.
+/// One OAuth credential candidate read from a store, paired with its expiry so
+/// the freshest can be chosen when stores diverge.
+struct OAuthCred {
+    token: String,
+    /// `claudeAiOauth.expiresAt` (unix-ms). `None` when the store doesn't
+    /// expose it — treated as "assume current" so such a token is never
+    /// discarded in favour of a definitely-expired one.
+    expires_at_ms: Option<i64>,
+}
+
+/// Read the Claude OAuth bearer token from the host. Returns `None` when none
+/// is available (API-key-only users, or no Claude install). NEVER logs the token.
 ///
-/// Order: env `CLAUDE_CODE_OAUTH_TOKEN` → `~/.claude/.credentials.json`
-/// (`claudeAiOauth.accessToken`) → macOS keychain (best-effort).
+/// `CLAUDE_CODE_OAUTH_TOKEN` wins outright when set — the explicit override
+/// Claude Code itself honours; it carries no expiry to compare.
+///
+/// Otherwise we read EVERY store and pick the freshest token rather than taking
+/// the first by source order. Claude Code keeps the same `claudeAiOauth` blob in
+/// two places that DIVERGE: `~/.claude/.credentials.json` and the macOS Keychain.
+/// It rotates the access token roughly hourly, and on macOS the Keychain is the
+/// source of truth — the file copy goes stale. A fixed source order surfaced the
+/// EXPIRED file token (→ 401 → "Sign in to Claude to see usage") while a valid
+/// token sat in the Keychain. Choosing by latest expiry is platform-agnostic
+/// (Linux: file only) and durable against rotation.
 fn read_claude_oauth_token() -> Option<String> {
-    // 1. Env var — the explicit override Claude Code itself honours.
     if let Ok(tok) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
         let tok = tok.trim();
         if !tok.is_empty() {
@@ -491,37 +508,67 @@ fn read_claude_oauth_token() -> Option<String> {
         }
     }
 
-    // 2. Legacy credentials file.
+    let mut candidates: Vec<OAuthCred> = Vec::new();
+
     if let Some(home) = home_dir() {
         let cred_path = home.join(".claude").join(".credentials.json");
         if let Ok(raw) = std::fs::read_to_string(&cred_path)
-            && let Some(tok) = token_from_credentials_json(&raw)
+            && let Some(cred) = cred_from_credentials_json(&raw)
         {
-            return Some(tok);
+            candidates.push(cred);
         }
     }
 
-    // 3. macOS keychain. Best-effort; no-op on Linux. Claude Code stores the
-    //    same `.credentials.json` JSON blob under a Keychain generic password.
+    // macOS Keychain. Best-effort; no-op on Linux. Claude Code stores the same
+    // `.credentials.json` JSON blob under a generic-password Keychain entry.
     #[cfg(target_os = "macos")]
     {
-        if let Some(tok) = read_macos_keychain_token() {
-            return Some(tok);
+        if let Some(cred) = read_macos_keychain_cred() {
+            candidates.push(cred);
         }
     }
 
-    None
+    pick_freshest_token(candidates, now_ms())
 }
 
-/// Extract `claudeAiOauth.accessToken` from a `.credentials.json` blob.
-fn token_from_credentials_json(raw: &str) -> Option<String> {
+/// Choose the freshest usable token: prefer one whose expiry is still in the
+/// future and, among those, the latest-expiring. A candidate with no known
+/// expiry is treated as current so it's never dropped in favour of a known-
+/// expired token. When every candidate is expired we still return the least-
+/// expired one — the OAuth fetch will 401 and we degrade to scan, no worse than
+/// before. Returns `None` only when there are no candidates at all.
+fn pick_freshest_token(creds: Vec<OAuthCred>, now_ms: i64) -> Option<String> {
+    creds
+        .into_iter()
+        .max_by_key(|c| {
+            let exp = c.expires_at_ms.unwrap_or(i64::MAX);
+            (exp > now_ms, exp)
+        })
+        .map(|c| c.token)
+}
+
+/// Extract the access token + expiry from a `.credentials.json` blob.
+fn cred_from_credentials_json(raw: &str) -> Option<OAuthCred> {
     let v: serde_json::Value = serde_json::from_str(raw).ok()?;
-    let tok = v.get("claudeAiOauth")?.get("accessToken")?.as_str()?.trim();
-    (!tok.is_empty()).then(|| tok.to_string())
+    let oauth = v.get("claudeAiOauth")?;
+    let tok = oauth.get("accessToken")?.as_str()?.trim();
+    if tok.is_empty() {
+        return None;
+    }
+    Some(OAuthCred {
+        token: tok.to_string(),
+        expires_at_ms: oauth.get("expiresAt").and_then(|e| e.as_i64()),
+    })
+}
+
+/// Thin token-only wrapper retained for the existing extraction test.
+#[cfg(test)]
+fn token_from_credentials_json(raw: &str) -> Option<String> {
+    cred_from_credentials_json(raw).map(|c| c.token)
 }
 
 #[cfg(target_os = "macos")]
-fn read_macos_keychain_token() -> Option<String> {
+fn read_macos_keychain_cred() -> Option<OAuthCred> {
     // Claude Code 2.1 stores credentials under the generic-password service
     // "Claude Code-credentials". `security find-generic-password -w` prints
     // the raw secret (the same JSON shape as the file) to stdout. We never
@@ -539,7 +586,7 @@ fn read_macos_keychain_token() -> Option<String> {
         return None;
     }
     let raw = String::from_utf8(out.stdout).ok()?;
-    token_from_credentials_json(raw.trim())
+    cred_from_credentials_json(raw.trim())
 }
 
 /// Parsed `/api/oauth/usage` result. All fields optional — Anthropic may omit
@@ -909,6 +956,97 @@ mod tests {
         // Missing / empty token → None.
         assert_eq!(token_from_credentials_json(r#"{"claudeAiOauth":{}}"#), None);
         assert_eq!(token_from_credentials_json("not json"), None);
+    }
+
+    #[test]
+    fn cred_parses_token_and_expiry() {
+        let raw = r#"{"claudeAiOauth":{"accessToken":"tok","expiresAt":1781411281013}}"#;
+        let c = cred_from_credentials_json(raw).expect("parses");
+        assert_eq!(c.token, "tok");
+        assert_eq!(c.expires_at_ms, Some(1_781_411_281_013));
+        // Token present but no expiresAt → None expiry, still usable.
+        let no_exp = cred_from_credentials_json(r#"{"claudeAiOauth":{"accessToken":"t"}}"#)
+            .expect("parses without expiry");
+        assert_eq!(no_exp.expires_at_ms, None);
+    }
+
+    #[test]
+    fn picks_valid_token_over_expired_regardless_of_order() {
+        // The real macOS bug: an expired file token shadowed a valid Keychain
+        // token. The freshest must win no matter the candidate order.
+        let now = 1_000_000;
+        let make = |t: &str, exp: i64| OAuthCred {
+            token: t.into(),
+            expires_at_ms: Some(exp),
+        };
+        assert_eq!(
+            pick_freshest_token(vec![make("expired", now - 1), make("valid", now + 10_000)], now)
+                .as_deref(),
+            Some("valid")
+        );
+        assert_eq!(
+            pick_freshest_token(vec![make("valid", now + 10_000), make("expired", now - 1)], now)
+                .as_deref(),
+            Some("valid")
+        );
+    }
+
+    #[test]
+    fn picks_latest_expiring_among_valid() {
+        let now = 1_000_000;
+        let soon = OAuthCred {
+            token: "soon".into(),
+            expires_at_ms: Some(now + 1_000),
+        };
+        let later = OAuthCred {
+            token: "later".into(),
+            expires_at_ms: Some(now + 9_000),
+        };
+        assert_eq!(
+            pick_freshest_token(vec![soon, later], now).as_deref(),
+            Some("later")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_least_expired_when_all_expired() {
+        // Both expired: still attempt the fetch (it 401s → degrade to scan),
+        // never silently return None when tokens exist.
+        let now = 1_000_000;
+        let old = OAuthCred {
+            token: "old".into(),
+            expires_at_ms: Some(now - 9_000),
+        };
+        let less_old = OAuthCred {
+            token: "less_old".into(),
+            expires_at_ms: Some(now - 1_000),
+        };
+        assert_eq!(
+            pick_freshest_token(vec![old, less_old], now).as_deref(),
+            Some("less_old")
+        );
+    }
+
+    #[test]
+    fn unknown_expiry_beats_known_expired() {
+        let now = 1_000_000;
+        let no_exp = OAuthCred {
+            token: "no_exp".into(),
+            expires_at_ms: None,
+        };
+        let expired = OAuthCred {
+            token: "expired".into(),
+            expires_at_ms: Some(now - 1),
+        };
+        assert_eq!(
+            pick_freshest_token(vec![expired, no_exp], now).as_deref(),
+            Some("no_exp")
+        );
+    }
+
+    #[test]
+    fn no_candidates_yields_none() {
+        assert_eq!(pick_freshest_token(vec![], 1), None);
     }
 
     #[test]
