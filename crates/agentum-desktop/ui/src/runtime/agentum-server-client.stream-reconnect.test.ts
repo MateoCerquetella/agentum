@@ -173,6 +173,22 @@ describe('openSessionStream reconnect', () => {
     expect(h.onReconnected).toHaveBeenCalledTimes(1)
   })
 
+  it('requestRepaint reconnects fresh (no resume) and is not treated as a reconnect', async () => {
+    // The blank-pane self-heal: force a full re-snapshot in place. A normal
+    // reconnect would send resume=true; a repaint must NOT (it needs the whole
+    // snapshot), and it must not look like a recovery (no onReconnecting).
+    const h = handlers()
+    const stream = await openSessionStream('sess-1', { cols: 80, rows: 24 }, h)
+    FakeWebSocket.instances[0].fireOpen() // connectedOnce = true
+
+    stream.requestRepaint()
+
+    expect(FakeWebSocket.instances).toHaveLength(2)
+    expect(FakeWebSocket.instances[1].url).not.toContain('resume=true')
+    expect(h.onReconnecting).not.toHaveBeenCalled()
+    expect(h.onClose).not.toHaveBeenCalled()
+  })
+
   it('passes resume=true on reconnect but not on the first connect', async () => {
     const h = handlers()
     await openSessionStream('sess-1', { cols: 80, rows: 24 }, h)

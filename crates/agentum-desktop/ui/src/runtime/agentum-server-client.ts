@@ -78,6 +78,13 @@ export type SessionStream = {
   send: (data: Uint8Array | string) => void
   /** Resize the pane (JSON text frame the server forwards to `resize-window`). */
   resize: (cols: number, rows: number) => void
+  /** Force a fresh full re-snapshot: drop the current socket and reconnect
+   *  WITHOUT `resume`, so the server repaints the whole pane. The blank-pane
+   *  self-heal calls this when a connected stream painted nothing (a snapshot
+   *  lost in a client reflow, or an empty server snapshot under SSH channel
+   *  pressure) — for an idle remote pane there are no live bytes to recover it
+   *  otherwise. Silent: it does NOT count as a reconnect (no onReconnecting). */
+  requestRepaint: () => void
   close: () => void
 }
 
@@ -247,6 +254,10 @@ export async function openSessionStream(
   // resume checkpoint; the remote path ignores the flag and re-snapshots — a
   // clean repaint either way.
   let connectedOnce = false
+  // Set by `requestRepaint` to force the NEXT connect to fetch a full fresh
+  // snapshot (omit `resume`), so a blank-pane self-heal actually repaints
+  // instead of replaying an empty delta on the local path. Consumed once.
+  let forceFreshNext = false
   let attempt = 0
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let stableTimer: ReturnType<typeof setTimeout> | null = null
@@ -267,7 +278,7 @@ export async function openSessionStream(
     if (token) {
       params.set('token', token)
     }
-    if (connectedOnce) {
+    if (connectedOnce && !forceFreshNext) {
       params.set('resume', 'true')
     }
     const qs = params.toString()
@@ -323,7 +334,9 @@ export async function openSessionStream(
     if (disposed) {
       return
     }
-    const sock = new WebSocket(streamUrl())
+    const url = streamUrl()
+    forceFreshNext = false // consumed for this connect
+    const sock = new WebSocket(url)
     sock.binaryType = 'arraybuffer'
     ws = sock
 
@@ -383,6 +396,25 @@ export async function openSessionStream(
       }
     },
     resize: sendResize,
+    requestRepaint: () => {
+      if (disposed) {
+        return
+      }
+      // Next connect must fetch a full snapshot, not a resume delta.
+      forceFreshNext = true
+      // Supersede the current socket BEFORE closing it: with `ws` cleared, the
+      // old socket's close handler sees `sock !== ws` and bails early, so this
+      // does NOT schedule a backoff reconnect or fire onReconnecting — it's a
+      // silent in-place repaint, not a recovery. Then connect fresh now.
+      const old = ws
+      ws = null
+      try {
+        old?.close()
+      } catch {
+        // already closing/closed — connect() below still re-establishes
+      }
+      connect()
+    },
     close: () => {
       disposed = true
       clearTimers()

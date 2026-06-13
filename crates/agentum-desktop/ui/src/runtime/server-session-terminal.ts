@@ -124,6 +124,55 @@ export async function bindServerSessionTerminal(
   const dataSub = term.onData((data) => stream.send(data))
   const resizeSub = term.onResize(({ cols, rows }) => stream.resize(cols, rows))
 
+  // ── Blank-pane self-heal ────────────────────────────────────────────────
+  // A remote IDLE pane's only paint source is the one connect snapshot — no
+  // live bytes follow it. If that snapshot never lands on screen (lost when the
+  // xterm reflows during a multi-pane restore on reopen, or the server returned
+  // an EMPTY snapshot under SSH ControlMaster channel pressure), the pane sits
+  // BLANK forever. We can't cheaply tell which boundary dropped it, so we watch
+  // the OBSERVABLE symptom: if the terminal still shows nothing a few seconds
+  // after connecting, force a fresh re-snapshot. Bounded so a genuinely-empty
+  // pane can't loop; a pane that actually painted is non-blank and never fires.
+  const PAINT_GRACE_MS = 6000
+  const MAX_REPAINTS = 2
+  let repaintAttempts = 0
+  let paintWatchdog: ReturnType<typeof setTimeout> | null = null
+
+  const paneLooksBlank = (): boolean => {
+    try {
+      const buf = term.buffer.active
+      for (let i = 0; i < buf.length; i++) {
+        if ((buf.getLine(i)?.translateToString(true).trim().length ?? 0) > 0) {
+          return false
+        }
+      }
+      return true
+    } catch {
+      // Can't introspect the buffer → assume it painted; never self-heal blind.
+      return false
+    }
+  }
+
+  const armPaintWatchdog = (): void => {
+    if (paintWatchdog) {
+      clearTimeout(paintWatchdog)
+      paintWatchdog = null
+    }
+    if (disposed || repaintAttempts >= MAX_REPAINTS) {
+      return
+    }
+    paintWatchdog = setTimeout(() => {
+      paintWatchdog = null
+      if (disposed || !paneLooksBlank()) {
+        return // painted (or torn down) — nothing to heal
+      }
+      repaintAttempts += 1
+      stream.requestRepaint()
+      armPaintWatchdog() // give the fresh snapshot its own grace window
+    }, PAINT_GRACE_MS)
+  }
+  armPaintWatchdog()
+
   // Launch the agent once the shell has had a moment to come up. tmux buffers
   // input, so an early send is harmless; the short delay just avoids racing the
   // prompt. Trailing CR submits the command.
@@ -141,6 +190,10 @@ export async function bindServerSessionTerminal(
       disposed = true
       if (startupTimer) {
         clearTimeout(startupTimer)
+      }
+      if (paintWatchdog) {
+        clearTimeout(paintWatchdog)
+        paintWatchdog = null
       }
       dataSub.dispose()
       resizeSub.dispose()
