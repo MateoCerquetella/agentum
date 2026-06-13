@@ -4,6 +4,37 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1] — 2026-06-13
+
+### Fixed
+- **Remote (SSH) sessions recover the whole UI on reconnect, not just the
+  terminal.** When a dropped session stream re-attached, the pane repainted but
+  the sidebar SSH badge stayed "Disconnected" and the file tree stayed stuck on
+  the outage's `/api/fs/entries` error. A successful reconnect now marks the host
+  connected, which repaints the status-bar/sidebar badges and re-fires the file
+  explorer's failed-load retry.
+- **Blank remote panes self-heal after reopening the app.** An idle remote
+  session's only paint source is its connect snapshot; when that snapshot was
+  lost (an xterm reflow during a multi-pane restore, or an empty server snapshot
+  under SSH ControlMaster channel pressure) the pane sat blank with no live bytes
+  to recover it. The desktop now detects a still-blank pane shortly after connect
+  and forces a bounded fresh re-snapshot.
+- **"Sign in to Claude to see usage" shown while actually signed in.** Claude
+  Code keeps the OAuth token in both `~/.claude/.credentials.json` and the macOS
+  Keychain, which diverge as it rotates the token (~hourly); a fixed read order
+  surfaced the stale copy. Usage now reads every store and picks the
+  freshest-expiring token.
+
+### Changed
+- **SSH connection hardening.** Explicit-key auth now sets `IdentitiesOnly=yes`
+  and forces the publickey method, so `ssh` no longer offers every agent/default
+  key first and trips a server's `MaxAuthTries` ("Too many authentication
+  failures") before the configured key is tried. All connections set
+  `TCPKeepAlive=yes` so a dead peer is detected at the TCP layer and a stale
+  pooled ControlMaster is reset rather than left half-open.
+- Remote pane sampling backs off slightly (vs. the local 1 s cadence) to cut
+  per-tick SSH load on hosts with many open sessions.
+
 ## [0.14.0] — 2026-06-11
 
 ### Added
