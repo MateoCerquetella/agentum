@@ -241,6 +241,13 @@ pub fn ssh_command_opts(host: &Host, script: &str, mux: SshMux) -> Command {
         // it the client-side attempt can stall a cold connect for seconds
         // (Kerberos/DNS lookups). Disabling it shaves that off every handshake.
         .arg("GSSAPIAuthentication=no")
+        .arg("-o")
+        // TCPKeepAlive: surface a dead peer (slept laptop, dropped link) at the
+        // TCP layer, not only via the app-level ServerAlive probe. A pooled
+        // master whose far end vanished is then reset by the OS rather than
+        // lingering as a half-open socket the next op stalls on. Cheap, and it
+        // pairs with the ssh_output stale-master retry to keep reconnects clean.
+        .arg("TCPKeepAlive=yes")
         // Compression: terminal/agent output is highly repetitive (redraw
         // escape sequences, whitespace, repeated status lines) and compresses
         // ~10x. On a bandwidth-limited link (e.g. a Tailscale-relayed host at
@@ -279,6 +286,18 @@ pub fn ssh_command_opts(host: &Host, script: &str, mux: SshMux) -> Command {
     match auth {
         SshAuth::Key { path } if !path.trim().is_empty() => {
             cmd.arg("-i").arg(path);
+            // Pin auth to THIS key. Without IdentitiesOnly, ssh first offers
+            // every ssh-agent/default identity; on a server with a low
+            // `MaxAuthTries` that burns the attempt budget before our key is
+            // tried and the connection is refused ("Too many authentication
+            // failures"). Forcing the publickey method also stops a failed key
+            // from falling through to a method that can't succeed under
+            // BatchMode. Agent auth deliberately omits both (it must let the
+            // agent offer its keys).
+            cmd.arg("-o")
+                .arg("IdentitiesOnly=yes")
+                .arg("-o")
+                .arg("PreferredAuthentications=publickey");
         }
         SshAuth::Password { password } if !password.trim().is_empty() => {
             // Force password auth so ssh doesn't silently try a key first
@@ -338,7 +357,27 @@ pub async fn ssh_output(
     script: &str,
     dur: Duration,
 ) -> std::io::Result<std::process::Output> {
-    let first = run_ssh_once(host, script, dur, SshMux::Interactive).await?;
+    ssh_output_on(host, script, dur, SshMux::Interactive).await
+}
+
+/// Like [`ssh_output`] but rides the caller-chosen pooled ControlMaster.
+///
+/// Why this exists: the watchdog's per-session pane sample ([`sample_pane`]) is
+/// an `ssh` exec every tick. Riding the *interactive* master (`cm-`) meant those
+/// execs shared one TCP connection's channel budget with — and starved — the
+/// keystroke writer and other interactive execs. With several remote sessions
+/// open that contention throttled typing AND pane output (the remote tmux server
+/// was also busy servicing N `capture-pane`s/tick). Routing the sample onto the
+/// *streaming* master (`cms-`, otherwise just long-lived `tail -f` channels)
+/// takes it off the keystroke path entirely. Same stale-master retry as
+/// [`ssh_output`]: a 255 mux-transport failure replays once unmultiplexed.
+pub async fn ssh_output_on(
+    host: &Host,
+    script: &str,
+    dur: Duration,
+    mux: SshMux,
+) -> std::io::Result<std::process::Output> {
+    let first = run_ssh_once(host, script, dur, mux).await?;
     if first.status.code() == Some(255) {
         let stderr = String::from_utf8_lossy(&first.stderr);
         if is_mux_transport_error(&stderr) {
@@ -536,7 +575,10 @@ pub async fn sample_pane(host: &Host, target: &str, lines: usize) -> Result<Opti
                  tmux capture-pane -p -S 0 -t {t} 2>/dev/null"
             );
             let script = format!("sh -c {}", q(&inner)?);
-            let output = ssh_output(host, &script, SSH_TIMEOUT)
+            // Ride the STREAMING master, not the interactive one: this exec fires
+            // every watchdog tick per session, and on the interactive master it
+            // starved keystrokes (and, via remote tmux load, pane throughput).
+            let output = ssh_output_on(host, &script, SSH_TIMEOUT, SshMux::Streaming)
                 .await
                 .map_err(TmuxError::Io)?;
             if output.status.code() == Some(SAMPLE_GONE_EXIT) {
@@ -728,6 +770,59 @@ mod tests {
             assert!(
                 arg_strings(&cmd).contains(&"Compression=yes".to_string()),
                 "compression missing (mux={mux:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn ssh_command_key_pins_to_that_identity() {
+        // An explicit key must pin auth to THAT key. IdentitiesOnly stops ssh
+        // from offering every ssh-agent/default key BEFORE the configured one —
+        // which trips a hardened server's `MaxAuthTries` and gets the whole
+        // connection refused ("Too many authentication failures") before our key
+        // is ever tried. Forcing the publickey method keeps a failed key from
+        // silently falling through to a method that can't work under BatchMode.
+        let cmd = ssh_command(
+            &ssh_host(SshAuth::Key {
+                path: "/home/me/.ssh/id_ed25519".into(),
+            }),
+            "echo hi",
+        );
+        let args = arg_strings(&cmd);
+        assert!(
+            args.contains(&"IdentitiesOnly=yes".to_string()),
+            "key auth must set IdentitiesOnly=yes: {args:?}"
+        );
+        assert!(
+            args.contains(&"PreferredAuthentications=publickey".to_string()),
+            "key auth must force the publickey method: {args:?}"
+        );
+        // The configured key is still passed.
+        assert!(args.iter().any(|a| a == "/home/me/.ssh/id_ed25519"));
+    }
+
+    #[test]
+    fn ssh_command_agent_omits_identities_only() {
+        // IdentitiesOnly=yes with no `-i` would stop ssh-agent keys from being
+        // offered at all, breaking agent auth. The flag belongs ONLY on the
+        // explicit-key path.
+        let cmd = ssh_command(&ssh_host(SshAuth::Agent), "echo hi");
+        assert!(
+            !arg_strings(&cmd).contains(&"IdentitiesOnly=yes".to_string()),
+            "agent auth must not pin IdentitiesOnly (would suppress agent keys)"
+        );
+    }
+
+    #[test]
+    fn ssh_command_enables_tcp_keepalive() {
+        // Detect a dead peer (slept laptop, dropped link) at the TCP layer, not
+        // only via the app-level ServerAlive probe — so a stale pooled master is
+        // torn down and replaced instead of lingering. Every mux mode carries it.
+        for mux in [SshMux::Off, SshMux::Interactive, SshMux::Streaming] {
+            let cmd = ssh_command_opts(&ssh_host(SshAuth::Agent), "echo hi", mux);
+            assert!(
+                arg_strings(&cmd).contains(&"TCPKeepAlive=yes".to_string()),
+                "TCPKeepAlive missing (mux={mux:?})"
             );
         }
     }
