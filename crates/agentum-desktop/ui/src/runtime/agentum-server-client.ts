@@ -51,8 +51,25 @@ export type CreateSessionInput = {
 /** Bytes from the tmux pane (server → client) for a live terminal surface. */
 export type SessionStreamHandlers = {
   onData: (bytes: Uint8Array) => void
+  /** Fired only when the stream is GONE FOR GOOD: the session no longer exists
+   *  on the server (404) or our token was rejected (401/403). A transient drop
+   *  — a flaky `ssh tail`, sshd channel pressure, or a cold ControlMaster right
+   *  after the app restarts — does NOT fire this; it triggers `onReconnecting`
+   *  and an automatic retry, because the pane lives in tmux on the server and a
+   *  reconnect re-attaches to it. */
   onClose?: () => void
   onError?: (event: Event) => void
+  /** Fired once per reconnect attempt while the stream is dropped but
+   *  recoverable (`attempt` starts at 1). A successful reconnect makes the
+   *  server replay a fresh snapshot, repainting the pane — so callers only need
+   *  to show a transient "reconnecting…" hint, not tear anything down. */
+  onReconnecting?: (attempt: number) => void
+  /** Fired when a connection opens AFTER at least one drop — i.e. the stream
+   *  RECOVERED. A live re-attach proves the host is reachable again, which the
+   *  desktop uses to flip the SSH status badge back to connected and refresh
+   *  host-scoped surfaces (the file tree) that failed during the outage. Not
+   *  fired on the first connect, which is not a recovery. */
+  onReconnected?: () => void
 }
 
 /** Handle for an open terminal stream. */
@@ -179,11 +196,38 @@ export function deleteSession(id: string, force = false): Promise<void> {
   return request<void>(`/api/sessions/${id}${force ? '?force=true' : ''}`, { method: 'DELETE' })
 }
 
+/** Is this session permanently unstreamable — deleted (404) or our token
+ *  rejected (401/403)? The reconnect loop calls this to decide whether to keep
+ *  retrying. A network error reaching the API is NOT terminal (the API may be
+ *  momentarily unreachable while the remote pane is perfectly fine), so we
+ *  return false and let the WS reconnect keep trying in that case. */
+async function sessionGoneOrUnauthorized(id: string): Promise<boolean> {
+  try {
+    const url = await apiUrl(`/api/sessions/${id}`)
+    const res = await fetch(url, { headers: await authHeaders() })
+    return res.status === 401 || res.status === 403 || res.status === 404
+  } catch {
+    return false
+  }
+}
+
 /**
  * Open the bidirectional terminal stream for a session
- * (`WS /api/sessions/{id}/stream`). Server → client frames are raw pane bytes;
- * client → server frames are binary (keystrokes) or a `{"resize":{cols,rows}}`
- * text frame. The initial resize is sent on open so the server sizes the pane.
+ * (`WS /api/sessions/{id}/stream`), and KEEP IT OPEN across transient drops.
+ *
+ * Server → client frames are raw pane bytes; client → server frames are binary
+ * (keystrokes) or a `{"resize":{cols,rows}}` text frame. The current size is
+ * (re)sent on every connect so the server sizes the freshly-attached pane.
+ *
+ * Resilience — this is the whole reason the TUI survives SSH hiccups and the
+ * desktop used to not: the pane lives in tmux on the server, so a dropped WS is
+ * recoverable. We transparently reconnect with capped exponential backoff and
+ * the server re-attaches and repaints the current pane (the remote path always
+ * re-snapshots; the local path replays the resume delta). We only give up (fire
+ * `onClose`) when the session is genuinely gone or our token is rejected. The
+ * returned handle is STABLE across reconnects — `send`/`resize` always target
+ * the live socket — so the caller binds its xterm listeners exactly once.
+ * Mirrors the TUI's `open_terminal_stream` reconnect loop (terminal/api.rs).
  */
 export async function openSessionStream(
   id: string,
@@ -195,31 +239,143 @@ export async function openSessionStream(
 ): Promise<SessionStream> {
   const { token } = await getServerEndpoint()
   const base = await wsUrl(`/api/sessions/${id}/stream`)
-  const url = token ? `${base}?token=${encodeURIComponent(token)}` : base
-  const ws = new WebSocket(url)
-  ws.binaryType = 'arraybuffer'
+
+  let ws: WebSocket | null = null
+  let disposed = false
+  // After the first successful attach, ask the server to replay only the bytes
+  // we missed instead of a full snapshot. Local sessions honor this via the
+  // resume checkpoint; the remote path ignores the flag and re-snapshots — a
+  // clean repaint either way.
+  let connectedOnce = false
+  let attempt = 0
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let stableTimer: ReturnType<typeof setTimeout> | null = null
+  // Latest size the caller asked for, re-sent on every (re)connect.
+  let lastCols = initial.cols
+  let lastRows = initial.rows
 
   const sendResize = (cols: number, rows: number): void => {
-    if (ws.readyState === WebSocket.OPEN) {
+    lastCols = cols
+    lastRows = rows
+    if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ resize: { cols, rows } }))
     }
   }
 
-  ws.addEventListener('open', () => sendResize(initial.cols, initial.rows))
-  ws.addEventListener('message', (event) => {
-    if (event.data instanceof ArrayBuffer) {
-      // Inbound pane bytes — meter before handing off to the renderer.
-      recordHostIo(hostKey, { in: event.data.byteLength })
-      handlers.onData(new Uint8Array(event.data))
+  const streamUrl = (): string => {
+    const params = new URLSearchParams()
+    if (token) {
+      params.set('token', token)
     }
-    // Text frames are control/no-op for the renderer; ignore.
-  })
-  ws.addEventListener('close', () => handlers.onClose?.())
-  ws.addEventListener('error', (event) => handlers.onError?.(event))
+    if (connectedOnce) {
+      params.set('resume', 'true')
+    }
+    const qs = params.toString()
+    return qs ? `${base}?${qs}` : base
+  }
+
+  // Capped exponential backoff with jitter — same shape as the TUI's loop.
+  const backoffMs = (n: number): number =>
+    Math.min(5000, 250 * 2 ** Math.min(n - 1, 5)) + Math.floor(Math.random() * 250)
+
+  const clearTimers = (): void => {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    if (stableTimer) {
+      clearTimeout(stableTimer)
+      stableTimer = null
+    }
+  }
+
+  const scheduleReconnect = (): void => {
+    if (disposed || reconnectTimer) {
+      return
+    }
+    attempt += 1
+    handlers.onReconnecting?.(attempt)
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      if (disposed) {
+        return
+      }
+      // The browser WS API hides a failed upgrade's HTTP status, so the close
+      // event alone can't separate "session deleted / bad token" (give up) from
+      // "network blip" (keep trying). Probe the REST endpoint, which DOES expose
+      // the status — mirrors the TUI giving up on 401/403/404.
+      void sessionGoneOrUnauthorized(id).then((fatal) => {
+        if (disposed) {
+          return
+        }
+        if (fatal) {
+          disposed = true
+          clearTimers()
+          handlers.onClose?.()
+          return
+        }
+        connect()
+      })
+    }, backoffMs(attempt))
+  }
+
+  const connect = (): void => {
+    if (disposed) {
+      return
+    }
+    const sock = new WebSocket(streamUrl())
+    sock.binaryType = 'arraybuffer'
+    ws = sock
+
+    sock.addEventListener('open', () => {
+      // `attempt >= 1` means this open follows ≥1 drop → we RECOVERED. Fire
+      // before the stable timer resets `attempt`, so the desktop can re-mark the
+      // host connected and refresh surfaces that failed during the outage. The
+      // first connect has `attempt === 0`, so recovery never fires spuriously.
+      if (attempt >= 1) {
+        handlers.onReconnected?.()
+      }
+      connectedOnce = true
+      sendResize(lastCols, lastRows)
+      // Only treat this as a healthy connection (resetting backoff) once it has
+      // held briefly — otherwise a flapping link resets backoff on every open
+      // and reconnects in a tight loop.
+      if (stableTimer) {
+        clearTimeout(stableTimer)
+      }
+      stableTimer = setTimeout(() => {
+        attempt = 0
+      }, 3000)
+    })
+    sock.addEventListener('message', (event) => {
+      if (event.data instanceof ArrayBuffer) {
+        // Inbound pane bytes — meter before handing off to the renderer.
+        recordHostIo(hostKey, { in: event.data.byteLength })
+        handlers.onData(new Uint8Array(event.data))
+      }
+      // Text frames are control/no-op for the renderer; ignore.
+    })
+    sock.addEventListener('close', () => {
+      if (sock !== ws) {
+        return // superseded by a newer socket
+      }
+      if (stableTimer) {
+        clearTimeout(stableTimer)
+        stableTimer = null
+      }
+      if (disposed) {
+        return // caller tore us down; not an error
+      }
+      scheduleReconnect()
+    })
+    sock.addEventListener('error', (event) => handlers.onError?.(event))
+  }
+
+  connect()
 
   return {
     send: (data) => {
-      if (ws.readyState === WebSocket.OPEN) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
         const frame = typeof data === 'string' ? new TextEncoder().encode(data) : data
         // Outbound keystrokes/data over the same WS — meter the wire bytes.
         recordHostIo(hostKey, { out: frame.byteLength })
@@ -227,6 +383,10 @@ export async function openSessionStream(
       }
     },
     resize: sendResize,
-    close: () => ws.close()
+    close: () => {
+      disposed = true
+      clearTimers()
+      ws?.close()
+    }
   }
 }

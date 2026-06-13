@@ -5,6 +5,10 @@
 // PTY owned by the desktop process.
 import type { Terminal } from '@xterm/xterm'
 import { openSessionStream, type SessionStream } from './agentum-server-client'
+import {
+  markHostConnectedFromHostKey,
+  markHostReconnectingFromHostKey
+} from './server-host-client'
 import { extractAllOscTitles } from '../../../shared/agent-detection'
 
 export type ServerSessionTerminalBinding = {
@@ -90,7 +94,29 @@ export async function bindServerSessionTerminal(
         scanForTitles(bytes)
         opts?.onActivity?.()
       },
-      onClose: () => term.write('\r\n\x1b[2m[agentum: session stream closed]\x1b[0m\r\n')
+      // Permanent close: the session is gone or our token was rejected. A
+      // transient drop reconnects silently (onReconnecting) instead of this.
+      onClose: () => term.write('\r\n\x1b[2m[agentum: session stream closed]\x1b[0m\r\n'),
+      // First drop of a reconnect cycle: show one dim hint. A successful
+      // reconnect repaints the pane (the server replays a snapshot) and wipes
+      // this line; printing only on attempt 1 keeps a long outage from spamming
+      // the scrollback. `attempt` resets after a connection holds, so a later
+      // independent drop hints again.
+      onReconnecting: (attempt) => {
+        if (attempt === 1) {
+          term.write('\r\n\x1b[2m[agentum: connection lost — reconnecting…]\x1b[0m\r\n')
+          // Reflect the outage in the SSH badge for this host (and arm the next
+          // recovery's generation bump). Keyed off hostKey; no-op for local.
+          void markHostReconnectingFromHostKey(opts?.hostKey)
+        }
+      },
+      // Recovered: the re-attach proves the host is reachable, so re-mark it
+      // connected. That repaints the SSH badges and bumps sshConnectedGeneration,
+      // re-triggering the file explorer's retry — fixing the bug where the
+      // terminal reconnected but the sidebar/tree stayed stuck on the outage.
+      onReconnected: () => {
+        void markHostConnectedFromHostKey(opts?.hostKey)
+      }
     },
     opts?.hostKey
   )

@@ -174,6 +174,70 @@ export async function connectSshTargetViaServer(
   }
 }
 
+/** Extract the native SSH target id from a session's hostKey
+ *  (`'ssh:<connectionId>'`). The connectionId IS the target id (see
+ *  resolveServerHostIdForConnection), which is also how `sshConnectionStates` is
+ *  keyed — so a stream's recovery can reconcile the badge with no host-id round
+ *  trip. Returns null for local sessions or a malformed key. */
+function sshConnectionIdFromHostKey(hostKey: string | undefined): string | null {
+  if (!hostKey || !hostKey.startsWith('ssh:')) {
+    return null
+  }
+  const id = hostKey.slice('ssh:'.length)
+  return id || null
+}
+
+/**
+ * Mark the SSH target behind a session's hostKey CONNECTED after its stream
+ * recovered from a transient drop. A live re-attach is itself the reachability
+ * proof — no extra probe needed — so this mirrors connectSshTargetViaServer's
+ * success state without the network round trip. The flip to 'connected' both
+ * repaints the status-bar/sidebar badges and bumps sshConnectedGeneration, which
+ * re-fires the file explorer's failed-load retry — so a recovered host's tree
+ * refreshes instead of staying stuck on the outage's error (the reported bug).
+ * No-op for local sessions.
+ */
+export async function markHostConnectedFromHostKey(hostKey: string | undefined): Promise<void> {
+  const connectionId = sshConnectionIdFromHostKey(hostKey)
+  if (!connectionId) {
+    return
+  }
+  const { useAppStore } = await import('@/store')
+  useAppStore.getState().setSshConnectionState(connectionId, {
+    targetId: connectionId,
+    status: 'connected',
+    error: null,
+    reconnectAttempt: 0
+  })
+}
+
+/**
+ * Mark the SSH target behind a session's hostKey RECONNECTING when its stream
+ * drops — but only when we currently consider it connected. Two reasons: it
+ * keeps the badge honest during an outage, and it makes the NEXT recovery a real
+ * 'reconnecting' → 'connected' transition so sshConnectedGeneration bumps again.
+ * Without it, a second outage would be a no-op 'connected' → 'connected' write
+ * that never re-triggers the file-tree retry. We never fabricate a badge for a
+ * host the UI never tracked, nor stomp an in-flight explicit connect.
+ */
+export async function markHostReconnectingFromHostKey(hostKey: string | undefined): Promise<void> {
+  const connectionId = sshConnectionIdFromHostKey(hostKey)
+  if (!connectionId) {
+    return
+  }
+  const { useAppStore } = await import('@/store')
+  const store = useAppStore.getState()
+  if (store.sshConnectionStates.get(connectionId)?.status !== 'connected') {
+    return
+  }
+  store.setSshConnectionState(connectionId, {
+    targetId: connectionId,
+    status: 'reconnecting',
+    error: null,
+    reconnectAttempt: 1
+  })
+}
+
 /** `POST /api/hosts` — register an SSH host. Auth defaults to agent/key on the
  *  server; we pass an explicit key path when the native target has one so the
  *  remote exec uses the same identity the user configured. */

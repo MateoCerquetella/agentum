@@ -33,7 +33,26 @@ use uuid::Uuid;
 /// negligible against the value of a snappy "is my agent done yet"
 /// indicator.
 const TICK: Duration = Duration::from_secs(1);
+
+/// Pane-sample cadence for REMOTE (SSH) sessions. Each tick is an `ssh` exec on
+/// the host's ControlMaster; at the local 1 s cadence, N open remote sessions
+/// fired N `capture-pane`s/sec at one remote tmux server and N channel opens at
+/// the SSH master — which throttled both pane output (~B/s) and keystroke
+/// delivery. 3 s cuts that load ~3× while keeping the agent-status dot's lag
+/// imperceptible. Local sampling is a cheap process spawn with no channel
+/// contention, so it stays at [`TICK`].
+const REMOTE_TICK: Duration = Duration::from_secs(3);
+
 const COMPACT_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+
+/// How often to pane-sample a session's host: slower for SSH (each tick is a
+/// remote `ssh` exec sharing the host's ControlMaster + tmux server) than local.
+fn sample_tick(kind: &agentum_core::HostKind) -> Duration {
+    match kind {
+        agentum_core::HostKind::Ssh { .. } => REMOTE_TICK,
+        agentum_core::HostKind::Local => TICK,
+    }
+}
 
 /// For agents that don't declare a `busy_signature` (codex, cursor, gemini,
 /// hermes — anything other than Claude), we fall back to change-based
@@ -241,7 +260,9 @@ async fn watch_session(
     // unaffected — its busy_signature still drives classification.
     let mut last_bottom_hash: Option<u64> = None;
     let mut last_change_at = Instant::now();
-    let mut tick = interval(TICK);
+    // Slower sample cadence on SSH hosts: the per-tick `sample_pane` is a remote
+    // `ssh` exec, so 1 s × N sessions flooded the host (see REMOTE_TICK).
+    let mut tick = interval(sample_tick(&host.kind));
     // Drop the immediate first tick so we don't fire before the pane is alive.
     tick.tick().await;
 
@@ -971,6 +992,21 @@ async fn emit(bus: &broadcast::Sender<Event>, store: &Store, ev: Event) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_sessions_sample_slower_than_local() {
+        use agentum_core::{HostKind, SshAuth};
+        let ssh = HostKind::Ssh {
+            user: "u".into(),
+            hostname: "h".into(),
+            port: 22,
+            auth: SshAuth::Agent,
+        };
+        // Local stays tight; SSH backs off so N sessions don't flood the host.
+        assert_eq!(sample_tick(&HostKind::Local), TICK);
+        assert_eq!(sample_tick(&ssh), REMOTE_TICK);
+        assert!(sample_tick(&ssh) > sample_tick(&HostKind::Local));
+    }
 
     #[test]
     fn status_rank_orders_todo_doing_done() {
