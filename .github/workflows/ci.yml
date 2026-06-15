@@ -44,7 +44,28 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
-            libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+            libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libasound2-dev
+      # Windows desktop build deps: MSVC (puts cl.exe on PATH) + nasm for the
+      # ring/aws-lc assembly, and override the repo .cargo/config CC=/usr/bin/gcc
+      # pin (a unix-only local-dev workaround) so cc-rs uses MSVC, not a missing
+      # gcc.
+      - name: Set up MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Install nasm (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+      - name: Use MSVC compiler instead of the gcc pin (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "CC=cl" >> "$GITHUB_ENV"
+      # macOS: stage the sherpa/onnxruntime dylibs where tauri.conf's frameworks
+      # (and build.rs's tauri_build check) expect them — target/release/ — so the
+      # desktop crate compiles under clippy/test. A native release build of just
+      # sherpa-rs drops them straight there.
+      - name: Stage sherpa dylibs (macOS)
+        if: runner.os == 'macOS'
+        run: cargo build --release -p sherpa-rs
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.14"
