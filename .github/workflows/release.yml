@@ -129,18 +129,22 @@ jobs:
         # Linux builds the .deb here (reliable); the AppImage is a separate
         # best-effort step below since its toolchain is finicky on CI.
         #
-        # macOS dylib staging: tauri.conf's macOS bundle `frameworks` point at
-        # ../../target/release/libsherpa-*.dylib (+ libonnxruntime), but a
-        # `--target` build emits those dylibs into target/<triple>/release/. The
-        # bundle step looks only at the literal target/release/ path, so it aborted
-        # with "Library not found" and broke the v0.14.0 release (works locally
-        # only because a plain `cargo build` uses target/release/). Compile first,
-        # copy the dylibs to where the frameworks paths expect them, THEN bundle.
-        # The tauri build below recompiles incrementally (cache hit). No-op on
-        # Linux (different bundle, no frameworks).
+        # macOS dylib staging (the blocker that failed v0.14.0/.1/.2): tauri.conf's
+        # macOS `frameworks` AND build.rs's `tauri_build::build()` validate the
+        # paths ../../target/release/libsherpa-*.dylib (+ libonnxruntime), but a
+        # `--target` cross-build emits those dylibs into target/<triple>/release/,
+        # so the frameworks check aborts with "Library not found".
+        #
+        # Produce the dylibs first by building ONLY the `sherpa-rs` dep: that runs
+        # sherpa-rs-sys's build script (which drops the dylibs in the target dir)
+        # WITHOUT compiling agentum-desktop — whose build.rs would hit the same
+        # frameworks check, and whose generate_context! needs ui/dist (not built
+        # until `cargo tauri build` runs beforeBuildCommand). Then copy the dylibs
+        # to where the frameworks expect them and bundle. Linux has no frameworks
+        # and beforeBuildCommand builds ui/dist, so it just runs the bundle.
         run: |
-          cargo build --release --target ${{ matrix.target }} -p agentum-desktop
           if [[ "${{ matrix.target }}" == *apple-darwin* ]]; then
+            cargo build --release --target ${{ matrix.target }} -p sherpa-rs
             mkdir -p ../../target/release
             for lib in libsherpa-onnx-c-api.dylib libsherpa-onnx-cxx-api.dylib libonnxruntime.1.17.1.dylib; do
               cp -f "../../target/${{ matrix.target }}/release/$lib" "../../target/release/$lib"
