@@ -4,6 +4,35 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.3] — 2026-06-15
+
+### Added
+- **Windows desktop build (x64).** `x86_64-pc-windows-msvc` now builds an NSIS
+  `.exe` installer alongside macOS `.dmg` and Linux `.deb`. Note: the daemon
+  shells out to `tmux` (no native Windows port), so the Windows app is a remote
+  client — it drives SSH hosts; local sessions need WSL. (ARM64 Windows is a
+  tracked follow-up — #13.)
+- **Open a terminal from the sidebar host header.** A hover-revealed button on
+  each host group opens a terminal scoped to that host, reusing the existing
+  terminal path (#6).
+
+### Fixed
+- **Markdown / file-open over SSH hosts.** `listRuntimeFiles` /
+  `listRuntimeMarkdownDocuments` / `statRuntimePath` had no SSH-host fallback, so
+  QuickOpen returned empty on a remote host and you couldn't open the `.md`. They
+  now route through the embedded server's `/api/fs/entries` (over SSH) (#9).
+- **Ports panel showed nothing.** The local `workspace_ports_scan` backend was a
+  hardcoded stub; implemented an `lsof`-based scan that attributes listeners to
+  worktrees by cwd, classifies external ports, and can kill them (#12).
+
+### CI
+- `ci.yml` is green again (long-standing `cargo fmt` drift cleared; added
+  `libasound2-dev`, sherpa-dylib staging, and two stale `AppState` test fixes;
+  added a Windows job).
+- `release.yml`: Windows toolchain (MSVC + nasm + `CC=cl`), `shell: bash` for the
+  bundle step, and dropped git-bash's `link.exe` so the MSVC linker wins; the
+  publish job is gated to tag pushes so dispatches can test-build without shipping.
+
 ## [0.14.2] — 2026-06-15
 
 ### Fixed
