@@ -257,7 +257,11 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           body_path: release-notes.md
-          fail_on_unmatched_files: true
+          # The AppImage is best-effort (its toolchain is flaky on CI), so it may
+          # be absent — don't hard-fail the whole release when an optional glob
+          # matches nothing. The required artifacts (.dmg/.deb/tarballs) are
+          # already gated by the build jobs, which must succeed to reach here.
+          fail_on_unmatched_files: false
           files: |
             dist/*.tar.gz
             dist/*.dmg
