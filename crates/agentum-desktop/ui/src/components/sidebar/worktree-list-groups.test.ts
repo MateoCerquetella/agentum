@@ -17,6 +17,7 @@ import {
   hostKeysWithOpenTmux,
   LOCAL_HOST_KEY,
   hostKeyForRepo,
+  pickWorktreeForHost,
   PINNED_GROUP_KEY,
   type HostTmuxSession,
   type Row,
@@ -1548,5 +1549,49 @@ describe('WorktreeList header styles', () => {
     expect(source).toContain('resolveProjectGroupHeaderColor({')
     expect(source).toContain('headerKey: row.key')
     expect(source).toContain('color={repoHeaderColor}')
+  })
+})
+
+describe('pickWorktreeForHost', () => {
+  const localMain: Worktree = { ...worktree, id: 'local-main', isMainWorktree: true }
+  const localChild: Worktree = { ...worktree, id: 'local-child', isMainWorktree: false }
+  const sshRepo: Repo = { ...repo, id: 'repo-ssh', connectionId: 'conn-1' }
+  const sshChild: Worktree = {
+    ...worktree,
+    id: 'ssh-child',
+    repoId: sshRepo.id,
+    isMainWorktree: false
+  }
+  const sshMain: Worktree = {
+    ...worktree,
+    id: 'ssh-main',
+    repoId: sshRepo.id,
+    isMainWorktree: true
+  }
+  const map = new Map<string, Repo>([
+    [repo.id, repo],
+    [sshRepo.id, sshRepo]
+  ])
+  const all = [localChild, localMain, sshChild, sshMain]
+
+  it('returns null when the host has no worktrees', () => {
+    expect(pickWorktreeForHost('ssh:nope', all, map, null)).toBeNull()
+  })
+
+  it('prefers the active worktree when it lives on the host', () => {
+    expect(pickWorktreeForHost(LOCAL_HOST_KEY, all, map, 'local-child')?.id).toBe('local-child')
+  })
+
+  it('falls back to the main worktree when the active one is on another host', () => {
+    // active worktree is on the ssh host, so the local pick ignores it
+    expect(pickWorktreeForHost(LOCAL_HOST_KEY, all, map, 'ssh-main')?.id).toBe('local-main')
+  })
+
+  it('buckets ssh worktrees under their connection host key', () => {
+    expect(pickWorktreeForHost('ssh:conn-1', all, map, null)?.id).toBe('ssh-main')
+  })
+
+  it('falls back to the first worktree when none is main', () => {
+    expect(pickWorktreeForHost(LOCAL_HOST_KEY, [localChild], map, null)?.id).toBe('local-child')
   })
 })

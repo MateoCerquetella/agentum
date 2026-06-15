@@ -247,6 +247,35 @@ export function hostKeyForRepo(repo: Repo | undefined): string {
   return repo?.connectionId ? `ssh:${repo.connectionId}` : LOCAL_HOST_KEY
 }
 
+/**
+ * Pick the worktree to anchor a host-scoped action (e.g. "open terminal here")
+ * to. Host headers don't own a workdir of their own — a terminal must run in
+ * some worktree on that host — so we resolve a sensible representative:
+ *   1. the currently-active worktree, when it already lives on this host (so the
+ *      terminal opens right where the user is looking), then
+ *   2. the host's primary/main worktree (the canonical clone directory), then
+ *   3. the first worktree bucketed under the host.
+ * Returns `null` when the host has no worktrees (no place to open a terminal).
+ */
+export function pickWorktreeForHost(
+  hostKey: string,
+  worktrees: readonly Worktree[],
+  repoMap: ReadonlyMap<string, Repo>,
+  activeWorktreeId: string | null
+): Worktree | null {
+  const onHost = worktrees.filter(
+    (worktree) => hostKeyForRepo(repoMap.get(worktree.repoId)) === hostKey
+  )
+  if (onHost.length === 0) {
+    return null
+  }
+  const active = onHost.find((worktree) => worktree.id === activeWorktreeId)
+  if (active) {
+    return active
+  }
+  return onHost.find((worktree) => worktree.isMainWorktree) ?? onHost[0]
+}
+
 /** Collapse-state key for a host header. Reuses the shared `collapsedGroups`
  *  set so host collapse rides the existing toggle/scroll-anchor machinery. */
 export function getHostHeaderKey(hostKey: string): string {

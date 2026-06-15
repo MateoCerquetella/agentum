@@ -40,6 +40,8 @@ const fsCreateFile = vi.fn()
 const fsRename = vi.fn()
 const fsDeletePath = vi.fn()
 const fsStat = vi.fn()
+const fsListFiles = vi.fn()
+const fsListMarkdownDocuments = vi.fn()
 const fsImportExternalPaths = vi.fn()
 const fsStageExternalPathsForRuntimeUpload = vi.fn()
 const runtimeEnvironmentCall = vi.fn()
@@ -61,6 +63,8 @@ beforeEach(() => {
   fsRename.mockReset()
   fsDeletePath.mockReset()
   fsStat.mockReset()
+  fsListFiles.mockReset()
+  fsListMarkdownDocuments.mockReset()
   fsImportExternalPaths.mockReset()
   fsStageExternalPathsForRuntimeUpload.mockReset()
   runtimeEnvironmentCall.mockReset()
@@ -93,6 +97,8 @@ beforeEach(() => {
         rename: fsRename,
         deletePath: fsDeletePath,
         stat: fsStat,
+        listFiles: fsListFiles,
+        listMarkdownDocuments: fsListMarkdownDocuments,
         importExternalPaths: fsImportExternalPaths,
         stageExternalPathsForRuntimeUpload: fsStageExternalPathsForRuntimeUpload
       },
@@ -428,6 +434,122 @@ describe('runtime file client', () => {
 
     expect(fsListEntries).not.toHaveBeenCalled()
     expect(fsReadDir).toHaveBeenCalledWith({ dirPath: '/srv/app', connectionId: 'ssh-unknown' })
+  })
+
+  it('walks a remote SSH workspace for QuickOpen via the host-aware entries endpoint', async () => {
+    vi.mocked(resolveServerHostIdForConnection).mockResolvedValue('host-9')
+    vi.mocked(fsListEntries).mockImplementation(async (path) => {
+      if (path === '/srv/app') {
+        return {
+          path: '/srv/app',
+          parent: '/srv',
+          entries: [
+            { name: '.git', path: '/srv/app/.git', kind: 'dir' as const },
+            { name: 'src', path: '/srv/app/src', kind: 'dir' as const },
+            { name: 'README.md', path: '/srv/app/README.md', kind: 'file' as const }
+          ]
+        }
+      }
+      return {
+        path: '/srv/app/src',
+        parent: '/srv/app',
+        entries: [{ name: 'index.ts', path: '/srv/app/src/index.ts', kind: 'file' as const }]
+      }
+    })
+
+    await expect(
+      listRuntimeFiles(
+        {
+          settings: { activeRuntimeEnvironmentId: null },
+          worktreeId: 'wt-1',
+          worktreePath: '/srv/app',
+          connectionId: 'ssh-7'
+        },
+        { rootPath: '/srv/app' }
+      )
+    ).resolves.toEqual(['/srv/app/README.md', '/srv/app/src/index.ts'])
+
+    // The .git directory is skipped, mirroring the native walk.
+    expect(fsListEntries).not.toHaveBeenCalledWith('/srv/app/.git', expect.anything())
+    expect(fsListFiles).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the native local file walk when the SSH connection cannot resolve a host', async () => {
+    vi.mocked(resolveServerHostIdForConnection).mockResolvedValue(null)
+    fsListFiles.mockResolvedValue(['/srv/app/a.ts'])
+
+    await expect(
+      listRuntimeFiles(
+        {
+          settings: { activeRuntimeEnvironmentId: null },
+          worktreeId: 'wt-1',
+          worktreePath: '/srv/app',
+          connectionId: 'ssh-unknown'
+        },
+        { rootPath: '/srv/app' }
+      )
+    ).resolves.toEqual(['/srv/app/a.ts'])
+
+    expect(fsListEntries).not.toHaveBeenCalled()
+    expect(fsListFiles).toHaveBeenCalled()
+  })
+
+  it('lists markdown documents on a remote SSH workspace via the host-aware entries endpoint', async () => {
+    vi.mocked(resolveServerHostIdForConnection).mockResolvedValue('host-9')
+    vi.mocked(fsListEntries).mockResolvedValue({
+      path: '/srv/app',
+      parent: '/srv',
+      entries: [
+        { name: 'README.md', path: '/srv/app/README.md', kind: 'file' as const },
+        { name: 'notes.markdown', path: '/srv/app/notes.markdown', kind: 'file' as const },
+        { name: 'index.ts', path: '/srv/app/index.ts', kind: 'file' as const }
+      ]
+    })
+
+    await expect(
+      listRuntimeMarkdownDocuments(
+        {
+          settings: { activeRuntimeEnvironmentId: null },
+          worktreeId: 'wt-1',
+          worktreePath: '/srv/app',
+          connectionId: 'ssh-7'
+        },
+        '/srv/app'
+      )
+    ).resolves.toEqual([
+      { filePath: '/srv/app/README.md', relativePath: 'README.md', basename: 'README.md', name: 'README' },
+      {
+        filePath: '/srv/app/notes.markdown',
+        relativePath: 'notes.markdown',
+        basename: 'notes.markdown',
+        name: 'notes'
+      }
+    ])
+    expect(fsListMarkdownDocuments).not.toHaveBeenCalled()
+  })
+
+  it('stats a remote SSH workspace path via the parent listing', async () => {
+    vi.mocked(resolveServerHostIdForConnection).mockResolvedValue('host-9')
+    vi.mocked(fsListEntries).mockResolvedValue({
+      path: '/srv/app/docs',
+      parent: '/srv/app',
+      entries: [{ name: 'guide.md', path: '/srv/app/docs/guide.md', kind: 'file' as const }]
+    })
+
+    await expect(
+      statRuntimePath(
+        {
+          settings: { activeRuntimeEnvironmentId: null },
+          worktreeId: 'wt-1',
+          worktreePath: '/srv/app',
+          connectionId: 'ssh-7'
+        },
+        '/srv/app/docs/guide.md'
+      )
+    ).resolves.toEqual({ size: 0, isDirectory: false, mtime: 0 })
+
+    expect(fsListEntries).toHaveBeenCalledWith('/srv/app/docs', { hidden: true, hostId: 'host-9' })
+    expect(fsStat).not.toHaveBeenCalled()
   })
 
   it('keeps local workspaces (no connectionId) on the native directory read', async () => {

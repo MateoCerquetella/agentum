@@ -81,7 +81,8 @@ import {
   groupRowsByHost,
   getHostHeaderKey,
   hostKeyForRepo,
-  hostKeysWithOpenTmux
+  hostKeysWithOpenTmux,
+  pickWorktreeForHost
 } from './worktree-list-groups'
 import { HostGroupHeader } from './HostGroupHeader'
 import { SessionActivityCard } from './SessionActivityCard'
@@ -855,6 +856,29 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   const [documentVisibilityRevision, setDocumentVisibilityRevision] = useState(0)
   const [highlightedRevealWorktreeId, setHighlightedRevealWorktreeId] = useState<string | null>(
     null
+  )
+  // Open a terminal scoped to a sidebar host header. Host headers don't own a
+  // workdir, so resolve a representative worktree on the host, activate it
+  // (which sets activeWorktreeId synchronously), then reuse the same terminal
+  // creation path as Cmd+J / the titlebar `+`. Returns false to callers when no
+  // worktree exists on the host so the header can hide the affordance.
+  const handleOpenTerminalForHost = useCallback(
+    (hostKey: string): boolean => {
+      const target = pickWorktreeForHost(hostKey, worktrees, repoMap, activeWorktreeId)
+      if (!target) {
+        return false
+      }
+      activateAndRevealWorktree(target.id)
+      const state = useAppStore.getState()
+      const targetGroupId =
+        state.activeGroupIdByWorktree[target.id] ?? state.groupsByWorktree[target.id]?.[0]?.id
+      if (!targetGroupId) {
+        return false
+      }
+      void state.openNewTerminalTabInActiveWorkspace(targetGroupId)
+      return true
+    },
+    [worktrees, repoMap, activeWorktreeId]
   )
   const worktreeDragSessionRef = useRef<WorktreeSidebarDragSession | null>(null)
   const worktreePointerDragRef = useRef<WorktreePointerDrag | null>(null)
@@ -2595,6 +2619,13 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                     count={row.count}
                     collapsed={collapsedGroups.has(row.key)}
                     onToggle={() => toggleGroupWithScrollAnchor(row.key)}
+                    onOpenTerminal={
+                      // Hide the affordance for hosts with no worktree to anchor
+                      // a terminal to (resolved against the same host bucketing).
+                      pickWorktreeForHost(row.host.key, worktrees, repoMap, activeWorktreeId)
+                        ? () => handleOpenTerminalForHost(row.host.key)
+                        : undefined
+                    }
                   />
                 </div>
               )

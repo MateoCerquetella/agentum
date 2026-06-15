@@ -17,12 +17,12 @@ import {
   unwrapRuntimeRpcResult
 } from './runtime-rpc-client'
 import type { RuntimeRpcResponse } from '../../../shared/runtime-rpc-envelope'
-import { basename, joinPath, normalizeRelativePath } from '@/lib/path'
+import { basename, dirname, joinPath, normalizeRelativePath } from '@/lib/path'
 import {
   isWindowsAbsolutePathLike,
   relativePathInsideRoot
 } from '../../../shared/cross-platform-path'
-import { fsListEntries, fsReadFile } from './server-fs-client'
+import { fsListEntries, fsReadFile, type FsFileEntry } from './server-fs-client'
 import { resolveServerHostIdForConnection } from './server-host-client'
 
 export type RuntimeReadableFileContent = {
@@ -261,6 +261,110 @@ async function readRemoteSshDirectory(
     isDirectory: entry.kind === 'dir',
     isSymlink: entry.kind === 'symlink'
   }))
+}
+
+/**
+ * Resolve the SSH server host id for a desktop SSH workspace, or `null` when
+ * this isn't one (no connectionId, a runtime environment owns the transport, or
+ * the connection can't be mapped). Shared by the host-aware fallbacks for the
+ * file-tree-walking ops (`listFiles`, `listMarkdownDocuments`, `stat`) that have
+ * no dedicated server route and otherwise run the *native* local fs commands —
+ * which ignore `connectionId` and so scan the remote path on the *local* machine
+ * (→ empty results / ENOENT). See `crates/agentum-desktop/src/commands/fs.rs`
+ * (`let _ = connection_id; // SSH transport not ported`).
+ */
+async function resolveRemoteSshHostId(
+  context: RuntimeFileOperationArgs
+): Promise<string | null> {
+  if (!context.connectionId || getActiveRuntimeTarget(context.settings).kind === 'environment') {
+    return null
+  }
+  return resolveServerHostIdForConnection(context.connectionId)
+}
+
+/**
+ * Recursively list a remote-SSH directory's files via the host-aware
+ * `/api/fs/entries` endpoint (the only file-listing route that runs over SSH).
+ * Mirrors the native `fs_list_files` walk (skip `.git`, honor exclude prefixes)
+ * so QuickOpen and markdown-doc discovery work in SSH workspaces, where the
+ * native walk would scan the remote path on the local machine and find nothing.
+ */
+async function walkRemoteSshFiles(
+  hostId: string,
+  rootPath: string,
+  excludePaths: string[]
+): Promise<FsFileEntry[]> {
+  const files: FsFileEntry[] = []
+  const stack: string[] = [rootPath]
+  while (stack.length > 0) {
+    const dir = stack.pop()!
+    let listing: Awaited<ReturnType<typeof fsListEntries>>
+    try {
+      listing = await fsListEntries(dir, { hidden: true, hostId })
+    } catch {
+      // Match the native walk: an unreadable directory is skipped, not fatal.
+      continue
+    }
+    for (const entry of listing.entries) {
+      if (entry.name === '.git') {
+        continue
+      }
+      if (excludePaths.some((exclude) => entry.path.includes(exclude))) {
+        continue
+      }
+      if (entry.kind === 'dir') {
+        stack.push(entry.path)
+      } else if (entry.kind === 'file') {
+        files.push(entry)
+      }
+    }
+  }
+  return files
+}
+
+/**
+ * Stat a path on a desktop SSH workspace's host via the host-aware
+ * `/api/fs/entries` (no dedicated host `stat` route exists). Lists the parent
+ * directory and matches the entry by name. Returns `null` when this isn't an SSH
+ * workspace (caller falls back to the native local stat); resolves with
+ * `isDirectory`/existence (size and mtime are unavailable over this route, so
+ * they're `0` — callers only use them for navigation existence checks). Throws
+ * "not found" when the entry is absent so `runtimePathExists` reports false.
+ */
+async function statRemoteSshPath(
+  context: RuntimeFileOperationArgs,
+  absolutePath: string
+): Promise<{ size: number; isDirectory: boolean; mtime: number } | null> {
+  const hostId = await resolveRemoteSshHostId(context)
+  if (!hostId) {
+    return null
+  }
+  const parent = dirname(absolutePath)
+  const name = basename(absolutePath)
+  const listing = await fsListEntries(parent, { hidden: true, hostId })
+  const match = listing.entries.find((entry) => entry.name === name)
+  if (!match) {
+    throw new Error(`no such file: ${absolutePath}`)
+  }
+  return { size: 0, isDirectory: match.kind === 'dir', mtime: 0 }
+}
+
+/**
+ * Build a `MarkdownDocument` from a remote-SSH file entry, mirroring the native
+ * `fs_list_markdown_documents` shape (relativePath from the worktree root,
+ * basename with extension, name without). Paths are normalized to `/` so they
+ * match what the markdown-doc-link resolver expects regardless of host OS.
+ */
+function remoteSshFileToMarkdownDocument(entry: FsFileEntry, rootPath: string): MarkdownDocument {
+  const name = basename(entry.path)
+  const relative = relativePathInsideRoot(rootPath, entry.path)
+  const dotIndex = name.lastIndexOf('.')
+  return {
+    filePath: entry.path,
+    relativePath: relative ?? entry.path,
+    basename: name,
+    name: dotIndex > 0 ? name.slice(0, dotIndex) : name
+  }
 }
 
 export async function writeRuntimeFile(
@@ -619,6 +723,14 @@ export async function listRuntimeFiles(
 ): Promise<string[]> {
   const target = getActiveRuntimeTarget(context.settings)
   if (target.kind !== 'environment' || !context.worktreeId) {
+    // SSH workspaces (connectionId, no environment) must list over the host;
+    // the native fs.listFiles ignores connectionId and scans the remote path on
+    // the local machine (→ empty), which breaks QuickOpen on the Hosts side.
+    const hostId = await resolveRemoteSshHostId(context)
+    if (hostId) {
+      const files = await walkRemoteSshFiles(hostId, args.rootPath, args.excludePaths ?? [])
+      return files.map((entry) => entry.path).sort()
+    }
     return api.fs.listFiles({
       rootPath: args.rootPath,
       connectionId: context.connectionId,
@@ -639,6 +751,16 @@ export async function listRuntimeMarkdownDocuments(
 ): Promise<MarkdownDocument[]> {
   const target = getActiveRuntimeTarget(context.settings)
   if (target.kind !== 'environment' || !context.worktreeId) {
+    // SSH workspaces must walk the host; the native command ignores connectionId
+    // and scans the remote path locally (→ no docs), so markdown-doc links and
+    // the doc picker silently come up empty on the Hosts side.
+    const hostId = await resolveRemoteSshHostId(context)
+    if (hostId) {
+      const files = await walkRemoteSshFiles(hostId, rootPath, ['node_modules'])
+      return files
+        .filter((entry) => /\.(md|markdown)$/i.test(entry.name))
+        .map((entry) => remoteSshFileToMarkdownDocument(entry, rootPath))
+    }
     return api.fs.listMarkdownDocuments({
       rootPath,
       connectionId: context.connectionId
@@ -658,6 +780,15 @@ export async function statRuntimePath(
 ): Promise<{ size: number; isDirectory: boolean; mtime: number }> {
   const remoteArgs = getRemoteFileArgs(context, absolutePath)
   if (!remoteArgs) {
+    // SSH workspaces have no host `stat` route, but the host-aware `/api/fs/entries`
+    // lets us list the parent and find this entry — enough for the existence and
+    // isDirectory checks that drive markdown link/preview navigation. Without this
+    // the native stat scans the remote path locally (→ ENOENT), so opening a
+    // markdown link or doc on the Hosts side reports "File not found".
+    const remoteStat = await statRemoteSshPath(context, absolutePath)
+    if (remoteStat) {
+      return remoteStat
+    }
     assertLocalFilesystemFallbackAllowed(context)
     return api.fs.stat({
       filePath: absolutePath,

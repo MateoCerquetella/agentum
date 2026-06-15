@@ -1,5 +1,5 @@
 import type React from 'react'
-import { ChevronDown, Monitor, Server, SquareTerminal } from 'lucide-react'
+import { ChevronDown, Monitor, Server, SquareTerminal, TerminalSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { SidebarHost } from './worktree-list-groups'
@@ -38,12 +38,17 @@ export function HostGroupHeader({
   host,
   count,
   collapsed,
-  onToggle
+  onToggle,
+  onOpenTerminal
 }: {
   host: SidebarHost
   count: number
   collapsed: boolean
   onToggle: () => void
+  /** Open a terminal scoped to this host (resolved to a representative worktree
+   *  on the host). Omitted when the host has no worktree to anchor a terminal
+   *  to, in which case the affordance is hidden. */
+  onOpenTerminal?: () => void
 }): React.JSX.Element {
   const Icon = host.kind === 'ssh' ? Server : Monitor
   const status = host.status ?? 'unknown'
@@ -111,7 +116,52 @@ export function HostGroupHeader({
           )
         ) : null}
       </div>
-      <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-sidebar-accent px-1.5 py-0.5 text-[11px] text-muted-foreground">
+      {onOpenTerminal ? (
+        // Hover-revealed affordance: open a terminal scoped to this host. Stop
+        // propagation so clicking it never toggles the section collapse.
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onOpenTerminal()
+              }}
+              onKeyDown={(e) => {
+                // The header root handles Enter/Space as a collapse toggle; keep
+                // those keys from bubbling so activating the button opens a
+                // terminal instead of collapsing the section.
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.stopPropagation()
+                }
+              }}
+              className={cn(
+                'ml-auto inline-flex size-5 shrink-0 items-center justify-center rounded bg-transparent opacity-0 transition-colors transition-opacity',
+                'group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100',
+                'text-muted-foreground hover:bg-sidebar-accent hover:text-foreground focus-visible:bg-sidebar-accent focus-visible:text-foreground focus-visible:outline-none'
+              )}
+              aria-label={
+                host.kind === 'ssh'
+                  ? `Open terminal on ${host.label}`
+                  : `Open terminal on this machine`
+              }
+            >
+              <TerminalSquare className="size-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={4}>
+            {host.kind === 'ssh' ? 'Open terminal on this host' : 'Open terminal on this machine'}
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+      <span
+        className={cn(
+          'inline-flex items-center gap-1 rounded-full bg-sidebar-accent px-1.5 py-0.5 text-[11px] text-muted-foreground',
+          // Push the count to the right edge only when the terminal button isn't
+          // there to claim `ml-auto` itself.
+          onOpenTerminal ? 'ml-1' : 'ml-auto'
+        )}
+      >
         <span className={cn('size-1.5 rounded-full', STATUS_DOT[status])} />
         {count}
       </span>
