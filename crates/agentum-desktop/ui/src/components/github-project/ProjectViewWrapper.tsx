@@ -48,16 +48,10 @@ import type { GitHubWorkItem } from '../../../../shared/types'
 import ProjectPicker, { type ResolvedProjectSelection } from './ProjectPicker'
 import ProjectViewList from './ProjectViewList'
 import ProjectItemSlugDialog from './ProjectItemSlugDialog'
-import { filterProjectTableRowsByOpenRepos } from './project-row-filtering'
 import {
   resolveMissingRepoProjectDialogState,
   resolveRepoBackedProjectDialogState
 } from './project-dialog-state'
-import {
-  getNextVisibleProjectTableCache,
-  getVisibleProjectTable,
-  type CachedVisibleProjectTable
-} from './project-visible-table-cache'
 
 type Props = Record<string, never>
 
@@ -314,27 +308,13 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
   const table: GitHubProjectTable | null = currentCacheKey
     ? (projectViewCache[currentCacheKey]?.data ?? null)
     : null
-  const filteredTable = useMemo(
-    () => (table && slugIndexReady ? filterProjectTableRowsByOpenRepos(table, lookupSlug) : null),
-    [table, slugIndexReady, lookupSlug]
-  )
-  const lastFilteredTableRef = useRef<CachedVisibleProjectTable | null>(null)
-  // Why: this cache only prevents a blank table while the repo slug index
-  // rebuilds; a ref preserves the previous render value without scheduling
-  // a second render after every filtered-table change.
-  lastFilteredTableRef.current = getNextVisibleProjectTableCache({
-    currentCacheKey,
-    sourceTable: table,
-    slugIndexReady,
-    filteredTable,
-    previous: lastFilteredTableRef.current
-  })
-  const visibleTable = getVisibleProjectTable({
-    currentCacheKey,
-    slugIndexReady,
-    filteredTable,
-    cachedTable: lastFilteredTableRef.current
-  })
+  // Why: render every project item, like GitHub itself. Rows whose repo isn't
+  // added to Agentum are still handled per-row (the slug dialog / "Repository
+  // not in Agentum" modal below), so filtering them out only made the panel
+  // look empty — "No items match this view's filter" — for any project whose
+  // repos aren't in Agentum (#11). `slugIndexReady`/`lookupSlug` stay in use to
+  // route those per-row actions.
+  const visibleTable = table
 
   // Parent-dropped toast, once per table.
   useEffect(() => {
