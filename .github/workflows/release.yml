@@ -180,6 +180,12 @@ jobs:
               cp -f "../../target/${{ matrix.target }}/release/$lib" "../../target/release/$lib"
             done
           fi
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            # git-bash ships /usr/bin/link.exe (GNU coreutils `link`), which under
+            # shell: bash shadows the MSVC linker → "linking with link.exe failed".
+            # Remove it so cargo uses MSVC's link.exe (msvc-dev-cmd set the path).
+            rm -f "/c/Program Files/Git/usr/bin/link.exe" || true
+          fi
           cargo tauri build --target ${{ matrix.target }} --bundles ${{ matrix.desktop }}
 
       # AppImage is the only Arch-friendly format, but linuxdeploy/appimagetool
