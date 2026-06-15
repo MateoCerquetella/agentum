@@ -26,7 +26,10 @@ pub fn router() -> Router<AppState> {
             get(list_tasks).post(create_task),
         )
         .route("/api/orchestration/tasks/{id}/status", post(update_task))
-        .route("/api/orchestration/dispatch", get(dispatch_show).post(dispatch))
+        .route(
+            "/api/orchestration/dispatch",
+            get(dispatch_show).post(dispatch),
+        )
 }
 
 /// Minimal session facts the recipient resolver needs. Decoupled from the full
@@ -199,7 +202,12 @@ async fn inbox(
 ) -> Result<Json<Value>, ApiError> {
     let msgs = state
         .store
-        .orch_inbox(&q.recipient, q.unread.unwrap_or(false), &[], q.limit.unwrap_or(50))
+        .orch_inbox(
+            &q.recipient,
+            q.unread.unwrap_or(false),
+            &[],
+            q.limit.unwrap_or(50),
+        )
         .await?;
     Ok(Json(json!({ "messages": msgs })))
 }
@@ -222,10 +230,7 @@ async fn reply(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("message {}", req.id)))?;
     // A reply goes back to the original sender, on the same thread.
-    let from = req
-        .from
-        .clone()
-        .unwrap_or_else(|| orig.recipient.clone());
+    let from = req.from.clone().unwrap_or_else(|| orig.recipient.clone());
     let m = state
         .store
         .orch_insert_message(&NewOrchMessage {
@@ -322,7 +327,10 @@ async fn dispatch(
         .into_iter()
         .next()
         .ok_or_else(|| ApiError::BadRequest(format!("`{}` resolved to no handle", req.to)))?;
-    let d = state.store.orch_create_dispatch(req.task, &assignee).await?;
+    let d = state
+        .store
+        .orch_create_dispatch(req.task, &assignee)
+        .await?;
     let task = state.store.orch_get_task(req.task).await?;
     Ok(Json(json!({ "dispatch": d, "task": task })))
 }
@@ -361,9 +369,15 @@ mod tests {
 
     #[test]
     fn plain_handle_resolves_to_itself() {
-        assert_eq!(resolve_recipients("worker-a", &infos(), "coord"), vec!["worker-a"]);
+        assert_eq!(
+            resolve_recipients("worker-a", &infos(), "coord"),
+            vec!["worker-a"]
+        );
         // Even an unknown handle is delivered (it may come online later).
-        assert_eq!(resolve_recipients("ghost", &infos(), "coord"), vec!["ghost"]);
+        assert_eq!(
+            resolve_recipients("ghost", &infos(), "coord"),
+            vec!["ghost"]
+        );
     }
 
     #[test]
@@ -376,13 +390,19 @@ mod tests {
     #[test]
     fn group_by_tool_and_status_and_worktree() {
         // @claude → claude sessions except sender.
-        assert_eq!(resolve_recipients("@claude", &infos(), "coord"), vec!["worker-a"]);
+        assert_eq!(
+            resolve_recipients("@claude", &infos(), "coord"),
+            vec!["worker-a"]
+        );
         // @idle → idle sessions.
         let mut idle = resolve_recipients("@idle", &infos(), "coord");
         idle.sort();
         assert_eq!(idle, vec!["worker-a", "worker-b"]);
         // @worktree:wt-b → workdir substring match.
-        assert_eq!(resolve_recipients("@worktree:wt-b", &infos(), "coord"), vec!["worker-b"]);
+        assert_eq!(
+            resolve_recipients("@worktree:wt-b", &infos(), "coord"),
+            vec!["worker-b"]
+        );
         // Unknown group → nothing.
         assert!(resolve_recipients("@nope", &infos(), "coord").is_empty());
     }

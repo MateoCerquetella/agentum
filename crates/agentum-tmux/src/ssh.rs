@@ -749,8 +749,14 @@ mod tests {
         let interactive = path_of(SshMux::Interactive).expect("interactive path");
         let streaming = path_of(SshMux::Streaming).expect("streaming path");
         assert_ne!(interactive, streaming, "masters share a socket");
-        assert!(interactive.contains("/cm-"), "interactive not cm-: {interactive}");
-        assert!(streaming.contains("/cms-"), "streaming not cms-: {streaming}");
+        assert!(
+            interactive.contains("/cm-"),
+            "interactive not cm-: {interactive}"
+        );
+        assert!(
+            streaming.contains("/cms-"),
+            "streaming not cms-: {streaming}"
+        );
     }
 
     #[test]

@@ -15,7 +15,7 @@ use agentum_executor::{binary_for, probed_tools};
 // runner: it replays an op on a fresh, unmultiplexed connection when a pooled
 // ControlMaster socket goes stale, so a flaky master never hard-fails a remote
 // op that never actually ran.
-use agentum_tmux::ssh::{ssh_command_opts, ssh_output, SshMux};
+use agentum_tmux::ssh::{SshMux, ssh_command_opts, ssh_output};
 use tokio::process::Command;
 use tokio::time::{sleep, timeout};
 
@@ -1399,8 +1399,14 @@ mod tests {
         assert!(script.starts_with("sh -c "), "not sh-wrapped: {script}");
         // A read-loop turning stdin hex lines into send-keys; $l unquoted so the
         // hex pairs split into separate args. exec lets a kill reap it.
-        assert!(script.contains("while IFS= read -r l"), "no read loop: {script}");
-        assert!(script.contains("send-keys -H -t"), "no hex send-keys: {script}");
+        assert!(
+            script.contains("while IFS= read -r l"),
+            "no read loop: {script}"
+        );
+        assert!(
+            script.contains("send-keys -H -t"),
+            "no hex send-keys: {script}"
+        );
         assert!(script.contains("agentum-demo"), "target missing: {script}");
         assert!(script.contains("exec sh -c"), "loop not exec'd: {script}");
     }
@@ -1431,7 +1437,10 @@ mod tests {
         // pipe-pane armed first (folded into this exec to save a round trip),
         // then cursor+capture, then the size LAST (no-overlap ordering).
         assert!(pipe < cur, "pipe-pane not armed before capture: {script}");
-        assert!(cap < wc, "size sampled before capture (would re-replay): {script}");
+        assert!(
+            cap < wc,
+            "size sampled before capture (would re-replay): {script}"
+        );
         assert!(cur < cap, "cursor sampled after capture: {script}");
         assert!(
             script.contains("cursor_x") && script.contains("cursor_flag"),

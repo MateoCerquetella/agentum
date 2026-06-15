@@ -297,12 +297,11 @@ impl Store {
     /// After `completed_id` completes, promote every `pending` task that depends
     /// on it to `ready` if all of that task's deps are now completed.
     async fn orch_promote_ready(&self, completed_id: i64) -> Result<()> {
-        let dependents: Vec<i64> = sqlx::query_scalar(
-            "SELECT task_id FROM orchestration_task_deps WHERE dep_id = ?",
-        )
-        .bind(completed_id)
-        .fetch_all(&self.pool)
-        .await?;
+        let dependents: Vec<i64> =
+            sqlx::query_scalar("SELECT task_id FROM orchestration_task_deps WHERE dep_id = ?")
+                .bind(completed_id)
+                .fetch_all(&self.pool)
+                .await?;
         for dep_task in dependents {
             let status: Option<String> =
                 sqlx::query_scalar("SELECT status FROM orchestration_tasks WHERE id = ?")
@@ -327,11 +326,7 @@ impl Store {
 
     /// Record a dispatch of a task to an assignee handle and mark the task
     /// `dispatched`. Returns the dispatch context.
-    pub async fn orch_create_dispatch(
-        &self,
-        task_id: i64,
-        assignee: &str,
-    ) -> Result<OrchDispatch> {
+    pub async fn orch_create_dispatch(&self, task_id: i64, assignee: &str) -> Result<OrchDispatch> {
         let created_at = now_rfc3339()?;
         let res = sqlx::query(
             "INSERT INTO orchestration_dispatches (task_id, assignee, status, attempts, created_at)
@@ -377,7 +372,9 @@ mod tests {
         use std::sync::atomic::{AtomicU32, Ordering};
         static N: AtomicU32 = AtomicU32::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
-        Store::open(&dir.join(format!("orch-{n}.db"))).await.unwrap()
+        Store::open(&dir.join(format!("orch-{n}.db")))
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -423,7 +420,10 @@ mod tests {
         s.orch_insert_message(&mk("go", "dispatch")).await.unwrap();
 
         // All for worker: 2.
-        assert_eq!(s.orch_inbox("worker", false, &[], 50).await.unwrap().len(), 2);
+        assert_eq!(
+            s.orch_inbox("worker", false, &[], 50).await.unwrap().len(),
+            2
+        );
         // Only dispatch type: 1.
         let only_dispatch = s
             .orch_inbox("worker", false, &["dispatch".to_string()], 50)
@@ -434,7 +434,10 @@ mod tests {
 
         // Mark m1 read → unread count drops to 1.
         s.orch_mark_read(&[m1.id]).await.unwrap();
-        assert_eq!(s.orch_inbox("worker", true, &[], 50).await.unwrap().len(), 1);
+        assert_eq!(
+            s.orch_inbox("worker", true, &[], 50).await.unwrap().len(),
+            1
+        );
     }
 
     #[tokio::test]
