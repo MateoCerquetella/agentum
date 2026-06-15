@@ -17,8 +17,20 @@ pub async fn run(name: String) -> Result<()> {
         bail!("session {name} is not running");
     }
 
-    // Replace this process with tmux attach so the user gets a live terminal.
-    let err = exec::execvp("tmux", &["tmux", "attach-session", "-t", &target]);
+    attach(&target)
+}
+
+// Replace this process with `tmux attach` so the user gets a live terminal.
+// `exec`/execvp is unix-only; on Windows there is no tmux to attach to.
+#[cfg(unix)]
+fn attach(target: &str) -> Result<()> {
+    let err = exec::execvp("tmux", &["tmux", "attach-session", "-t", target]);
     // exec::execvp only returns on error.
-    bail!("failed to exec tmux: {err}");
+    bail!("failed to exec tmux: {err}")
+}
+
+#[cfg(not(unix))]
+fn attach(target: &str) -> Result<()> {
+    let _ = target;
+    bail!("`agentum open` (tmux attach) isn't supported on Windows")
 }

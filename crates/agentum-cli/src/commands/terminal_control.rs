@@ -283,7 +283,7 @@ mod tests {
         // Asking for more than exist returns all meaningful rows.
         assert_eq!(last_meaningful_lines(&pane, 10).len(), 3);
         // An all-blank pane yields nothing rather than rows of whitespace.
-        assert!(last_meaningful_lines(&vec!["".to_string(), "  ".to_string()], 5).is_empty());
+        assert!(last_meaningful_lines(&["".to_string(), "  ".to_string()], 5).is_empty());
     }
 
     #[test]

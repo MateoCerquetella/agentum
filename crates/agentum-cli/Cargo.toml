@@ -37,7 +37,6 @@ serde_json      = { workspace = true }
 time            = { workspace = true }
 toml            = { workspace = true }
 toml_edit       = { workspace = true }
-exec            = { workspace = true }
 uuid            = { workspace = true }
 
 # Terminal dashboard (`agentum terminal`, alias `tui`, bin `lazyagentum`)
@@ -80,3 +79,6 @@ image              = { version = "0.25", default-features = false, features = ["
 # controlling terminal so it survives the user closing the alt-screen.
 [target.'cfg(unix)'.dependencies]
 libc               = "0.2"
+# execvp (process replacement) is unix-only; `agentum open` execs into
+# `tmux attach`, which doesn't exist on Windows.
+exec               = { workspace = true }
