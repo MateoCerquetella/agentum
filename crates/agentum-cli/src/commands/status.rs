@@ -57,12 +57,28 @@ pub fn render_status(api_base: &str, sessions: &Value, worktrees: &Value, hosts:
 
 pub async fn run(json: bool) -> Result<()> {
     let client = ApiClient::from_env();
-    // Tolerate routes that aren't present on older/standalone servers: a failed
-    // list counts as empty rather than aborting the whole status.
-    let sessions = client.get_json("/api/sessions").await.unwrap_or(Value::Null);
-    let worktrees = client.get_json("/api/worktrees").await.unwrap_or(Value::Null);
-    let hosts = client.get_json("/api/hosts").await.unwrap_or(Value::Null);
-    let report = render_status(client.base(), &sessions, &worktrees, &hosts);
+    // Tolerate routes that aren't present on older/standalone servers: a single
+    // failed list counts as empty rather than aborting the whole status.
+    let sessions = client.get_json("/api/sessions").await;
+    let worktrees = client.get_json("/api/worktrees").await;
+    let hosts = client.get_json("/api/hosts").await;
+    // But don't paper over a server we can't reach AT ALL: if every endpoint
+    // errors, the daemon is down/unreachable (or the scheme is wrong, e.g. a
+    // plaintext base against a TLS daemon). Report that instead of a misleading
+    // all-zeros summary.
+    if sessions.is_err() && worktrees.is_err() && hosts.is_err() {
+        anyhow::bail!(
+            "couldn't reach the agentum control plane at {} — is a server running there?\n\
+             Run inside an agentum pane (sets $AGENTUM_API_URL), or `agentum profiles use <name>`.",
+            client.base()
+        );
+    }
+    let report = render_status(
+        client.base(),
+        &sessions.unwrap_or(Value::Null),
+        &worktrees.unwrap_or(Value::Null),
+        &hosts.unwrap_or(Value::Null),
+    );
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
