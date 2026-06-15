@@ -665,7 +665,10 @@ mod tests {
     }
 
     // Env vars explicitly set on the Command (vars only cleared/inherited are
-    // skipped) — lets the tests assert the SSH_ASKPASS wiring.
+    // skipped) — lets the tests assert the SSH_ASKPASS wiring. Only the askpass
+    // tests (unix-gated) use it, so gate it too to avoid a dead-code warning on
+    // Windows.
+    #[cfg(unix)]
     fn env_map(cmd: &Command) -> std::collections::HashMap<String, String> {
         cmd.as_std()
             .get_envs()
