@@ -14,6 +14,7 @@ pub mod new;
 pub mod open;
 pub mod orchestration;
 pub mod profiles;
+pub mod prune;
 pub mod rm;
 pub mod send;
 pub mod serve;

@@ -106,6 +106,20 @@ pub enum Cmd {
     /// Show running sessions.
     Ps,
 
+    /// Remove dead sessions the control plane still tracks (zombies left by
+    /// crashed agents). Dry-run by default — pass --yes to remove. Never touches
+    /// running/idle sessions, and only acts on sessions agentum manages (tmux
+    /// sessions started outside agentum are never in the store, so they're safe).
+    Prune {
+        /// Actually remove the sessions (default prints a dry-run preview).
+        #[arg(long, short = 'y')]
+        yes: bool,
+
+        /// Also prune `stopped` sessions, not just `crashed` ones.
+        #[arg(long)]
+        stopped: bool,
+    },
+
     /// Attach to a session's tmux pane (detach: Ctrl-b d).
     Open {
         /// Session name.
@@ -877,6 +891,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Cmd::Rm { name, force } => crate::commands::rm::run(name, force).await,
         Cmd::Ls { running, tool } => crate::commands::ls::run(running, tool).await,
         Cmd::Ps => crate::commands::ls::run(true, None).await,
+        Cmd::Prune { yes, stopped } => crate::commands::prune::run(yes, stopped).await,
         Cmd::Open { name } => crate::commands::open::run(name).await,
         Cmd::Tail {
             name,
