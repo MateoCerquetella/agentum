@@ -4,6 +4,34 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.2] — 2026-06-15
+
+### Fixed
+- **GitHub Projects panel shows every item again.** The panel filtered project
+  rows down to repos already added to Agentum, so opening a project whose items
+  belong to a not-yet-added repo rendered a misleading "No items match this
+  view's filter" with a 0 count. It now renders the full project (like GitHub);
+  rows for repos not in Agentum are still handled per-row (the slug dialog and
+  the "Repository not in Agentum" prompt).
+- **`agentum status` reports an unreachable control plane instead of zeros.** It
+  swallowed every list error, so a server it couldn't reach at all (down, or a
+  plaintext base hitting a TLS daemon) printed a misleading `sessions 0 /
+  worktrees 0 / hosts 0`. A single missing route still counts as empty, but if
+  all of them fail it now errors with the base URL and how to point it at a
+  reachable server.
+
+### Added
+- **`agentum prune`** removes dead "zombie" sessions the control plane is still
+  tracking (left by crashed agents). Dry-run by default; `--yes` to remove,
+  `--stopped` to also include stopped sessions. Running/idle sessions are never
+  touched, and sessions started outside agentum are never in the store, so they
+  can't be killed.
+
+### CI
+- Release builds: install `libasound2-dev` on Linux (the voice-STT `alsa-sys`
+  dep) and stage the macOS sherpa/onnxruntime dylibs before bundling — the two
+  failures that blocked the v0.14.0 and v0.14.1 releases from publishing.
+
 ## [0.14.1] — 2026-06-13
 
 ### Fixed
