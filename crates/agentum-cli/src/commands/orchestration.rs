@@ -46,7 +46,8 @@ pub async fn send(
     json: bool,
 ) -> Result<()> {
     let client = ApiClient::from_env();
-    let payload_json: Option<Value> = payload.map(|p| serde_json::from_str(&p).unwrap_or(Value::String(p)));
+    let payload_json: Option<Value> =
+        payload.map(|p| serde_json::from_str(&p).unwrap_or(Value::String(p)));
     let body_req = json!({
         "to": to,
         "subject": subject,
