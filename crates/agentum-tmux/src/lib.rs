@@ -477,12 +477,20 @@ mod tests {
     fn cursor_sample_parses_and_rejects() {
         assert_eq!(
             parse_cursor_sample("12 3 0"),
-            Some(CursorSample { x: 12, y: 3, visible: false })
+            Some(CursorSample {
+                x: 12,
+                y: 3,
+                visible: false
+            })
         );
         // Missing flag defaults to visible (older tmux without cursor_flag).
         assert_eq!(
             parse_cursor_sample("5 7"),
-            Some(CursorSample { x: 5, y: 7, visible: true })
+            Some(CursorSample {
+                x: 5,
+                y: 7,
+                visible: true
+            })
         );
         assert_eq!(parse_cursor_sample(""), None);
         assert_eq!(parse_cursor_sample("X"), None);
@@ -493,7 +501,11 @@ mod tests {
     fn anchored_snapshot_separates_rows_and_restores_cursor() {
         let snap = assemble_anchored_snapshot(
             b"hello\nworld\n",
-            Some(CursorSample { x: 5, y: 1, visible: true }),
+            Some(CursorSample {
+                x: 5,
+                y: 1,
+                visible: true,
+            }),
         );
         // No trailing CRLF (would scroll a full-height pane); CUP is 1-based.
         assert_eq!(snap, b"hello\r\nworld\x1b[2;6H");
@@ -511,7 +523,11 @@ mod tests {
     fn anchored_snapshot_rehides_hidden_cursor() {
         let snap = assemble_anchored_snapshot(
             b"x\n",
-            Some(CursorSample { x: 0, y: 0, visible: false }),
+            Some(CursorSample {
+                x: 0,
+                y: 0,
+                visible: false,
+            }),
         );
         assert_eq!(snap, b"x\x1b[1;1H\x1b[?25l");
     }
@@ -521,7 +537,14 @@ mod tests {
         // Callers treat an empty snapshot as "nothing to paint" — a bare CUP
         // with no content must not flip that gate.
         assert_eq!(
-            assemble_anchored_snapshot(b"", Some(CursorSample { x: 1, y: 1, visible: true })),
+            assemble_anchored_snapshot(
+                b"",
+                Some(CursorSample {
+                    x: 1,
+                    y: 1,
+                    visible: true
+                })
+            ),
             Vec::<u8>::new()
         );
         assert_eq!(assemble_anchored_snapshot(b"\n", None), Vec::<u8>::new());
@@ -547,7 +570,9 @@ mod tests {
         // not be newline-terminated — both are what keeps replayed redraw
         // cycles aligned with the painted grid.
         assert!(
-            s.rsplit('\x1b').next().is_some_and(|t| t.ends_with('H') || t.ends_with('l')),
+            s.rsplit('\x1b')
+                .next()
+                .is_some_and(|t| t.ends_with('H') || t.ends_with('l')),
             "no cursor anchor suffix: {s:?}"
         );
         assert!(!s.ends_with("\r\n"), "row-terminated snapshot: {s:?}");

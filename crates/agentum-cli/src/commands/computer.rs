@@ -3,7 +3,7 @@
 //! the Accessibility grant); reaches it via `$AGENTUM_API_URL`.
 
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::http::ApiClient;
 
@@ -31,7 +31,11 @@ pub async fn list_apps(json_out: bool) -> Result<()> {
     if json_out {
         return show(&resp);
     }
-    let apps = resp.get("apps").and_then(Value::as_array).cloned().unwrap_or_default();
+    let apps = resp
+        .get("apps")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     for a in apps {
         println!(
             "{:>7}  {}",
@@ -47,7 +51,11 @@ pub async fn get_app_state(app: String, json_out: bool) -> Result<()> {
     if json_out {
         return show(&resp);
     }
-    let els = resp.get("elements").and_then(Value::as_array).cloned().unwrap_or_default();
+    let els = resp
+        .get("elements")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     println!(
         "{} elements in {}",
         resp.get("count").and_then(Value::as_i64).unwrap_or(0),
@@ -61,22 +69,34 @@ pub async fn get_app_state(app: String, json_out: bool) -> Result<()> {
             e.get("index").and_then(Value::as_i64).unwrap_or(0),
             e.get("role").and_then(Value::as_str).unwrap_or(""),
             title,
-            if value.is_empty() { String::new() } else { format!("= {value}") },
+            if value.is_empty() {
+                String::new()
+            } else {
+                format!("= {value}")
+            },
         );
     }
     Ok(())
 }
 
 pub async fn click(app: String, element_index: usize) -> Result<()> {
-    show(&call("click", json!({ "app": app, "element-index": element_index })).await?)
+    show(
+        &call(
+            "click",
+            json!({ "app": app, "element-index": element_index }),
+        )
+        .await?,
+    )
 }
 
 pub async fn set_value(app: String, element_index: usize, value: String) -> Result<()> {
-    show(&call(
-        "set-value",
-        json!({ "app": app, "element-index": element_index, "value": value }),
+    show(
+        &call(
+            "set-value",
+            json!({ "app": app, "element-index": element_index, "value": value }),
+        )
+        .await?,
     )
-    .await?)
 }
 
 pub async fn type_text(app: String, text: String) -> Result<()> {

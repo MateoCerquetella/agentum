@@ -8,8 +8,8 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, bail, Result};
-use serde_json::{json, Value};
+use anyhow::{Result, anyhow, bail};
+use serde_json::{Value, json};
 
 use crate::http::ApiClient;
 
@@ -96,7 +96,10 @@ pub async fn read(name: String, lines: usize, json: bool) -> Result<()> {
     let captured = pane_lines(&client, &id, 200).await?;
     let out = last_meaningful_lines(&captured, lines);
     if json {
-        println!("{}", serde_json::to_string_pretty(&json!({ "lines": out }))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "lines": out }))?
+        );
     } else {
         for l in out {
             println!("{l}");
@@ -231,9 +234,15 @@ mod tests {
             json!({"name": "build", "id": "abc123-def"}),
             json!({"name": "test", "id": "999000-aaa"}),
         ];
-        assert_eq!(field(find_session(&sessions, "test").unwrap(), "id"), "999000-aaa");
+        assert_eq!(
+            field(find_session(&sessions, "test").unwrap(), "id"),
+            "999000-aaa"
+        );
         // id prefix also resolves
-        assert_eq!(field(find_session(&sessions, "abc123").unwrap(), "name"), "build");
+        assert_eq!(
+            field(find_session(&sessions, "abc123").unwrap(), "name"),
+            "build"
+        );
         assert!(find_session(&sessions, "nope").is_none());
     }
 
@@ -242,9 +251,9 @@ mod tests {
         let marker = "__AGENTUM_EXEC_DONE_42__";
         let lines = vec![
             format!("$ echo hi; printf '%s:%d' '{marker}' \"$?\""), // command echo (contains marker)
-            "hi".to_string(),                                        // the actual output
-            format!("{marker}:0"),                                   // result line
-            "$ ".to_string(),                                        // next prompt
+            "hi".to_string(),                                       // the actual output
+            format!("{marker}:0"),                                  // result line
+            "$ ".to_string(),                                       // next prompt
         ];
         let (out, code) = extract_exec_output(&lines, marker).unwrap();
         assert_eq!(out, vec!["hi".to_string()]);

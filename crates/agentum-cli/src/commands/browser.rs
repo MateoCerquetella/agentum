@@ -3,7 +3,7 @@
 //! standalone daemon 501s these); reaches it via `$AGENTUM_API_URL`.
 
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::http::ApiClient;
 
@@ -20,7 +20,11 @@ pub async fn tab_list(json_out: bool) -> Result<()> {
     if json_out {
         println!("{}", serde_json::to_string_pretty(&resp)?);
     } else {
-        let tabs = resp.get("tabs").and_then(Value::as_array).cloned().unwrap_or_default();
+        let tabs = resp
+            .get("tabs")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
         if tabs.is_empty() {
             println!("(no browser tabs open)");
         }
@@ -37,7 +41,9 @@ pub async fn tab_list(json_out: bool) -> Result<()> {
 
 pub async fn snapshot(tab: Option<String>, json_out: bool) -> Result<()> {
     let client = ApiClient::from_env();
-    let resp = client.post_json("/api/browser/snapshot", &tab_arg(tab)).await?;
+    let resp = client
+        .post_json("/api/browser/snapshot", &tab_arg(tab))
+        .await?;
     println!("{}", serde_json::to_string_pretty(&resp)?);
     let _ = json_out;
     Ok(())

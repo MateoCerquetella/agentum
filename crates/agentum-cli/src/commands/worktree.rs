@@ -102,7 +102,11 @@ pub async fn current(json: bool) -> Result<()> {
     let cwd = std::env::var("AGENTUM_WORKTREE_PATH")
         .ok()
         .filter(|s| !s.is_empty())
-        .or_else(|| std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned()))
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned())
+        })
         .unwrap_or_default();
     match find_current_worktree(&worktrees, &cwd) {
         Some(wt) if json => println!("{}", serde_json::to_string_pretty(wt)?),

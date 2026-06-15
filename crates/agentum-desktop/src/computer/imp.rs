@@ -13,7 +13,7 @@ use core_foundation::base::{CFTypeRef, TCFType};
 use core_foundation::string::{CFString, CFStringRef};
 use core_graphics::event::{CGEvent, CGKeyCode};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 type AxUIElementRef = *const c_void;
 type AxError = i32;
@@ -45,9 +45,8 @@ unsafe extern "C" {
 fn attr_string(element: AxUIElementRef, attr: &str) -> Option<String> {
     let key = CFString::new(attr);
     let mut value: CFTypeRef = std::ptr::null();
-    let err = unsafe {
-        AXUIElementCopyAttributeValue(element, key.as_concrete_TypeRef(), &mut value)
-    };
+    let err =
+        unsafe { AXUIElementCopyAttributeValue(element, key.as_concrete_TypeRef(), &mut value) };
     if err != AX_SUCCESS || value.is_null() {
         return None;
     }
@@ -75,9 +74,8 @@ fn children_via_indices(element: AxUIElementRef) -> Vec<AxUIElementRef> {
     }
     let key = CFString::new("AXChildren");
     let mut value: CFTypeRef = std::ptr::null();
-    let err = unsafe {
-        AXUIElementCopyAttributeValue(element, key.as_concrete_TypeRef(), &mut value)
-    };
+    let err =
+        unsafe { AXUIElementCopyAttributeValue(element, key.as_concrete_TypeRef(), &mut value) };
     if err != AX_SUCCESS || value.is_null() {
         return Vec::new();
     }
@@ -313,7 +311,11 @@ fn keycode_for(name: &str) -> Option<CGKeyCode> {
 
 pub fn handle(op: &str, args: &Value) -> anyhow::Result<Value> {
     let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_string);
-    let idx = || args.get("element-index").and_then(Value::as_u64).map(|v| v as usize);
+    let idx = || {
+        args.get("element-index")
+            .and_then(Value::as_u64)
+            .map(|v| v as usize)
+    };
     let resolve = |app: &str| {
         resolve_pid(app).ok_or_else(|| anyhow::anyhow!("no app matching `{app}` (try list-apps)"))
     };
@@ -377,8 +379,7 @@ pub fn handle(op: &str, args: &Value) -> anyhow::Result<Value> {
         "press-key" => {
             let app = s("app").ok_or_else(|| anyhow::anyhow!("missing `app`"))?;
             let key = s("key").ok_or_else(|| anyhow::anyhow!("missing `key`"))?;
-            let code = keycode_for(&key)
-                .ok_or_else(|| anyhow::anyhow!("unknown key `{key}`"))?;
+            let code = keycode_for(&key).ok_or_else(|| anyhow::anyhow!("unknown key `{key}`"))?;
             let pid = resolve(&app)?;
             press_key(pid, code)?;
             Ok(json!({ "ok": true }))

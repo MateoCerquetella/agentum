@@ -963,9 +963,11 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Cmd::Snapshot { tab, json } => crate::commands::browser::snapshot(tab, json).await,
         Cmd::Navigate { url, tab } => crate::commands::browser::navigate(url, tab).await,
         Cmd::Click { selector, tab } => crate::commands::browser::click(selector, tab).await,
-        Cmd::Fill { selector, text, tab } => {
-            crate::commands::browser::fill(selector, text, tab).await
-        }
+        Cmd::Fill {
+            selector,
+            text,
+            tab,
+        } => crate::commands::browser::fill(selector, text, tab).await,
         Cmd::Computer { action } => dispatch_computer(action).await,
         Cmd::Exec {
             session,
@@ -1022,7 +1024,12 @@ async fn dispatch_orchestration(action: OrchestrationCmd) -> Result<()> {
             thread_id,
             payload,
             json,
-        } => orch::send(to, subject, from, body, msg_type, priority, thread_id, payload, json).await,
+        } => {
+            orch::send(
+                to, subject, from, body, msg_type, priority, thread_id, payload, json,
+            )
+            .await
+        }
         OrchestrationCmd::Check {
             terminal,
             types,

@@ -23,7 +23,9 @@ impl ApiClient {
     pub fn from_env() -> Self {
         Self::with_base(
             crate::api_base::resolve_api_base(),
-            std::env::var("AGENTUM_TOKEN").ok().filter(|t| !t.is_empty()),
+            std::env::var("AGENTUM_TOKEN")
+                .ok()
+                .filter(|t| !t.is_empty()),
         )
     }
 

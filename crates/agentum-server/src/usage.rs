@@ -980,13 +980,19 @@ mod tests {
             expires_at_ms: Some(exp),
         };
         assert_eq!(
-            pick_freshest_token(vec![make("expired", now - 1), make("valid", now + 10_000)], now)
-                .as_deref(),
+            pick_freshest_token(
+                vec![make("expired", now - 1), make("valid", now + 10_000)],
+                now
+            )
+            .as_deref(),
             Some("valid")
         );
         assert_eq!(
-            pick_freshest_token(vec![make("valid", now + 10_000), make("expired", now - 1)], now)
-                .as_deref(),
+            pick_freshest_token(
+                vec![make("valid", now + 10_000), make("expired", now - 1)],
+                now
+            )
+            .as_deref(),
             Some("valid")
         );
     }

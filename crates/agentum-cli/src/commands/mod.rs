@@ -1,8 +1,8 @@
 pub mod auth;
 pub mod board;
 pub mod browser;
-pub mod computer;
 pub mod clip_agent;
+pub mod computer;
 pub mod config;
 pub mod doctor;
 pub mod down;
@@ -20,12 +20,12 @@ pub mod send;
 pub mod serve;
 pub mod status;
 pub mod tail;
-pub mod terminal_control;
-pub mod worktree;
 pub mod terminal;
+pub mod terminal_control;
 pub mod uninstall;
 pub mod up;
 pub mod update;
+pub mod worktree;
 
 use agentum_store::Store;
 use anyhow::{Context, Result};

@@ -5,7 +5,7 @@
 //! Accessibility grant). Installed via `serve_embedded_loopback_with_bridge`.
 
 use agentum_server::bridge::{BridgeFuture, DesktopBridge};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
 /// Browser webviews created by `commands::browser_native` use this label prefix.
@@ -21,7 +21,10 @@ impl TauriBridge {
     }
 
     fn op_name(args: &Value) -> String {
-        args.get("op").and_then(Value::as_str).unwrap_or("").to_string()
+        args.get("op")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
     }
 
     /// The browser webviews, as (label, current-url) pairs.
@@ -78,7 +81,8 @@ impl TauriBridge {
                 let parsed: tauri::Url = url
                     .parse()
                     .map_err(|e| anyhow::anyhow!("bad url `{url}`: {e}"))?;
-                wv.navigate(parsed).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                wv.navigate(parsed)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 Ok(json!({ "ok": true }))
             }
             "click" => {

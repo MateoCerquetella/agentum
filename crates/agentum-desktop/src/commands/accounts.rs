@@ -54,9 +54,7 @@ fn home() -> Result<PathBuf, String> {
 /// (same isolation convention as the CLI crates).
 fn store_base(provider: &str) -> Result<PathBuf, String> {
     if let Some(home) = std::env::var_os("AGENTUM_HOME") {
-        return Ok(PathBuf::from(home)
-            .join("managed-accounts")
-            .join(provider));
+        return Ok(PathBuf::from(home).join("managed-accounts").join(provider));
     }
     let base = dirs::data_local_dir()
         .or_else(dirs::data_dir)
@@ -561,9 +559,8 @@ fn claude_add(conn: &Connection) -> Result<Value, String> {
 /// Step 2 is the regular `claude_add` capture once the new login appears
 /// (the renderer polls `claude_accounts_live_login` for it).
 fn claude_begin_add(conn: &Connection) -> Result<Value, String> {
-    let blob = read_live_claude_blob().ok_or(
-        "No Claude login found on this machine. Sign in with Claude Code first.",
-    )?;
+    let blob = read_live_claude_blob()
+        .ok_or("No Claude login found on this machine. Sign in with Claude Code first.")?;
     let oauth = read_live_claude_oauth_account();
     let (id, email) = claude_capture_account(conn, &blob, &oauth)?;
     sign_out_live_claude()?;
@@ -1185,7 +1182,8 @@ mod tests {
     fn capture_upserts_by_email_and_sets_active() {
         // Isolate the secret store; this is the only test in the crate that
         // sets AGENTUM_HOME, so there is no cross-test race.
-        let tmp = std::env::temp_dir().join(format!("agentum-accounts-test-{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("agentum-accounts-test-{}", std::process::id()));
         std::env::set_var("AGENTUM_HOME", &tmp);
         let conn = mem_db();
 
@@ -1250,7 +1248,10 @@ mod tests {
         .unwrap();
 
         // Active flipped, but the stored timestamps are untouched.
-        assert_eq!(read_setting(&conn, "activeClaudeManagedAccountId"), json!("a1"));
+        assert_eq!(
+            read_setting(&conn, "activeClaudeManagedAccountId"),
+            json!("a1")
+        );
         let after = read_accounts_array(&conn, "claudeManagedAccounts");
         assert_eq!(after[0]["updatedAt"], json!(111));
         assert_eq!(after[0]["lastAuthenticatedAt"], json!(111));

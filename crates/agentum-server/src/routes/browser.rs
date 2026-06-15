@@ -39,13 +39,22 @@ async fn forward(state: &AppState, op: &str, mut body: Value) -> Result<Json<Val
         .map_err(|e| ApiError::Internal(e.to_string()))
 }
 
-async fn tabs(State(s): State<AppState>, body: Option<Json<Value>>) -> Result<Json<Value>, ApiError> {
+async fn tabs(
+    State(s): State<AppState>,
+    body: Option<Json<Value>>,
+) -> Result<Json<Value>, ApiError> {
     forward(&s, "tabs", body.map(|b| b.0).unwrap_or(json!({}))).await
 }
-async fn navigate(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
+async fn navigate(
+    State(s): State<AppState>,
+    Json(b): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
     forward(&s, "navigate", b).await
 }
-async fn snapshot(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
+async fn snapshot(
+    State(s): State<AppState>,
+    Json(b): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
     forward(&s, "snapshot", b).await
 }
 async fn click(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
@@ -54,6 +63,9 @@ async fn click(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<V
 async fn fill(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
     forward(&s, "fill", b).await
 }
-async fn screenshot(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
+async fn screenshot(
+    State(s): State<AppState>,
+    Json(b): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
     forward(&s, "screenshot", b).await
 }

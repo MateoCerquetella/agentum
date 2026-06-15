@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::http::ApiClient;
 
@@ -16,7 +16,11 @@ use crate::http::ApiClient;
 fn self_handle(explicit: Option<String>) -> String {
     explicit
         .filter(|s| !s.is_empty())
-        .or_else(|| std::env::var("AGENTUM_TERMINAL_HANDLE").ok().filter(|s| !s.is_empty()))
+        .or_else(|| {
+            std::env::var("AGENTUM_TERMINAL_HANDLE")
+                .ok()
+                .filter(|s| !s.is_empty())
+        })
         .unwrap_or_else(|| "unknown".to_string())
 }
 
@@ -62,7 +66,11 @@ pub async fn send(
     print_value(
         json,
         |v| {
-            let n = v.get("delivered").and_then(Value::as_array).map(|a| a.len()).unwrap_or(0);
+            let n = v
+                .get("delivered")
+                .and_then(Value::as_array)
+                .map(|a| a.len())
+                .unwrap_or(0);
             let thread = v.get("thread_id").and_then(Value::as_str).unwrap_or("");
             println!("sent to {n} recipient(s) — thread {thread}");
         },
@@ -108,13 +116,20 @@ pub async fn check(
 }
 
 fn print_messages(v: &Value) {
-    let msgs = v.get("messages").and_then(Value::as_array).cloned().unwrap_or_default();
+    let msgs = v
+        .get("messages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     if msgs.is_empty() {
         println!("(no messages)");
         return;
     }
     for m in msgs {
-        let pri = m.get("priority").and_then(Value::as_str).unwrap_or("normal");
+        let pri = m
+            .get("priority")
+            .and_then(Value::as_str)
+            .unwrap_or("normal");
         let tag = match pri {
             "urgent" => "[URGENT] ",
             "high" => "[HIGH] ",
@@ -192,7 +207,11 @@ pub async fn task_list(status: Option<String>, ready: bool, json: bool) -> Resul
     print_value(
         json,
         |v| {
-            let tasks = v.get("tasks").and_then(Value::as_array).cloned().unwrap_or_default();
+            let tasks = v
+                .get("tasks")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
             if tasks.is_empty() {
                 println!("(no tasks)");
             }
@@ -232,7 +251,8 @@ pub async fn task_update(
     json: bool,
 ) -> Result<()> {
     let client = ApiClient::from_env();
-    let result_json: Option<Value> = result.map(|r| serde_json::from_str(&r).unwrap_or(Value::String(r)));
+    let result_json: Option<Value> =
+        result.map(|r| serde_json::from_str(&r).unwrap_or(Value::String(r)));
     let req = json!({ "status": status, "result": result_json });
     let resp = client
         .post_json(&format!("/api/orchestration/tasks/{id}/status"), &req)
@@ -249,7 +269,9 @@ pub async fn dispatch(
 ) -> Result<()> {
     let client = ApiClient::from_env();
     let req = json!({ "task": task, "to": to, "from": from });
-    let resp = client.post_json("/api/orchestration/dispatch", &req).await?;
+    let resp = client
+        .post_json("/api/orchestration/dispatch", &req)
+        .await?;
 
     // --inject: also push the task spec into the assignee's terminal so the
     // agent sees the work without a separate `terminal send`. Best-effort.
@@ -280,7 +302,9 @@ pub async fn dispatch(
             println!(
                 "dispatched task #{} → {}",
                 task,
-                d.and_then(|d| d.get("assignee")).and_then(Value::as_str).unwrap_or("?")
+                d.and_then(|d| d.get("assignee"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("?")
             );
         },
         &resp,
@@ -296,7 +320,11 @@ pub async fn dispatch_show(task: i64, json: bool) -> Result<()> {
         json,
         |v| {
             print_task(v);
-            let ds = v.get("dispatches").and_then(Value::as_array).cloned().unwrap_or_default();
+            let ds = v
+                .get("dispatches")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
             for d in ds {
                 println!(
                     "  dispatch #{} → {} [{}] attempts={}",

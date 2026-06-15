@@ -54,7 +54,13 @@ pub async fn run(yes: bool, include_stopped: bool) -> Result<()> {
         );
         for s in &targets {
             let loc = s.host_label.as_deref().unwrap_or("local");
-            println!("  {:<8}  {}  ({} @ {})", s.status.as_str(), s.name, s.tool, loc);
+            println!(
+                "  {:<8}  {}  ({} @ {})",
+                s.status.as_str(),
+                s.name,
+                s.tool,
+                loc
+            );
         }
         return Ok(());
     }

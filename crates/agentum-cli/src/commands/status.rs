@@ -24,7 +24,12 @@ pub struct StatusReport {
 /// Pure composition over the three list responses, so the counting logic is
 /// unit-testable without a live server. Defensive against shape: anything not
 /// an array counts as empty rather than erroring.
-pub fn render_status(api_base: &str, sessions: &Value, worktrees: &Value, hosts: &Value) -> StatusReport {
+pub fn render_status(
+    api_base: &str,
+    sessions: &Value,
+    worktrees: &Value,
+    hosts: &Value,
+) -> StatusReport {
     let arr = |v: &Value| v.as_array().cloned().unwrap_or_default();
     let sessions = arr(sessions);
     let hosts = arr(hosts);

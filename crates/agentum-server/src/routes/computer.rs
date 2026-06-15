@@ -42,28 +42,49 @@ async fn forward(state: &AppState, op: &str, mut body: Value) -> Result<Json<Val
         .map_err(|e| ApiError::Internal(e.to_string()))
 }
 
-async fn capabilities(State(s): State<AppState>, body: Option<Json<Value>>) -> Result<Json<Value>, ApiError> {
+async fn capabilities(
+    State(s): State<AppState>,
+    body: Option<Json<Value>>,
+) -> Result<Json<Value>, ApiError> {
     forward(&s, "capabilities", body.map(|b| b.0).unwrap_or(json!({}))).await
 }
-async fn permissions(State(s): State<AppState>, body: Option<Json<Value>>) -> Result<Json<Value>, ApiError> {
+async fn permissions(
+    State(s): State<AppState>,
+    body: Option<Json<Value>>,
+) -> Result<Json<Value>, ApiError> {
     forward(&s, "permissions", body.map(|b| b.0).unwrap_or(json!({}))).await
 }
-async fn list_apps(State(s): State<AppState>, body: Option<Json<Value>>) -> Result<Json<Value>, ApiError> {
+async fn list_apps(
+    State(s): State<AppState>,
+    body: Option<Json<Value>>,
+) -> Result<Json<Value>, ApiError> {
     forward(&s, "list-apps", body.map(|b| b.0).unwrap_or(json!({}))).await
 }
-async fn get_app_state(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
+async fn get_app_state(
+    State(s): State<AppState>,
+    Json(b): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
     forward(&s, "get-app-state", b).await
 }
 async fn click(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
     forward(&s, "click", b).await
 }
-async fn set_value(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
+async fn set_value(
+    State(s): State<AppState>,
+    Json(b): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
     forward(&s, "set-value", b).await
 }
-async fn type_text(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
+async fn type_text(
+    State(s): State<AppState>,
+    Json(b): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
     forward(&s, "type-text", b).await
 }
-async fn press_key(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
+async fn press_key(
+    State(s): State<AppState>,
+    Json(b): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
     forward(&s, "press-key", b).await
 }
 async fn scroll(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
