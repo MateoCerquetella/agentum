@@ -80,9 +80,12 @@ jobs:
           toolchain: 1.94.1
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
+      # No rust-cache on purpose. sherpa-rs's `download-binaries` stages the
+      # onnxruntime/sherpa native libs during a *cold* build, but a restored
+      # cache leaves them off the linker search path → "unable to find library
+      # -lonnxruntime" on Linux. That broke v0.14.2's cache-hit re-run even
+      # though the cold (cache-miss) run was fully green. Releases are
+      # infrequent, so a reliable cold compile beats a flaky cached one.
 
       - name: Install cross
         if: matrix.cross
