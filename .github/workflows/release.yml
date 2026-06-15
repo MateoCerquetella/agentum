@@ -150,6 +150,10 @@ jobs:
       - name: Build desktop installers
         if: ${{ matrix.desktop != '' }}
         working-directory: crates/agentum-desktop
+        # shell: bash so this multi-line script runs under bash on Windows too —
+        # the default Windows shell is PowerShell, which can't parse the bash
+        # `[[ ]]`/`for` syntax (ParserError). Windows runners ship git-bash.
+        shell: bash
         # Workspace target dir resolves at the repo root → bundles land in
         # target/<triple>/release/bundle/ (consumed by the staging step).
         # Linux builds the .deb here (reliable); the AppImage is a separate
