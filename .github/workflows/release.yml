@@ -108,10 +108,14 @@ jobs:
           # libayatana-appindicator3-dev is required by Tauri's `tray-icon`
           # feature at LINK time — without it the desktop build aborts with
           # "Can't detect any appindicator library" (broke v0.10.8 on Linux).
+          # libasound2-dev ships alsa.pc for `alsa-sys`, pulled in transitively
+          # by the voice-STT capture path (cpal) in agentum-desktop — without it
+          # the build panics with "Package alsa was not found in the pkg-config
+          # search path" (broke v0.14.1 on Linux).
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
             libgtk-3-dev librsvg2-dev patchelf libfuse2 file \
-            libayatana-appindicator3-dev
+            libayatana-appindicator3-dev libasound2-dev
       - name: Install tauri-cli
         if: ${{ matrix.desktop != '' }}
         uses: taiki-e/install-action@v2
@@ -124,7 +128,25 @@ jobs:
         # target/<triple>/release/bundle/ (consumed by the staging step).
         # Linux builds the .deb here (reliable); the AppImage is a separate
         # best-effort step below since its toolchain is finicky on CI.
-        run: cargo tauri build --target ${{ matrix.target }} --bundles ${{ matrix.desktop }}
+        #
+        # macOS dylib staging: tauri.conf's macOS bundle `frameworks` point at
+        # ../../target/release/libsherpa-*.dylib (+ libonnxruntime), but a
+        # `--target` build emits those dylibs into target/<triple>/release/. The
+        # bundle step looks only at the literal target/release/ path, so it aborted
+        # with "Library not found" and broke the v0.14.0 release (works locally
+        # only because a plain `cargo build` uses target/release/). Compile first,
+        # copy the dylibs to where the frameworks paths expect them, THEN bundle.
+        # The tauri build below recompiles incrementally (cache hit). No-op on
+        # Linux (different bundle, no frameworks).
+        run: |
+          cargo build --release --target ${{ matrix.target }} -p agentum-desktop
+          if [[ "${{ matrix.target }}" == *apple-darwin* ]]; then
+            mkdir -p ../../target/release
+            for lib in libsherpa-onnx-c-api.dylib libsherpa-onnx-cxx-api.dylib libonnxruntime.1.17.1.dylib; do
+              cp -f "../../target/${{ matrix.target }}/release/$lib" "../../target/release/$lib"
+            done
+          fi
+          cargo tauri build --target ${{ matrix.target }} --bundles ${{ matrix.desktop }}
 
       # AppImage is the only Arch-friendly format, but linuxdeploy/appimagetool
       # are flaky on CI (no FUSE). Best-effort: if it fails we still ship the
