@@ -86,7 +86,7 @@ fn load_worktrees() -> Vec<WorktreeEntry> {
     rows.into_iter()
         .filter_map(|row| {
             let path = row.id.split_once("::").map(|(_, p)| p.to_string())?;
-            (!path.is_empty()).then(|| WorktreeEntry {
+            (!path.is_empty()).then_some(WorktreeEntry {
                 id: row.id,
                 repo_id: row.repo_id,
                 display_name: row.display_name,
