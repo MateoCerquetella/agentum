@@ -50,6 +50,14 @@ jobs:
             runner: macos-14
             cross: false
             desktop: dmg
+          # Windows x64. NSIS produces the .exe installer (like Orca's
+          # orca-windows-setup.exe). The daemon shells out to tmux (no native
+          # Windows port), so this ships as a remote client; local sessions need
+          # WSL — but the app installs and drives remote SSH hosts.
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            cross: false
+            desktop: nsis
     steps:
       - uses: actions/checkout@v4
 
@@ -86,6 +94,21 @@ jobs:
       # -lonnxruntime" on Linux. That broke v0.14.2's cache-hit re-run even
       # though the cold (cache-miss) run was fully green. Releases are
       # infrequent, so a reliable cold compile beats a flaky cached one.
+
+      # Windows build deps: MSVC (puts cl.exe on PATH) + nasm for ring/aws-lc
+      # assembly, and override the repo .cargo/config CC=/usr/bin/gcc pin (a
+      # unix-only local-dev workaround) so cc-rs uses MSVC. Must run BEFORE the
+      # cargo build steps below.
+      - name: Set up MSVC (Windows)
+        if: ${{ contains(matrix.target, 'windows') }}
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Install nasm (Windows)
+        if: ${{ contains(matrix.target, 'windows') }}
+        uses: ilammy/setup-nasm@v1
+      - name: Use MSVC compiler instead of the gcc pin (Windows)
+        if: ${{ contains(matrix.target, 'windows') }}
+        shell: bash
+        run: echo "CC=cl" >> "$GITHUB_ENV"
 
       - name: Install cross
         if: matrix.cross
@@ -174,7 +197,10 @@ jobs:
           set -eux
           OUT="dist/${BIN_NAME}-${{ github.ref_name }}-${{ matrix.target }}"
           mkdir -p "$OUT"
-          cp "target/${{ matrix.target }}/release/${BIN_NAME}" "$OUT/"
+          # The CLI binary is `agentum` on unix, `agentum.exe` on Windows.
+          BIN="target/${{ matrix.target }}/release/${BIN_NAME}"
+          [ -f "$BIN" ] || BIN="${BIN}.exe"
+          cp "$BIN" "$OUT/"
           cp LICENSE README.md CHANGELOG.md "$OUT/"
           ( cd dist && tar -czf "${BIN_NAME}-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" "${BIN_NAME}-${{ github.ref_name }}-${{ matrix.target }}" )
           # Desktop installers (.dmg/.deb/.AppImage) ship as standalone assets,
@@ -182,7 +208,7 @@ jobs:
           # release job merges every target's artifacts into one dir.
           BUNDLE_DIR="target/${{ matrix.target }}/release/bundle"
           if [ -d "$BUNDLE_DIR" ]; then
-            find "$BUNDLE_DIR" -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) -print0 \
+            find "$BUNDLE_DIR" -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' -o -name '*-setup.exe' -o -name '*.msi' \) -print0 \
               | while IFS= read -r -d '' f; do
                   base="$(basename "$f")"
                   cp "$f" "dist/${base%.*}-${{ matrix.target }}.${base##*.}"
@@ -207,12 +233,18 @@ jobs:
             dist/*.dmg
             dist/*.deb
             dist/*.AppImage
+            dist/*.exe
+            dist/*.msi
             dist/agentum-desktop-*
           if-no-files-found: error
           retention-days: 7
 
   release:
     name: github release
+    # Only publish on a tag push. A manual workflow_dispatch (used to test the
+    # build matrix — e.g. the Windows port) still runs `build` but skips this, so
+    # a dispatch never creates a junk release named after a branch.
+    if: startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -228,7 +260,7 @@ jobs:
       - name: Generate sha256 sums
         run: |
           set -eux
-          ( cd dist && sha256sum $(ls *.tar.gz *.dmg *.deb *.AppImage agentum-desktop-* 2>/dev/null) > SHA256SUMS )
+          ( cd dist && sha256sum $(ls *.tar.gz *.dmg *.deb *.AppImage *.exe *.msi agentum-desktop-* 2>/dev/null) > SHA256SUMS )
           cat dist/SHA256SUMS
 
       - name: Stage installer + uninstaller
@@ -270,6 +302,8 @@ jobs:
             dist/*.dmg
             dist/*.deb
             dist/*.AppImage
+            dist/*.exe
+            dist/*.msi
             dist/agentum-desktop-*
             dist/SHA256SUMS
             dist/install.sh
