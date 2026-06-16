@@ -38,7 +38,7 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
             cross: false
-            desktop: deb
+            desktop: deb,rpm
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04
             cross: true
@@ -244,7 +244,7 @@ jobs:
           # installer keeps a -setup suffix). Clean + versioned, no triple.
           BUNDLE_DIR="target/${{ matrix.target }}/release/bundle"
           if [ -d "$BUNDLE_DIR" ]; then
-            find "$BUNDLE_DIR" -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' -o -name '*-setup.exe' -o -name '*.msi' \) -print0 \
+            find "$BUNDLE_DIR" -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*-setup.exe' -o -name '*.msi' \) -print0 \
               | while IFS= read -r -d '' f; do
                   base="$(basename "$f")"; ext="${base##*.}"
                   case "$base" in
@@ -272,6 +272,7 @@ jobs:
             dist/*.tar.gz
             dist/*.dmg
             dist/*.deb
+            dist/*.rpm
             dist/*.AppImage
             dist/*.exe
             dist/*.msi
@@ -300,7 +301,7 @@ jobs:
       - name: Generate sha256 sums
         run: |
           set -eux
-          ( cd dist && sha256sum $(ls *.tar.gz *.dmg *.deb *.AppImage *.exe *.msi agentum-desktop-* 2>/dev/null) > SHA256SUMS )
+          ( cd dist && sha256sum $(ls *.tar.gz *.dmg *.deb *.rpm *.AppImage *.exe *.msi agentum-desktop-* 2>/dev/null) > SHA256SUMS )
           cat dist/SHA256SUMS
 
       - name: Stage installer + uninstaller
@@ -341,6 +342,7 @@ jobs:
             dist/*.tar.gz
             dist/*.dmg
             dist/*.deb
+            dist/*.rpm
             dist/*.AppImage
             dist/*.exe
             dist/*.msi
