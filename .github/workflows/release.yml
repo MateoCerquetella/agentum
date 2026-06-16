@@ -58,6 +58,13 @@ jobs:
             runner: windows-latest
             cross: false
             desktop: nsis
+          # Windows on ARM (aarch64) — cross-compiled from the x64 runner via the
+          # amd64_arm64 MSVC toolchain. Best-effort: depends on sherpa-rs shipping
+          # aarch64-pc-windows-msvc prebuilts.
+          - target: aarch64-pc-windows-msvc
+            runner: windows-latest
+            cross: false
+            desktop: nsis
     steps:
       - uses: actions/checkout@v4
 
@@ -102,6 +109,9 @@ jobs:
       - name: Set up MSVC (Windows)
         if: ${{ contains(matrix.target, 'windows') }}
         uses: ilammy/msvc-dev-cmd@v1
+        with:
+          # Cross to ARM64 from the x64 runner for aarch64-pc-windows-msvc.
+          arch: ${{ contains(matrix.target, 'aarch64') && 'amd64_arm64' || 'amd64' }}
       - name: Install nasm (Windows)
         if: ${{ contains(matrix.target, 'windows') }}
         uses: ilammy/setup-nasm@v1
