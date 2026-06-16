@@ -652,9 +652,57 @@ async fn start(
         // the already-running server — free); Playwright is opt-in
         // (AGENTUM_BROWSER_VERIFY, spawns npx). Best-effort: `provision` logs and
         // skips anything it can't provision and returns `None` when there's
-        // nothing to wire, so a normal coding session is never blocked.
-        if let Some(p) = crate::mcp_provision::provision(&state, &session.tool).await {
+        // nothing to wire, so a normal coding session is never blocked. Local
+        // agents reach the MCP directly on the Mac loopback.
+        let base = state
+            .api_base_url
+            .as_deref()
+            .unwrap_or("http://127.0.0.1:8822");
+        let agentum_mcp_url = format!("{base}/mcp");
+        if let Some(p) =
+            crate::mcp_provision::provision(&state, &session.tool, &agentum_mcp_url).await
+        {
             launch.argv.extend(adapter.mcp_args(&p));
+        }
+    } else if matches!(host.kind, HostKind::Ssh { .. }) {
+        // Remote MCP parity: the agentum MCP lives on the Mac. Reverse-tunnel it
+        // to the host so the remote agent reaches it at the fixed loopback
+        // REMOTE_MCP_PORT, which forwards back to the Mac's embedded server. The
+        // tunnel is loopback-bound on both ends and the MCP is bearer-token
+        // guarded, so it's safe even without a VPN. Best-effort: a tunnel failure
+        // logs and launches the agent without the MCP rather than blocking.
+        match crate::mcp_provision::local_mcp_port(&state) {
+            Some(mac_port) => {
+                let host_port = crate::mcp_provision::REMOTE_MCP_PORT;
+                match crate::host_runtime::ensure_reverse_tunnel(&host, host_port, mac_port).await {
+                    Ok(()) => {
+                        // The remote agent needs its own orchestration handle (for
+                        // agentum_check_messages) and an AGENTUM_API_URL pointing
+                        // at the tunnel so an in-pane `agentum` CLI works too.
+                        launch
+                            .env
+                            .push(("AGENTUM_TERMINAL_HANDLE".into(), session.name.clone()));
+                        launch.env.push((
+                            "AGENTUM_API_URL".into(),
+                            format!("http://127.0.0.1:{host_port}"),
+                        ));
+                        let agentum_mcp_url = format!("http://127.0.0.1:{host_port}/mcp");
+                        if let Some(p) =
+                            crate::mcp_provision::provision(&state, &session.tool, &agentum_mcp_url)
+                                .await
+                        {
+                            launch.argv.extend(adapter.mcp_args(&p));
+                        }
+                    }
+                    Err(e) => tracing::warn!(
+                        session = %session.id,
+                        "reverse MCP tunnel to host failed; launching remote agent without agentum MCP: {e}"
+                    ),
+                }
+            }
+            None => tracing::warn!(
+                "no embedded api_base_url; cannot reverse-tunnel the agentum MCP to an SSH host"
+            ),
         }
     }
 
