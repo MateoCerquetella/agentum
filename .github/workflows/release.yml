@@ -58,13 +58,11 @@ jobs:
             runner: windows-latest
             cross: false
             desktop: nsis
-          # Windows on ARM (aarch64) — cross-compiled from the x64 runner via the
-          # amd64_arm64 MSVC toolchain. Best-effort: depends on sherpa-rs shipping
-          # aarch64-pc-windows-msvc prebuilts.
-          - target: aarch64-pc-windows-msvc
-            runner: windows-latest
-            cross: false
-            desktop: nsis
+          # NOTE: aarch64-pc-windows-msvc is intentionally NOT built yet. aws-lc-sys
+          # (the rustls crypto backend) fails to assemble its ARM64 .S files when
+          # cross-compiled on the x64 runner (LNK1181: chacha-armv8.o missing).
+          # Fixing it means swapping the whole TLS stack to ring or wiring an ARM64
+          # assembler — tracked in #13 as a follow-up. x64 Windows ships today.
     steps:
       - uses: actions/checkout@v4
 
