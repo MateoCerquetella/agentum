@@ -135,6 +135,16 @@ One Chrome, driven by Playwright and mirrored by agentum.
   functional. **The live test surfaced and fixed a real bug:** Playwright MCP's
   default `--host localhost` binds IPv6 `::1`-only on macOS → the `127.0.0.1` URL
   was connection-refused; pinned `--host 127.0.0.1` so bind/probe/URL agree.
+- **P1 — VIA-AGENTUM E2E PASSED.** Booted the real worktree `agentum serve
+  --no-tls --no-auth` with `AGENTUM_BROWSER_VERIFY=1`, created + started a claude
+  session through `POST /api/sessions` + `/start` (the actual wired path,
+  `routes/sessions.rs::start`). Evidence: (1) the spawned `claude` process argv
+  carried `--mcp-config /…/state/playwright-mcp.json`; (2) that file held the
+  correct `{mcpServers.playwright={type:"http",url:"http://127.0.0.1:8931/mcp"}}`;
+  (3) the shared `agentum-playwright-mcp` tmux session was alive and 8931 listening.
+  Combined with the Claude-path browser test above, the full chain — agentum
+  launch → MCP wired → live server → navigate+screenshot — is proven. **P1 is
+  complete for the Claude path.**
 - **P1 — remaining:** verify the exact Codex `-c mcp_servers.playwright.*` schema
   against a real codex CLI (Claude path is proven; Codex is still unverified-live);
   optional standalone `agentum` CLI helper for the fully-desktop-closed path. P2
