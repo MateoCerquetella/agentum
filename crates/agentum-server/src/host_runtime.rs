@@ -3,7 +3,7 @@
 //! The SSH backend intentionally drives only stock `ssh` + `tmux` on the
 //! remote machine. The remote host never needs an `agentum` binary.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -968,8 +968,22 @@ const TMUX_DISCOVER_FORMAT: &str = "#{session_name}\t#{session_attached}\t#{sess
 /// running" both return an empty list — for discovery they mean the same
 /// thing; only transport failures (SSH unreachable/timeout) are errors.
 pub async fn list_tmux_sessions(host: &Host) -> Result<Vec<DiscoveredTmuxSession>> {
-    let stdout = match &host.kind {
-        HostKind::Local => agentum_tmux::list_panes_all(TMUX_DISCOVER_FORMAT).await?,
+    Ok(parse_tmux_panes(&tmux_discover_raw(host).await?))
+}
+
+/// Like [`list_tmux_sessions`] but returns the agentum-MANAGED (`agentum-*`)
+/// sessions instead of the external ones — the basis for the zombie sweep
+/// (orphaned panes a crashed/abandoned session left running on a host).
+pub async fn list_managed_tmux_sessions(host: &Host) -> Result<Vec<DiscoveredTmuxSession>> {
+    Ok(parse_tmux_panes_managed(&tmux_discover_raw(host).await?))
+}
+
+/// Run the pane-discovery query on `host`, returning raw stdout. "tmux missing"
+/// and "no server running" both collapse to an empty string (for discovery they
+/// mean the same — nothing to report); only SSH transport failures error.
+async fn tmux_discover_raw(host: &Host) -> Result<String> {
+    match &host.kind {
+        HostKind::Local => Ok(agentum_tmux::list_panes_all(TMUX_DISCOVER_FORMAT).await?),
         HostKind::Ssh { .. } => {
             let script = format!("tmux list-panes -a -F {}", q(TMUX_DISCOVER_FORMAT)?);
             let output = ssh_output(host, &script, SSH_TIMEOUT)
@@ -977,26 +991,38 @@ pub async fn list_tmux_sessions(host: &Host) -> Result<Vec<DiscoveredTmuxSession
                 .map_err(map_ssh_io)?;
             if !output.status.success() {
                 // tmux exits 1 for "no server running", the shell exits 127
-                // when tmux isn't installed; ssh itself exits 255 on
-                // transport failure — only the latter should surface.
+                // when tmux isn't installed; ssh itself exits 255 on transport
+                // failure — only the latter should surface.
                 return match output.status.code() {
-                    Some(1) | Some(127) => Ok(Vec::new()),
+                    Some(1) | Some(127) => Ok(String::new()),
                     code => Err(HostRuntimeError::NonZero {
                         status: code,
                         stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
                     }),
                 };
             }
-            String::from_utf8(output.stdout)?
+            Ok(String::from_utf8(output.stdout)?)
         }
-    };
-    Ok(parse_tmux_panes(&stdout))
+    }
 }
 
-/// Parse [`TMUX_DISCOVER_FORMAT`] pane lines into sessions, preserving
-/// tmux's order and dropping `agentum-*` (managed) sessions. Tolerant of
-/// trailing `\r` and malformed lines.
+/// Parse [`TMUX_DISCOVER_FORMAT`] pane lines into the EXTERNAL (non-`agentum-*`)
+/// sessions — the discovery view. Thin wrapper over [`parse_tmux_panes_filtered`].
 fn parse_tmux_panes(stdout: &str) -> Vec<DiscoveredTmuxSession> {
+    parse_tmux_panes_filtered(stdout, false)
+}
+
+/// Parse [`TMUX_DISCOVER_FORMAT`] pane lines into the agentum-MANAGED
+/// (`agentum-*`) sessions — the zombie-sweep view.
+fn parse_tmux_panes_managed(stdout: &str) -> Vec<DiscoveredTmuxSession> {
+    parse_tmux_panes_filtered(stdout, true)
+}
+
+/// Parse [`TMUX_DISCOVER_FORMAT`] pane lines into sessions, preserving tmux's
+/// order. `managed = false` keeps only EXTERNAL sessions (discovery); `managed =
+/// true` keeps only agentum-MANAGED (`agentum-*`) ones (zombie sweep). Tolerant
+/// of trailing `\r` and malformed lines.
+fn parse_tmux_panes_filtered(stdout: &str, managed: bool) -> Vec<DiscoveredTmuxSession> {
     let mut sessions: Vec<DiscoveredTmuxSession> = Vec::new();
     for line in stdout.lines() {
         let line = line.trim_end_matches('\r');
@@ -1009,7 +1035,8 @@ fn parse_tmux_panes(stdout: &str) -> Vec<DiscoveredTmuxSession> {
         else {
             continue;
         };
-        if name.starts_with("agentum-") {
+        // Keep only the requested class: managed (`agentum-*`) vs external.
+        if name.starts_with("agentum-") != managed {
             continue;
         }
         let pane = DiscoveredPane {
@@ -1032,6 +1059,36 @@ fn parse_tmux_panes(stdout: &str) -> Vec<DiscoveredTmuxSession> {
         }
     }
     sessions
+}
+
+/// Decide which agentum-managed (`agentum-*`) tmux sessions on a host are
+/// zombies — orphaned panes a crashed/abandoned session left running, safe to
+/// kill. A session is a zombie ONLY when ALL hold:
+///   - it is managed (`agentum-*`) — external/user sessions never qualify;
+///   - it is NOT attached (no tmux client is using it right now);
+///   - it is NOT backed by a live (running/idle) store session;
+///   - it is NOT `protected` (e.g. an [`EXTERNAL_TMUX_FLAG`] binding, whose
+///     underlying tmux is user-owned and must never be killed).
+///
+/// Pure (no I/O) so the safety invariants can be exhaustively unit-tested. The
+/// destructive caller passes the result to [`kill_session`] only on `--yes`.
+///
+/// [`EXTERNAL_TMUX_FLAG`]: agentum_core::EXTERNAL_TMUX_FLAG
+pub fn zombie_tmux_targets(
+    on_host: &[DiscoveredTmuxSession],
+    live_targets: &HashSet<String>,
+    protected_targets: &HashSet<String>,
+) -> Vec<String> {
+    on_host
+        .iter()
+        .filter(|s| {
+            s.name.starts_with("agentum-")
+                && !s.attached
+                && !live_targets.contains(&s.name)
+                && !protected_targets.contains(&s.name)
+        })
+        .map(|s| s.name.clone())
+        .collect()
 }
 
 pub async fn ssh_stdout(host: &Host, script: &str) -> Result<String> {
@@ -1488,6 +1545,57 @@ mod tests {
             "2 attached clients counts as attached"
         );
         assert_eq!(sessions[0].panes[0].cwd, "/srv/app");
+    }
+
+    #[test]
+    fn parse_tmux_panes_managed_keeps_only_agentum_sessions() {
+        // Inverse of the discovery view: external sessions drop, `agentum-*` stay.
+        let stdout = "dev\t1\t1\tnvim\t/p\n\
+             agentum-alpha\t0\t2\tclaude\t/p\n\
+             agentum-beta\t1\t3\tcodex\t/q\n";
+        let sessions = parse_tmux_panes_managed(stdout);
+        assert_eq!(sessions.len(), 2, "only agentum-* kept");
+        assert_eq!(sessions[0].name, "agentum-alpha");
+        assert!(!sessions[0].attached);
+        assert_eq!(sessions[1].name, "agentum-beta");
+        assert!(sessions[1].attached);
+    }
+
+    fn tmux(name: &str, attached: bool) -> DiscoveredTmuxSession {
+        DiscoveredTmuxSession {
+            name: name.to_string(),
+            attached,
+            created_at: None,
+            panes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn zombie_sweep_kills_only_orphaned_unattached_managed_panes() {
+        let on_host = vec![
+            tmux("agentum-live", false), // backed by a live session → keep
+            tmux("agentum-dead", false), // orphaned + unattached → ZOMBIE
+            tmux("agentum-busy", true),  // orphaned but attached → keep
+            tmux("agentum-ext", false),  // EXTERNAL_TMUX_FLAG binding → keep
+        ];
+        let live: HashSet<String> = ["agentum-live".to_string()].into_iter().collect();
+        let protected: HashSet<String> = ["agentum-ext".to_string()].into_iter().collect();
+
+        let zombies = zombie_tmux_targets(&on_host, &live, &protected);
+        assert_eq!(zombies, vec!["agentum-dead".to_string()]);
+    }
+
+    #[test]
+    fn zombie_sweep_never_touches_external_or_attached_sessions() {
+        // A non-managed (user) session is never a zombie even if unattached and
+        // absent from the store; an attached managed orphan is never a zombie.
+        let on_host = vec![
+            tmux("dev", false),           // not agentum-* → never killed
+            tmux("scratch", false),       // not agentum-* → never killed
+            tmux("agentum-orphan", true), // attached → never killed
+        ];
+        let empty = HashSet::new();
+        assert!(zombie_tmux_targets(&on_host, &empty, &empty).is_empty());
     }
 
     // ── host-aware git/fs, Local backend ──────────────────────────────────

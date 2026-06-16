@@ -9,51 +9,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "agentum-cli"
-version = "0.14.3"
-dependencies = [
- "agentum-core",
- "agentum-executor",
- "agentum-server",
- "agentum-store",
- "agentum-tmux",
- "anyhow",
- "arboard",
- "base64 0.22.1",
- "bytes",
- "clap",
- "crossterm",
- "exec",
- "futures-util",
- "getrandom 0.2.17",
- "image",
- "libc",
- "portable-pty",
- "ratatui",
- "reqwest 0.12.28",
- "rpassword",
- "rustls",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tokio-rustls",
- "tokio-tungstenite 0.24.0",
- "toml 0.8.23",
- "toml_edit 0.22.27",
- "tracing",
- "tracing-subscriber",
- "tui-term",
- "url",
- "uuid",
- "vt100",
- "which 7.0.3",
-]
-
-[[package]]
 name = "agentum-core"
 version = "0.14.3"
 dependencies = [
@@ -186,6 +141,51 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "agentum-tui"
+version = "0.14.3"
+dependencies = [
+ "agentum-core",
+ "agentum-executor",
+ "agentum-server",
+ "agentum-store",
+ "agentum-tmux",
+ "anyhow",
+ "arboard",
+ "base64 0.22.1",
+ "bytes",
+ "clap",
+ "crossterm",
+ "exec",
+ "futures-util",
+ "getrandom 0.2.17",
+ "image",
+ "libc",
+ "portable-pty",
+ "ratatui",
+ "reqwest 0.12.28",
+ "rpassword",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite 0.24.0",
+ "toml 0.8.23",
+ "toml_edit 0.22.27",
+ "tracing",
+ "tracing-subscriber",
+ "tui-term",
+ "url",
+ "uuid",
+ "vt100",
+ "which 7.0.3",
 ]
 
 [[package]]

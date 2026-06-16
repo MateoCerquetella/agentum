@@ -40,17 +40,14 @@ One Rust binary spawns AI coding agents (Claude, Codex, Gemini, Cursor, Hermes, 
 # Install (interactive prompts for LAN exposure + autostart only)
 curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh | sh
 
-# From source
-cargo install --git https://github.com/mateocerquetella/agentum agentum-cli
+# From source (installs the `agentum` command)
+cargo install --git https://github.com/mateocerquetella/agentum agentum-tui
 ```
 
 After install:
 
 ```sh
-# Start the daemon (HTTP/WS API on :8822; loopback by default)
-agentum serve
-
-# Drive it from the terminal UI
+# Open the terminal UI — it boots its own server in-process, no daemon to start
 agentum terminal
 
 # …or spawn a session straight from the CLI
@@ -117,7 +114,7 @@ See [`docs/`](docs/) for the data model, HTTP API, and CLI reference.
 
 ```
 crates/
-  agentum-cli/       # binary `agentum` + clap CLI; houses the TUI (commands/terminal/)
+  agentum-tui/       # binary `agentum` + clap CLI; houses the TUI (commands/terminal/)
   agentum-server/    # axum HTTP(S) + WS API (API-only; no embedded web UI)
   agentum-desktop/   # desktop app: Tauri 2 Rust shell in src/ (embeds agentum-server in-process)
                       #   + React/Vite UI in ui/ (native, no Electron bridge)
@@ -132,9 +129,8 @@ docs/                # architecture, data model, API, CLI reference
 ## Development
 
 ```sh
-# Daemon / TUI dev loop
-cargo run -p agentum-cli -- serve --no-tls
-cargo run -p agentum-cli -- terminal
+# TUI dev loop (boots its own embedded server in-process)
+cargo run -p agentum-tui -- terminal
 
 # Desktop UI dev loop (Vite HMR)
 npm --prefix crates/agentum-desktop/ui run dev

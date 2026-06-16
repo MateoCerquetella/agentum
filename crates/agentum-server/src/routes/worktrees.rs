@@ -22,7 +22,7 @@ use serde_json::{Map, Value};
 use crate::AppState;
 use crate::error::ApiError;
 use crate::host_runtime::{self, git_in_dir};
-use crate::routes::repos::{load_host_for_repo, resolve_repo_path};
+use crate::routes::repos::{all_repo_ids, load_host_for_repo, resolve_repo_path};
 
 pub fn router() -> Router<crate::AppState> {
     Router::new()
@@ -32,6 +32,7 @@ pub fn router() -> Router<crate::AppState> {
         .route("/api/worktrees/update-meta", post(update_meta))
         .route("/api/worktrees/create", post(create))
         .route("/api/worktrees/remove", post(remove))
+        .route("/api/worktrees/prune", post(prune))
         .route("/api/worktrees/sort-order", post(persist_sort_order))
         .route(
             "/api/worktrees/force-delete-branch",
@@ -422,6 +423,206 @@ async fn remove(
     Ok(Json(serde_json::json!({})))
 }
 
+// ───────────────────────────────── prune ─────────────────────────────────
+// Bulk-remove the stale worktrees sessions leave behind (issue #8, "clean up
+// stale git worktrees"). Conservative by construction: classification is
+// git-authoritative, a worktree with uncommitted work is NEVER removed, and
+// dry-run is the default — nothing is destroyed without an explicit `apply`.
+
+/// One worktree as `git worktree list --porcelain` reports it, reduced to the
+/// fields classification needs. A pure parse target so the classifier can be
+/// unit-tested without invoking git.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PorcelainWorktree {
+    path: String,
+    branch: Option<String>,
+    /// The first entry git lists is the repo's primary (main) working tree.
+    is_primary: bool,
+    /// A `git worktree lock`ed tree — never auto-pruned.
+    locked: bool,
+    /// git itself flags the working tree as gone (a `prunable <reason>` line);
+    /// `git worktree prune` would drop it. Always safe to remove.
+    prunable: bool,
+}
+
+/// Parse `git worktree list --porcelain` into [`PorcelainWorktree`]s. Each
+/// `worktree ` line starts an entry; `branch`/`locked`/`prunable` attach to the
+/// entry in progress. Tolerant of trailing `\r` and lines we don't model.
+fn parse_worktree_porcelain(text: &str) -> Vec<PorcelainWorktree> {
+    let mut out: Vec<PorcelainWorktree> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim_end_matches('\r');
+        if let Some(path) = line.strip_prefix("worktree ") {
+            let is_primary = out.is_empty();
+            out.push(PorcelainWorktree {
+                path: path.to_string(),
+                branch: None,
+                is_primary,
+                locked: false,
+                prunable: false,
+            });
+        } else if let Some(branch) = line.strip_prefix("branch refs/heads/") {
+            if let Some(last) = out.last_mut() {
+                last.branch = Some(branch.to_string());
+            }
+        } else if line == "locked" || line.starts_with("locked ") {
+            if let Some(last) = out.last_mut() {
+                last.locked = true;
+            }
+        } else if line == "prunable" || line.starts_with("prunable ") {
+            if let Some(last) = out.last_mut() {
+                last.prunable = true;
+            }
+        }
+    }
+    out
+}
+
+/// How prune treats one worktree. Serialized into the response so the CLI/UI can
+/// show *why* each tree was kept or removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum PruneClass {
+    /// Primary worktree, or `git worktree lock`ed — never touched.
+    Keep,
+    /// Working tree is gone (git-prunable); removing it just drops a stale admin
+    /// entry. Always pruned.
+    Gone,
+    /// Exists, non-primary, unlocked, no uncommitted changes. Pruned only with
+    /// `includeClean` (a clean tree may still be wanted).
+    Clean,
+    /// Has uncommitted changes, or its state couldn't be read. NEVER
+    /// auto-pruned — losing uncommitted work is the one unrecoverable mistake.
+    Dirty,
+}
+
+/// Pure classification. `dirty` is the outcome of a `git status --porcelain`
+/// check on the worktree: `Some(false)` = clean, `Some(true)` = dirty, `None` =
+/// couldn't check. Unknown collapses to `Dirty`, so an unreadable tree is
+/// preserved rather than destroyed.
+fn classify_worktree(wt: &PorcelainWorktree, dirty: Option<bool>) -> PruneClass {
+    if wt.is_primary || wt.locked {
+        return PruneClass::Keep;
+    }
+    if wt.prunable {
+        return PruneClass::Gone;
+    }
+    match dirty {
+        Some(false) => PruneClass::Clean,
+        _ => PruneClass::Dirty,
+    }
+}
+
+/// Whether a class is removed at the requested aggressiveness. `Gone` always;
+/// `Clean` only when the caller opts in; `Keep`/`Dirty` never.
+fn should_prune(class: PruneClass, include_clean: bool) -> bool {
+    matches!(class, PruneClass::Gone) || (include_clean && matches!(class, PruneClass::Clean))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PruneBody {
+    /// Limit to one repo; omit to sweep every registered repo.
+    #[serde(default)]
+    repo_id: Option<String>,
+    /// Actually remove (default false = dry-run preview).
+    #[serde(default)]
+    apply: bool,
+    /// Also prune clean (no-uncommitted-changes) non-primary worktrees, not just
+    /// the git-prunable (gone) ones.
+    #[serde(default)]
+    include_clean: bool,
+}
+
+/// `POST /api/worktrees/prune` — bulk-remove stale worktrees across one repo or
+/// all of them. Host-aware (each repo's git runs on the repo's host). Dry-run
+/// unless `apply`. Returns `{dryRun, pruned:[{id,path,branch,class}], kept:[…]}`.
+async fn prune(
+    State(state): State<AppState>,
+    Json(body): Json<PruneBody>,
+) -> Result<Json<Value>, ApiError> {
+    let repo_ids = match &body.repo_id {
+        Some(id) => vec![id.clone()],
+        None => all_repo_ids()?,
+    };
+
+    let mut pruned: Vec<Value> = Vec::new();
+    let mut kept: Vec<Value> = Vec::new();
+
+    for repo_id in repo_ids {
+        // A repo whose host was deleted/unreachable, or whose path no longer
+        // resolves, shouldn't abort the whole sweep — skip it, keep going.
+        let (Ok(host), Ok(repo_path)) = (
+            load_host_for_repo(&state, &repo_id).await,
+            resolve_repo_path(&repo_id),
+        ) else {
+            continue;
+        };
+        let listing =
+            match git_in_dir(&host, &repo_path, &["worktree", "list", "--porcelain"]).await {
+                Ok(out) if out.success => out.stdout_string(),
+                _ => continue,
+            };
+
+        for wt in parse_worktree_porcelain(&listing) {
+            // Only an existing, non-primary, unlocked tree needs the dirty check;
+            // primary/locked/gone trees skip the extra git call.
+            let dirty = if wt.is_primary || wt.locked || wt.prunable {
+                None
+            } else {
+                match git_in_dir(&host, &wt.path, &["status", "--porcelain"]).await {
+                    Ok(out) if out.success => Some(!out.stdout_string().trim().is_empty()),
+                    _ => None, // unreadable → treated as Dirty (kept)
+                }
+            };
+            let class = classify_worktree(&wt, dirty);
+            let entry = serde_json::json!({
+                "id": format!("{repo_id}::{}", wt.path),
+                "repoId": repo_id,
+                "path": wt.path,
+                "branch": wt.branch,
+                "class": class,
+            });
+
+            if should_prune(class, body.include_clean) {
+                if body.apply {
+                    // --force: a Clean tree has nothing to lose (status --porcelain
+                    // was empty) and a Gone tree's dir is already absent. The
+                    // follow-up `prune` sweeps the leftover admin entry git's
+                    // `remove` can't (the missing-dir case).
+                    let _ = git_in_dir(
+                        &host,
+                        &repo_path,
+                        &["worktree", "remove", "--force", &wt.path],
+                    )
+                    .await;
+                    let _ = git_in_dir(&host, &repo_path, &["worktree", "prune"]).await;
+                }
+                pruned.push(entry);
+            } else {
+                kept.push(entry);
+            }
+        }
+    }
+
+    // Deregister every removed worktree from the registry in one read/write.
+    if body.apply && !pruned.is_empty() {
+        let removed: std::collections::HashSet<&str> = pruned
+            .iter()
+            .filter_map(|entry| entry.get("id").and_then(Value::as_str))
+            .collect();
+        let mut registry = read_worktrees()?;
+        registry.retain(|wt| !removed.contains(wt.id.as_str()));
+        write_worktrees(&registry)?;
+    }
+
+    Ok(Json(serde_json::json!({
+        "dryRun": !body.apply,
+        "pruned": pruned,
+        "kept": kept,
+    })))
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SortOrderBody {
@@ -653,6 +854,96 @@ mod tests {
             last_seen_at: None,
         };
         assert_eq!(host_location(&ssh), "the remote host forge.lan");
+    }
+
+    #[test]
+    fn porcelain_parses_primary_branch_locked_and_prunable() {
+        // First entry is primary; later entries carry branch/locked/prunable.
+        let text = "\
+worktree /repo
+HEAD aaaa
+branch refs/heads/main
+
+worktree /repo/.claude/worktrees/feat
+HEAD bbbb
+branch refs/heads/feat
+
+worktree /repo/.claude/worktrees/held
+HEAD cccc
+branch refs/heads/held
+locked manual hold
+
+worktree /repo/.claude/worktrees/gone
+HEAD dddd
+detached
+prunable gitdir file points to non-existent location
+";
+        let wts = parse_worktree_porcelain(text);
+        assert_eq!(wts.len(), 4);
+        assert!(wts[0].is_primary && wts[0].branch.as_deref() == Some("main"));
+        assert!(!wts[1].is_primary && !wts[1].locked && !wts[1].prunable);
+        assert!(wts[2].locked, "`locked <reason>` must set locked");
+        assert!(wts[3].prunable, "`prunable <reason>` must set prunable");
+        assert_eq!(wts[3].branch, None); // detached → no branch
+    }
+
+    fn wt(is_primary: bool, locked: bool, prunable: bool) -> PorcelainWorktree {
+        PorcelainWorktree {
+            path: "/p".into(),
+            branch: None,
+            is_primary,
+            locked,
+            prunable,
+        }
+    }
+
+    #[test]
+    fn classify_keeps_primary_and_locked_always() {
+        // Primary and locked are kept no matter how clean — even gone/clean.
+        for dirty in [Some(false), Some(true), None] {
+            assert_eq!(
+                classify_worktree(&wt(true, false, false), dirty),
+                PruneClass::Keep
+            );
+            assert_eq!(
+                classify_worktree(&wt(false, true, false), dirty),
+                PruneClass::Keep
+            );
+        }
+    }
+
+    #[test]
+    fn classify_gone_clean_and_dirty() {
+        // Gone (git-prunable) regardless of the dirty probe.
+        assert_eq!(
+            classify_worktree(&wt(false, false, true), None),
+            PruneClass::Gone
+        );
+        // Existing tree: clean vs dirty vs unknown.
+        assert_eq!(
+            classify_worktree(&wt(false, false, false), Some(false)),
+            PruneClass::Clean
+        );
+        assert_eq!(
+            classify_worktree(&wt(false, false, false), Some(true)),
+            PruneClass::Dirty
+        );
+        // Unknown dirty state is preserved (never destroyed).
+        assert_eq!(
+            classify_worktree(&wt(false, false, false), None),
+            PruneClass::Dirty
+        );
+    }
+
+    #[test]
+    fn should_prune_gates_clean_behind_opt_in() {
+        // Gone is always pruned; Dirty/Keep never.
+        assert!(should_prune(PruneClass::Gone, false));
+        assert!(!should_prune(PruneClass::Dirty, true));
+        assert!(!should_prune(PruneClass::Keep, true));
+        // Clean only when include_clean is set.
+        assert!(!should_prune(PruneClass::Clean, false));
+        assert!(should_prune(PruneClass::Clean, true));
     }
 
     #[test]
