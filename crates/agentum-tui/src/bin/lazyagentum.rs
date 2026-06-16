@@ -11,12 +11,14 @@ use clap::Parser;
     name = "lazyagentum",
     version,
     about = "Drop into the agentum terminal dashboard with one keystroke.",
-    long_about = "Equivalent to `agentum terminal`. Connects to a running \
-                  `agentum serve` daemon and opens the dashboard. Use \
-                  `--api` to point at a non-default daemon URL."
+    long_about = "Equivalent to `agentum terminal`. Boots `agentum-server` \
+                  in-process and opens the dashboard — no separate daemon to \
+                  start. Use `--api`/`--profile` to target a remote machine \
+                  instead."
 )]
 struct Args {
-    /// Override API base URL (defaults to https://127.0.0.1:8822 → http fallback).
+    /// Override the API base URL, targeting a remote server instead of the
+    /// in-process embedded one. When omitted, the TUI runs its own server.
     #[arg(long)]
     api: Option<String>,
 

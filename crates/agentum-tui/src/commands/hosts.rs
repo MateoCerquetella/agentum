@@ -1,7 +1,10 @@
 //! `agentum hosts` — manage SSH-agentless hosts plus the legacy
 //! SSH-style known_hosts file for remote Agentum server certificates.
 
-use agentum_core::{Host, HostKind, HostReadiness, NewHost, SshAuth};
+use agentum_core::{
+    EXTERNAL_TMUX_FLAG, Host, HostKind, HostReadiness, LOCAL_HOST_ID, NewHost, Session, SshAuth,
+    Status,
+};
 use anyhow::Result;
 
 use crate::cli::HostsCmd;
@@ -23,6 +26,7 @@ pub async fn run(action: HostsCmd) -> Result<()> {
         HostsCmd::Readiness { name } => readiness(name).await,
         HostsCmd::Rm { name } => remove(name).await,
         HostsCmd::Forget { host } => forget(&host).await,
+        HostsCmd::PruneTmux { name, yes } => prune_tmux(name, yes).await,
     }
 }
 
@@ -384,6 +388,89 @@ async fn remove(name: String) -> Result<()> {
     if store.delete_host(host.id).await? {
         println!("removed host `{name}`");
     }
+    Ok(())
+}
+
+/// The tmux target backing a session: its explicit target, else the canonical
+/// `agentum-<name>` — the same fallback `prune` and session spawn use.
+fn session_target(session: &Session) -> String {
+    session
+        .tmux_target
+        .clone()
+        .unwrap_or_else(|| agentum_tmux::target_for(&session.name))
+}
+
+/// `agentum hosts prune-tmux <name> [--yes]` — kill orphaned `agentum-*` tmux
+/// sessions a crashed/abandoned session left running on a host. Runs in-process
+/// (store + host_runtime, like the other host commands). Dry-run unless `yes`.
+///
+/// Safety rests on [`zombie_tmux_targets`]: a session is killed only when it is
+/// managed, unattached, not backed by a live (running/idle) record, and not an
+/// externally-attached binding. We never kill a tmux a user started themselves.
+///
+/// [`zombie_tmux_targets`]: agentum_server::host_runtime::zombie_tmux_targets
+async fn prune_tmux(name: String, yes: bool) -> Result<()> {
+    use std::collections::HashSet;
+
+    let (store, _) = agentum_store::open_default().await?;
+    let host = find_host(&store, &name).await?;
+
+    // Reconcile the host's managed tmux against what the store believes:
+    //   live      = running/idle records → their tmux must survive
+    //   protected = EXTERNAL_TMUX_FLAG bindings → user-owned tmux, never killed
+    let sessions = store.list_sessions(None).await?;
+    let mut live: HashSet<String> = HashSet::new();
+    let mut protected: HashSet<String> = HashSet::new();
+    for session in sessions
+        .iter()
+        .filter(|s| s.host_id.unwrap_or(LOCAL_HOST_ID) == host.id)
+    {
+        if matches!(session.status, Status::Running | Status::Idle) {
+            live.insert(session_target(session));
+        }
+        if session.flags.iter().any(|f| f == EXTERNAL_TMUX_FLAG) {
+            protected.insert(session_target(session));
+        }
+    }
+
+    let on_host = agentum_server::host_runtime::list_managed_tmux_sessions(&host)
+        .await
+        .map_err(|e| anyhow::anyhow!("listing tmux on `{}` failed: {e}", host.name))?;
+    let zombies = agentum_server::host_runtime::zombie_tmux_targets(&on_host, &live, &protected);
+
+    if zombies.is_empty() {
+        println!("no zombie tmux sessions on `{}`", host.name);
+        return Ok(());
+    }
+
+    if !yes {
+        println!(
+            "Would kill {} zombie tmux session(s) on `{}` — dry run, pass --yes to kill:",
+            zombies.len(),
+            host.name
+        );
+        for target in &zombies {
+            println!("  {target}");
+        }
+        return Ok(());
+    }
+
+    let mut killed = 0u32;
+    for target in &zombies {
+        match agentum_server::host_runtime::kill_session(&host, target).await {
+            Ok(()) => {
+                println!("killed      {target}");
+                killed += 1;
+            }
+            // A session that vanished between listing and kill is fine; surface
+            // real failures but keep sweeping the rest.
+            Err(e) => eprintln!("  failed to kill {target}: {e}"),
+        }
+    }
+    println!(
+        "\nkilled {killed} zombie tmux session(s) on `{}`",
+        host.name
+    );
     Ok(())
 }
 

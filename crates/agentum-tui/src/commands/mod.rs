@@ -17,7 +17,6 @@ pub mod profiles;
 pub mod prune;
 pub mod rm;
 pub mod send;
-pub mod serve;
 pub mod status;
 pub mod tail;
 pub mod terminal;

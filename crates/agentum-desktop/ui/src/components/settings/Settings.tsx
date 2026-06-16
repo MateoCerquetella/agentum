@@ -34,6 +34,7 @@ import { SshPane } from './SshPane'
 import { ExperimentalPane } from './ExperimentalPane'
 import { AgentsPane } from './AgentsPane'
 import { OrchestrationPane } from './OrchestrationPane'
+import { BrowserVerificationLoopPane } from './BrowserVerificationLoopPane'
 import { AccountsPane } from './AccountsPane'
 import { StatsPane } from '../stats/StatsPane'
 import { IntegrationsPane } from './IntegrationsPane'
@@ -843,6 +844,10 @@ function Settings(): React.JSX.Element {
                   {isSectionMounted('agents-automation') ? (
                     <div className="space-y-10">
                       <OrchestrationPane />
+
+                      <div className="border-t border-border/60 pt-8">
+                        <BrowserVerificationLoopPane />
+                      </div>
 
                       {showDesktopOnlySettings ? (
                         // Why: Computer Use lives inside this pane as a subsection. The

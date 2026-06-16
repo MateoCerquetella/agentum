@@ -124,11 +124,11 @@ jobs:
 
       - name: Build (native)
         if: ${{ !matrix.cross }}
-        run: cargo build --release --target ${{ matrix.target }} -p agentum-cli
+        run: cargo build --release --target ${{ matrix.target }} -p agentum-tui
 
       - name: Build (cross)
         if: matrix.cross
-        run: cross build --release --target ${{ matrix.target }} -p agentum-cli
+        run: cross build --release --target ${{ matrix.target }} -p agentum-tui
 
       # --- Desktop installers (Tauri 2) -------------------------------------
       # cargo tauri build produces native installers (.dmg on macOS, .deb +

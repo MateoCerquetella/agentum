@@ -2,7 +2,7 @@
 // drives. Session-per-workspace (Option A): repos/worktrees become server
 // sessions and git/fs/terminal flow through /api/sessions/{id}/*. Built on the
 // loopback endpoint resolved in server-endpoint.ts. Mirrors the TUI client in
-// crates/agentum-cli/src/commands/terminal/api.rs.
+// crates/agentum-tui/src/commands/terminal/api.rs.
 import { apiUrl, wsUrl, getServerEndpoint } from './server-endpoint'
 import { record as recordHostIo, LOCAL_HOST_KEY, type HostKey } from './io-meter'
 

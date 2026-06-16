@@ -17,8 +17,11 @@ A "session" is a `(name, workdir, tool, model, flags)` tuple. The
 daemon spawns the right binary into a tmux pane and streams its
 output to clients.
 
-Two clients consume that API: the **TUI** connects to a running
-`agentum serve` daemon; the **desktop app** (the Tauri crate
+Two clients consume that API: the **TUI** (`agentum terminal`) boots
+`agentum-server` in-process on an ephemeral loopback port — the same
+embedded server the desktop uses — so it is self-contained (no separate
+`agentum serve` daemon; remote machines are reached as SSH hosts); the
+**desktop app** (the Tauri crate
 `crates/agentum-desktop/`, with its Rust shell in `src/` and its
 React/Vite UI in `ui/`) boots
 `agentum-server` *in-process* on a loopback port (see
@@ -39,7 +42,8 @@ crates/
   agentum-watchdog/    # Background loop. Tails panes, emits Event::AgentFinished/AwaitingInput/Crashed.
   agentum-executor/    # ToolAdapter trait + per-agent argv builders. Owns YOLO marker translation.
   agentum-server/      # axum HTTP+WS API + TLS + auth + routes/. API-only (no embedded web UI).
-  agentum-cli/         # CLI package (binary named `agentum`). Houses the TUI under commands/terminal/.
+  agentum-tui/         # Package `agentum-tui` (binary `agentum`). The TUI
+                       #   (commands/terminal/, boots agentum-server in-process) + scriptable CLI.
   agentum-desktop/     # The desktop app, self-contained:
     src/               #   Tauri 2 Rust shell — embeds agentum-server in-process (loopback) and exposes
                        #   native commands (window, dialogs, clipboard, local PTY) to the webview.
@@ -57,7 +61,9 @@ Each `crates/<x>/Cargo.toml` declares its deps; the workspace root
 > shell (`agentum-desktop`) depends on `agentum-server`, which
 > transitively pulls in the rest. We kept the fine-grained split for
 > compile-time parallelism and clearer ownership; the binary crate was
-> renamed (`agentum` → `agentum-cli` in 2026-05).
+> renamed (`agentum` → `agentum-cli` in 2026-05, then both package and
+> folder `agentum-cli` → `agentum-tui` in 2026-06 — the binary stays
+> `agentum`).
 
 ---
 
@@ -66,10 +72,11 @@ Each `crates/<x>/Cargo.toml` declares its deps; the workspace root
 The daemon is **API-only** — it serves no web UI, so there is no
 compile-time asset embed. The two clients build independently:
 
-- **Daemon / TUI** (Rust): `cargo build --release`, then restart
-  (`pkill agentum && agentum serve` / re-run `agentum terminal`).
+- **TUI** (Rust): `cargo build --release`, then restart by re-running
+  `agentum terminal` (it boots its own embedded server; `pkill agentum`
+  first if a previous instance is still holding its loopback port).
   There's no hot reload; rebuild after touching
-  `crates/agentum-cli/src/commands/terminal/*.rs`.
+  `crates/agentum-tui/src/commands/terminal/*.rs`.
 - **Desktop UI** (React/Vite): `npm run build --prefix crates/agentum-desktop/ui`
   (or `npm run dev --prefix crates/agentum-desktop/ui` for HMR). The Tauri shell
   loads it; `cargo build` the `agentum-desktop` crate after changing
@@ -295,15 +302,8 @@ cargo build --release
 npm run build --prefix dashboard
 cargo build --release   # rebake the embedded SPA
 
-# Run the daemon
-agentum serve
-
-# Run the TUI against the local daemon
+# Run the TUI (boots its own embedded server in-process)
 agentum terminal
-
-# Run the TUI against a remote profile
-agentum profiles add vps https://my-vps.example.com:8822 --set-default
-agentum terminal --profile vps
 
 # Run with mute
 AGENTUM_TUI_NO_SOUND=1 agentum terminal

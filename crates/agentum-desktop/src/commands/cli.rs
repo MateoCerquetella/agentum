@@ -179,7 +179,7 @@ fn build_status() -> CliInstallStatus {
         None => unsupported_status(
             "launcher_missing",
             "No `agentum` CLI binary was found. Install it with \
-             `cargo install --git https://github.com/mateocerquetella/agentum agentum-cli` \
+             `cargo install --git https://github.com/mateocerquetella/agentum agentum-tui` \
              (or download a release), then register here.",
         ),
     }

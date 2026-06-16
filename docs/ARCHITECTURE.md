@@ -123,7 +123,7 @@ MSRV 1.83+, Rust 2024 edition, single workspace.
 
 ### Clients
 
-The TUI is pure Rust (in `agentum-cli`, under `commands/terminal/`) and renders
+The TUI is pure Rust (in `agentum-tui`, under `commands/terminal/`) and renders
 with `ratatui`/`crossterm`. The desktop app is a Tauri 2 shell (`agentum-desktop`)
 hosting a React + Vite UI (in `crates/agentum-desktop/ui/`):
 

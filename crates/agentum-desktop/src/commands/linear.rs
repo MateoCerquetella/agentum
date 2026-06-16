@@ -658,7 +658,31 @@ pub fn linear_update_issue() -> Option<Value> {
     None
 }
 
+// Post a comment to a Linear issue via the GraphQL `commentCreate` mutation using
+// the stored workspace token, so the browser-verification loop (spec 008a) can
+// report pass/fail back to the linked issue. A missing token returns a typed
+// not-connected error rather than a silent no-op.
 #[tauri::command]
-pub fn linear_add_issue_comment() -> Option<Value> {
-    None
+pub async fn linear_add_issue_comment(
+    issue_id: String,
+    body: String,
+    workspace_id: Option<String>,
+) -> Value {
+    let creds = read_creds();
+    let Some(token) = pick_token(&creds, workspace_id.as_deref()) else {
+        return json!({ "ok": false, "error": "Linear is not connected." });
+    };
+    const ADD_COMMENT_MUTATION: &str = "mutation($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success comment { id url } } }";
+    let variables = json!({ "issueId": issue_id, "body": body });
+    match graphql(&token, ADD_COMMENT_MUTATION, variables).await {
+        Ok(data) => {
+            let comment = data.get("commentCreate").and_then(|c| c.get("comment"));
+            json!({
+                "ok": true,
+                "id": comment.and_then(|c| c.get("id")).and_then(Value::as_str).unwrap_or_default(),
+                "url": comment.and_then(|c| c.get("url")).and_then(Value::as_str).unwrap_or_default(),
+            })
+        }
+        Err(message) => json!({ "ok": false, "error": message }),
+    }
 }

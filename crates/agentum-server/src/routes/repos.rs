@@ -334,6 +334,13 @@ async fn reorder(Json(body): Json<ReorderBody>) -> Result<Json<Value>, ApiError>
     Ok(Json(serde_json::json!({ "status": "applied" })))
 }
 
+/// Every registered repo's id, in registry order. `pub(crate)` so the
+/// worktrees route can scan all repos (e.g. a prune with no `repoId` filter)
+/// without duplicating the registry read or exposing the private `Repo`.
+pub(crate) fn all_repo_ids() -> Result<Vec<String>, ApiError> {
+    Ok(read_repos()?.into_iter().map(|repo| repo.id).collect())
+}
+
 /// Resolve a repoId to its checkout path via the registry. `pub(crate)` so the
 /// worktrees route can resolve the same path without duplicating the read.
 pub(crate) fn resolve_repo_path(repo_id: &str) -> Result<String, ApiError> {

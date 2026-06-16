@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -8,11 +7,11 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "agentum",
     version,
-    about = "Self-hosted control plane for AI coding agents.",
-    long_about = "Self-hosted control plane for AI coding agents.\n\n\
+    about = "Control plane for AI coding agents.",
+    long_about = "Control plane for AI coding agents.\n\n\
                   Quick start:\n  \
                   agentum new my-session --tool claude --dir .\n  \
-                  agentum serve          # resumes sessions + starts dashboard"
+                  agentum terminal       # open the interactive dashboard"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -158,42 +157,6 @@ pub enum Cmd {
         key_spec: String,
     },
 
-    /// Start agentum (resumes sessions + launches dashboard).
-    Serve {
-        /// Port to bind on (HTTPS by default).
-        #[arg(long, default_value_t = 8822)]
-        port: u16,
-
-        /// Bind address.
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
-
-        /// Plain-HTTP cert-server port — serves the self-signed PEM
-        /// for trust-on-first-use from a phone.
-        #[arg(long, default_value_t = 8823)]
-        cert_port: u16,
-
-        /// Bind plain HTTP instead of HTTPS. Disables the cert-server too.
-        #[arg(long)]
-        no_tls: bool,
-
-        /// Skip auto-resuming stopped sessions on startup.
-        #[arg(long)]
-        no_resume: bool,
-
-        /// Detach from the terminal and run as a background daemon.
-        /// The process survives terminal close; logs go to
-        /// $XDG_STATE_HOME/agentum/daemon.log (or ~/.local/state/agentum/daemon.log).
-        #[arg(long, short = 'd')]
-        detach: bool,
-
-        /// Disable authentication entirely. All API routes are accessible
-        /// without a bearer token. The dashboard will not show a login screen.
-        /// Use only on localhost or a fully trusted private network.
-        #[arg(long)]
-        no_auth: bool,
-    },
-
     /// Manage API authentication.
     Auth {
         #[command(subcommand)]
@@ -313,7 +276,7 @@ pub enum Cmd {
         api: Option<String>,
 
         /// Pre-pin the server's SHA-256 cert fingerprint (e.g. `AB:CD:…` as
-        /// printed by `agentum serve` on the host). Skips the interactive
+        /// printed by the remote server on the host). Skips the interactive
         /// trust prompt on first contact.
         #[arg(long)]
         fingerprint: Option<String>,
@@ -734,6 +697,29 @@ pub enum WorktreeCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Remove stale worktrees sessions left behind. Dry-run by default — pass
+    /// --yes to remove. Prunes git-prunable (gone) worktrees; add --clean to
+    /// also remove non-primary worktrees with no uncommitted changes. NEVER
+    /// removes the primary worktree, locked worktrees, or any tree with
+    /// uncommitted work. Host-aware (covers remote SSH repos too).
+    Prune {
+        /// Limit to one repo (its id); omit to sweep every registered repo.
+        #[arg(long)]
+        repo: Option<String>,
+
+        /// Also remove clean (no-uncommitted-changes) non-primary worktrees,
+        /// not just git-prunable ones.
+        #[arg(long)]
+        clean: bool,
+
+        /// Actually remove the worktrees (default prints a dry-run preview).
+        #[arg(long, short = 'y')]
+        yes: bool,
+
+        /// Emit the raw prune JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -775,6 +761,17 @@ pub enum HostsCmd {
     Rm { name: String },
     /// Forget a pinned Agentum server certificate host (legacy trust store).
     Forget { host: String },
+    /// Kill zombie tmux sessions on a host — orphaned `agentum-*` panes a
+    /// crashed/abandoned session left running. Dry-run by default; pass --yes
+    /// to kill. NEVER touches attached sessions, sessions backed by a live
+    /// (running/idle) record, externally-attached sessions, or any tmux a user
+    /// started outside agentum.
+    PruneTmux {
+        name: String,
+        /// Actually kill the zombie sessions (default prints a dry-run preview).
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -900,19 +897,6 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         } => crate::commands::tail::run(name, lines, follow).await,
         Cmd::Send { name, text } => crate::commands::send::run(name, text).await,
         Cmd::Keys { name, key_spec } => crate::commands::keys::run(name, key_spec).await,
-        Cmd::Serve {
-            port,
-            host,
-            cert_port,
-            no_tls,
-            no_resume,
-            detach,
-            no_auth,
-        } => {
-            let addr: SocketAddr = format!("{host}:{port}").parse()?;
-            let cert_addr: SocketAddr = format!("{host}:{cert_port}").parse()?;
-            crate::commands::serve::run(addr, cert_addr, !no_tls, no_resume, detach, no_auth).await
-        }
         Cmd::Auth { action } => crate::commands::auth::run(action).await,
         Cmd::Config { action } => crate::commands::config::run(action).await,
         Cmd::Doctor => crate::commands::doctor::run().await,
@@ -920,6 +904,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Cmd::Worktree { action } => match action {
             WorktreeCmd::List { json } => crate::commands::worktree::list(json).await,
             WorktreeCmd::Current { json } => crate::commands::worktree::current(json).await,
+            WorktreeCmd::Prune {
+                repo,
+                clean,
+                yes,
+                json,
+            } => crate::commands::worktree::prune(repo, clean, yes, json).await,
         },
         Cmd::Terminal {
             action,

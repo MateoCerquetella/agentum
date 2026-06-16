@@ -1,6 +1,7 @@
 mod bridge;
 mod commands;
 mod computer;
+mod menu;
 mod path_env;
 // The Voice STT engine. Named `speech_engine` (not `speech`) to avoid colliding
 // with the `commands::speech` module imported below for the invoke_handler.
@@ -41,6 +42,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
+        // Replace the default menu so ⌘W is NOT a native key-equivalent — it
+        // must reach the webview, which closes the active tab/file like VS Code
+        // instead of quitting the window. See `menu.rs`.
+        .menu(menu::build)
+        .on_menu_event(menu::on_menu_event)
         .setup(|app| {
             let state = AppState::new().map_err(|error| {
                 Box::<dyn std::error::Error>::from(std::io::Error::other(error.to_string()))

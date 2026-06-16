@@ -130,10 +130,115 @@ pub async fn current(json: bool) -> Result<()> {
     Ok(())
 }
 
+/// One row of the prune response, for the human table. Pulls the fields the
+/// server returns per worktree (`path`/`branch`/`class`).
+fn prune_row(wt: &Value) -> (String, &str, &str) {
+    let path = worktree_path(wt).unwrap_or_else(|| field(wt, "path").to_string());
+    (path, field(wt, "branch"), field(wt, "class"))
+}
+
+fn print_prune_list(label: &str, worktrees: &[Value]) {
+    for wt in worktrees {
+        let (path, branch, class) = prune_row(wt);
+        println!(
+            "  {label}  {:<6}  {}{}",
+            class,
+            path,
+            if branch.is_empty() {
+                String::new()
+            } else {
+                format!("  ({branch})")
+            }
+        );
+    }
+}
+
+/// `agentum worktree prune [--repo ID] [--clean] [--yes]` — remove stale
+/// worktrees via `POST /api/worktrees/prune`. Dry-run unless `yes`.
+pub async fn prune(repo: Option<String>, clean: bool, yes: bool, json: bool) -> Result<()> {
+    let client = ApiClient::from_env();
+    let mut body = serde_json::Map::new();
+    if let Some(repo_id) = repo {
+        body.insert("repoId".into(), Value::String(repo_id));
+    }
+    body.insert("apply".into(), Value::Bool(yes));
+    body.insert("includeClean".into(), Value::Bool(clean));
+
+    let result = client
+        .post_json("/api/worktrees/prune", &Value::Object(body))
+        .await?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+
+    let empty = Vec::new();
+    let pruned = result
+        .get("pruned")
+        .and_then(Value::as_array)
+        .unwrap_or(&empty);
+    let kept = result
+        .get("kept")
+        .and_then(Value::as_array)
+        .unwrap_or(&empty);
+
+    if pruned.is_empty() {
+        println!("no stale worktrees to prune");
+    } else if yes {
+        println!("removed {} stale worktree(s):", pruned.len());
+        print_prune_list("pruned", pruned);
+    } else {
+        println!(
+            "Would remove {} stale worktree(s) — dry run, pass --yes to remove:",
+            pruned.len()
+        );
+        print_prune_list("would-prune", pruned);
+    }
+
+    // When not already including clean trees, point out any clean candidates the
+    // user could also remove — they're kept (class "clean") but eligible.
+    if !clean {
+        let clean_kept = kept
+            .iter()
+            .filter(|wt| field(wt, "class") == "clean")
+            .count();
+        if clean_kept > 0 {
+            println!(
+                "\n{clean_kept} clean worktree(s) left untouched — add --clean to also remove them."
+            );
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn prune_row_reads_path_branch_class() {
+        let wt = json!({
+            "id": "r1::/repo/.claude/worktrees/feat",
+            "path": "/repo/.claude/worktrees/feat",
+            "branch": "feat",
+            "class": "clean"
+        });
+        let (path, branch, class) = prune_row(&wt);
+        assert_eq!(path, "/repo/.claude/worktrees/feat");
+        assert_eq!(branch, "feat");
+        assert_eq!(class, "clean");
+    }
+
+    #[test]
+    fn prune_row_falls_back_to_id_path_when_no_path_field() {
+        // `worktree_path` decodes the `repoId::path` id when there's no flat path.
+        let wt = json!({"id": "r1::/repo/wt", "class": "gone"});
+        let (path, _branch, class) = prune_row(&wt);
+        assert_eq!(path, "/repo/wt");
+        assert_eq!(class, "gone");
+    }
 
     #[test]
     fn current_matches_deepest_worktree_by_path() {

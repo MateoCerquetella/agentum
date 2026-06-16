@@ -1,5 +1,3 @@
-use std::net::TcpListener;
-
 use agentum_store::paths;
 use anyhow::Result;
 use tokio::process::Command;
@@ -35,7 +33,6 @@ pub async fn run() -> Result<()> {
         check_db().await,
         check_tls(),
         check_users().await,
-        check_port(8822),
     ];
 
     println!();
@@ -121,10 +118,7 @@ fn check_tls() -> Check {
             if cert.exists() {
                 Check::ok("tls cert", cert.display().to_string())
             } else {
-                Check::ok(
-                    "tls cert",
-                    "not yet generated (created on first `agentum serve`)",
-                )
+                Check::ok("tls cert", "not yet generated")
             }
         }
         Err(e) => Check::fail("tls cert", format!("could not resolve path: {e}")),
@@ -143,13 +137,5 @@ async fn check_users() -> Check {
         },
         Ok(_) => Check::ok("users", "(db not yet created)"),
         Err(e) => Check::fail("users", format!("could not resolve db path: {e}")),
-    }
-}
-
-fn check_port(port: u16) -> Check {
-    let label = "port 8822";
-    match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(_) => Check::ok(label, "available"),
-        Err(_) => Check::ok(label, "in use (agentum serve may already be running)"),
     }
 }

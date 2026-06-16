@@ -1,12 +1,12 @@
 [package]
-name = "agentum-cli"
+name = "agentum-tui"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Self-hosted control plane for AI coding agents."
+description = "agentum terminal UI (TUI) + CLI for AI coding agents. Installs the `agentum` command."
 
 [lib]
 name = "agentum"

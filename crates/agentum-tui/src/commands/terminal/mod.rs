@@ -1,14 +1,16 @@
 //! `agentum terminal` — interactive terminal dashboard (also reachable as
 //! the `lazyagentum` shim binary, and aliased as `agentum tui`).
 //!
-//! Thin client. Talks to a running `agentum serve` over the same HTTP/WS
-//! API the Svelte SPA uses. It never opens the database or touches tmux
-//! directly. The lazygit side pane spawns a *local* PTY independently.
+//! Self-contained. For the local machine the TUI boots `agentum-server`
+//! in-process on an ephemeral loopback port (the same embedded server the
+//! desktop app uses) and drives it over the HTTP/WS API — there is no
+//! separate `agentum serve` daemon to start. A configured profile points
+//! the TUI at a remote machine, reached as an SSH host. The lazygit side
+//! pane spawns a *local* PTY independently.
 //!
 //! Connection trust: SSH-style. The first time we hit an `https://` host
 //! we don't already have pinned, we display its SHA-256 fingerprint and
-//! ask the operator to confirm it matches what `agentum serve` printed
-//! on the host TTY. Once accepted, the pin is persisted to
+//! ask the operator to confirm it. Once accepted, the pin is persisted to
 //! `$XDG_CONFIG_HOME/agentum/known_hosts.toml`. Mismatch on subsequent
 //! connect aborts with a loud "MITM?" error.
 
@@ -80,7 +82,38 @@ pub async fn run(opts: Options) -> Result<()> {
     // invocations (CI, scripts) fall through to the same bail! they
     // got before — the prompt would just hang.
     let initial_opts = opts.clone();
-    let mut current_opts = apply_profile(opts).await?;
+
+    // No standalone `agentum serve` daemon anymore: when the user didn't
+    // point us at an explicit target (`--profile`/`--api`), boot the API
+    // server in-process on an ephemeral loopback port — the TUI is now
+    // self-contained, the same way the desktop embeds the server. Remote
+    // machines are reached as SSH hosts, not as remote daemons.
+    let embedded_api: Option<String> = if opts.api.is_none() && opts.profile.is_none() {
+        let (store, _db) = crate::commands::open_store().await?;
+        // Preserve the old daemon's startup behaviour: bring idle/stopped
+        // sessions back up. `resume_sessions` drives tmux + the store
+        // directly, so it needs no running server.
+        resume_sessions(&store).await;
+        let addr = agentum_server::serve_embedded_loopback(store)
+            .await
+            .context("boot embedded agentum-server")?;
+        Some(format!("http://{addr}"))
+    } else {
+        None
+    };
+    // Inject the embedded server's address into any connection attempt that
+    // didn't ask for an explicit target — applied on first connect and on
+    // every reconnect so the TUI keeps talking to its own in-process server.
+    let with_embedded = |mut o: Options| -> Options {
+        if let Some(api) = &embedded_api {
+            if o.api.is_none() && o.profile.is_none() {
+                o.api = Some(api.clone());
+            }
+        }
+        o
+    };
+
+    let mut current_opts = apply_profile(with_embedded(opts)).await?;
     let (client, base, sessions) = loop {
         match connect_once(&current_opts).await {
             Ok(connected) => break connected,
@@ -95,7 +128,7 @@ pub async fn run(opts: Options) -> Result<()> {
                     // daemon — handy right after `agentum serve`.
                     UnreachableAction::Quit => return Err(e),
                     _ => {
-                        current_opts = apply_profile(initial_opts.clone()).await?;
+                        current_opts = apply_profile(with_embedded(initial_opts.clone())).await?;
                     }
                 }
             }
@@ -131,7 +164,7 @@ pub async fn run(opts: Options) -> Result<()> {
                 // Hosts don't switch the daemon (there's only one). Treat
                 // a lingering switch/reconnect request as a reconnect to
                 // the local daemon — useful right after it restarts.
-                current_opts = apply_profile(initial_opts.clone()).await?;
+                current_opts = apply_profile(with_embedded(initial_opts.clone())).await?;
                 let connected = connect_once(&current_opts).await?;
                 client = connected.0;
                 sessions = connected.2;
@@ -450,125 +483,53 @@ pub struct ProfileConnect {
     pub version: Option<String>,
 }
 
+/// Bring up any sessions that aren't currently running. Ported from the
+/// removed `agentum serve` boot path: now that the TUI embeds the server it
+/// owns startup resume. Drives tmux + the store directly (no API), so it
+/// works before/without any server listening.
+async fn resume_sessions(store: &agentum_store::Store) {
+    let sessions = match store.list_sessions(None).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("could not list sessions for auto-resume: {e}");
+            return;
+        }
+    };
+    let to_resume: Vec<_> = sessions
+        .into_iter()
+        .filter(|s| {
+            matches!(
+                s.status,
+                agentum_core::Status::Idle | agentum_core::Status::Stopped
+            )
+        })
+        .collect();
+    if to_resume.is_empty() {
+        return;
+    }
+    tracing::info!(count = to_resume.len(), "resuming sessions");
+    for session in to_resume {
+        let name = session.name.clone();
+        if let Err(e) = crate::commands::up::run(name.clone()).await {
+            tracing::warn!(session = %name, "could not resume: {e}");
+        }
+    }
+}
+
 /// Layer profile defaults under any explicit CLI flags. Returns the
 /// merged `Options` so the rest of `run()` reads from one source. A
 /// missing profile name resolves to the file's `default = …`; an
 /// explicit `--profile` that doesn't exist is an error so the user
 /// notices typos instead of silently dropping back to the loopback.
-/// Auto-start a local `agentum serve` sidecar in the background when
-/// no daemon is listening on the loopback. The user shouldn't have to
-/// remember to run `agentum serve` in another window before
-/// `agentum terminal` — on the host they're already at, the TUI
-/// should just work. The sidecar lives in its own process group and
-/// outlives the TUI on purpose so subsequent `agentum terminal` runs
-/// reuse the same daemon (and its SQLite user DB / token storage).
-///
-/// Returns `true` once the new daemon answers a health probe, `false`
-/// if the spawn failed or it didn't come up within the budget. The
-/// caller falls back to its prior behaviour on `false` (configured
-/// remote default, or the connect-or-onboard menu).
-async fn try_autostart_local_daemon() -> bool {
-    // Only attempt this when we're the user-launched binary — if
-    // `current_exe` is unresolvable (uncommon edge case) we can't
-    // safely re-spawn ourselves.
-    let Ok(exe) = std::env::current_exe() else {
-        return false;
-    };
-    // Spawn `<exe> serve` in a detached child. `setsid`/process-group
-    // detach happens implicitly via `Command::spawn` without inheriting
-    // the parent's controlling terminal — the child writes its logs to
-    // a temp file rather than the parent's stdout/stderr so the alt-
-    // screen UI never sees daemon output.
-    let log_dir = std::env::var_os("XDG_STATE_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state"))
-        })
-        .map(|p| p.join("agentum"))
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
-    let _ = std::fs::create_dir_all(&log_dir);
-    let log_path = log_dir.join("autoserve.log");
-    let log_file = match std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-    {
-        Ok(f) => f,
-        Err(_) => return false,
-    };
-    let log_err = match log_file.try_clone() {
-        Ok(f) => f,
-        Err(_) => return false,
-    };
-    let mut cmd = std::process::Command::new(exe);
-    cmd.arg("serve")
-        .stdin(std::process::Stdio::null())
-        .stdout(log_file)
-        .stderr(log_err);
-    // Detach from the parent's process group on Unix so a TUI exit
-    // doesn't take the sidecar with it.
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        unsafe {
-            cmd.pre_exec(|| {
-                // setsid() to start a new session — frees the child
-                // from the parent's controlling terminal.
-                if libc::setsid() < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
-    let Ok(_child) = cmd.spawn() else {
-        return false;
-    };
-    // Wait up to ~3 s for the daemon to bind + answer. The handshake
-    // is fast on a warm cache; the loop exits the moment it answers.
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    while std::time::Instant::now() < deadline {
-        if loopback_alive().await {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(150)).await;
-    }
-    false
-}
-
-/// Quick non-interactive health probe of the local loopback daemon
-/// across HTTPS-then-HTTP. Used by `apply_profile` to decide whether
-/// to prefer the local daemon over a configured `default = …` when
-/// the user didn't pass `--profile`. Bounded to a short timeout so
-/// the boot path doesn't pay the full TCP handshake latency on a
-/// host that isn't running `agentum serve`.
-async fn loopback_alive() -> bool {
-    // HTTP-first: --no-tls is the common local-dev setup.
-    for candidate in [DEFAULT_HTTP, DEFAULT_HTTPS] {
-        let Ok(base) = Url::parse(candidate) else {
-            continue;
-        };
-        let trust = if base.scheme() == "https" {
-            let host_key = trust::host_key(&base).unwrap_or_default();
-            trust::KnownHosts::load()
-                .ok()
-                .and_then(|kh| kh.pin(&host_key).map(|s| s.to_string()))
-                .map(TlsTrust::Pinned)
-                .unwrap_or(TlsTrust::AcceptAny)
-        } else {
-            TlsTrust::Plain
-        };
-        if api::probe_health(&base, &trust, Duration::from_millis(500))
-            .await
-            .is_ok()
-        {
-            return true;
-        }
-    }
-    false
-}
-
 async fn apply_profile(mut opts: Options) -> Result<Options> {
+    // An explicit API target — the in-process embedded server (wired up in
+    // `run()`) or a user-supplied `--api` — bypasses profile/default
+    // resolution entirely; there is no longer a separate `agentum serve`
+    // daemon to discover on the loopback.
+    if opts.api.is_some() {
+        return Ok(opts);
+    }
+
     let profiles = match profiles::load() {
         Ok(p) => p,
         Err(e) => {
@@ -584,36 +545,13 @@ async fn apply_profile(mut opts: Options) -> Result<Options> {
         }
     };
 
-    // Resolution rules when no `--profile` flag is present:
-    //   1. If the local loopback daemon answers, prefer it. Launching
-    //      `agentum terminal` on a host with a live local daemon
-    //      should drive that host — `default = "omarchy"` in
-    //      profiles.toml is a *fallback*, not an override, because the
-    //      most common reason to run the TUI is to drive the machine
-    //      you're sitting at. The user can still target the configured
-    //      default explicitly via `agentum terminal --profile <name>`.
-    //   2. Otherwise, fall back to the configured `default = …`.
-    //   3. Otherwise, fall through to the connect-or-onboard loop
-    //      (which itself does loopback discovery + the unreachable
-    //      menu).
-    //
-    // Explicit `--profile` always wins. The probe is bounded to
-    // 500 ms so the boot path stays snappy on offline machines.
+    // No `--profile` and no `--api`: the local machine is driven by the
+    // in-process embedded server (wired up in `run()`), so fall back to the
+    // configured `default = …` for a remote target, else fall through to the
+    // connect-or-onboard loop. Explicit `--profile` always wins.
     let active = match opts.profile.clone() {
         Some(name) => Some(name),
-        None => {
-            // Prefer the local loopback whenever it answers. If it
-            // doesn't, try to auto-spawn `agentum serve` in the
-            // background — running the TUI on a machine should not
-            // require remembering to start a daemon by hand. The
-            // sidecar lives in its own process group so it outlives
-            // the TUI and gets reused on subsequent launches.
-            if loopback_alive().await || try_autostart_local_daemon().await {
-                None
-            } else {
-                profiles.default_name().map(str::to_string)
-            }
-        }
+        None => profiles.default_name().map(str::to_string),
     };
     let Some(name) = active else {
         return Ok(opts);

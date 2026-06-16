@@ -31,7 +31,6 @@ agentum open <name>                     # tmux attach passthrough (detach: Ctrl-
 agentum tail <name> [-n 30] [-f]        # show last N lines (or follow)
 agentum send <name> <text>              # send text + Enter
 agentum keys <name> <key-spec>          # raw tmux keys, e.g. 'C-c'
-agentum serve [--port 8822] [--no-tls]  # start dashboard
 agentum auth show                       # print bearer token
 agentum auth rotate                     # generate a new bearer token
 agentum config get <key>

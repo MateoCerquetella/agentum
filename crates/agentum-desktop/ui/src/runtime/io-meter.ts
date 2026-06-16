@@ -1,5 +1,5 @@
 // Per-host WS throughput counters — the desktop mirror of the TUI's iometer
-// (crates/agentum-cli/src/commands/terminal/iometer.rs). Each server session
+// (crates/agentum-tui/src/commands/terminal/iometer.rs). Each server session
 // streams its tmux pane over a bidirectional WebSocket: pane bytes come in,
 // keystrokes/resizes go out. We bucket the cumulative byte totals by host so
 // the status-bar chip can show "↓ in / ↑ out" for whichever host the user
