@@ -33,24 +33,33 @@ impl LaunchCommand {
     }
 }
 
-/// Inputs for wiring a shared Playwright MCP server into an agent **at launch**.
+/// Inputs for wiring one or more streamable-HTTP MCP servers into an agent
+/// **at launch** (agentum's own MCP server, the shared Playwright server, …).
 ///
 /// MCP servers are read only at agent-CLI startup (Claude Code / Codex have no
-/// in-session reload), so the launch site must (a) ensure the HTTP server is up
-/// → [`Self::http_url`] and (b) for tools that load MCP from a file, pre-write
-/// that file → [`Self::config_file`]. Each adapter turns these into the right
-/// startup flags via [`ToolAdapter::mcp_args`] — that's the only tool-specific
-/// part. The server is shared per machine/host, not one per session.
+/// in-session reload), so the launch site must (a) ensure each HTTP server is up
+/// → [`Self::servers`] and (b) for tools that load MCP from a file, pre-write a
+/// combined config → [`Self::config_file`]. Each adapter turns these into the
+/// right startup flags via [`ToolAdapter::mcp_args`] — the only tool-specific
+/// part. Servers are shared per machine/host, not one per session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpProvision {
-    /// Streamable-HTTP endpoint of the shared Playwright MCP server, e.g.
-    /// `http://127.0.0.1:8931/mcp`. Used directly by tools that take MCP config
-    /// on the command line (Codex `-c`).
-    pub http_url: String,
-    /// Path to a `{ "mcpServers": { "playwright": { "type": "http", "url": … } } }`
-    /// file the launch site already wrote — used by tools that load MCP from a
-    /// file (Claude `--mcp-config <file>`).
+    /// Every streamable-HTTP MCP server to register with this agent. Tools that
+    /// take MCP config on the command line (Codex `-c`) emit one block per entry.
+    pub servers: Vec<McpServer>,
+    /// Path to the combined `{ "mcpServers": { … } }` file the launch site
+    /// already wrote (holding *all* of [`Self::servers`]) — used by tools that
+    /// load MCP from a file (Claude `--mcp-config <file>`).
     pub config_file: std::path::PathBuf,
+}
+
+/// One streamable-HTTP MCP server to wire into an agent at launch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServer {
+    /// Logical key under `mcpServers` (Claude) / `mcp_servers.<name>` (Codex).
+    pub name: String,
+    /// Streamable-HTTP endpoint, e.g. `http://127.0.0.1:8931/mcp`.
+    pub url: String,
 }
 
 /// A first-class tool integration. Trait methods are deliberately small so a
