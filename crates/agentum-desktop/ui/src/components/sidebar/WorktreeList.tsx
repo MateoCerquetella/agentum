@@ -126,7 +126,12 @@ import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { getShortcutPlatform } from '@/lib/shortcut-platform'
 import { SCROLL_TO_CURRENT_WORKSPACE_REVEAL_REQUEST_EVENT } from '@/lib/scroll-to-current-workspace-status'
 import { useRepoHeaderDrag } from './project-header-drag'
-import WorktreeContextMenu from './WorktreeContextMenu'
+import WorktreeContextMenu, { CLOSE_ALL_CONTEXT_MENUS_EVENT } from './WorktreeContextMenu'
+import {
+  getProjectContextMenuTarget,
+  shouldSuppressProjectHeaderClick,
+  type ProjectContextMenuTarget
+} from './project-context-menu'
 import {
   buildWorktreeDragPreviewOffsets,
   buildManualOrderUpdatesForVisibleGroups,
@@ -849,6 +854,13 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   const directScrollInputUntilRef = useRef(0)
   const [dragOverStatus, setDragOverStatus] = useState<WorkspaceStatus | null>(null)
   const [pinDragOver, setPinDragOver] = useState(false)
+  // Single open-at-a-time right-click menu for project header rows. Hoisted to
+  // the viewport (not per-row) so a virtualized list renders only one menu.
+  const [projectContextMenu, setProjectContextMenu] =
+    useState<ProjectContextMenuTarget | null>(null)
+  // Timestamp of the last right-click open, used to swallow the macOS ctrl-click
+  // follow-up `click` so opening the menu does not also toggle the project row.
+  const projectHeaderContextOpenedAtRef = useRef<number | null>(null)
   // Host Readiness & Provisioning dialog target (sidebar host key + label), or
   // null when closed. Opened from the host header's readiness chip.
   const [readinessHost, setReadinessHost] = useState<{ key: string; label: string } | null>(null)
@@ -861,6 +873,13 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   const [highlightedRevealWorktreeId, setHighlightedRevealWorktreeId] = useState<string | null>(
     null
   )
+  // Why: closing coordination — right-clicking any other surface dispatches
+  // CLOSE_ALL_CONTEXT_MENUS_EVENT; dismiss our project menu when it fires.
+  useEffect(() => {
+    const closeProjectMenu = () => setProjectContextMenu(null)
+    window.addEventListener(CLOSE_ALL_CONTEXT_MENUS_EVENT, closeProjectMenu)
+    return () => window.removeEventListener(CLOSE_ALL_CONTEXT_MENUS_EVENT, closeProjectMenu)
+  }, [])
   // Open a terminal scoped to a sidebar host header. Host headers don't own a
   // workdir, so resolve a representative worktree on the host, activate it
   // (which sets activeWorktreeId synchronously), then reuse the same terminal
@@ -2817,6 +2836,20 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                         : undefined
                     }
                     onClick={(event) => {
+                      // Swallow the macOS ctrl-click that just opened the
+                      // right-click menu so it does not also toggle/select.
+                      if (
+                        shouldSuppressProjectHeaderClick(
+                          projectHeaderContextOpenedAtRef.current,
+                          Date.now()
+                        )
+                      ) {
+                        projectHeaderContextOpenedAtRef.current = null
+                        event.preventDefault()
+                        event.stopPropagation()
+                        return
+                      }
+                      projectHeaderContextOpenedAtRef.current = null
                       if (
                         projectIdForHeader &&
                         onProjectSelectionGesture(event, projectIdForHeader)
@@ -2826,6 +2859,21 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                         return
                       }
                       toggleGroupWithScrollAnchor(row.key)
+                    }}
+                    onContextMenu={(event) => {
+                      const target = getProjectContextMenuTarget({
+                        groupBy,
+                        repo: row.repo,
+                        clientX: event.clientX,
+                        clientY: event.clientY
+                      })
+                      if (!target) {
+                        return
+                      }
+                      event.preventDefault()
+                      projectHeaderContextOpenedAtRef.current = Date.now()
+                      window.dispatchEvent(new Event(CLOSE_ALL_CONTEXT_MENUS_EVENT))
+                      setProjectContextMenu(target)
                     }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
@@ -3417,6 +3465,33 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
           })}
         </div>
       </div>
+      {/* Right-click context menu for project header rows. Rendered once; a
+          hidden fixed-positioned trigger anchors Radix's menu at the cursor. */}
+      <DropdownMenu
+        open={projectContextMenu != null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setProjectContextMenu(null)
+          }
+        }}
+        modal={false}
+      >
+        <DropdownMenuTrigger asChild>
+          <button
+            aria-hidden
+            tabIndex={-1}
+            className="pointer-events-none fixed size-px opacity-0"
+            style={{ left: projectContextMenu?.x ?? 0, top: projectContextMenu?.y ?? 0 }}
+          />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="start"
+          sideOffset={0}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {projectContextMenu ? renderProjectActionItems(projectContextMenu.repo) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   )
 })
