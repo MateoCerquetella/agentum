@@ -145,10 +145,16 @@ One Chrome, driven by Playwright and mirrored by agentum.
   Combined with the Claude-path browser test above, the full chain — agentum
   launch → MCP wired → live server → navigate+screenshot — is proven. **P1 is
   complete for the Claude path.**
-- **P1 — remaining:** verify the exact Codex `-c mcp_servers.playwright.*` schema
-  against a real codex CLI (Claude path is proven; Codex is still unverified-live);
-  optional standalone `agentum` CLI helper for the fully-desktop-closed path. P2
-  (remote-host parity) extends `ensure` to take a `&Host`.
+- **P1 — Codex argv verified via agentum.** Same via-agentum E2E with `tool:"codex"`:
+  the spawned codex process carried `-c mcp_servers.playwright.type="http" -c
+  mcp_servers.playwright.url="http://127.0.0.1:8931/mcp"` (exactly `CodexAdapter::
+  mcp_args`), and codex-cli 0.137.0 **accepted the overrides with no parse error** —
+  de-risking the `-c` schema syntactically.
+- **P1 — remaining (not P1 gates):** the *functional* Codex check (an authenticated
+  `codex` session showing playwright under `/mcp` + driving the browser) — argv +
+  no-parse-error are proven, full load needs a logged-in codex; optional standalone
+  `agentum` CLI helper for the fully-desktop-closed path. P2 (remote-host parity)
+  extends `ensure` to take a `&Host`.
 
 ## Decisions resolved (this round)
 
