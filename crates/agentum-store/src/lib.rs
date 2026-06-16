@@ -16,6 +16,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
+pub mod discovery;
 pub mod orchestration;
 pub mod paths;
 

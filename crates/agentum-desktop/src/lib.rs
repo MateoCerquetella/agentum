@@ -63,8 +63,16 @@ pub fn run() {
                     .await
                     .map_err(|e| std::io::Error::other(e.to_string()))
             })?;
+            // Advertise this desktop's ephemeral port so a CLI run OUTSIDE an
+            // agentum-spawned pane (no `$AGENTUM_API_URL`) — e.g. the
+            // capability-card example prompts pasted into a user's own
+            // Codex/Claude Code terminal — can discover and drive THIS server
+            // instead of failing against the TLS standalone daemon. Cleared on
+            // exit below; stale entries are caught by the CLI's liveness probe.
+            let endpoint_url = format!("http://{addr}");
+            agentum_store::discovery::advertise_desktop_api_url(&endpoint_url);
             app.manage(server::ServerEndpoint {
-                url: format!("http://{addr}"),
+                url: endpoint_url,
                 token: None,
             });
 
@@ -498,6 +506,13 @@ pub fn run() {
             stats::stats_get_summary,
             workspace_space::workspace_space_cancel,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_handle, event| {
+            // Retract the discovery advertisement when the desktop quits so a
+            // later CLI call doesn't probe a dead ephemeral port.
+            if let tauri::RunEvent::Exit = event {
+                agentum_store::discovery::clear_desktop_api_url();
+            }
+        });
 }
