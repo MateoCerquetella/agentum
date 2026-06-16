@@ -136,12 +136,22 @@ pub async fn ensure_playwright_mcp() -> Result<String> {
     // `npx -y` so a first run installs the package non-interactively (an
     // interactive prompt would hang the detached pane forever). `--headless`
     // so it works on display-less hosts and never steals focus.
+    //
+    // `--host 127.0.0.1` is load-bearing: Playwright MCP's default `--host
+    // localhost` resolves to IPv6 `::1` only on macOS, so a server started with
+    // the default would NOT be reachable at the `http://127.0.0.1:<port>/mcp`
+    // URL we write into the agent config (connection refused) — and our IPv4
+    // `port_listening` probe would also miss it and wrongly report "did not
+    // start". Pinning IPv4 keeps the bind, the probe, and the config URL all
+    // consistent. (Found via P1 live test.)
     let argv = vec![
         "npx".to_string(),
         "-y".to_string(),
         "@playwright/mcp@latest".to_string(),
         "--port".to_string(),
         port.to_string(),
+        "--host".to_string(),
+        "127.0.0.1".to_string(),
         "--headless".to_string(),
     ];
     // The MCP server has no project context — run it from $HOME so tmux has a
