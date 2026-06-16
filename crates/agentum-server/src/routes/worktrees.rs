@@ -45,7 +45,7 @@ pub fn router() -> Router<crate::AppState> {
 /// null); `extra` round-trips fields not managed here. camelCase on the wire.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Worktree {
+pub(crate) struct Worktree {
     id: String,
     repo_id: String,
     display_name: String,
@@ -76,7 +76,7 @@ fn registry_path() -> Result<PathBuf, ApiError> {
     Ok(home.join(".agentum").join("worktrees.json"))
 }
 
-fn read_worktrees() -> Result<Vec<Worktree>, ApiError> {
+pub(crate) fn read_worktrees() -> Result<Vec<Worktree>, ApiError> {
     let path = registry_path()?;
     if !path.exists() {
         return Ok(Vec::new());

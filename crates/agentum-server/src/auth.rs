@@ -83,6 +83,15 @@ fn is_public(path: &str) -> bool {
     ) {
         return true;
     }
+    // NOTE: `/mcp` (the agentum MCP server) is deliberately NOT public. It
+    // exposes app control tools (sessions, and soon worktrees/terminal/
+    // orchestration), so it must require auth on a networked daemon. It stays
+    // reachable on the embedded loopback server because that server runs with
+    // `no_auth = true` (loopback-bound by construction — see
+    // serve_embedded_loopback_state). For an authed `agentum serve`, the agent
+    // launch wiring injects the bearer token into the agent's MCP config as an
+    // `Authorization` header, so the agent authenticates like any other client.
+    //
     // Hook endpoints use per-session ephemeral tokens, not bearer auth.
     // Agent CLIs don't know the user's bearer token.
     path.starts_with("/api/sessions/") && path.ends_with("/hook")
