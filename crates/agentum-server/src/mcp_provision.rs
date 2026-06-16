@@ -107,21 +107,20 @@ pub async fn provision(
     }
 }
 
-/// Write the combined `{ "mcpServers": { … } }` Claude config under the state dir
-/// and return its path. File scope (passed via `--mcp-config`), never a project
-/// `.mcp.json` (which would trigger an approval prompt blocking an unattended
-/// launch).
-pub fn write_combined_config(servers: &[McpServer]) -> Result<PathBuf> {
-    let dir = agentum_store::paths::state_dir().context("resolve agentum state dir")?;
-    write_combined_config_in(&dir, servers)
+/// The agentum-MCP server entry for a session: the endpoint the agent should
+/// reach (loopback locally, tunnel port remotely) plus the bearer token.
+pub fn agentum_server(state: &AppState, agentum_mcp_url: &str) -> McpServer {
+    McpServer {
+        name: "agentum".to_string(),
+        url: agentum_mcp_url.to_string(),
+        auth_token: Some(state.mcp_token.as_str().to_string()),
+    }
 }
 
-/// Inner writer parameterised on the state dir so tests exercise the exact JSON
-/// shape without mutating process-global env (`AGENTUM_HOME`).
-fn write_combined_config_in(state_dir: &Path, servers: &[McpServer]) -> Result<PathBuf> {
-    std::fs::create_dir_all(state_dir)
-        .with_context(|| format!("create state dir {}", state_dir.display()))?;
-    let path = state_dir.join("mcp.json");
+/// The `{ "mcpServers": { … } }` JSON content for a Claude `--mcp-config` file —
+/// works the same whether the file lands on the Mac (local session) or on the
+/// host (remote session, where the agent can actually read it).
+pub fn config_json(servers: &[McpServer]) -> String {
     let mut map = serde_json::Map::new();
     for s in servers {
         // `type:"http"` (streamable-HTTP) keeps every server identical to the
@@ -134,9 +133,25 @@ fn write_combined_config_in(state_dir: &Path, servers: &[McpServer]) -> Result<P
         }
         map.insert(s.name.clone(), entry);
     }
-    let doc = serde_json::json!({ "mcpServers": map });
-    let body = serde_json::to_string_pretty(&doc).context("serialize MCP config")?;
-    std::fs::write(&path, body).with_context(|| format!("write {}", path.display()))?;
+    serde_json::to_string_pretty(&serde_json::json!({ "mcpServers": map }))
+        .unwrap_or_else(|_| "{\"mcpServers\":{}}".to_string())
+}
+
+/// Write the combined Claude config under the state dir (LOCAL sessions only —
+/// remote sessions write the file on the host) and return its path.
+pub fn write_combined_config(servers: &[McpServer]) -> Result<PathBuf> {
+    let dir = agentum_store::paths::state_dir().context("resolve agentum state dir")?;
+    write_combined_config_in(&dir, servers)
+}
+
+/// Inner writer parameterised on the state dir so tests exercise the exact JSON
+/// shape without mutating process-global env (`AGENTUM_HOME`).
+fn write_combined_config_in(state_dir: &Path, servers: &[McpServer]) -> Result<PathBuf> {
+    std::fs::create_dir_all(state_dir)
+        .with_context(|| format!("create state dir {}", state_dir.display()))?;
+    let path = state_dir.join("mcp.json");
+    std::fs::write(&path, config_json(servers))
+        .with_context(|| format!("write {}", path.display()))?;
     Ok(path)
 }
 
