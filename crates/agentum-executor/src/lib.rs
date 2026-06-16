@@ -33,6 +33,26 @@ impl LaunchCommand {
     }
 }
 
+/// Inputs for wiring a shared Playwright MCP server into an agent **at launch**.
+///
+/// MCP servers are read only at agent-CLI startup (Claude Code / Codex have no
+/// in-session reload), so the launch site must (a) ensure the HTTP server is up
+/// → [`Self::http_url`] and (b) for tools that load MCP from a file, pre-write
+/// that file → [`Self::config_file`]. Each adapter turns these into the right
+/// startup flags via [`ToolAdapter::mcp_args`] — that's the only tool-specific
+/// part. The server is shared per machine/host, not one per session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpProvision {
+    /// Streamable-HTTP endpoint of the shared Playwright MCP server, e.g.
+    /// `http://127.0.0.1:8931/mcp`. Used directly by tools that take MCP config
+    /// on the command line (Codex `-c`).
+    pub http_url: String,
+    /// Path to a `{ "mcpServers": { "playwright": { "type": "http", "url": … } } }`
+    /// file the launch site already wrote — used by tools that load MCP from a
+    /// file (Claude `--mcp-config <file>`).
+    pub config_file: std::path::PathBuf,
+}
+
 /// A first-class tool integration. Trait methods are deliberately small so a
 /// new adapter is a ~30-line file.
 pub trait ToolAdapter: Send + Sync {
@@ -41,6 +61,20 @@ pub trait ToolAdapter: Send + Sync {
 
     /// Build the argv (and any env) tmux should spawn for this session.
     fn launch(&self, session: &Session) -> LaunchCommand;
+
+    /// Extra startup args that register a Playwright MCP server with this agent.
+    ///
+    /// Default: none — most tools (and shells) get no browser MCP. First-class
+    /// agents that support launch-time MCP override this:
+    /// - Claude Code: `--mcp-config <file>` (additive; we deliberately do NOT
+    ///   pass `--strict-mcp-config`, which would disable the user's own servers).
+    /// - Codex: repeated `-c mcp_servers.playwright.*` overrides (no file flag).
+    ///
+    /// Returns args to append to [`LaunchCommand::argv`]; the launch site is
+    /// responsible for having started the server and written `p.config_file`.
+    fn mcp_args(&self, _p: &McpProvision) -> Vec<String> {
+        Vec::new()
+    }
 
     /// Tool-specific watchdog "compact context" command, if any. Watchdog
     /// sends this verbatim followed by Enter when context-low signatures appear.
