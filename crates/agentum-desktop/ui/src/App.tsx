@@ -211,7 +211,6 @@ const Landing = lazy(() => import('./components/Landing'))
 const TaskPage = lazy(() => import('./components/TaskPage'))
 const ActivityPrototypePage = lazy(() => import('./components/activity/ActivityPrototypePage'))
 const Settings = lazy(() => import('./components/settings/Settings'))
-const SkillsPage = lazy(() => import('./components/skills/SkillsPage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
 const WorktreeJumpPalette = lazy(() => import('./components/WorktreeJumpPalette'))
 const SettingsCommandPalette = lazy(() => import('./components/settings/SettingsCommandPalette'))
@@ -1711,7 +1710,6 @@ function App(): React.JSX.Element {
                           description="Retry the page or navigate to another agentum surface."
                         >
                           {activeView === 'settings' ? <Settings /> : null}
-                          {activeView === 'skills' ? <SkillsPage /> : null}
                           {activeView === 'tasks' ? <TaskPage /> : null}
                           {activeView === 'activity' ? <ActivityPrototypePage /> : null}
                           {activeView === 'terminal' && !activeWorktreeId ? <Landing /> : null}
