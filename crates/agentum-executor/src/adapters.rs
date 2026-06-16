@@ -4,7 +4,7 @@ use std::path::Path;
 
 use agentum_core::{Session, transcript};
 
-use crate::{LaunchCommand, ToolAdapter, translate_yolo_marker};
+use crate::{LaunchCommand, McpProvision, ToolAdapter, translate_yolo_marker};
 
 /// Append `--model=<v>` to argv if the session has a model set.
 fn push_model(argv: &mut Vec<String>, session: &Session) {
@@ -71,6 +71,16 @@ impl ToolAdapter for ClaudeAdapter {
         argv.push(session.id.to_string());
         push_user_flags(&mut argv, session, self.yolo_flag());
         LaunchCommand::argv_only(argv)
+    }
+
+    // Claude loads MCP servers from a file at startup; point it at the
+    // pre-written Playwright config. Additive — we deliberately omit
+    // `--strict-mcp-config` so the user's own MCP servers stay available.
+    fn mcp_args(&self, p: &McpProvision) -> Vec<String> {
+        vec![
+            "--mcp-config".to_string(),
+            p.config_file.display().to_string(),
+        ]
     }
 
     fn compact_trigger(&self) -> Option<&'static str> {
@@ -154,6 +164,18 @@ impl ToolAdapter for CodexAdapter {
         push_model(&mut argv, session);
         push_user_flags(&mut argv, session, self.yolo_flag());
         LaunchCommand::argv_only(argv)
+    }
+
+    // Codex has no `--mcp-config`; inject the server with `-c` TOML overrides at
+    // launch. Values are quoted so the URL parses as a TOML string. NOTE: the
+    // exact Codex MCP schema (`type`/`url`) is unverified — P1 tests Claude first.
+    fn mcp_args(&self, p: &McpProvision) -> Vec<String> {
+        vec![
+            "-c".to_string(),
+            "mcp_servers.playwright.type=\"http\"".to_string(),
+            "-c".to_string(),
+            format!("mcp_servers.playwright.url=\"{}\"", p.http_url),
+        ]
     }
 
     // Codex CLI uses `/compact` too as of late 2025.
@@ -408,6 +430,52 @@ mod tests {
             ]
         );
         assert_eq!(ClaudeAdapter.compact_trigger(), Some("/compact"));
+    }
+
+    fn provision() -> McpProvision {
+        McpProvision {
+            http_url: "http://127.0.0.1:8931/mcp".to_string(),
+            config_file: std::path::PathBuf::from("/tmp/agentum/playwright-mcp.json"),
+        }
+    }
+
+    #[test]
+    fn claude_mcp_args_point_at_the_config_file_additively() {
+        // Additive: no `--strict-mcp-config`, so the user's own MCP servers survive.
+        let args = ClaudeAdapter.mcp_args(&provision());
+        assert_eq!(
+            args,
+            vec![
+                "--mcp-config".to_string(),
+                "/tmp/agentum/playwright-mcp.json".to_string(),
+            ]
+        );
+        assert!(!args.iter().any(|a| a == "--strict-mcp-config"));
+    }
+
+    #[test]
+    fn codex_mcp_args_inject_http_server_via_config_overrides() {
+        let args = CodexAdapter.mcp_args(&provision());
+        assert_eq!(
+            args,
+            vec![
+                "-c".to_string(),
+                "mcp_servers.playwright.type=\"http\"".to_string(),
+                "-c".to_string(),
+                "mcp_servers.playwright.url=\"http://127.0.0.1:8931/mcp\"".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn tools_without_browser_mcp_get_no_args_by_default() {
+        let p = provision();
+        for tool in ["cursor", "gemini", "hermes", "terminal", "agent", "opencode"] {
+            assert!(
+                adapter_for(tool).mcp_args(&p).is_empty(),
+                "{tool} must not inject browser MCP by default"
+            );
+        }
     }
 
     #[test]
