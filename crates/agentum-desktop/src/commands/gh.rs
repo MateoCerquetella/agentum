@@ -436,9 +436,67 @@ pub fn gh_update_issue_by_slug() -> Value {
     not_available()
 }
 
+// Post a comment to a GitHub issue (or PR conversation) via the authenticated `gh`
+// CLI, and return the renderer's GitHubCommentResult ({ ok, comment } | { ok:false,
+// error }). This both serves the existing issue/PR comment UI (previously stubbed)
+// and lets the browser-verification loop (spec 008a) report pass/fail to the linked
+// issue. PR conversation comments live under the issues API, so one endpoint covers
+// both — `type` is accepted-and-ignored. `prRepo` (cross-repo / fork PRs) overrides
+// the origin owner/repo when present.
 #[tauri::command]
-pub fn gh_add_issue_comment() -> Value {
-    not_available()
+pub async fn gh_add_issue_comment(
+    repo_path: String,
+    number: i64,
+    body: String,
+    pr_repo: Option<Value>,
+) -> Value {
+    let from_pr_repo = pr_repo.as_ref().and_then(|pr| {
+        let owner = pr.get("owner").and_then(Value::as_str)?;
+        let repo = pr.get("repo").and_then(Value::as_str)?;
+        Some((owner.to_string(), repo.to_string()))
+    });
+    let owner_repo = match from_pr_repo {
+        Some(owner_repo) => Some(owner_repo),
+        None => resolve_owner_repo(&repo_path).await,
+    };
+    let Some((owner, repo)) = owner_repo else {
+        return json!({ "ok": false, "error": "Not a GitHub repository (no origin remote)." });
+    };
+    let output = tokio::process::Command::new("gh")
+        .args([
+            "api",
+            &format!("repos/{owner}/{repo}/issues/{number}/comments"),
+            "-f",
+            &format!("body={body}"),
+        ])
+        .output()
+        .await;
+    let output = match output {
+        Ok(output) => output,
+        Err(e) => return json!({ "ok": false, "error": format!("Couldn't run gh: {e}") }),
+    };
+    if !output.status.success() {
+        return json!({
+            "ok": false,
+            "error": classify_gh_error(&String::from_utf8_lossy(&output.stderr)).message,
+        });
+    }
+    let created: Value = match serde_json::from_slice(&output.stdout) {
+        Ok(value) => value,
+        Err(e) => return json!({ "ok": false, "error": format!("Couldn't parse gh response: {e}") }),
+    };
+    let user = created.get("user");
+    json!({
+        "ok": true,
+        "comment": {
+            "id": created.get("id").and_then(Value::as_i64).unwrap_or_default(),
+            "author": user.and_then(|u| u.get("login")).and_then(Value::as_str).unwrap_or_default(),
+            "authorAvatarUrl": user.and_then(|u| u.get("avatar_url")).and_then(Value::as_str).unwrap_or_default(),
+            "body": created.get("body").and_then(Value::as_str).unwrap_or(body.as_str()),
+            "createdAt": created.get("created_at").and_then(Value::as_str).unwrap_or_default(),
+            "url": created.get("html_url").and_then(Value::as_str).unwrap_or_default(),
+        },
+    })
 }
 
 #[tauri::command]
