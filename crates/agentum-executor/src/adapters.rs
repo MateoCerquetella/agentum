@@ -74,8 +74,9 @@ impl ToolAdapter for ClaudeAdapter {
     }
 
     // Claude loads MCP servers from a file at startup; point it at the
-    // pre-written Playwright config. Additive — we deliberately omit
-    // `--strict-mcp-config` so the user's own MCP servers stay available.
+    // pre-written combined config (agentum + playwright + …). Additive — we
+    // deliberately omit `--strict-mcp-config` so the user's own MCP servers
+    // stay available.
     fn mcp_args(&self, p: &McpProvision) -> Vec<String> {
         vec![
             "--mcp-config".to_string(),
@@ -166,16 +167,18 @@ impl ToolAdapter for CodexAdapter {
         LaunchCommand::argv_only(argv)
     }
 
-    // Codex has no `--mcp-config`; inject the server with `-c` TOML overrides at
-    // launch. Values are quoted so the URL parses as a TOML string. NOTE: the
-    // exact Codex MCP schema (`type`/`url`) is unverified — P1 tests Claude first.
+    // Codex has no `--mcp-config`; inject each server with `-c` TOML overrides at
+    // launch. Values are quoted so the URL parses as a TOML string. One pair of
+    // `-c` blocks per server (agentum, playwright, …).
     fn mcp_args(&self, p: &McpProvision) -> Vec<String> {
-        vec![
-            "-c".to_string(),
-            "mcp_servers.playwright.type=\"http\"".to_string(),
-            "-c".to_string(),
-            format!("mcp_servers.playwright.url=\"{}\"", p.http_url),
-        ]
+        let mut args = Vec::with_capacity(p.servers.len() * 4);
+        for s in &p.servers {
+            args.push("-c".to_string());
+            args.push(format!("mcp_servers.{}.type=\"http\"", s.name));
+            args.push("-c".to_string());
+            args.push(format!("mcp_servers.{}.url=\"{}\"", s.name, s.url));
+        }
+        args
     }
 
     // Codex CLI uses `/compact` too as of late 2025.
@@ -375,7 +378,7 @@ impl ToolAdapter for PassthroughAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapter_for;
+    use crate::{McpServer, adapter_for};
     use agentum_core::{Session, Status};
     use time::OffsetDateTime;
     use uuid::Uuid;
@@ -434,8 +437,28 @@ mod tests {
 
     fn provision() -> McpProvision {
         McpProvision {
-            http_url: "http://127.0.0.1:8931/mcp".to_string(),
+            servers: vec![McpServer {
+                name: "playwright".to_string(),
+                url: "http://127.0.0.1:8931/mcp".to_string(),
+            }],
             config_file: std::path::PathBuf::from("/tmp/agentum/playwright-mcp.json"),
+        }
+    }
+
+    /// Two servers (agentum + playwright) → Codex must emit a `-c` pair for each.
+    fn provision_two() -> McpProvision {
+        McpProvision {
+            servers: vec![
+                McpServer {
+                    name: "agentum".to_string(),
+                    url: "http://127.0.0.1:8822/mcp".to_string(),
+                },
+                McpServer {
+                    name: "playwright".to_string(),
+                    url: "http://127.0.0.1:8931/mcp".to_string(),
+                },
+            ],
+            config_file: std::path::PathBuf::from("/tmp/agentum/mcp.json"),
         }
     }
 
@@ -468,9 +491,43 @@ mod tests {
     }
 
     #[test]
+    fn codex_mcp_args_emit_one_block_per_server() {
+        // N servers → N `-c` pairs, in order (agentum first, then playwright).
+        let args = CodexAdapter.mcp_args(&provision_two());
+        assert_eq!(
+            args,
+            vec![
+                "-c".to_string(),
+                "mcp_servers.agentum.type=\"http\"".to_string(),
+                "-c".to_string(),
+                "mcp_servers.agentum.url=\"http://127.0.0.1:8822/mcp\"".to_string(),
+                "-c".to_string(),
+                "mcp_servers.playwright.type=\"http\"".to_string(),
+                "-c".to_string(),
+                "mcp_servers.playwright.url=\"http://127.0.0.1:8931/mcp\"".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_mcp_args_are_one_config_file_regardless_of_server_count() {
+        // Claude reads all servers from the single combined config file.
+        let args = ClaudeAdapter.mcp_args(&provision_two());
+        assert_eq!(
+            args,
+            vec![
+                "--mcp-config".to_string(),
+                "/tmp/agentum/mcp.json".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn tools_without_browser_mcp_get_no_args_by_default() {
         let p = provision();
-        for tool in ["cursor", "gemini", "hermes", "terminal", "agent", "opencode"] {
+        for tool in [
+            "cursor", "gemini", "hermes", "terminal", "agent", "opencode",
+        ] {
             assert!(
                 adapter_for(tool).mcp_args(&p).is_empty(),
                 "{tool} must not inject browser MCP by default"
