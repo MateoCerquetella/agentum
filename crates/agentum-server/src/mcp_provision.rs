@@ -32,11 +32,36 @@ pub fn tool_supports_mcp(tool: &str) -> bool {
     MCP_TOOLS.contains(&tool)
 }
 
-/// Build the MCP provisioning for a *local* session launch, or `None` when there
-/// is nothing to wire. Ensures any servers that need starting (Playwright) are
-/// up and writes the combined config file. Best-effort: a server that can't be
-/// provisioned is logged and skipped, never fatal to the launch.
-pub async fn provision(state: &AppState, tool: &str) -> Option<McpProvision> {
+/// Fixed loopback port the reverse SSH tunnel binds on each host. A remote
+/// agent reaches agentum's MCP at `http://127.0.0.1:<REMOTE_MCP_PORT>/mcp`,
+/// which tunnels back to the Mac's embedded server.
+pub const REMOTE_MCP_PORT: u16 = 8990;
+
+/// The Mac-side embedded-server port to reverse-tunnel to, parsed from
+/// `api_base_url` (e.g. `http://127.0.0.1:60102` → `60102`). `None` for a
+/// standalone daemon that didn't set its own URL (then remote wiring is skipped).
+pub fn local_mcp_port(state: &AppState) -> Option<u16> {
+    state
+        .api_base_url
+        .as_deref()?
+        .trim_end_matches('/')
+        .rsplit(':')
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// Build the MCP provisioning for a session launch, or `None` when there is
+/// nothing to wire. `agentum_mcp_url` is the endpoint *this session's agent*
+/// should reach agentum's own MCP at — the Mac loopback for a local session, or
+/// the host's reverse-tunnel port for an SSH session. Ensures any servers that
+/// need starting (Playwright) are up and writes the combined config. Best-effort:
+/// a server that can't be provisioned is logged and skipped, never fatal.
+pub async fn provision(
+    state: &AppState,
+    tool: &str,
+    agentum_mcp_url: &str,
+) -> Option<McpProvision> {
     if !tool_supports_mcp(tool) {
         return None;
     }
@@ -46,15 +71,9 @@ pub async fn provision(state: &AppState, tool: &str) -> Option<McpProvision> {
     // agentum's own MCP — always wired. It's secured by the per-server bearer
     // token (every agent presents it; the `/mcp` handler 401s without it), so it
     // no longer matters whether the server is no-auth: the token is the gate.
-    // `mcp_url` resolves the right endpoint for this session's host (loopback
-    // locally; the reverse-tunnel port for an SSH host).
-    let base = state
-        .api_base_url
-        .as_deref()
-        .unwrap_or("http://127.0.0.1:8822");
     servers.push(McpServer {
         name: "agentum".to_string(),
-        url: format!("{base}/mcp"),
+        url: agentum_mcp_url.to_string(),
         auth_token: Some(state.mcp_token.as_str().to_string()),
     });
 

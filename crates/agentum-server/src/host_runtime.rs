@@ -18,7 +18,7 @@ use base64::Engine as _;
 // runner: it replays an op on a fresh, unmultiplexed connection when a pooled
 // ControlMaster socket goes stale, so a flaky master never hard-fails a remote
 // op that never actually ran.
-use agentum_tmux::ssh::{SshMux, ssh_command_opts, ssh_output};
+use agentum_tmux::ssh::{SshMux, ssh_command_opts, ssh_control_forward_cmd, ssh_output};
 use tokio::process::Command;
 use tokio::time::{sleep, timeout};
 
@@ -832,6 +832,41 @@ pub async fn warm_ssh_master(host: &Host) -> Result<()> {
     let (interactive, _) = tokio::join!(ssh_output(host, "true", SSH_TIMEOUT), stream_warm);
     interactive.map_err(map_ssh_io)?;
     Ok(())
+}
+
+/// Ensure a **reverse** SSH tunnel so this host can reach the Mac's embedded
+/// agentum MCP server: on the host, `127.0.0.1:<host_port>` → (over SSH) →
+/// Mac's `127.0.0.1:<mac_port>`. Rides the warm interactive ControlMaster via
+/// `-O forward` (no extra connection). Idempotent — re-arming an existing
+/// forward is treated as success.
+///
+/// Loopback-bound on both ends (see [`ssh_control_forward_cmd`]), so the MCP is
+/// never exposed to either machine's network; the per-server bearer token guards
+/// against other processes/users on the host itself.
+pub async fn ensure_reverse_tunnel(host: &Host, host_port: u16, mac_port: u16) -> Result<()> {
+    if !matches!(host.kind, HostKind::Ssh { .. }) {
+        return Ok(());
+    }
+    // `-O forward` attaches to an existing master, so the master must be up first.
+    warm_ssh_master(host).await?;
+    let Some(mut cmd) = ssh_control_forward_cmd(host, host_port, mac_port) else {
+        return Err(HostRuntimeError::Bootstrap(
+            "no ControlPath available for the reverse MCP tunnel".into(),
+        ));
+    };
+    let out = cmd.output().await.map_err(map_ssh_io)?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let s = stderr.to_ascii_lowercase();
+    if s.contains("already") || s.contains("exists") {
+        return Ok(()); // forward already present — the tunnel is up
+    }
+    Err(HostRuntimeError::Bootstrap(format!(
+        "ssh reverse MCP forward failed: {}",
+        stderr.trim()
+    )))
 }
 
 pub async fn capture_pane_visible(host: &Host, target: &str) -> Result<String> {
