@@ -18,7 +18,9 @@ use base64::Engine as _;
 // runner: it replays an op on a fresh, unmultiplexed connection when a pooled
 // ControlMaster socket goes stale, so a flaky master never hard-fails a remote
 // op that never actually ran.
-use agentum_tmux::ssh::{SshMux, ssh_command_opts, ssh_control_forward_cmd, ssh_output};
+use agentum_tmux::ssh::{
+    SshMux, ssh_command_opts, ssh_control_cancel_cmd, ssh_control_forward_cmd, ssh_output,
+};
 use tokio::process::Command;
 use tokio::time::{sleep, timeout};
 
@@ -849,6 +851,16 @@ pub async fn ensure_reverse_tunnel(host: &Host, host_port: u16, mac_port: u16) -
     }
     // `-O forward` attaches to an existing master, so the master must be up first.
     warm_ssh_master(host).await?;
+
+    // Cancel any forward already bound to this port first. A reverse forward
+    // outlives the session that created it (and the app instance), so a leftover
+    // one — pointing at a now-dead Mac port — both BLOCKS re-binding the port and
+    // would route the agent to nothing. Cancel-then-arm makes the tunnel always
+    // point at THIS server's live port. Best-effort: a no-op when none exists.
+    if let Some(mut cancel) = ssh_control_cancel_cmd(host, host_port) {
+        let _ = cancel.output().await;
+    }
+
     let Some(mut cmd) = ssh_control_forward_cmd(host, host_port, mac_port) else {
         return Err(HostRuntimeError::Bootstrap(
             "no ControlPath available for the reverse MCP tunnel".into(),
@@ -860,8 +872,10 @@ pub async fn ensure_reverse_tunnel(host: &Host, host_port: u16, mac_port: u16) -
     }
     let stderr = String::from_utf8_lossy(&out.stderr);
     let s = stderr.to_ascii_lowercase();
+    // After the cancel above a re-arm should bind cleanly; tolerate a benign
+    // "already exists" race (two launches arming at once) as success too.
     if s.contains("already") || s.contains("exists") {
-        return Ok(()); // forward already present — the tunnel is up
+        return Ok(());
     }
     Err(HostRuntimeError::Bootstrap(format!(
         "ssh reverse MCP forward failed: {}",
@@ -898,19 +912,21 @@ pub async fn write_remote_file(host: &Host, abs_path: &str, content: &str) -> Re
                 .parent()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "/tmp".to_string());
-            // umask 077 ⇒ the mktemp file is created 0600; write the decoded
-            // bytes, then atomically `mv` over the target (replaces any planted
-            // symlink rather than following it). `printf %s` avoids echo's
-            // backslash mangling. Cleans up the temp file on any failure.
-            let script = format!(
-                "umask 077 && mkdir -p {dir} && t=$(mktemp {path}.XXXXXX) && \
-                 (printf %s {b64} | base64 -d > \"$t\" && chmod 600 \"$t\" && mv -f \"$t\" {path}) \
-                 || {{ rm -f \"$t\"; exit 1; }}",
+            // The host's LOGIN shell may be fish/zsh (not POSIX sh), so a bash-y
+            // script run directly fails. Build a POSIX-sh script and feed it to
+            // `sh` via a base64 pipe: the only chars in the outer command are
+            // base64 (shell-safe everywhere), so fish/zsh/bash all run it the
+            // same. `umask 077` + `chmod 600` keep the token file owner-only; the
+            // random-UUID filename means no attacker can pre-plant a symlink.
+            let inner = format!(
+                "umask 077; mkdir -p {dir}; printf %s {b64} | base64 -d > {path}; chmod 600 {path}",
                 dir = q(&parent)?,
                 b64 = q(&b64)?,
                 path = q(abs_path)?,
             );
-            ssh_checked(host, &script).await
+            let inner_b64 = base64::engine::general_purpose::STANDARD.encode(&inner);
+            let remote = format!("printf %s {} | base64 -d | sh", q(&inner_b64)?);
+            ssh_checked(host, &remote).await
         }
     }
 }
