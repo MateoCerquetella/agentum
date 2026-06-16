@@ -43,6 +43,7 @@ import { QUICK_COMMANDS_PANE_SEARCH_ENTRIES } from '@/components/settings/quick-
 import { BROWSER_PANE_SEARCH_ENTRIES } from '@/components/settings/browser-pane-search'
 import { NOTIFICATIONS_PANE_SEARCH_ENTRIES } from '@/components/settings/notifications-search'
 import { ORCHESTRATION_PANE_SEARCH_ENTRIES } from '@/components/settings/orchestration-search'
+import { BROWSER_VERIFICATION_LOOP_PANE_SEARCH_ENTRIES } from '@/components/settings/browser-verification-loop-search'
 import { SSH_PANE_SEARCH_ENTRIES } from '@/components/settings/ssh-search'
 import { COMPUTER_USE_PANE_SEARCH_ENTRIES } from '@/components/settings/computer-use-search'
 import { VOICE_PANE_SEARCH_ENTRIES } from '@/components/settings/voice-pane-search'
@@ -106,8 +107,12 @@ export function buildSettingsNavigationMetadata({
       description: 'Coordinate multiple agents and let them operate desktop apps.',
       icon: Network,
       searchEntries: showDesktopOnlySettings
-        ? [...ORCHESTRATION_PANE_SEARCH_ENTRIES, ...COMPUTER_USE_PANE_SEARCH_ENTRIES]
-        : ORCHESTRATION_PANE_SEARCH_ENTRIES,
+        ? [
+            ...ORCHESTRATION_PANE_SEARCH_ENTRIES,
+            ...BROWSER_VERIFICATION_LOOP_PANE_SEARCH_ENTRIES,
+            ...COMPUTER_USE_PANE_SEARCH_ENTRIES
+          ]
+        : [...ORCHESTRATION_PANE_SEARCH_ENTRIES, ...BROWSER_VERIFICATION_LOOP_PANE_SEARCH_ENTRIES],
       group: 'capabilities'
     },
     ...(showDesktopOnlySettings
