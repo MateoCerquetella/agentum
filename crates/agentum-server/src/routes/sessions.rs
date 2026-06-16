@@ -686,11 +686,40 @@ async fn start(
                             "AGENTUM_API_URL".into(),
                             format!("http://127.0.0.1:{host_port}"),
                         ));
+                        // Only agentum's own MCP is wired remotely (Playwright is a
+                        // local-only browser). The agent reaches it via the tunnel.
                         let agentum_mcp_url = format!("http://127.0.0.1:{host_port}/mcp");
-                        if let Some(p) =
-                            crate::mcp_provision::provision(&state, &session.tool, &agentum_mcp_url)
+                        let servers = vec![crate::mcp_provision::agentum_server(
+                            &state,
+                            &agentum_mcp_url,
+                        )];
+                        let provision = if session.tool == "claude" {
+                            // Claude loads MCP from a FILE — it must live on the
+                            // HOST (a Mac path is meaningless there). Write a
+                            // per-session config under the host's /tmp and point
+                            // --mcp-config at it.
+                            let host_cfg = format!("/tmp/agentum-mcp-{}.json", session.id);
+                            let json = crate::mcp_provision::config_json(&servers);
+                            match crate::host_runtime::write_remote_file(&host, &host_cfg, &json)
                                 .await
-                        {
+                            {
+                                Ok(()) => Some(agentum_executor::McpProvision {
+                                    servers,
+                                    config_file: PathBuf::from(host_cfg),
+                                }),
+                                Err(e) => {
+                                    tracing::warn!(session = %session.id, "could not write remote MCP config to host: {e}");
+                                    None
+                                }
+                            }
+                        } else {
+                            // Codex injects MCP inline via `-c` — no host file needed.
+                            Some(agentum_executor::McpProvision {
+                                servers,
+                                config_file: PathBuf::new(),
+                            })
+                        };
+                        if let Some(p) = provision {
                             launch.argv.extend(adapter.mcp_args(&p));
                         }
                     }

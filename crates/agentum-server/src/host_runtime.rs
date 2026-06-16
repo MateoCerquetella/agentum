@@ -869,6 +869,52 @@ pub async fn ensure_reverse_tunnel(host: &Host, host_port: u16, mac_port: u16) -
     )))
 }
 
+/// Write `content` to `abs_path` on `host` (local fs, or on the SSH host) with
+/// owner-only (0600) permissions. Used to place a remote agent's `--mcp-config`
+/// file — which carries the MCP **bearer token** — where the agent can read it.
+///
+/// Security: the file must be unreadable to other users on the host (the token
+/// is a credential). We write with `umask 077` to a `mktemp` file and `mv` it
+/// into place atomically — so the final path can't be a pre-planted symlink we'd
+/// follow, and the file is never briefly world-readable. The filename is a random
+/// session UUID, so it can't be pre-created by an attacker. Content is
+/// base64-piped so JSON quoting can't break the write.
+pub async fn write_remote_file(host: &Host, abs_path: &str, content: &str) -> Result<()> {
+    match &host.kind {
+        HostKind::Local => {
+            std::fs::write(abs_path, content).map_err(map_ssh_io)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(abs_path, std::fs::Permissions::from_mode(0o600))
+                    .map_err(map_ssh_io)?;
+            }
+            Ok(())
+        }
+        HostKind::Ssh { .. } => {
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(content);
+            let parent = std::path::Path::new(abs_path)
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "/tmp".to_string());
+            // umask 077 ⇒ the mktemp file is created 0600; write the decoded
+            // bytes, then atomically `mv` over the target (replaces any planted
+            // symlink rather than following it). `printf %s` avoids echo's
+            // backslash mangling. Cleans up the temp file on any failure.
+            let script = format!(
+                "umask 077 && mkdir -p {dir} && t=$(mktemp {path}.XXXXXX) && \
+                 (printf %s {b64} | base64 -d > \"$t\" && chmod 600 \"$t\" && mv -f \"$t\" {path}) \
+                 || {{ rm -f \"$t\"; exit 1; }}",
+                dir = q(&parent)?,
+                b64 = q(&b64)?,
+                path = q(abs_path)?,
+            );
+            ssh_checked(host, &script).await
+        }
+    }
+}
+
 pub async fn capture_pane_visible(host: &Host, target: &str) -> Result<String> {
     match &host.kind {
         HostKind::Local => Ok(agentum_tmux::capture_pane_visible(target).await?),
