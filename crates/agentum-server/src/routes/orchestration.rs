@@ -77,7 +77,7 @@ pub fn resolve_recipients(target: &str, sessions: &[HandleInfo], sender: &str) -
     }
 }
 
-async fn handle_infos(state: &AppState) -> Result<Vec<HandleInfo>, ApiError> {
+pub(crate) async fn handle_infos(state: &AppState) -> Result<Vec<HandleInfo>, ApiError> {
     let sessions = state.store.list_sessions(None).await?;
     Ok(sessions
         .into_iter()
