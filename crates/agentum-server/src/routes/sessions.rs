@@ -673,9 +673,8 @@ async fn start(
         // logs and launches the agent without the MCP rather than blocking.
         match crate::mcp_provision::local_mcp_port(&state) {
             Some(mac_port) => {
-                let host_port = crate::mcp_provision::REMOTE_MCP_PORT;
-                match crate::host_runtime::ensure_reverse_tunnel(&host, host_port, mac_port).await {
-                    Ok(()) => {
+                match crate::host_runtime::ensure_reverse_tunnel(&host, mac_port).await {
+                    Ok(host_port) => {
                         // The remote agent needs its own orchestration handle (for
                         // agentum_check_messages) and an AGENTUM_API_URL pointing
                         // at the tunnel so an in-pane `agentum` CLI works too.

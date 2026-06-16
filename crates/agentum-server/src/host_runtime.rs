@@ -836,50 +836,57 @@ pub async fn warm_ssh_master(host: &Host) -> Result<()> {
     Ok(())
 }
 
+/// First port of the loopback range scanned for the reverse tunnel on a host.
+pub const REMOTE_MCP_PORT_BASE: u16 = 8990;
+/// How many consecutive ports to try before giving up (host services or stale
+/// forwards may already hold some).
+const REMOTE_MCP_PORT_TRIES: u16 = 24;
+
 /// Ensure a **reverse** SSH tunnel so this host can reach the Mac's embedded
-/// agentum MCP server: on the host, `127.0.0.1:<host_port>` → (over SSH) →
-/// Mac's `127.0.0.1:<mac_port>`. Rides the warm interactive ControlMaster via
-/// `-O forward` (no extra connection). Idempotent — re-arming an existing
-/// forward is treated as success.
+/// agentum MCP server: on the host, `127.0.0.1:<port>` → (over SSH) → Mac's
+/// `127.0.0.1:<mac_port>`. Returns the **host port** that was armed (the caller
+/// writes it into the agent's MCP URL).
 ///
-/// Loopback-bound on both ends (see [`ssh_control_forward_cmd`]), so the MCP is
-/// never exposed to either machine's network; the per-server bearer token guards
-/// against other processes/users on the host itself.
-pub async fn ensure_reverse_tunnel(host: &Host, host_port: u16, mac_port: u16) -> Result<()> {
+/// Scans a small loopback-port range — a fixed port collides with whatever the
+/// host already runs there (verified: a real service held the first choice on a
+/// live host) or with a stale forward from a prior app instance that the current
+/// master can't cancel. We cancel-then-arm each candidate and take the first that
+/// binds, so the tunnel always points at THIS server's live port. Rides the warm
+/// interactive ControlMaster via `-O forward` (no extra connection). Loopback-
+/// bound both ends; the per-server bearer token guards on-host access.
+pub async fn ensure_reverse_tunnel(host: &Host, mac_port: u16) -> Result<u16> {
     if !matches!(host.kind, HostKind::Ssh { .. }) {
-        return Ok(());
+        return Err(HostRuntimeError::Unsupported);
     }
     // `-O forward` attaches to an existing master, so the master must be up first.
     warm_ssh_master(host).await?;
 
-    // Cancel any forward already bound to this port first. A reverse forward
-    // outlives the session that created it (and the app instance), so a leftover
-    // one — pointing at a now-dead Mac port — both BLOCKS re-binding the port and
-    // would route the agent to nothing. Cancel-then-arm makes the tunnel always
-    // point at THIS server's live port. Best-effort: a no-op when none exists.
-    if let Some(mut cancel) = ssh_control_cancel_cmd(host, host_port) {
-        let _ = cancel.output().await;
-    }
-
-    let Some(mut cmd) = ssh_control_forward_cmd(host, host_port, mac_port) else {
-        return Err(HostRuntimeError::Bootstrap(
-            "no ControlPath available for the reverse MCP tunnel".into(),
-        ));
-    };
-    let out = cmd.output().await.map_err(map_ssh_io)?;
-    if out.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let s = stderr.to_ascii_lowercase();
-    // After the cancel above a re-arm should bind cleanly; tolerate a benign
-    // "already exists" race (two launches arming at once) as success too.
-    if s.contains("already") || s.contains("exists") {
-        return Ok(());
+    let mut last_err = String::new();
+    for host_port in
+        REMOTE_MCP_PORT_BASE..REMOTE_MCP_PORT_BASE.saturating_add(REMOTE_MCP_PORT_TRIES)
+    {
+        // Cancel any forward already bound to this port (e.g. a stale one from a
+        // prior app instance pointing at a now-dead Mac port), then arm fresh so
+        // the tunnel always targets the current Mac port. No-op when none exists.
+        if let Some(mut cancel) = ssh_control_cancel_cmd(host, host_port) {
+            let _ = cancel.output().await;
+        }
+        let Some(mut cmd) = ssh_control_forward_cmd(host, host_port, mac_port) else {
+            return Err(HostRuntimeError::Bootstrap(
+                "no ControlPath available for the reverse MCP tunnel".into(),
+            ));
+        };
+        let out = cmd.output().await.map_err(map_ssh_io)?;
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let s = stderr.to_ascii_lowercase();
+        if out.status.success() || s.contains("already") || s.contains("exists") {
+            return Ok(host_port);
+        }
+        // Port busy (host service or unreachable stale forward) → try the next.
+        last_err = stderr.trim().to_string();
     }
     Err(HostRuntimeError::Bootstrap(format!(
-        "ssh reverse MCP forward failed: {}",
-        stderr.trim()
+        "no free reverse-tunnel port on host in {REMOTE_MCP_PORT_BASE}..; last: {last_err}"
     )))
 }
 
