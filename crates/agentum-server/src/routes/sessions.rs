@@ -637,8 +637,33 @@ async fn start(
             launch.argv.push(settings.to_string());
         }
 
-        let mut map = state.hook_tokens.lock().unwrap();
-        map.insert(session.id, hook_token);
+        // Scope the lock so the (non-Send) MutexGuard is dropped before the
+        // provisioning await below — holding it across `.await` would make this
+        // handler's future non-Send and break the axum Handler bound.
+        {
+            let mut map = state.hook_tokens.lock().unwrap();
+            map.insert(session.id, hook_token);
+        }
+
+        // 008b: wire the shared Playwright MCP server into first-class agents
+        // that load MCP at launch (Claude/Codex). MCP config is read only at
+        // agent startup, so we must ensure the server is up and the config file
+        // written *before* spawning. Opt-in (AGENTUM_BROWSER_VERIFY) so a plain
+        // coding session never pays for a browser MCP, and best-effort: a
+        // provisioning failure is logged loudly but must not block the launch —
+        // the 008a loop still fails loud at run time if the browser can't start.
+        if crate::playwright_mcp::feature_enabled()
+            && crate::playwright_mcp::tool_supports_browser_mcp(&session.tool)
+        {
+            match crate::playwright_mcp::provision().await {
+                Ok(p) => launch.argv.extend(adapter.mcp_args(&p)),
+                Err(e) => tracing::warn!(
+                    session = %session.id,
+                    tool = %session.tool,
+                    "Playwright MCP provisioning failed; launching without browser MCP: {e:#}"
+                ),
+            }
+        }
     }
 
     crate::host_runtime::new_session(&host, &target, &workdir, &launch.argv, &launch.env)
