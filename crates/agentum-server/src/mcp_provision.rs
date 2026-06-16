@@ -43,28 +43,28 @@ pub async fn provision(state: &AppState, tool: &str) -> Option<McpProvision> {
 
     let mut servers = Vec::new();
 
-    // agentum's own MCP — wired by default, but only when the agent can reach it
-    // without a bearer token. The embedded loopback server is `no_auth`; a
-    // standalone `--no-auth` daemon too. An authed daemon needs the token
-    // injected into the agent's MCP config as an Authorization header (TODO) —
-    // until then we skip it rather than wire a server every call would 401 on.
-    if state.no_auth {
-        let base = state
-            .api_base_url
-            .as_deref()
-            .unwrap_or("http://127.0.0.1:8822");
-        servers.push(McpServer {
-            name: "agentum".to_string(),
-            url: format!("{base}/mcp"),
-        });
-    }
+    // agentum's own MCP — always wired. It's secured by the per-server bearer
+    // token (every agent presents it; the `/mcp` handler 401s without it), so it
+    // no longer matters whether the server is no-auth: the token is the gate.
+    // `mcp_url` resolves the right endpoint for this session's host (loopback
+    // locally; the reverse-tunnel port for an SSH host).
+    let base = state
+        .api_base_url
+        .as_deref()
+        .unwrap_or("http://127.0.0.1:8822");
+    servers.push(McpServer {
+        name: "agentum".to_string(),
+        url: format!("{base}/mcp"),
+        auth_token: Some(state.mcp_token.as_str().to_string()),
+    });
 
-    // Playwright browser MCP — opt-in, spawns npx, best-effort.
+    // Playwright browser MCP — opt-in, spawns npx, best-effort. No auth.
     if playwright_mcp::feature_enabled() {
         match playwright_mcp::ensure_playwright_mcp().await {
             Ok(url) => servers.push(McpServer {
                 name: "playwright".to_string(),
                 url,
+                auth_token: None,
             }),
             Err(e) => {
                 tracing::warn!("Playwright MCP not provisioned; skipping: {e:#}")
@@ -107,10 +107,13 @@ fn write_combined_config_in(state_dir: &Path, servers: &[McpServer]) -> Result<P
     for s in servers {
         // `type:"http"` (streamable-HTTP) keeps every server identical to the
         // Codex `-c` overrides — no stdio/command transport anywhere.
-        map.insert(
-            s.name.clone(),
-            serde_json::json!({ "type": "http", "url": s.url }),
-        );
+        let mut entry = serde_json::json!({ "type": "http", "url": s.url });
+        if let Some(token) = &s.auth_token {
+            // Claude's `--mcp-config` http servers accept a `headers` map; the
+            // agent presents this on every request so the server authorizes it.
+            entry["headers"] = serde_json::json!({ "Authorization": format!("Bearer {token}") });
+        }
+        map.insert(s.name.clone(), entry);
     }
     let doc = serde_json::json!({ "mcpServers": map });
     let body = serde_json::to_string_pretty(&doc).context("serialize MCP config")?;
@@ -146,10 +149,12 @@ mod tests {
             McpServer {
                 name: "agentum".to_string(),
                 url: "http://127.0.0.1:8822/mcp".to_string(),
+                auth_token: Some("tok123".to_string()),
             },
             McpServer {
                 name: "playwright".to_string(),
                 url: "http://127.0.0.1:8931/mcp".to_string(),
+                auth_token: None,
             },
         ];
         let path = write_combined_config_in(&tmp, &servers).unwrap();

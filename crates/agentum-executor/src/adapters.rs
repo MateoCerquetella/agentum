@@ -168,15 +168,20 @@ impl ToolAdapter for CodexAdapter {
     }
 
     // Codex has no `--mcp-config`; inject each server with `-c` TOML overrides at
-    // launch. Values are quoted so the URL parses as a TOML string. One pair of
-    // `-c` blocks per server (agentum, playwright, …).
+    // launch. Values are quoted so the URL parses as a TOML string. One block per
+    // server (agentum, playwright, …); a server with an `auth_token` also gets a
+    // `bearer_token` override so Codex authenticates to it.
     fn mcp_args(&self, p: &McpProvision) -> Vec<String> {
-        let mut args = Vec::with_capacity(p.servers.len() * 4);
+        let mut args = Vec::with_capacity(p.servers.len() * 6);
         for s in &p.servers {
             args.push("-c".to_string());
             args.push(format!("mcp_servers.{}.type=\"http\"", s.name));
             args.push("-c".to_string());
             args.push(format!("mcp_servers.{}.url=\"{}\"", s.name, s.url));
+            if let Some(token) = &s.auth_token {
+                args.push("-c".to_string());
+                args.push(format!("mcp_servers.{}.bearer_token=\"{}\"", s.name, token));
+            }
         }
         args
     }
@@ -440,22 +445,26 @@ mod tests {
             servers: vec![McpServer {
                 name: "playwright".to_string(),
                 url: "http://127.0.0.1:8931/mcp".to_string(),
+                auth_token: None,
             }],
             config_file: std::path::PathBuf::from("/tmp/agentum/playwright-mcp.json"),
         }
     }
 
-    /// Two servers (agentum + playwright) → Codex must emit a `-c` pair for each.
+    /// Two servers: agentum (token-guarded) + playwright (none) → Codex must emit
+    /// a `-c` block for each, plus a `bearer_token` for agentum.
     fn provision_two() -> McpProvision {
         McpProvision {
             servers: vec![
                 McpServer {
                     name: "agentum".to_string(),
                     url: "http://127.0.0.1:8822/mcp".to_string(),
+                    auth_token: Some("secret-tok".to_string()),
                 },
                 McpServer {
                     name: "playwright".to_string(),
                     url: "http://127.0.0.1:8931/mcp".to_string(),
+                    auth_token: None,
                 },
             ],
             config_file: std::path::PathBuf::from("/tmp/agentum/mcp.json"),
@@ -492,7 +501,8 @@ mod tests {
 
     #[test]
     fn codex_mcp_args_emit_one_block_per_server() {
-        // N servers → N `-c` pairs, in order (agentum first, then playwright).
+        // N servers in order; the token-guarded agentum server also gets a
+        // `bearer_token` override, the unauthenticated playwright one doesn't.
         let args = CodexAdapter.mcp_args(&provision_two());
         assert_eq!(
             args,
@@ -501,6 +511,8 @@ mod tests {
                 "mcp_servers.agentum.type=\"http\"".to_string(),
                 "-c".to_string(),
                 "mcp_servers.agentum.url=\"http://127.0.0.1:8822/mcp\"".to_string(),
+                "-c".to_string(),
+                "mcp_servers.agentum.bearer_token=\"secret-tok\"".to_string(),
                 "-c".to_string(),
                 "mcp_servers.playwright.type=\"http\"".to_string(),
                 "-c".to_string(),
