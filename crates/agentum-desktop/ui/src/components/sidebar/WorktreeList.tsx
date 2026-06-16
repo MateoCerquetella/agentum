@@ -33,6 +33,7 @@ import WorktreeCardAgents, {
   SUPPRESS_WORKTREE_LIST_SCROLL_ADJUSTMENT_EVENT
 } from './WorktreeCardAgents'
 import { SshDisconnectedDialog } from './SshDisconnectedDialog'
+import { HostReadinessDialog } from './HostReadinessDialog'
 import { WorktreeActivityStatusIndicator } from './WorktreeActivityStatusIndicator'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -848,6 +849,9 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   const directScrollInputUntilRef = useRef(0)
   const [dragOverStatus, setDragOverStatus] = useState<WorkspaceStatus | null>(null)
   const [pinDragOver, setPinDragOver] = useState(false)
+  // Host Readiness & Provisioning dialog target (sidebar host key + label), or
+  // null when closed. Opened from the host header's readiness chip.
+  const [readinessHost, setReadinessHost] = useState<{ key: string; label: string } | null>(null)
   const [lineageReconnectWorktreeId, setLineageReconnectWorktreeId] = useState<string | null>(null)
   const [worktreeDragState, setWorktreeDragState] = useState<WorktreeRowDragState>(
     WORKTREE_ROW_DRAG_INITIAL_STATE
@@ -2546,6 +2550,14 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
         className="worktree-sidebar-scrollbar h-full overflow-y-scroll overflow-x-hidden pl-1 scrollbar-sleek outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset pt-px"
         style={WORKTREE_SIDEBAR_SCROLL_STYLE}
       >
+        <HostReadinessDialog
+          hostKey={readinessHost?.key ?? null}
+          hostLabel={readinessHost?.label ?? ''}
+          open={readinessHost !== null}
+          onOpenChange={(open) => {
+            if (!open) setReadinessHost(null)
+          }}
+        />
         {activeLineageChildConnectionId && activeLineageChildSshStatus ? (
           <SshDisconnectedDialog
             open={
@@ -2619,6 +2631,9 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                     count={row.count}
                     collapsed={collapsedGroups.has(row.key)}
                     onToggle={() => toggleGroupWithScrollAnchor(row.key)}
+                    onOpenReadiness={() =>
+                      setReadinessHost({ key: row.host.key, label: row.host.label })
+                    }
                     onOpenTerminal={
                       // Hide the affordance for hosts with no worktree to anchor
                       // a terminal to (resolved against the same host bucketing).

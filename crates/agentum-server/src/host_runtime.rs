@@ -4,10 +4,11 @@
 //! remote machine. The remote host never needs an `agentum` binary.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use agentum_core::{AgentDepCheck, DepCheck, Host, HostKind, HostReadiness, HostSystemInfo};
+use agentum_core::{AgentDepCheck, DepCheck, Host, HostKind, HostReadiness, HostSystemInfo, SkillCheck};
+use base64::Engine as _;
 use agentum_executor::{binary_for, probed_tools};
 // The SSH connection builder lives in the shared lower crate so the watchdog
 // (which can't depend on agentum-server) shares one source of truth for the
@@ -95,19 +96,169 @@ const REQUIRED_DEPS: &[&str] = &["tmux", "git"];
 /// manager, with install hints filled in. See
 /// `docs/plans/SSH_HOST_READINESS_PRD.md` §7.1.
 pub async fn readiness(host: &Host) -> HostReadiness {
+    // The agentum skills we could provision to this host (the local user's
+    // installed skills). We report which of these the host already has.
+    let known_skills = local_provisionable_skill_ids();
     let mut report = match &host.kind {
-        HostKind::Local => assemble_readiness(probe_local()),
+        HostKind::Local => {
+            let mut r = assemble_readiness(probe_local());
+            r.skills = detect_host_skills(host, &known_skills).await;
+            r
+        }
         HostKind::Ssh { .. } => match probe_ssh(host).await {
-            Ok(probe) => assemble_readiness(probe),
+            Ok(probe) => {
+                let mut r = assemble_readiness(probe);
+                // Host reachable → one more round trip to see which skills it has.
+                r.skills = detect_host_skills(host, &known_skills).await;
+                r
+            }
             // Connection / auth / timeout failure: surface the error
             // verbatim and report everything as missing so the UI shows
             // the full (unverifiable) dependency list rather than a bare
-            // error with no guidance.
+            // error with no guidance. Skills stay empty (host unreachable).
             Err(e) => unreachable_readiness(e.to_string()),
         },
     };
     crate::host_install_hints::fill_hints(&mut report);
     report
+}
+
+/// The local `~/.claude/skills` directory (the daemon user's global Claude
+/// skills) — the source of truth for what we can provision to a host.
+fn local_skills_root() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude/skills"))
+}
+
+/// Agentum skills installed locally that we can provision to a host: each
+/// directory under `~/.claude/skills` that contains a `SKILL.md`. Returns the
+/// directory names (skill ids), sorted.
+fn local_provisionable_skill_ids() -> Vec<String> {
+    let Some(root) = local_skills_root() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().join("SKILL.md").is_file())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// For each locally-known skill id, whether the host already has it under
+/// `~/.claude/skills`. One SSH round trip (an `ls` of the skills dir). Errors
+/// (no dir, unreachable) read as "none present" rather than failing readiness.
+async fn detect_host_skills(host: &Host, ids: &[String]) -> Vec<SkillCheck> {
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    let present: HashSet<String> = match &host.kind {
+        // The local host is the source — every known skill is present.
+        HostKind::Local => ids.iter().cloned().collect(),
+        HostKind::Ssh { .. } => {
+            // `$HOME` expands inside the inner `sh -c`; `|| true` keeps exit 0
+            // (and stdout empty) when the skills dir doesn't exist yet.
+            let inner = "ls -1 \"$HOME/.claude/skills\" 2>/dev/null || true";
+            let Ok(quoted) = q(inner) else {
+                return Vec::new();
+            };
+            let script = format!("sh -c {quoted}");
+            match ssh_stdout(host, &script).await {
+                Ok(out) => out
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect(),
+                Err(_) => HashSet::new(),
+            }
+        }
+    };
+    ids.iter()
+        .map(|id| SkillCheck {
+            id: id.clone(),
+            label: id.clone(),
+            installed: present.contains(id),
+        })
+        .collect()
+}
+
+/// Copy agentum skills (by id) from the local `~/.claude/skills` to the host's
+/// `~/.claude/skills`, then re-probe and return fresh readiness. File-copy only
+/// (base64 over SSH) — never runs an arbitrary command on the remote. The caller
+/// (route) gates this behind `confirm: true`; unknown / path-suspicious ids are
+/// rejected here so a client can't write outside the skills tree.
+pub async fn provision_skills(host: &Host, ids: &[String]) -> Result<HostReadiness> {
+    let root = local_skills_root()
+        .ok_or_else(|| HostRuntimeError::Bootstrap("no local ~/.claude/skills directory".into()))?;
+    for id in ids {
+        if id.is_empty() || id.contains('/') || id.contains("..") {
+            return Err(HostRuntimeError::Bootstrap(format!("invalid skill id `{id}`")));
+        }
+        if !root.join(id).join("SKILL.md").is_file() {
+            return Err(HostRuntimeError::Bootstrap(format!(
+                "unknown local skill `{id}` (no ~/.claude/skills/{id}/SKILL.md)"
+            )));
+        }
+    }
+    match &host.kind {
+        // Local host is the source; the skills are already there.
+        HostKind::Local => {}
+        HostKind::Ssh { .. } => {
+            let home = remote_home(host).await?;
+            for id in ids {
+                tracing::info!(host = %host.name, skill = %id, "provisioning skill to host");
+                copy_skill_dir_ssh(host, &root.join(id), &home, id).await?;
+            }
+        }
+    }
+    Ok(readiness(host).await)
+}
+
+/// Resolve the host's absolute `$HOME` (one SSH round trip) so subsequent file
+/// writes use absolute paths — `$HOME` can't survive the double shell-quoting
+/// the write commands need.
+async fn remote_home(host: &Host) -> Result<String> {
+    let script = format!("sh -c {}", q("printf %s \"$HOME\"")?);
+    let home = ssh_stdout(host, &script).await?.trim().to_string();
+    if home.is_empty() {
+        return Err(HostRuntimeError::Bootstrap(
+            "could not resolve remote $HOME".into(),
+        ));
+    }
+    Ok(home)
+}
+
+/// Copy every regular file directly under `src_dir` to
+/// `<home>/.claude/skills/<id>/` on the host via base64 (`base64 -d`), creating
+/// the directory first. Non-recursive (skills are flat: SKILL.md + a few files).
+async fn copy_skill_dir_ssh(host: &Host, src_dir: &Path, home: &str, id: &str) -> Result<()> {
+    let remote_dir = format!("{home}/.claude/skills/{id}");
+    let mkdir = format!("sh -c {}", q(&format!("mkdir -p {}", q(&remote_dir)?))?);
+    ssh_checked(host, &mkdir).await?;
+    let mut entries = tokio::fs::read_dir(src_dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        if !entry.path().is_file() {
+            continue;
+        }
+        let Ok(fname) = entry.file_name().into_string() else {
+            continue;
+        };
+        if fname.contains('/') || fname.contains("..") {
+            continue;
+        }
+        let bytes = tokio::fs::read(entry.path()).await?;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let remote_file = format!("{remote_dir}/{fname}");
+        // `printf %s '<b64>' | base64 -d > '<file>'` — content is base64 (no
+        // shell-special chars), paths are absolute + quoted. No arbitrary exec.
+        let inner = format!("printf %s {} | base64 -d > {}", q(&b64)?, q(&remote_file)?);
+        let script = format!("sh -c {}", q(&inner)?);
+        ssh_checked(host, &script).await?;
+    }
+    Ok(())
 }
 
 /// Install required system packages (`tmux`/`git`) on a host via its
@@ -328,6 +479,9 @@ fn assemble_readiness(probe: ProbeOutput) -> HostReadiness {
         },
         required,
         agents,
+        // Filled by `readiness()` after assembly (needs an async host probe);
+        // empty here and for the unreachable path.
+        skills: Vec::new(),
     }
 }
 

@@ -23,6 +23,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/hosts/{id}/readiness", get(readiness))
         .route("/api/hosts/{id}/bootstrap", post(bootstrap))
         .route("/api/hosts/{id}/install-agent", post(install_agent))
+        .route("/api/hosts/{id}/provision-skills", post(provision_skills))
         .route("/api/hosts/{id}/tmux-sessions", get(tmux_sessions))
         .route(
             "/api/hosts/{id}/tmux-sessions/{name}/attach",
@@ -276,6 +277,50 @@ async fn install_agent(
         .await?
         .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
     let report = crate::host_runtime::install_agents(&host, &req.tools)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if report.ok {
+        let _ = state.store.update_host_seen(id).await;
+    }
+    Ok(Json(report))
+}
+
+/// Body for `POST /api/hosts/{id}/provision-skills`. `confirm` must be `true`;
+/// `skills` are agentum skill ids validated against this daemon's installed
+/// skills in `host_runtime::provision_skills`. File-copy only — never runs an
+/// arbitrary command on the remote.
+#[derive(serde::Deserialize)]
+struct ProvisionSkillsRequest {
+    #[serde(default)]
+    skills: Vec<String>,
+    #[serde(default)]
+    confirm: bool,
+}
+
+/// `POST /api/hosts/{id}/provision-skills` — copy agentum skills (by id) from
+/// this daemon's `~/.claude/skills` to the host's `~/.claude/skills`, then
+/// return the re-probed [`HostReadiness`]. Skills are opt-in per host and never
+/// gate `ok` (purely additive). Rejects `confirm != true`.
+async fn provision_skills(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<ProvisionSkillsRequest>,
+) -> Result<Json<HostReadiness>, ApiError> {
+    let id = parse_uuid(&id)?;
+    if !req.confirm {
+        return Err(ApiError::BadRequest(
+            "provision-skills requires explicit confirm: true".into(),
+        ));
+    }
+    if req.skills.is_empty() {
+        return Err(ApiError::BadRequest("no skills to provision".into()));
+    }
+    let host = state
+        .store
+        .get_host(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
+    let report = crate::host_runtime::provision_skills(&host, &req.skills)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     if report.ok {

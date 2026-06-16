@@ -147,6 +147,12 @@ pub struct HostReadiness {
     /// Optional agent CLIs from `agentum_executor::probed_tools()`. A
     /// missing agent only blocks if the user picks that specific tool.
     pub agents: Vec<AgentDepCheck>,
+    /// Optional agentum skills detected in the host's `~/.claude/skills`.
+    /// Like agents, a missing skill never blocks `ok` — skills are opt-in
+    /// per host and provisioned by copying the local skill files over SSH.
+    /// `#[serde(default)]` keeps older daemons' payloads parseable.
+    #[serde(default)]
+    pub skills: Vec<SkillCheck>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,6 +203,19 @@ pub struct AgentDepCheck {
     pub install_hint: Option<String>,
     /// Always `false`: agentum never auto-installs agent CLIs.
     pub bootstrapable: bool,
+}
+
+/// An optional agentum skill detected in the host's `~/.claude/skills`.
+/// Provisioned to a host by copying the local skill files over SSH
+/// (`provision-skills`); never gates host readiness (opt-in per host).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillCheck {
+    /// Skill id = directory name (e.g. "browser-verification-loop").
+    pub id: String,
+    /// Display label (defaults to the id).
+    pub label: String,
+    /// `true` when the skill's directory exists in the host's `~/.claude/skills`.
+    pub installed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
