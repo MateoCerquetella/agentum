@@ -126,10 +126,19 @@ One Chrome, driven by Playwright and mirrored by agentum.
   `--mcp-config <file>`, provisioning selection, URL path, flag truthiness). Gated
   opt-in by `AGENTUM_BROWSER_VERIFY` (truthy) — see "Decisions resolved".
   `cargo test -p agentum-executor -p agentum-server --lib` green; clippy clean.
-  Remaining for full P1 close: **live test** (`npx playwright install chromium`,
-  launch a claude session via agentum, confirm `/mcp` lists playwright + a browser
-  task can navigate+screenshot) and verify the exact Codex `-c` schema against a
-  real codex CLI. P2 (remote-host parity) extends `ensure` to take a `&Host`.
+- **P1 — LIVE TEST PASSED (Claude path).** Started the shared server via the
+  exact argv, then ran `claude --mcp-config <file> --dangerously-skip-permissions
+  -p "navigate to example.com + screenshot"` (the config + flag the adapter
+  produces). Claude loaded the HTTP Playwright server, called `browser_navigate`
+  (returned the real H1 "Example Domain") and `browser_take_screenshot` (18 KB png
+  written). Navigate+screenshot succeeding proves the server is both listed and
+  functional. **The live test surfaced and fixed a real bug:** Playwright MCP's
+  default `--host localhost` binds IPv6 `::1`-only on macOS → the `127.0.0.1` URL
+  was connection-refused; pinned `--host 127.0.0.1` so bind/probe/URL agree.
+- **P1 — remaining:** verify the exact Codex `-c mcp_servers.playwright.*` schema
+  against a real codex CLI (Claude path is proven; Codex is still unverified-live);
+  optional standalone `agentum` CLI helper for the fully-desktop-closed path. P2
+  (remote-host parity) extends `ensure` to take a `&Host`.
 
 ## Decisions resolved (this round)
 
