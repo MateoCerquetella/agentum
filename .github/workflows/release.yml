@@ -215,31 +215,51 @@ jobs:
         shell: bash
         run: |
           set -eux
-          OUT="dist/${BIN_NAME}-${{ github.ref_name }}-${{ matrix.target }}"
+          # Clean, Orca-style asset label: <os>-<arch>. The raw Rust triple was
+          # redundant — the tauri bundle name already carries an arch, which made
+          # names like agentum_0.14.3_aarch64-aarch64-apple-darwin.dmg.
+          case "${{ matrix.target }}" in
+            x86_64-apple-darwin)       OSARCH="macos-x64" ;;
+            aarch64-apple-darwin)      OSARCH="macos-arm64" ;;
+            x86_64-pc-windows-msvc)    OSARCH="windows-x64" ;;
+            aarch64-pc-windows-msvc)   OSARCH="windows-arm64" ;;
+            x86_64-unknown-linux-gnu)  OSARCH="linux-x64" ;;
+            aarch64-unknown-linux-gnu) OSARCH="linux-arm64" ;;
+            *)                         OSARCH="${{ matrix.target }}" ;;
+          esac
+          VER="${GITHUB_REF_NAME#v}"   # v0.14.4 -> 0.14.4 on a tag; the branch on dispatch
+          STEM="agentum-${VER}-${OSARCH}"
+
+          # CLI tarball.
+          OUT="dist/${STEM}"
           mkdir -p "$OUT"
           # The CLI binary is `agentum` on unix, `agentum.exe` on Windows.
           BIN="target/${{ matrix.target }}/release/${BIN_NAME}"
           [ -f "$BIN" ] || BIN="${BIN}.exe"
           cp "$BIN" "$OUT/"
           cp LICENSE README.md CHANGELOG.md "$OUT/"
-          ( cd dist && tar -czf "${BIN_NAME}-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" "${BIN_NAME}-${{ github.ref_name }}-${{ matrix.target }}" )
-          # Desktop installers (.dmg/.deb/.AppImage) ship as standalone assets,
-          # suffixed with the target triple so they don't collide when the
-          # release job merges every target's artifacts into one dir.
+          ( cd dist && tar -czf "${STEM}.tar.gz" "${STEM}" )
+
+          # Desktop installers → agentum-<ver>-<os>-<arch>.<ext> (the NSIS
+          # installer keeps a -setup suffix). Clean + versioned, no triple.
           BUNDLE_DIR="target/${{ matrix.target }}/release/bundle"
           if [ -d "$BUNDLE_DIR" ]; then
             find "$BUNDLE_DIR" -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' -o -name '*-setup.exe' -o -name '*.msi' \) -print0 \
               | while IFS= read -r -d '' f; do
-                  base="$(basename "$f")"
-                  cp "$f" "dist/${base%.*}-${{ matrix.target }}.${base##*.}"
+                  base="$(basename "$f")"; ext="${base##*.}"
+                  case "$base" in
+                    *-setup.exe) cp "$f" "dist/${STEM}-setup.exe" ;;
+                    *)           cp "$f" "dist/${STEM}.${ext}" ;;
+                  esac
                 done
           fi
-          # Raw Linux desktop binary — the artifact that runs on Arch and other
-          # non-deb distros (install.sh falls back to it when no AppImage). macOS
-          # users get the .app inside the .dmg, so only ship it for Linux.
+
+          # Raw Linux desktop binary — runs on Arch and other non-deb distros
+          # (install.sh falls back to it when no AppImage). macOS users get the
+          # .app inside the .dmg, so only ship it for Linux.
           DESK_BIN="target/${{ matrix.target }}/release/agentum-desktop"
           if [ -n "${{ matrix.desktop }}" ] && [ -f "$DESK_BIN" ] && [[ "${{ matrix.target }}" == *linux* ]]; then
-            cp "$DESK_BIN" "dist/agentum-desktop-${{ github.ref_name }}-${{ matrix.target }}"
+            cp "$DESK_BIN" "dist/agentum-desktop-${VER}-${OSARCH}"
           fi
           ls -la dist/
 
