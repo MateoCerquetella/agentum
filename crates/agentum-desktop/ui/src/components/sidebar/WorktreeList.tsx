@@ -2526,6 +2526,64 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
     }
   )
 
+  // Why: both the project header ⋯ button and the new right-click context menu
+  // render the exact same actions, so the item list lives in one closure to
+  // prevent the two entry points from drifting apart.
+  const renderProjectActionItems = (repo: Repo) => (
+    <>
+      <DropdownMenuItem onSelect={() => handleOpenRepoSettings(repo.id)}>
+        <SlidersHorizontal className="size-3.5" />
+        Project Settings
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        onSelect={() => handleOpenRepoSettings(repo.id, getRepositoryIconSectionId(repo.id))}
+      >
+        <Shapes className="size-3.5" />
+        Change Project Icon
+      </DropdownMenuItem>
+      {isGitRepoKind(repo) ? (
+        <DropdownMenuItem onSelect={() => handleOpenWorktreeVisibility(repo.id)}>
+          <Eye className="size-3.5" />
+          {getWorktreeVisibilityMenuLabel(repo)}
+        </DropdownMenuItem>
+      ) : null}
+      <DropdownMenuItem onSelect={() => handleCreateGroupFromRepo(repo)}>
+        <FolderPlus className="size-3.5" />
+        New group from project
+      </DropdownMenuItem>
+      {projectGroups.length > 0 ? (
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <FolderInput className="size-3.5" />
+            Move to group
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            {projectGroups.map((group) => (
+              <DropdownMenuItem
+                key={group.id}
+                disabled={repo.projectGroupId === group.id}
+                onSelect={() => handleMoveProjectToGroup(repo, group.id)}
+              >
+                <span className="max-w-48 truncate">{group.name}</span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      ) : null}
+      {repo.projectGroupId ? (
+        <DropdownMenuItem onSelect={() => handleRemoveProjectFromGroup(repo)}>
+          <CircleX className="size-3.5" />
+          Remove from group
+        </DropdownMenuItem>
+      ) : null}
+      <DropdownMenuSeparator />
+      <DropdownMenuItem variant="destructive" onSelect={() => handleRemoveProject(repo)}>
+        <Trash2 className="size-3.5" />
+        Remove Project
+      </DropdownMenuItem>
+    </>
+  )
+
   return (
     <div data-worktree-sidebar-container className="relative min-h-0 flex-1">
       <div
@@ -2906,98 +2964,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                           sideOffset={6}
                           onClick={(event) => event.stopPropagation()}
                         >
-                          <DropdownMenuItem
-                            onSelect={() => {
-                              if (row.repo) {
-                                handleOpenRepoSettings(row.repo.id)
-                              }
-                            }}
-                          >
-                            <SlidersHorizontal className="size-3.5" />
-                            Project Settings
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onSelect={() => {
-                              if (row.repo) {
-                                handleOpenRepoSettings(
-                                  row.repo.id,
-                                  getRepositoryIconSectionId(row.repo.id)
-                                )
-                              }
-                            }}
-                          >
-                            <Shapes className="size-3.5" />
-                            Change Project Icon
-                          </DropdownMenuItem>
-                          {row.repo && isGitRepoKind(row.repo) ? (
-                            <DropdownMenuItem
-                              onSelect={() => {
-                                if (row.repo) {
-                                  handleOpenWorktreeVisibility(row.repo.id)
-                                }
-                              }}
-                            >
-                              <Eye className="size-3.5" />
-                              {getWorktreeVisibilityMenuLabel(row.repo)}
-                            </DropdownMenuItem>
-                          ) : null}
-                          <DropdownMenuItem
-                            onSelect={() => {
-                              if (row.repo) {
-                                handleCreateGroupFromRepo(row.repo)
-                              }
-                            }}
-                          >
-                            <FolderPlus className="size-3.5" />
-                            New group from project
-                          </DropdownMenuItem>
-                          {projectGroups.length > 0 ? (
-                            <DropdownMenuSub>
-                              <DropdownMenuSubTrigger>
-                                <FolderInput className="size-3.5" />
-                                Move to group
-                              </DropdownMenuSubTrigger>
-                              <DropdownMenuSubContent>
-                                {projectGroups.map((group) => (
-                                  <DropdownMenuItem
-                                    key={group.id}
-                                    disabled={row.repo?.projectGroupId === group.id}
-                                    onSelect={() => {
-                                      if (row.repo) {
-                                        handleMoveProjectToGroup(row.repo, group.id)
-                                      }
-                                    }}
-                                  >
-                                    <span className="max-w-48 truncate">{group.name}</span>
-                                  </DropdownMenuItem>
-                                ))}
-                              </DropdownMenuSubContent>
-                            </DropdownMenuSub>
-                          ) : null}
-                          {row.repo.projectGroupId ? (
-                            <DropdownMenuItem
-                              onSelect={() => {
-                                if (row.repo) {
-                                  handleRemoveProjectFromGroup(row.repo)
-                                }
-                              }}
-                            >
-                              <CircleX className="size-3.5" />
-                              Remove from group
-                            </DropdownMenuItem>
-                          ) : null}
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            variant="destructive"
-                            onSelect={() => {
-                              if (row.repo) {
-                                handleRemoveProject(row.repo)
-                              }
-                            }}
-                          >
-                            <Trash2 className="size-3.5" />
-                            Remove Project
-                          </DropdownMenuItem>
+                          {renderProjectActionItems(row.repo)}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     ) : null}
