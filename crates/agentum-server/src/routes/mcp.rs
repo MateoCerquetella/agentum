@@ -106,6 +106,40 @@ fn tool_specs() -> Value {
                 id, repo, branch, path, and comment. Use to see what other agents \
                 are working on in parallel.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        },
+        {
+            "name": "agentum_send_message",
+            "description": "Send a message to another agent (or a group) via agentum's \
+                inter-agent mailbox. `to` is a handle (another session's name) or a \
+                group: @all, @idle, @claude/@codex/… (by tool), or @worktree:<id>. \
+                The recipient reads it with agentum_check_messages. Use to coordinate \
+                with sibling agents — hand off work, ask a question, report status.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "to": { "type": "string", "description": "Recipient handle or @group" },
+                    "subject": { "type": "string", "description": "Short subject line" },
+                    "body": { "type": "string", "description": "Message body" },
+                    "from": { "type": "string", "description": "Sender handle (your own session name, e.g. $AGENTUM_TERMINAL_HANDLE)" }
+                },
+                "required": ["to", "subject"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "agentum_check_messages",
+            "description": "Read (and consume) your unread inter-agent messages from \
+                agentum's mailbox. `recipient` is your own handle (your session name, \
+                e.g. $AGENTUM_TERMINAL_HANDLE). Returns the messages and marks them read.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "recipient": { "type": "string", "description": "Your handle (session name)" },
+                    "limit": { "type": "integer", "description": "Max messages to return (default 50)" }
+                },
+                "required": ["recipient"],
+                "additionalProperties": false,
+            },
         }
     ])
 }
@@ -119,9 +153,15 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         .and_then(Value::as_str)
         .ok_or((-32602, "missing tool name".to_string()))?;
 
+    let args = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let outcome: anyhow::Result<String> = match name {
         "agentum_list_sessions" => tool_list_sessions(state).await,
         "agentum_list_worktrees" => tool_list_worktrees().await,
+        "agentum_send_message" => tool_send_message(state, &args).await,
+        "agentum_check_messages" => tool_check_messages(state, &args).await,
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
 
@@ -157,6 +197,70 @@ async fn tool_list_worktrees() -> anyhow::Result<String> {
     let worktrees =
         super::worktrees::read_worktrees().map_err(|e| anyhow::anyhow!("read worktrees: {e}"))?;
     Ok(serde_json::to_string_pretty(&worktrees)?)
+}
+
+/// Send to another agent / group, reusing the orchestration route's recipient
+/// resolution + the store's mailbox insert (same path as `agentum orchestration
+/// send`). The `orchestration` skill becomes this tool.
+async fn tool_send_message(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    use agentum_store::orchestration::NewOrchMessage;
+
+    let to = args
+        .get("to")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `to`"))?;
+    let subject = args
+        .get("subject")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `subject`"))?;
+    let from = args.get("from").and_then(Value::as_str).unwrap_or("agent");
+    let body = args.get("body").and_then(Value::as_str).unwrap_or("");
+
+    let infos = super::orchestration::handle_infos(state)
+        .await
+        .map_err(|e| anyhow::anyhow!("resolve handles: {e}"))?;
+    let recipients = super::orchestration::resolve_recipients(to, &infos, from);
+    if recipients.is_empty() {
+        anyhow::bail!("`{to}` resolved to no recipients");
+    }
+
+    // One thread for the fan-out so a group conversation stays linked.
+    let thread_id = uuid::Uuid::new_v4().to_string();
+    for recipient in &recipients {
+        state
+            .store
+            .orch_insert_message(&NewOrchMessage {
+                thread_id: thread_id.clone(),
+                sender: from.to_string(),
+                recipient: recipient.clone(),
+                subject: subject.to_string(),
+                body: body.to_string(),
+                msg_type: "status".to_string(),
+                priority: "normal".to_string(),
+                payload: None,
+            })
+            .await?;
+    }
+    Ok(serde_json::to_string_pretty(
+        &json!({ "thread_id": thread_id, "delivered_to": recipients }),
+    )?)
+}
+
+/// Read + consume the caller's unread mailbox (same as `agentum orchestration
+/// check`). Marks the returned messages read.
+async fn tool_check_messages(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let recipient = args
+        .get("recipient")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `recipient`"))?;
+    let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(50);
+
+    let msgs = state.store.orch_inbox(recipient, true, &[], limit).await?;
+    let ids: Vec<i64> = msgs.iter().map(|m| m.id).collect();
+    if !ids.is_empty() {
+        state.store.orch_mark_read(&ids).await?;
+    }
+    Ok(serde_json::to_string_pretty(&json!({ "messages": msgs }))?)
 }
 
 #[cfg(test)]
