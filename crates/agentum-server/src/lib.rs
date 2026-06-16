@@ -28,7 +28,9 @@ mod headers;
 pub mod host_install_hints;
 pub mod host_runtime;
 mod logging;
+pub mod mcp_provision;
 pub mod planner;
+pub mod playwright_mcp;
 pub mod ratelimit;
 mod routes;
 mod rules;
@@ -227,6 +229,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::health::router())
         .merge(routes::host::router())
         .merge(routes::hosts::router())
+        .merge(routes::mcp::router())
         .merge(routes::cert::router())
         .merge(routes::doctor::router())
         .merge(routes::auth::router())

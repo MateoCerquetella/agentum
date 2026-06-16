@@ -1,7 +1,6 @@
 import { api } from '@/tauri'
 import React, { useState } from 'react'
 import {
-  BookOpen,
   CircleHelp,
   FolderPlus,
   RotateCw,
@@ -26,7 +25,6 @@ import { ScrollToCurrentWorkspaceToolbarButton } from './ScrollToCurrentWorkspac
 const SidebarToolbar = React.memo(function SidebarToolbar() {
   const openModal = useAppStore((s) => s.openModal)
   const openSettingsPage = useAppStore((s) => s.openSettingsPage)
-  const openSkillsPage = useAppStore((s) => s.openSkillsPage)
   const [helpMenuOpen, setHelpMenuOpen] = useState(false)
   const [showAdminHelpOptions, setShowAdminHelpOptions] = useState(false)
   const [isRestartingAgentum, setIsRestartingAgentum] = useState(false)
@@ -122,10 +120,6 @@ const SidebarToolbar = React.memo(function SidebarToolbar() {
               >
                 <School className="size-3.5" />
                 Show Onboarding
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={openSkillsPage}>
-                <BookOpen className="size-3.5" />
-                Skills
               </DropdownMenuItem>
               {showAdminHelpOptions ? (
                 <>

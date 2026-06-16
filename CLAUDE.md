@@ -236,12 +236,53 @@ All HTTP/WS routes live in `crates/agentum-server/src/routes/`:
 | `agent_tasks.rs`  | `/api/sessions/{id}/agent-tasks` | Plan/todos/tasks tail. |
 | `host.rs`         | `/api/host/metrics`        | CPU+RAM samples; also broadcasts. |
 | `fs.rs`           | `/api/fs/list`             | Workdir picker. |
+| `mcp.rs`          | `/mcp`                     | agentum's own MCP server (see below). |
 | `board.rs`, `notes.rs`, `channels.rs`, `watchdog.rs`, `doctor.rs` | various | Self-explanatory. |
 
 Auth middleware (`crate::auth::require_token`) is applied at the
 top-level router merge — see `lib.rs::router`. Public paths are
 listed in `auth.rs::is_public`. WS clients pass the bearer token as
 `?token=` because browsers can't set headers on upgrade.
+
+---
+
+## agentum as an MCP server (skills → MCP)
+
+agentum exposes its own capabilities as **MCP tools** so *any* agent
+(Claude, Codex, …) gets them over the same streamable-HTTP transport it
+already uses for Playwright — agent-agnostic, app-owned, no per-agent
+skill files. This supersedes the old "install a skill into
+`~/.claude/skills`" model.
+
+- **Server** (`routes/mcp.rs`): a hand-rolled streamable-HTTP JSON-RPC
+  server at `POST /mcp` — `initialize` / `ping` / `tools/list` /
+  `tools/call`, stateless, single `application/json` responses (no SSE;
+  `GET /mcp` → 405). Each tool is a thin view over an existing
+  route/store helper, never a reimplementation. Tools so far:
+  `agentum_list_sessions`, `agentum_list_worktrees`,
+  `agentum_send_message`, `agentum_check_messages` (the `orchestration`
+  mailbox). Add a tool by appending to `tool_specs()` + a `call_tool`
+  arm.
+- **Auth**: `/mcp` is **not** public — it requires the bearer token on a
+  networked daemon. It's reachable on the embedded loopback server
+  because that runs `no_auth` (loopback-bound). For an authed standalone
+  daemon, the launch wiring must inject the token as an `Authorization`
+  header (TODO).
+- **Auto-wiring** (`mcp_provision.rs`): every *local* Claude/Codex launch
+  is wired to the agentum MCP **by default** (it's free — the running
+  server), plus Playwright when `AGENTUM_BROWSER_VERIFY` is set. The
+  generalized seam (`agentum_executor::McpProvision` holds
+  `Vec<McpServer>`) writes ONE combined `--mcp-config` file (Claude) or a
+  `-c` block per server (Codex). The URL comes from `state.api_base_url`
+  (correct for the embedded TUI/desktop server; a standalone daemon on a
+  non-default port falls back to `:8822`, same gap as `pane_env`).
+- **Skill removal is a separate, desktop-UI effort**: the skill-install
+  surface lives entirely in `agentum-desktop/ui/src` (TS/React —
+  `SkillsPage.tsx`, `tauri/skills.ts`, `agent-feature-install-commands.ts`,
+  …) with NO Rust/compile coupling to the repo `skills/` dir. Removing it
+  needs the npm build env to verify; do it after the remaining skill
+  capabilities (computer-use, scheduling, browser, orchestration DAG) are
+  ported to MCP tools, else those capabilities are lost.
 
 ---
 

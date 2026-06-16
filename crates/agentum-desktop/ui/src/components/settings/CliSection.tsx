@@ -253,37 +253,10 @@ export function CliSection({ currentPlatform }: CliSectionProps): React.JSX.Elem
           ) : null}
         </div>
 
-        {!isBrowserManaged ? (
-          <div className="border-t border-border/60 pt-3">
-            <div className="space-y-0.5">
-              <Label>Agent skills</Label>
-              <p className="text-xs text-muted-foreground">
-                Give agents Agentum-aware workspace, terminal, and progress workflows.
-              </p>
-            </div>
-
-            <AgentSkillSetupPanel
-              className="mt-3"
-              variant="inline"
-              title="CLI skill"
-              description="Enables agents to use Agentum workspace, terminal, and progress commands."
-              command={AGENTUM_CLI_SKILL_INSTALL_COMMAND}
-              terminalTitle="CLI skill setup"
-              terminalAriaLabel="CLI skill install terminal"
-              terminalWorktreeId="settings-cli-skill-terminal"
-              installed={cliSkillDetected}
-              loading={cliSkillLoading}
-              error={cliSkillError}
-              preInstallNotice={AGENT_SKILL_CLI_PREREQUISITE_NOTICE}
-              onBeforeOpenTerminal={async () => {
-                await ensureAgentumCliAvailableForAgentSkillTerminal({
-                  onStatusChange: handleStatusChange
-                })
-              }}
-              onRecheck={refreshCliSkill}
-            />
-          </div>
-        ) : null}
+        {/* Agent-skill install panel removed: agentum exposes its capabilities as
+            MCP tools wired into every agent at launch (see agentum-server
+            routes/mcp.rs + mcp_provision.rs), so there is no per-agent skill to
+            install. */}
       </div>
 
       <WslCliRegistration currentPlatform={currentPlatform} />

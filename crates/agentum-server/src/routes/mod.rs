@@ -18,6 +18,7 @@ pub mod git;
 pub mod health;
 pub mod host;
 pub mod hosts;
+pub mod mcp;
 pub mod notes;
 pub mod orchestration;
 pub mod preferences;

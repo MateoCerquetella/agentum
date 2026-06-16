@@ -637,8 +637,25 @@ async fn start(
             launch.argv.push(settings.to_string());
         }
 
-        let mut map = state.hook_tokens.lock().unwrap();
-        map.insert(session.id, hook_token);
+        // Scope the lock so the (non-Send) MutexGuard is dropped before the
+        // provisioning await below — holding it across `.await` would make this
+        // handler's future non-Send and break the axum Handler bound.
+        {
+            let mut map = state.hook_tokens.lock().unwrap();
+            map.insert(session.id, hook_token);
+        }
+
+        // Wire MCP servers into first-class agents that load MCP at launch
+        // (Claude/Codex). MCP config is read only at agent startup, so the
+        // launch site must ensure each server is up and the combined config
+        // written *before* spawning. agentum's own MCP is wired by default (it's
+        // the already-running server — free); Playwright is opt-in
+        // (AGENTUM_BROWSER_VERIFY, spawns npx). Best-effort: `provision` logs and
+        // skips anything it can't provision and returns `None` when there's
+        // nothing to wire, so a normal coding session is never blocked.
+        if let Some(p) = crate::mcp_provision::provision(&state, &session.tool).await {
+            launch.argv.extend(adapter.mcp_args(&p));
+        }
     }
 
     crate::host_runtime::new_session(&host, &target, &workdir, &launch.argv, &launch.env)

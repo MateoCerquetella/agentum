@@ -1,16 +1,10 @@
-import { api } from '@/tauri'
-import { useEffect, useState, type ReactNode } from 'react'
-import { RefreshCw, Terminal } from 'lucide-react'
-import { IntegrationStatusPill } from '../integration-status-pill'
-import { OnboardingInlineCommandTerminal } from '../onboarding/OnboardingInlineCommandTerminal'
-import { Button } from '../ui/button'
-import { useMountedRef } from '@/hooks/useMountedRef'
-import { notifyInstalledAgentSkillsChanged } from '@/hooks/useInstalledAgentSkills'
-import { isAgentumCliAvailableOnPath } from '@/lib/agent-skill-cli-prerequisite'
+import { type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
 type AgentSkillSetupPanelVariant = 'card' | 'inline'
 
+// The full prop surface is preserved so existing call sites compile unchanged —
+// most fields are now ignored (see below).
 type AgentSkillSetupPanelProps = {
   title: string
   description: ReactNode
@@ -33,173 +27,32 @@ type AgentSkillSetupPanelProps = {
   onRecheck: () => void | Promise<void>
 }
 
+// Skill installation is retired. agentum exposes its capabilities as MCP tools
+// wired into every agent at launch (agentum-server `routes/mcp.rs` +
+// `mcp_provision.rs`), so there is no per-agent skill to install. This widget
+// used to render an `npx skills add …` install terminal; it now renders a short
+// note. The props are kept intact so every call site (the feature panes and the
+// onboarding flow) compiles without change.
 export function AgentSkillSetupPanel({
   title,
-  description,
-  command,
-  terminalTitle,
-  terminalAriaLabel,
-  terminalWorktreeId,
-  installed,
-  loading,
-  error,
-  installDisabled = false,
-  terminalHeightPx,
-  leading,
   icon,
   variant = 'card',
-  className,
-  preInstallNotice,
-  onBeforeOpenTerminal,
-  showRecheckWhenInstalled = true,
-  onRecheck
+  className
 }: AgentSkillSetupPanelProps): React.JSX.Element {
-  const [terminalOpen, setTerminalOpen] = useState(false)
-  const [preInstallNoticeVisible, setPreInstallNoticeVisible] = useState(Boolean(preInstallNotice))
-  const mountedRef = useMountedRef()
-
-  useEffect(() => {
-    if (!preInstallNotice) {
-      setPreInstallNoticeVisible(false)
-      return
-    }
-
-    let canceled = false
-    const refreshCliNotice = async (): Promise<void> => {
-      try {
-        const status = await api.cli.getInstallStatus()
-        if (!canceled) {
-          setPreInstallNoticeVisible(!isAgentumCliAvailableOnPath(status))
-        }
-      } catch {
-        if (!canceled) {
-          setPreInstallNoticeVisible(true)
-        }
-      }
-    }
-
-    void refreshCliNotice()
-    window.addEventListener('focus', refreshCliNotice)
-    return () => {
-      canceled = true
-      window.removeEventListener('focus', refreshCliNotice)
-    }
-  }, [preInstallNotice])
-
-  const refreshPreInstallNotice = async (): Promise<void> => {
-    if (!preInstallNotice) {
-      return
-    }
-    try {
-      const status = await api.cli.getInstallStatus()
-      if (mountedRef.current) {
-        setPreInstallNoticeVisible(!isAgentumCliAvailableOnPath(status))
-      }
-    } catch {
-      if (mountedRef.current) {
-        setPreInstallNoticeVisible(true)
-      }
-    }
-  }
-  const actionRow = (
-    <div className="mt-3 flex flex-wrap items-center gap-2">
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={() => {
-          void (async () => {
-            try {
-              await onBeforeOpenTerminal?.()
-              await refreshPreInstallNotice()
-            } finally {
-              if (mountedRef.current) {
-                setTerminalOpen(true)
-              }
-            }
-          })()
-        }}
-        disabled={terminalOpen || installDisabled}
-      >
-        <Terminal className="size-3.5" />
-        Install
-      </Button>
-      {!installed || showRecheckWhenInstalled ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="gap-1.5"
-          onClick={() => void onRecheck()}
-          disabled={loading}
-        >
-          <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
-          Re-check
-        </Button>
-      ) : null}
-    </div>
-  )
-
   return (
     <div
       className={cn(
-        variant === 'card' ? 'rounded-xl border border-border bg-muted/20' : null,
+        variant === 'card' ? 'rounded-lg border border-border/60 p-3' : 'mt-3',
         className
       )}
     >
-      <div
-        className={variant === 'card' ? cn('px-5 pt-5', terminalOpen ? 'pb-2' : 'pb-5') : undefined}
-      >
-        <div className="flex items-center gap-4">
-          {leading}
-          {icon ? (
-            <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-foreground">
-              {icon}
-            </div>
-          ) : null}
-          <div className="min-w-0 flex-1 self-center">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-[15px] font-semibold leading-tight text-foreground">{title}</h3>
-              {loading && !installed ? (
-                <IntegrationStatusPill tone="neutral">Checking...</IntegrationStatusPill>
-              ) : installed ? (
-                <IntegrationStatusPill tone="connected">Installed</IntegrationStatusPill>
-              ) : (
-                <IntegrationStatusPill tone="attention">Not installed</IntegrationStatusPill>
-              )}
-            </div>
-            {error ? <p className="mt-1 text-[12px] text-destructive">{error}</p> : null}
-          </div>
-        </div>
-        <div className="mt-3 max-w-none">
-          <p className="text-[13px] leading-snug text-muted-foreground">{description}</p>
-          {actionRow}
-          {!installed && preInstallNotice && preInstallNoticeVisible ? (
-            <p className="mt-3 text-[12px] leading-snug text-muted-foreground">
-              {preInstallNotice}
-            </p>
-          ) : null}
-        </div>
+      <div className="flex items-center gap-2 text-sm font-medium">
+        {icon}
+        <span>{title}</span>
       </div>
-      {terminalOpen ? (
-        <div className={cn(variant === 'card' ? 'px-5 pb-5' : 'mt-2')}>
-          <OnboardingInlineCommandTerminal
-            worktreeId={terminalWorktreeId}
-            command={command}
-            title={terminalTitle}
-            ariaLabel={terminalAriaLabel}
-            terminalHeightPx={terminalHeightPx}
-            terminalTopMarginPx={0}
-            autoScrollIntoView={false}
-            onExit={() => {
-              // Why: the install shell exited — invalidate the cached skill
-              // scan so every useInstalledAgentSkill re-probes and flips to
-              // "Installed" without a window refocus or manual re-check.
-              notifyInstalledAgentSkillsChanged()
-            }}
-          />
-        </div>
-      ) : null}
+      <p className="mt-1 text-xs text-muted-foreground">
+        Provided automatically by agentum&apos;s MCP server — no install needed.
+      </p>
     </div>
   )
 }
