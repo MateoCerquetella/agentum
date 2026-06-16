@@ -98,6 +98,14 @@ fn tool_specs() -> Value {
                 (each is one tmux pane running an agent CLI). Returns name, tool, \
                 status, and working directory. Use to see sibling agents/worktrees.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        },
+        {
+            "name": "agentum_list_worktrees",
+            "description": "List the git worktrees agentum tracks (isolated branch \
+                checkouts under <repo>/.claude/worktrees). Returns each worktree's \
+                id, repo, branch, path, and comment. Use to see what other agents \
+                are working on in parallel.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
         }
     ])
 }
@@ -113,6 +121,7 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
 
     let outcome: anyhow::Result<String> = match name {
         "agentum_list_sessions" => tool_list_sessions(state).await,
+        "agentum_list_worktrees" => tool_list_worktrees().await,
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
 
@@ -140,6 +149,14 @@ async fn tool_list_sessions(state: &AppState) -> anyhow::Result<String> {
         })
         .collect();
     Ok(serde_json::to_string_pretty(&Value::Array(rows))?)
+}
+
+/// Reuses the same registry reader the `/api/worktrees` route uses — a tool is
+/// a second view over existing logic, never a reimplementation.
+async fn tool_list_worktrees() -> anyhow::Result<String> {
+    let worktrees =
+        super::worktrees::read_worktrees().map_err(|e| anyhow::anyhow!("read worktrees: {e}"))?;
+    Ok(serde_json::to_string_pretty(&worktrees)?)
 }
 
 #[cfg(test)]
