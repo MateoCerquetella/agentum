@@ -112,11 +112,24 @@ One Chrome, driven by Playwright and mirrored by agentum.
   `agentum-executor`. Claude → `--mcp-config <file>` (additive); Codex → `-c
   mcp_servers.playwright.*`; all other tools → none. Unit-tested (executor `--lib`
   green). This is the per-tool half — pure, no I/O.
-- **P1 — TODO (orchestration):** (1) a Playwright-MCP **server manager** (idempotent
-  `ensure` → one shared HTTP server per machine/host, kept alive by the watchdog);
-  (2) a **config-file writer** for Claude's `--mcp-config`; (3) **wire at the session
-  launch site** — `ensure server → write file → argv.extend(adapter.mcp_args(&p))`
-  before spawning; (4) integration test. Risk to verify live: exact Codex `-c` schema.
+- **P1 — DONE (orchestration):** new `agentum_server::playwright_mcp` module —
+  (1) `ensure_playwright_mcp()`: idempotent shared HTTP server per machine
+  (reuse if the port is listening, else `npx -y @playwright/mcp@latest --port <p>
+  --headless` in a dedicated long-lived tmux session `agentum-playwright-mcp` so
+  it survives agent restarts; fails loud if `npx` is missing; port overridable via
+  `AGENTUM_PLAYWRIGHT_MCP_PORT`, default 8931); (2) `write_claude_config()`: writes
+  the `{ mcpServers.playwright = { type:"http", url } }` file at file scope under the
+  state dir; (3) **wired at the local launch site** (`routes/sessions.rs::start`) —
+  before spawning a claude/codex session, when the feature is enabled, `provision()`
+  (ensure + write) then `argv.extend(adapter.mcp_args(&p))`; best-effort (logs loud,
+  never blocks the launch); (4) unit tests (config JSON round-trip, written-file →
+  `--mcp-config <file>`, provisioning selection, URL path, flag truthiness). Gated
+  opt-in by `AGENTUM_BROWSER_VERIFY` (truthy) — see "Decisions resolved".
+  `cargo test -p agentum-executor -p agentum-server --lib` green; clippy clean.
+  Remaining for full P1 close: **live test** (`npx playwright install chromium`,
+  launch a claude session via agentum, confirm `/mcp` lists playwright + a browser
+  task can navigate+screenshot) and verify the exact Codex `-c` schema against a
+  real codex CLI. P2 (remote-host parity) extends `ensure` to take a `&Host`.
 
 ## Decisions resolved (this round)
 
@@ -125,6 +138,15 @@ One Chrome, driven by Playwright and mirrored by agentum.
 - MCP must be provisioned **before** the agent launches (no mid-session reload).
 - Provision at **local/user scope** to avoid the project-scope approval prompt that
   would block an unattended launch.
+- **Opt-in gate.** Provisioning is off by default and enabled per-process by a truthy
+  `AGENTUM_BROWSER_VERIFY` env value. Rationale: the user flagged browser MCP as
+  *optional*, and a plain coding session must not spawn a browser MCP it won't use.
+  No server-persisted setting exists yet — the env flag is the minimal gate; a
+  Settings-pane toggle can drive it later. (When ON, the locked "provision every
+  agent session" rule applies to claude/codex.)
+- **Port = fixed default 8931, env-overridable** (`AGENTUM_PLAYWRIGHT_MCP_PORT`).
+  Matches Playwright MCP's own documented default; ephemeral-advertise can come with
+  the P3 live-view forwarding work if needed.
 
 ## Launch model — DECIDED: provision every agent session
 
@@ -136,9 +158,13 @@ MCP server even when not verifying — mitigate by sharing **one** server per ma
 (idempotent ensure), not one per session.
 
 ## Open questions
-- Port allocation per host: fixed vs ephemeral-advertised (reuse the
-  `state/desktop-api.url` discovery-file pattern from the CLI auto-discovery work).
 - `--isolated` (fresh each run) vs persistent `--user-data-dir` (keeps logins) default.
+  Currently neither is passed (Playwright MCP's own default applies).
 - Whether the CLI helper writes config via the existing
   `ui/src/shared/mcp-config.ts` formats or a Rust-side equivalent (desktop-closed
-  path can't use the TS module).
+  path can't use the TS module). P1 wrote a Rust-side writer (`playwright_mcp::
+  write_claude_config`); a standalone `agentum` CLI helper that calls it for the
+  fully-desktop-closed (user runs `claude` by hand) path is still TODO — the
+  in-agentum launch path (TUI + desktop, via the embedded server) is covered.
+- Codex `-c mcp_servers.playwright.*` exact schema unverified against a live codex
+  CLI (the Claude path is the P1 live-test target).
