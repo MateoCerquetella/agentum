@@ -140,6 +140,69 @@ fn tool_specs() -> Value {
                 "required": ["recipient"],
                 "additionalProperties": false,
             },
+        },
+        {
+            "name": "agentum_create_task",
+            "description": "Create a task in agentum's orchestration DAG (the \
+                orchestration skill's task system). `spec` is the task description; \
+                optional `deps` (task ids that must finish first) and `parent` (id). \
+                Dependents auto-promote to ready when their deps complete.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "spec": { "type": "string", "description": "Task description" },
+                    "deps": { "type": "array", "items": { "type": "integer" }, "description": "Blocking task ids" },
+                    "parent": { "type": "integer", "description": "Parent task id" }
+                },
+                "required": ["spec"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "agentum_list_tasks",
+            "description": "List tasks in agentum's orchestration DAG. Optional `status` \
+                filter and `ready` (only tasks whose dependencies are all met).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "status": { "type": "string", "description": "Filter by status (pending/in_progress/completed/…)" },
+                    "ready": { "type": "boolean", "description": "Only dependency-ready tasks" }
+                },
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "agentum_computer",
+            "description": "Control a local desktop app via agentum's computer-use \
+                (macOS accessibility) — the computer-use skill. Pass `op` and its \
+                params: capabilities | permissions | list-apps | get-app-state \
+                (app) | click (app, ...) | set-value | type-text (text) | press-key \
+                (key) | scroll. Requires the agentum desktop app (not the headless \
+                daemon).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "op": { "type": "string", "description": "capabilities|permissions|list-apps|get-app-state|click|set-value|type-text|press-key|scroll" }
+                },
+                "required": ["op"],
+                "additionalProperties": true,
+            },
+        },
+        {
+            "name": "agentum_browser",
+            "description": "Drive agentum's built-in browser webview — the agentum-cli \
+                browser skill. Pass `op` and its params: tabs | navigate (url) | \
+                snapshot | click | fill | screenshot. Requires the agentum desktop \
+                app. (For headless browser automation an agent should use the \
+                Playwright MCP instead.)",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "op": { "type": "string", "description": "tabs|navigate|snapshot|click|fill|screenshot" }
+                },
+                "required": ["op"],
+                "additionalProperties": true,
+            },
         }
     ])
 }
@@ -162,6 +225,10 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         "agentum_list_worktrees" => tool_list_worktrees().await,
         "agentum_send_message" => tool_send_message(state, &args).await,
         "agentum_check_messages" => tool_check_messages(state, &args).await,
+        "agentum_create_task" => tool_create_task(state, &args).await,
+        "agentum_list_tasks" => tool_list_tasks(state, &args).await,
+        "agentum_computer" => tool_bridge(state, "computer", &args).await,
+        "agentum_browser" => tool_bridge(state, "browser", &args).await,
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
 
@@ -261,6 +328,49 @@ async fn tool_check_messages(state: &AppState, args: &Value) -> anyhow::Result<S
         state.store.orch_mark_read(&ids).await?;
     }
     Ok(serde_json::to_string_pretty(&json!({ "messages": msgs }))?)
+}
+
+/// Create an orchestration-DAG task (same store call as the
+/// `/api/orchestration/tasks` route).
+async fn tool_create_task(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let spec = args
+        .get("spec")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `spec`"))?;
+    let deps: Vec<i64> = args
+        .get("deps")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_i64).collect())
+        .unwrap_or_default();
+    let parent = args.get("parent").and_then(Value::as_i64);
+    let task = state.store.orch_create_task(spec, &deps, parent).await?;
+    Ok(serde_json::to_string_pretty(&json!({ "task": task }))?)
+}
+
+/// List orchestration-DAG tasks (same store call as the route).
+async fn tool_list_tasks(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let status = args.get("status").and_then(Value::as_str);
+    let ready = args.get("ready").and_then(Value::as_bool).unwrap_or(false);
+    let tasks = state.store.orch_list_tasks(status, ready).await?;
+    Ok(serde_json::to_string_pretty(&json!({ "tasks": tasks }))?)
+}
+
+/// Forward a `{op, …}` payload to the desktop bridge (`computer`/`browser`).
+/// These ops only exist in the agentum desktop app — the headless daemon has no
+/// bridge, so return a clear, actionable error there rather than a silent empty.
+async fn tool_bridge(state: &AppState, kind: &str, args: &Value) -> anyhow::Result<String> {
+    let bridge = state.desktop_bridge.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "agentum_{kind} requires the agentum desktop app (this is a headless daemon \
+             with no desktop bridge)"
+        )
+    })?;
+    let result = match kind {
+        "computer" => bridge.computer(args.clone()).await,
+        "browser" => bridge.browser(args.clone()).await,
+        other => anyhow::bail!("unknown bridge kind: {other}"),
+    }?;
+    Ok(serde_json::to_string_pretty(&result)?)
 }
 
 #[cfg(test)]
