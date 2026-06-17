@@ -2983,7 +2983,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                       </DropdownMenu>
                     ) : null}
 
-                    {row.repo && groupBy === 'repo' ? (
+                    {row.repo && (groupBy === 'repo' || groupBy === 'host') ? (
                       <DropdownMenu modal={false}>
                         <Tooltip>
                           <TooltipTrigger asChild>

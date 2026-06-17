@@ -24,13 +24,26 @@ describe('getProjectContextMenuTarget', () => {
     ).toEqual({ repo, x: 120, y: 240 })
   })
 
-  it('returns null when grouping is not "repo"', () => {
+  it('returns the cursor-anchored target for a project row under "host" grouping', () => {
+    // Why: under By Host grouping projects render as repo sub-headers (with
+    // row.repo set) nested under host headers, so right-click must work there
+    // too — that is the default grouping users see.
     const repo = makeRepo()
     expect(
-      getProjectContextMenuTarget({ groupBy: 'host', repo, clientX: 1, clientY: 2 })
-    ).toBeNull()
+      getProjectContextMenuTarget({ groupBy: 'host', repo, clientX: 7, clientY: 9 })
+    ).toEqual({ repo, x: 7, y: 9 })
+  })
+
+  it('returns null for groupings without per-project header rows', () => {
+    const repo = makeRepo()
     expect(
       getProjectContextMenuTarget({ groupBy: 'none', repo, clientX: 1, clientY: 2 })
+    ).toBeNull()
+    expect(
+      getProjectContextMenuTarget({ groupBy: 'workspace-status', repo, clientX: 1, clientY: 2 })
+    ).toBeNull()
+    expect(
+      getProjectContextMenuTarget({ groupBy: 'pr-status', repo, clientX: 1, clientY: 2 })
     ).toBeNull()
   })
 
