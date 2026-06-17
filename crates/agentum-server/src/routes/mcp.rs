@@ -303,6 +303,22 @@ fn tool_specs() -> Value {
                 "required": ["workdir", "spec_id"],
                 "additionalProperties": false,
             },
+        },
+        {
+            "name": "agentum_harness_check",
+            "description": "Bootstrap-Contract readiness check (spec 010d): scan \
+                `.agentum-harness/` and report whether it can start (init.sh), can verify \
+                (verify.sh), has instructions (AGENTS.md), and has a non-empty backlog — \
+                plus an overall `ready`. Names what's missing. Pure read; the mechanized \
+                cold-start test.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workdir": { "type": "string", "description": "Project directory to check" }
+                },
+                "required": ["workdir"],
+                "additionalProperties": false,
+            },
         }
     ])
 }
@@ -333,6 +349,7 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         "agentum_harness_migrate" => tool_harness_migrate(&args).await,
         "agentum_harness_board" => tool_harness_board(&args).await,
         "agentum_harness_plan" => tool_harness_plan(&args).await,
+        "agentum_harness_check" => tool_harness_check(&args).await,
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
 
@@ -535,6 +552,19 @@ async fn tool_harness_plan(args: &Value) -> anyhow::Result<String> {
         super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
     let list = crate::harness::plan_from_spec(&workdir, spec_id).await?;
     Ok(serde_json::to_string_pretty(&list)?)
+}
+
+/// Bootstrap-Contract readiness — a thin view over [`crate::harness::check_bootstrap`]
+/// (spec 010d).
+async fn tool_harness_check(args: &Value) -> anyhow::Result<String> {
+    let raw = args
+        .get("workdir")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
+    let workdir =
+        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
+    let report = crate::harness::check_bootstrap(&workdir).await;
+    Ok(serde_json::to_string_pretty(&report)?)
 }
 
 #[cfg(test)]

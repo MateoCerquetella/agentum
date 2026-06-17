@@ -649,6 +649,43 @@ pub async fn plan_from_spec(workdir: &Path, spec_id: &str) -> anyhow::Result<Fea
     Ok(list)
 }
 
+/// Bootstrap-Contract readiness of a `.agentum-harness/` surface (spec 010d /
+/// lectures L03+L06): can-start, can-verify, has instructions, has a backlog.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct BootstrapReport {
+    pub harness_dir: Option<String>,
+    pub agents_md: bool,
+    pub init_sh: bool,
+    pub verify_sh: bool,
+    /// `feature_list.json` parses with ≥1 feature.
+    pub backlog: bool,
+    /// All of the above → ready to drive.
+    pub ready: bool,
+}
+
+/// Mechanized cold-start test: scan `.agentum-harness/` and report what's present
+/// vs missing. Pure read; an absent surface reports not-ready (no error). Names
+/// the gaps so a fresh agent knows exactly what to fix before a run.
+pub async fn check_bootstrap(workdir: &Path) -> BootstrapReport {
+    let dir = resolve_harness_dir(workdir);
+    let mut r = BootstrapReport::default();
+    if !dir.is_dir() {
+        return r;
+    }
+    r.harness_dir = Some(dir.to_string_lossy().to_string());
+    r.agents_md = dir.join("AGENTS.md").is_file();
+    r.init_sh = dir.join("init.sh").is_file();
+    r.verify_sh = dir.join("verify.sh").is_file();
+    r.backlog = match tokio::fs::read_to_string(dir.join("feature_list.json")).await {
+        Ok(content) => serde_json::from_str::<FeatureList>(&content)
+            .map(|l| !l.features.is_empty())
+            .unwrap_or(false),
+        Err(_) => false,
+    };
+    r.ready = r.agents_md && r.init_sh && r.verify_sh && r.backlog;
+    r
+}
+
 /// Manages every concurrent harness run + the event bus they publish on.
 pub struct HarnessEngine {
     runs: RwLock<HashMap<Uuid, Arc<RwLock<HarnessRun>>>>,
@@ -2166,5 +2203,42 @@ mod surface_tests {
         let id = engine.start(wd.to_path_buf()).await.unwrap();
         assert!(engine.run_verify(id, "F1").await.unwrap());
         assert_eq!(scan_board(wd).await.features[0].state, FeatureState::Done);
+    }
+
+    // --- 010d: Bootstrap-Contract readiness check ---
+
+    #[tokio::test]
+    async fn bootstrap_ready_after_scaffold_and_gaps() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        // empty surface → not ready, no error.
+        assert!(!check_bootstrap(wd).await.ready);
+
+        // scaffold writes all four contract items → ready.
+        scaffold_harness(wd).await.unwrap();
+        let r = check_bootstrap(wd).await;
+        assert!(
+            r.ready && r.agents_md && r.init_sh && r.verify_sh && r.backlog,
+            "scaffolded surface satisfies the Bootstrap Contract"
+        );
+
+        // remove verify.sh → not ready; names the gap; others still true.
+        std::fs::remove_file(wd.join(".agentum-harness/verify.sh")).unwrap();
+        let r = check_bootstrap(wd).await;
+        assert!(!r.ready && !r.verify_sh && r.agents_md && r.init_sh);
+    }
+
+    #[tokio::test]
+    async fn bootstrap_backlog_false_when_no_features() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        let hd = wd.join(".agentum-harness");
+        std::fs::create_dir_all(&hd).unwrap();
+        std::fs::write(hd.join("feature_list.json"), r#"{"features":[]}"#).unwrap();
+        let r = check_bootstrap(wd).await;
+        assert!(
+            !r.backlog && !r.ready,
+            "empty backlog → not bootstrap-ready"
+        );
     }
 }
