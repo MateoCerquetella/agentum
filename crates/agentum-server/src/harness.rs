@@ -686,6 +686,30 @@ pub async fn check_bootstrap(workdir: &Path) -> BootstrapReport {
     r
 }
 
+/// Append one line to the project's **append-only** decision log
+/// (`.agentum-harness/decisions.md`, spec 010e / lecture L05) — the durable
+/// "why," never overwritten (unlike the lossy rolling `STATE.md`). Creates the
+/// surface dir + file on first use.
+pub async fn append_decision(workdir: &Path, entry: &str) -> anyhow::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let dir = resolve_harness_dir(workdir);
+    tokio::fs::create_dir_all(&dir).await?;
+    let mut f = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("decisions.md"))
+        .await?;
+    f.write_all(format!("- {}\n", entry.trim()).as_bytes())
+        .await?;
+    Ok(())
+}
+
+/// Read the decision log (empty string if there is none).
+pub async fn read_decisions(workdir: &Path) -> String {
+    let path = resolve_harness_dir(workdir).join("decisions.md");
+    tokio::fs::read_to_string(path).await.unwrap_or_default()
+}
+
 /// Manages every concurrent harness run + the event bus they publish on.
 pub struct HarnessEngine {
     runs: RwLock<HashMap<Uuid, Arc<RwLock<HarnessRun>>>>,
@@ -2240,5 +2264,25 @@ mod surface_tests {
             !r.backlog && !r.ready,
             "empty backlog → not bootstrap-ready"
         );
+    }
+
+    // --- 010e: append-only decision log ---
+
+    #[tokio::test]
+    async fn decision_log_is_append_only() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        assert_eq!(read_decisions(wd).await, "", "no log yet");
+        append_decision(wd, "chose per-repo durable specs over agentum-only")
+            .await
+            .unwrap();
+        append_decision(wd, "rejected agentum-only storage (data-loss risk)")
+            .await
+            .unwrap();
+        let log = read_decisions(wd).await;
+        let first = log.find("chose per-repo").expect("first entry present");
+        let second = log.find("rejected agentum-only").expect("second present");
+        assert!(first < second, "append-only, kept in order");
+        assert!(wd.join(".agentum-harness/decisions.md").exists());
     }
 }
