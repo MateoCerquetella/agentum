@@ -319,6 +319,22 @@ fn tool_specs() -> Value {
                 "required": ["workdir"],
                 "additionalProperties": false,
             },
+        },
+        {
+            "name": "agentum_harness_log_decision",
+            "description": "Append one entry to the project's append-only decision log \
+                (`.agentum-harness/decisions.md`, spec 010e) — the durable 'why', incl. \
+                rejected alternatives. Never overwrites prior entries. Returns the updated \
+                log. Use to record a deliberate choice so a resumed session won't reverse it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workdir": { "type": "string", "description": "Project directory" },
+                    "entry": { "type": "string", "description": "The decision (one line; include the why + any rejected alternative)" }
+                },
+                "required": ["workdir", "entry"],
+                "additionalProperties": false,
+            },
         }
     ])
 }
@@ -350,6 +366,7 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         "agentum_harness_board" => tool_harness_board(&args).await,
         "agentum_harness_plan" => tool_harness_plan(&args).await,
         "agentum_harness_check" => tool_harness_check(&args).await,
+        "agentum_harness_log_decision" => tool_harness_log_decision(&args).await,
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
 
@@ -565,6 +582,23 @@ async fn tool_harness_check(args: &Value) -> anyhow::Result<String> {
         super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
     let report = crate::harness::check_bootstrap(&workdir).await;
     Ok(serde_json::to_string_pretty(&report)?)
+}
+
+/// Append to the project decision log + return it — thin view over
+/// [`crate::harness::append_decision`] / [`crate::harness::read_decisions`] (010e).
+async fn tool_harness_log_decision(args: &Value) -> anyhow::Result<String> {
+    let raw = args
+        .get("workdir")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
+    let entry = args
+        .get("entry")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `entry`"))?;
+    let workdir =
+        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
+    crate::harness::append_decision(&workdir, entry).await?;
+    Ok(crate::harness::read_decisions(&workdir).await)
 }
 
 #[cfg(test)]
