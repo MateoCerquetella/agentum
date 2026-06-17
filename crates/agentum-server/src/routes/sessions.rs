@@ -664,6 +664,16 @@ async fn start(
         {
             launch.argv.extend(adapter.mcp_args(&p));
         }
+        // File-based agents (Cursor/Gemini/OpenCode) load MCP from a config file
+        // in the workdir, not a launch flag — write it (no-op for claude/codex).
+        crate::mcp_provision::write_agent_project_config(
+            &state,
+            &host,
+            &workdir.to_string_lossy(),
+            &session.tool,
+            &agentum_mcp_url,
+        )
+        .await;
     } else if matches!(host.kind, HostKind::Ssh { .. }) {
         // Remote MCP parity: the agentum MCP lives on the Mac. Reverse-tunnel it
         // to the host so the remote agent reaches it at the fixed loopback
@@ -721,6 +731,17 @@ async fn start(
                         if let Some(p) = provision {
                             launch.argv.extend(adapter.mcp_args(&p));
                         }
+                        // File-based agents (Cursor/Gemini/OpenCode): write their
+                        // MCP config on the HOST in the workdir, pointing at the
+                        // tunnel URL (no-op for claude/codex).
+                        crate::mcp_provision::write_agent_project_config(
+                            &state,
+                            &host,
+                            &workdir.to_string_lossy(),
+                            &session.tool,
+                            &agentum_mcp_url,
+                        )
+                        .await;
                     }
                     Err(e) => tracing::warn!(
                         session = %session.id,
