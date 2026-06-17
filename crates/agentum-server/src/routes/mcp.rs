@@ -38,9 +38,44 @@ async fn handle_get() -> Response {
     StatusCode::METHOD_NOT_ALLOWED.into_response()
 }
 
+/// Does the request carry the correct `Authorization: Bearer <mcp_token>`?
+/// Constant-time compare so a wrong token can't be brute-forced by timing.
+fn mcp_authorized(state: &AppState, headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|tok| ct_eq(tok, state.mcp_token.as_str()))
+        .unwrap_or(false)
+}
+
+/// Length-checked constant-time byte comparison (the length itself isn't secret).
+fn ct_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 /// One JSON-RPC message in, one response out. Notifications (no `id`) are
 /// acknowledged with `202 Accepted` and no body, per the streamable-HTTP spec.
-async fn handle(State(state): State<AppState>, Json(msg): Json<Value>) -> Response {
+async fn handle(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(msg): Json<Value>,
+) -> Response {
+    // Token gate FIRST — before parsing the message, and required on EVERY
+    // request (including the no-auth embedded server). /mcp may be reached over a
+    // reverse SSH tunnel from a host where other users/processes share localhost;
+    // without the bearer token they get 401.
+    if !mcp_authorized(&state, &headers) {
+        return (StatusCode::UNAUTHORIZED, "missing or invalid MCP token").into_response();
+    }
     let Some(id) = msg.get("id").cloned() else {
         // notifications/initialized, notifications/cancelled, … — just ack.
         return StatusCode::ACCEPTED.into_response();

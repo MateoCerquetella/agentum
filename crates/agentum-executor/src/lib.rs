@@ -60,6 +60,10 @@ pub struct McpServer {
     pub name: String,
     /// Streamable-HTTP endpoint, e.g. `http://127.0.0.1:8931/mcp`.
     pub url: String,
+    /// Optional bearer token sent as `Authorization: Bearer <token>` on every
+    /// request to this server. `Some` for agentum's own MCP (which requires it);
+    /// `None` for servers that don't authenticate (e.g. a local Playwright).
+    pub auth_token: Option<String>,
 }
 
 /// A first-class tool integration. Trait methods are deliberately small so a

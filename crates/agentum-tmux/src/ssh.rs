@@ -328,6 +328,73 @@ pub fn ssh_command_opts(host: &Host, script: &str, mux: SshMux) -> Command {
     cmd
 }
 
+/// Build an `ssh -O forward -R …` control command that adds a **reverse** port
+/// forward to the host's *already-established* interactive ControlMaster — no
+/// new connection. On the host, `127.0.0.1:<host_port>` then tunnels back to the
+/// Mac's `127.0.0.1:<mac_port>` (the embedded agentum MCP server). Bound to
+/// loopback on BOTH ends, so it's never exposed to either machine's network.
+///
+/// Returns `None` for a non-SSH host or when no ControlPath is available (the
+/// master must exist first — warm it via the normal path). `-O forward` matches
+/// the running master purely by the `%C` ControlPath hash, so only the host
+/// identity (`-p`, `user@host`) needs to agree with how the master was opened.
+pub fn ssh_control_forward_cmd(host: &Host, host_port: u16, mac_port: u16) -> Option<Command> {
+    let HostKind::Ssh {
+        user,
+        hostname,
+        port,
+        ..
+    } = &host.kind
+    else {
+        return None;
+    };
+    let control_path = control_path_for(SshMux::Interactive)?;
+    // Explicit loopback bind on the host side (the leading `127.0.0.1:`); without
+    // it a host with `GatewayPorts yes` could bind the wildcard and expose the
+    // tunnel to the host's network. Mac side is loopback too.
+    let spec = format!("127.0.0.1:{host_port}:127.0.0.1:{mac_port}");
+    let mut cmd = Command::new("ssh");
+    cmd.arg("-o")
+        .arg(format!("ControlPath={control_path}"))
+        .arg("-p")
+        .arg(port.to_string())
+        .arg("-O")
+        .arg("forward")
+        .arg("-R")
+        .arg(spec)
+        .arg(format!("{user}@{hostname}"));
+    Some(cmd)
+}
+
+/// `ssh -O cancel -R 127.0.0.1:<host_port>` — tears down a reverse forward on the
+/// host's master, matched by its loopback bind side only (so it cancels a stale
+/// forward regardless of what Mac port it used to target). Best-effort cleanup
+/// run before re-arming, so the tunnel always points at the *current* Mac port
+/// and a leftover forward from a prior app instance can't block the new bind.
+pub fn ssh_control_cancel_cmd(host: &Host, host_port: u16) -> Option<Command> {
+    let HostKind::Ssh {
+        user,
+        hostname,
+        port,
+        ..
+    } = &host.kind
+    else {
+        return None;
+    };
+    let control_path = control_path_for(SshMux::Interactive)?;
+    let mut cmd = Command::new("ssh");
+    cmd.arg("-o")
+        .arg(format!("ControlPath={control_path}"))
+        .arg("-p")
+        .arg(port.to_string())
+        .arg("-O")
+        .arg("cancel")
+        .arg("-R")
+        .arg(format!("127.0.0.1:{host_port}"))
+        .arg(format!("{user}@{hostname}"));
+    Some(cmd)
+}
+
 /// True when ssh's stderr says the *pooled ControlMaster* socket was stale or
 /// racing (the shared master died mid-op), not that the remote command failed.
 /// Such a failure happens at the multiplex layer *before* the script runs, so
