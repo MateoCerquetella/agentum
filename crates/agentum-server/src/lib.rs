@@ -26,6 +26,7 @@ mod error;
 pub mod git;
 pub mod harness;
 mod headers;
+pub mod host_browser;
 pub mod host_install_hints;
 pub mod host_runtime;
 mod logging;
