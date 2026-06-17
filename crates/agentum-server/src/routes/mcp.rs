@@ -238,6 +238,38 @@ fn tool_specs() -> Value {
                 "required": ["op"],
                 "additionalProperties": true,
             },
+        },
+        {
+            "name": "agentum_harness_scaffold",
+            "description": "Scaffold the unified `.agentum-harness/` surface into a \
+                project (spec 010). Writes ONLY `.agentum-harness/` (a small AGENTS.md \
+                router, feature_list.json, init.sh, verify.sh) into `workdir` — no \
+                generic playbooks/engine are copied in. Idempotent; the folder is \
+                committable to git.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workdir": { "type": "string", "description": "Project directory to scaffold" }
+                },
+                "required": ["workdir"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "agentum_harness_migrate",
+            "description": "Migrate a pre-010 project into `.agentum-harness/` without \
+                hand-rewrite: copies SDD `ai/specs/*` and any legacy `.harness/` contract \
+                files into `.agentum-harness/`. Idempotent; pass `remove_legacy: true` to \
+                delete the old `.harness/` after copying.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workdir": { "type": "string", "description": "Project directory to migrate" },
+                    "remove_legacy": { "type": "boolean", "description": "Delete legacy .harness/ after copying (default false)" }
+                },
+                "required": ["workdir"],
+                "additionalProperties": false,
+            },
         }
     ])
 }
@@ -264,6 +296,8 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         "agentum_list_tasks" => tool_list_tasks(state, &args).await,
         "agentum_computer" => tool_bridge(state, "computer", &args).await,
         "agentum_browser" => tool_bridge(state, "browser", &args).await,
+        "agentum_harness_scaffold" => tool_harness_scaffold(&args).await,
+        "agentum_harness_migrate" => tool_harness_migrate(&args).await,
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
 
@@ -406,6 +440,36 @@ async fn tool_bridge(state: &AppState, kind: &str, args: &Value) -> anyhow::Resu
         other => anyhow::bail!("unknown bridge kind: {other}"),
     }?;
     Ok(serde_json::to_string_pretty(&result)?)
+}
+
+/// Scaffold the unified `.agentum-harness/` surface — a thin view over
+/// [`crate::harness::scaffold_harness`] (the only thing agentum writes into a repo).
+async fn tool_harness_scaffold(args: &Value) -> anyhow::Result<String> {
+    let raw = args
+        .get("workdir")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
+    let workdir =
+        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
+    let out = crate::harness::scaffold_harness(&workdir).await?;
+    Ok(serde_json::to_string_pretty(&out)?)
+}
+
+/// Migrate a pre-010 project into `.agentum-harness/` — thin view over
+/// [`crate::harness::migrate_harness`].
+async fn tool_harness_migrate(args: &Value) -> anyhow::Result<String> {
+    let raw = args
+        .get("workdir")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
+    let workdir =
+        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
+    let remove_legacy = args
+        .get("remove_legacy")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let out = crate::harness::migrate_harness(&workdir, remove_legacy).await?;
+    Ok(serde_json::to_string_pretty(&out)?)
 }
 
 #[cfg(test)]
