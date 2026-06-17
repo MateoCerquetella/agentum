@@ -85,6 +85,9 @@ fn default_settle_grace_secs() -> u64 {
 fn default_settle_timeout_secs() -> u64 {
     1800
 }
+fn default_agent_yolo() -> bool {
+    true
+}
 
 /// The `feature_list.json` document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +111,14 @@ pub struct FeatureList {
     /// the gate anyway.
     #[serde(default = "default_settle_timeout_secs")]
     pub settle_timeout_secs: u64,
+    /// Run each agent in autonomous (YOLO) mode. The harness is non-interactive:
+    /// without this the agent stops at the first permission prompt and never
+    /// reaches the gate. We push the canonical Claude marker into the session
+    /// flags and let each adapter translate it (see CLAUDE.md "YOLO marker
+    /// translation"). Default on — turn it off only for a tool that is safe to
+    /// drive without bypass, or for debugging.
+    #[serde(default = "default_agent_yolo")]
+    pub agent_yolo: bool,
 }
 
 impl Default for FeatureList {
@@ -119,6 +130,7 @@ impl Default for FeatureList {
             agent_model: None,
             settle_grace_secs: default_settle_grace_secs(),
             settle_timeout_secs: default_settle_timeout_secs(),
+            agent_yolo: default_agent_yolo(),
         }
     }
 }
@@ -258,6 +270,20 @@ impl HarnessConfig {
         } else {
             anyhow::bail!("no .harness/feature_list.json found");
         };
+
+        // A run with no features would register and instantly report "done"; a
+        // duplicate id would make state writes and the `$HARNESS_FEATURE_ID`
+        // gate target the wrong feature. Reject both up front so a bad backlog
+        // fails at load instead of misbehaving mid-run.
+        if features.features.is_empty() {
+            anyhow::bail!("feature_list.json has no features");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for f in &features.features {
+            if !seen.insert(f.id.as_str()) {
+                anyhow::bail!("duplicate feature id in feature_list.json: {}", f.id);
+            }
+        }
 
         let init_script = harness_dir.join("init.sh");
         let init_script = init_script.exists().then_some(init_script);
@@ -402,6 +428,13 @@ impl HarnessEngine {
         });
         if !success {
             self.set_state(harness_id, HarnessState::Failed).await?;
+        } else {
+            // Don't strand the run in `InitVerifying` after a standalone
+            // (manual `POST /{id}/init`) check passes. The driver immediately
+            // overrides this with `Running`, so the extra transition is only
+            // observable for the manual path, where `Idle` is the correct
+            // resting state.
+            self.set_state(harness_id, HarnessState::Idle).await?;
         }
         Ok(success)
     }
@@ -595,16 +628,69 @@ impl HarnessEngine {
         Ok(r.workdir.clone())
     }
 
-    /// Atomically claim the driver slot. Returns `false` if already driving so
-    /// the route can reject a double-run instead of spawning two loops.
+    /// Atomically claim the driver slot. Returns `false` if a drive loop is
+    /// already live so the route can reject a double-run instead of spawning two
+    /// loops. The slot is freed by [`Self::release_driver`] when the loop exits
+    /// (done/blocked/failed/stopped), so a finished run can always be re-driven.
     pub async fn claim_driver(&self, harness_id: Uuid) -> anyhow::Result<bool> {
         let run = self.get_run(harness_id).await?;
         let mut r = run.write().await;
-        if r.driving && matches!(r.state, HarnessState::Running | HarnessState::Verifying) {
+        if r.driving {
             return Ok(false);
         }
         r.driving = true;
         Ok(true)
+    }
+
+    /// Free the driver slot. Best-effort: a run removed mid-drive (user pressed
+    /// Stop) is a no-op. Always called once [`drive`] returns, regardless of how.
+    pub async fn release_driver(&self, harness_id: Uuid) {
+        if let Ok(run) = self.get_run(harness_id).await {
+            run.write().await.driving = false;
+        }
+    }
+
+    /// Reset every `Blocked` feature back to `Pending` with a fresh retry budget.
+    /// A blocked feature halts the run; on a re-run we want to *retry* it, not
+    /// silently skip past it to the next pending feature (`next_pending_feature`
+    /// ignores `Blocked`). Returns how many were reset.
+    pub async fn reset_blocked_features(&self, harness_id: Uuid) -> anyhow::Result<usize> {
+        let (reset_ids, workdir, snapshot) = {
+            let run = self.get_run(harness_id).await?;
+            let mut r = run.write().await;
+            let mut reset_ids = Vec::new();
+            for f in r.features.features.iter_mut() {
+                if f.state == FeatureState::Blocked {
+                    f.state = FeatureState::Pending;
+                    f.attempts = 0;
+                    f.last_error = None;
+                    reset_ids.push(f.id.clone());
+                }
+            }
+            (reset_ids, r.workdir.clone(), r.features.clone())
+        };
+        if !reset_ids.is_empty() {
+            let config = HarnessConfig::load(&workdir).await?;
+            config.save_features(&snapshot).await?;
+            for id in &reset_ids {
+                self.emit(HarnessEvent::FeatureStateChanged {
+                    harness_id,
+                    feature_id: id.clone(),
+                    state: FeatureState::Pending,
+                });
+            }
+        }
+        Ok(reset_ids.len())
+    }
+
+    /// Clear the "current feature/session" pointers once the run has no more
+    /// work, so the UI doesn't keep pinning the last feature as active.
+    pub async fn clear_current(&self, harness_id: Uuid) {
+        if let Ok(run) = self.get_run(harness_id).await {
+            let mut r = run.write().await;
+            r.current_feature = None;
+            r.current_session = None;
+        }
     }
 
     /// Drop a run from the map. Best-effort; the agent's tmux pane (if any) is
@@ -782,13 +868,22 @@ const AGENT_BOOT_DELAY: Duration = Duration::from_secs(3);
 /// uses. All errors are surfaced as `HarnessEvent::Error` + a `Failed` state
 /// rather than panicking the task.
 pub async fn drive(state: AppState, harness_id: Uuid) {
-    if let Err(e) = drive_inner(&state, harness_id).await {
-        warn!(%harness_id, error = %e, "harness run failed");
-        state.harness.emit_error(harness_id, e.to_string());
-        let _ = state
-            .harness
-            .set_state(harness_id, HarnessState::Failed)
-            .await;
+    let result = drive_inner(&state, harness_id).await;
+    // Free the driver slot no matter how the loop ended so the run can be
+    // re-driven (after done/blocked/failed, or once the user re-runs).
+    state.harness.release_driver(harness_id).await;
+    if let Err(e) = result {
+        // A run removed mid-drive (user pressed Stop/unload) surfaces here as a
+        // "harness not found" error — that's an intentional teardown, not a
+        // failure. Only surface a real error if the run still exists.
+        if state.harness.status(harness_id).await.is_ok() {
+            warn!(%harness_id, error = %e, "harness run failed");
+            state.harness.emit_error(harness_id, e.to_string());
+            let _ = state
+                .harness
+                .set_state(harness_id, HarnessState::Failed)
+                .await;
+        }
     }
 }
 
@@ -803,11 +898,25 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
 
     engine.set_state(harness_id, HarnessState::Running).await?;
 
+    // A previous run may have halted with a feature `Blocked`. On (re-)drive,
+    // retry it from `Pending` rather than skipping past it — `next_pending_feature`
+    // ignores `Blocked`, so without this the run would jump to the next feature
+    // and quietly abandon the one that actually failed the gate.
+    let reset = engine.reset_blocked_features(harness_id).await?;
+    if reset > 0 {
+        engine.log(
+            harness_id,
+            None,
+            format!("reset {reset} blocked feature(s) for retry"),
+        );
+    }
+
     let workdir = engine.workdir(harness_id).await?;
 
     // 2. One feature at a time.
     loop {
         let Some(feature) = engine.next_pending_feature(harness_id).await? else {
+            engine.clear_current(harness_id).await;
             engine.set_state(harness_id, HarnessState::Done).await?;
             engine.emit(HarnessEvent::HarnessCompleted {
                 harness_id,
@@ -822,17 +931,26 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
             Some(&feature.id),
             format!("starting feature: {}", feature.name),
         );
+        // Reset the run-level state to `Running` for each feature: the previous
+        // feature left it at `Verifying` after its green gate, and the UI gate
+        // banner keys off this — without it an actively-coding agent would show
+        // as "VERIFYING…".
+        engine.set_state(harness_id, HarnessState::Running).await?;
 
         // 3. Reload config (agent tool/model/timeouts may have been edited).
         let config = HarnessConfig::load(&workdir).await?;
         let session = spawn_feature_agent(state, harness_id, &workdir, &config, &feature).await?;
 
-        // Subscribe to the lifecycle bus BEFORE injecting the prompt so we never
-        // miss the working→idle transition for this turn.
+        // `wait_for_settle` subscribes to the lifecycle bus on entry (just after
+        // the prompt is injected). The `grace` window covers the agent's initial
+        // idle so we never gate before it has had a chance to act; a settle
+        // signal inside that window is remembered, not discarded.
         let grace = Duration::from_secs(config.features.settle_grace_secs);
         let timeout = Duration::from_secs(config.features.settle_timeout_secs);
 
-        // 4. Hand the agent its scoped task.
+        // 4. Hand the agent its scoped task. `inject_prompt` waits for the REPL
+        // to be ready first (accepting Claude's workspace-trust dialog and
+        // outlasting an MCP-slowed boot), so there's no fixed-delay guesswork.
         let prompt = build_feature_prompt(&config.agent_instructions, &feature);
         inject_prompt(state, &session, &prompt).await?;
         engine.log(harness_id, Some(&feature.id), "agent working…");
@@ -907,12 +1025,22 @@ async fn spawn_feature_agent(
     let short = harness_id.simple().to_string();
     let name = format!("harness-{}-{}", sanitize(&feature.id), &short[..8]);
 
+    // The harness is non-interactive — push the canonical YOLO marker so the
+    // agent runs without permission prompts (the shared spawn path translates it
+    // to each tool's flag). Without this the agent stalls on the first prompt and
+    // never reaches the gate. See CLAUDE.md "YOLO marker translation".
+    let flags = if config.features.agent_yolo {
+        vec![agentum_executor::YOLO_MARKER.to_string()]
+    } else {
+        Vec::new()
+    };
+
     let new = NewSession {
         name: name.clone(),
         workdir: workdir.to_string_lossy().into_owned(),
         tool: config.features.agent_tool.clone(),
         model: config.features.agent_model.clone(),
-        flags: Vec::new(),
+        flags,
         card_id: None,
         worktree_path: None,
         worktree_branch: None,
@@ -937,14 +1065,88 @@ async fn spawn_feature_agent(
     Ok(session)
 }
 
-/// Type a prompt into the agent's pane after a boot delay (the REPL needs a
-/// moment to come up before it will accept input).
+/// How long to wait after typing a multi-line prompt before sending the
+/// submitting Enter. A TUI like Claude Code coalesces a fast multi-line burst
+/// into a single bracketed-paste block; the Enter must arrive as its own
+/// keystroke *after* that, or it gets swallowed into the paste and the prompt
+/// just sits unsent in the input box.
+const SUBMIT_DELAY: Duration = Duration::from_millis(600);
+
+/// Wait until the agent's REPL is ready to accept a prompt, transparently
+/// accepting Claude's one-time workspace-trust dialog along the way.
+///
+/// Two things make a fixed boot delay too fragile to type after. First, on a
+/// fresh workdir Claude shows "Do you trust this folder?" — NOT skipped by
+/// `--dangerously-skip-permissions` (only by non-interactive `-p` mode) — and
+/// typing the prompt while that dialog is up feeds the task text into the menu
+/// and loses it. Second, with MCP servers wired the boot can take 10–30s+, so
+/// the dialog appears late and unpredictably.
+///
+/// So we poll the pane instead: accept the trust dialog the instant it appears,
+/// and return once the idle input footer is visible. Bounded (~56s); a remote
+/// pane or unrecognised tool falls back to a fixed delay so it still gets typed.
+async fn await_repl_ready(state: &AppState, session: &agentum_core::Session) {
+    let host = match state
+        .store
+        .get_host(session.host_id.unwrap_or(LOCAL_HOST_ID))
+        .await
+    {
+        Ok(Some(h)) => h,
+        _ => return,
+    };
+    // We can only cheaply capture local panes; remote panes get a fixed delay.
+    if !matches!(host.kind, HostKind::Local) {
+        tokio::time::sleep(AGENT_BOOT_DELAY).await;
+        return;
+    }
+    let target = session
+        .tmux_target
+        .clone()
+        .unwrap_or_else(|| agentum_tmux::target_for(&session.name));
+
+    let mut trusted = false;
+    for _ in 0..80 {
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        let pane = match crate::host_runtime::capture_pane_visible(&host, &target).await {
+            Ok(p) => p.to_lowercase(),
+            Err(_) => continue,
+        };
+        if !trusted && (pane.contains("trust this folder") || pane.contains("do you trust")) {
+            // Confirm the pre-selected "Yes, I trust this folder" (Enter), then
+            // keep polling until the REPL itself is up.
+            let _ = crate::host_runtime::send_keys(&host, &target, "", true).await;
+            trusted = true;
+            tokio::time::sleep(Duration::from_millis(900)).await;
+            continue;
+        }
+        // Idle REPL footer → ready for input. Covers YOLO ("bypass permissions
+        // on" / "shift+tab to cycle") and default ("? for shortcuts") modes.
+        if pane.contains("bypass permissions on")
+            || pane.contains("shift+tab to cycle")
+            || pane.contains("? for shortcuts")
+        {
+            // A beat to ensure the input is focused before we type.
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            return;
+        }
+    }
+}
+
+/// Hand the agent a prompt: wait for the REPL to be ready (accepting the trust
+/// dialog, outlasting an MCP-slowed boot), then type it and submit.
+///
+/// The submit is a deliberate **two-step**: type the prompt with NO trailing
+/// Enter, pause, then send a bare Enter. A single combined
+/// `send-keys "<text>" Enter` is swallowed by the REPL's paste handling for a
+/// multi-line prompt — the text lands in the input box (often collapsed to a
+/// "[Pasted text]" block) but never executes. The separate, delayed Enter is
+/// what actually runs the agent's turn.
 async fn inject_prompt(
     state: &AppState,
     session: &agentum_core::Session,
     prompt: &str,
 ) -> anyhow::Result<()> {
-    tokio::time::sleep(AGENT_BOOT_DELAY).await;
+    await_repl_ready(state, session).await;
     let host = state
         .store
         .get_host(session.host_id.unwrap_or(LOCAL_HOST_ID))
@@ -954,9 +1156,15 @@ async fn inject_prompt(
         .tmux_target
         .clone()
         .unwrap_or_else(|| agentum_tmux::target_for(&session.name));
-    crate::host_runtime::send_keys(&host, &target, prompt, true)
+    // Step 1: type/paste the prompt body, no Enter.
+    crate::host_runtime::send_keys(&host, &target, prompt, false)
         .await
         .map_err(|e| anyhow::anyhow!("send_keys failed: {e}"))?;
+    // Step 2: let the paste settle, then submit with a bare Enter.
+    tokio::time::sleep(SUBMIT_DELAY).await;
+    crate::host_runtime::send_keys(&host, &target, "", true)
+        .await
+        .map_err(|e| anyhow::anyhow!("submit Enter failed: {e}"))?;
     Ok(())
 }
 
@@ -994,23 +1202,48 @@ async fn wait_for_settle(
 ) {
     let mut rx = bus.subscribe();
     let start = Instant::now();
+    // Did the agent go idle *inside* the grace window? If so we don't discard
+    // that signal (which would strand a fast feature waiting out the full
+    // `timeout`) — we return as soon as grace elapses.
+    let mut settled_early = false;
     loop {
+        if settled_early && start.elapsed() >= grace {
+            return;
+        }
         let Some(remaining) = timeout.checked_sub(start.elapsed()) else {
             return; // overall settle timeout — proceed to the gate
         };
-        match tokio::time::timeout(remaining, rx.recv()).await {
-            Err(_) => return, // timed out waiting
+        // While a settle is pending, cap the wait at the grace boundary so we
+        // re-evaluate the early-return condition the moment grace expires.
+        let wait = if settled_early {
+            grace
+                .checked_sub(start.elapsed())
+                .unwrap_or(Duration::ZERO)
+                .min(remaining)
+        } else {
+            remaining
+        };
+        match tokio::time::timeout(wait, rx.recv()).await {
+            Err(_) => {
+                // Either we hit the grace boundary (loop re-checks settled_early)
+                // or the overall settle timeout elapsed.
+                if start.elapsed() >= timeout {
+                    return;
+                }
+                continue;
+            }
             Ok(Ok(ev)) => {
                 if ev.session_id != Some(session_id) {
                     continue;
                 }
                 match ev.kind.as_str() {
                     "agent.awaiting_input" | "agent.finished" => {
-                        // Ignore the agent's *initial* idle before it has had a
-                        // chance to act on the prompt.
                         if start.elapsed() >= grace {
                             return;
                         }
+                        // The agent's *initial* idle, before grace — remember it
+                        // and return once the grace window closes.
+                        settled_early = true;
                     }
                     "session.crashed" | "session.stopped" => return,
                     _ => {}
@@ -1182,5 +1415,178 @@ mod tests {
         let s = "a".repeat(10);
         assert_eq!(tail(&s, 100), s);
         assert!(tail(&s, 3).ends_with("aaa"));
+    }
+
+    fn feat(id: &str) -> Feature {
+        Feature {
+            id: id.into(),
+            name: id.into(),
+            description: String::new(),
+            state: FeatureState::Pending,
+            attempts: 0,
+            last_error: None,
+            prompt: None,
+        }
+    }
+
+    /// Write a `feature_list.json` with the given features into a fresh
+    /// `.harness/` (no scripts needed — these exercise load/validation only).
+    fn write_features(features: Vec<Feature>) -> (TempDir, PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let harness_dir = dir.path().join(".harness");
+        std::fs::create_dir_all(&harness_dir).unwrap();
+        let list = FeatureList {
+            features,
+            ..Default::default()
+        };
+        std::fs::write(
+            harness_dir.join("feature_list.json"),
+            serde_json::to_string_pretty(&list).unwrap(),
+        )
+        .unwrap();
+        let path = dir.path().to_path_buf();
+        (dir, path)
+    }
+
+    #[tokio::test]
+    async fn empty_feature_list_rejected() {
+        let (_d, wd) = write_features(vec![]);
+        let err = HarnessConfig::load(&wd).await.unwrap_err().to_string();
+        assert!(err.contains("no features"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn duplicate_feature_ids_rejected() {
+        let (_d, wd) = write_features(vec![feat("dup"), feat("dup")]);
+        let err = HarnessConfig::load(&wd).await.unwrap_err().to_string();
+        assert!(err.contains("duplicate feature id"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn agent_yolo_defaults_on() {
+        let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
+        let cfg = HarnessConfig::load(&wd).await.unwrap();
+        assert!(cfg.features.agent_yolo, "YOLO must default on for autonomy");
+    }
+
+    #[tokio::test]
+    async fn claim_release_driver_round_trips() {
+        let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
+        let engine = HarnessEngine::new();
+        let id = engine.start(wd).await.unwrap();
+        assert!(engine.claim_driver(id).await.unwrap(), "first claim wins");
+        assert!(
+            !engine.claim_driver(id).await.unwrap(),
+            "second claim is rejected while driving"
+        );
+        engine.release_driver(id).await;
+        assert!(
+            engine.claim_driver(id).await.unwrap(),
+            "re-claimable after release"
+        );
+    }
+
+    #[tokio::test]
+    async fn reset_blocked_features_retries_the_halted_feature() {
+        // verify.sh always red → drive feat-1 into Blocked (max_retries = 2).
+        let (_d, wd) = setup("#!/bin/bash\necho boom >&2\nexit 1\n").await;
+        let engine = HarnessEngine::new();
+        let id = engine.start(wd).await.unwrap();
+        for _ in 0..2 {
+            let (_ok, out) = engine.run_verify_once(id, "feat-1").await.unwrap();
+            engine
+                .record_feature_failure(id, "feat-1", &out)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            engine.status(id).await.unwrap().features.features[0].state,
+            FeatureState::Blocked
+        );
+        // next_pending would otherwise skip the blocked feature → feat-2.
+        assert_eq!(
+            engine.next_pending_feature(id).await.unwrap().unwrap().id,
+            "feat-2"
+        );
+
+        let n = engine.reset_blocked_features(id).await.unwrap();
+        assert_eq!(n, 1);
+        let f = engine.status(id).await.unwrap().features.features[0].clone();
+        assert_eq!(f.state, FeatureState::Pending);
+        assert_eq!(f.attempts, 0);
+        assert!(f.last_error.is_none());
+        // After reset the halted feature is the next one to retry.
+        assert_eq!(
+            engine.next_pending_feature(id).await.unwrap().unwrap().id,
+            "feat-1"
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_current_drops_pointers() {
+        let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
+        let engine = HarnessEngine::new();
+        let id = engine.start(wd).await.unwrap();
+        engine
+            .set_session(id, Uuid::new_v4(), "feat-1")
+            .await
+            .unwrap();
+        assert!(engine.status(id).await.unwrap().current_feature.is_some());
+        engine.clear_current(id).await;
+        let s = engine.status(id).await.unwrap();
+        assert!(s.current_feature.is_none());
+        assert!(s.current_session.is_none());
+    }
+
+    #[tokio::test]
+    async fn settle_returns_after_grace_on_early_idle() {
+        // The agent goes idle well inside the grace window. The wait must end
+        // shortly after grace — NOT wait out the (here very long) settle timeout.
+        let (tx, _keepalive) = broadcast::channel::<Event>(16);
+        let sid = Uuid::new_v4();
+        let grace = Duration::from_millis(150);
+        let long_timeout = Duration::from_secs(60);
+
+        let tx2 = tx.clone();
+        let emitter = tokio::spawn(async move {
+            // Let wait_for_settle subscribe first, then emit an early finish.
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let _ = tx2.send(Event::new("agent.finished").with_session(sid, "s"));
+        });
+
+        let begin = Instant::now();
+        wait_for_settle(&tx, sid, grace, long_timeout).await;
+        let elapsed = begin.elapsed();
+        emitter.await.unwrap();
+
+        assert!(
+            elapsed >= grace,
+            "must honor the grace minimum, got {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "must not wait out the full timeout on an early settle, got {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn settle_ignores_events_for_other_sessions() {
+        let (tx, _keepalive) = broadcast::channel::<Event>(16);
+        let sid = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let grace = Duration::from_millis(50);
+        let timeout = Duration::from_millis(400);
+
+        let tx2 = tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            // An unrelated session finishing must NOT release our wait.
+            let _ = tx2.send(Event::new("agent.finished").with_session(other, "x"));
+        });
+
+        let begin = Instant::now();
+        wait_for_settle(&tx, sid, grace, timeout).await;
+        // No event for `sid` ever arrives → we fall through at the settle timeout.
+        assert!(begin.elapsed() >= timeout, "should wait out the timeout");
     }
 }
