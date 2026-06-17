@@ -70,6 +70,9 @@ pub enum FeatureState {
     Coding,
     /// `verify.sh` is running for this feature.
     Verifying,
+    /// Verify passed, but a human confirmation is required (HITL-at-QA, spec
+    /// 010c) before the feature is locked in. The run pauses here.
+    AwaitingConfirm,
     /// Verified green — locked in.
     Done,
     /// Exhausted `max_retries` against a red verify; the run halts here.
@@ -143,6 +146,11 @@ pub struct FeatureList {
     /// drive without bypass, or for debugging.
     #[serde(default = "default_agent_yolo")]
     pub agent_yolo: bool,
+    /// Require ONE human confirmation when `verify.sh` passes, before a feature
+    /// is marked `Done` (HITL-at-QA, spec 010c). Off by default = fully
+    /// autonomous; on = the run pauses at `AwaitingConfirm` until confirmed.
+    #[serde(default)]
+    pub hitl_at_qa: bool,
 }
 
 impl Default for FeatureList {
@@ -155,6 +163,7 @@ impl Default for FeatureList {
             settle_grace_secs: default_settle_grace_secs(),
             settle_timeout_secs: default_settle_timeout_secs(),
             agent_yolo: default_agent_yolo(),
+            hitl_at_qa: false,
         }
     }
 }
@@ -172,6 +181,9 @@ pub enum HarnessState {
     Running,
     /// A `verify.sh` gate is running.
     Verifying,
+    /// A feature passed verify and is awaiting human confirmation (HITL-at-QA);
+    /// the run is paused until `POST /{id}/confirm`.
+    AwaitingConfirmation,
     /// A feature exhausted its retries — the run halted at the gate.
     Blocked,
     /// All features verified green.
@@ -821,6 +833,51 @@ impl HarnessEngine {
         Ok(())
     }
 
+    /// Whether this run requires one human confirmation at the QA gate (HITL-at-QA, 010c).
+    pub async fn hitl_at_qa(&self, harness_id: Uuid) -> anyhow::Result<bool> {
+        let run = self.get_run(harness_id).await?;
+        let r = run.read().await;
+        Ok(r.features.hitl_at_qa)
+    }
+
+    /// Verify passed but HITL-at-QA is on: park the feature in `AwaitingConfirm`
+    /// and pause the run. Persisted so the board shows the pending confirmation.
+    pub async fn await_confirm(&self, harness_id: Uuid, feature_id: &str) -> anyhow::Result<()> {
+        self.set_feature_state(harness_id, feature_id, FeatureState::AwaitingConfirm)
+            .await?;
+        self.set_state(harness_id, HarnessState::AwaitingConfirmation)
+            .await?;
+        Ok(())
+    }
+
+    /// Human confirms a feature parked in `AwaitingConfirm` → finalize it `Done`
+    /// (writes `handoff.md`). Errors if the feature isn't awaiting confirmation,
+    /// so a stray confirm can't fast-track an unverified feature.
+    pub async fn confirm_feature(&self, harness_id: Uuid, feature_id: &str) -> anyhow::Result<()> {
+        let state = {
+            let run = self.get_run(harness_id).await?;
+            let r = run.read().await;
+            r.features
+                .features
+                .iter()
+                .find(|f| f.id == feature_id)
+                .map(|f| f.state)
+        };
+        match state {
+            Some(FeatureState::AwaitingConfirm) => {}
+            Some(other) => {
+                anyhow::bail!("feature {feature_id} is {other:?}, not awaiting confirmation")
+            }
+            None => anyhow::bail!("no such feature: {feature_id}"),
+        }
+        self.mark_feature_done(
+            harness_id,
+            feature_id,
+            "Human-confirmed at the QA gate (HITL-at-QA).",
+        )
+        .await
+    }
+
     /// Record a verify failure: bump `attempts`, store the error. Returns
     /// `true` when the feature has now exhausted `max_retries` and is `Blocked`;
     /// otherwise the feature is left `Coding` for another attempt.
@@ -870,8 +927,13 @@ impl HarnessEngine {
     pub async fn run_verify(&self, harness_id: Uuid, feature_id: &str) -> anyhow::Result<bool> {
         let (success, output) = self.run_verify_once(harness_id, feature_id).await?;
         if success {
-            self.mark_feature_done(harness_id, feature_id, &output)
-                .await?;
+            if self.hitl_at_qa(harness_id).await? {
+                // Park for human confirmation instead of locking in (HITL-at-QA).
+                self.await_confirm(harness_id, feature_id).await?;
+            } else {
+                self.mark_feature_done(harness_id, feature_id, &output)
+                    .await?;
+            }
         } else {
             self.record_feature_failure(harness_id, feature_id, &output)
                 .await?;
@@ -1251,6 +1313,16 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
             engine.log(harness_id, Some(&feature.id), "running verification gate");
             let (passed, output) = engine.run_verify_once(harness_id, &feature.id).await?;
             if passed {
+                if engine.hitl_at_qa(harness_id).await? {
+                    // HITL-at-QA: pause for ONE human confirmation before Done.
+                    engine.await_confirm(harness_id, &feature.id).await?;
+                    engine.log(
+                        harness_id,
+                        Some(&feature.id),
+                        "✓ verify PASSED — awaiting human confirmation (HITL-at-QA). Run paused; POST /{id}/confirm to finalize and resume.",
+                    );
+                    return Ok(());
+                }
                 engine
                     .mark_feature_done(harness_id, &feature.id, &output)
                     .await?;
@@ -2038,5 +2110,61 @@ mod surface_tests {
             plan_from_spec(wd, "s1").await.is_err(),
             "no criteria → explicit error, not a silent empty backlog"
         );
+    }
+
+    // --- 010c slice 2: HITL-at-QA gate ---
+
+    #[tokio::test]
+    async fn hitl_at_qa_parks_then_confirm_finalizes() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        let hd = wd.join(".agentum-harness");
+        std::fs::create_dir_all(&hd).unwrap();
+        std::fs::write(
+            hd.join("feature_list.json"),
+            r#"{"features":[{"id":"F1","name":"x"}],"hitl_at_qa":true}"#,
+        )
+        .unwrap();
+        std::fs::write(hd.join("verify.sh"), "#!/usr/bin/env bash\nexit 0\n").unwrap();
+
+        let engine = HarnessEngine::new();
+        let id = engine.start(wd.to_path_buf()).await.unwrap();
+
+        // Verify passes, but HITL-at-QA PARKS it at AwaitingConfirm — not Done.
+        assert!(engine.run_verify(id, "F1").await.unwrap(), "verify passed");
+        assert_eq!(
+            scan_board(wd).await.features[0].state,
+            FeatureState::AwaitingConfirm,
+            "parked for human confirmation, persisted to disk"
+        );
+
+        // Confirming finalizes it to Done.
+        engine.confirm_feature(id, "F1").await.unwrap();
+        assert_eq!(scan_board(wd).await.features[0].state, FeatureState::Done);
+
+        // A stray confirm on a non-awaiting (now Done) feature errors.
+        assert!(
+            engine.confirm_feature(id, "F1").await.is_err(),
+            "confirm guard: only AwaitingConfirm can be confirmed"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_hitl_marks_done_directly() {
+        // Default (hitl_at_qa absent/false): green verify → Done immediately.
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        let hd = wd.join(".agentum-harness");
+        std::fs::create_dir_all(&hd).unwrap();
+        std::fs::write(
+            hd.join("feature_list.json"),
+            r#"{"features":[{"id":"F1","name":"x"}]}"#,
+        )
+        .unwrap();
+        std::fs::write(hd.join("verify.sh"), "#!/usr/bin/env bash\nexit 0\n").unwrap();
+        let engine = HarnessEngine::new();
+        let id = engine.start(wd.to_path_buf()).await.unwrap();
+        assert!(engine.run_verify(id, "F1").await.unwrap());
+        assert_eq!(scan_board(wd).await.features[0].state, FeatureState::Done);
     }
 }
