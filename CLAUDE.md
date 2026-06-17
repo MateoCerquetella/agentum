@@ -315,7 +315,31 @@ time, blocking advancement on a red gate.
   route uses (extracted in this work) — so YOLO translation, loopback
   `pane_env`, the Claude `--settings` hook, and MCP wiring stay centralized.
   Settle detection subscribes to the session lifecycle bus and waits for the
-  first `agent.awaiting_input`/`agent.finished` after a grace window.
+  first `agent.awaiting_input`/`agent.finished` after a grace window (an early
+  settle inside the grace window is remembered, not discarded — otherwise a
+  fast feature would hang until `settle_timeout_secs`).
+- **Autonomy mechanics (hard-won, don't regress)**: an autonomous run can only
+  work if the agent never blocks on a human. Three non-obvious pieces make that
+  true, all in `harness.rs`:
+  1. **YOLO is mandatory** — `spawn_feature_agent` pushes
+     `agentum_executor::YOLO_MARKER` into the session flags (`agent_yolo`,
+     default true). Without it the agent stops at the first permission prompt
+     and never reaches the gate.
+  2. **Workspace-trust dialog** — Claude shows "Do you trust this folder?" on a
+     fresh workdir and `--dangerously-skip-permissions` does **not** skip it
+     (only non-interactive `-p` does). `await_repl_ready` watches the pane,
+     accepts the dialog (Enter on the default "Yes"), and waits for the idle
+     REPL footer — also outlasting an MCP-slowed boot (a fixed sleep is too
+     fragile for both).
+  3. **Prompt submit is two-step** — `inject_prompt` types the prompt with NO
+     trailing Enter, pauses (`SUBMIT_DELAY`), then sends a bare Enter. A single
+     combined `send-keys "<text>" Enter` is swallowed by the REPL's
+     bracketed-paste handling for a multi-line prompt: the text lands in the
+     input box (often collapsed to a "[Pasted text]" block) but never executes.
+  A `#[ignore]` live test (`tests/harness_live_agent.rs`) drives a **real**
+  Claude agent end-to-end against `examples/harness-demo/` and asserts the gate
+  goes green; run it with
+  `AGENTUM_BROWSER_VERIFY=1 cargo test -p agentum-server --test harness_live_agent -- --ignored --nocapture`.
 - **Routes** (`routes/harness.rs`): `POST /api/harness` (register),
   `GET` (list/status), `POST /{id}/run` (kick off `drive` as a bg task,
   rejects double-run via `claim_driver`), `POST /{id}/init`,
