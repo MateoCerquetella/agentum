@@ -15,6 +15,7 @@ pub mod events;
 pub mod forge;
 pub mod fs;
 pub mod git;
+pub mod harness;
 pub mod health;
 pub mod host;
 pub mod hosts;

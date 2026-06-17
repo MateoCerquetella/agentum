@@ -237,6 +237,7 @@ All HTTP/WS routes live in `crates/agentum-server/src/routes/`:
 | `host.rs`         | `/api/host/metrics`        | CPU+RAM samples; also broadcasts. |
 | `fs.rs`           | `/api/fs/list`             | Workdir picker. |
 | `mcp.rs`          | `/mcp`                     | agentum's own MCP server (see below). |
+| `harness.rs`      | `/api/harness/*` + `/events` WS | Harness Engine: drive agents one feature at a time behind a verify gate (see below). |
 | `board.rs`, `notes.rs`, `channels.rs`, `watchdog.rs`, `doctor.rs` | various | Self-explanatory. |
 
 Auth middleware (`crate::auth::require_token`) is applied at the
@@ -283,6 +284,48 @@ skill files. This supersedes the old "install a skill into
   needs the npm build env to verify; do it after the remaining skill
   capabilities (computer-use, scheduling, browser, orchestration DAG) are
   ported to MCP tools, else those capabilities are lost.
+
+---
+
+## Harness Engine (`/api/harness/*`)
+
+A **verification-gated** agent runner. Point it at a project dir that
+contains a `.harness/` folder and it drives real agents one feature at a
+time, blocking advancement on a red gate.
+
+- **`.harness/` contract** (all under the project root):
+  - `AGENTS.md` — instructions prepended to every feature prompt.
+  - `feature_list.json` — the ordered backlog + per-feature `state`
+    (`pending`/`coding`/`verifying`/`done`/`blocked`), plus run knobs
+    (`agent_tool`, `agent_model`, `max_retries`, `settle_*`). The engine
+    **writes state back here** as it runs — it is the single source of truth.
+  - `init.sh` — environment smoke-test, run once; non-zero aborts the run.
+  - `verify.sh` — **the gate**, run after each feature with
+    `$HARNESS_FEATURE_ID` set. exit 0 = green (advance + write handoff),
+    non-zero = red (block + retry). Falls back to `npm run verify`, then
+    to a pass if neither exists.
+  - `handoff.md` — overwritten after each green gate.
+- **Engine** (`harness.rs`): `HarnessEngine` holds in-memory runs + a
+  `broadcast` event bus; the state machine (load/verify/mark-done/block)
+  is decoupled from spawning so it's unit-testable with stub `verify.sh`.
+  [`harness::drive`] is the live loop: init → for each pending feature
+  {spawn agent → wait-for-settle → verify gate → advance / retry / block}.
+- **Real agents, one launch path**: `spawn_feature_agent` goes through
+  `routes::sessions::spawn_agent_into_pane` — the *same* helper the `start`
+  route uses (extracted in this work) — so YOLO translation, loopback
+  `pane_env`, the Claude `--settings` hook, and MCP wiring stay centralized.
+  Settle detection subscribes to the session lifecycle bus and waits for the
+  first `agent.awaiting_input`/`agent.finished` after a grace window.
+- **Routes** (`routes/harness.rs`): `POST /api/harness` (register),
+  `GET` (list/status), `POST /{id}/run` (kick off `drive` as a bg task,
+  rejects double-run via `claim_driver`), `POST /{id}/init`,
+  `POST /{id}/verify` (manual one-shot gate), `GET /{id}/files`,
+  `DELETE /{id}`, and `WS /api/harness/events` (live `HarnessEvent` stream).
+- **Desktop UI**: `agentum-desktop/ui/src/components/harness/HarnessEngine.tsx`
+  (sidebar **Harness** entry; `activeView === 'harness'`) — feature board,
+  an unmistakable verification-gate banner, the `.harness/` file viewer, and
+  a live event log, all fed by `runtime/harness-client.ts` over the embedded
+  loopback server. A runnable example lives in `examples/harness-demo/`.
 
 ---
 

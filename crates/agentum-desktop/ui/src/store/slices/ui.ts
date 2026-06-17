@@ -436,11 +436,12 @@ export type UISlice = {
   acknowledgedAgentsByPaneKey: Record<string, number>
   acknowledgeAgents: (paneKeys: string[]) => void
   unacknowledgeAgents: (paneKeys: string[]) => void
-  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills'
-  previousViewBeforeTasks: 'terminal' | 'settings' | 'activity' | 'skills'
-  previousViewBeforeSettings: 'terminal' | 'tasks' | 'activity' | 'skills'
-  previousViewBeforeActivity: 'terminal' | 'settings' | 'tasks' | 'skills'
-  previousViewBeforeSkills: 'terminal' | 'settings' | 'tasks' | 'activity'
+  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness'
+  previousViewBeforeTasks: 'terminal' | 'settings' | 'activity' | 'skills' | 'harness'
+  previousViewBeforeSettings: 'terminal' | 'tasks' | 'activity' | 'skills' | 'harness'
+  previousViewBeforeActivity: 'terminal' | 'settings' | 'tasks' | 'skills' | 'harness'
+  previousViewBeforeSkills: 'terminal' | 'settings' | 'tasks' | 'activity' | 'harness'
+  previousViewBeforeHarness: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills'
   setActiveView: (view: UISlice['activeView']) => void
   taskPageData: {
     preselectedRepoId?: string
@@ -489,6 +490,8 @@ export type UISlice = {
   closeActivityPage: () => void
   openSkillsPage: () => void
   closeSkillsPage: () => void
+  openHarnessPage: () => void
+  closeHarnessPage: () => void
   setNewWorkspaceDraft: (draft: NonNullable<UISlice['newWorkspaceDraft']>) => void
   clearNewWorkspaceDraft: () => void
   openSettingsPage: () => void
@@ -830,6 +833,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   previousViewBeforeSettings: 'terminal',
   previousViewBeforeActivity: 'terminal',
   previousViewBeforeSkills: 'terminal',
+  previousViewBeforeHarness: 'terminal',
   setActiveView: (view) => set({ activeView: view }),
   taskPageData: {},
   taskResumeState: undefined,
@@ -1003,6 +1007,16 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   closeSkillsPage: () =>
     set((state) => ({
       activeView: state.previousViewBeforeSkills
+    })),
+  openHarnessPage: () =>
+    set((state) => ({
+      activeView: 'harness',
+      previousViewBeforeHarness:
+        state.activeView === 'harness' ? state.previousViewBeforeHarness : state.activeView
+    })),
+  closeHarnessPage: () =>
+    set((state) => ({
+      activeView: state.previousViewBeforeHarness
     })),
   setNewWorkspaceDraft: (draft) => set({ newWorkspaceDraft: draft }),
   clearNewWorkspaceDraft: () => set({ newWorkspaceDraft: null }),
