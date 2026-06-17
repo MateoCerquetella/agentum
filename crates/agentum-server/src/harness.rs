@@ -34,6 +34,30 @@ use uuid::Uuid;
 
 use crate::AppState;
 
+/// Canonical per-project harness directory (spec 010). Holds the committable
+/// deliverables: `AGENTS.md`, `feature_list.json`, `init.sh`, `verify.sh`,
+/// `handoff.md`. Supersedes the legacy `.harness/`.
+pub const HARNESS_DIR: &str = ".agentum-harness";
+/// Pre-010 directory name. Still read when `.agentum-harness/` is absent so the
+/// demo, in-flight worktrees, and the live test keep working — no flag day.
+pub const LEGACY_HARNESS_DIR: &str = ".harness";
+
+/// Resolve a project's harness directory: prefer the canonical
+/// `.agentum-harness/`, fall back to the legacy `.harness/` when only it exists.
+/// Returns the canonical path when neither exists (callers check existence or
+/// scaffold).
+pub fn resolve_harness_dir(workdir: &Path) -> PathBuf {
+    let canonical = workdir.join(HARNESS_DIR);
+    if canonical.is_dir() {
+        return canonical;
+    }
+    let legacy = workdir.join(LEGACY_HARNESS_DIR);
+    if legacy.is_dir() {
+        return legacy;
+    }
+    canonical
+}
+
 /// Feature state in the harness pipeline. Persisted into `feature_list.json` so
 /// a restarted daemon (or the file viewer) sees the live board.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -231,6 +255,9 @@ pub struct HarnessRun {
 #[derive(Debug, Clone)]
 pub struct HarnessConfig {
     pub workdir: PathBuf,
+    /// The resolved harness dir — `.agentum-harness/` or the legacy `.harness/`.
+    /// All reads/writes go through this so a project never mixes the two.
+    pub harness_dir: PathBuf,
     pub agent_instructions: String,
     pub features: FeatureList,
     pub init_script: Option<PathBuf>,
@@ -250,9 +277,12 @@ pub struct HarnessFiles {
 impl HarnessConfig {
     /// Load harness config from a project directory (the parent of `.harness/`).
     pub async fn load(workdir: &Path) -> anyhow::Result<Self> {
-        let harness_dir = workdir.join(".harness");
-        if !harness_dir.exists() {
-            anyhow::bail!("no .harness/ directory found in {}", workdir.display());
+        let harness_dir = resolve_harness_dir(workdir);
+        if !harness_dir.is_dir() {
+            anyhow::bail!(
+                "no {HARNESS_DIR}/ (or legacy {LEGACY_HARNESS_DIR}/) directory found in {}",
+                workdir.display()
+            );
         }
 
         let agents_md = harness_dir.join("AGENTS.md");
@@ -268,7 +298,7 @@ impl HarnessConfig {
             serde_json::from_str(&content)
                 .map_err(|e| anyhow::anyhow!("feature_list.json is invalid: {e}"))?
         } else {
-            anyhow::bail!("no .harness/feature_list.json found");
+            anyhow::bail!("no feature_list.json in {}", harness_dir.display());
         };
 
         // A run with no features would register and instantly report "done"; a
@@ -293,6 +323,7 @@ impl HarnessConfig {
 
         Ok(Self {
             workdir: workdir.to_path_buf(),
+            harness_dir,
             agent_instructions,
             features,
             init_script,
@@ -303,7 +334,7 @@ impl HarnessConfig {
     /// Persist the (possibly mutated) feature list back to disk so the board on
     /// disk always matches the live run.
     pub async fn save_features(&self, features: &FeatureList) -> anyhow::Result<()> {
-        let path = self.workdir.join(".harness/feature_list.json");
+        let path = self.harness_dir.join("feature_list.json");
         let content = serde_json::to_string_pretty(features)?;
         tokio::fs::write(&path, content).await?;
         Ok(())
@@ -311,7 +342,7 @@ impl HarnessConfig {
 
     /// Write `handoff.md` after a feature is verified green.
     pub async fn write_handoff(&self, feature: &Feature, output: &str) -> anyhow::Result<()> {
-        let path = self.workdir.join(".harness/handoff.md");
+        let path = self.harness_dir.join("handoff.md");
         let content = format!(
             "# Handoff — {name}\n\n\
              - **Feature ID:** `{id}`\n\
@@ -333,7 +364,7 @@ impl HarnessConfig {
 
     /// Read the current `.harness/` file contents for the viewer.
     pub async fn read_files(workdir: &Path) -> HarnessFiles {
-        let dir = workdir.join(".harness");
+        let dir = resolve_harness_dir(workdir);
         async fn read(p: PathBuf) -> Option<String> {
             tokio::fs::read_to_string(p).await.ok()
         }
@@ -345,6 +376,136 @@ impl HarnessConfig {
             handoff_md: read(dir.join("handoff.md")).await,
         }
     }
+}
+
+/// Result of scaffolding / migrating a project's harness surface.
+#[derive(Debug, Default, Serialize)]
+pub struct HarnessScaffold {
+    /// Files (relative to workdir) created or written.
+    pub written: Vec<String>,
+    /// For a migration: where content was sourced (`ai/specs`, `.harness`, or none).
+    pub from: Option<String>,
+}
+
+/// Scaffold a fresh `.agentum-harness/` skeleton into `workdir` — the only thing
+/// agentum writes into a repo (spec 010a). Idempotent: existing files are kept.
+pub async fn scaffold_harness(workdir: &Path) -> anyhow::Result<HarnessScaffold> {
+    let dir = workdir.join(HARNESS_DIR);
+    tokio::fs::create_dir_all(&dir).await?;
+    let mut out = HarnessScaffold::default();
+    for (name, body) in scaffold_files() {
+        let path = dir.join(name);
+        if path.exists() {
+            continue;
+        }
+        tokio::fs::write(&path, body).await?;
+        out.written.push(format!("{HARNESS_DIR}/{name}"));
+    }
+    Ok(out)
+}
+
+/// The skeleton file set written by [`scaffold_harness`]. `AGENTS.md` is a small
+/// router stub (spec 010 L04); `feature_list.json` seeds one pending feature so
+/// the surface loads immediately.
+fn scaffold_files() -> Vec<(&'static str, String)> {
+    let feature_list = serde_json::to_string_pretty(&FeatureList {
+        features: vec![Feature {
+            id: "F1".into(),
+            name: "First feature".into(),
+            description: "Describe one observable behavior; the engine drives it behind verify.sh."
+                .into(),
+            state: FeatureState::Pending,
+            attempts: 0,
+            last_error: None,
+            prompt: None,
+        }],
+        ..FeatureList::default()
+    })
+    .unwrap_or_else(|_| "{}".into());
+    vec![
+        (
+            "AGENTS.md",
+            "# AGENTS\n\n<!-- Router: keep <=200 lines, <=15 hard constraints; link detail into .agentum-harness/docs/*. -->\n\n## Project\n\nTODO: one-paragraph summary.\n\n## Run / Test\n\n- start: `./init.sh`\n- verify: `./verify.sh`\n".to_string(),
+        ),
+        ("feature_list.json", feature_list),
+        (
+            "init.sh",
+            "#!/usr/bin/env bash\nset -euo pipefail\n# Environment smoke-test: prove the project can build/start. Non-zero aborts the run.\necho \"init: TODO\"\n".to_string(),
+        ),
+        (
+            "verify.sh",
+            "#!/usr/bin/env bash\nset -euo pipefail\n# The gate. exit 0 = green (advance), non-zero = red (retry/block). $HARNESS_FEATURE_ID names the feature under test. Prefer real end-to-end checks.\necho \"verify: TODO\"\n".to_string(),
+        ),
+    ]
+}
+
+/// Migrate a pre-010 project into the unified `.agentum-harness/` surface without
+/// hand-rewrite (spec 010a): copies any legacy `.harness/` contract files and any
+/// SDD `ai/specs/*` (deliverables only — generic playbooks stay central) into
+/// `.agentum-harness/`. Idempotent; never deletes unless `remove_legacy`.
+pub async fn migrate_harness(
+    workdir: &Path,
+    remove_legacy: bool,
+) -> anyhow::Result<HarnessScaffold> {
+    let dest = workdir.join(HARNESS_DIR);
+    tokio::fs::create_dir_all(&dest).await?;
+    let mut out = HarnessScaffold::default();
+
+    // 1) legacy .harness/ contract files → .agentum-harness/
+    let legacy = workdir.join(LEGACY_HARNESS_DIR);
+    if legacy.is_dir() {
+        out.from = Some(LEGACY_HARNESS_DIR.to_string());
+        copy_dir_contents(&legacy, &dest, &mut out.written, HARNESS_DIR).await?;
+        if remove_legacy {
+            tokio::fs::remove_dir_all(&legacy).await.ok();
+        }
+    }
+
+    // 2) SDD ai/specs/* → .agentum-harness/specs/* (deliverables only)
+    let ai_specs = workdir.join("ai").join("specs");
+    if ai_specs.is_dir() {
+        if out.from.is_none() {
+            out.from = Some("ai/specs".to_string());
+        }
+        let specs_dest = dest.join("specs");
+        copy_dir_contents(
+            &ai_specs,
+            &specs_dest,
+            &mut out.written,
+            &format!("{HARNESS_DIR}/specs"),
+        )
+        .await?;
+    }
+
+    Ok(out)
+}
+
+/// Recursively copy the *contents* of `src` into `dst`, recording each written
+/// file as `<label>/<relpath>`. Iterative (no async recursion). Existing
+/// destination files are overwritten — migration is explicit + idempotent.
+async fn copy_dir_contents(
+    src: &Path,
+    dst: &Path,
+    written: &mut Vec<String>,
+    label: &str,
+) -> anyhow::Result<()> {
+    let mut stack = vec![(src.to_path_buf(), dst.to_path_buf(), label.to_string())];
+    while let Some((from, to, lbl)) = stack.pop() {
+        tokio::fs::create_dir_all(&to).await?;
+        let mut rd = tokio::fs::read_dir(&from).await?;
+        while let Some(entry) = rd.next_entry().await? {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy().to_string();
+            let to_child = to.join(&name);
+            if entry.file_type().await?.is_dir() {
+                stack.push((entry.path(), to_child, format!("{lbl}/{name_str}")));
+            } else {
+                tokio::fs::copy(entry.path(), &to_child).await?;
+                written.push(format!("{lbl}/{name_str}"));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Manages every concurrent harness run + the event bus they publish on.
@@ -1588,5 +1749,79 @@ mod tests {
         wait_for_settle(&tx, sid, grace, timeout).await;
         // No event for `sid` ever arrives → we fall through at the settle timeout.
         assert!(begin.elapsed() >= timeout, "should wait out the timeout");
+    }
+}
+
+#[cfg(test)]
+mod surface_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn resolve_prefers_canonical_then_legacy() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        // neither exists → canonical path returned (callers scaffold).
+        assert_eq!(resolve_harness_dir(wd), wd.join(HARNESS_DIR));
+        // only legacy exists → legacy.
+        std::fs::create_dir_all(wd.join(LEGACY_HARNESS_DIR)).unwrap();
+        assert_eq!(resolve_harness_dir(wd), wd.join(LEGACY_HARNESS_DIR));
+        // canonical present → canonical wins over legacy.
+        std::fs::create_dir_all(wd.join(HARNESS_DIR)).unwrap();
+        assert_eq!(resolve_harness_dir(wd), wd.join(HARNESS_DIR));
+    }
+
+    #[tokio::test]
+    async fn scaffold_creates_loadable_surface() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        let out = scaffold_harness(wd).await.unwrap();
+        assert!(wd.join(".agentum-harness/feature_list.json").exists());
+        assert!(wd.join(".agentum-harness/AGENTS.md").exists());
+        assert!(out.written.iter().any(|w| w.contains("feature_list.json")));
+        // the scaffolded surface loads through the normal engine path.
+        let cfg = HarnessConfig::load(wd).await.unwrap();
+        assert_eq!(cfg.harness_dir, wd.join(HARNESS_DIR));
+        assert!(!cfg.features.features.is_empty());
+        // idempotent: a second scaffold writes nothing new.
+        let again = scaffold_harness(wd).await.unwrap();
+        assert!(again.written.is_empty());
+    }
+
+    #[tokio::test]
+    async fn migrate_maps_legacy_and_specs() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        // a legacy .harness with a (minimal) feature list
+        std::fs::create_dir_all(wd.join(".harness")).unwrap();
+        std::fs::write(wd.join(".harness/feature_list.json"), "{\"features\":[]}").unwrap();
+        // an SDD spec deliverable
+        std::fs::create_dir_all(wd.join("ai/specs/001-demo")).unwrap();
+        std::fs::write(wd.join("ai/specs/001-demo/spec.md"), "# Spec").unwrap();
+
+        let out = migrate_harness(wd, false).await.unwrap();
+        assert!(wd.join(".agentum-harness/feature_list.json").exists());
+        assert!(wd.join(".agentum-harness/specs/001-demo/spec.md").exists());
+        assert!(
+            wd.join(".harness").exists(),
+            "legacy kept when remove_legacy=false"
+        );
+        assert!(!out.written.is_empty());
+    }
+
+    #[tokio::test]
+    async fn load_still_reads_legacy_harness() {
+        // Back-compat: a project with only `.harness/` (no `.agentum-harness/`)
+        // must still load — this is what keeps the demo + in-flight worktrees green.
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        std::fs::create_dir_all(wd.join(".harness")).unwrap();
+        std::fs::write(
+            wd.join(".harness/feature_list.json"),
+            "{\"features\":[{\"id\":\"F1\",\"name\":\"x\"}]}",
+        )
+        .unwrap();
+        let cfg = HarnessConfig::load(wd).await.unwrap();
+        assert_eq!(cfg.harness_dir, wd.join(LEGACY_HARNESS_DIR));
     }
 }
