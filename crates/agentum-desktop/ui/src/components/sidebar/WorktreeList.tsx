@@ -12,8 +12,6 @@ import {
   CircleX,
   Ellipsis,
   Eye,
-  FolderInput,
-  FolderPlus,
   Plus,
   Shapes,
   SlidersHorizontal,
@@ -42,9 +40,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
@@ -2564,35 +2559,6 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
         <DropdownMenuItem onSelect={() => handleOpenWorktreeVisibility(repo.id)}>
           <Eye className="size-3.5" />
           {getWorktreeVisibilityMenuLabel(repo)}
-        </DropdownMenuItem>
-      ) : null}
-      <DropdownMenuItem onSelect={() => handleCreateGroupFromRepo(repo)}>
-        <FolderPlus className="size-3.5" />
-        New group from project
-      </DropdownMenuItem>
-      {projectGroups.length > 0 ? (
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>
-            <FolderInput className="size-3.5" />
-            Move to group
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent>
-            {projectGroups.map((group) => (
-              <DropdownMenuItem
-                key={group.id}
-                disabled={repo.projectGroupId === group.id}
-                onSelect={() => handleMoveProjectToGroup(repo, group.id)}
-              >
-                <span className="max-w-48 truncate">{group.name}</span>
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-      ) : null}
-      {repo.projectGroupId ? (
-        <DropdownMenuItem onSelect={() => handleRemoveProjectFromGroup(repo)}>
-          <CircleX className="size-3.5" />
-          Remove from group
         </DropdownMenuItem>
       ) : null}
       <DropdownMenuSeparator />
