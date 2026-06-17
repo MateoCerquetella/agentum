@@ -246,6 +246,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::health::router())
         .merge(routes::host::router())
+        .merge(routes::host_browser::router())
         .merge(routes::hosts::router())
         .merge(routes::mcp::router())
         .merge(routes::cert::router())

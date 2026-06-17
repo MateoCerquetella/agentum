@@ -18,6 +18,7 @@ pub mod git;
 pub mod harness;
 pub mod health;
 pub mod host;
+pub mod host_browser;
 pub mod hosts;
 pub mod mcp;
 pub mod notes;
