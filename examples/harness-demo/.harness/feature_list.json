@@ -1,0 +1,20 @@
+{
+  "agent_tool": "claude",
+  "max_retries": 3,
+  "settle_grace_secs": 8,
+  "settle_timeout_secs": 900,
+  "features": [
+    {
+      "id": "hello-file",
+      "name": "Create the greeting file",
+      "description": "Create a file named GREETING.md at the project root. Its first line must be exactly:\n\nHello from the Agentum Harness Engine\n\nThat single line is enough — the verification gate checks for it.",
+      "state": "pending"
+    },
+    {
+      "id": "add-build-stamp",
+      "name": "Add a build stamp line",
+      "description": "Append a second line to GREETING.md that starts with the word 'Verified' (e.g. 'Verified by the harness gate'). Keep the original greeting line intact.",
+      "state": "pending"
+    }
+  ]
+}
