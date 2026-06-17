@@ -270,6 +270,22 @@ fn tool_specs() -> Value {
                 "required": ["workdir"],
                 "additionalProperties": false,
             },
+        },
+        {
+            "name": "agentum_harness_board",
+            "description": "Reconstruct a project's harness board by scanning \
+                `.agentum-harness/` on disk (spec 010b) — the spec deliverables under \
+                specs/* and the active feature_list.json states. Pure read; the repo is \
+                the durable source of truth, so this rebuilds the board with no agentum \
+                store consulted (survives a store wipe). Empty when there's no surface.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workdir": { "type": "string", "description": "Project directory to scan" }
+                },
+                "required": ["workdir"],
+                "additionalProperties": false,
+            },
         }
     ])
 }
@@ -298,6 +314,7 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         "agentum_browser" => tool_bridge(state, "browser", &args).await,
         "agentum_harness_scaffold" => tool_harness_scaffold(&args).await,
         "agentum_harness_migrate" => tool_harness_migrate(&args).await,
+        "agentum_harness_board" => tool_harness_board(&args).await,
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
 
@@ -470,6 +487,19 @@ async fn tool_harness_migrate(args: &Value) -> anyhow::Result<String> {
         .unwrap_or(false);
     let out = crate::harness::migrate_harness(&workdir, remove_legacy).await?;
     Ok(serde_json::to_string_pretty(&out)?)
+}
+
+/// Reconstruct a project's harness board by scanning `.agentum-harness/` — a thin
+/// view over [`crate::harness::scan_board`] (spec 010b; the rebuildable index).
+async fn tool_harness_board(args: &Value) -> anyhow::Result<String> {
+    let raw = args
+        .get("workdir")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
+    let workdir =
+        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
+    let board = crate::harness::scan_board(&workdir).await;
+    Ok(serde_json::to_string_pretty(&board)?)
 }
 
 #[cfg(test)]

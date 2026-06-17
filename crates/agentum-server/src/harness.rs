@@ -508,6 +508,65 @@ async fn copy_dir_contents(
     Ok(())
 }
 
+/// One spec deliverable found under `.agentum-harness/specs/`.
+#[derive(Debug, Clone, Serialize)]
+pub struct BoardSpec {
+    /// Directory name, e.g. `010a-agentum-harness-surface`.
+    pub id: String,
+    pub has_spec: bool,
+    pub has_architecture: bool,
+    pub has_tasks: bool,
+}
+
+/// A worktree's harness board, reconstructed purely from disk (spec 010b).
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct HarnessBoard {
+    /// The resolved surface dir (`.agentum-harness/` or legacy `.harness/`).
+    pub harness_dir: Option<String>,
+    /// Spec deliverables under `.agentum-harness/specs/*`.
+    pub specs: Vec<BoardSpec>,
+    /// The active backlog features (from `feature_list.json`), if present.
+    pub features: Vec<Feature>,
+}
+
+/// Reconstruct a worktree's board by scanning `.agentum-harness/` **only** — no
+/// agentum store / DB consulted. The repo is the durable source of truth; the
+/// store is just a rebuildable index. An absent/empty surface yields an empty
+/// board (never an error). Pure read — never writes (the mutating lifecycle is
+/// 010c).
+pub async fn scan_board(workdir: &Path) -> HarnessBoard {
+    let dir = resolve_harness_dir(workdir);
+    let mut board = HarnessBoard::default();
+    if !dir.is_dir() {
+        return board;
+    }
+    board.harness_dir = Some(dir.to_string_lossy().to_string());
+
+    // Active backlog (best-effort: a malformed file leaves features empty).
+    if let Ok(content) = tokio::fs::read_to_string(dir.join("feature_list.json")).await {
+        if let Ok(list) = serde_json::from_str::<FeatureList>(&content) {
+            board.features = list.features;
+        }
+    }
+
+    // Spec deliverables: any subdir of specs/ is a spec; report which files exist.
+    if let Ok(mut rd) = tokio::fs::read_dir(dir.join("specs")).await {
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+                let p = entry.path();
+                board.specs.push(BoardSpec {
+                    id: entry.file_name().to_string_lossy().to_string(),
+                    has_spec: p.join("spec.md").exists(),
+                    has_architecture: p.join("architecture.md").exists(),
+                    has_tasks: p.join("tasks.md").exists(),
+                });
+            }
+        }
+        board.specs.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+    board
+}
+
 /// Manages every concurrent harness run + the event bus they publish on.
 pub struct HarnessEngine {
     runs: RwLock<HashMap<Uuid, Arc<RwLock<HarnessRun>>>>,
@@ -1823,5 +1882,39 @@ mod surface_tests {
         .unwrap();
         let cfg = HarnessConfig::load(wd).await.unwrap();
         assert_eq!(cfg.harness_dir, wd.join(LEGACY_HARNESS_DIR));
+    }
+
+    // --- 010b: per-worktree rebuildable board ---
+
+    #[tokio::test]
+    async fn board_empty_when_no_surface() {
+        let dir = TempDir::new().unwrap();
+        let board = scan_board(dir.path()).await;
+        assert!(board.harness_dir.is_none());
+        assert!(board.specs.is_empty());
+        assert!(board.features.is_empty());
+    }
+
+    #[tokio::test]
+    async fn board_reflects_scaffold_and_migrate() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        // scaffold seeds one feature → board sees it (read purely from disk).
+        scaffold_harness(wd).await.unwrap();
+        let board = scan_board(wd).await;
+        assert!(board.harness_dir.is_some());
+        assert_eq!(
+            board.features.len(),
+            1,
+            "seeded feature visible on the board"
+        );
+        // add an SDD spec + migrate it → board lists the spec deliverable.
+        std::fs::create_dir_all(wd.join("ai/specs/001-demo")).unwrap();
+        std::fs::write(wd.join("ai/specs/001-demo/spec.md"), "# Spec").unwrap();
+        migrate_harness(wd, false).await.unwrap();
+        let board = scan_board(wd).await;
+        let demo = board.specs.iter().find(|s| s.id == "001-demo");
+        assert!(demo.is_some(), "migrated spec appears on the board");
+        assert!(demo.unwrap().has_spec, "spec.md detected on disk");
     }
 }
