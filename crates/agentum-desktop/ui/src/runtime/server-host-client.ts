@@ -4,7 +4,7 @@
 // (a native SSH target id); to run its sessions on the remote we need the
 // matching server host id. This module create-or-gets that host by SSH
 // coordinates and caches the mapping for the session lifetime.
-import { getJson, postJson, putJson } from './server-http'
+import { del, getJson, postJson, putJson } from './server-http'
 import { api } from '@/tauri'
 import type { SshTarget } from '../../../shared/ssh-types'
 
@@ -176,16 +176,25 @@ export type DiscoveredTmuxSession = {
   related: boolean
 }
 
-/** `GET /api/hosts/{id}/tmux-sessions?path=…` — tmux sessions on the host that
- *  agentum does not manage. One SSH round trip; "no tmux server" is `[]`. */
+/** `GET /api/hosts/{id}/tmux-sessions?path=…&all=true` — tmux sessions on the
+ *  host. Pass `all=true` to include agentum-managed sessions. */
 export function listHostTmuxSessions(
   hostId: string,
-  path?: string
+  opts?: { path?: string; all?: boolean }
 ): Promise<DiscoveredTmuxSession[]> {
-  const query = path ? `?path=${encodeURIComponent(path)}` : ''
+  const params = new URLSearchParams()
+  if (opts?.path) params.set('path', opts.path)
+  if (opts?.all) params.set('all', 'true')
+  const query = params.toString() ? `?${params.toString()}` : ''
   return getJson<DiscoveredTmuxSession[]>(
     `/api/hosts/${encodeURIComponent(hostId)}/tmux-sessions${query}`
   )
+}
+
+/** `DELETE /api/hosts/{id}/tmux-sessions/{name}` — kill a tmux session on the
+ *  host. Only works for non-agentum-managed sessions. */
+export function killHostTmuxSession(hostId: string, name: string): Promise<void> {
+  return del(`/api/hosts/${encodeURIComponent(hostId)}/tmux-sessions/${encodeURIComponent(name)}`)
 }
 
 /** `POST /api/hosts/{id}/tmux-sessions/{name}/attach` — bind a discovered tmux

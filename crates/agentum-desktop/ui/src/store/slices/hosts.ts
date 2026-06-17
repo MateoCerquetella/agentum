@@ -80,7 +80,7 @@ export const createHostsSlice: StateCreator<AppState, [], [], HostsSlice> = (set
         setEntry({ status: 'error', sessions: [], error: 'host not registered' })
         return
       }
-      const sessions = await listHostTmuxSessions(hostId, repoPath)
+      const sessions = await listHostTmuxSessions(hostId, { path: repoPath })
       setEntry({ status: 'ready', sessions, fetchedAt: Date.now() })
     } catch (err) {
       setEntry({

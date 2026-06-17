@@ -1264,6 +1264,61 @@ pub async fn list_managed_tmux_sessions(host: &Host) -> Result<Vec<DiscoveredTmu
     Ok(parse_tmux_panes_managed(&tmux_discover_raw(host).await?))
 }
 
+/// Like [`list_tmux_sessions`] but returns ALL sessions (external + managed).
+/// Used by the host-level tmux browser in the desktop UI.
+pub async fn list_all_tmux_sessions(host: &Host) -> Result<Vec<DiscoveredTmuxSession>> {
+    let raw = tmux_discover_raw(host).await?;
+    Ok(parse_tmux_panes_all(&raw))
+}
+
+/// Parse [`TMUX_DISCOVER_FORMAT`] pane lines into ALL sessions regardless of
+/// the `agentum-*` naming convention.
+fn parse_tmux_panes_all(stdout: &str) -> Vec<DiscoveredTmuxSession> {
+    let mut sessions: Vec<DiscoveredTmuxSession> = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
+            continue;
+        }
+        let mut it = line.splitn(5, '\t');
+        let (Some(name), Some(attached), Some(created), Some(command), Some(cwd)) =
+            (it.next(), it.next(), it.next(), it.next(), it.next())
+        else {
+            continue;
+        };
+        let pane = DiscoveredPane {
+            command: command.to_string(),
+            cwd: cwd.to_string(),
+        };
+        match sessions.iter_mut().find(|s| s.name == name) {
+            Some(s) => s.panes.push(pane),
+            None => sessions.push(DiscoveredTmuxSession {
+                name: name.to_string(),
+                attached: attached
+                    .trim()
+                    .parse::<u32>()
+                    .map(|n| n > 0)
+                    .unwrap_or(false),
+                created_at: created.trim().parse().ok(),
+                panes: vec![pane],
+            }),
+        }
+    }
+    sessions
+}
+
+/// Kill a tmux session on the host by name. Errors if the session doesn't
+/// exist or the transport fails.
+pub async fn kill_tmux_session(host: &Host, name: &str) -> Result<()> {
+    match &host.kind {
+        HostKind::Local => Ok(agentum_tmux::kill_session(name).await?),
+        HostKind::Ssh { .. } => {
+            let script = format!("tmux kill-session -t {}", q(name)?);
+            ssh_checked(host, &script).await
+        }
+    }
+}
+
 /// Run the pane-discovery query on `host`, returning raw stdout. "tmux missing"
 /// and "no server running" both collapse to an empty string (for discovery they
 /// mean the same — nothing to report); only SSH transport failures error.

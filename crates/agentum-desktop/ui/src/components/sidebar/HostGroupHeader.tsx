@@ -1,5 +1,5 @@
 import type React from 'react'
-import { ChevronDown, Monitor, Server, ShieldCheck, SquareTerminal, TerminalSquare } from 'lucide-react'
+import { ChevronDown, Monitor, Server, ShieldCheck, SquareTerminal } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { SidebarHost } from './worktree-list-groups'
@@ -39,17 +39,16 @@ export function HostGroupHeader({
   count,
   collapsed,
   onToggle,
-  onOpenTerminal,
+  onOpenTmuxSessions,
   onOpenReadiness
 }: {
   host: SidebarHost
   count: number
   collapsed: boolean
   onToggle: () => void
-  /** Open a terminal scoped to this host (resolved to a representative worktree
-   *  on the host). Omitted when the host has no worktree to anchor a terminal
-   *  to, in which case the affordance is hidden. */
-  onOpenTerminal?: () => void
+  /** Open the tmux sessions modal for this host. Always shown for SSH hosts;
+   *  shown for the local host when tmux is in use. */
+  onOpenTmuxSessions?: () => void
   /** Open the Host Readiness & Provisioning dialog for this host (required deps
    *  + optional agentum skills to sync onto it). */
   onOpenReadiness?: () => void
@@ -120,21 +119,18 @@ export function HostGroupHeader({
           )
         ) : null}
       </div>
-      {onOpenTerminal ? (
-        // Hover-revealed affordance: open a terminal scoped to this host. Stop
-        // propagation so clicking it never toggles the section collapse.
+      {onOpenTmuxSessions ? (
+        // Hover-revealed affordance: open the tmux sessions browser for this
+        // host. Stop propagation so clicking never toggles the section collapse.
         <Tooltip>
           <TooltipTrigger asChild>
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation()
-                onOpenTerminal()
+                onOpenTmuxSessions()
               }}
               onKeyDown={(e) => {
-                // The header root handles Enter/Space as a collapse toggle; keep
-                // those keys from bubbling so activating the button opens a
-                // terminal instead of collapsing the section.
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.stopPropagation()
                 }
@@ -144,17 +140,13 @@ export function HostGroupHeader({
                 'group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100',
                 'text-muted-foreground hover:bg-sidebar-accent hover:text-foreground focus-visible:bg-sidebar-accent focus-visible:text-foreground focus-visible:outline-none'
               )}
-              aria-label={
-                host.kind === 'ssh'
-                  ? `Open terminal on ${host.label}`
-                  : `Open terminal on this machine`
-              }
+              aria-label={`Tmux sessions on ${host.label}`}
             >
-              <TerminalSquare className="size-3.5" />
+              <SquareTerminal className="size-3.5" />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom" sideOffset={4}>
-            {host.kind === 'ssh' ? 'Open terminal on this host' : 'Open terminal on this machine'}
+            Tmux sessions
           </TooltipContent>
         </Tooltip>
       ) : null}
@@ -193,9 +185,9 @@ export function HostGroupHeader({
       <span
         className={cn(
           'inline-flex items-center gap-1 rounded-full bg-sidebar-accent px-1.5 py-0.5 text-[11px] text-muted-foreground',
-          // Push the count to the right edge only when the terminal button isn't
+          // Push the count to the right edge only when the tmux button isn't
           // there to claim `ml-auto` itself.
-          onOpenTerminal ? 'ml-1' : 'ml-auto'
+          onOpenTmuxSessions ? 'ml-1' : 'ml-auto'
         )}
       >
         <span className={cn('size-1.5 rounded-full', STATUS_DOT[status])} />

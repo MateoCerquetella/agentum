@@ -54,10 +54,6 @@ export function estimateRenderRowSize(
   if (row?.type === 'imported-worktrees-card') {
     return IMPORTED_WORKTREES_LINE_ROW_HEIGHT
   }
-  if (row?.type === 'remote-tmux-card') {
-    // Collapsed disclosure row; expansion is corrected by measurement.
-    return 28
-  }
   return 116
 }
 
