@@ -33,6 +33,7 @@ export type FeatureList = {
   agent_model?: string | null
   settle_grace_secs: number
   settle_timeout_secs: number
+  agent_yolo: boolean
 }
 
 export type HarnessStatus = {

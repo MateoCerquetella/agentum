@@ -90,6 +90,7 @@ async fn make_state(dir: &std::path::Path) -> AppState {
         hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         api_base_url: None,
         desktop_bridge: None,
+        harness: Arc::new(agentum_server::harness::HarnessEngine::new()),
     }
 }
 

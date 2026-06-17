@@ -1,5 +1,6 @@
 {
   "agent_tool": "claude",
+  "agent_yolo": true,
   "max_retries": 3,
   "settle_grace_secs": 8,
   "settle_timeout_secs": 900,
