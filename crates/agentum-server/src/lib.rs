@@ -146,6 +146,14 @@ pub struct AppState {
     /// `std::sync::Mutex` because the critical section is a single HashMap
     /// lookup/insert/remove — no `.await` while holding the lock.
     pub hook_tokens: Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, String>>>,
+    /// Secret bearer token guarding the agentum MCP server (`/mcp`). Minted once
+    /// at boot. Every agentum-launched agent gets it baked into its MCP config
+    /// (`Authorization: Bearer …`), and the `/mcp` handler rejects any request
+    /// without it — *even on the no-auth embedded server*. This is what makes the
+    /// MCP safe to expose to a remote host over the reverse SSH tunnel: the port
+    /// is loopback-bound on the host AND the tool surface needs this token, so
+    /// another user/process on the host can't drive agentum.
+    pub mcp_token: Arc<String>,
     /// The base URL this server is reachable at on loopback (`http://127.0.0.1:<port>`),
     /// set only for the embedded desktop server (which binds an ephemeral port). The
     /// session-start handler injects it into each pane's `AGENTUM_API_URL` so a CLI run
@@ -195,6 +203,8 @@ impl AppState {
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             clipboard_request_bus,
             hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            // Minted once per server instance; agents present it on every /mcp call.
+            mcp_token: Arc::new(auth::new_token()),
             // Only the embedded loopback server knows its own URL (it binds an
             // ephemeral port); the standalone daemon leaves this None.
             api_base_url: None,

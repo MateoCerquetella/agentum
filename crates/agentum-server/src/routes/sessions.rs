@@ -567,11 +567,92 @@ pub(crate) async fn spawn_agent_into_pane(
             map.insert(session.id, hook_token);
         }
 
-        // Wire MCP servers into first-class agents that load MCP at launch
-        // (Claude/Codex). Best-effort; `provision` logs and skips anything it
-        // can't provision so a normal coding session is never blocked.
-        if let Some(p) = crate::mcp_provision::provision(state, &session.tool).await {
+        // Wire the agentum MCP into agents that take it via a launch arg
+        // (Claude --mcp-config, Codex -c); local agents reach it on the Mac
+        // loopback. Best-effort — never blocks a launch.
+        let base = state
+            .api_base_url
+            .as_deref()
+            .unwrap_or("http://127.0.0.1:8822");
+        let agentum_mcp_url = format!("{base}/mcp");
+        if let Some(p) =
+            crate::mcp_provision::provision(state, &session.tool, &agentum_mcp_url).await
+        {
             launch.argv.extend(adapter.mcp_args(&p));
+        }
+        // File-based agents (Cursor/Gemini/OpenCode) load MCP from a config file
+        // in the workdir — write it (no-op for claude/codex).
+        crate::mcp_provision::write_agent_project_config(
+            state,
+            host,
+            &workdir.to_string_lossy(),
+            &session.tool,
+            &agentum_mcp_url,
+        )
+        .await;
+    } else if matches!(host.kind, HostKind::Ssh { .. }) {
+        // Remote MCP parity: the agentum MCP lives on the Mac. Reverse-tunnel it
+        // to the host (token-guarded, loopback-bound), then wire each agent at
+        // the tunnel URL. Best-effort: a tunnel failure logs and launches the
+        // agent without the MCP rather than blocking.
+        match crate::mcp_provision::local_mcp_port(state) {
+            Some(mac_port) => match crate::host_runtime::ensure_reverse_tunnel(host, mac_port).await
+            {
+                Ok(host_port) => {
+                    // The remote agent needs its own orchestration handle and an
+                    // AGENTUM_API_URL pointing at the tunnel.
+                    launch
+                        .env
+                        .push(("AGENTUM_TERMINAL_HANDLE".into(), session.name.clone()));
+                    launch.env.push((
+                        "AGENTUM_API_URL".into(),
+                        format!("http://127.0.0.1:{host_port}"),
+                    ));
+                    let agentum_mcp_url = format!("http://127.0.0.1:{host_port}/mcp");
+                    let servers =
+                        vec![crate::mcp_provision::agentum_server(state, &agentum_mcp_url)];
+                    let provision = if session.tool == "claude" {
+                        // Claude needs the --mcp-config FILE on the HOST.
+                        let host_cfg = format!("/tmp/agentum-mcp-{}.json", session.id);
+                        let json = crate::mcp_provision::config_json(&servers);
+                        match crate::host_runtime::write_remote_file(host, &host_cfg, &json).await {
+                            Ok(()) => Some(agentum_executor::McpProvision {
+                                servers,
+                                config_file: PathBuf::from(host_cfg),
+                            }),
+                            Err(e) => {
+                                tracing::warn!(session = %session.id, "could not write remote MCP config to host: {e}");
+                                None
+                            }
+                        }
+                    } else {
+                        // Codex injects MCP inline via `-c` — no host file needed.
+                        Some(agentum_executor::McpProvision {
+                            servers,
+                            config_file: PathBuf::new(),
+                        })
+                    };
+                    if let Some(p) = provision {
+                        launch.argv.extend(adapter.mcp_args(&p));
+                    }
+                    // File-based agents: write the config on the HOST in the workdir.
+                    crate::mcp_provision::write_agent_project_config(
+                        state,
+                        host,
+                        &workdir.to_string_lossy(),
+                        &session.tool,
+                        &agentum_mcp_url,
+                    )
+                    .await;
+                }
+                Err(e) => tracing::warn!(
+                    session = %session.id,
+                    "reverse MCP tunnel to host failed; launching remote agent without agentum MCP: {e}"
+                ),
+            },
+            None => tracing::warn!(
+                "no embedded api_base_url; cannot reverse-tunnel the agentum MCP to an SSH host"
+            ),
         }
     }
 
@@ -1967,6 +2048,7 @@ mod tests {
                 ),
                 clipboard_request_bus: broadcast::channel(64).0,
                 hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+                mcp_token: Arc::new(String::from("test-mcp-token")),
                 api_base_url: None,
                 desktop_bridge: None,
                 harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
@@ -2111,6 +2193,7 @@ mod tests {
                 ),
                 clipboard_request_bus: broadcast::channel(64).0,
                 hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+                mcp_token: Arc::new(String::from("test-mcp-token")),
                 api_base_url: None,
                 desktop_bridge: None,
                 harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),

@@ -18,7 +18,9 @@ use base64::Engine as _;
 // runner: it replays an op on a fresh, unmultiplexed connection when a pooled
 // ControlMaster socket goes stale, so a flaky master never hard-fails a remote
 // op that never actually ran.
-use agentum_tmux::ssh::{SshMux, ssh_command_opts, ssh_output};
+use agentum_tmux::ssh::{
+    SshMux, ssh_command_opts, ssh_control_cancel_cmd, ssh_control_forward_cmd, ssh_output,
+};
 use tokio::process::Command;
 use tokio::time::{sleep, timeout};
 
@@ -832,6 +834,132 @@ pub async fn warm_ssh_master(host: &Host) -> Result<()> {
     let (interactive, _) = tokio::join!(ssh_output(host, "true", SSH_TIMEOUT), stream_warm);
     interactive.map_err(map_ssh_io)?;
     Ok(())
+}
+
+/// First port of the loopback range scanned for the reverse tunnel on a host.
+pub const REMOTE_MCP_PORT_BASE: u16 = 8990;
+/// How many consecutive ports to try before giving up (host services or stale
+/// forwards may already hold some).
+const REMOTE_MCP_PORT_TRIES: u16 = 24;
+
+/// Ensure a **reverse** SSH tunnel so this host can reach the Mac's embedded
+/// agentum MCP server: on the host, `127.0.0.1:<port>` → (over SSH) → Mac's
+/// `127.0.0.1:<mac_port>`. Returns the **host port** that was armed (the caller
+/// writes it into the agent's MCP URL).
+///
+/// Scans a small loopback-port range — a fixed port collides with whatever the
+/// host already runs there (verified: a real service held the first choice on a
+/// live host) or with a stale forward from a prior app instance that the current
+/// master can't cancel. We cancel-then-arm each candidate and take the first that
+/// binds, so the tunnel always points at THIS server's live port. Rides the warm
+/// interactive ControlMaster via `-O forward` (no extra connection). Loopback-
+/// bound both ends; the per-server bearer token guards on-host access.
+pub async fn ensure_reverse_tunnel(host: &Host, mac_port: u16) -> Result<u16> {
+    if !matches!(host.kind, HostKind::Ssh { .. }) {
+        return Err(HostRuntimeError::Unsupported);
+    }
+    // `-O forward` attaches to an existing master, so the master must be up first.
+    warm_ssh_master(host).await?;
+
+    let mut last_err = String::new();
+    for host_port in
+        REMOTE_MCP_PORT_BASE..REMOTE_MCP_PORT_BASE.saturating_add(REMOTE_MCP_PORT_TRIES)
+    {
+        // Cancel any forward already bound to this port (e.g. a stale one from a
+        // prior app instance pointing at a now-dead Mac port), then arm fresh so
+        // the tunnel always targets the current Mac port. No-op when none exists.
+        if let Some(mut cancel) = ssh_control_cancel_cmd(host, host_port) {
+            let _ = cancel.output().await;
+        }
+        let Some(mut cmd) = ssh_control_forward_cmd(host, host_port, mac_port) else {
+            return Err(HostRuntimeError::Bootstrap(
+                "no ControlPath available for the reverse MCP tunnel".into(),
+            ));
+        };
+        let out = cmd.output().await.map_err(map_ssh_io)?;
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let s = stderr.to_ascii_lowercase();
+        if out.status.success() || s.contains("already") || s.contains("exists") {
+            return Ok(host_port);
+        }
+        // Port busy (host service or unreachable stale forward) → try the next.
+        last_err = stderr.trim().to_string();
+    }
+    Err(HostRuntimeError::Bootstrap(format!(
+        "no free reverse-tunnel port on host in {REMOTE_MCP_PORT_BASE}..; last: {last_err}"
+    )))
+}
+
+/// Write `content` to `abs_path` on `host` (local fs, or on the SSH host) with
+/// owner-only (0600) permissions. Used to place a remote agent's `--mcp-config`
+/// file — which carries the MCP **bearer token** — where the agent can read it.
+///
+/// Security: the file must be unreadable to other users on the host (the token
+/// is a credential). We write with `umask 077` to a `mktemp` file and `mv` it
+/// into place atomically — so the final path can't be a pre-planted symlink we'd
+/// follow, and the file is never briefly world-readable. The filename is a random
+/// session UUID, so it can't be pre-created by an attacker. Content is
+/// base64-piped so JSON quoting can't break the write.
+pub async fn write_remote_file(host: &Host, abs_path: &str, content: &str) -> Result<()> {
+    match &host.kind {
+        HostKind::Local => {
+            if let Some(parent) = std::path::Path::new(abs_path).parent() {
+                std::fs::create_dir_all(parent).map_err(map_ssh_io)?;
+            }
+            std::fs::write(abs_path, content).map_err(map_ssh_io)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(abs_path, std::fs::Permissions::from_mode(0o600))
+                    .map_err(map_ssh_io)?;
+            }
+            Ok(())
+        }
+        HostKind::Ssh { .. } => {
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(content);
+            let parent = std::path::Path::new(abs_path)
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "/tmp".to_string());
+            // The host's LOGIN shell may be fish/zsh (not POSIX sh), so a bash-y
+            // script run directly fails. Build a POSIX-sh script and feed it to
+            // `sh` via a base64 pipe: the only chars in the outer command are
+            // base64 (shell-safe everywhere), so fish/zsh/bash all run it the
+            // same. `umask 077` + `chmod 600` keep the token file owner-only; the
+            // random-UUID filename means no attacker can pre-plant a symlink.
+            let inner = format!(
+                "umask 077; mkdir -p {dir}; printf %s {b64} | base64 -d > {path}; chmod 600 {path}",
+                dir = q(&parent)?,
+                b64 = q(&b64)?,
+                path = q(abs_path)?,
+            );
+            let inner_b64 = base64::engine::general_purpose::STANDARD.encode(&inner);
+            let remote = format!("printf %s {} | base64 -d | sh", q(&inner_b64)?);
+            ssh_checked(host, &remote).await
+        }
+    }
+}
+
+/// Read `abs_path` from `host` (local fs or SSH), or `None` when it doesn't
+/// exist. Used to merge agentum into an existing agent config file (Cursor,
+/// Gemini, OpenCode) without clobbering the user's other servers. Only stdout is
+/// read, so the host's login-shell noise (fnm, etc.) on stderr is ignored.
+pub async fn read_remote_file(host: &Host, abs_path: &str) -> Result<Option<String>> {
+    match &host.kind {
+        HostKind::Local => Ok(std::fs::read_to_string(abs_path).ok()),
+        HostKind::Ssh { .. } => {
+            let mut cmd =
+                ssh_command_opts(host, &format!("cat {}", q(abs_path)?), SshMux::Interactive);
+            let out = cmd.output().await.map_err(map_ssh_io)?;
+            if out.status.success() && !out.stdout.is_empty() {
+                Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+            } else {
+                // Missing file (cat exits non-zero) → None, not an error.
+                Ok(None)
+            }
+        }
+    }
 }
 
 pub async fn capture_pane_visible(host: &Host, target: &str) -> Result<String> {
