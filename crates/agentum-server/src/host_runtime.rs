@@ -903,6 +903,9 @@ pub async fn ensure_reverse_tunnel(host: &Host, mac_port: u16) -> Result<u16> {
 pub async fn write_remote_file(host: &Host, abs_path: &str, content: &str) -> Result<()> {
     match &host.kind {
         HostKind::Local => {
+            if let Some(parent) = std::path::Path::new(abs_path).parent() {
+                std::fs::create_dir_all(parent).map_err(map_ssh_io)?;
+            }
             std::fs::write(abs_path, content).map_err(map_ssh_io)?;
             #[cfg(unix)]
             {
@@ -934,6 +937,27 @@ pub async fn write_remote_file(host: &Host, abs_path: &str, content: &str) -> Re
             let inner_b64 = base64::engine::general_purpose::STANDARD.encode(&inner);
             let remote = format!("printf %s {} | base64 -d | sh", q(&inner_b64)?);
             ssh_checked(host, &remote).await
+        }
+    }
+}
+
+/// Read `abs_path` from `host` (local fs or SSH), or `None` when it doesn't
+/// exist. Used to merge agentum into an existing agent config file (Cursor,
+/// Gemini, OpenCode) without clobbering the user's other servers. Only stdout is
+/// read, so the host's login-shell noise (fnm, etc.) on stderr is ignored.
+pub async fn read_remote_file(host: &Host, abs_path: &str) -> Result<Option<String>> {
+    match &host.kind {
+        HostKind::Local => Ok(std::fs::read_to_string(abs_path).ok()),
+        HostKind::Ssh { .. } => {
+            let mut cmd =
+                ssh_command_opts(host, &format!("cat {}", q(abs_path)?), SshMux::Interactive);
+            let out = cmd.output().await.map_err(map_ssh_io)?;
+            if out.status.success() && !out.stdout.is_empty() {
+                Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+            } else {
+                // Missing file (cat exits non-zero) → None, not an error.
+                Ok(None)
+            }
         }
     }
 }
