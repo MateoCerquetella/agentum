@@ -7,9 +7,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use agentum_core::{AgentDepCheck, DepCheck, Host, HostKind, HostReadiness, HostSystemInfo, SkillCheck};
-use base64::Engine as _;
+use agentum_core::{
+    AgentDepCheck, DepCheck, Host, HostKind, HostReadiness, HostSystemInfo, SkillCheck,
+};
 use agentum_executor::{binary_for, probed_tools};
+use base64::Engine as _;
 // The SSH connection builder lives in the shared lower crate so the watchdog
 // (which can't depend on agentum-server) shares one source of truth for the
 // ssh flags + the SSH_ASKPASS password helper. `ssh_output` is the resilient
@@ -195,7 +197,9 @@ pub async fn provision_skills(host: &Host, ids: &[String]) -> Result<HostReadine
         .ok_or_else(|| HostRuntimeError::Bootstrap("no local ~/.claude/skills directory".into()))?;
     for id in ids {
         if id.is_empty() || id.contains('/') || id.contains("..") {
-            return Err(HostRuntimeError::Bootstrap(format!("invalid skill id `{id}`")));
+            return Err(HostRuntimeError::Bootstrap(format!(
+                "invalid skill id `{id}`"
+            )));
         }
         if !root.join(id).join("SKILL.md").is_file() {
             return Err(HostRuntimeError::Bootstrap(format!(

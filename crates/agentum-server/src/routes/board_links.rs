@@ -197,6 +197,7 @@ mod tests {
             hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             api_base_url: None,
             desktop_bridge: None,
+            harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
         }
     }
 

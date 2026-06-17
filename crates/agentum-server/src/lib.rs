@@ -24,6 +24,7 @@ pub mod auth;
 pub mod bridge;
 mod error;
 pub mod git;
+pub mod harness;
 mod headers;
 pub mod host_install_hints;
 pub mod host_runtime;
@@ -156,6 +157,11 @@ pub struct AppState {
     /// webview automation, macOS computer-use). `None` for the standalone
     /// daemon — `/api/browser/*` and `/api/computer/*` then return 501.
     pub desktop_bridge: Option<std::sync::Arc<dyn crate::bridge::DesktopBridge>>,
+    /// The Harness Engine: drives agents one feature at a time behind a
+    /// verification gate. Shared (`Arc`) so the `/api/harness/*` routes and the
+    /// background [`harness::drive`] task operate on the same in-memory runs +
+    /// event bus. Cheap to construct; always present.
+    pub harness: Arc<harness::HarnessEngine>,
 }
 
 impl AppState {
@@ -194,6 +200,7 @@ impl AppState {
             api_base_url: None,
             // Set only by the desktop via serve_embedded_loopback_with_bridge.
             desktop_bridge: None,
+            harness: Arc::new(harness::HarnessEngine::new()),
         }
     }
 }
@@ -258,6 +265,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::worktrees::router())
         .merge(routes::forge::router())
         .merge(routes::usage::router())
+        .merge(routes::harness::router())
         .layer(axum_mw::from_fn_with_state(
             state.clone(),
             auth::require_token,

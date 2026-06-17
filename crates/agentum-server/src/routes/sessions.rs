@@ -501,6 +501,98 @@ fn pane_env(
     ]
 }
 
+/// Spawn the agent process for a freshly-(re)started session into a tmux pane
+/// on `host`, arm the output pipe, and mark it `Running`. Shared by the `start`
+/// HTTP handler and the harness-engine driver ([`crate::harness`]) so both go
+/// through the *one* launch path — YOLO marker translation, loopback `pane_env`,
+/// the Claude `--settings` PostToolUse hook, and MCP wiring all stay centralized
+/// here. `workdir` must already be resolved + validated by the caller (the
+/// reattach / external / worktree-heal decisions differ per caller and stay
+/// out of this helper). On a pipe failure the half-spawned pane is killed so we
+/// never leave an orphan behind.
+pub(crate) async fn spawn_agent_into_pane(
+    state: &AppState,
+    session: &Session,
+    host: &Host,
+    target: &str,
+    workdir: &std::path::Path,
+) -> Result<(), ApiError> {
+    let adapter = agentum_executor::adapter_for(&session.tool);
+    let mut launch = adapter.launch(session);
+
+    if matches!(host.kind, HostKind::Local) {
+        // Loopback hook URLs only work for local panes. SSH-hosted agents
+        // run on another machine, where 127.0.0.1 points at the VPS.
+        let hook_token = crate::auth::new_token();
+        for kv in pane_env(
+            state.api_base_url.as_deref(),
+            session.id,
+            &session.name,
+            &hook_token,
+        ) {
+            launch.env.push(kv);
+        }
+
+        if session.tool == "claude" {
+            // Claude Code has no `--hook-post-tool-use` flag; hooks are
+            // registered through settings. Inject a PostToolUse command hook
+            // via `--settings` (which *adds* to the user's settings rather than
+            // replacing them). The AGENTUM_HOOK_* refs resolve from the pane env
+            // exported above, so they must stay unexpanded here.
+            let hook_cmd = "curl -s -X POST \"$AGENTUM_HOOK_URL\" \
+                 -H \"X-Agentum-Hook-Token: $AGENTUM_HOOK_TOKEN\" \
+                 -H \"Content-Type: application/json\" \
+                 -d '{\"kind\":\"tool_done\",\"payload\":{}}'";
+            let settings = serde_json::json!({
+                "hooks": {
+                    "PostToolUse": [
+                        {
+                            "matcher": "*",
+                            "hooks": [
+                                { "type": "command", "command": hook_cmd }
+                            ]
+                        }
+                    ]
+                }
+            });
+            launch.argv.push("--settings".into());
+            launch.argv.push(settings.to_string());
+        }
+
+        // Scope the lock so the (non-Send) MutexGuard is dropped before the
+        // provisioning await below — holding it across `.await` would make the
+        // caller's future non-Send and break the axum Handler bound.
+        {
+            let mut map = state.hook_tokens.lock().unwrap();
+            map.insert(session.id, hook_token);
+        }
+
+        // Wire MCP servers into first-class agents that load MCP at launch
+        // (Claude/Codex). Best-effort; `provision` logs and skips anything it
+        // can't provision so a normal coding session is never blocked.
+        if let Some(p) = crate::mcp_provision::provision(state, &session.tool).await {
+            launch.argv.extend(adapter.mcp_args(&p));
+        }
+    }
+
+    crate::host_runtime::new_session(host, target, workdir, &launch.argv, &launch.env)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let log =
+        paths::pane_log(&session.id.to_string()).map_err(|e| ApiError::Internal(e.to_string()))?;
+    if let Err(e) = crate::host_runtime::pipe_pane(host, target, &log).await {
+        let _ = crate::host_runtime::kill_session(host, target).await;
+        return Err(ApiError::Internal(e.to_string()));
+    }
+
+    state
+        .store
+        .update_status_and_target(session.id, Status::Running, Some(target))
+        .await?;
+    Ok(())
+}
+
 async fn start(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -590,89 +682,10 @@ async fn start(
         HostKind::Ssh { .. } => PathBuf::from(session.effective_cwd()),
     };
 
-    let adapter = agentum_executor::adapter_for(&session.tool);
-    let mut launch = adapter.launch(&session);
-
-    if matches!(host.kind, HostKind::Local) {
-        // Loopback hook URLs only work for local panes. SSH-hosted agents
-        // run on another machine, where 127.0.0.1 points at the VPS.
-        let hook_token = crate::auth::new_token();
-        // AGENTUM_API_URL + the hook URL/token, all anchored to THIS server's
-        // own base (ephemeral port for the embedded desktop server) so an
-        // in-pane `agentum` CLI and the agent's hook both reach the right place.
-        for kv in pane_env(
-            state.api_base_url.as_deref(),
-            session.id,
-            &session.name,
-            &hook_token,
-        ) {
-            launch.env.push(kv);
-        }
-
-        if session.tool == "claude" {
-            // Claude Code has no `--hook-post-tool-use` flag; hooks are
-            // registered through settings. Inject a PostToolUse command
-            // hook via `--settings` (which *adds* to the user's settings
-            // rather than replacing them). The curl command is stored
-            // verbatim by Claude and runs in a shell on each tool call —
-            // the AGENTUM_HOOK_* refs resolve from the pane env exported
-            // above, so they must stay unexpanded here.
-            let hook_cmd = "curl -s -X POST \"$AGENTUM_HOOK_URL\" \
-                 -H \"X-Agentum-Hook-Token: $AGENTUM_HOOK_TOKEN\" \
-                 -H \"Content-Type: application/json\" \
-                 -d '{\"kind\":\"tool_done\",\"payload\":{}}'";
-            let settings = serde_json::json!({
-                "hooks": {
-                    "PostToolUse": [
-                        {
-                            "matcher": "*",
-                            "hooks": [
-                                { "type": "command", "command": hook_cmd }
-                            ]
-                        }
-                    ]
-                }
-            });
-            launch.argv.push("--settings".into());
-            launch.argv.push(settings.to_string());
-        }
-
-        // Scope the lock so the (non-Send) MutexGuard is dropped before the
-        // provisioning await below — holding it across `.await` would make this
-        // handler's future non-Send and break the axum Handler bound.
-        {
-            let mut map = state.hook_tokens.lock().unwrap();
-            map.insert(session.id, hook_token);
-        }
-
-        // Wire MCP servers into first-class agents that load MCP at launch
-        // (Claude/Codex). MCP config is read only at agent startup, so the
-        // launch site must ensure each server is up and the combined config
-        // written *before* spawning. agentum's own MCP is wired by default (it's
-        // the already-running server — free); Playwright is opt-in
-        // (AGENTUM_BROWSER_VERIFY, spawns npx). Best-effort: `provision` logs and
-        // skips anything it can't provision and returns `None` when there's
-        // nothing to wire, so a normal coding session is never blocked.
-        if let Some(p) = crate::mcp_provision::provision(&state, &session.tool).await {
-            launch.argv.extend(adapter.mcp_args(&p));
-        }
-    }
-
-    crate::host_runtime::new_session(&host, &target, &workdir, &launch.argv, &launch.env)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-
-    let log =
-        paths::pane_log(&session.id.to_string()).map_err(|e| ApiError::Internal(e.to_string()))?;
-    if let Err(e) = crate::host_runtime::pipe_pane(&host, &target, &log).await {
-        let _ = crate::host_runtime::kill_session(&host, &target).await;
-        return Err(ApiError::Internal(e.to_string()));
-    }
-
-    state
-        .store
-        .update_status_and_target(id, Status::Running, Some(&target))
-        .await?;
+    // All launch conventions (YOLO translation, loopback env, Claude hook, MCP
+    // wiring, pipe-pane, status flip) live in the shared spawn helper so the
+    // harness-engine driver goes through the exact same path.
+    spawn_agent_into_pane(&state, &session, &host, &target, &workdir).await?;
     Ok(Json(session_with_spawned(load(&state, id).await?, true)))
 }
 
@@ -1956,6 +1969,7 @@ mod tests {
                 hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
                 api_base_url: None,
                 desktop_bridge: None,
+                harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
             }
         }
 
@@ -2099,6 +2113,7 @@ mod tests {
                 hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
                 api_base_url: None,
                 desktop_bridge: None,
+                harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
             }
         }
 
