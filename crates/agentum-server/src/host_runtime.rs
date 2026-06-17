@@ -19,7 +19,8 @@ use base64::Engine as _;
 // ControlMaster socket goes stale, so a flaky master never hard-fails a remote
 // op that never actually ran.
 use agentum_tmux::ssh::{
-    SshMux, ssh_command_opts, ssh_control_cancel_cmd, ssh_control_forward_cmd, ssh_output,
+    SshMux, ssh_command_opts, ssh_control_cancel_cmd, ssh_control_forward_cmd,
+    ssh_control_local_cancel_cmd, ssh_control_local_forward_cmd, ssh_output,
 };
 use tokio::process::Command;
 use tokio::time::{sleep, timeout};
@@ -890,6 +891,83 @@ pub async fn ensure_reverse_tunnel(host: &Host, mac_port: u16) -> Result<u16> {
     )))
 }
 
+/// First Mac-loopback port scanned for the **forward** (CDP screencast) tunnel.
+/// A SEPARATE range from [`REMOTE_MCP_PORT_BASE`] (8990) so the reverse MCP
+/// tunnel and this forward CDP tunnel can coexist on the one Interactive
+/// ControlMaster without one cancel/arm clobbering the other.
+pub const REMOTE_CDP_PORT_BASE: u16 = 9200;
+/// How many consecutive Mac ports to try before giving up (another local app
+/// may already hold some, or a stale forward may linger).
+const REMOTE_CDP_PORT_TRIES: u16 = 24;
+
+/// The Mac-loopback port range scanned by [`ensure_forward_tunnel`]. Pure so the
+/// range (and its disjointness from the MCP range) is unit-testable.
+fn forward_tunnel_ports() -> std::ops::Range<u16> {
+    REMOTE_CDP_PORT_BASE..REMOTE_CDP_PORT_BASE.saturating_add(REMOTE_CDP_PORT_TRIES)
+}
+
+/// Did an `ssh -O forward -L` attempt bind the Mac port? A clean exit means
+/// bound; ssh reporting the forward as already established is an idempotent
+/// success (cancel-then-arm can race a still-present forward). Any other
+/// non-zero exit means the port is unusable → scan the next. Mirrors the
+/// reverse-tunnel predicate in [`ensure_reverse_tunnel`].
+fn forward_arm_bound(status_success: bool, stderr: &str) -> bool {
+    if status_success {
+        return true;
+    }
+    let s = stderr.to_ascii_lowercase();
+    s.contains("already") || s.contains("exists")
+}
+
+/// Ensure a **forward** SSH tunnel so the Mac can reach the host's headless
+/// Chromium CDP debugger: on the Mac, `127.0.0.1:<mac_port>` → (over SSH) →
+/// host's `127.0.0.1:<host_port>`. Returns the **Mac port** that was armed (the
+/// caller connects its CDP client + screencast bridge there).
+///
+/// The mirror of [`ensure_reverse_tunnel`]: CDP lives on the host, so the Mac
+/// reaches it with a local (-L) forward rather than the reverse (-R) the MCP
+/// server needs. Scans a small Mac-loopback range — a fixed port collides with
+/// whatever the Mac already runs there or a stale forward a prior app instance
+/// left. We cancel-then-arm each candidate and take the first that binds, so the
+/// tunnel always points at THIS host's CDP port. Rides the warm interactive
+/// ControlMaster via `-O forward` (no extra connection). Loopback-bound both
+/// ends; the SSH channel is the only path to the host's CDP.
+pub async fn ensure_forward_tunnel(host: &Host, host_port: u16) -> Result<u16> {
+    if !matches!(host.kind, HostKind::Ssh { .. }) {
+        return Err(HostRuntimeError::Unsupported);
+    }
+    // `-O forward` attaches to an existing master, so the master must be up first.
+    warm_ssh_master(host).await?;
+
+    let mut last_err = String::new();
+    for mac_port in forward_tunnel_ports() {
+        // Cancel any forward already bound to this Mac→host pair (e.g. a stale
+        // one left after a Mac sleep, when re-attaching to the same browser),
+        // then arm fresh. OpenSSH needs the full spec to cancel a -L, so this
+        // only clears a forward to the SAME host port — exactly the re-attach
+        // case; a foreign holder of the Mac port instead fails the arm below and
+        // we scan on. No-op when none; best-effort, so failures are ignored.
+        if let Some(mut cancel) = ssh_control_local_cancel_cmd(host, mac_port, host_port) {
+            let _ = cancel.output().await;
+        }
+        let Some(mut cmd) = ssh_control_local_forward_cmd(host, mac_port, host_port) else {
+            return Err(HostRuntimeError::Bootstrap(
+                "no ControlPath available for the CDP forward tunnel".into(),
+            ));
+        };
+        let out = cmd.output().await.map_err(map_ssh_io)?;
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if forward_arm_bound(out.status.success(), &stderr) {
+            return Ok(mac_port);
+        }
+        // Port busy (local service or unbindable stale forward) → try the next.
+        last_err = stderr.trim().to_string();
+    }
+    Err(HostRuntimeError::Bootstrap(format!(
+        "no free CDP forward-tunnel port on Mac in {REMOTE_CDP_PORT_BASE}..; last: {last_err}"
+    )))
+}
+
 /// Write `content` to `abs_path` on `host` (local fs, or on the SSH host) with
 /// owner-only (0600) permissions. Used to place a remote agent's `--mcp-config`
 /// file — which carries the MCP **bearer token** — where the agent can read it.
@@ -1528,6 +1606,47 @@ pub async fn path_exists(host: &Host, abs_path: &str) -> Result<bool> {
     }
 }
 
+/// Build the inner POSIX script that writes `content` to `$HOME/<rel_path>` on
+/// the host, creating the parent dir and keeping the file owner-only. `$HOME` is
+/// left for the remote `sh` to expand (the login shell may be fish/zsh, so this
+/// inner script is base64-piped to `sh` by [`write_home_relative_file`], never
+/// run directly). `content` rides as base64 so any payload writes verbatim.
+/// `rel_path` must be a caller-controlled safe slug path (embedded in quotes).
+fn marker_inner_script(rel_path: &str, content: &str) -> Result<String> {
+    let b64 = base64::engine::general_purpose::STANDARD.encode(content);
+    let mkdir = match rel_path.rsplit_once('/') {
+        Some((parent, _)) => format!("mkdir -p \"$HOME/{parent}\"; "),
+        None => String::new(),
+    };
+    Ok(format!(
+        "umask 077; {mkdir}printf %s {b64} | base64 -d > \"$HOME/{rel_path}\"",
+        b64 = q(&b64)?,
+    ))
+}
+
+/// Write `content` to `$HOME/<rel_path>` on `host` (the local home, or the SSH
+/// host's home), owner-only, creating parents. Unlike [`write_remote_file`] this
+/// resolves the host's `$HOME` so callers can drop a marker without knowing the
+/// absolute home path. Used for the host-browser per-worktree port marker.
+pub async fn write_home_relative_file(host: &Host, rel_path: &str, content: &str) -> Result<()> {
+    match &host.kind {
+        HostKind::Local => {
+            let home = std::env::var("HOME")
+                .map_err(|_| HostRuntimeError::Bootstrap("no HOME for local marker".into()))?;
+            // The local branch of `write_remote_file` mkdir-p's + chmods 600.
+            write_remote_file(host, &format!("{home}/{rel_path}"), content).await
+        }
+        HostKind::Ssh { .. } => {
+            let inner = marker_inner_script(rel_path, content)?;
+            let inner_b64 = base64::engine::general_purpose::STANDARD.encode(&inner);
+            // Only base64 chars in the outer command, so fish/zsh/bash run it the
+            // same; the decoded inner runs under `sh`, where `$HOME` expands.
+            let remote = format!("printf %s {} | base64 -d | sh", q(&inner_b64)?);
+            ssh_checked(host, &remote).await
+        }
+    }
+}
+
 async fn ssh_checked(host: &Host, script: &str) -> Result<()> {
     let output = ssh_output(host, script, SSH_TIMEOUT)
         .await
@@ -1948,6 +2067,77 @@ mod tests {
         assert_eq!(
             read_file_bytes(&host, &file).await.unwrap().as_deref(),
             Some(&b"hi there"[..])
+        );
+    }
+
+    // ── CDP forward-tunnel port selection ─────────────────────────────────
+    // The forward (-L) tunnel binds a Mac loopback port; these pure helpers are
+    // the moving parts of `ensure_forward_tunnel`'s scan. A live host validates
+    // the I/O, but the range + bind-criterion are pure and tested here so a
+    // regression can't silently collide with the MCP range or mis-read ssh.
+
+    #[test]
+    fn cdp_forward_range_is_24_ports_at_9200_disjoint_from_mcp() {
+        let ports: Vec<u16> = forward_tunnel_ports().collect();
+        assert_eq!(REMOTE_CDP_PORT_BASE, 9200, "CDP base moved");
+        assert_eq!(ports.len(), 24, "must scan 24 candidate Mac ports");
+        assert_eq!(
+            ports[0], REMOTE_CDP_PORT_BASE,
+            "scan must start at the base"
+        );
+        assert_eq!(*ports.last().unwrap(), REMOTE_CDP_PORT_BASE + 23);
+        // The reverse MCP tunnel and this forward CDP tunnel ride one
+        // ControlMaster — their port ranges must not overlap or arming one would
+        // cancel/clobber the other.
+        let mcp: std::collections::HashSet<u16> = (REMOTE_MCP_PORT_BASE
+            ..REMOTE_MCP_PORT_BASE.saturating_add(REMOTE_MCP_PORT_TRIES))
+            .collect();
+        assert!(
+            ports.iter().all(|p| !mcp.contains(p)),
+            "CDP forward range overlaps the MCP reverse range"
+        );
+    }
+
+    #[test]
+    fn forward_arm_bound_treats_success_and_already_established_as_bound() {
+        // A clean `-O forward` exit means the tunnel bound.
+        assert!(forward_arm_bound(true, ""));
+        // Cancel-then-arm can race a still-present forward; ssh reporting it as
+        // already established is an idempotent success, not a failure.
+        assert!(forward_arm_bound(false, "forwarding already in place"));
+        assert!(
+            forward_arm_bound(false, "remote forward EXISTS"),
+            "must be case-insensitive"
+        );
+        // A generic forwarding failure means this port is unusable → scan the next.
+        assert!(!forward_arm_bound(
+            false,
+            "could not request local forwarding"
+        ));
+    }
+
+    #[test]
+    fn marker_inner_script_is_home_relative_and_owner_only() {
+        let script = marker_inner_script("hostbrowser/demo.port", "9222\n").unwrap();
+        // $HOME must stay UNQUOTED-but-double-quoted so it expands on the host
+        // (whose login shell may be fish/zsh) while the path stays one token.
+        assert!(
+            script.contains("\"$HOME/hostbrowser/demo.port\""),
+            "marker path not home-relative: {script}"
+        );
+        assert!(
+            script.contains("mkdir -p \"$HOME/hostbrowser\""),
+            "parent dir not created: {script}"
+        );
+        // Content rides as base64 so a payload can't break the write.
+        assert!(
+            script.contains("base64 -d"),
+            "content not base64-decoded: {script}"
+        );
+        // The marker is a per-user file; keep it owner-only.
+        assert!(
+            script.contains("umask 077") || script.contains("chmod 600"),
+            "marker not owner-only: {script}"
         );
     }
 }
