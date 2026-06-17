@@ -567,6 +567,76 @@ pub async fn scan_board(workdir: &Path) -> HarnessBoard {
     board
 }
 
+/// Parse a spec's acceptance-criteria checkboxes into a verify-gated backlog
+/// (spec 010c — the SDD→Harness bridge). Each `- [ ]` / `- [x]` line becomes one
+/// feature: unchecked → `Pending`, checked → `Done`. Features are numbered `F1..`
+/// in document order. Pure/deterministic — no agent call. No checkboxes → empty
+/// backlog (the caller decides whether that's an error).
+pub fn derive_backlog_from_spec(spec_md: &str) -> FeatureList {
+    let mut features = Vec::new();
+    for line in spec_md.lines() {
+        let t = line.trim_start();
+        let (done, rest) = if let Some(r) = t.strip_prefix("- [ ] ") {
+            (false, r)
+        } else if let Some(r) = t
+            .strip_prefix("- [x] ")
+            .or_else(|| t.strip_prefix("- [X] "))
+        {
+            (true, r)
+        } else {
+            continue;
+        };
+        let name = rest.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let n = features.len() + 1;
+        features.push(Feature {
+            id: format!("F{n}"),
+            name: name.to_string(),
+            description: String::new(),
+            state: if done {
+                FeatureState::Done
+            } else {
+                FeatureState::Pending
+            },
+            attempts: 0,
+            last_error: None,
+            prompt: None,
+        });
+    }
+    FeatureList {
+        features,
+        ..FeatureList::default()
+    }
+}
+
+/// Build the engine backlog for a spec under `.agentum-harness/specs/<spec_id>/`
+/// from its `spec.md` acceptance criteria and write
+/// `.agentum-harness/feature_list.json`. Returns the derived list; errors if the
+/// spec.md is missing or has no criteria (no silent empty backlog).
+pub async fn plan_from_spec(workdir: &Path, spec_id: &str) -> anyhow::Result<FeatureList> {
+    let dir = workdir.join(HARNESS_DIR);
+    let spec_md = dir.join("specs").join(spec_id).join("spec.md");
+    let content = tokio::fs::read_to_string(&spec_md)
+        .await
+        .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", spec_md.display()))?;
+    let list = derive_backlog_from_spec(&content);
+    if list.features.is_empty() {
+        anyhow::bail!(
+            "no acceptance-criteria checkboxes (`- [ ]`) found in {}",
+            spec_md.display()
+        );
+    }
+    tokio::fs::create_dir_all(&dir).await?;
+    tokio::fs::write(
+        dir.join("feature_list.json"),
+        serde_json::to_string_pretty(&list)?,
+    )
+    .await?;
+    Ok(list)
+}
+
 /// Manages every concurrent harness run + the event bus they publish on.
 pub struct HarnessEngine {
     runs: RwLock<HashMap<Uuid, Arc<RwLock<HarnessRun>>>>,
@@ -1916,5 +1986,57 @@ mod surface_tests {
         let demo = board.specs.iter().find(|s| s.id == "001-demo");
         assert!(demo.is_some(), "migrated spec appears on the board");
         assert!(demo.unwrap().has_spec, "spec.md detected on disk");
+    }
+
+    // --- 010c: spec→backlog pipeline ---
+
+    #[test]
+    fn derive_backlog_maps_checkboxes() {
+        let spec = "# Spec\n\n## Acceptance Criteria\n\n\
+            - [ ] First criterion\n\
+            - [x] Already done criterion\n\
+            - [ ] Third criterion\n\n\
+            Some prose, not a checkbox.\n";
+        let list = derive_backlog_from_spec(spec);
+        assert_eq!(list.features.len(), 3, "one feature per checkbox");
+        assert_eq!(list.features[0].id, "F1");
+        assert_eq!(list.features[0].name, "First criterion");
+        assert_eq!(list.features[0].state, FeatureState::Pending);
+        assert_eq!(list.features[1].state, FeatureState::Done, "[x] → Done");
+        assert_eq!(list.features[2].id, "F3");
+    }
+
+    #[tokio::test]
+    async fn plan_from_spec_writes_loadable_backlog() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        let spec_dir = wd.join(".agentum-harness/specs/s1");
+        std::fs::create_dir_all(&spec_dir).unwrap();
+        std::fs::write(
+            spec_dir.join("spec.md"),
+            "## Acceptance Criteria\n- [ ] A\n- [ ] B\n",
+        )
+        .unwrap();
+
+        let list = plan_from_spec(wd, "s1").await.unwrap();
+        assert_eq!(list.features.len(), 2);
+        // written feature_list.json is loadable by the engine + visible on the board.
+        let cfg = HarnessConfig::load(wd).await.unwrap();
+        assert_eq!(cfg.features.features.len(), 2);
+        let board = scan_board(wd).await;
+        assert_eq!(board.features.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn plan_rejects_spec_without_criteria() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        let spec_dir = wd.join(".agentum-harness/specs/s1");
+        std::fs::create_dir_all(&spec_dir).unwrap();
+        std::fs::write(spec_dir.join("spec.md"), "# Spec\n\nNo checkboxes here.\n").unwrap();
+        assert!(
+            plan_from_spec(wd, "s1").await.is_err(),
+            "no criteria → explicit error, not a silent empty backlog"
+        );
     }
 }

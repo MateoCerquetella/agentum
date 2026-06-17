@@ -286,6 +286,23 @@ fn tool_specs() -> Value {
                 "required": ["workdir"],
                 "additionalProperties": false,
             },
+        },
+        {
+            "name": "agentum_harness_plan",
+            "description": "Turn an authored spec into the engine's verify-gated backlog \
+                (spec 010c): reads `.agentum-harness/specs/<spec_id>/spec.md`, maps each \
+                acceptance-criteria checkbox (`- [ ]`/`- [x]`) to a feature, and writes \
+                `.agentum-harness/feature_list.json`. Deterministic; errors if the spec \
+                has no criteria.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workdir": { "type": "string", "description": "Project directory" },
+                    "spec_id": { "type": "string", "description": "Spec dir under .agentum-harness/specs/ (e.g. 010a-agentum-harness-surface)" }
+                },
+                "required": ["workdir", "spec_id"],
+                "additionalProperties": false,
+            },
         }
     ])
 }
@@ -315,6 +332,7 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         "agentum_harness_scaffold" => tool_harness_scaffold(&args).await,
         "agentum_harness_migrate" => tool_harness_migrate(&args).await,
         "agentum_harness_board" => tool_harness_board(&args).await,
+        "agentum_harness_plan" => tool_harness_plan(&args).await,
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
 
@@ -500,6 +518,23 @@ async fn tool_harness_board(args: &Value) -> anyhow::Result<String> {
         super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
     let board = crate::harness::scan_board(&workdir).await;
     Ok(serde_json::to_string_pretty(&board)?)
+}
+
+/// Turn a spec into the engine backlog — a thin view over
+/// [`crate::harness::plan_from_spec`] (spec 010c).
+async fn tool_harness_plan(args: &Value) -> anyhow::Result<String> {
+    let raw = args
+        .get("workdir")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
+    let spec_id = args
+        .get("spec_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `spec_id`"))?;
+    let workdir =
+        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
+    let list = crate::harness::plan_from_spec(&workdir, spec_id).await?;
+    Ok(serde_json::to_string_pretty(&list)?)
 }
 
 #[cfg(test)]
