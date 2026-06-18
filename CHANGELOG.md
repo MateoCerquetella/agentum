@@ -4,6 +4,33 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] — 2026-06-18
+
+### Added
+- **SDD → Linear → QA automated pipeline (012).** A feature started from the SDD
+  intake auto-creates a tracker ticket and the harness drives its state across the
+  lifecycle: **Todo** on creation → **In Progress** while an agent codes →
+  **Ready to Test** when the unit gate (`verify.sh`) is green → **Done** when the
+  browser QA gate passes. Linear transitions resolve workflow states by name
+  (`LinearStateMap`, configurable in Settings via `linear.json` `state_map` +
+  `AGENTUM_LINEAR_STATE_*`); the internal board moves card status; a missing
+  tracker state is a logged skip, never a failed run.
+- **Two-phase verification gate.** The harness runs the unit-test gate
+  (`verify.sh`) then a browser QA gate; both must be green to advance a feature.
+  New `FeatureState::ReadyToTest` between verifying and done, surfaced as a board
+  column with clickable tracker links.
+- **Browser QA gate as a spawned agent (012b).** `qa_mode` (`auto`/`script`/
+  `agent`) can run the QA gate as a real browser-verification-loop agent that
+  drives Chrome/Playwright MCP and writes a deterministic verdict file
+  (`.agentum-harness/qa/<id>.json`); an inconclusive verdict fails the gate.
+- **Host-resident browser (009a).** A Chromium that runs on the host (survives
+  client sleep), watchable live over a CDP screencast through an `ssh -L` tunnel,
+  with preflight detection, offer-install, and reconnect surfacing.
+- **Desktop board-goals view.** A goals board with a "Plan harness" action that
+  decomposes a goal into the verify-gated backlog.
+- **Linear integration settings.** Connect Linear and edit the pipeline
+  workflow-state name mapping from the Integrations pane.
+
 ## [0.16.0] — 2026-06-18
 
 ### Added
