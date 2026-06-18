@@ -97,9 +97,15 @@ export function resolveTerminalShortcutAction(
     event.shiftKey &&
     event.key === 'Enter'
   ) {
-    // Why: Codex on Windows PowerShell treats CSI-u Shift+Enter as inert,
-    // while the Alt+Enter byte path inserts a composer newline.
-    return { type: 'sendInput', data: isWindows ? '\x1b\r' : '\x1b[13;2u' }
+    // Why: send Alt+Enter (ESC + CR) on every platform so Shift+Enter inserts a
+    // newline broadly. The CSI-u encoding (\e[13;2u) only lands a newline in
+    // CLIs that opt into the Kitty keyboard protocol (Codex); it is inert in a
+    // plain shell and in Claude Code, which is exactly the "skip a line doesn't
+    // work" report. The Alt+Enter byte path inserts a composer newline in Codex
+    // and Claude Code (Meta+Enter) alike and is harmless at a bare shell prompt,
+    // so it is the most broadly-compatible choice. (Windows PowerShell already
+    // relied on this same byte path.)
+    return { type: 'sendInput', data: '\x1b\r' }
   }
 
   if (
