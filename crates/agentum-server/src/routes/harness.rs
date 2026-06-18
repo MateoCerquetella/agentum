@@ -32,6 +32,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/harness/{id}/run", post(run))
         .route("/api/harness/{id}/init", post(init))
         .route("/api/harness/{id}/verify", post(verify))
+        .route("/api/harness/{id}/confirm", post(confirm))
         .route("/api/harness/{id}/files", get(files))
 }
 
@@ -134,6 +135,33 @@ async fn verify(
         .await
         .map(axum::Json)
         .map_err(|e| ApiError::Internal(e.to_string()))
+}
+
+#[derive(Debug, Deserialize)]
+struct ConfirmRequest {
+    feature_id: String,
+}
+
+/// `POST /api/harness/{id}/confirm` — human confirms a feature parked at the
+/// HITL-at-QA gate: finalize it `Done` and resume the drive loop from the next
+/// pending feature (the paused run already freed its driver slot).
+async fn confirm(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    axum::Json(req): axum::Json<ConfirmRequest>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .harness
+        .confirm_feature(id, &req.feature_id)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    // Resume autonomously: re-claim the driver and continue with the next
+    // pending feature. If something else already drives it, leave it be.
+    if state.harness.claim_driver(id).await.unwrap_or(false) {
+        let st = state.clone();
+        tokio::spawn(async move { crate::harness::drive(st, id).await });
+    }
+    Ok(StatusCode::ACCEPTED)
 }
 
 /// `GET /api/harness/{id}/files` — current `.harness/` file contents for the viewer.

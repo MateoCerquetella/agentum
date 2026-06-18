@@ -1,5 +1,5 @@
 import React from 'react'
-import { Bell, Github, Gitlab, List, Search, ShieldCheck } from 'lucide-react'
+import { Bell, Github, Gitlab, List, MessagesSquare, Search } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { useRepoMap } from '@/store/selectors'
 import { cn } from '@/lib/utils'
@@ -236,11 +236,11 @@ const SidebarNav = React.memo(function SidebarNav() {
             : 'text-sidebar-foreground/60 hover:bg-sidebar-foreground/8'
         )}
       >
-        <ShieldCheck
+        <MessagesSquare
           className={cn('size-4 shrink-0', !harnessActive && 'text-sidebar-foreground/30')}
           strokeWidth={harnessActive ? 2.25 : 1.75}
         />
-        <span className="flex-1">Harness</span>
+        <span className="flex-1">Chat</span>
       </button>
       <button
         type="button"
