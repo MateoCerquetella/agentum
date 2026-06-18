@@ -52,6 +52,10 @@ reqwest        = { version = "0.12", default-features = false, features = ["json
 # Used by planner.rs to deserialise $XDG_CONFIG_HOME/agentum/planner.toml.
 # Already a workspace dep (profiles.toml, credentials.toml read by agentum-tui).
 toml           = { workspace = true }
+# Locate the desktop's Linear creds file (`<data_local_dir>/Agentum/linear.json`)
+# for the server-side Linear task sink (spec 011c). Same crate + version the
+# desktop already pins, so the lockfile carries no new transitive deps.
+dirs           = "6"
 
 [dev-dependencies]
 tempfile       = "3"

@@ -162,6 +162,32 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
         },
         {
+            "name": "agentum_spawn_session",
+            "description": "Spawn a NEW agent session INSIDE agentum — create a session \
+                and launch its agent CLI into a fresh tmux pane on this machine, the same \
+                way the desktop/TUI 'new session' does. Use to delegate work to a sibling \
+                agent you can then coordinate with via agentum_send_message / \
+                agentum_check_messages. `name` is a unique session name (also the agent's \
+                mailbox handle); `workdir` is an existing directory to run in; `tool` is \
+                the agent CLI (claude|codex|cursor|gemini|… — default claude); optional \
+                `model`; `flags` are extra CLI args; `yolo` skips permission prompts \
+                (pushed as the canonical marker and translated per tool). Returns the new \
+                session's id, name, tool, status, and workdir.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Unique session name (also the agent's orchestration handle)" },
+                    "workdir": { "type": "string", "description": "Existing directory the agent runs in" },
+                    "tool": { "type": "string", "description": "Agent CLI: claude|codex|cursor|gemini|… (default claude)" },
+                    "model": { "type": "string", "description": "Model override (optional)" },
+                    "flags": { "type": "array", "items": { "type": "string" }, "description": "Extra CLI args passed to the agent" },
+                    "yolo": { "type": "boolean", "description": "Skip permission prompts (default false)" }
+                },
+                "required": ["name", "workdir"],
+                "additionalProperties": false,
+            },
+        },
+        {
             "name": "agentum_list_worktrees",
             "description": "List the git worktrees agentum tracks (isolated branch \
                 checkouts under <repo>/.claude/worktrees). Returns each worktree's \
@@ -422,6 +448,7 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         .unwrap_or_else(|| json!({}));
     let outcome: anyhow::Result<String> = match name {
         "agentum_list_sessions" => tool_list_sessions(state).await,
+        "agentum_spawn_session" => tool_spawn_session(state, &args).await,
         "agentum_list_worktrees" => tool_list_worktrees().await,
         "agentum_send_message" => tool_send_message(state, &args).await,
         "agentum_check_messages" => tool_check_messages(state, &args).await,
@@ -445,6 +472,70 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
             "isError": true,
         }),
     })
+}
+
+/// Spawn a new agent session inside agentum — a thin view over
+/// [`super::sessions::create_and_spawn_session`] (the same create+launch path the
+/// `/create`+`/start` routes use). Lets one agent delegate to a sibling agent.
+async fn tool_spawn_session(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    use agentum_core::NewSession;
+
+    let name = args
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `name`"))?;
+    let workdir = args
+        .get("workdir")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
+    let tool = args
+        .get("tool")
+        .and_then(Value::as_str)
+        .unwrap_or("claude");
+    let model = args
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let mut flags: Vec<String> = args
+        .get("flags")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    // YOLO is the canonical marker regardless of tool — the adapter translates
+    // it to the per-tool spelling at launch (see executor::translate_yolo_marker).
+    if args.get("yolo").and_then(Value::as_bool).unwrap_or(false)
+        && !flags.iter().any(|f| f == agentum_executor::YOLO_MARKER)
+    {
+        flags.push(agentum_executor::YOLO_MARKER.to_string());
+    }
+
+    let new = NewSession {
+        name: name.to_string(),
+        workdir: workdir.to_string(),
+        tool: tool.to_string(),
+        model,
+        flags,
+        card_id: None,
+        worktree_path: None,
+        worktree_branch: None,
+        worktree_base_ref: None,
+    };
+
+    let session = super::sessions::create_and_spawn_session(state, new, None)
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn session: {e}"))?;
+    Ok(serde_json::to_string_pretty(&json!({
+        "id": session.id.to_string(),
+        "name": session.name,
+        "tool": session.tool,
+        "status": format!("{:?}", session.status),
+        "workdir": session.workdir,
+    }))?)
 }
 
 async fn tool_list_sessions(state: &AppState) -> anyhow::Result<String> {
