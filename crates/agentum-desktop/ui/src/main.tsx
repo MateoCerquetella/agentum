@@ -9,7 +9,6 @@ import {
   recordRendererCrashBreadcrumb
 } from './lib/crash-diagnostics'
 import { applyDocumentTheme } from './lib/document-theme'
-import { shouldEnableReactGrab } from './lib/react-grab-dev-gate'
 import { logEmbeddedServerSnapshot } from './runtime/agentum-server-client'
 
 // Exercise the embedded agentum-server over its session model (the shared core
@@ -19,17 +18,6 @@ void logEmbeddedServerSnapshot()
 
 recordRendererCrashBreadcrumb('renderer_bootstrap_started', { dev: import.meta.env.DEV })
 installRendererCrashDiagnostics()
-
-if (
-  import.meta.env.DEV &&
-  shouldEnableReactGrab({
-    dev: import.meta.env.DEV,
-    enableFlag: import.meta.env.VITE_ENABLE_REACT_GRAB
-  })
-) {
-  void import('react-grab').then(({ init }) => init())
-  void import('react-grab/styles.css')
-}
 
 // Apply the last-used theme immediately so the first paint matches the user's
 // choice (no dark flash on light setups). App.tsx re-applies authoritatively once
