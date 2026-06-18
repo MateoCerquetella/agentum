@@ -126,6 +126,8 @@ async fn create_goal(
 
 #[derive(Debug, Serialize)]
 struct PlanGoalHarnessResponse {
+    /// Which task manager backed the features ("board" | "github" | …).
+    provider: &'static str,
     workdir: String,
     feature_count: usize,
     features: crate::harness::FeatureList,
@@ -172,18 +174,51 @@ async fn plan_goal_harness(
     // created_at — the order the user sees top-to-bottom). The board key is the
     // stable tracker id; it becomes the harness feature id (and
     // `$HARNESS_FEATURE_ID` in verify.sh).
-    let feats: Vec<(String, String, String)> = state
+    let children: Vec<BoardItem> = state
         .store
         .list_board_items()
         .await?
         .into_iter()
         .filter(|c| c.parent_goal_id == Some(goal_id))
-        .map(|c| (c.key, c.title, c.body.unwrap_or_default()))
         .collect();
-    if feats.is_empty() {
+    if children.is_empty() {
         return Err(ApiError::BadRequest(
             "goal has no feature cards yet; let the planner decompose it first".into(),
         ));
+    }
+
+    // Pick the destination from what's configured (external manager = source of
+    // truth; the board is the agnostic fallback). For the board the planner's
+    // cards ARE the source, so we reuse their keys; for an external sink we
+    // mirror each card out and use the tracker's id as the harness feature id.
+    // (Re-running against an external sink re-creates issues — idempotent sync
+    // is deferred to 011d.)
+    let sink = crate::task_sink::TaskSink::select(&wd).await;
+    let mut feats: Vec<(String, String, String)> = Vec::with_capacity(children.len());
+    for c in &children {
+        let body = c.body.clone().unwrap_or_default();
+        let id = match sink {
+            crate::task_sink::TaskSink::Board => c.key.clone(),
+            other => other
+                .create_feature(
+                    &crate::task_sink::SinkCtx {
+                        store: &state.store,
+                        // deref Arc<Store> → &Store
+                        workdir: &wd,
+                        parent_goal_id: Some(goal_id),
+                    },
+                    &crate::task_sink::NewFeature {
+                        title: c.title.clone(),
+                        body: c.body.clone(),
+                    },
+                )
+                .await
+                .map_err(|e| {
+                    ApiError::Internal(format!("create feature in {}: {e}", other.provider()))
+                })?
+                .id,
+        };
+        feats.push((id, c.title.clone(), body));
     }
 
     let list = crate::harness::write_backlog_from_features(&wd, &feats)
@@ -193,10 +228,12 @@ async fn plan_goal_harness(
     let _ = state.bus.send(Event::new("goal.harness.planned").with_payload(json!({
         "goal_id": goal_id,
         "workdir": wd.to_string_lossy(),
+        "provider": sink.provider(),
         "feature_count": list.features.len(),
     })));
 
     Ok(Json(PlanGoalHarnessResponse {
+        provider: sink.provider(),
         workdir: wd.to_string_lossy().into_owned(),
         feature_count: list.features.len(),
         features: list,
@@ -872,6 +909,9 @@ mod tests {
             .await
             .expect("plan must succeed");
         assert_eq!(resp.0.feature_count, 2);
+        // A temp workdir is not a GitHub repo, so the agnostic fallback (board)
+        // is the source of truth.
+        assert_eq!(resp.0.provider, "board");
 
         // feature_list.json is on disk, loadable, and every feature is Pending.
         let cfg = crate::harness::HarnessConfig::load(dir.path()).await.unwrap();
