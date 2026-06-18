@@ -91,7 +91,9 @@ export function HostBrowserPane({ hostId, workdir, initialUrl }: Props): React.J
             metaRef.current = frame.metadata
             const img = imgRef.current
             if (!img) return
-            const blob = new Blob([frame.image], {
+            // Uint8Array is a valid BlobPart at runtime; the cast satisfies the
+            // generic `Uint8Array<ArrayBufferLike>` typing in newer TS libs.
+            const blob = new Blob([frame.image as BlobPart], {
               type: frame.format === 'png' ? 'image/png' : 'image/jpeg'
             })
             const objectUrl = URL.createObjectURL(blob)
