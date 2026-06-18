@@ -14,11 +14,14 @@ use crate::error::ApiError;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/browser/tabs", post(tabs))
+        .route("/api/browser/open", post(open))
         .route("/api/browser/navigate", post(navigate))
         .route("/api/browser/snapshot", post(snapshot))
         .route("/api/browser/click", post(click))
         .route("/api/browser/fill", post(fill))
         .route("/api/browser/screenshot", post(screenshot))
+        .route("/api/browser/annotations", post(annotations))
+        .route("/api/browser/grab", post(grab))
 }
 
 /// Forward a browser op to the desktop bridge, or 501 if there is no desktop.
@@ -45,6 +48,12 @@ async fn tabs(
 ) -> Result<Json<Value>, ApiError> {
     forward(&s, "tabs", body.map(|b| b.0).unwrap_or(json!({}))).await
 }
+/// Open a new browser tab navigated to `url` (body: `{ "url": "..." }`). Unlike
+/// the other ops this creates a tab rather than driving an existing one; the
+/// desktop bridge round-trips through the renderer and returns the new tab id.
+async fn open(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
+    forward(&s, "open", b).await
+}
 async fn navigate(
     State(s): State<AppState>,
     Json(b): Json<Value>,
@@ -68,4 +77,19 @@ async fn screenshot(
     Json(b): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
     forward(&s, "screenshot", b).await
+}
+/// Read the user-made annotations on a browser tab (body: optional `{ "tab": id }`,
+/// else the active tab). Returns the same structured feedback the in-app "Send"
+/// button builds, so a running agent can consume design feedback over MCP.
+async fn annotations(
+    State(s): State<AppState>,
+    body: Option<Json<Value>>,
+) -> Result<Json<Value>, ApiError> {
+    forward(&s, "annotations", body.map(|b| b.0).unwrap_or(json!({}))).await
+}
+/// Grab an element by CSS selector (body: `{ "selector": "...", "tab"?: id }`),
+/// returning its extracted metadata. Unlike interactive picking this is
+/// agent-driven; the desktop bridge injects an extractor into the page.
+async fn grab(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
+    forward(&s, "grab", b).await
 }

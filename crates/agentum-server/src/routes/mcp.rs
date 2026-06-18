@@ -226,14 +226,25 @@ fn tool_specs() -> Value {
         {
             "name": "agentum_browser",
             "description": "Drive agentum's built-in browser webview — the agentum-cli \
-                browser skill. Pass `op` and its params: tabs | navigate (url) | \
-                snapshot | click | fill | screenshot. Requires the agentum desktop \
-                app. (For headless browser automation an agent should use the \
+                browser skill. Pass `op` and its params: open (url) — opens a NEW tab \
+                navigated to url and returns its `tab` id; tabs — lists open tabs; \
+                navigate (url) | snapshot | click (selector) | fill (selector, text) | \
+                screenshot — act on a tab (optional `tab` id, else the active one); \
+                annotations — read the design-feedback annotations the user marked on \
+                page elements (returns structured markdown the agent can act on); \
+                grab (selector) — extract an element's metadata (tag, text, selector, \
+                rect, computed styles) by CSS selector. \
+                Start with `open` when no tab is listed by `tabs`. Requires the agentum \
+                desktop app. (For headless browser automation an agent should use the \
                 Playwright MCP instead.)",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "op": { "type": "string", "description": "tabs|navigate|snapshot|click|fill|screenshot" }
+                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|screenshot|annotations|grab" },
+                    "url": { "type": "string", "description": "Target URL for `open`/`navigate`" },
+                    "tab": { "type": "string", "description": "Tab id to act on (default: the active tab)" },
+                    "selector": { "type": "string", "description": "CSS selector for `click`/`fill`" },
+                    "text": { "type": "string", "description": "Text to type for `fill`" }
                 },
                 "required": ["op"],
                 "additionalProperties": true,
