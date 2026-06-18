@@ -38,7 +38,7 @@ const FEATURE_SETUP_ROWS: readonly FeatureSetupRow[] = [
     id: 'orchestration',
     title: 'Agent Orchestration',
     description: 'Agents can message each other, take tasks, and coordinate handoffs.',
-    setupSummary: 'Registers the Agentum CLI, enables orchestration, and prepares the skill.',
+    setupSummary: "Turns on agentum's orchestration MCP — no skill to install.",
     icon: <Workflow className="size-4" />
   }
 ]

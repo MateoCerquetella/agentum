@@ -85,6 +85,49 @@ impl Store {
         &self.pool
     }
 
+    // ---------- settings (generic key/value, see migration 0021) ----------
+
+    /// Read a setting's raw string value, or `None` when the key was never set.
+    pub async fn setting_get(&self, key: &str) -> Result<Option<String>> {
+        let row: Option<(String,)> = sqlx::query_as("SELECT value FROM settings WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| r.0))
+    }
+
+    /// Upsert a setting's raw string value.
+    pub async fn setting_set(&self, key: &str, value: &str) -> Result<()> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        sqlx::query(
+            "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+             ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at",
+        )
+        .bind(key)
+        .bind(value)
+        .bind(&now_s)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Read a boolean setting (stored as `"1"`/`"0"`), falling back to `default`
+    /// when unset or unparseable.
+    pub async fn setting_get_bool(&self, key: &str, default: bool) -> Result<bool> {
+        Ok(self
+            .setting_get(key)
+            .await?
+            .map(|v| v == "1")
+            .unwrap_or(default))
+    }
+
+    /// Upsert a boolean setting as `"1"`/`"0"`.
+    pub async fn setting_set_bool(&self, key: &str, value: bool) -> Result<()> {
+        self.setting_set(key, if value { "1" } else { "0" }).await
+    }
+
     pub async fn list_hosts(&self) -> Result<Vec<Host>> {
         let rows: Vec<HostRow> =
             sqlx::query_as("SELECT * FROM hosts ORDER BY kind = 'local' DESC, name ASC")
@@ -2195,6 +2238,26 @@ mod tests {
         // Leak the tempdir handle to keep it alive for the test duration.
         std::mem::forget(dir);
         Store::open(&p).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn settings_roundtrip_and_bool_default() {
+        let s = tmp_store().await;
+        // Unset key → None, and the bool reader returns the caller's default.
+        assert_eq!(s.setting_get("orchestration.enabled").await.unwrap(), None);
+        assert!(!s.setting_get_bool("orchestration.enabled", false).await.unwrap());
+        assert!(s.setting_get_bool("orchestration.enabled", true).await.unwrap());
+
+        // Set true, then flip false — upsert overwrites in place.
+        s.setting_set_bool("orchestration.enabled", true).await.unwrap();
+        assert_eq!(
+            s.setting_get("orchestration.enabled").await.unwrap().as_deref(),
+            Some("1")
+        );
+        assert!(s.setting_get_bool("orchestration.enabled", false).await.unwrap());
+
+        s.setting_set_bool("orchestration.enabled", false).await.unwrap();
+        assert!(!s.setting_get_bool("orchestration.enabled", true).await.unwrap());
     }
 
     #[tokio::test]

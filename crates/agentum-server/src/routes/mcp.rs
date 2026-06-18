@@ -117,16 +117,43 @@ async fn dispatch(
             }))
         }
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tool_specs() })),
+        "tools/list" => Ok(json!({ "tools": tool_specs(orchestration_enabled(state).await) })),
         "tools/call" => call_tool(state, params).await,
         other => Err((-32601, format!("method not found: {other}"))),
     }
 }
 
+/// The inter-agent orchestration tools (mailbox + task DAG). Gated behind the
+/// `orchestration.enabled` setting: when off they are neither advertised
+/// (`tools/list`) nor callable (`tools/call`). The MCP server itself stays wired
+/// — only this surface toggles — so agents keep the rest of agentum's tools. The
+/// switch lives in the desktop Settings → Agent Orchestration pane.
+const ORCHESTRATION_TOOLS: &[&str] = &[
+    "agentum_send_message",
+    "agentum_check_messages",
+    "agentum_create_task",
+    "agentum_list_tasks",
+];
+
+fn is_orchestration_tool(name: &str) -> bool {
+    ORCHESTRATION_TOOLS.contains(&name)
+}
+
+/// Read the orchestration gate (opt-in: absent/unset = off). Best-effort — a
+/// store error falls back to off rather than failing the whole MCP request.
+async fn orchestration_enabled(state: &AppState) -> bool {
+    state
+        .store
+        .setting_get_bool(super::orchestration::ORCHESTRATION_ENABLED_SETTING, false)
+        .await
+        .unwrap_or(false)
+}
+
 /// The advertised tool catalog. Grows as skills get ported; each entry needs a
-/// matching arm in [`call_tool`].
-fn tool_specs() -> Value {
-    json!([
+/// matching arm in [`call_tool`]. The orchestration tools are filtered out when
+/// the gate is off (`orchestration_enabled`).
+fn tool_specs(orchestration_enabled: bool) -> Value {
+    let mut tools = json!([
         {
             "name": "agentum_list_sessions",
             "description": "List the agent sessions agentum manages on this machine \
@@ -352,7 +379,19 @@ fn tool_specs() -> Value {
                 "additionalProperties": false,
             },
         }
-    ])
+    ]);
+
+    if !orchestration_enabled {
+        if let Some(arr) = tools.as_array_mut() {
+            arr.retain(|t| {
+                t.get("name")
+                    .and_then(Value::as_str)
+                    .map(|n| !is_orchestration_tool(n))
+                    .unwrap_or(true)
+            });
+        }
+    }
+    tools
 }
 
 /// Execute a `tools/call`. A bad request (missing name/params) is a JSON-RPC
@@ -363,6 +402,19 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         .get("name")
         .and_then(Value::as_str)
         .ok_or((-32602, "missing tool name".to_string()))?;
+
+    // Gate the orchestration surface: when off, these tools aren't advertised,
+    // but a client could still call one by name — reject with an actionable hint.
+    if is_orchestration_tool(name) && !orchestration_enabled(state).await {
+        return Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": "agentum orchestration is turned off. Enable it in the agentum \
+                         desktop app under Settings → Agent Orchestration.",
+            }],
+            "isError": true,
+        }));
+    }
 
     let args = params
         .get("arguments")
@@ -621,11 +673,21 @@ async fn tool_harness_log_decision(args: &Value) -> anyhow::Result<String> {
 mod tests {
     use super::*;
 
+    fn tool_names(orchestration_enabled: bool) -> Vec<String> {
+        tool_specs(orchestration_enabled)
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t.get("name").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect()
+    }
+
     #[test]
     fn tool_catalog_is_well_formed() {
         // Every advertised tool needs name + description + object inputSchema,
         // or agents reject the listing.
-        let tools = tool_specs();
+        let tools = tool_specs(true);
         let arr = tools.as_array().expect("tools is an array");
         assert!(!arr.is_empty());
         for t in arr {
@@ -637,13 +699,24 @@ mod tests {
 
     #[test]
     fn list_sessions_is_in_the_catalog() {
-        let tools = tool_specs();
-        let names: Vec<&str> = tools
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|t| t.get("name").and_then(Value::as_str))
-            .collect();
-        assert!(names.contains(&"agentum_list_sessions"));
+        // A non-orchestration tool is present regardless of the gate.
+        assert!(tool_names(true).contains(&"agentum_list_sessions".to_string()));
+        assert!(tool_names(false).contains(&"agentum_list_sessions".to_string()));
+    }
+
+    #[test]
+    fn orchestration_tools_are_gated_off_the_catalog() {
+        // Enabled: the mailbox + task DAG tools are advertised.
+        let on = tool_names(true);
+        for t in ORCHESTRATION_TOOLS {
+            assert!(on.contains(&t.to_string()), "{t} should be listed when enabled");
+        }
+        // Disabled: none of them are, but the rest of the catalog survives.
+        let off = tool_names(false);
+        for t in ORCHESTRATION_TOOLS {
+            assert!(!off.contains(&t.to_string()), "{t} must be hidden when disabled");
+        }
+        assert!(off.contains(&"agentum_list_worktrees".to_string()));
+        assert!(off.len() + ORCHESTRATION_TOOLS.len() == on.len());
     }
 }
