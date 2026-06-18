@@ -4,6 +4,30 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.9] — 2026-06-18
+
+### Added
+- **CDP browser + MCP annotate.** New `cdp_browser.rs` and
+  `routes/cdp_browser.rs` wire a Chrome DevTools Protocol browser pane through
+  the MCP layer, replacing the old native browser page pane with an
+  agent-drivable browser.
+- **In-page annotate picker (orca-style).** A floating element-selector pill
+  renders over the webview, letting you pick elements on the page and annotate
+  them via MCP `annotate`.
+
+### Fixed
+- **Session 409 leaking into git panels.** Stopped an HTTP 409 conflict from
+  bleeding into the sidebar Git diff/panels view when sessions were out of sync.
+- **Grab result delivered via image-src, not fetch.** The browser element
+  grabber now reads through the image element's `src` attribute, fixing
+  cross-origin issues that broke the old `fetch()` path.
+- **Annotate icon on the native toolbar.** The annotation button now lives on
+  the real native browser toolbar instead of a floating overlay.
+- **WKWebView UA fix.** The browser MCP sends a proper User-Agent so web pages
+  don't redirect to mobile views.
+- **Security: guarded tmux kill-session against option injection.** Added `--`
+  guard to `tmux kill-session` to prevent option injection attacks.
+
 ## [0.14.3] — 2026-06-15
 
 ### Added
