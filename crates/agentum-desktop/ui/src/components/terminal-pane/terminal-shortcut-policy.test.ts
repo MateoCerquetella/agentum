@@ -304,6 +304,34 @@ describe('resolveTerminalShortcutAction', () => {
     ).toBeNull()
   })
 
+  it('sends the standard Alt+Arrow CSI for option+←/→ when an agent owns the pane', () => {
+    // paneRunsAgent=true: Claude Code / Codex read the standard cursor sequence
+    // (\e[1;3D / \e[1;3C), the same bytes every other terminal sends — not the
+    // readline \eb / \ef translation meant for bare shells.
+    expect(
+      resolveTerminalShortcutAction(
+        event({ key: 'ArrowLeft', code: 'ArrowLeft', altKey: true }),
+        true,
+        'false',
+        0,
+        false,
+        undefined,
+        true
+      )
+    ).toEqual({ type: 'sendInput', data: '\x1b[1;3D' })
+    expect(
+      resolveTerminalShortcutAction(
+        event({ key: 'ArrowRight', code: 'ArrowRight', altKey: true }),
+        true,
+        'false',
+        0,
+        false,
+        undefined,
+        true
+      )
+    ).toEqual({ type: 'sendInput', data: '\x1b[1;3C' })
+  })
+
   it('translates macOS Option+B/F/D to readline escape sequences in compose mode', () => {
     // With macOptionAsAlt='false' (compose), xterm.js doesn't translate these.
     // Matches on event.code because macOS composition replaces event.key.
