@@ -264,7 +264,6 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     defaultTuiAgent: null,
     disabledTuiAgents: [],
     skipDeleteWorktreeConfirm: false,
-    skipDeleteAutomationConfirm: false,
     defaultTaskViewPreset: 'all',
     defaultTaskSource: 'github',
     visibleTaskProviders: [...TASK_PROVIDERS],
@@ -372,8 +371,6 @@ export function getDefaultPersistedState(homedir: string): PersistedState {
     sshRemotePtyLeases: [],
     migrationUnsupportedPtyEntries: [],
     legacyPaneKeyAliasEntries: [],
-    automations: [],
-    automationRuns: [],
     onboarding: getDefaultOnboardingState()
   }
 }

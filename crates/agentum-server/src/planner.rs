@@ -130,7 +130,9 @@ mod tests {
     fn isolate_xdg() -> TestEnv {
         // Shared crate-wide lock: AGENTUM_HOME is process-global, so serialise
         // against profiles/board_goals too (a per-module lock would not).
-        let guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         // SAFETY: `set_var` is unsound under concurrent access.
         // `ENV_LOCK` serialises this whole module so only one thread

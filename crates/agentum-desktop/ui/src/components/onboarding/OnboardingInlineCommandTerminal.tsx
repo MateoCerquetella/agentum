@@ -26,6 +26,9 @@ type OnboardingInlineCommandTerminalProps = {
   worktreeId?: string
   onOpened?: () => void
   onInteracted?: (method: 'keyboard' | 'pointer', event?: KeyboardEvent<HTMLElement>) => void
+  // Why: install panels re-probe their "installed" state when the install
+  // shell exits (e.g. the skill installer finishes and the shell closes).
+  onExit?: () => void
 }
 
 export function OnboardingInlineCommandTerminal({
@@ -39,7 +42,8 @@ export function OnboardingInlineCommandTerminal({
   autoScrollIntoView = true,
   worktreeId = ONBOARDING_INLINE_TERMINAL_WORKTREE_ID,
   onOpened,
-  onInteracted
+  onInteracted,
+  onExit
 }: OnboardingInlineCommandTerminalProps): React.JSX.Element {
   const createTab = useAppStore((s) => s.createTab)
   const closeTab = useAppStore((s) => s.closeTab)
@@ -271,7 +275,12 @@ export function OnboardingInlineCommandTerminal({
               cwd={cwd}
               isActive
               isVisible
-              onPtyExit={() => closeTab(tabId, { recordInteraction: false })}
+              onPtyExit={() => {
+                // Why: the install command's shell exiting is our best in-app
+                // signal that an install finished; let the owner re-probe.
+                onExit?.()
+                closeTab(tabId, { recordInteraction: false })
+              }}
               onCloseTab={() => closeTab(tabId, { recordInteraction: false })}
             />
           ) : (

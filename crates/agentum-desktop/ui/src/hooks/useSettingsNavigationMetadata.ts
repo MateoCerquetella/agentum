@@ -14,14 +14,10 @@ import {
   Globe,
   Keyboard,
   ListChecks,
-  Lock,
   Mic,
-  MousePointerClick,
   Network,
   Palette,
-  PanelsTopLeft,
   Play,
-  Server,
   ShieldCheck,
   SlidersHorizontal,
   SquareTerminal,
@@ -40,7 +36,6 @@ import { INTEGRATIONS_PANE_SEARCH_ENTRIES } from '@/components/settings/integrat
 import { GIT_PANE_SEARCH_ENTRIES } from '@/components/settings/git-search'
 import { COMMIT_MESSAGE_AI_PANE_SEARCH_ENTRIES } from '@/components/settings/commit-message-ai-search'
 import { TASKS_PANE_SEARCH_ENTRIES } from '@/components/settings/tasks-search'
-import { FLOATING_WORKSPACE_SEARCH_ENTRIES } from '@/components/settings/floating-workspace-search'
 import { APPEARANCE_PANE_SEARCH_ENTRIES } from '@/components/settings/appearance-search'
 import { INPUT_PANE_SEARCH_ENTRIES } from '@/components/settings/input-search'
 import { getTerminalPaneSearchEntries } from '@/components/settings/terminal-search'
@@ -48,15 +43,11 @@ import { QUICK_COMMANDS_PANE_SEARCH_ENTRIES } from '@/components/settings/quick-
 import { BROWSER_PANE_SEARCH_ENTRIES } from '@/components/settings/browser-pane-search'
 import { NOTIFICATIONS_PANE_SEARCH_ENTRIES } from '@/components/settings/notifications-search'
 import { ORCHESTRATION_PANE_SEARCH_ENTRIES } from '@/components/settings/orchestration-search'
-import {
-  RUNTIME_ENVIRONMENTS_SEARCH_ENTRY,
-  WEB_RUNTIME_ENVIRONMENTS_SEARCH_ENTRY
-} from '@/components/settings/runtime-environments-search'
+import { BROWSER_VERIFICATION_LOOP_PANE_SEARCH_ENTRIES } from '@/components/settings/browser-verification-loop-search'
 import { SSH_PANE_SEARCH_ENTRIES } from '@/components/settings/ssh-search'
 import { COMPUTER_USE_PANE_SEARCH_ENTRIES } from '@/components/settings/computer-use-search'
 import { VOICE_PANE_SEARCH_ENTRIES } from '@/components/settings/voice-pane-search'
 import { DEVELOPER_PERMISSIONS_PANE_SEARCH_ENTRIES } from '@/components/settings/developer-permissions-search'
-import { PRIVACY_PANE_SEARCH_ENTRIES } from '@/components/settings/privacy-search'
 import { SHORTCUTS_PANE_SEARCH_ENTRIES } from '@/components/settings/shortcuts-search'
 import { STATS_PANE_SEARCH_ENTRIES } from '@/components/stats/stats-search'
 import { EXPERIMENTAL_PANE_SEARCH_ENTRIES } from '@/components/settings/experimental-search'
@@ -85,10 +76,6 @@ export function buildSettingsNavigationMetadata({
     isWindows,
     isMac
   })
-  const runtimeEnvironmentsSearchEntry = isWebClient
-    ? WEB_RUNTIME_ENVIRONMENTS_SEARCH_ENTRY
-    : RUNTIME_ENVIRONMENTS_SEARCH_ENTRY
-
   return [
     // Why: this array's order must mirror SETTINGS_NAV_GROUPS so the Settings
     // sidebar and the Cmd+J palette both read top-to-bottom in the same grouped
@@ -111,24 +98,25 @@ export function buildSettingsNavigationMetadata({
       badge: 'Optional'
     },
     {
-      id: 'orchestration',
-      title: 'Orchestration',
-      description: 'Coordinate multiple coding agents through Agentum.',
+      // Why: Orchestration (cross-platform) and Computer Use (desktop-only) are one
+      // "let agents do more" surface, so they share a single page. Computer Use is
+      // folded in as a subsection of this pane; its search keywords ride along on
+      // desktop so "computer use" still resolves here.
+      id: 'agents-automation',
+      title: 'Agents & Automation',
+      description: 'Coordinate multiple agents and let them operate desktop apps.',
       icon: Network,
-      searchEntries: ORCHESTRATION_PANE_SEARCH_ENTRIES,
+      searchEntries: showDesktopOnlySettings
+        ? [
+            ...ORCHESTRATION_PANE_SEARCH_ENTRIES,
+            ...BROWSER_VERIFICATION_LOOP_PANE_SEARCH_ENTRIES,
+            ...COMPUTER_USE_PANE_SEARCH_ENTRIES
+          ]
+        : [...ORCHESTRATION_PANE_SEARCH_ENTRIES, ...BROWSER_VERIFICATION_LOOP_PANE_SEARCH_ENTRIES],
       group: 'capabilities'
     },
     ...(showDesktopOnlySettings
       ? [
-          {
-            id: 'computer-use',
-            title: 'Computer Use',
-            description: 'Enable agents to control any app on your computer.',
-            icon: MousePointerClick,
-            searchEntries: COMPUTER_USE_PANE_SEARCH_ENTRIES,
-            group: 'capabilities',
-            badge: 'Beta'
-          },
           {
             id: 'voice',
             title: 'Voice',
@@ -203,14 +191,6 @@ export function buildSettingsNavigationMetadata({
         ]
       : []),
     {
-      id: 'floating-workspace',
-      title: 'Floating Workspace',
-      description: 'Global terminal, browser, and markdown tabs.',
-      icon: PanelsTopLeft,
-      searchEntries: FLOATING_WORKSPACE_SEARCH_ENTRIES,
-      group: 'workflows'
-    },
-    {
       id: 'appearance',
       title: 'Appearance',
       description: 'Theme, zoom, app and terminal appearance, sidebars, and status bar.',
@@ -254,17 +234,6 @@ export function buildSettingsNavigationMetadata({
       searchEntries: STATS_PANE_SEARCH_ENTRIES,
       group: 'interface'
     },
-    {
-      id: 'servers',
-      title: 'Remote Agentum Servers',
-      description: isWebClient
-        ? 'Connect this browser to a saved Agentum server.'
-        : 'Switch between local desktop mode and paired remote Agentum runtimes.',
-      icon: Server,
-      searchEntries: [runtimeEnvironmentsSearchEntry],
-      group: 'remote',
-      badge: 'Beta'
-    },
     ...(showDesktopOnlySettings
       ? [
           {
@@ -289,14 +258,6 @@ export function buildSettingsNavigationMetadata({
           }
         ]
       : []),
-    {
-      id: 'privacy',
-      title: 'Privacy & Telemetry',
-      description: 'Anonymous usage data and telemetry controls.',
-      icon: Lock,
-      searchEntries: PRIVACY_PANE_SEARCH_ENTRIES,
-      group: 'security'
-    },
     {
       id: 'experimental',
       title: 'Experimental',

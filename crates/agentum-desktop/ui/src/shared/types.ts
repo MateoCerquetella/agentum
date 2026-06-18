@@ -1,6 +1,5 @@
 /* eslint-disable max-lines */
 import type { SshRemotePtyLease, SshTarget } from './ssh-types'
-import type { Automation, AutomationRun } from './automations-types'
 import type { WorkspaceSource } from './workspace-source'
 import type { GitHubProjectSettings } from './github-project-types'
 import type {
@@ -492,6 +491,19 @@ export type TerminalTab = {
    *  hook status overrides this once the agent does anything. Plain terminals
    *  and manually-started agents omit it. */
   launchAgent?: TuiAgent
+  /** Pin this tab to a specific embedded-server session id instead of the
+   *  workdir-keyed find-or-create (`ensureWorkspaceSession`). Set when the tab
+   *  was opened by attaching to a discovered external tmux session on a host —
+   *  the pane must stream exactly that session, and closing the tab must never
+   *  kill the underlying (user-owned) tmux session. */
+  serverSessionId?: string
+  /** Spec 005-C: the tab's "Run in tmux (persist)" choice, stamped at creation.
+   *  `true` → the pane runs in a persistent tmux session (server-backed) that
+   *  silently auto-reattaches on relaunch; `false` → ephemeral local PTY that
+   *  does not survive a quit. Omitted on older persisted tabs and panes created
+   *  outside the New Terminal / New Agent flows, which fall back to the global
+   *  default (`shouldUseServerTerminals`, on). */
+  persistTmux?: boolean
   /** Why: when `setActiveWorktree` bumps generation on all-dead tabs to drive a
    *  TerminalPane remount, the fresh PTY that results is caused by navigation,
    *  not by the user doing work. Without this flag the resulting
@@ -2085,10 +2097,6 @@ export type GlobalSettings = {
    *  again" checkbox inside it or from the General settings pane. We keep this
    *  defaulted to false so first-time behavior stays safe. */
   skipDeleteWorktreeConfirm: boolean
-  /** Why: deleting an automation also deletes its run history. Keep this
-   *  separate from worktree deletion so skipping one destructive confirmation
-   *  does not silently skip the other. */
-  skipDeleteAutomationConfirm: boolean
   /** Default preset in the new-workspace GitHub task view. */
   defaultTaskViewPreset: TaskViewPresetId
   /** Why: persists the user's last-used task source so the Tasks page
@@ -2159,8 +2167,8 @@ export type GlobalSettings = {
    *  on read into [5_000ms, 60min] to defend against bad config.
    *  See docs/mobile-fit-hold.md. */
   mobileAutoRestoreFitMs: number | null
-  /** Experimental: floating animated pet (claude.webp) in the bottom-right
-   *  corner. Opt-in because it's a cosmetic joke feature; users who leave it
+  /** Experimental: floating animated pet (the agentum-www agent mascot) in
+   *  the bottom-right corner. Opt-in because it's a cosmetic joke feature; users who leave it
    *  off never mount the overlay. Toggling takes effect immediately in the
    *  current session (no relaunch) because it is purely renderer-side. */
   experimentalPet: boolean
@@ -2424,6 +2432,7 @@ export type StatusBarItem =
   | 'opencode-go'
   | 'ssh'
   | 'ports'
+  | 'io'
 export type FloatingTerminalTriggerLocation = 'floating-button' | 'status-bar'
 
 export type TaskResumeState = {
@@ -2491,6 +2500,8 @@ export type PersistedUIState = {
   _workspaceStatusesDefaultVisualsMigrated?: boolean
   /** One-shot migration flag for adding the default-on Ports status item. */
   _portsStatusBarDefaultAdded?: boolean
+  /** One-shot migration flag for adding the default-on I/O speed status item. */
+  _ioStatusBarDefaultAdded?: boolean
   statusBarItems: StatusBarItem[]
   statusBarVisible: boolean
   dismissedUpdateVersion: string | null
@@ -2607,7 +2618,7 @@ export type PersistedUIState = {
 
 export const PET_SIZE_MIN = 60
 export const PET_SIZE_MAX = 360
-export const PET_SIZE_DEFAULT = 180
+export const PET_SIZE_DEFAULT = 120
 
 /** Metadata for a user-uploaded pet image. `id` is the stable identifier;
  *  the on-disk filename (preserving the original extension) lives in `fileName`.
@@ -2647,10 +2658,15 @@ export type CustomPet = {
 }
 
 /** One animation strip within a sprite sheet: `row` is the y-index (0-based)
- *  and `frames` is the number of consecutive cells played left-to-right. */
+ *  and `frames` is the number of consecutive cells played left-to-right.
+ *  `col` is the 0-based starting x-index (defaults to 0) so a single-row
+ *  sheet of distinct poses can map each state to one cell — used by the
+ *  bundled agent mascot, whose poses (walk/blink/happy/jump/…) all live in
+ *  row 0. */
 export type SpriteAnimation = {
   row: number
   frames: number
+  col?: number
 }
 
 export type PersistedTrustedAgentumHookEntry = {
@@ -2697,8 +2713,6 @@ export type PersistedState = {
   sshRemotePtyLeases: SshRemotePtyLease[]
   migrationUnsupportedPtyEntries: MigrationUnsupportedPtyEntry[]
   legacyPaneKeyAliasEntries: LegacyPaneKeyAliasEntry[]
-  automations: Automation[]
-  automationRuns: AutomationRun[]
   onboarding: OnboardingState
 }
 

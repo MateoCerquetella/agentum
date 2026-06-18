@@ -4,7 +4,7 @@
 // (a native SSH target id); to run its sessions on the remote we need the
 // matching server host id. This module create-or-gets that host by SSH
 // coordinates and caches the mapping for the session lifetime.
-import { getJson, postJson } from './server-http'
+import { del, getJson, postJson, putJson } from './server-http'
 import { api } from '@/tauri'
 import type { SshTarget } from '../../../shared/ssh-types'
 
@@ -97,6 +97,119 @@ export async function getServerHostReadinessInfo(hostId: string): Promise<HostRe
   }
 }
 
+/** Optional agentum skill entry from `/api/hosts/{id}/readiness` (`skills[]`). */
+export type HostReadinessSkill = { id: string; label: string; installed: boolean }
+
+/** Full host readiness for the readiness dialog: required deps + agent CLIs +
+ *  optional agentum skills. Mirrors `agentum_core::HostReadiness`. */
+export type FullHostReadiness = {
+  ok: boolean
+  message: string
+  uname: string | null
+  required: { id: string; label: string; installed: boolean }[]
+  agents: { id: string; installed: boolean }[]
+  skills: HostReadinessSkill[]
+}
+
+type RawHostReadiness = {
+  ok?: boolean
+  message?: string
+  system?: { uname?: string | null }
+  required?: { id: string; label: string; installed: boolean }[]
+  agents?: { id: string; installed: boolean }[]
+  skills?: HostReadinessSkill[]
+}
+
+function mapHostReadiness(r: RawHostReadiness): FullHostReadiness {
+  return {
+    ok: r.ok ?? false,
+    message: r.message ?? '',
+    uname: r.system?.uname ?? null,
+    required: r.required ?? [],
+    agents: r.agents ?? [],
+    skills: r.skills ?? []
+  }
+}
+
+/** `GET /api/hosts/{id}/readiness` — the full report (incl. optional skills). */
+export async function getFullHostReadiness(hostId: string): Promise<FullHostReadiness> {
+  return mapHostReadiness(
+    await getJson<RawHostReadiness>(`/api/hosts/${encodeURIComponent(hostId)}/readiness`)
+  )
+}
+
+/** `POST /api/hosts/{id}/provision-skills` — copy agentum skills (by id) from
+ *  this machine's `~/.claude/skills` onto the host. Returns fresh readiness. */
+export async function provisionHostSkills(
+  hostId: string,
+  skillIds: string[]
+): Promise<FullHostReadiness> {
+  return mapHostReadiness(
+    await postJson<RawHostReadiness>(
+      `/api/hosts/${encodeURIComponent(hostId)}/provision-skills`,
+      { skills: skillIds, confirm: true }
+    )
+  )
+}
+
+/** Resolve a sidebar host key (`local` | `ssh:<connectionId>`) to a server host
+ *  id, so the readiness dialog can talk to `/api/hosts/{id}/…`. */
+export async function resolveServerHostIdForHostKey(hostKey: string): Promise<string | null> {
+  if (hostKey.startsWith('ssh:')) {
+    return resolveServerHostIdForConnection(hostKey.slice('ssh:'.length))
+  }
+  const hosts = await listServerHosts()
+  return hosts.find((h) => h.kind === 'local')?.id ?? null
+}
+
+/** One pane of a discovered (non-agentum) tmux session on a host. */
+export type DiscoveredTmuxPane = { command: string; cwd: string }
+
+/** A tmux session running on a host that agentum does not manage, as returned
+ *  by `GET /api/hosts/{id}/tmux-sessions`. `related` is true when any pane's
+ *  cwd is at or under the `path` passed in the query. */
+export type DiscoveredTmuxSession = {
+  name: string
+  attached: boolean
+  created_at?: number | null
+  panes: DiscoveredTmuxPane[]
+  related: boolean
+}
+
+/** `GET /api/hosts/{id}/tmux-sessions?path=…&all=true` — tmux sessions on the
+ *  host. Pass `all=true` to include agentum-managed sessions. */
+export function listHostTmuxSessions(
+  hostId: string,
+  opts?: { path?: string; all?: boolean }
+): Promise<DiscoveredTmuxSession[]> {
+  const params = new URLSearchParams()
+  if (opts?.path) params.set('path', opts.path)
+  if (opts?.all) params.set('all', 'true')
+  const query = params.toString() ? `?${params.toString()}` : ''
+  return getJson<DiscoveredTmuxSession[]>(
+    `/api/hosts/${encodeURIComponent(hostId)}/tmux-sessions${query}`
+  )
+}
+
+/** `DELETE /api/hosts/{id}/tmux-sessions/{name}` — kill a tmux session on the
+ *  host. Only works for non-agentum-managed sessions. */
+export function killHostTmuxSession(hostId: string, name: string): Promise<void> {
+  return del(`/api/hosts/${encodeURIComponent(hostId)}/tmux-sessions/${encodeURIComponent(name)}`)
+}
+
+/** `POST /api/hosts/{id}/tmux-sessions/{name}/attach` — bind a discovered tmux
+ *  session to an agentum session record (running, externally-flagged) so it can
+ *  stream like any managed session. Idempotent per (host, tmux name). Returns
+ *  the server Session wire shape (see runtime/agentum-server-client.ts). */
+export function attachHostTmuxSession(
+  hostId: string,
+  name: string
+): Promise<import('./agentum-server-client').Session> {
+  return postJson(
+    `/api/hosts/${encodeURIComponent(hostId)}/tmux-sessions/${encodeURIComponent(name)}/attach`
+  )
+}
+
 /**
  * Shared "Connect" for any SSH connect button (settings, status bar, add-repo
  * remote step). The native ssh_connect transport was never ported; with the
@@ -135,6 +248,70 @@ export async function connectSshTargetViaServer(
   }
 }
 
+/** Extract the native SSH target id from a session's hostKey
+ *  (`'ssh:<connectionId>'`). The connectionId IS the target id (see
+ *  resolveServerHostIdForConnection), which is also how `sshConnectionStates` is
+ *  keyed — so a stream's recovery can reconcile the badge with no host-id round
+ *  trip. Returns null for local sessions or a malformed key. */
+function sshConnectionIdFromHostKey(hostKey: string | undefined): string | null {
+  if (!hostKey || !hostKey.startsWith('ssh:')) {
+    return null
+  }
+  const id = hostKey.slice('ssh:'.length)
+  return id || null
+}
+
+/**
+ * Mark the SSH target behind a session's hostKey CONNECTED after its stream
+ * recovered from a transient drop. A live re-attach is itself the reachability
+ * proof — no extra probe needed — so this mirrors connectSshTargetViaServer's
+ * success state without the network round trip. The flip to 'connected' both
+ * repaints the status-bar/sidebar badges and bumps sshConnectedGeneration, which
+ * re-fires the file explorer's failed-load retry — so a recovered host's tree
+ * refreshes instead of staying stuck on the outage's error (the reported bug).
+ * No-op for local sessions.
+ */
+export async function markHostConnectedFromHostKey(hostKey: string | undefined): Promise<void> {
+  const connectionId = sshConnectionIdFromHostKey(hostKey)
+  if (!connectionId) {
+    return
+  }
+  const { useAppStore } = await import('@/store')
+  useAppStore.getState().setSshConnectionState(connectionId, {
+    targetId: connectionId,
+    status: 'connected',
+    error: null,
+    reconnectAttempt: 0
+  })
+}
+
+/**
+ * Mark the SSH target behind a session's hostKey RECONNECTING when its stream
+ * drops — but only when we currently consider it connected. Two reasons: it
+ * keeps the badge honest during an outage, and it makes the NEXT recovery a real
+ * 'reconnecting' → 'connected' transition so sshConnectedGeneration bumps again.
+ * Without it, a second outage would be a no-op 'connected' → 'connected' write
+ * that never re-triggers the file-tree retry. We never fabricate a badge for a
+ * host the UI never tracked, nor stomp an in-flight explicit connect.
+ */
+export async function markHostReconnectingFromHostKey(hostKey: string | undefined): Promise<void> {
+  const connectionId = sshConnectionIdFromHostKey(hostKey)
+  if (!connectionId) {
+    return
+  }
+  const { useAppStore } = await import('@/store')
+  const store = useAppStore.getState()
+  if (store.sshConnectionStates.get(connectionId)?.status !== 'connected') {
+    return
+  }
+  store.setSshConnectionState(connectionId, {
+    targetId: connectionId,
+    status: 'reconnecting',
+    error: null,
+    reconnectAttempt: 1
+  })
+}
+
 /** `POST /api/hosts` — register an SSH host. Auth defaults to agent/key on the
  *  server; we pass an explicit key path when the native target has one so the
  *  remote exec uses the same identity the user configured. */
@@ -152,21 +329,63 @@ function targetHostname(target: SshTarget): string {
   return target.host
 }
 
-function createServerHost(name: string, target: SshTarget): Promise<ServerHost> {
-  // `auth` is an internally-tagged SshAuth on the server (tag = "auth"), so it
-  // must be a nested object — {auth:'agent'} or {auth:'key', path} — NOT a flat
-  // field. Default to agent auth when the target has no explicit identity file.
-  const auth = target.identityFile
-    ? { auth: 'key' as const, path: target.identityFile }
-    : { auth: 'agent' as const }
-  return postJson<ServerHost>('/api/hosts', {
+// `auth` is an internally-tagged SshAuth on the server (tag = "auth"), so it
+// must be a nested object — {auth:'agent'}, {auth:'key', path}, or
+// {auth:'password', password} — NOT a flat field. Precedence: an explicit
+// password wins (host only allows password login), then an identity file, else
+// the SSH agent.
+function authFromTarget(target: SshTarget) {
+  return target.password
+    ? { auth: 'password' as const, password: target.password }
+    : target.identityFile
+      ? { auth: 'key' as const, path: target.identityFile }
+      : { auth: 'agent' as const }
+}
+
+function hostBody(name: string, target: SshTarget) {
+  return {
     name,
-    kind: 'ssh',
+    kind: 'ssh' as const,
     user: target.username,
     hostname: targetHostname(target),
     port: target.port,
-    auth
-  })
+    auth: authFromTarget(target)
+  }
+}
+
+function createServerHost(name: string, target: SshTarget): Promise<ServerHost> {
+  return postJson<ServerHost>('/api/hosts', hostBody(name, target))
+}
+
+// PUT the host's connection settings — crucially its auth — so a re-entered or
+// changed password (or key) on the target reaches the host the daemon actually
+// authenticates with. The host's stored secret isn't returned by GET, so we
+// can't diff it; we always push the target's current auth. This closes the bug
+// where a host, once created with a wrong password, kept it forever because the
+// resolver matched by host/user/port only and never refreshed the secret.
+function updateServerHost(id: string, name: string, target: SshTarget): Promise<ServerHost> {
+  return putJson<ServerHost>(`/api/hosts/${encodeURIComponent(id)}`, hostBody(name, target))
+}
+
+/**
+ * Push a saved target's auth to its matching server host so a re-entered or
+ * changed password takes effect immediately. Updates an existing host only —
+ * it does not eagerly create one (the resolver creates it lazily on first
+ * session, with this same current auth). Best-effort: never throws into the
+ * save flow.
+ */
+export async function syncServerHostAuthForTarget(target: SshTarget): Promise<void> {
+  try {
+    const hosts = await listServerHosts()
+    const existing = hosts.find((h) => sameSshCoords(h, target))
+    if (!existing) {
+      return
+    }
+    const host = await updateServerHost(existing.id, target.label || target.host, target)
+    hostIdByConnectionId.set(target.id, host.id)
+  } catch (err) {
+    console.warn('[agentum] failed to sync server host auth for target', target.id, err)
+  }
 }
 
 // connectionId (native ssh target id) → resolved server host id. Bounded by the
@@ -204,7 +423,11 @@ export async function resolveServerHostIdForConnection(
     }
     const hosts = await listServerHosts()
     const existing = hosts.find((h) => sameSshCoords(h, target))
-    const host = existing ?? (await createServerHost(target.label || target.host, target))
+    // Refresh an existing host's auth from the target (not just reuse it) so a
+    // password changed since the host was created actually takes effect.
+    const host = existing
+      ? await updateServerHost(existing.id, target.label || target.host, target)
+      : await createServerHost(target.label || target.host, target)
     hostIdByConnectionId.set(connectionId, host.id)
     return host.id
   } catch (err) {

@@ -71,15 +71,15 @@ describe('ensureWorktreeHasInitialTerminal', () => {
     expect(store.queueTabSetupSplit).not.toHaveBeenCalled()
   })
 
-  it('creates a single tab without setup split when no setup is provided', () => {
+  it('does not auto-create a terminal when there is nothing to launch', () => {
+    // A plain activation (no startup/setup/default-tabs/issue-command) shows
+    // the WorkspaceAgentLauncher picker instead of spawning a blank terminal.
     const store = createMockStore()
 
-    ensureWorktreeHasInitialTerminal(store, 'wt-1')
+    const result = ensureWorktreeHasInitialTerminal(store, 'wt-1')
 
-    expect(store.createTab).toHaveBeenCalledWith('wt-1', undefined, undefined, {
-      pendingActivationSpawn: true
-    })
-    expect(store.setActiveTab).toHaveBeenCalledWith('tab-1')
+    expect(result).toBeNull()
+    expect(store.createTab).not.toHaveBeenCalled()
     expect(store.queueTabStartupCommand).not.toHaveBeenCalled()
     expect(store.queueTabSetupSplit).not.toHaveBeenCalled()
   })

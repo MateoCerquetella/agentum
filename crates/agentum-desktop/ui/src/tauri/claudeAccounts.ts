@@ -6,7 +6,10 @@ import type { AgentumApi } from './contract'
 
 export const claudeAccounts = defineNamespace('claudeAccounts', {
   add: (...args: any[]) => call('claude_accounts_add', args),
+  beginAdd: (...args: any[]) => call('claude_accounts_begin_add', args),
   list: (...args: any[]) => call('claude_accounts_list', args),
+  liveLogin: (...args: any[]) => call('claude_accounts_live_login', args),
+  syncCurrent: (...args: any[]) => call('claude_accounts_sync_current', args),
   reauthenticate: (...args: any[]) => call('claude_accounts_reauthenticate', args),
   remove: (...args: any[]) => call('claude_accounts_remove', args),
   select: (...args: any[]) => call('claude_accounts_select', args),

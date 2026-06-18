@@ -3,6 +3,7 @@ import { api } from '@/tauri'
 import { useEffect } from 'react'
 import { toast } from 'sonner'
 import { useAppStore } from '../store'
+import { formatBrowserAnnotationsAsMarkdown } from '../components/browser-pane/browser-annotation-output'
 import { getWorktreeMapFromState, getRepoMapFromState } from '@/store/selectors'
 import { applyUIZoom } from '@/lib/ui-zoom'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
@@ -50,7 +51,6 @@ import {
   shouldSuppressInheritedTerminalStatus
 } from '../../../shared/agent-status-identity'
 import { isGitRepoKind } from '../../../shared/repo-kind'
-import { TOGGLE_FLOATING_TERMINAL_EVENT } from '@/lib/floating-terminal'
 import { focusTerminalTabSurface } from '@/lib/focus-terminal-tab-surface'
 import { activateTabAndFocusPane } from '@/lib/activate-tab-and-focus-pane'
 import { focusRuntimeTerminalSurface } from '@/runtime/sync-runtime-graph'
@@ -71,14 +71,6 @@ import {
   createWebRuntimeSessionTerminal,
   isWebRuntimeSessionActive
 } from '@/runtime/web-runtime-session'
-import {
-  createFloatingWorkspaceBrowserTab,
-  createFloatingWorkspaceMarkdownTab,
-  createFloatingWorkspaceTerminalTab,
-  isEmptyFloatingWorkspacePanelVisible,
-  isFloatingWorkspacePanelFocused,
-  switchFloatingWorkspaceTab
-} from '@/lib/floating-workspace-terminal-actions'
 import {
   observeAgentHookCompletionForNotification,
   resetAgentHookCompletionNotificationCoordinators,
@@ -638,7 +630,6 @@ export function useIpcEvents(): void {
             removed
           )
           afterState.purgeWorktreeTerminalState(removed)
-          afterState.removeWorkspaceSpaceWorktrees(removed)
         }
       })
     )
@@ -737,12 +728,6 @@ export function useIpcEvents(): void {
           return
         }
         store.openModal('worktree-palette')
-      })
-    )
-
-    unsubs.push(
-      api.ui.onToggleFloatingTerminal(() => {
-        window.dispatchEvent(new CustomEvent(TOGGLE_FLOATING_TERMINAL_EVENT))
       })
     )
 
@@ -1405,10 +1390,6 @@ export function useIpcEvents(): void {
     unsubs.push(
       api.ui.onNewBrowserTab(() => {
         const store = useAppStore.getState()
-        if (isFloatingWorkspacePanelFocused()) {
-          void createFloatingWorkspaceBrowserTab(store)
-          return
-        }
         const worktreeId = store.activeWorktreeId
         if (worktreeId) {
           if (isRuntimeEnvironmentActive()) {
@@ -1442,14 +1423,6 @@ export function useIpcEvents(): void {
     unsubs.push(
       api.ui.onNewMarkdownTab(() => {
         const store = useAppStore.getState()
-        if (isFloatingWorkspacePanelFocused()) {
-          void createFloatingWorkspaceMarkdownTab(store).catch((err) => {
-            toast.error(
-              err instanceof Error ? err.message : 'Failed to create untitled markdown file.'
-            )
-          })
-          return
-        }
         const worktreeId = store.activeWorktreeId
         if (!worktreeId) {
           return
@@ -1493,11 +1466,16 @@ export function useIpcEvents(): void {
               )
             : undefined
 
+          // Why: activate the tab so its native webview actually mounts (the
+          // bootstrap lease alone left it unmounted, so `tabs`/navigate/click
+          // found nothing after an MCP `open`). This path is only driven by the
+          // bridge's `open` op, so showing the opened tab is the intended,
+          // non-surprising behaviour.
           const workspace = store.createBrowserTab(worktreeId, data.url, {
             title: data.url,
             targetGroupId: activeBrowserUnifiedTab?.groupId,
             sessionProfileId: data.sessionProfileId,
-            activate: false
+            activate: true
           })
           // Why: registerGuest fires with the page ID (not workspace ID) as
           // browserPageId. Return the page ID so waitForTabRegistration can
@@ -1511,6 +1489,156 @@ export function useIpcEvents(): void {
             requestId: data.requestId,
             error: err instanceof Error ? err.message : 'Tab creation failed'
           })
+        }
+      })
+    )
+
+    // Why: the agentum MCP `agentum_browser {op:"annotations"}` round-trips
+    // here (via the desktop bridge) so a running agent can READ the page
+    // annotations the user made — until now they only left the browser when the
+    // user clicked "Send". Resolve the target page (explicit `tab` id, else the
+    // active browser page) and reply with the same markdown the Send button
+    // builds, plus a structured list.
+    unsubs.push(
+      api.ui.onRequestBrowserAnnotations((data) => {
+        try {
+          const store = useAppStore.getState()
+          const resolvePageId = (): string | null => {
+            const tab = typeof data?.tab === 'string' ? data.tab.trim() : ''
+            if (tab) {
+              for (const pages of Object.values(store.browserPagesByWorkspace)) {
+                const hit = pages.find((p) => p.id === tab || p.id.endsWith(tab))
+                if (hit) return hit.id
+              }
+            }
+            const worktreeId = store.activeWorktreeId
+            const workspaceId =
+              (worktreeId ? store.activeBrowserTabIdByWorktree[worktreeId] : null) ??
+              store.activeBrowserTabId
+            if (!workspaceId) return null
+            return store.browserPagesByWorkspace[workspaceId]?.[0]?.id ?? null
+          }
+          const pageId = resolvePageId()
+          if (!pageId) {
+            api.ui.replyBrowserOp({ requestId: data.requestId, error: 'No browser tab open' })
+            return
+          }
+          const annotations = store.browserAnnotationsByPageId[pageId] ?? []
+          api.ui.replyBrowserOp({
+            requestId: data.requestId,
+            result: {
+              tab: pageId,
+              count: annotations.length,
+              markdown: formatBrowserAnnotationsAsMarkdown(annotations),
+              annotations: annotations.map((a) => ({
+                id: a.id,
+                intent: a.intent,
+                priority: a.priority,
+                comment: a.comment,
+                selector: a.payload?.target?.selector ?? null,
+                element:
+                  a.payload?.target?.accessibility?.accessibleName ||
+                  a.payload?.target?.textSnippet ||
+                  a.payload?.target?.tagName ||
+                  null,
+                createdAt: a.createdAt
+              }))
+            }
+          })
+        } catch (err) {
+          api.ui.replyBrowserOp({
+            requestId: data.requestId,
+            error: err instanceof Error ? err.message : 'Failed to read annotations'
+          })
+        }
+      })
+    )
+
+    // Why: the agentum MCP `agentum_browser {op:"annotate"}` round-trips here
+    // with an already-extracted element `payload` (the bridge grabbed it by
+    // selector) plus the agent's comment/intent. We own the annotation store,
+    // so build the annotation and add it — it then shows in the tray and the
+    // `annotations` read returns it.
+    unsubs.push(
+      api.ui.onRequestBrowserAnnotate((data) => {
+        try {
+          const store = useAppStore.getState()
+          const tab = typeof data?.tab === 'string' ? data.tab.trim() : ''
+          let pageId: string | null = null
+          if (tab) {
+            for (const pages of Object.values(store.browserPagesByWorkspace)) {
+              const hit = pages.find((p) => p.id === tab || p.id.endsWith(tab))
+              if (hit) {
+                pageId = hit.id
+                break
+              }
+            }
+          }
+          if (!pageId) {
+            const worktreeId = store.activeWorktreeId
+            const workspaceId =
+              (worktreeId ? store.activeBrowserTabIdByWorktree[worktreeId] : null) ??
+              store.activeBrowserTabId
+            pageId = workspaceId ? (store.browserPagesByWorkspace[workspaceId]?.[0]?.id ?? null) : null
+          }
+          if (!pageId) {
+            api.ui.replyBrowserOp({ requestId: data.requestId, error: 'No browser tab open' })
+            return
+          }
+          const intents = ['fix', 'change', 'question', 'approve']
+          const intent = intents.includes(data?.intent) ? data.intent : 'change'
+          const id =
+            typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+              ? crypto.randomUUID()
+              : `ann-${pageId}-${data.requestId}`
+          store.addBrowserPageAnnotation({
+            id,
+            browserPageId: pageId,
+            comment: String(data?.comment ?? ''),
+            intent,
+            priority: 'important',
+            createdAt: new Date().toISOString(),
+            payload: { ...data.payload, screenshot: null }
+          })
+          api.ui.replyBrowserOp({ requestId: data.requestId, result: { ok: true, id, tab: pageId } })
+        } catch (err) {
+          api.ui.replyBrowserOp({
+            requestId: data.requestId,
+            error: err instanceof Error ? err.message : 'Failed to add annotation'
+          })
+        }
+      })
+    )
+
+    // Why: the in-page annotate UI (injected into the guest page) submits a
+    // user annotation over the agentumgrab:// scheme; the Rust handler forwards
+    // it here as `browser-inpage-annotation`. Add it to the store so it shows in
+    // the tray and `annotations` returns it — same envelope as MCP `annotate`.
+    unsubs.push(
+      api.browser.onInpageAnnotation((data) => {
+        try {
+          const pageId = typeof data?.pageId === 'string' ? data.pageId : null
+          if (!pageId || !data?.payload) {
+            return
+          }
+          const store = useAppStore.getState()
+          const intents = ['fix', 'change', 'question', 'approve']
+          const intent = intents.includes(data?.intent) ? data.intent : 'change'
+          const id =
+            typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+              ? crypto.randomUUID()
+              : `ann-${pageId}-${Date.now()}`
+          store.addBrowserPageAnnotation({
+            id,
+            browserPageId: pageId,
+            comment: String(data?.comment ?? ''),
+            intent,
+            priority: 'important',
+            createdAt: new Date().toISOString(),
+            payload: { ...data.payload, screenshot: null }
+          })
+        } catch {
+          // Best-effort: a malformed in-page submission shouldn't break the bus.
         }
       })
     )
@@ -1653,10 +1781,6 @@ export function useIpcEvents(): void {
     unsubs.push(
       api.ui.onNewTerminalTab(() => {
         const store = useAppStore.getState()
-        if (isFloatingWorkspacePanelFocused()) {
-          void createFloatingWorkspaceTerminalTab(store)
-          return
-        }
         const worktreeId = store.activeWorktreeId
         if (!worktreeId) {
           return
@@ -1702,10 +1826,6 @@ export function useIpcEvents(): void {
 
     unsubs.push(
       api.ui.onCloseActiveTab(() => {
-        if (isEmptyFloatingWorkspacePanelVisible()) {
-          window.dispatchEvent(new Event(TOGGLE_FLOATING_TERMINAL_EVENT))
-          return
-        }
         const store = useAppStore.getState()
         if (store.activeTabType === 'browser' && store.activeBrowserTabId) {
           if (
@@ -1735,32 +1855,17 @@ export function useIpcEvents(): void {
 
     unsubs.push(
       api.ui.onSwitchTab((direction) => {
-        const store = useAppStore.getState()
-        if (isFloatingWorkspacePanelFocused()) {
-          switchFloatingWorkspaceTab(store, direction, 'same-type')
-          return
-        }
         handleSwitchTab(direction)
       })
     )
     unsubs.push(
       api.ui.onSwitchTabAcrossAllTypes((direction) => {
-        const store = useAppStore.getState()
-        if (isFloatingWorkspacePanelFocused()) {
-          switchFloatingWorkspaceTab(store, direction, 'all-types')
-          return
-        }
         handleSwitchTabAcrossAllTypes(direction)
       })
     )
     unsubs.push(api.ui.onSwitchRecentTab(handleSwitchRecentTab))
     unsubs.push(
       api.ui.onSwitchTerminalTab((direction) => {
-        const store = useAppStore.getState()
-        if (isFloatingWorkspacePanelFocused()) {
-          switchFloatingWorkspaceTab(store, direction, 'terminal')
-          return
-        }
         handleSwitchTerminalTab(direction)
       })
     )
@@ -1775,15 +1880,6 @@ export function useIpcEvents(): void {
         useAppStore.getState().setRateLimitsFromPush(state as RateLimitState)
       })
     )
-
-    const unsubscribeWorkspaceSpaceProgress = api.workspaceSpace?.onProgress?.(
-      (progress) => {
-        useAppStore.getState().applyWorkspaceSpaceProgress(progress)
-      }
-    )
-    if (unsubscribeWorkspaceSpaceProgress) {
-      unsubs.push(unsubscribeWorkspaceSpaceProgress)
-    }
 
     // Track SSH connection state changes so the renderer can show
     // disconnected indicators on remote worktrees.

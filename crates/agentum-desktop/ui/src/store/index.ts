@@ -14,7 +14,6 @@ import { createLinearSlice } from './slices/linear'
 import { createPreflightSlice } from './slices/preflight'
 import { createEditorSlice } from './slices/editor'
 import { createStatsSlice } from './slices/stats'
-import { createWorkspaceSpaceSlice } from './slices/workspace-space'
 import { createClaudeUsageSlice } from './slices/claude-usage'
 import { createCodexUsageSlice } from './slices/codex-usage'
 import { createOpenCodeUsageSlice } from './slices/opencode-usage'
@@ -46,7 +45,6 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createPreflightSlice(...a),
   ...createEditorSlice(...a),
   ...createStatsSlice(...a),
-  ...createWorkspaceSpaceSlice(...a),
   ...createClaudeUsageSlice(...a),
   ...createCodexUsageSlice(...a),
   ...createOpenCodeUsageSlice(...a),

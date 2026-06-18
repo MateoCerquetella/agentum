@@ -70,6 +70,18 @@ export type AgentStatusSlice = {
   /** Clear the done marker (agent resumed work, or the pane was torn down). */
   clearServerAgentDone: (paneKey: string) => void
 
+  /** Pane keys that are bound to a REAL tmux session (`tmux_target` non-null on
+   *  the server). Recorded ONLY on the server-session connection path when the
+   *  session is genuinely tmux-backed — never for a local PTY. This is the
+   *  truthful "this pane runs in tmux right now" signal the tab bar reads to show
+   *  the tmux glyph; do NOT derive it from the persistTmux intent flag (that was
+   *  the source of false positives on local PTY tabs). */
+  tmuxByPaneKey: Record<string, true>
+  /** Record that this pane is backed by a real tmux session (server path). */
+  markPaneTmux: (paneKey: string) => void
+  /** Clear the tmux marker (pane torn down, or it fell back to a local PTY). */
+  clearPaneTmux: (paneKey: string) => void
+
   /** Update or insert an agent status entry from a status payload. */
   setAgentStatus: (
     paneKey: string,
@@ -214,6 +226,23 @@ export const createAgentStatusSlice: StateCreator<AppState, [], [], AgentStatusS
     retainedAgentsByPaneKey: {},
     retentionSuppressedPaneKeys: {},
     serverAgentDoneByPaneKey: {},
+    tmuxByPaneKey: {},
+
+    markPaneTmux: (paneKey) =>
+      set((s) =>
+        s.tmuxByPaneKey[paneKey] === true
+          ? s
+          : { tmuxByPaneKey: { ...s.tmuxByPaneKey, [paneKey]: true } }
+      ),
+    clearPaneTmux: (paneKey) =>
+      set((s) => {
+        if (!(paneKey in s.tmuxByPaneKey)) {
+          return s
+        }
+        const next = { ...s.tmuxByPaneKey }
+        delete next[paneKey]
+        return { tmuxByPaneKey: next }
+      }),
 
     markServerAgentDone: (paneKey) =>
       set((s) =>

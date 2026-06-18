@@ -1,5 +1,5 @@
 import React from 'react'
-import { Bell, CalendarClock, Github, Gitlab, List, Search } from 'lucide-react'
+import { Bell, Github, Gitlab, List, MessagesSquare, Search } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { useRepoMap } from '@/store/selectors'
 import { cn } from '@/lib/utils'
@@ -24,8 +24,8 @@ export function shouldShowAgentsButton(
 const SidebarNav = React.memo(function SidebarNav() {
   const worktreePaletteShortcut = useShortcutLabel('worktree.palette')
   const openTaskPage = useAppStore((s) => s.openTaskPage)
-  const openAutomationsPage = useAppStore((s) => s.openAutomationsPage)
   const openActivityPage = useAppStore((s) => s.openActivityPage)
+  const openHarnessPage = useAppStore((s) => s.openHarnessPage)
   const openModal = useAppStore((s) => s.openModal)
   const activeView = useAppStore((s) => s.activeView)
   const repos = useAppStore((s) => s.repos)
@@ -114,8 +114,8 @@ const SidebarNav = React.memo(function SidebarNav() {
   ])
 
   const tasksActive = activeView === 'tasks'
-  const automationsActive = activeView === 'automations'
   const activityActive = activeView === 'activity'
+  const harnessActive = activeView === 'harness'
   const activityUnreadCount = useActivityUnreadCount(showAgentsButton, 'sidebar-badge')
 
   return (
@@ -201,23 +201,6 @@ const SidebarNav = React.memo(function SidebarNav() {
           </span>
         </button>
       ) : null}
-      <button
-        type="button"
-        onClick={openAutomationsPage}
-        aria-current={automationsActive ? 'page' : undefined}
-        className={cn(
-          'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight transition-colors',
-          automationsActive
-            ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-            : 'text-sidebar-foreground/60 hover:bg-sidebar-foreground/8'
-        )}
-      >
-        <CalendarClock
-          className={cn('size-4 shrink-0', !automationsActive && 'text-sidebar-foreground/30')}
-          strokeWidth={automationsActive ? 2.25 : 1.75}
-        />
-        <span className="flex-1">Automations</span>
-      </button>
       {showAgentsButton ? (
         <button
           type="button"
@@ -242,6 +225,23 @@ const SidebarNav = React.memo(function SidebarNav() {
           ) : null}
         </button>
       ) : null}
+      <button
+        type="button"
+        onClick={openHarnessPage}
+        aria-current={harnessActive ? 'page' : undefined}
+        className={cn(
+          'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight transition-colors',
+          harnessActive
+            ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+            : 'text-sidebar-foreground/60 hover:bg-sidebar-foreground/8'
+        )}
+      >
+        <MessagesSquare
+          className={cn('size-4 shrink-0', !harnessActive && 'text-sidebar-foreground/30')}
+          strokeWidth={harnessActive ? 2.25 : 1.75}
+        />
+        <span className="flex-1">Chat</span>
+      </button>
       <button
         type="button"
         onClick={() => openModal('worktree-palette')}

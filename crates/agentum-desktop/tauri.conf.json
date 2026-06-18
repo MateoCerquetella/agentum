@@ -1,11 +1,12 @@
 {
   "productName": "agentum",
-  "version": "0.10.11",
+  "version": "0.14.8",
   "identifier": "dev.agentum.app",
   "build": {
     "frontendDist": "ui/dist",
-    "beforeDevCommand": "npm --prefix ui run dev",
-    "beforeBuildCommand": "npm --prefix ui run build"
+    "beforeDevCommand": "bun run dev",
+    "beforeBuildCommand": "bun run --bun build",
+    "devUrl": "http://127.0.0.1:1420"
   },
   "app": {
     "windows": [
@@ -39,7 +40,12 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "infoPlist": "Info.plist"
+      "infoPlist": "Info.plist",
+      "frameworks": [
+        "../../target/release/libsherpa-onnx-c-api.dylib",
+        "../../target/release/libsherpa-onnx-cxx-api.dylib",
+        "../../target/release/libonnxruntime.1.17.1.dylib"
+      ]
     }
   }
 }

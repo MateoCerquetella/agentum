@@ -11,18 +11,18 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use agentum_core::Host;
+use agentum_core::{Host, HostKind};
+use axum::Json;
 use axum::Router;
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::AppState;
 use crate::error::ApiError;
 use crate::host_runtime::{self, git_in_dir};
-use crate::routes::repos::{load_host_for_repo, resolve_repo_path};
+use crate::routes::repos::{all_repo_ids, load_host_for_repo, resolve_repo_path};
 
 pub fn router() -> Router<crate::AppState> {
     Router::new()
@@ -32,8 +32,12 @@ pub fn router() -> Router<crate::AppState> {
         .route("/api/worktrees/update-meta", post(update_meta))
         .route("/api/worktrees/create", post(create))
         .route("/api/worktrees/remove", post(remove))
+        .route("/api/worktrees/prune", post(prune))
         .route("/api/worktrees/sort-order", post(persist_sort_order))
-        .route("/api/worktrees/force-delete-branch", post(force_delete_branch))
+        .route(
+            "/api/worktrees/force-delete-branch",
+            post(force_delete_branch),
+        )
         .route("/api/worktrees/resolve-pr-base", get(resolve_pr_base))
 }
 
@@ -41,7 +45,7 @@ pub fn router() -> Router<crate::AppState> {
 /// null); `extra` round-trips fields not managed here. camelCase on the wire.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Worktree {
+pub(crate) struct Worktree {
     id: String,
     repo_id: String,
     display_name: String,
@@ -72,7 +76,7 @@ fn registry_path() -> Result<PathBuf, ApiError> {
     Ok(home.join(".agentum").join("worktrees.json"))
 }
 
-fn read_worktrees() -> Result<Vec<Worktree>, ApiError> {
+pub(crate) fn read_worktrees() -> Result<Vec<Worktree>, ApiError> {
     let path = registry_path()?;
     if !path.exists() {
         return Ok(Vec::new());
@@ -114,15 +118,18 @@ fn enrich_worktree(mut wt: Worktree) -> Worktree {
             .filter(|s| !s.is_empty())
     };
     if !wt.extra.contains_key("path") {
-        wt.extra.insert("path".into(), Value::String(wt_path.clone()));
+        wt.extra
+            .insert("path".into(), Value::String(wt_path.clone()));
     }
     if !wt.extra.contains_key("branch") {
         let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|| "HEAD".into());
         wt.extra.insert("branch".into(), Value::String(branch));
     }
     if !wt.extra.contains_key("head") {
-        wt.extra
-            .insert("head".into(), Value::String(git(&["rev-parse", "HEAD"]).unwrap_or_default()));
+        wt.extra.insert(
+            "head".into(),
+            Value::String(git(&["rev-parse", "HEAD"]).unwrap_or_default()),
+        );
     }
     if !wt.extra.contains_key("isBare") {
         wt.extra.insert("isBare".into(), Value::Bool(false));
@@ -138,9 +145,39 @@ fn enrich_worktree(mut wt: Worktree) -> Worktree {
 /// a shared daemon, so this matters more than it did in the desktop-local command.
 fn reject_dashed(label: &str, value: &str) -> Result<(), ApiError> {
     if value.starts_with('-') {
-        return Err(ApiError::BadRequest(format!("{label} must not start with '-'")));
+        return Err(ApiError::BadRequest(format!(
+            "{label} must not start with '-'"
+        )));
     }
     Ok(())
+}
+
+/// Where a worktree create ran, for the human-readable non-git error. `Local`
+/// for the daemon's own machine; `Ssh(hostname)` for a remote host.
+fn host_location(host: &Host) -> String {
+    match &host.kind {
+        HostKind::Local => "this machine".to_string(),
+        HostKind::Ssh { hostname, .. } => format!("the remote host {hostname}"),
+    }
+}
+
+/// Map a failed `git worktree add` stderr to a friendly create error. When the
+/// target path isn't a git repo (spec 006's FinanzasArgy case), `git` emits a
+/// `fatal: not a git repository` line that means nothing to a user — replace it
+/// with one that names the path + host and points at the fix. Returns `None` for
+/// every other failure so the caller keeps surfacing the raw git stderr.
+fn non_git_create_error_message(
+    stderr: &str,
+    repo_path: &str,
+    host_location: &str,
+) -> Option<String> {
+    if stderr.contains("not a git repository") {
+        Some(format!(
+            "{repo_path} on {host_location} is not a git repository — re-add the project with the correct path"
+        ))
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -264,16 +301,13 @@ async fn create(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let worktree_path_string = format!("{worktrees_root}/{}", body.name);
-    let branch = body.branch_name_override.clone().unwrap_or_else(|| body.name.clone());
+    let branch = body
+        .branch_name_override
+        .clone()
+        .unwrap_or_else(|| body.name.clone());
 
     // Try to create a NEW branch; if it already exists, attach to it instead.
-    let mut new_branch_args = vec![
-        "worktree",
-        "add",
-        "-b",
-        &branch,
-        &worktree_path_string,
-    ];
+    let mut new_branch_args = vec!["worktree", "add", "-b", &branch, &worktree_path_string];
     if let Some(base) = body.base_branch.as_deref() {
         new_branch_args.push(base);
     }
@@ -291,6 +325,14 @@ async fn create(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
     if !output.success {
+        // A non-git target path 400s with `fatal: not a git repository`, which
+        // is opaque to a user who registered the wrong remote path. Swap in a
+        // message that names the path + host; keep the raw stderr otherwise.
+        if let Some(friendly) =
+            non_git_create_error_message(&output.stderr, &repo_path, &host_location(&host))
+        {
+            return Err(ApiError::BadRequest(friendly));
+        }
         return Err(ApiError::BadRequest(output.stderr.trim().to_string()));
     }
 
@@ -348,10 +390,9 @@ async fn remove(
     State(state): State<AppState>,
     Json(body): Json<RemoveBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let (repo_id, worktree_path) = body
-        .worktree_id
-        .split_once("::")
-        .ok_or_else(|| ApiError::BadRequest(format!("invalid worktree id: {}", body.worktree_id)))?;
+    let (repo_id, worktree_path) = body.worktree_id.split_once("::").ok_or_else(|| {
+        ApiError::BadRequest(format!("invalid worktree id: {}", body.worktree_id))
+    })?;
     reject_dashed("worktree path", worktree_path)?;
     let repo_path = resolve_repo_path(repo_id)?;
     let host = load_host_for_repo(&state, repo_id).await?;
@@ -382,6 +423,206 @@ async fn remove(
     Ok(Json(serde_json::json!({})))
 }
 
+// ───────────────────────────────── prune ─────────────────────────────────
+// Bulk-remove the stale worktrees sessions leave behind (issue #8, "clean up
+// stale git worktrees"). Conservative by construction: classification is
+// git-authoritative, a worktree with uncommitted work is NEVER removed, and
+// dry-run is the default — nothing is destroyed without an explicit `apply`.
+
+/// One worktree as `git worktree list --porcelain` reports it, reduced to the
+/// fields classification needs. A pure parse target so the classifier can be
+/// unit-tested without invoking git.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PorcelainWorktree {
+    path: String,
+    branch: Option<String>,
+    /// The first entry git lists is the repo's primary (main) working tree.
+    is_primary: bool,
+    /// A `git worktree lock`ed tree — never auto-pruned.
+    locked: bool,
+    /// git itself flags the working tree as gone (a `prunable <reason>` line);
+    /// `git worktree prune` would drop it. Always safe to remove.
+    prunable: bool,
+}
+
+/// Parse `git worktree list --porcelain` into [`PorcelainWorktree`]s. Each
+/// `worktree ` line starts an entry; `branch`/`locked`/`prunable` attach to the
+/// entry in progress. Tolerant of trailing `\r` and lines we don't model.
+fn parse_worktree_porcelain(text: &str) -> Vec<PorcelainWorktree> {
+    let mut out: Vec<PorcelainWorktree> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim_end_matches('\r');
+        if let Some(path) = line.strip_prefix("worktree ") {
+            let is_primary = out.is_empty();
+            out.push(PorcelainWorktree {
+                path: path.to_string(),
+                branch: None,
+                is_primary,
+                locked: false,
+                prunable: false,
+            });
+        } else if let Some(branch) = line.strip_prefix("branch refs/heads/") {
+            if let Some(last) = out.last_mut() {
+                last.branch = Some(branch.to_string());
+            }
+        } else if line == "locked" || line.starts_with("locked ") {
+            if let Some(last) = out.last_mut() {
+                last.locked = true;
+            }
+        } else if line == "prunable" || line.starts_with("prunable ") {
+            if let Some(last) = out.last_mut() {
+                last.prunable = true;
+            }
+        }
+    }
+    out
+}
+
+/// How prune treats one worktree. Serialized into the response so the CLI/UI can
+/// show *why* each tree was kept or removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum PruneClass {
+    /// Primary worktree, or `git worktree lock`ed — never touched.
+    Keep,
+    /// Working tree is gone (git-prunable); removing it just drops a stale admin
+    /// entry. Always pruned.
+    Gone,
+    /// Exists, non-primary, unlocked, no uncommitted changes. Pruned only with
+    /// `includeClean` (a clean tree may still be wanted).
+    Clean,
+    /// Has uncommitted changes, or its state couldn't be read. NEVER
+    /// auto-pruned — losing uncommitted work is the one unrecoverable mistake.
+    Dirty,
+}
+
+/// Pure classification. `dirty` is the outcome of a `git status --porcelain`
+/// check on the worktree: `Some(false)` = clean, `Some(true)` = dirty, `None` =
+/// couldn't check. Unknown collapses to `Dirty`, so an unreadable tree is
+/// preserved rather than destroyed.
+fn classify_worktree(wt: &PorcelainWorktree, dirty: Option<bool>) -> PruneClass {
+    if wt.is_primary || wt.locked {
+        return PruneClass::Keep;
+    }
+    if wt.prunable {
+        return PruneClass::Gone;
+    }
+    match dirty {
+        Some(false) => PruneClass::Clean,
+        _ => PruneClass::Dirty,
+    }
+}
+
+/// Whether a class is removed at the requested aggressiveness. `Gone` always;
+/// `Clean` only when the caller opts in; `Keep`/`Dirty` never.
+fn should_prune(class: PruneClass, include_clean: bool) -> bool {
+    matches!(class, PruneClass::Gone) || (include_clean && matches!(class, PruneClass::Clean))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PruneBody {
+    /// Limit to one repo; omit to sweep every registered repo.
+    #[serde(default)]
+    repo_id: Option<String>,
+    /// Actually remove (default false = dry-run preview).
+    #[serde(default)]
+    apply: bool,
+    /// Also prune clean (no-uncommitted-changes) non-primary worktrees, not just
+    /// the git-prunable (gone) ones.
+    #[serde(default)]
+    include_clean: bool,
+}
+
+/// `POST /api/worktrees/prune` — bulk-remove stale worktrees across one repo or
+/// all of them. Host-aware (each repo's git runs on the repo's host). Dry-run
+/// unless `apply`. Returns `{dryRun, pruned:[{id,path,branch,class}], kept:[…]}`.
+async fn prune(
+    State(state): State<AppState>,
+    Json(body): Json<PruneBody>,
+) -> Result<Json<Value>, ApiError> {
+    let repo_ids = match &body.repo_id {
+        Some(id) => vec![id.clone()],
+        None => all_repo_ids()?,
+    };
+
+    let mut pruned: Vec<Value> = Vec::new();
+    let mut kept: Vec<Value> = Vec::new();
+
+    for repo_id in repo_ids {
+        // A repo whose host was deleted/unreachable, or whose path no longer
+        // resolves, shouldn't abort the whole sweep — skip it, keep going.
+        let (Ok(host), Ok(repo_path)) = (
+            load_host_for_repo(&state, &repo_id).await,
+            resolve_repo_path(&repo_id),
+        ) else {
+            continue;
+        };
+        let listing =
+            match git_in_dir(&host, &repo_path, &["worktree", "list", "--porcelain"]).await {
+                Ok(out) if out.success => out.stdout_string(),
+                _ => continue,
+            };
+
+        for wt in parse_worktree_porcelain(&listing) {
+            // Only an existing, non-primary, unlocked tree needs the dirty check;
+            // primary/locked/gone trees skip the extra git call.
+            let dirty = if wt.is_primary || wt.locked || wt.prunable {
+                None
+            } else {
+                match git_in_dir(&host, &wt.path, &["status", "--porcelain"]).await {
+                    Ok(out) if out.success => Some(!out.stdout_string().trim().is_empty()),
+                    _ => None, // unreadable → treated as Dirty (kept)
+                }
+            };
+            let class = classify_worktree(&wt, dirty);
+            let entry = serde_json::json!({
+                "id": format!("{repo_id}::{}", wt.path),
+                "repoId": repo_id,
+                "path": wt.path,
+                "branch": wt.branch,
+                "class": class,
+            });
+
+            if should_prune(class, body.include_clean) {
+                if body.apply {
+                    // --force: a Clean tree has nothing to lose (status --porcelain
+                    // was empty) and a Gone tree's dir is already absent. The
+                    // follow-up `prune` sweeps the leftover admin entry git's
+                    // `remove` can't (the missing-dir case).
+                    let _ = git_in_dir(
+                        &host,
+                        &repo_path,
+                        &["worktree", "remove", "--force", &wt.path],
+                    )
+                    .await;
+                    let _ = git_in_dir(&host, &repo_path, &["worktree", "prune"]).await;
+                }
+                pruned.push(entry);
+            } else {
+                kept.push(entry);
+            }
+        }
+    }
+
+    // Deregister every removed worktree from the registry in one read/write.
+    if body.apply && !pruned.is_empty() {
+        let removed: std::collections::HashSet<&str> = pruned
+            .iter()
+            .filter_map(|entry| entry.get("id").and_then(Value::as_str))
+            .collect();
+        let mut registry = read_worktrees()?;
+        registry.retain(|wt| !removed.contains(wt.id.as_str()));
+        write_worktrees(&registry)?;
+    }
+
+    Ok(Json(serde_json::json!({
+        "dryRun": !body.apply,
+        "pruned": pruned,
+        "kept": kept,
+    })))
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SortOrderBody {
@@ -396,8 +637,8 @@ async fn persist_sort_order(Json(body): Json<SortOrderBody>) -> Result<Json<Valu
         .ok_or_else(|| ApiError::Internal("no home directory".into()))?;
     let dir = home.join(".agentum");
     std::fs::create_dir_all(&dir).map_err(|e| ApiError::Internal(e.to_string()))?;
-    let serialized =
-        serde_json::to_string_pretty(&body.ordered_ids).map_err(|e| ApiError::Internal(e.to_string()))?;
+    let serialized = serde_json::to_string_pretty(&body.ordered_ids)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     std::fs::write(dir.join("worktree-sort-order.json"), serialized)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(serde_json::json!({ "status": "ok" })))
@@ -432,9 +673,13 @@ async fn force_delete_branch(
         .unwrap_or(&body.worktree_id);
     let repo_path = resolve_repo_path(repo_id)?;
     let host = load_host_for_repo(&state, repo_id).await?;
-    let output = git_in_dir(&host, &repo_path, &["branch", "-D", "--", &body.branch_name])
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let output = git_in_dir(
+        &host,
+        &repo_path,
+        &["branch", "-D", "--", &body.branch_name],
+    )
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
     if output.success {
         Ok(Json(serde_json::json!({ "deleted": true })))
     } else {
@@ -506,6 +751,11 @@ async fn scan_git_worktrees(host: &Host, repo_id: &str) -> Result<Vec<Value>, Ap
                 "branch": branch,
                 "ownership": "self",
                 "selectedCheckout": is_primary,
+                // The first `git worktree list` entry is the repo's primary
+                // worktree. The sidebar's "Hide default branch" filter keys off
+                // this; without it the flag defaulted to false for every row and
+                // the filter silently did nothing.
+                "isMainWorktree": is_primary,
                 "visible": true
             })
         })
@@ -521,7 +771,9 @@ async fn detected(
         .repo_id
         .ok_or_else(|| ApiError::BadRequest("repoId is required".into()))?;
     let host = load_host_for_repo(&state, &repo_id).await?;
-    let worktrees = scan_git_worktrees(&host, &repo_id).await.unwrap_or_default();
+    let worktrees = scan_git_worktrees(&host, &repo_id)
+        .await
+        .unwrap_or_default();
     let authoritative = !worktrees.is_empty();
     Ok(Json(serde_json::json!({
         "repoId": repo_id,
@@ -541,6 +793,158 @@ async fn resolve_pr_base() -> Json<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn non_git_stderr_maps_to_friendly_message() {
+        // The FinanzasArgy case: a registered path that isn't a repo on the host.
+        let stderr = "fatal: not a git repository (or any of the parent directories): .git";
+        let msg = non_git_create_error_message(
+            stderr,
+            "/home/malloc/Developer/projects/CerqueTech/FinanzasArgy",
+            "the remote host forge.lan",
+        )
+        .expect("non-git stderr should map to a friendly message");
+        assert!(msg.contains("/home/malloc/Developer/projects/CerqueTech/FinanzasArgy"));
+        assert!(msg.contains("the remote host forge.lan"));
+        assert!(msg.contains("not a git repository"));
+        assert!(msg.contains("re-add the project"));
+        // The raw git `fatal:` prefix must not leak into the user-facing copy.
+        assert!(!msg.contains("fatal:"));
+    }
+
+    #[test]
+    fn other_create_stderr_is_not_rewritten() {
+        // Any other failure (branch conflict, dirty tree, …) keeps the raw stderr.
+        assert!(
+            non_git_create_error_message(
+                "fatal: a branch named 'feature' already exists",
+                "/repo",
+                "this machine",
+            )
+            .is_none()
+        );
+        assert!(non_git_create_error_message("", "/repo", "this machine").is_none());
+    }
+
+    #[test]
+    fn host_location_describes_local_and_ssh() {
+        use agentum_core::{HostKind, LOCAL_HOST_ID};
+        use time::OffsetDateTime;
+        let now = OffsetDateTime::now_utc();
+        let local = Host {
+            id: LOCAL_HOST_ID,
+            name: "local".into(),
+            kind: HostKind::Local,
+            created_at: now,
+            updated_at: now,
+            last_seen_at: None,
+        };
+        assert_eq!(host_location(&local), "this machine");
+        let ssh = Host {
+            id: LOCAL_HOST_ID,
+            name: "forge".into(),
+            kind: HostKind::Ssh {
+                user: "malloc".into(),
+                hostname: "forge.lan".into(),
+                port: 22,
+                auth: agentum_core::SshAuth::Agent,
+            },
+            created_at: now,
+            updated_at: now,
+            last_seen_at: None,
+        };
+        assert_eq!(host_location(&ssh), "the remote host forge.lan");
+    }
+
+    #[test]
+    fn porcelain_parses_primary_branch_locked_and_prunable() {
+        // First entry is primary; later entries carry branch/locked/prunable.
+        let text = "\
+worktree /repo
+HEAD aaaa
+branch refs/heads/main
+
+worktree /repo/.claude/worktrees/feat
+HEAD bbbb
+branch refs/heads/feat
+
+worktree /repo/.claude/worktrees/held
+HEAD cccc
+branch refs/heads/held
+locked manual hold
+
+worktree /repo/.claude/worktrees/gone
+HEAD dddd
+detached
+prunable gitdir file points to non-existent location
+";
+        let wts = parse_worktree_porcelain(text);
+        assert_eq!(wts.len(), 4);
+        assert!(wts[0].is_primary && wts[0].branch.as_deref() == Some("main"));
+        assert!(!wts[1].is_primary && !wts[1].locked && !wts[1].prunable);
+        assert!(wts[2].locked, "`locked <reason>` must set locked");
+        assert!(wts[3].prunable, "`prunable <reason>` must set prunable");
+        assert_eq!(wts[3].branch, None); // detached → no branch
+    }
+
+    fn wt(is_primary: bool, locked: bool, prunable: bool) -> PorcelainWorktree {
+        PorcelainWorktree {
+            path: "/p".into(),
+            branch: None,
+            is_primary,
+            locked,
+            prunable,
+        }
+    }
+
+    #[test]
+    fn classify_keeps_primary_and_locked_always() {
+        // Primary and locked are kept no matter how clean — even gone/clean.
+        for dirty in [Some(false), Some(true), None] {
+            assert_eq!(
+                classify_worktree(&wt(true, false, false), dirty),
+                PruneClass::Keep
+            );
+            assert_eq!(
+                classify_worktree(&wt(false, true, false), dirty),
+                PruneClass::Keep
+            );
+        }
+    }
+
+    #[test]
+    fn classify_gone_clean_and_dirty() {
+        // Gone (git-prunable) regardless of the dirty probe.
+        assert_eq!(
+            classify_worktree(&wt(false, false, true), None),
+            PruneClass::Gone
+        );
+        // Existing tree: clean vs dirty vs unknown.
+        assert_eq!(
+            classify_worktree(&wt(false, false, false), Some(false)),
+            PruneClass::Clean
+        );
+        assert_eq!(
+            classify_worktree(&wt(false, false, false), Some(true)),
+            PruneClass::Dirty
+        );
+        // Unknown dirty state is preserved (never destroyed).
+        assert_eq!(
+            classify_worktree(&wt(false, false, false), None),
+            PruneClass::Dirty
+        );
+    }
+
+    #[test]
+    fn should_prune_gates_clean_behind_opt_in() {
+        // Gone is always pruned; Dirty/Keep never.
+        assert!(should_prune(PruneClass::Gone, false));
+        assert!(!should_prune(PruneClass::Dirty, true));
+        assert!(!should_prune(PruneClass::Keep, true));
+        // Clean only when include_clean is set.
+        assert!(!should_prune(PruneClass::Clean, false));
+        assert!(should_prune(PruneClass::Clean, true));
+    }
 
     #[test]
     fn worktree_id_splits_repo_and_path() {

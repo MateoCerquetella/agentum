@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Why: the worktree card centralizes sidebar card state (selection, drag, agent status, git info, context menu) in one cohesive component so sidebar rendering doesn't fan out across files. */
-import React, { useEffect, useCallback, useState } from 'react'
+import React, { useEffect, useCallback, useRef, useState } from 'react'
 import { useAppStore } from '@/store'
 import { getHostedReviewCacheKey } from '@/store/slices/hosted-review'
 import { Badge } from '@/components/ui/badge'
@@ -42,7 +42,6 @@ import {
 } from './WorktreeCardMeta'
 import { WorktreeCardPortsDetails, WorktreeCardPortsTrigger } from './WorktreeCardPorts'
 import { writeWorkspaceDragData } from './workspace-status'
-import { getWorktreeCardPrDisplay } from './worktree-card-pr-display'
 import { getWorkspacePortsByWorktreeId } from '@/lib/workspace-port-groups'
 import { RepoBadgeMark } from '@/components/repo/RepoBadgeLabel'
 import { installWindowVisibilityInterval, isWindowVisible } from '@/lib/window-visibility-interval'
@@ -184,12 +183,16 @@ const WorktreeCard = React.memo(function WorktreeCard({
   // Why: on restart the previously-active worktree is auto-restored without a
   // click, so the dialog never opens. Auto-show it for the active card when SSH
   // is disconnected, but keep dismissals sticky until that prompt key changes.
-  if (sshDisconnectedPromptKey !== lastSshDisconnectedPromptKey) {
-    setLastSshDisconnectedPromptKey(sshDisconnectedPromptKey)
+  const lastPromptKeyRef = useRef(lastSshDisconnectedPromptKey)
+  lastPromptKeyRef.current = lastSshDisconnectedPromptKey
+  useEffect(() => {
     if (sshDisconnectedPromptKey) {
-      setShowDisconnectedDialog(true)
+      if (sshDisconnectedPromptKey !== lastPromptKeyRef.current) {
+        setLastSshDisconnectedPromptKey(sshDisconnectedPromptKey)
+        setShowDisconnectedDialog(true)
+      }
     }
-  }
+  }, [sshDisconnectedPromptKey])
   // Why: read the target label from the store (populated during hydration in
   // useIpcEvents.ts) instead of calling listTargets IPC per card instance.
   const sshTargetLabel = useAppStore((s) =>
@@ -223,7 +226,6 @@ const WorktreeCard = React.memo(function WorktreeCard({
     hostedReviewEntry !== undefined ? hostedReviewEntry.data : undefined
   const fallbackGitHubPRNumber =
     worktree.linkedPR == null && hostedReview?.provider === 'github' ? hostedReview.number : null
-  const prDisplay = getWorktreeCardPrDisplay(hostedReview, worktree.linkedPR)
   const issue: IssueInfo | null | undefined = worktree.linkedIssue
     ? issueEntry !== undefined
       ? issueEntry.data
@@ -498,7 +500,6 @@ const WorktreeCard = React.memo(function WorktreeCard({
   const showUnreadEmphasis = cardProps.includes('unread') && worktree.isUnread
   const metaIssue = showIssue ? issueDisplay : null
   const metaLinearIssue = showLinearIssue ? linearIssueDisplay : null
-  const metaReview = showPR ? prDisplay : null
   const metaComment = showComment ? worktree.comment : null
   const handleOpenGitHubIssueInAgentum = useCallback(
     (e: React.MouseEvent) => {
@@ -523,29 +524,6 @@ const WorktreeCard = React.memo(function WorktreeCard({
     },
     [metaIssue, openTaskPage, repo]
   )
-  const handleOpenReviewInAgentum = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation()
-      if (!repo || !metaReview?.url || metaReview.provider !== 'github') {
-        return
-      }
-      const item: GitHubWorkItem = {
-        id: metaReview.url,
-        type: 'pr',
-        number: metaReview.number,
-        title: metaReview.title,
-        state: metaReview.state ?? 'open',
-        url: metaReview.url,
-        labels: [],
-        updatedAt: 'updatedAt' in metaReview ? metaReview.updatedAt : new Date().toISOString(),
-        author: null,
-        headSha: 'headSha' in metaReview ? metaReview.headSha : undefined,
-        repoId: repo.id
-      }
-      openTaskPage({ taskSource: 'github', preselectedRepoId: repo.id, openGitHubWorkItem: item })
-    },
-    [metaReview, openTaskPage, repo]
-  )
   const handleOpenLinearIssueInAgentum = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
@@ -559,7 +537,6 @@ const WorktreeCard = React.memo(function WorktreeCard({
   const hasDetails = hasWorktreeCardDetails({
     issue: metaIssue,
     linearIssue: metaLinearIssue,
-    review: metaReview,
     comment: metaComment
   })
   const hasPorts = showPorts && workspacePorts.length > 0
@@ -602,7 +579,6 @@ const WorktreeCard = React.memo(function WorktreeCard({
           <WorktreeCardDetailsHover
             issue={null}
             linearIssue={null}
-            review={null}
             comment={null}
             branchName={showBranchIdentityHover ? branch : undefined}
             workspaceTitle={worktree.displayName}
@@ -619,7 +595,6 @@ const WorktreeCard = React.memo(function WorktreeCard({
       <WorktreeCardDetailsHover
         issue={metaIssue}
         linearIssue={metaLinearIssue}
-        review={metaReview}
         comment={metaComment}
         detailsAfter={hasPorts ? <WorktreeCardPortsDetails ports={workspacePorts} /> : null}
         onEditIssue={handleEditIssue}
@@ -628,9 +603,6 @@ const WorktreeCard = React.memo(function WorktreeCard({
           metaIssue && 'url' in metaIssue && metaIssue.url ? handleOpenGitHubIssueInAgentum : undefined
         }
         onOpenLinearIssueInAgentum={linearIssue?.url ? handleOpenLinearIssueInAgentum : undefined}
-        onOpenReviewInAgentum={
-          metaReview?.url && metaReview.provider === 'github' ? handleOpenReviewInAgentum : undefined
-        }
       >
         <div className="flex shrink-0 items-center gap-1">
           {hasPorts && <WorktreeCardPortsTrigger ports={workspacePorts} />}
@@ -638,7 +610,6 @@ const WorktreeCard = React.memo(function WorktreeCard({
             <WorktreeCardMetaBadges
               issue={metaIssue}
               linearIssue={metaLinearIssue}
-              review={metaReview}
               comment={metaComment}
               className="ml-0 pr-0"
             />

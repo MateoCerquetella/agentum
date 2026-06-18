@@ -44,12 +44,17 @@ import {
 } from '../../../../shared/windows-terminal-shell'
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
+import {
+  getPersistTmuxDefault,
+  setPersistTmuxDefault
+} from '@/components/terminal-pane/resolve-pane-persist'
 import type { TabCreateEntryArgs } from './tab-create-entry-action'
 import { buildTabAgentLaunchOptions, orderTabLaunchAgents } from './tab-agent-launch-options'
 
@@ -275,6 +280,19 @@ function TabBarInner({
   // clicks, so it misses webview clicks entirely. Listening for window blur
   // catches the moment focus leaves the renderer (including into a webview).
   const [newTabMenuOpen, setNewTabMenuOpen] = useState(false)
+  // Spec 005-C: "Run in tmux (persist)" default applied to the next New Terminal
+  // / New Agent created from this menu. Seeded from (and written back to) the
+  // remembered default so the user's last choice carries forward. createTab
+  // reads the same default at creation, so flipping this before opening a tab
+  // changes which connectPane path that pane uses.
+  const [persistTmuxDefault, setPersistTmuxDefaultState] = useState(() => getPersistTmuxDefault())
+  const togglePersistTmuxDefault = (): void => {
+    setPersistTmuxDefaultState((prev) => {
+      const next = !prev
+      setPersistTmuxDefault(next)
+      return next
+    })
+  }
   const pendingNewTabMenuFocusRef = useRef<(() => void) | null>(null)
   const pendingNewTabMenuFocusAnimationRef = useRef<number | null>(null)
   const pendingNewTabMenuFocusRetryRef = useRef<number | null>(null)
@@ -701,6 +719,13 @@ function TabBarInner({
   return (
     <div
       ref={clearPendingNewTabMenuFocusOnUnmount}
+      // Why: Tauri v2 drags the window only from data-tauri-drag-region. The
+      // TabBar fills the center top strip, so the empty space after the tab
+      // scroll area (and around the "+") lives here — mark the outer container
+      // so that gap is window-draggable. The terminal-tab-strip scroll area and
+      // the "+" button below are NOT marked (they keep their no-drag), so tabs
+      // and the new-tab menu still click normally.
+      data-tauri-drag-region
       className="flex items-stretch h-full overflow-hidden flex-1 min-w-0"
       // Why: only drops aimed at the top tab/session strip should open files in
       // Agentum's editor. Terminal-pane drops need to keep inserting file paths
@@ -876,6 +901,25 @@ function TabBarInner({
               />
             </>
           ) : null}
+          {isWebClient ? null : (
+            <>
+              <DropdownMenuSeparator />
+              {/* Spec 005-C: opt the next New Terminal / New Agent into a
+                  persistent tmux session (default on) that auto-reattaches on
+                  relaunch. Off → ephemeral local PTY. onSelect preventsDefault
+                  so toggling keeps the menu open for the subsequent pick. */}
+              <DropdownMenuCheckboxItem
+                checked={persistTmuxDefault}
+                onSelect={(e) => {
+                  e.preventDefault()
+                  togglePersistTmuxDefault()
+                }}
+                className="py-1.5"
+              >
+                Run in tmux (persist)
+              </DropdownMenuCheckboxItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

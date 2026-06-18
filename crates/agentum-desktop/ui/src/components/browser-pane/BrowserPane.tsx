@@ -152,6 +152,7 @@ import {
   formatPopupNotice
 } from './browser-notices'
 import { shouldPollChromiumErrorPage } from './chromium-error-page-polling'
+import NativeBrowserPagePane from './NativeBrowserPagePane'
 
 type BrowserTabPageState = Partial<
   Pick<
@@ -727,9 +728,12 @@ export default function BrowserPane({
   browserTab: BrowserWorkspaceState
   isActive: boolean
 }): React.JSX.Element {
-  const activeRuntimeEnvironmentId = useAppStore(
-    (s) => s.settings?.activeRuntimeEnvironmentId ?? null
-  )
+  // Why: browser pages always render in a Tauri child webview on this machine
+  // (NativeBrowserPagePane). The Electron <webview> path (BrowserPagePane) has
+  // no element to render in Tauri, and the remote screencast path
+  // (RemoteBrowserPagePane) has no runtime backend in this port — both are kept
+  // for reference until their feature sets (grab mode, annotations, remote
+  // rendering) are reimplemented natively.
   const browserPages = useAppStore((s) =>
     getBrowserPagesForWorkspace(s.browserPagesByWorkspace, browserTab.id)
   )
@@ -737,67 +741,24 @@ export default function BrowserPane({
     browserPages.find((page) => page.id === browserTab.activePageId) ?? browserPages[0] ?? null
   const updateBrowserPageState = useAppStore((s) => s.updateBrowserPageState)
   const setBrowserPageUrl = useAppStore((s) => s.setBrowserPageUrl)
-  const runtimeEnvironmentActive = Boolean(activeRuntimeEnvironmentId?.trim())
-  const activeBrowserPageId = activeBrowserPage?.id ?? null
-  const browserPageIds = useMemo(() => browserPages.map((page) => page.id), [browserPages])
-  const automationVisiblePageIds = useBrowserAutomationVisiblePageIds(browserPageIds)
-  const renderedBrowserPages = useMemo(() => {
-    const pages: BrowserPageState[] = []
-    if (activeBrowserPage) {
-      pages.push(activeBrowserPage)
-    }
-    for (const page of browserPages) {
-      if (page.id !== activeBrowserPage?.id && automationVisiblePageIds.has(page.id)) {
-        pages.push(page)
-      }
-    }
-    return pages
-  }, [activeBrowserPage, automationVisiblePageIds, browserPages])
-  useEffect(() => {
-    if (!runtimeEnvironmentActive) {
-      return
-    }
-    for (const page of browserPages) {
-      destroyPersistentWebview(page.id)
-    }
-  }, [browserPages, runtimeEnvironmentActive])
 
-  if (runtimeEnvironmentActive) {
-    return activeBrowserPage ? (
-      <RemoteBrowserPagePane
-        key={`${activeRuntimeEnvironmentId?.trim() ?? ''}:${activeBrowserPage.id}`}
-        browserTab={activeBrowserPage}
-        worktreeId={browserTab.worktreeId}
-        isActive={isActive}
-        onUpdatePageState={updateBrowserPageState}
-        onSetUrl={setBrowserPageUrl}
-      />
-    ) : (
-      <div className="flex h-full min-h-0 flex-1 bg-background" />
-    )
-  }
-
-  return (
-    <div className="relative flex h-full min-h-0 flex-1 flex-col">
-      {renderedBrowserPages.length > 0 ? (
-        <div className="relative flex min-h-0 flex-1">
-          {renderedBrowserPages.map((page) => (
-            <BrowserPagePane
-              key={page.id}
-              browserTab={page}
-              workspaceId={browserTab.id}
-              worktreeId={browserTab.worktreeId}
-              sessionProfileId={browserTab.sessionProfileId ?? null}
-              isActive={isActive && page.id === activeBrowserPage?.id}
-              isAutomationVisible={automationVisiblePageIds.has(page.id)}
-              onUpdatePageState={updateBrowserPageState}
-              onSetUrl={setBrowserPageUrl}
-            />
-          ))}
-        </div>
-      ) : null}
-    </div>
+  return activeBrowserPage ? (
+    <NativeBrowserPagePane
+      key={activeBrowserPage.id}
+      browserTab={activeBrowserPage}
+      isActive={isActive}
+      onUpdatePageState={updateBrowserPageState}
+      onSetUrl={setBrowserPageUrl}
+    />
+  ) : (
+    <div className="flex h-full min-h-0 flex-1 bg-background" />
   )
+}
+
+// Retained pre-native panes (unused): see comment in BrowserPane above.
+export {
+  BrowserPagePane as LegacyElectronBrowserPagePane,
+  RemoteBrowserPagePane as LegacyRemoteBrowserPagePane
 }
 
 function RemoteBrowserPagePane({
@@ -3679,7 +3640,16 @@ function BrowserPagePane({
     (nextIntent: GrabIntent): void => {
       recordFeatureInteraction('browser-grab')
       if (nextIntent === 'annotate') {
+        // Why: the legacy React grab flow drives Electron <webview> APIs that
+        // don't exist on Tauri's native webview. Instead inject the in-page
+        // picker (renders ON TOP of the native webview content, unlike React UI
+        // which paints behind it); annotations flow back to the store via the
+        // agentumgrab:// scheme → `browser-inpage-annotation`.
         recordFeatureInteraction('browser-annotations')
+        setGrabIntent('annotate')
+        setBrowserAnnotationTrayOpen(true)
+        void api.browser.inpageAnnotate({ browserPageId: browserTab.id, enabled: true })
+        return
       }
       setGrabIntent(nextIntent)
       if (nextIntent === 'copy') {

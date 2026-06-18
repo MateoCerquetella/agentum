@@ -16,10 +16,10 @@ use std::path::{Path as StdPath, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agentum_core::{Host, LOCAL_HOST_ID};
+use axum::Json;
 use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::routing::{get, patch, post};
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tokio::process::Command;
@@ -259,7 +259,12 @@ async fn create(Json(body): Json<CreateBody>) -> Result<Json<Value>, ApiError> {
             return Ok(Json(serde_json::json!({ "error": "git init failed" })));
         }
     }
-    let repo = append_repo(target.to_string_lossy().into_owned(), Some(body.kind), None, None)?;
+    let repo = append_repo(
+        target.to_string_lossy().into_owned(),
+        Some(body.kind),
+        None,
+        None,
+    )?;
     Ok(Json(serde_json::json!({ "repo": repo })))
 }
 
@@ -288,7 +293,12 @@ async fn clone(Json(body): Json<CloneBody>) -> Result<Json<Repo>, ApiError> {
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
         ));
     }
-    Ok(Json(append_repo(body.destination, Some("git".to_string()), None, None)?))
+    Ok(Json(append_repo(
+        body.destination,
+        Some("git".to_string()),
+        None,
+        None,
+    )?))
 }
 
 /// `DELETE /api/repos/{id}` — drop from the registry.
@@ -322,6 +332,13 @@ async fn reorder(Json(body): Json<ReorderBody>) -> Result<Json<Value>, ApiError>
     });
     write_repos(&repos)?;
     Ok(Json(serde_json::json!({ "status": "applied" })))
+}
+
+/// Every registered repo's id, in registry order. `pub(crate)` so the
+/// worktrees route can scan all repos (e.g. a prune with no `repoId` filter)
+/// without duplicating the registry read or exposing the private `Repo`.
+pub(crate) fn all_repo_ids() -> Result<Vec<String>, ApiError> {
+    Ok(read_repos()?.into_iter().map(|repo| repo.id).collect())
 }
 
 /// Resolve a repoId to its checkout path via the registry. `pub(crate)` so the
@@ -363,7 +380,9 @@ pub(crate) async fn load_host_for_repo(state: &AppState, repo_id: &str) -> Resul
 /// success, `None` on a non-zero exit or transport failure. Host-aware so
 /// a remote repo's refs resolve over SSH.
 async fn git_out(host: &Host, path: &str, args: &[&str]) -> Option<String> {
-    let out = crate::host_runtime::git_in_dir(host, path, args).await.ok()?;
+    let out = crate::host_runtime::git_in_dir(host, path, args)
+        .await
+        .ok()?;
     out.success.then(|| out.stdout_string().trim().to_string())
 }
 
@@ -379,18 +398,30 @@ async fn base_ref_default(
         .await
         .map(|out| out.lines().filter(|line| !line.trim().is_empty()).count())
         .unwrap_or(0);
-    let default = if let Some(head) =
-        git_out(&host, &path, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).await
+    let default = if let Some(head) = git_out(
+        &host,
+        &path,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    )
+    .await
     {
         Some(head.trim_start_matches("origin/").to_string())
-    } else if git_out(&host, &path, &["rev-parse", "--verify", "-q", "refs/heads/main"])
-        .await
-        .is_some()
+    } else if git_out(
+        &host,
+        &path,
+        &["rev-parse", "--verify", "-q", "refs/heads/main"],
+    )
+    .await
+    .is_some()
     {
         Some("main".to_string())
-    } else if git_out(&host, &path, &["rev-parse", "--verify", "-q", "refs/heads/master"])
-        .await
-        .is_some()
+    } else if git_out(
+        &host,
+        &path,
+        &["rev-parse", "--verify", "-q", "refs/heads/master"],
+    )
+    .await
+    .is_some()
     {
         Some("master".to_string())
     } else {
@@ -406,21 +437,32 @@ async fn base_ref_default(
 /// (refName, localBranchName) pairs across local + remote branches.
 async fn collect_refs(host: &Host, path: &str) -> Vec<(String, String)> {
     let mut refs = Vec::new();
-    if let Some(locals) =
-        git_out(host, path, &["for-each-ref", "--format=%(refname:short)", "refs/heads"]).await
+    if let Some(locals) = git_out(
+        host,
+        path,
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+    )
+    .await
     {
         for name in locals.lines().filter(|line| !line.is_empty()) {
             refs.push((name.to_string(), name.to_string()));
         }
     }
-    if let Some(remotes) =
-        git_out(host, path, &["for-each-ref", "--format=%(refname:short)", "refs/remotes"]).await
+    if let Some(remotes) = git_out(
+        host,
+        path,
+        &["for-each-ref", "--format=%(refname:short)", "refs/remotes"],
+    )
+    .await
     {
         for name in remotes
             .lines()
             .filter(|line| !line.is_empty() && !line.ends_with("/HEAD"))
         {
-            let local = name.splitn(2, '/').nth(1).unwrap_or(name).to_string();
+            let local = name
+                .split_once('/')
+                .map_or(name, |(_, rest)| rest)
+                .to_string();
             refs.push((name.to_string(), local));
         }
     }

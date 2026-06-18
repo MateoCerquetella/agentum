@@ -33,7 +33,26 @@ use uuid::Uuid;
 /// negligible against the value of a snappy "is my agent done yet"
 /// indicator.
 const TICK: Duration = Duration::from_secs(1);
+
+/// Pane-sample cadence for REMOTE (SSH) sessions. Each tick is an `ssh` exec on
+/// the host's ControlMaster; at the local 1 s cadence, N open remote sessions
+/// fired N `capture-pane`s/sec at one remote tmux server and N channel opens at
+/// the SSH master — which throttled both pane output (~B/s) and keystroke
+/// delivery. 3 s cuts that load ~3× while keeping the agent-status dot's lag
+/// imperceptible. Local sampling is a cheap process spawn with no channel
+/// contention, so it stays at [`TICK`].
+const REMOTE_TICK: Duration = Duration::from_secs(3);
+
 const COMPACT_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+
+/// How often to pane-sample a session's host: slower for SSH (each tick is a
+/// remote `ssh` exec sharing the host's ControlMaster + tmux server) than local.
+fn sample_tick(kind: &agentum_core::HostKind) -> Duration {
+    match kind {
+        agentum_core::HostKind::Ssh { .. } => REMOTE_TICK,
+        agentum_core::HostKind::Local => TICK,
+    }
+}
 
 /// For agents that don't declare a `busy_signature` (codex, cursor, gemini,
 /// hermes — anything other than Claude), we fall back to change-based
@@ -241,16 +260,31 @@ async fn watch_session(
     // unaffected — its busy_signature still drives classification.
     let mut last_bottom_hash: Option<u64> = None;
     let mut last_change_at = Instant::now();
-    let mut tick = interval(TICK);
+    // Slower sample cadence on SSH hosts: the per-tick `sample_pane` is a remote
+    // `ssh` exec, so 1 s × N sessions flooded the host (see REMOTE_TICK).
+    let mut tick = interval(sample_tick(&host.kind));
     // Drop the immediate first tick so we don't fire before the pane is alive.
     tick.tick().await;
 
     loop {
         tick.tick().await;
 
-        match agentum_tmux::ssh::has_session(&host, &target).await {
-            Ok(true) => {}
-            Ok(false) => {
+        // One sample per tick: existence + both captures + foreground command
+        // in a single round trip (on SSH hosts, one exec instead of four —
+        // the per-call channel churn on the shared ControlMaster was the
+        // dominant remote load and competed with interactive keystrokes).
+        //
+        // Two captures:
+        //   `pane`      — 100 lines incl. scrollback; for crash + context-low
+        //                 matches that can scroll slightly off-screen and
+        //                 still need to fire.
+        //   `viewport`  — currently-visible cells only; for activity
+        //                 classification, where stale "esc to interrupt"
+        //                 text in scrollback would otherwise pin the
+        //                 session as Working forever after a turn ended.
+        let sample = match agentum_tmux::ssh::sample_pane(&host, &target, 100).await {
+            Ok(Some(s)) => s,
+            Ok(None) => {
                 // Pane is gone. Distinguish "user killed it" from "it
                 // crashed": if the DB already reflects Stopped (set by the
                 // /stop or /kill API route), the disappearance was
@@ -269,38 +303,12 @@ async fn watch_session(
                 return;
             }
             Err(e) => {
-                tracing::warn!(target = %target, error = ?e, "has_session check failed");
-                continue;
-            }
-        }
-
-        // Two captures per tick:
-        //   `pane`      — 100 lines incl. scrollback; for crash + context-low
-        //                 matches that can scroll slightly off-screen and
-        //                 still need to fire.
-        //   `viewport`  — currently-visible cells only; for activity
-        //                 classification, where stale "esc to interrupt"
-        //                 text in scrollback would otherwise pin the
-        //                 session as Working forever after a turn ended.
-        //                 That was the v0.7.47-and-earlier bug where the
-        //                 sidebar dot stayed green long after Claude
-        //                 finished — the scrollback retained the spinner
-        //                 footer from the prior turn, so `pane.contains
-        //                 ("esc to interrupt")` kept matching.
-        let pane = match agentum_tmux::ssh::capture_pane(&host, &target, 100).await {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(target = %target, error = ?e, "capture_pane failed");
+                tracing::warn!(target = %target, error = ?e, "pane sample failed");
                 continue;
             }
         };
-        let viewport = match agentum_tmux::ssh::capture_pane_visible(&host, &target).await {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(target = %target, error = ?e, "capture_pane_visible failed");
-                continue;
-            }
-        };
+        let pane = sample.pane;
+        let viewport = sample.viewport;
 
         // Crash signatures first — exiting wins over compacting.
         if let Some(sig) = crash_sigs.iter().find(|s| pane.contains(*s)) {
@@ -344,15 +352,13 @@ async fn watch_session(
             }
         }
 
-        // Tool drift → `session.tool_changed`. Cheap: one extra
-        // `tmux display-message` per tick. We map the foreground command
-        // to a known adapter id and only commit on the second
-        // consecutive observation of the same NEW value, so a brief
-        // shell-out (git, ls, …) doesn't get latched as the active tool.
-        // The `tool_candidate` slot is reset whenever the observation
-        // doesn't match it.
-        if let Ok(cmd) = agentum_tmux::ssh::pane_current_command(&host, &target).await
-            && let Some(detected) = canonical_tool_from_command(&cmd)
+        // Tool drift → `session.tool_changed`. The foreground command rides
+        // the combined sample (no extra round trip). We map it to a known
+        // adapter id and only commit on the second consecutive observation
+        // of the same NEW value, so a brief shell-out (git, ls, …) doesn't
+        // get latched as the active tool. The `tool_candidate` slot is reset
+        // whenever the observation doesn't match it.
+        if let Some(detected) = canonical_tool_from_command(&sample.current_command)
             && detected != current_tool
         {
             if tool_candidate.as_deref() == Some(detected) {
@@ -988,6 +994,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn remote_sessions_sample_slower_than_local() {
+        use agentum_core::{HostKind, SshAuth};
+        let ssh = HostKind::Ssh {
+            user: "u".into(),
+            hostname: "h".into(),
+            port: 22,
+            auth: SshAuth::Agent,
+        };
+        // Local stays tight; SSH backs off so N sessions don't flood the host.
+        assert_eq!(sample_tick(&HostKind::Local), TICK);
+        assert_eq!(sample_tick(&ssh), REMOTE_TICK);
+        assert!(sample_tick(&ssh) > sample_tick(&HostKind::Local));
+    }
+
+    #[test]
     fn status_rank_orders_todo_doing_done() {
         assert_eq!(status_rank("todo"), 0);
         assert_eq!(status_rank("doing"), 1);
@@ -1099,6 +1120,60 @@ mod tests {
         assert_eq!(
             classify_activity("$ ", busy, &awaiting, false, quiet_long),
             ActivityState::Unknown,
+        );
+    }
+
+    #[test]
+    fn classify_activity_hookless_passthrough_agent_via_real_adapter() {
+        // Root-cause regression for the remote OpenCode "stuck on Idle"
+        // bug. OpenCode is a hookless agent that routes through
+        // PassthroughAdapter (it's in PASSTHROUGH_PROBED, not FIRST_CLASS),
+        // so it has no busy_signature(). Before the fix PassthroughAdapter
+        // inherited the default is_agent() == false, so classify_activity
+        // hit the `None =>` arm and returned Unknown forever — the session
+        // never transitioned to Working or Idle and the sidebar dot showed
+        // "Idle" while the agent was visibly streaming output.
+        //
+        // This test pulls the real adapter values straight from
+        // `adapter_for("opencode")` (rather than hardcoding is_agent=true)
+        // so it stays coupled to the actual wiring: if someone flips
+        // PassthroughAdapter back to is_agent() == false, this fails.
+        let adapter = agentum_executor::adapter_for("opencode");
+        let busy_sig = adapter.busy_signature();
+        let awaiting_sigs = adapter.awaiting_input_signatures();
+        let is_agent = adapter.is_agent();
+        assert!(
+            busy_sig.is_none(),
+            "opencode is hookless: no busy_signature"
+        );
+        assert!(is_agent, "opencode must be treated as an agent");
+
+        // Actively redrawing pane (footer just changed this tick) → Working.
+        let just_changed = Duration::from_millis(100);
+        assert_eq!(
+            classify_activity(
+                "Build · Big Pickle\ngenerating tests...",
+                busy_sig,
+                awaiting_sigs,
+                is_agent,
+                just_changed,
+            ),
+            ActivityState::Working,
+            "an actively-changing OpenCode pane must classify as Working"
+        );
+
+        // Stable pane (footer quiet past the idle threshold) → Idle.
+        let quiet_long = IDLE_AFTER_QUIET + Duration::from_millis(500);
+        assert_eq!(
+            classify_activity(
+                "opencode ready\n> ",
+                busy_sig,
+                awaiting_sigs,
+                is_agent,
+                quiet_long,
+            ),
+            ActivityState::Idle,
+            "a stable OpenCode pane past the quiet threshold must classify as Idle"
         );
     }
 

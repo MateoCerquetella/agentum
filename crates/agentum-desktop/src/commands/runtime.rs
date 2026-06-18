@@ -50,13 +50,10 @@ pub fn runtime_reclaim_browser_for_desktop() -> Value {
     json!({ "reclaimed": false })
 }
 
-#[tauri::command]
-pub fn runtime_environments_list() -> Vec<Value> {
-    Vec::new()
-}
-
 // Generic runtime RPC + remote-environment management aren't ported; calls return
-// null and subscribe/remove/sync no-op.
+// null and subscribe/sync no-op. The pairing-based environment management
+// commands (list/add_from_pairing_code/remove) were removed with the Remote
+// Agentum Servers UI (spec 007 A2); only the generic transport remains.
 #[tauri::command]
 pub fn runtime_call() -> Option<Value> {
     None
@@ -67,14 +64,6 @@ pub fn runtime_sync_window_graph() {}
 
 #[tauri::command]
 pub fn runtime_environments_call() -> Option<Value> {
-    None
-}
-
-#[tauri::command]
-pub fn runtime_environments_remove() {}
-
-#[tauri::command]
-pub fn runtime_environments_add_from_pairing_code() -> Option<Value> {
     None
 }
 

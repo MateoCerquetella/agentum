@@ -59,4 +59,43 @@ describe('HostGroupHeader', () => {
     button?.props.onClick?.()
     expect(onToggle).toHaveBeenCalledOnce()
   })
+
+  it('renders the open-terminal affordance and fires onOpenTerminal without toggling', () => {
+    const onToggle = vi.fn()
+    const onOpenTerminal = vi.fn()
+    const host: SidebarHost = { key: 'ssh:conn-1', kind: 'ssh', label: 'omarchy' }
+    const element = HostGroupHeader({
+      host,
+      count: 2,
+      collapsed: false,
+      onToggle,
+      onOpenTerminal
+    })
+    const action = findElement(
+      element,
+      (props) =>
+        (props as { 'aria-label'?: string })['aria-label'] === 'Open terminal on omarchy'
+    )
+    expect(action).not.toBeNull()
+    const onClick = action?.props.onClick as unknown as
+      | ((event: { stopPropagation: () => void }) => void)
+      | undefined
+    onClick?.({ stopPropagation: () => {} })
+    expect(onOpenTerminal).toHaveBeenCalledOnce()
+    // Clicking the terminal action must not collapse the host section.
+    expect(onToggle).not.toHaveBeenCalled()
+  })
+
+  it('omits the open-terminal affordance when no handler is provided', () => {
+    const host: SidebarHost = { key: 'local', kind: 'local', label: 'studio' }
+    const markup = renderToStaticMarkup(
+      React.createElement(HostGroupHeader, {
+        host,
+        count: 1,
+        collapsed: false,
+        onToggle: () => {}
+      })
+    )
+    expect(markup).not.toContain('Open terminal')
+  })
 })

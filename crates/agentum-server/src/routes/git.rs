@@ -158,11 +158,6 @@ async fn status_entries(
 ) -> Result<Json<Vec<StatusEntry>>, ApiError> {
     let id = parse_uuid(&id)?;
     let (host, cwd) = host_and_cwd_for(&state, id).await?;
-    if !host_runtime::is_git_repo(&host, &cwd).await {
-        return Err(ApiError::BadRequest(format!(
-            "not a git repository: {cwd}"
-        )));
-    }
     let raw = run_git_bytes(&host, &cwd, &["status", "--porcelain=v1", "-z"]).await?;
     Ok(Json(parse_status_entries(&raw)))
 }
@@ -174,6 +169,12 @@ async fn run_git_bytes(host: &Host, cwd: &str, args: &[&str]) -> Result<Vec<u8>,
         .await
         .map_err(|e| ApiError::Internal(format!("git {}: {e}", args.join(" "))))?;
     if !out.success {
+        // Surface "not a repo" as a 400, not a 500. Letting git itself report
+        // this (instead of a separate `is_git_repo` pre-check) saves one full
+        // SSH round trip on every status poll against a remote host.
+        if out.stderr.contains("not a git repository") {
+            return Err(ApiError::BadRequest(format!("not a git repository: {cwd}")));
+        }
         return Err(ApiError::Internal(format!(
             "git {} failed: {}",
             args.join(" "),
@@ -218,7 +219,8 @@ async fn commit_compare(
     let (host, cwd) = host_and_cwd_for(&state, id).await?;
     let commit = q.commit.trim().to_string();
     let commit_oid = match run_git(
-        &host, &cwd,
+        &host,
+        &cwd,
         &["rev-parse", "--verify", &format!("{commit}^{{commit}}")],
     )
     .await
@@ -239,10 +241,14 @@ async fn commit_compare(
         }
     };
     // First parent, if any. Root commits diff against the empty-tree object.
-    let parent_oid = run_git(&host, &cwd, &["rev-parse", "--verify", &format!("{commit_oid}^")])
-        .await
-        .ok()
-        .map(|s| s.trim().to_string());
+    let parent_oid = run_git(
+        &host,
+        &cwd,
+        &["rev-parse", "--verify", &format!("{commit_oid}^")],
+    )
+    .await
+    .ok()
+    .map(|s| s.trim().to_string());
     const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
     let base = parent_oid.clone().unwrap_or_else(|| EMPTY_TREE.to_string());
 
@@ -592,32 +598,34 @@ async fn upstream(
 ) -> Result<Json<UpstreamStatus>, ApiError> {
     let id = parse_uuid(&id)?;
     let (host, cwd) = host_and_cwd_for(&state, id).await?;
-    let upstream = run_git(
-        &host, &cwd,
-        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-    )
-    .await
-    .ok()
-    .map(|s| s.trim().to_string())
-    .filter(|s| !s.is_empty());
-    let (ahead, behind) = if upstream.is_some() {
+    // Both calls fail harmlessly when there is no upstream, so run them
+    // concurrently instead of gating rev-list on rev-parse — over SSH that
+    // halves the wall-clock cost of this endpoint.
+    let (upstream_out, counts_out) = tokio::join!(
+        run_git(
+            &host,
+            &cwd,
+            &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        ),
         // `--left-right --count @{u}...HEAD` prints "<behind>\t<ahead>".
-        match run_git(
-            &host, &cwd,
+        run_git(
+            &host,
+            &cwd,
             &["rev-list", "--left-right", "--count", "@{u}...HEAD"],
         )
-        .await
-        {
-            Ok(out) => {
-                let mut it = out.split_whitespace();
-                let behind = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-                let ahead = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-                (ahead, behind)
-            }
-            Err(_) => (0, 0),
+    );
+    let upstream = upstream_out
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let (ahead, behind) = match (&upstream, counts_out) {
+        (Some(_), Ok(out)) => {
+            let mut it = out.split_whitespace();
+            let behind = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            let ahead = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            (ahead, behind)
         }
-    } else {
-        (0, 0)
+        _ => (0, 0),
     };
     Ok(Json(UpstreamStatus {
         upstream,
@@ -658,16 +666,20 @@ async fn branches(
 ) -> Result<Json<BranchesResp>, ApiError> {
     let id = parse_uuid(&id)?;
     let (host, cwd) = host_and_cwd_for(&state, id).await?;
-    let current = run_git(&host, &cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .await
+    // Independent reads — run concurrently so a remote host pays one RTT.
+    let (current_out, raw) = tokio::join!(
+        run_git(&host, &cwd, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        run_git(
+            &host,
+            &cwd,
+            &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        )
+    );
+    let current = current_out
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty() && s != "HEAD");
-    let raw = run_git(
-        &host, &cwd,
-        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
-    )
-    .await?;
+    let raw = raw?;
     let branches = raw
         .lines()
         .map(|l| l.trim().to_string())
@@ -891,12 +903,6 @@ async fn status(
 ) -> Result<Json<GitStatus>, ApiError> {
     let id = parse_uuid(&id)?;
     let (host, cwd) = host_and_cwd_for(&state, id).await?;
-    if !host_runtime::is_git_repo(&host, &cwd).await {
-        return Err(ApiError::BadRequest(format!(
-            "not a git repository: {cwd}"
-        )));
-    }
-
     let raw = run_git_bytes(&host, &cwd, &["status", "--porcelain=v1", "-z"]).await?;
     Ok(Json(parse_porcelain_z(&raw)))
 }
@@ -987,7 +993,14 @@ async fn diff(
         let synth = git_in_dir(
             &host,
             &cwd,
-            &["diff", "--no-color", "--no-index", "--", "/dev/null", &q.path],
+            &[
+                "diff",
+                "--no-color",
+                "--no-index",
+                "--",
+                "/dev/null",
+                &q.path,
+            ],
         )
         .await
         .map_err(|e| ApiError::Internal(format!("git diff --no-index: {e}")))?;
@@ -1095,7 +1108,11 @@ async fn stage(
     if !out.success {
         return Err(ApiError::BadRequest(format!(
             "git {} failed: {}",
-            if body.unstage { "restore --staged" } else { "add" },
+            if body.unstage {
+                "restore --staged"
+            } else {
+                "add"
+            },
             out.stderr
         )));
     }
@@ -1192,7 +1209,8 @@ async fn commit_staged(
         return Err(ApiError::BadRequest("commit message is empty".into()));
     }
     run_git(
-        &host, &cwd,
+        &host,
+        &cwd,
         &[
             "-c",
             "user.name=agentum-bot",
@@ -1509,7 +1527,8 @@ async fn history(
 
     // Upstream ahead/behind → incoming/outgoing. No upstream → false/false.
     let (incoming, outgoing) = match run_git(
-        &host, &cwd,
+        &host,
+        &cwd,
         &["rev-list", "--left-right", "--count", "@{u}...HEAD"],
     )
     .await

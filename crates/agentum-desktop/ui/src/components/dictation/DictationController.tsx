@@ -236,15 +236,23 @@ export function DictationController() {
     await finishDictationSession(sessionId)
   }, [finishDictationSession, setDictationState, stopCapture])
 
-  // Toggle mode: use IPC from main process (before-input-event intercepts
-  // the keyDown so Cmd+E doesn't reach xterm or trigger system shortcuts).
+  // Toggle mode: handle Cmd+E entirely in the renderer. orca's Electron build
+  // intercepted this in the main process via before-input-event and forwarded a
+  // `ui-dictation-key-down` IPC event, but Tauri has no such interceptor and
+  // never emits it — so toggle did nothing (notably in terminals, where xterm
+  // also captures keys). We instead listen on window in the capture phase and
+  // preventDefault, matching the hold-mode path. On macOS Cmd+E produces no
+  // terminal control character, so suppressing it before xterm is harmless.
   useEffect(() => {
     const mode = settings?.voice?.dictationMode ?? 'toggle'
     if (mode !== 'toggle') {
       return
     }
 
-    const handleKeyDown = (): void => {
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if (!keybindingMatchesAction('voice.dictation', e, getShortcutPlatform(), keybindings)) {
+        return
+      }
       if (
         !settings?.voice?.enabled ||
         !settings.voice.sttModel ||
@@ -252,6 +260,8 @@ export function DictationController() {
       ) {
         return
       }
+      e.preventDefault()
+      e.stopPropagation()
       if (dictationStateRef.current === 'listening' || dictationStateRef.current === 'starting') {
         void stopDictation()
       } else {
@@ -259,12 +269,15 @@ export function DictationController() {
       }
     }
 
-    const cleanup = api.ui.onDictationKeyDown(handleKeyDown)
-    return cleanup
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true)
+    }
   }, [
     settings?.voice?.dictationMode,
     settings?.voice?.enabled,
     settings?.voice?.sttModel,
+    keybindings,
     startDictation,
     stopDictation
   ])

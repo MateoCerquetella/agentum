@@ -13,9 +13,13 @@ import {
   getPRGroupKey,
   getProjectGroupOrdering,
   groupRowsByHost,
+  hasTmuxForHost,
+  hostKeysWithOpenTmux,
   LOCAL_HOST_KEY,
   hostKeyForRepo,
+  pickWorktreeForHost,
   PINNED_GROUP_KEY,
+  type HostTmuxSession,
   type Row,
   type SidebarHost
 } from './worktree-list-groups'
@@ -56,6 +60,122 @@ const worktree: Worktree = {
 }
 
 const repoMap = new Map([[repo.id, repo]])
+
+describe('hasTmuxForHost', () => {
+  // server host UUID → sidebar host key, as hydrateHosts builds it.
+  const serverHostIdToHostKey = new Map<string, string>([
+    ['local-uuid', 'local'],
+    ['omarchy-uuid', 'ssh:conn-omarchy']
+  ])
+
+  const running = (over: Partial<HostTmuxSession>): HostTmuxSession => ({
+    status: 'running',
+    tmux_target: 'agentum-feature-claude-abc',
+    host_id: null,
+    ...over
+  })
+
+  it('includes a running session with a tmux_target on the matching host', () => {
+    const sessions = [running({ host_id: 'omarchy-uuid' })]
+    expect(hasTmuxForHost(sessions, 'ssh:conn-omarchy', serverHostIdToHostKey)).toBe(true)
+  })
+
+  it('buckets a null host_id under the local host', () => {
+    const sessions = [running({ host_id: null })]
+    expect(hasTmuxForHost(sessions, 'local', serverHostIdToHostKey)).toBe(true)
+    expect(hasTmuxForHost(sessions, 'ssh:conn-omarchy', serverHostIdToHostKey)).toBe(false)
+  })
+
+  it('excludes a session whose tmux_target is null or absent (local PTY / crashed)', () => {
+    expect(hasTmuxForHost([running({ tmux_target: null })], 'local', serverHostIdToHostKey)).toBe(
+      false
+    )
+    expect(
+      hasTmuxForHost([running({ tmux_target: undefined })], 'local', serverHostIdToHostKey)
+    ).toBe(false)
+  })
+
+  it('excludes a non-running session even with a tmux_target', () => {
+    expect(
+      hasTmuxForHost([running({ status: 'stopped' })], 'local', serverHostIdToHostKey)
+    ).toBe(false)
+    expect(
+      hasTmuxForHost([running({ status: 'crashed' })], 'local', serverHostIdToHostKey)
+    ).toBe(false)
+  })
+
+  it('excludes a tmux session that belongs to a different host', () => {
+    const sessions = [running({ host_id: 'omarchy-uuid' })]
+    expect(hasTmuxForHost(sessions, 'local', serverHostIdToHostKey)).toBe(false)
+  })
+
+  it('returns false for an empty session list', () => {
+    expect(hasTmuxForHost([], 'local', serverHostIdToHostKey)).toBe(false)
+  })
+})
+
+describe('hostKeysWithOpenTmux', () => {
+  // tabId → worktreeId, as WorktreeList assembles from tabsByWorktree.
+  const tabIdToWorktreeId = new Map<string, string>([
+    ['tab-local', 'wt-local'],
+    ['tab-remote', 'wt-remote']
+  ])
+  // worktreeId → host key, as WorktreeList assembles from worktree → repo.
+  const worktreeIdToHostKey = new Map<string, string>([
+    ['wt-local', 'local'],
+    ['wt-remote', 'ssh:conn-omarchy']
+  ])
+
+  it('maps a local tab pane key to the local host', () => {
+    const out = hostKeysWithOpenTmux({ 'tab-local:leaf-1': true }, tabIdToWorktreeId, worktreeIdToHostKey)
+    expect(out).toEqual(new Set(['local']))
+  })
+
+  it('maps a remote tab pane key to its ssh host key', () => {
+    const out = hostKeysWithOpenTmux(
+      { 'tab-remote:leaf-1': true },
+      tabIdToWorktreeId,
+      worktreeIdToHostKey
+    )
+    expect(out).toEqual(new Set(['ssh:conn-omarchy']))
+  })
+
+  it('collapses multiple open panes on the same host into one key', () => {
+    const out = hostKeysWithOpenTmux(
+      { 'tab-local:leaf-1': true, 'tab-local:leaf-2': true },
+      tabIdToWorktreeId,
+      worktreeIdToHostKey
+    )
+    expect(out).toEqual(new Set(['local']))
+  })
+
+  it('returns both hosts when open tmux panes span local and remote', () => {
+    const out = hostKeysWithOpenTmux(
+      { 'tab-local:leaf-1': true, 'tab-remote:leaf-9': true },
+      tabIdToWorktreeId,
+      worktreeIdToHostKey
+    )
+    expect(out).toEqual(new Set(['local', 'ssh:conn-omarchy']))
+  })
+
+  it('skips a pane key whose tab no longer exists (closed/persisted leftover)', () => {
+    const out = hostKeysWithOpenTmux({ 'tab-gone:leaf-1': true }, tabIdToWorktreeId, worktreeIdToHostKey)
+    expect(out).toEqual(new Set())
+  })
+
+  it('skips a pane key whose worktree has no host mapping', () => {
+    const out = hostKeysWithOpenTmux(
+      { 'tab-orphan:leaf-1': true },
+      new Map([['tab-orphan', 'wt-unmapped']]),
+      worktreeIdToHostKey
+    )
+    expect(out).toEqual(new Set())
+  })
+
+  it('returns an empty set for an empty tmux map', () => {
+    expect(hostKeysWithOpenTmux({}, tabIdToWorktreeId, worktreeIdToHostKey)).toEqual(new Set())
+  })
+})
 
 describe('hostKeyForRepo', () => {
   it('buckets a local repo (no host association) under the synthetic local key', () => {
@@ -1429,5 +1549,49 @@ describe('WorktreeList header styles', () => {
     expect(source).toContain('resolveProjectGroupHeaderColor({')
     expect(source).toContain('headerKey: row.key')
     expect(source).toContain('color={repoHeaderColor}')
+  })
+})
+
+describe('pickWorktreeForHost', () => {
+  const localMain: Worktree = { ...worktree, id: 'local-main', isMainWorktree: true }
+  const localChild: Worktree = { ...worktree, id: 'local-child', isMainWorktree: false }
+  const sshRepo: Repo = { ...repo, id: 'repo-ssh', connectionId: 'conn-1' }
+  const sshChild: Worktree = {
+    ...worktree,
+    id: 'ssh-child',
+    repoId: sshRepo.id,
+    isMainWorktree: false
+  }
+  const sshMain: Worktree = {
+    ...worktree,
+    id: 'ssh-main',
+    repoId: sshRepo.id,
+    isMainWorktree: true
+  }
+  const map = new Map<string, Repo>([
+    [repo.id, repo],
+    [sshRepo.id, sshRepo]
+  ])
+  const all = [localChild, localMain, sshChild, sshMain]
+
+  it('returns null when the host has no worktrees', () => {
+    expect(pickWorktreeForHost('ssh:nope', all, map, null)).toBeNull()
+  })
+
+  it('prefers the active worktree when it lives on the host', () => {
+    expect(pickWorktreeForHost(LOCAL_HOST_KEY, all, map, 'local-child')?.id).toBe('local-child')
+  })
+
+  it('falls back to the main worktree when the active one is on another host', () => {
+    // active worktree is on the ssh host, so the local pick ignores it
+    expect(pickWorktreeForHost(LOCAL_HOST_KEY, all, map, 'ssh-main')?.id).toBe('local-main')
+  })
+
+  it('buckets ssh worktrees under their connection host key', () => {
+    expect(pickWorktreeForHost('ssh:conn-1', all, map, null)?.id).toBe('ssh-main')
+  })
+
+  it('falls back to the first worktree when none is main', () => {
+    expect(pickWorktreeForHost(LOCAL_HOST_KEY, [localChild], map, null)?.id).toBe('local-child')
   })
 })

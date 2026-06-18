@@ -53,13 +53,18 @@ const MAX_WRITES_PER_DRAIN = 2
 const HIGH_PRIORITY_MAX_WRITES_PER_DRAIN = 16
 const LARGE_BACKLOG_CHARS = 512 * 1024
 const SYNC_FOREGROUND_FLUSH_CHARS = 256 * 1024
-const MAX_BACKGROUND_QUEUE_CHARS = 2 * 1024 * 1024
-const MAX_BACKGROUND_QUEUE_CHUNKS = 4096
+// Why: this is the bounded memory cap for hidden panes whose host keeps no
+// retained buffer (no snapshot recovery). Snapshot-capable panes never reach it
+// because their hidden bytes are restored from the main buffer instead. 8 MB
+// keeps a comfortable scrollback while still guaranteeing the renderer cannot
+// grow without bound when a backgrounded, throttled tab keeps producing output.
+const MAX_BACKGROUND_QUEUE_CHARS = 8 * 1024 * 1024
+const MAX_BACKGROUND_QUEUE_CHUNKS = 16_384
 const PARSE_SETTLE_TIMEOUT_MS = 250
 // Why: CAN aborts a partial escape sequence before resetting style and showing
 // the lossy-backlog warning.
 const BACKGROUND_BACKLOG_WARNING =
-  '\x18\x1b[0m\r\n[Agentum skipped hidden terminal output because the backlog exceeded 2 MB.]\r\n'
+  '\x18\x1b[0m\r\n[Agentum skipped hidden terminal output because the backlog exceeded 8 MB.]\r\n'
 
 const queuedByTerminal = new Map<TerminalOutputTarget, QueueEntry>()
 const backlogRecoveryByTerminal = new WeakMap<

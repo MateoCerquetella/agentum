@@ -41,7 +41,90 @@ export type SidebarHost = {
   /** Whether `tmux` is installed on the host (sessions run inside it). Drives
    *  the host header's tmux indicator. Undefined until readiness resolves. */
   tmuxInstalled?: boolean
+  /** Whether this host currently has at least one RUNNING session whose agent
+   *  actually spawned in tmux (`tmux_target` non-null). This is the truthful
+   *  per-host "in tmux right now" signal — distinct from `tmuxInstalled`
+   *  ("tmux is available") — and drives the muted glyph on the host header. */
+  hasTmux?: boolean
 }
+
+/** Minimal session shape the per-host tmux check needs. Mirrors the relevant
+ *  fields of `agentum_core::Session` (see runtime/agentum-server-client.ts)
+ *  without depending on the full client type, so this stays pure + testable. */
+export type HostTmuxSession = {
+  status: string
+  /** Set by the server only when the agent really spawned in a tmux session;
+   *  null for local-PTY tabs and crashed sessions. The truthful tmux signal. */
+  tmux_target?: string | null
+  /** Server host UUID the session runs on (null/absent = the local host). */
+  host_id?: string | null
+}
+
+/**
+ * Truthful per-host tmux check: is any session RUNNING with a real `tmux_target`
+ * on the host identified by `hostKey`? A session's `host_id` is the server host
+ * UUID, while sidebar host keys are `local` / `ssh:<connectionId>`, so callers
+ * pass `serverHostIdToHostKey` (built from the resolved host mappings) to bridge
+ * the two. Sessions whose `host_id` isn't in the map bucket under the local host
+ * (matching how `hostKeyForRepo` treats an absent connection).
+ */
+export function hasTmuxForHost(
+  sessions: readonly HostTmuxSession[],
+  hostKey: string,
+  serverHostIdToHostKey: ReadonlyMap<string, string>
+): boolean {
+  return sessions.some((session) => {
+    if (session.status !== 'running' || !session.tmux_target) {
+      return false
+    }
+    const sessionHostKey = session.host_id
+      ? (serverHostIdToHostKey.get(session.host_id) ?? LOCAL_HOST_KEY)
+      : LOCAL_HOST_KEY
+    return sessionHostKey === hostKey
+  })
+}
+
+/** Extract the `tabId` portion (`${tabId}:${leafId}`) from a pane key. Returns
+ *  the whole string when there is no separator, so a malformed key still maps
+ *  through the lookups (and is harmlessly skipped when no tab matches). */
+function tabIdFromPaneKey(paneKey: string): string {
+  const sep = paneKey.indexOf(':')
+  return sep <= 0 ? paneKey : paneKey.slice(0, sep)
+}
+
+/**
+ * Derive the set of host keys that have at least one OPEN, tmux-backed pane.
+ *
+ * Unlike `hasTmuxForHost` (which reads the persisted session list and so keeps
+ * marking a host for sessions the user already closed), this is computed from
+ * `tmuxByPaneKey` — the renderer's "this open pane is bound to a real tmux
+ * session right now" map, cleared on pane dispose. That makes the host glyph
+ * consistent with the per-tab tmux icon and truthful about open panes only.
+ *
+ * Each pane key (`${tabId}:${leafId}`) is resolved tab → worktree → host key
+ * via the two lookup maps the caller assembles from the store. A pane whose tab
+ * (or worktree) no longer exists is skipped rather than bucketed to local.
+ */
+export function hostKeysWithOpenTmux(
+  tmuxByPaneKey: Readonly<Record<string, true>>,
+  tabIdToWorktreeId: ReadonlyMap<string, string>,
+  worktreeIdToHostKey: ReadonlyMap<string, string>
+): Set<string> {
+  const hosts = new Set<string>()
+  for (const paneKey of Object.keys(tmuxByPaneKey)) {
+    const worktreeId = tabIdToWorktreeId.get(tabIdFromPaneKey(paneKey))
+    if (worktreeId === undefined) {
+      continue
+    }
+    const hostKey = worktreeIdToHostKey.get(worktreeId)
+    if (hostKey === undefined) {
+      continue
+    }
+    hosts.add(hostKey)
+  }
+  return hosts
+}
+
 export type ProjectGroupOrdering = 'manual' | 'visible-worktree-order'
 
 export function getProjectGroupOrdering(
@@ -97,7 +180,21 @@ export type HostHeaderRow = {
   count: number
 }
 
-export type Row = GroupHeaderRow | WorktreeRow | ImportedWorktreesCardRow | HostHeaderRow
+// Trailing row inside each SSH repo group: lists the host's pre-existing tmux
+// sessions (not agentum-managed) so they can be attached from the project they
+// belong to, instead of a detached global sidebar section.
+export type RemoteTmuxCardRow = {
+  type: 'remote-tmux-card'
+  key: string
+  repo: Repo
+}
+
+export type Row =
+  | GroupHeaderRow
+  | WorktreeRow
+  | ImportedWorktreesCardRow
+  | HostHeaderRow
+  | RemoteTmuxCardRow
 
 export type PRGroupKey = 'done' | 'in-review' | 'in-progress' | 'closed'
 
@@ -148,6 +245,35 @@ export const LOCAL_HOST_KEY = 'local'
  *  synthetic local host. Mirrors the TUI's `host_group_key()`. */
 export function hostKeyForRepo(repo: Repo | undefined): string {
   return repo?.connectionId ? `ssh:${repo.connectionId}` : LOCAL_HOST_KEY
+}
+
+/**
+ * Pick the worktree to anchor a host-scoped action (e.g. "open terminal here")
+ * to. Host headers don't own a workdir of their own — a terminal must run in
+ * some worktree on that host — so we resolve a sensible representative:
+ *   1. the currently-active worktree, when it already lives on this host (so the
+ *      terminal opens right where the user is looking), then
+ *   2. the host's primary/main worktree (the canonical clone directory), then
+ *   3. the first worktree bucketed under the host.
+ * Returns `null` when the host has no worktrees (no place to open a terminal).
+ */
+export function pickWorktreeForHost(
+  hostKey: string,
+  worktrees: readonly Worktree[],
+  repoMap: ReadonlyMap<string, Repo>,
+  activeWorktreeId: string | null
+): Worktree | null {
+  const onHost = worktrees.filter(
+    (worktree) => hostKeyForRepo(repoMap.get(worktree.repoId)) === hostKey
+  )
+  if (onHost.length === 0) {
+    return null
+  }
+  const active = onHost.find((worktree) => worktree.id === activeWorktreeId)
+  if (active) {
+    return active
+  }
+  return onHost.find((worktree) => worktree.isMainWorktree) ?? onHost[0]
 }
 
 /** Collapse-state key for a host header. Reuses the shared `collapsedGroups`

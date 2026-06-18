@@ -27,22 +27,6 @@ export interface AgentumApi {
     restart: ApiMethod
     setUnreadDockBadgeCount: ApiMethod
   }
-  automations: {
-    create: ApiMethod
-    createExternal: ApiMethod
-    delete: ApiMethod
-    list: ApiMethod
-    listExternalManagers: ApiMethod
-    listRuns: ApiMethod
-    markDispatchResult: ApiMethod
-    rendererReady: ApiMethod
-    runExternalAction: ApiMethod
-    runNow: ApiMethod
-    runPrecheck: ApiMethod
-    update: ApiMethod
-    updateExternal: ApiMethod
-    onDispatchRequested: ApiEvent
-  }
   browser: {
     acceptDownload: ApiMethod
     awaitGrabSelection: ApiMethod
@@ -50,6 +34,7 @@ export interface AgentumApi {
     cancelGrab: ApiMethod
     captureSelectionScreenshot: ApiMethod
     extractHoverPayload: ApiMethod
+    inpageAnnotate: ApiMethod
     notifyActiveTabChanged: ApiMethod
     openDevTools: ApiMethod
     sessionClearDefaultCookies: ApiMethod
@@ -71,6 +56,7 @@ export interface AgentumApi {
     onGrabActionShortcut: ApiEvent
     onGrabModeToggle: ApiEvent
     onGuestLoadFailed: ApiEvent
+    onInpageAnnotation: ApiEvent
     onNavigationUpdate: ApiEvent
     onOpenLinkInAgentumTab: ApiEvent
     onPaneFocus: ApiEvent
@@ -83,10 +69,13 @@ export interface AgentumApi {
   }
   claudeAccounts: {
     add: ApiMethod
+    beginAdd: ApiMethod
     list: ApiMethod
+    liveLogin: ApiMethod
     reauthenticate: ApiMethod
     remove: ApiMethod
     select: ApiMethod
+    syncCurrent: ApiMethod
   }
   claudeUsage: {
     getBreakdown: ApiMethod
@@ -107,10 +96,13 @@ export interface AgentumApi {
   }
   codexAccounts: {
     add: ApiMethod
+    beginAdd: ApiMethod
     list: ApiMethod
+    liveLogin: ApiMethod
     reauthenticate: ApiMethod
     remove: ApiMethod
     select: ApiMethod
+    syncCurrent: ApiMethod
   }
   codexUsage: {
     getBreakdown: ApiMethod
@@ -505,12 +497,12 @@ export interface AgentumApi {
     recordFeatureInteraction: ApiMethod
     replyTabClose: ApiMethod
     replyTabCreate: ApiMethod
+    replyBrowserOp: ApiMethod
     replyTabSetProfile: ApiMethod
     replyTerminalCreate: ApiMethod
     requestClose: ApiMethod
     saveClipboardImageAsTempFile: ApiMethod
     set: ApiMethod
-    setFloatingTerminalInputFocused: ApiMethod
     setMarkdownEditorFocused: ApiMethod
     setShortcutRecorderFocused: ApiMethod
     setTerminalInputFocused: ApiMethod
@@ -552,6 +544,9 @@ export interface AgentumApi {
     onRenameTerminal: ApiEvent
     onRequestTabClose: ApiEvent
     onRequestTabCreate: ApiEvent
+    onRequestBrowserAnnotations: ApiEvent
+    onRequestBrowserGrab: ApiEvent
+    onRequestBrowserAnnotate: ApiEvent
     onRequestTabSetProfile: ApiEvent
     onRequestTerminalCreate: ApiEvent
     onRichMarkdownContextCommand: ApiEvent
@@ -563,7 +558,6 @@ export interface AgentumApi {
     onSwitchTerminalTab: ApiEvent
     onTerminalShortcutCaptured: ApiEvent
     onTerminalZoom: ApiEvent
-    onToggleFloatingTerminal: ApiEvent
     onToggleLeftSidebar: ApiEvent
     onToggleRightSidebar: ApiEvent
     onToggleStatusBar: ApiEvent
@@ -590,9 +584,6 @@ export interface AgentumApi {
     kill: ApiMethod
     scan: ApiMethod
     onAdvertisedUrlChanged: ApiEvent
-  }
-  workspaceSpace: {
-    cancel: ApiMethod
   }
   worktrees: {
     create: ApiMethod

@@ -377,10 +377,11 @@ pub fn ssh_reset_relay() {}
 // key-based reachability). Returns the renderer's {success,state}|{success,error}.
 #[tauri::command]
 pub fn ssh_test_connection(target_id: String) -> Value {
-    let Some(target) = read_targets()
-        .ok()
-        .and_then(|targets| targets.into_iter().find(|candidate| candidate.id == target_id))
-    else {
+    let Some(target) = read_targets().ok().and_then(|targets| {
+        targets
+            .into_iter()
+            .find(|candidate| candidate.id == target_id)
+    }) else {
         return serde_json::json!({
             "success": false,
             "error": format!("SSH target \"{target_id}\" not found")

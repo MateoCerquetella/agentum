@@ -16,12 +16,17 @@ fn read_all_settings(connection: &rusqlite::Connection) -> Result<Value, String>
         .prepare("SELECT key, value FROM settings ORDER BY key")
         .map_err(map_err)?;
     let rows = statement
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .map_err(map_err)?;
     let mut object = serde_json::Map::new();
     for row in rows {
         let (key, raw) = row.map_err(map_err)?;
-        object.insert(key, serde_json::from_str(&raw).unwrap_or(Value::String(raw)));
+        object.insert(
+            key,
+            serde_json::from_str(&raw).unwrap_or(Value::String(raw)),
+        );
     }
     Ok(Value::Object(object))
 }

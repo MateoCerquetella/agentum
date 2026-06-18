@@ -25,6 +25,7 @@ export type KeybindingMatchOptions = {
 export type KeybindingActionId =
   | 'worktree.quickOpen'
   | 'worktree.palette'
+  | 'settings.commandPalette'
   | 'worktree.navigateUp'
   | 'worktree.navigateDown'
   | 'app.settings'
@@ -42,7 +43,6 @@ export type KeybindingActionId =
   | 'sidebar.checks.toggle'
   | 'sidebar.ports.toggle'
   | 'sidebar.focusWorktreeList'
-  | 'floatingTerminal.toggle'
   | 'zoom.in'
   | 'zoom.out'
   | 'zoom.reset'
@@ -191,7 +191,9 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     group: 'Global',
     scope: 'global',
     searchKeywords: ['shortcut', 'export', 'pdf', 'markdown'],
-    defaultBindings: platformBindings(['Mod+Shift+E']),
+    // Why: Mod+Shift+E is VS Code's "Show Explorer" — kept for sidebar.explorer.toggle
+    // (spec 007 C4b). Export PDF stays reachable via the menu (onExportPdfRequested IPC).
+    defaultBindings: platformBindings([]),
     conflictGroup: 'menu'
   },
   {
@@ -205,6 +207,14 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
       linux: ['Mod+Shift+J'],
       win32: ['Mod+Shift+J']
     }
+  },
+  {
+    id: 'settings.commandPalette',
+    title: 'Open Settings Search',
+    group: 'Global',
+    scope: 'global',
+    searchKeywords: ['shortcut', 'settings', 'search', 'palette', 'preferences'],
+    defaultBindings: platformBindings(['Mod+Shift+P'])
   },
   {
     id: 'worktree.navigateUp',
@@ -333,15 +343,6 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     scope: 'global',
     searchKeywords: ['shortcut', 'sidebar', 'worktree', 'focus'],
     defaultBindings: platformBindings(['Mod+0'])
-  },
-  {
-    id: 'floatingTerminal.toggle',
-    title: 'Toggle Floating Terminal',
-    group: 'Global',
-    scope: 'global',
-    searchKeywords: ['shortcut', 'floating terminal', 'terminal'],
-    defaultBindings: platformBindings(['Mod+Alt+A']),
-    allowInTerminal: true
   },
   {
     id: 'zoom.in',

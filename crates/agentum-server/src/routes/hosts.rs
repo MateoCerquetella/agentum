@@ -1,7 +1,11 @@
 //! `/api/hosts` — machines controlled directly by this daemon.
 
-use agentum_core::{Host, HostKind, HostReadiness, NewHost, SshAuth};
-use axum::extract::{Path, State};
+use agentum_core::{
+    EXTERNAL_TMUX_FLAG, Host, HostKind, HostReadiness, LOCAL_HOST_ID, NewHost, NewSession, Session,
+    SshAuth, Status,
+};
+use agentum_store::paths;
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -9,7 +13,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::host_runtime::HostProbe;
+use crate::host_runtime::{DiscoveredTmuxSession, HostProbe};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -19,6 +23,16 @@ pub fn router() -> Router<AppState> {
         .route("/api/hosts/{id}/readiness", get(readiness))
         .route("/api/hosts/{id}/bootstrap", post(bootstrap))
         .route("/api/hosts/{id}/install-agent", post(install_agent))
+        .route("/api/hosts/{id}/provision-skills", post(provision_skills))
+        .route("/api/hosts/{id}/tmux-sessions", get(tmux_sessions))
+        .route(
+            "/api/hosts/{id}/tmux-sessions/{name}/attach",
+            post(attach_tmux_session),
+        )
+        .route(
+            "/api/hosts/{id}/tmux-sessions/{name}",
+            axum::routing::delete(kill_tmux_session_route),
+        )
 }
 
 async fn list(State(state): State<AppState>) -> Result<Json<Vec<Host>>, ApiError> {
@@ -273,6 +287,257 @@ async fn install_agent(
         let _ = state.store.update_host_seen(id).await;
     }
     Ok(Json(report))
+}
+
+/// Body for `POST /api/hosts/{id}/provision-skills`. `confirm` must be `true`;
+/// `skills` are agentum skill ids validated against this daemon's installed
+/// skills in `host_runtime::provision_skills`. File-copy only — never runs an
+/// arbitrary command on the remote.
+#[derive(serde::Deserialize)]
+struct ProvisionSkillsRequest {
+    #[serde(default)]
+    skills: Vec<String>,
+    #[serde(default)]
+    confirm: bool,
+}
+
+/// `POST /api/hosts/{id}/provision-skills` — copy agentum skills (by id) from
+/// this daemon's `~/.claude/skills` to the host's `~/.claude/skills`, then
+/// return the re-probed [`HostReadiness`]. Skills are opt-in per host and never
+/// gate `ok` (purely additive). Rejects `confirm != true`.
+async fn provision_skills(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<ProvisionSkillsRequest>,
+) -> Result<Json<HostReadiness>, ApiError> {
+    let id = parse_uuid(&id)?;
+    if !req.confirm {
+        return Err(ApiError::BadRequest(
+            "provision-skills requires explicit confirm: true".into(),
+        ));
+    }
+    if req.skills.is_empty() {
+        return Err(ApiError::BadRequest("no skills to provision".into()));
+    }
+    let host = state
+        .store
+        .get_host(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
+    let report = crate::host_runtime::provision_skills(&host, &req.skills)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if report.ok {
+        let _ = state.store.update_host_seen(id).await;
+    }
+    Ok(Json(report))
+}
+
+/// Query for `GET /api/hosts/{id}/tmux-sessions`. `path` is the project
+/// root used only to compute the per-session `related` flag — never a
+/// server-side filter, so the UI can render "related first, show all"
+/// from one response.
+#[derive(serde::Deserialize)]
+struct TmuxSessionsQuery {
+    #[serde(default)]
+    path: Option<String>,
+    /// When true, return ALL sessions (external + agentum-managed). The
+    /// per-repo RemoteTmuxRepoCard leaves this false; the host-level modal sets it.
+    #[serde(default)]
+    all: bool,
+}
+
+/// A discovered session plus its relation to the queried project path.
+#[derive(serde::Serialize)]
+struct DiscoveredSessionItem {
+    #[serde(flatten)]
+    session: DiscoveredTmuxSession,
+    /// True when any pane's cwd is at or under the queried `path`.
+    related: bool,
+}
+
+/// `GET /api/hosts/{id}/tmux-sessions?path=…` — list tmux sessions on the
+/// host that agentum does not manage (anything not `agentum-*`). One SSH
+/// round trip; "tmux missing / no server" reads as an empty list.
+async fn tmux_sessions(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<TmuxSessionsQuery>,
+) -> Result<Json<Vec<DiscoveredSessionItem>>, ApiError> {
+    let id = parse_uuid(&id)?;
+    let host = state
+        .store
+        .get_host(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
+    let found = if q.all {
+        crate::host_runtime::list_all_tmux_sessions(&host).await
+    } else {
+        crate::host_runtime::list_tmux_sessions(&host).await
+    }
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let _ = state.store.update_host_seen(id).await;
+    let root = q
+        .path
+        .as_deref()
+        .map(|p| p.trim_end_matches('/'))
+        .filter(|p| !p.is_empty());
+    let items = found
+        .into_iter()
+        .map(|s| {
+            let related = root.is_some_and(|r| {
+                s.panes
+                    .iter()
+                    .any(|p| p.cwd == r || p.cwd.starts_with(&format!("{r}/")))
+            });
+            DiscoveredSessionItem {
+                session: s,
+                related,
+            }
+        })
+        .collect();
+    Ok(Json(items))
+}
+
+/// Derive a valid agentum session name from an arbitrary tmux session
+/// name (tmux allows characters `validate_name` rejects). Truncated to
+/// leave room for a dedup suffix.
+fn external_session_name(tmux_name: &str) -> String {
+    let mut s: String = tmux_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    s.truncate(56);
+    if s.is_empty() {
+        s = "tmux".to_string();
+    }
+    s
+}
+
+/// `POST /api/hosts/{id}/tmux-sessions/{name}/attach` — bind a discovered
+/// tmux session to a new agentum session record so it streams like any
+/// managed session. The record is marked [`EXTERNAL_TMUX_FLAG`], which
+/// makes the whole lifecycle non-destructive: stop/kill/delete only ever
+/// detach; the underlying tmux session is never killed. Idempotent — an
+/// existing record bound to the same (host, tmux session) is re-armed and
+/// returned instead of duplicated.
+async fn attach_tmux_session(
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+) -> Result<(StatusCode, Json<Session>), ApiError> {
+    let host_id = parse_uuid(&id)?;
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(host_id.to_string()))?;
+
+    // Reuse an existing binding for this exact (host, tmux session).
+    let existing = state
+        .store
+        .list_sessions(None)
+        .await?
+        .into_iter()
+        .find(|s| {
+            s.host_id.unwrap_or(LOCAL_HOST_ID) == host_id
+                && s.tmux_target.as_deref() == Some(name.as_str())
+                && s.flags.iter().any(|f| f == EXTERNAL_TMUX_FLAG)
+        });
+
+    // Validate liveness + grab pane metadata in the same round trip.
+    // Use list_all so agentum-managed sessions can also be attached for viewing.
+    let discovered = crate::host_runtime::list_all_tmux_sessions(&host)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .into_iter()
+        .find(|s| s.name == name)
+        .ok_or_else(|| ApiError::NotFound(format!("tmux session not found on host: {name}")))?;
+
+    let session = match existing {
+        Some(s) => s,
+        None => {
+            let new = NewSession {
+                name: external_session_name(&name),
+                workdir: discovered
+                    .panes
+                    .first()
+                    .map(|p| p.cwd.clone())
+                    .unwrap_or_else(|| "~".to_string()),
+                tool: "terminal".to_string(),
+                model: None,
+                flags: vec![EXTERNAL_TMUX_FLAG.to_string()],
+                card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
+            };
+            // The derived name can collide with an existing session; retry
+            // once with a random suffix rather than failing the attach.
+            match state
+                .store
+                .create_session_on_host(new.clone(), Some(host_id))
+                .await
+            {
+                Ok(s) => s,
+                Err(_) => {
+                    let mut retry = new;
+                    retry.name = format!(
+                        "{}-{}",
+                        retry.name,
+                        &Uuid::new_v4().simple().to_string()[..6]
+                    );
+                    state
+                        .store
+                        .create_session_on_host(retry, Some(host_id))
+                        .await?
+                }
+            }
+        }
+    };
+
+    // Arm the pane log pipe and mark the record running with the external
+    // target. `pipe-pane -o` is idempotent, so re-attach is harmless.
+    let log =
+        paths::pane_log(&session.id.to_string()).map_err(|e| ApiError::Internal(e.to_string()))?;
+    crate::host_runtime::pipe_pane(&host, &name, &log)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    state
+        .store
+        .update_status_and_target(session.id, Status::Running, Some(&name))
+        .await?;
+    let session = state
+        .store
+        .get_session_by_id(session.id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(session.id.to_string()))?;
+    Ok((StatusCode::CREATED, Json(session)))
+}
+
+/// `DELETE /api/hosts/{id}/tmux-sessions/{name}` — kill a tmux session on the
+/// Kill a named tmux session on the host. Callers are responsible for only
+/// targeting inactive sessions — this endpoint does not protect `agentum-*`
+/// sessions from deletion.
+async fn kill_tmux_session_route(
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let host_id = parse_uuid(&id)?;
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(host_id.to_string()))?;
+    crate::host_runtime::kill_tmux_session(&host, &name)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn parse_uuid(s: &str) -> Result<Uuid, ApiError> {

@@ -627,7 +627,7 @@ describe('createUISlice hydratePersistedUI', () => {
     expect(store.getState().worktreeCardProperties).toEqual(['status', 'unread', 'inline-agents'])
   })
 
-  it('adds the default-on Ports status item once for older persisted UI', () => {
+  it('adds the default-on Ports + I/O status items once for older persisted UI', () => {
     const setUI = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('window', { api: { ui: { set: setUI } } })
     const store = createUIStore()
@@ -639,14 +639,35 @@ describe('createUISlice hydratePersistedUI', () => {
       })
     )
 
-    expect(store.getState().statusBarItems).toEqual(['claude', 'gemini', 'ports'])
+    expect(store.getState().statusBarItems).toEqual(['claude', 'gemini', 'ports', 'io'])
     expect(setUI).toHaveBeenCalledWith({
-      statusBarItems: ['claude', 'gemini', 'ports'],
-      _portsStatusBarDefaultAdded: true
+      statusBarItems: ['claude', 'gemini', 'ports', 'io'],
+      _portsStatusBarDefaultAdded: true,
+      _ioStatusBarDefaultAdded: true
     })
   })
 
-  it('preserves a user-hidden Ports status item after the one-shot migration ran', () => {
+  it('adds the default-on I/O status item once even after the Ports migration ran', () => {
+    const setUI = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('window', { api: { ui: { set: setUI } } })
+    const store = createUIStore()
+
+    store.getState().hydratePersistedUI(
+      makePersistedUI({
+        statusBarItems: ['claude', 'gemini', 'ports'],
+        _portsStatusBarDefaultAdded: true
+      })
+    )
+
+    expect(store.getState().statusBarItems).toEqual(['claude', 'gemini', 'ports', 'io'])
+    expect(setUI).toHaveBeenCalledWith({
+      statusBarItems: ['claude', 'gemini', 'ports', 'io'],
+      _portsStatusBarDefaultAdded: true,
+      _ioStatusBarDefaultAdded: true
+    })
+  })
+
+  it('preserves user-hidden Ports + I/O status items after both one-shot migrations ran', () => {
     const setUI = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('window', { api: { ui: { set: setUI } } })
     const store = createUIStore()
@@ -654,7 +675,8 @@ describe('createUISlice hydratePersistedUI', () => {
     store.getState().hydratePersistedUI(
       makePersistedUI({
         statusBarItems: ['claude', 'gemini'],
-        _portsStatusBarDefaultAdded: true
+        _portsStatusBarDefaultAdded: true,
+        _ioStatusBarDefaultAdded: true
       })
     )
 
@@ -1212,60 +1234,6 @@ describe('createUISlice page navigation history', () => {
     expect(store.getState().activeView).toBe('terminal')
     expect(store.getState().worktreeNavHistoryIndex).toBe(0)
   })
-
-  it('records and rewinds Automations visits on close', () => {
-    const store = createUIStore()
-    store.setState({ worktreesByRepo: { 'repo-1': [makeWorktree('a')] } })
-
-    store.getState().recordWorktreeVisit('a')
-    store.getState().openAutomationsPage()
-    expect(store.getState().worktreeNavHistory).toEqual(['a', 'automations'])
-    expect(store.getState().worktreeNavHistoryIndex).toBe(1)
-
-    store.getState().closeAutomationsPage()
-    expect(store.getState().activeView).toBe('terminal')
-    expect(store.getState().worktreeNavHistoryIndex).toBe(0)
-  })
-
-  it('dedupes repeated Automations opens against the current history entry', () => {
-    const store = createUIStore()
-    store.setState({ worktreesByRepo: { 'repo-1': [makeWorktree('a')] } })
-
-    store.getState().recordWorktreeVisit('a')
-    store.getState().openAutomationsPage()
-    store.getState().openAutomationsPage()
-
-    expect(store.getState().activeView).toBe('automations')
-    expect(store.getState().worktreeNavHistory).toEqual(['a', 'automations'])
-    expect(store.getState().worktreeNavHistoryIndex).toBe(1)
-  })
-
-  it('keeps the Automations history index when Automations is the only entry', () => {
-    const store = createUIStore()
-
-    store.getState().openAutomationsPage()
-    expect(store.getState().worktreeNavHistory).toEqual(['automations'])
-    expect(store.getState().worktreeNavHistoryIndex).toBe(0)
-
-    store.getState().closeAutomationsPage()
-    expect(store.getState().activeView).toBe('terminal')
-    expect(store.getState().worktreeNavHistoryIndex).toBe(0)
-  })
-
-  it('skips deleted prior worktrees when closing Automations', () => {
-    const store = createUIStore()
-    store.setState({
-      activeView: 'automations',
-      previousViewBeforeAutomations: 'terminal',
-      worktreesByRepo: { 'repo-1': [makeWorktree('c')] },
-      worktreeNavHistory: ['c', 'a', 'automations'],
-      worktreeNavHistoryIndex: 2
-    })
-
-    store.getState().closeAutomationsPage()
-    expect(store.getState().activeView).toBe('terminal')
-    expect(store.getState().worktreeNavHistoryIndex).toBe(0)
-  })
 })
 
 describe('createUISlice feature tips', () => {
@@ -1454,65 +1422,5 @@ describe('createUISlice feature interactions', () => {
 
     expect(store.getState().featureInteractions).toEqual({})
     expect(setMock).not.toHaveBeenCalled()
-  })
-})
-
-describe('createUISlice space navigation', () => {
-  it('records Space page opens as workspace cleanup interactions', () => {
-    const setMock = vi.fn(() => Promise.resolve())
-    vi.stubGlobal('window', {
-      api: {
-        ui: {
-          set: setMock
-        }
-      }
-    })
-    const now = 1_700_000_000_000
-    vi.useFakeTimers()
-    vi.setSystemTime(now)
-
-    try {
-      const store = createUIStore()
-      store.getState().hydratePersistedUI(makePersistedUI())
-      setMock.mockClear()
-
-      store.getState().openSpacePage()
-
-      const expected: FeatureInteractionState = {
-        'workspace-cleanup': { firstInteractedAt: now, interactionCount: 1 }
-      }
-      expect(store.getState().featureInteractions).toEqual(expected)
-      expect(setMock).toHaveBeenCalledWith({ featureInteractions: expected })
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('returns to the tasks page after opening Space from an in-progress draft', () => {
-    const store = createUIStore()
-
-    store.getState().openTaskPage({ preselectedRepoId: 'repo-1' })
-    store.getState().openSpacePage()
-
-    expect(store.getState().activeView).toBe('space')
-    expect(store.getState().previousViewBeforeSpace).toBe('tasks')
-
-    store.getState().closeSpacePage()
-
-    expect(store.getState().activeView).toBe('tasks')
-  })
-
-  it('keeps the original return target when Space is reopened while already visible', () => {
-    const store = createUIStore()
-
-    store.getState().openTaskPage()
-    store.getState().openSpacePage()
-    store.getState().openSpacePage()
-
-    expect(store.getState().previousViewBeforeSpace).toBe('tasks')
-
-    store.getState().closeSpacePage()
-
-    expect(store.getState().activeView).toBe('tasks')
   })
 })

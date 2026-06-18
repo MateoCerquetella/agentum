@@ -404,6 +404,10 @@ mod tests {
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             clipboard_request_bus: broadcast::channel(64).0,
             hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            mcp_token: Arc::new(String::from("test-mcp-token")),
+            api_base_url: None,
+            desktop_bridge: None,
+            harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
         }
     }
 
@@ -415,7 +419,9 @@ mod tests {
     fn isolate_xdg() -> TestEnv {
         // Shared crate-wide lock: AGENTUM_HOME is process-global, so serialise
         // against profiles/planner too (a per-module lock would not).
-        let guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         // SAFETY: `set_var` is unsound under concurrent access.
         // `ENV_LOCK` serialises all tests in this module so only one thread

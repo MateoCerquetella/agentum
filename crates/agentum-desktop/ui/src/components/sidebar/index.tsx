@@ -49,6 +49,9 @@ function Sidebar({
     void hydrateHosts()
   }, [hydrateHosts, sshConnectedGeneration])
 
+  // Note: the per-host tmux glyph is derived reactively in WorktreeList from the
+  // open-pane tmux map (tmuxByPaneKey), so there is no session-list poll here.
+
   const setLiveSidebarWidth = React.useCallback((width: number) => {
     document.documentElement.style.setProperty('--workspace-sidebar-live-width', `${width}px`)
   }, [])

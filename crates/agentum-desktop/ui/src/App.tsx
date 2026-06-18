@@ -37,7 +37,6 @@ import {
 import { useAppStore } from './store'
 import { useShallow } from 'zustand/react/shallow'
 import { isRemoteWorkspaceSnapshotApplyInProgress, useIpcEvents } from './hooks/useIpcEvents'
-import { useAutomationDispatchEvents } from './hooks/useAutomationDispatchEvents'
 import RetainedAgentsSyncGate from './components/dashboard/RetainedAgentsSyncGate'
 import { ActivityTitlebarControls } from './components/activity/ActivityTitlebarControls'
 import Sidebar from './components/Sidebar'
@@ -53,18 +52,8 @@ import { onOnboardingReopened } from './components/onboarding/show-onboarding-ev
 import { shouldShowOnboarding } from './components/onboarding/should-show-onboarding'
 import { SshPassphraseDialog } from './components/settings/SshPassphraseDialog'
 import DeleteWorktreeDialog from './components/sidebar/DeleteWorktreeDialog'
+import { runWorktreeDelete } from './components/sidebar/delete-worktree-flow'
 import { MarkdownTemplatePicker } from './components/editor/MarkdownTemplatePicker'
-import {
-  FloatingTerminalPanel,
-  FloatingTerminalToggleButton
-} from './components/floating-terminal/FloatingTerminalPanel'
-import { TOGGLE_FLOATING_TERMINAL_EVENT } from '@/lib/floating-terminal'
-import {
-  isFloatingWorkspacePanelFocused,
-  isFloatingWorkspacePanelShortcut,
-  isFloatingWorkspaceTerminalInputTarget,
-  shouldMinimizeFloatingWorkspacePanelOnCloseShortcut
-} from '@/lib/floating-workspace-terminal-actions'
 import { DictationController } from './components/dictation/DictationController'
 import { WorkspacePortScanner } from './components/ports/WorkspacePortScanner'
 import { CrashReportDialog } from './components/crash-report/CrashReportDialog'
@@ -118,7 +107,6 @@ import {
 import type { VirtualizedScrollAnchor } from './hooks/useVirtualizedScrollAnchor'
 import type { RemoteWorkspacePatchResult } from '../../shared/remote-workspace-types'
 import type { OnboardingState } from '../../shared/types'
-import { FLOATING_TERMINAL_WORKTREE_ID } from '../../shared/constants'
 import {
   getFeatureTipsAppOpenDecision,
   isCliFeatureTipCompleted
@@ -221,13 +209,12 @@ function WindowControls(): React.JSX.Element {
 
 const Landing = lazy(() => import('./components/Landing'))
 const TaskPage = lazy(() => import('./components/TaskPage'))
-const AutomationsPage = lazy(() => import('./components/automations/AutomationsPage'))
 const ActivityPrototypePage = lazy(() => import('./components/activity/ActivityPrototypePage'))
 const Settings = lazy(() => import('./components/settings/Settings'))
-const SkillsPage = lazy(() => import('./components/skills/SkillsPage'))
-const WorkspaceSpacePage = lazy(() => import('./components/workspace-space/WorkspaceSpacePage'))
+const ChatPage = lazy(() => import('./components/harness/ChatPage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
 const WorktreeJumpPalette = lazy(() => import('./components/WorktreeJumpPalette'))
+const SettingsCommandPalette = lazy(() => import('./components/settings/SettingsCommandPalette'))
 const NewWorkspaceComposerModal = lazy(() => import('./components/NewWorkspaceComposerModal'))
 const WorkspaceCleanupDialog = lazy(
   () => import('./components/workspace-cleanup/WorkspaceCleanupDialog')
@@ -276,7 +263,6 @@ function App(): React.JSX.Element {
   const clearUnreadDockBadge = useUnreadDockBadge()
   useRadixBodyPointerEventsRecovery()
   useWebSessionTabsSync()
-  const [floatingTerminalOpen, setFloatingTerminalOpen] = useState(false)
 
   // Why: Zustand actions are referentially stable, but each individual
   // useAppStore(s => s.someAction) still registers a subscription that React
@@ -331,28 +317,6 @@ function App(): React.JSX.Element {
   const worktreeSidebarScrollOffsetRef = useRef(0)
   const worktreeSidebarScrollAnchorRef = useRef<VirtualizedScrollAnchor>(null)
   const tabsByWorktree = useAppStore((s) => s.tabsByWorktree)
-  const floatingVisibleTabCount = useAppStore((s) => {
-    const terminalIds = new Set(
-      (s.tabsByWorktree[FLOATING_TERMINAL_WORKTREE_ID] ?? []).map((tab) => tab.id)
-    )
-    const browserIds = new Set(
-      (s.browserTabsByWorktree[FLOATING_TERMINAL_WORKTREE_ID] ?? []).map((tab) => tab.id)
-    )
-    const editorIds = new Set(
-      s.openFiles
-        .filter((file) => file.worktreeId === FLOATING_TERMINAL_WORKTREE_ID)
-        .map((file) => file.id)
-    )
-    return (s.unifiedTabsByWorktree[FLOATING_TERMINAL_WORKTREE_ID] ?? []).filter((tab) => {
-      if (tab.contentType === 'terminal') {
-        return terminalIds.has(tab.entityId)
-      }
-      if (tab.contentType === 'browser') {
-        return browserIds.has(tab.entityId)
-      }
-      return editorIds.has(tab.entityId)
-    }).length
-  })
   const activeTabId = useAppStore((s) => s.activeTabId)
   const expandedPaneByTabId = useAppStore((s) => s.expandedPaneByTabId)
   const canExpandPaneByTabId = useAppStore((s) => s.canExpandPaneByTabId)
@@ -362,101 +326,15 @@ function App(): React.JSX.Element {
   const rightSidebarShortcutLabel = useShortcutLabel('sidebar.right.toggle')
   const historyBackShortcutLabel = useShortcutLabel('worktree.history.back')
   const historyForwardShortcutLabel = useShortcutLabel('worktree.history.forward')
-  const floatingTerminalEnabled = useAppStore((s) => s.settings?.floatingTerminalEnabled === true)
-  const floatingTerminalTriggerLocation = useAppStore(
-    (s) => s.settings?.floatingTerminalTriggerLocation ?? 'floating-button'
-  )
-  const statusBarVisible = useAppStore((s) => s.statusBarVisible)
-  const showFloatingTerminalButton =
-    floatingTerminalEnabled &&
-    (floatingTerminalTriggerLocation === 'floating-button' || !statusBarVisible)
-  // Why: the floating workspace is a transient overlay; hotkey minimize should
-  // return keyboard focus to the surface the user was working in before it.
-  const floatingTerminalReturnFocusRef = useRef<HTMLElement | null>(null)
-  const floatingTerminalReturnFocusFrameRef = useRef<number | null>(null)
-
-  const cancelFloatingTerminalReturnFocusFrame = useCallback((): void => {
-    if (floatingTerminalReturnFocusFrameRef.current === null) {
-      return
-    }
-    cancelAnimationFrame(floatingTerminalReturnFocusFrameRef.current)
-    floatingTerminalReturnFocusFrameRef.current = null
-  }, [])
-
   const setAppRootNode = useCallback(
     (node: HTMLDivElement | null): void => {
-      // Why: these best-effort App chrome cleanups share the App root lifetime.
+      // Why: this best-effort App chrome cleanup shares the App root lifetime.
       if (!node) {
-        cancelFloatingTerminalReturnFocusFrame()
         clearUnreadDockBadge()
       }
     },
-    [cancelFloatingTerminalReturnFocusFrame, clearUnreadDockBadge]
+    [clearUnreadDockBadge]
   )
-
-  const rememberFloatingTerminalReturnFocus = useCallback((): void => {
-    const active = document.activeElement
-    if (!(active instanceof HTMLElement)) {
-      floatingTerminalReturnFocusRef.current = null
-      return
-    }
-    if (
-      active.closest('[data-floating-terminal-panel]') ||
-      active.closest('[data-floating-terminal-toggle]')
-    ) {
-      return
-    }
-    floatingTerminalReturnFocusRef.current = active
-  }, [])
-
-  const restoreFloatingTerminalReturnFocus = useCallback((): void => {
-    const target = floatingTerminalReturnFocusRef.current
-    floatingTerminalReturnFocusRef.current = null
-    if (!target || !document.contains(target)) {
-      return
-    }
-    cancelFloatingTerminalReturnFocusFrame()
-    floatingTerminalReturnFocusFrameRef.current = requestAnimationFrame(() => {
-      floatingTerminalReturnFocusFrameRef.current = null
-      if (!document.contains(target)) {
-        return
-      }
-      target.focus({ preventScroll: true })
-    })
-  }, [cancelFloatingTerminalReturnFocusFrame])
-
-  const setFloatingTerminalOpenWithFocus = useCallback(
-    (nextOpen: SetStateAction<boolean>): void => {
-      const resolvedOpen =
-        typeof nextOpen === 'function' ? nextOpen(floatingTerminalOpen) : nextOpen
-      // Why: recordFeatureInteraction updates Zustand subscribers; doing it
-      // inside React's state updater logs a render-phase update warning.
-      if (resolvedOpen && !floatingTerminalOpen) {
-        useAppStore.getState().recordFeatureInteraction('floating-workspace')
-        rememberFloatingTerminalReturnFocus()
-      } else if (!resolvedOpen && floatingTerminalOpen) {
-        restoreFloatingTerminalReturnFocus()
-      }
-      setFloatingTerminalOpen(resolvedOpen)
-    },
-    [floatingTerminalOpen, rememberFloatingTerminalReturnFocus, restoreFloatingTerminalReturnFocus]
-  )
-
-  useEffect(() => {
-    const toggleFloatingTerminal = (): void => {
-      if (floatingTerminalEnabled) {
-        setFloatingTerminalOpenWithFocus((open) => !open)
-      }
-    }
-    window.addEventListener(TOGGLE_FLOATING_TERMINAL_EVENT, toggleFloatingTerminal)
-    return () => window.removeEventListener(TOGGLE_FLOATING_TERMINAL_EVENT, toggleFloatingTerminal)
-  }, [floatingTerminalEnabled, setFloatingTerminalOpenWithFocus])
-
-  useEffect(() => {
-    if (!floatingTerminalEnabled) {
-      setFloatingTerminalOpenWithFocus(false)
-    }
-  }, [floatingTerminalEnabled, setFloatingTerminalOpenWithFocus])
   const sidebarWidth = useAppStore((s) => s.sidebarWidth)
   const sidebarOpen = useAppStore((s) => s.sidebarOpen)
   const groupBy = useAppStore((s) => s.groupBy)
@@ -504,7 +382,6 @@ function App(): React.JSX.Element {
 
   // Subscribe to IPC push events
   useIpcEvents()
-  useAutomationDispatchEvents()
   // Why: retention must run at App level so the inline per-card agents list
   // always sees retained entries. If retention ran inside the sidebar-card
   // subtree, "done" agents would vanish any time the user collapsed a card's
@@ -1138,8 +1015,8 @@ function App(): React.JSX.Element {
   const showSidebar =
     activeView !== 'settings' &&
     activeView !== 'activity' &&
-    activeView !== 'space' &&
-    activeView !== 'skills'
+    activeView !== 'skills' &&
+    activeView !== 'harness'
   // Why: only the terminal workspace replaces the full-width titlebar with
   // split-column chrome. Full-page navigation views keep the draggable app
   // titlebar so their page-level controls can live in that window strip.
@@ -1244,22 +1121,6 @@ function App(): React.JSX.Element {
         }
       }
 
-      // Why: an empty floating workspace has no tab to close; Cmd/Ctrl+W
-      // should hide that transient overlay before underlying app surfaces act.
-      if (
-        keybindingMatchesAction('tab.close', e, shortcutPlatform, keybindings, {
-          context: 'app'
-        }) &&
-        shouldMinimizeFloatingWorkspacePanelOnCloseShortcut({
-          floatingTerminalOpen,
-          floatingVisibleTabCount
-        })
-      ) {
-        e.preventDefault()
-        setFloatingTerminalOpenWithFocus(false)
-        return
-      }
-
       // Why: keep this guard. TipTap's Cmd+B bold binding depends on the
       // window-level handler *not* toggling the sidebar when focus lives in an
       // editable surface. The main-process before-input-event already carves out
@@ -1267,13 +1128,6 @@ function App(): React.JSX.Element {
       // docs/markdown-cmd-b-bold-design.md), but this renderer-side fallback
       // still covers the blur→press IPC race and any non-carved editable surface.
       if (isEditableTarget(e.target)) {
-        return
-      }
-
-      // Why: xterm's helper textarea is intentionally not a generic editable
-      // target, but floating-terminal SSH/tmux control chords must still reach
-      // the terminal instead of app-level chrome shortcuts.
-      if (isFloatingWorkspaceTerminalInputTarget(e.target)) {
         return
       }
 
@@ -1296,22 +1150,6 @@ function App(): React.JSX.Element {
         return
       }
 
-      // Why: only short-circuit chords the floating panel's own keydown
-      // handler claims (Cmd/Ctrl+T, Cmd/Ctrl+W, Cmd/Ctrl+Shift+B/M). Other
-      // app-level mod shortcuts (B, L, Shift+E/F/G) have no panel-level
-      // counterpart, so suppressing them here would silently no-op when
-      // focus lives inside the floating panel.
-      if (isFloatingWorkspacePanelFocused()) {
-        if (
-          isFloatingWorkspacePanelShortcut(e, shortcutPlatform, null, keybindings, {
-            context,
-            terminalShortcutPolicy: settings?.terminalShortcutPolicy
-          })
-        ) {
-          return
-        }
-      }
-
       // Cmd/Ctrl+B — toggle left sidebar
       if (matchShortcut('sidebar.left.toggle')) {
         e.preventDefault()
@@ -1320,11 +1158,88 @@ function App(): React.JSX.Element {
         return
       }
 
-      // Why: Cmd/Ctrl+N is handled via the main-process before-input-event
-      // allowlist (see window-shortcut-policy.ts / useIpcEvents.ts) so it works
-      // globally — including when focus lives inside the markdown rich editor
-      // (contentEditable) or a browser guest webContents, both of which bypass
-      // this renderer-side window keydown listener.
+      // Command palette + quick-open — the "search" palettes. In the Electron
+      // build these fired from the main-process before-input-event; the Tauri
+      // shell has no equivalent, so without these renderer handlers the search
+      // shortcuts never opened anything. Mirrors the (now inert) IPC handlers in
+      // useIpcEvents.ts (onToggleWorktreePalette / onOpenQuickOpen).
+      if (matchShortcut('worktree.palette')) {
+        e.preventDefault()
+        notifyTerminalCapture('worktree.palette')
+        const store = useAppStore.getState()
+        if (store.activeModal === 'worktree-palette') {
+          store.closeModal()
+        } else {
+          store.openModal('worktree-palette')
+        }
+        return
+      }
+
+      // Cmd+Shift+P — settings command palette. Mirrors the worktree.palette
+      // toggle above; the proven Cmd+J path drives navigation from here.
+      if (matchShortcut('settings.commandPalette')) {
+        e.preventDefault()
+        notifyTerminalCapture('settings.commandPalette')
+        const store = useAppStore.getState()
+        if (store.activeModal === 'settings-command-palette') {
+          store.closeModal()
+        } else {
+          store.openModal('settings-command-palette')
+        }
+        return
+      }
+
+      if (matchShortcut('worktree.quickOpen')) {
+        const store = useAppStore.getState()
+        if (store.activeView === 'terminal' && store.activeWorktreeId !== null) {
+          e.preventDefault()
+          notifyTerminalCapture('worktree.quickOpen')
+          store.openModal('quick-open')
+          return
+        }
+      }
+
+      // Menu-group Global shortcuts. In the Electron build these fired from the
+      // main-process before-input-event allowlist (window-shortcut-policy.ts);
+      // the Tauri shell has no equivalent, so without these renderer branches the
+      // chords never fired. The matching IPC handlers in useIpcEvents.ts stay as
+      // inert mirrors for any future native-menu dispatch. Placed before the
+      // right-sidebar early-return below so they fire on every view.
+      if (matchShortcut('app.settings')) {
+        e.preventDefault()
+        notifyTerminalCapture('app.settings')
+        useAppStore.getState().openSettingsPage()
+        return
+      }
+
+      // Cmd/Ctrl+N — new workspace. Mirrors onOpenNewWorkspace: stay quiet on a
+      // fresh install (no repos) and no-op while the composer is already open.
+      if (matchShortcut('workspace.create')) {
+        e.preventDefault()
+        notifyTerminalCapture('workspace.create')
+        const store = useAppStore.getState()
+        if (store.repos.length > 0 && store.activeModal !== 'new-workspace-composer') {
+          store.openModal('new-workspace-composer', { telemetrySource: 'shortcut' })
+        }
+        return
+      }
+
+      // Cmd/Ctrl+Shift+Backspace — delete the current workspace. Mirrors
+      // onDeleteCurrentWorkspace: only from the terminal view with no other modal
+      // open; runWorktreeDelete gates the actual deletion behind a confirmation.
+      if (matchShortcut('workspace.delete')) {
+        e.preventDefault()
+        notifyTerminalCapture('workspace.delete')
+        const store = useAppStore.getState()
+        if (
+          store.activeModal === 'none' &&
+          store.activeView === 'terminal' &&
+          store.activeWorktreeId
+        ) {
+          runWorktreeDelete(store.activeWorktreeId)
+        }
+        return
+      }
 
       // Why: full-page navigation surfaces should not reveal the right sidebar;
       // they are designed as distraction-free content areas.
@@ -1408,11 +1323,8 @@ function App(): React.JSX.Element {
     activeView,
     activeWorktreeId,
     actions,
-    floatingTerminalOpen,
-    floatingVisibleTabCount,
     keybindings,
-    settings?.terminalShortcutPolicy,
-    setFloatingTerminalOpenWithFocus
+    settings?.terminalShortcutPolicy
   ])
 
   useLayoutEffect(() => {
@@ -1454,14 +1366,19 @@ function App(): React.JSX.Element {
     // prevents Windows Chromium from shrinking the app name down to one glyph.
     <div
       ref={titlebarLeftControlsRef}
+      // Why: shared by both layouts, so marking it drag-enables the
+      // traffic-light area in the non-workspace titlebar AND the workspace
+      // left header. The nav buttons inside carry their own no-drag and are
+      // not marked here, so they keep clicking.
+      data-tauri-drag-region
       className={`flex h-full shrink-0 items-center${
         workspaceActive && !sidebarOpen ? ' w-max' : ' w-full'
       }`}
     >
-      <div className="flex h-full items-center">
+      <div data-tauri-drag-region className="flex h-full items-center">
         {isMac && !isFullScreen ? (
           <>
-            <div className="titlebar-traffic-light-pad" />
+            <div className="titlebar-traffic-light-pad" data-tauri-drag-region />
             {/* Ag logo identity anchor next to the traffic lights (matches the design). */}
             <img src={logo} alt="" aria-hidden className="titlebar-logo" />
           </>
@@ -1614,8 +1531,15 @@ function App(): React.JSX.Element {
                 header above the sidebar. Settings, landing, and the tasks
                 page keep the titlebar. */}
                 {!workspaceActive ? (
-                  <div className="titlebar">
+                  // Why: Tauri v2 only drags from elements carrying
+                  // data-tauri-drag-region (it ignores the -webkit-app-region
+                  // CSS this codebase also sets). Mark the titlebar background
+                  // and its empty spacers; interactive children are NOT marked,
+                  // so Tauri starts a drag only when the empty strip is the
+                  // mousedown target — buttons/tabs/inputs keep clicking.
+                  <div className="titlebar" data-tauri-drag-region>
                     <div
+                      data-tauri-drag-region
                       className={`flex items-center${showSidebar && sidebarOpen ? ' overflow-hidden shrink-0' : ' shrink-0 mr-2'}`}
                       style={{ width: showSidebar && sidebarOpen ? sidebarWidth : undefined }}
                     >
@@ -1626,6 +1550,7 @@ function App(): React.JSX.Element {
                     ) : (
                       <div
                         id="titlebar-tabs"
+                        data-tauri-drag-region
                         className={`flex flex-1 min-w-0 self-stretch${activeView !== 'terminal' || !activeWorktreeId ? ' invisible pointer-events-none' : ''}`}
                       />
                     )}
@@ -1678,6 +1603,10 @@ function App(): React.JSX.Element {
                           // stays visible in both states. w-max keeps the floating
                           // header sized to its own controls instead of the w-0
                           // sidebar wrapper.
+                          // Why: workspace-view left header — Tauri drags only
+                          // from data-tauri-drag-region, so mark this strip so
+                          // the traffic-light/nav band is window-draggable.
+                          data-tauri-drag-region
                           className={`titlebar-left${
                             sidebarOpen
                               ? ''
@@ -1783,21 +1712,13 @@ function App(): React.JSX.Element {
                           description="Retry the page or navigate to another agentum surface."
                         >
                           {activeView === 'settings' ? <Settings /> : null}
-                          {activeView === 'skills' ? <SkillsPage /> : null}
                           {activeView === 'tasks' ? <TaskPage /> : null}
-                          {activeView === 'automations' ? <AutomationsPage /> : null}
                           {activeView === 'activity' ? <ActivityPrototypePage /> : null}
-                          {activeView === 'space' ? <WorkspaceSpacePage /> : null}
+                          {activeView === 'harness' ? <ChatPage /> : null}
                           {activeView === 'terminal' && !activeWorktreeId ? <Landing /> : null}
                         </RecoverableRenderErrorBoundary>
                       </Suspense>
                     </div>
-                    {showFloatingTerminalButton ? (
-                      <FloatingTerminalToggleButton
-                        open={floatingTerminalOpen}
-                        onToggle={() => setFloatingTerminalOpenWithFocus((open) => !open)}
-                      />
-                    ) : null}
                   </div>
                 </div>
               </div>
@@ -1819,21 +1740,6 @@ function App(): React.JSX.Element {
               ) : null}
             </div>
           </RecoverableRenderErrorBoundary>
-          {floatingTerminalEnabled ? (
-            <RecoverableRenderErrorBoundary
-              boundaryId="overlay.floating-workspace"
-              surface="overlay"
-              resetKey={floatingTerminalOpen}
-              compact
-              title="The floating workspace hit an error."
-              description="Retry the floating workspace or close and reopen it."
-            >
-              <FloatingTerminalPanel
-                open={floatingTerminalOpen}
-                onOpenChange={setFloatingTerminalOpenWithFocus}
-              />
-            </RecoverableRenderErrorBoundary>
-          ) : null}
           <RecoverableRenderErrorBoundary
             boundaryId="overlay.status-bar"
             surface="overlay"
@@ -1842,7 +1748,7 @@ function App(): React.JSX.Element {
             title="The status bar hit an error."
             description="Retry the status bar to remount its controls."
           >
-            <StatusBar floatingTerminalOpen={floatingTerminalOpen} />
+            <StatusBar />
           </RecoverableRenderErrorBoundary>
           {/* Why: root overlays can render Radix <Tooltip>s; keep them inside
             the shared provider so lazy surfaces mount safely from any entry point. */}
@@ -1887,6 +1793,16 @@ function App(): React.JSX.Element {
                 compact
               >
                 <WorktreeJumpPalette />
+              </RecoverableRenderErrorBoundary>
+            ) : null}
+            {resolvedMountedLazyModalIds.has('settings-command-palette') ? (
+              <RecoverableRenderErrorBoundary
+                boundaryId="modal.settings-command-palette"
+                surface="modal"
+                resetKey={activeModal === 'settings-command-palette'}
+                compact
+              >
+                <SettingsCommandPalette />
               </RecoverableRenderErrorBoundary>
             ) : null}
             {resolvedMountedLazyModalIds.has('feature-wall') ? (

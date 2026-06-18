@@ -10,6 +10,7 @@ import { Button } from '../ui/button'
 import { removeSshTargetWithBestEffortCleanup } from './ssh-target-remove'
 import {
   resolveServerHostIdForConnection,
+  syncServerHostAuthForTarget,
   testServerHost
 } from '@/runtime/server-host-client'
 import { SshTargetCard } from './SshTargetCard'
@@ -81,7 +82,7 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
     const graceSeconds = parseRelayGracePeriodSeconds(form)
     if (!isRelayGracePeriodValid(form, graceSeconds)) {
       toast.error(
-        `Relay grace period must be between 60 and ${MAX_SSH_RELAY_GRACE_PERIOD_SECONDS} seconds, or choose keep alive until reset`
+        `Relay grace period must be between 60 and ${MAX_SSH_RELAY_GRACE_PERIOD_SECONDS} seconds`
       )
       return
     }
@@ -94,15 +95,28 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
       username,
       relayGracePeriodSeconds: graceSeconds,
       ...(form.identityFile.trim() ? { identityFile: form.identityFile.trim() } : {}),
+      // Send the password verbatim — never trimmed. Leading/trailing whitespace
+      // can be a real part of it (and pasting from a password manager often
+      // carries it), so trimming would silently store the wrong secret and every
+      // login would fail with "Permission denied". Guard on the trimmed value
+      // only to treat a whitespace-only field as empty (→ omit it).
+      ...(form.password.trim() ? { password: form.password } : {}),
       ...(form.proxyCommand.trim() ? { proxyCommand: form.proxyCommand.trim() } : {}),
       ...(form.jumpHost.trim() ? { jumpHost: form.jumpHost.trim() } : {})
     }
 
     try {
-      await (editingId
+      const saved = (await (editingId
         ? api.ssh.updateTarget({ id: editingId, updates: target })
-        : api.ssh.addTarget({ target }))
+        : api.ssh.addTarget({ target }))) as SshTarget | undefined
       recordFeatureInteraction('ssh')
+      // Push the (possibly re-entered) password/key to the embedded server host
+      // so the daemon authenticates with the current secret, not a stale one.
+      // The host is created/matched by host/user/port and otherwise never has
+      // its secret refreshed — this is what makes "fix the password" actually work.
+      if (saved?.id) {
+        void syncServerHostAuthForTarget(saved)
+      }
       if (!mountedRef.current) {
         return
       }

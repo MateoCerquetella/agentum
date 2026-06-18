@@ -12,8 +12,6 @@ import {
   CircleX,
   Ellipsis,
   Eye,
-  FolderInput,
-  FolderPlus,
   Plus,
   Shapes,
   SlidersHorizontal,
@@ -33,6 +31,7 @@ import WorktreeCardAgents, {
   SUPPRESS_WORKTREE_LIST_SCROLL_ADJUSTMENT_EVENT
 } from './WorktreeCardAgents'
 import { SshDisconnectedDialog } from './SshDisconnectedDialog'
+import { HostReadinessDialog } from './HostReadinessDialog'
 import { WorktreeActivityStatusIndicator } from './WorktreeActivityStatusIndicator'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -41,9 +40,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
@@ -79,9 +75,12 @@ import {
   getProjectGroupOrdering,
   getLineageGroupKey,
   groupRowsByHost,
-  getHostHeaderKey
+  getHostHeaderKey,
+  hostKeyForRepo,
+  hostKeysWithOpenTmux
 } from './worktree-list-groups'
 import { HostGroupHeader } from './HostGroupHeader'
+import { TmuxSessionsModal, type TmuxSessionsModalHost } from './TmuxSessionsModal'
 import { SessionActivityCard } from './SessionActivityCard'
 import {
   estimateRenderRowSize,
@@ -122,7 +121,12 @@ import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { getShortcutPlatform } from '@/lib/shortcut-platform'
 import { SCROLL_TO_CURRENT_WORKSPACE_REVEAL_REQUEST_EVENT } from '@/lib/scroll-to-current-workspace-status'
 import { useRepoHeaderDrag } from './project-header-drag'
-import WorktreeContextMenu from './WorktreeContextMenu'
+import WorktreeContextMenu, { CLOSE_ALL_CONTEXT_MENUS_EVENT } from './WorktreeContextMenu'
+import {
+  getProjectContextMenuTarget,
+  shouldSuppressProjectHeaderClick,
+  type ProjectContextMenuTarget
+} from './project-context-menu'
 import {
   buildWorktreeDragPreviewOffsets,
   buildManualOrderUpdatesForVisibleGroups,
@@ -394,9 +398,9 @@ const WORKTREE_GROUP_INDENT = 18
 const PROJECT_GROUP_HEADER_BASE_PADDING = 4
 const PROJECT_GROUP_HEADER_INDENT = 10
 // Why: in host-first grouping the host header is the top-level parent, so every
-// row beneath it (repo sub-headers + their worktrees) shifts one step right to
-// make the host → project → worktree nesting read visually.
-const HOST_CHILD_INDENT = 28
+// row beneath it (repo sub-headers + their worktrees) shifts right to make the
+// host → project → worktree nesting read clearly.
+const HOST_CHILD_INDENT = 40
 const SIDEBAR_POINTER_DRAG_THRESHOLD_PX = 4
 
 type VirtualizedWorktreeViewportProps = {
@@ -838,6 +842,17 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   const directScrollInputUntilRef = useRef(0)
   const [dragOverStatus, setDragOverStatus] = useState<WorkspaceStatus | null>(null)
   const [pinDragOver, setPinDragOver] = useState(false)
+  // Single open-at-a-time right-click menu for project header rows. Hoisted to
+  // the viewport (not per-row) so a virtualized list renders only one menu.
+  const [projectContextMenu, setProjectContextMenu] =
+    useState<ProjectContextMenuTarget | null>(null)
+  // Timestamp of the last right-click open, used to swallow the macOS ctrl-click
+  // follow-up `click` so opening the menu does not also toggle the project row.
+  const projectHeaderContextOpenedAtRef = useRef<number | null>(null)
+  // Host Readiness & Provisioning dialog target (sidebar host key + label), or
+  // null when closed. Opened from the host header's readiness chip.
+  const [readinessHost, setReadinessHost] = useState<{ key: string; label: string } | null>(null)
+  const [tmuxModalHost, setTmuxModalHost] = useState<TmuxSessionsModalHost | null>(null)
   const [lineageReconnectWorktreeId, setLineageReconnectWorktreeId] = useState<string | null>(null)
   const [worktreeDragState, setWorktreeDragState] = useState<WorktreeRowDragState>(
     WORKTREE_ROW_DRAG_INITIAL_STATE
@@ -847,6 +862,16 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   const [highlightedRevealWorktreeId, setHighlightedRevealWorktreeId] = useState<string | null>(
     null
   )
+  // Why: closing coordination — right-clicking any other surface dispatches
+  // CLOSE_ALL_CONTEXT_MENUS_EVENT; dismiss our project menu when it fires.
+  useEffect(() => {
+    const closeProjectMenu = () => setProjectContextMenu(null)
+    window.addEventListener(CLOSE_ALL_CONTEXT_MENUS_EVENT, closeProjectMenu)
+    return () => window.removeEventListener(CLOSE_ALL_CONTEXT_MENUS_EVENT, closeProjectMenu)
+  }, [])
+  // Open a terminal scoped to a sidebar host header. Host headers don't own a
+  // workdir, so resolve a representative worktree on the host, activate it
+  // (which sets activeWorktreeId synchronously), then reuse the same terminal
   const worktreeDragSessionRef = useRef<WorktreeSidebarDragSession | null>(null)
   const worktreePointerDragRef = useRef<WorktreePointerDrag | null>(null)
   const worktreePointerAutoscrollFrameIdRef = useRef<number | null>(null)
@@ -2489,6 +2514,35 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
     }
   )
 
+  // Why: both the project header ⋯ button and the new right-click context menu
+  // render the exact same actions, so the item list lives in one closure to
+  // prevent the two entry points from drifting apart.
+  const renderProjectActionItems = (repo: Repo) => (
+    <>
+      <DropdownMenuItem onSelect={() => handleOpenRepoSettings(repo.id)}>
+        <SlidersHorizontal className="size-3.5" />
+        Project Settings
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        onSelect={() => handleOpenRepoSettings(repo.id, getRepositoryIconSectionId(repo.id))}
+      >
+        <Shapes className="size-3.5" />
+        Change Project Icon
+      </DropdownMenuItem>
+      {isGitRepoKind(repo) ? (
+        <DropdownMenuItem onSelect={() => handleOpenWorktreeVisibility(repo.id)}>
+          <Eye className="size-3.5" />
+          {getWorktreeVisibilityMenuLabel(repo)}
+        </DropdownMenuItem>
+      ) : null}
+      <DropdownMenuSeparator />
+      <DropdownMenuItem variant="destructive" onSelect={() => handleRemoveProject(repo)}>
+        <Trash2 className="size-3.5" />
+        Remove Project
+      </DropdownMenuItem>
+    </>
+  )
+
   return (
     <div data-worktree-sidebar-container className="relative min-h-0 flex-1">
       <div
@@ -2513,6 +2567,18 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
         className="worktree-sidebar-scrollbar h-full overflow-y-scroll overflow-x-hidden pl-1 scrollbar-sleek outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset pt-px"
         style={WORKTREE_SIDEBAR_SCROLL_STYLE}
       >
+        <HostReadinessDialog
+          hostKey={readinessHost?.key ?? null}
+          hostLabel={readinessHost?.label ?? ''}
+          open={readinessHost !== null}
+          onOpenChange={(open) => {
+            if (!open) setReadinessHost(null)
+          }}
+        />
+        <TmuxSessionsModal
+          host={tmuxModalHost}
+          onClose={() => setTmuxModalHost(null)}
+        />
         {activeLineageChildConnectionId && activeLineageChildSshStatus ? (
           <SshDisconnectedDialog
             open={
@@ -2570,9 +2636,15 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                   role="presentation"
                   data-worktree-virtual-row
                   data-worktree-virtual-row-key={String(vItem.key)}
+                  data-worktree-virtual-row-start={vItem.start}
                   data-index={vItem.index}
                   ref={measureVirtualRowElement}
-                  className="absolute left-0 right-0 pt-1"
+                  // Why: top-0 is load-bearing — while a repo header is pinned,
+                  // that sticky sibling is in normal flow, so an absolute row
+                  // with top:auto resolves its static position *below* it and
+                  // renders ~28px past its virtual slot, bleeding under the
+                  // next row.
+                  className="absolute left-0 right-0 top-0 pt-1"
                   style={{ transform: getVirtualRowTransform(vItem.start) }}
                 >
                   <HostGroupHeader
@@ -2580,6 +2652,16 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                     count={row.count}
                     collapsed={collapsedGroups.has(row.key)}
                     onToggle={() => toggleGroupWithScrollAnchor(row.key)}
+                    onOpenReadiness={() =>
+                      setReadinessHost({ key: row.host.key, label: row.host.label })
+                    }
+                    onOpenTmuxSessions={() =>
+                      setTmuxModalHost({
+                        key: row.host.key,
+                        label: row.host.label,
+                        kind: row.host.kind
+                      })
+                    }
                   />
                 </div>
               )
@@ -2698,6 +2780,20 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                         : undefined
                     }
                     onClick={(event) => {
+                      // Swallow the macOS ctrl-click that just opened the
+                      // right-click menu so it does not also toggle/select.
+                      if (
+                        shouldSuppressProjectHeaderClick(
+                          projectHeaderContextOpenedAtRef.current,
+                          Date.now()
+                        )
+                      ) {
+                        projectHeaderContextOpenedAtRef.current = null
+                        event.preventDefault()
+                        event.stopPropagation()
+                        return
+                      }
+                      projectHeaderContextOpenedAtRef.current = null
                       if (
                         projectIdForHeader &&
                         onProjectSelectionGesture(event, projectIdForHeader)
@@ -2707,6 +2803,21 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                         return
                       }
                       toggleGroupWithScrollAnchor(row.key)
+                    }}
+                    onContextMenu={(event) => {
+                      const target = getProjectContextMenuTarget({
+                        groupBy,
+                        repo: row.repo,
+                        clientX: event.clientX,
+                        clientY: event.clientY
+                      })
+                      if (!target) {
+                        return
+                      }
+                      event.preventDefault()
+                      projectHeaderContextOpenedAtRef.current = Date.now()
+                      window.dispatchEvent(new Event(CLOSE_ALL_CONTEXT_MENUS_EVENT))
+                      setProjectContextMenu(target)
                     }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
@@ -2816,7 +2927,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                       </DropdownMenu>
                     ) : null}
 
-                    {row.repo && groupBy === 'repo' ? (
+                    {row.repo && (groupBy === 'repo' || groupBy === 'host') ? (
                       <DropdownMenu modal={false}>
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -2845,98 +2956,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                           sideOffset={6}
                           onClick={(event) => event.stopPropagation()}
                         >
-                          <DropdownMenuItem
-                            onSelect={() => {
-                              if (row.repo) {
-                                handleOpenRepoSettings(row.repo.id)
-                              }
-                            }}
-                          >
-                            <SlidersHorizontal className="size-3.5" />
-                            Project Settings
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onSelect={() => {
-                              if (row.repo) {
-                                handleOpenRepoSettings(
-                                  row.repo.id,
-                                  getRepositoryIconSectionId(row.repo.id)
-                                )
-                              }
-                            }}
-                          >
-                            <Shapes className="size-3.5" />
-                            Change Project Icon
-                          </DropdownMenuItem>
-                          {row.repo && isGitRepoKind(row.repo) ? (
-                            <DropdownMenuItem
-                              onSelect={() => {
-                                if (row.repo) {
-                                  handleOpenWorktreeVisibility(row.repo.id)
-                                }
-                              }}
-                            >
-                              <Eye className="size-3.5" />
-                              {getWorktreeVisibilityMenuLabel(row.repo)}
-                            </DropdownMenuItem>
-                          ) : null}
-                          <DropdownMenuItem
-                            onSelect={() => {
-                              if (row.repo) {
-                                handleCreateGroupFromRepo(row.repo)
-                              }
-                            }}
-                          >
-                            <FolderPlus className="size-3.5" />
-                            New group from project
-                          </DropdownMenuItem>
-                          {projectGroups.length > 0 ? (
-                            <DropdownMenuSub>
-                              <DropdownMenuSubTrigger>
-                                <FolderInput className="size-3.5" />
-                                Move to group
-                              </DropdownMenuSubTrigger>
-                              <DropdownMenuSubContent>
-                                {projectGroups.map((group) => (
-                                  <DropdownMenuItem
-                                    key={group.id}
-                                    disabled={row.repo?.projectGroupId === group.id}
-                                    onSelect={() => {
-                                      if (row.repo) {
-                                        handleMoveProjectToGroup(row.repo, group.id)
-                                      }
-                                    }}
-                                  >
-                                    <span className="max-w-48 truncate">{group.name}</span>
-                                  </DropdownMenuItem>
-                                ))}
-                              </DropdownMenuSubContent>
-                            </DropdownMenuSub>
-                          ) : null}
-                          {row.repo.projectGroupId ? (
-                            <DropdownMenuItem
-                              onSelect={() => {
-                                if (row.repo) {
-                                  handleRemoveProjectFromGroup(row.repo)
-                                }
-                              }}
-                            >
-                              <CircleX className="size-3.5" />
-                              Remove from group
-                            </DropdownMenuItem>
-                          ) : null}
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            variant="destructive"
-                            onSelect={() => {
-                              if (row.repo) {
-                                handleRemoveProject(row.repo)
-                              }
-                            }}
-                          >
-                            <Trash2 className="size-3.5" />
-                            Remove Project
-                          </DropdownMenuItem>
+                          {renderProjectActionItems(row.repo)}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     ) : null}
@@ -3324,6 +3344,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
               )
             }
 
+
             const itemWorkspaceStatus =
               groupBy === 'workspace-status'
                 ? getWorkspaceStatus(row.worktree, workspaceStatuses)
@@ -3371,6 +3392,33 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
           })}
         </div>
       </div>
+      {/* Right-click context menu for project header rows. Rendered once; a
+          hidden fixed-positioned trigger anchors Radix's menu at the cursor. */}
+      <DropdownMenu
+        open={projectContextMenu != null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setProjectContextMenu(null)
+          }
+        }}
+        modal={false}
+      >
+        <DropdownMenuTrigger asChild>
+          <button
+            aria-hidden
+            tabIndex={-1}
+            className="pointer-events-none fixed size-px opacity-0"
+            style={{ left: projectContextMenu?.x ?? 0, top: projectContextMenu?.y ?? 0 }}
+          />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="start"
+          sideOffset={0}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {projectContextMenu ? renderProjectActionItems(projectContextMenu.repo) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   )
 })
@@ -3399,6 +3447,14 @@ const WorktreeList = React.memo(function WorktreeList({
   const activeWorktreeId = useAppStore((s) => s.activeWorktreeId)
   const groupBy = useAppStore((s) => s.groupBy)
   const hostMetaByKey = useAppStore((s) => s.hostMetaByKey)
+  // Why: the per-host tmux glyph must reflect only OPEN, tmux-backed panes —
+  // not persisted-but-closed tmux sessions (those keep showing in listSessions
+  // by design). tmuxByPaneKey is the renderer's truthful "this open pane is in
+  // tmux right now" signal (set on bind, cleared on dispose; it also backs the
+  // per-tab tmux icon, so the two surfaces stay consistent). We derive
+  // hostsWithTmux from it below instead of polling the session list.
+  const tmuxByPaneKey = useAppStore((s) => s.tmuxByPaneKey)
+  const hostTmuxTabsByWorktree = useAppStore((s) => s.tabsByWorktree)
   const sshConnectionStates = useAppStore((s) => s.sshConnectionStates)
   const sshTargetLabels = useAppStore((s) => s.sshTargetLabels)
   const workspaceStatuses = useAppStore((s) => s.workspaceStatuses)
@@ -3910,6 +3966,24 @@ const WorktreeList = React.memo(function WorktreeList({
     ]
   )
 
+  // Reactive per-host "open tmux pane" set. Recomputes whenever a pane binds or
+  // disposes a tmux session (tmuxByPaneKey) or the tab/worktree/repo topology
+  // shifts — no session-list poll. tabId → worktreeId → hostKey, where the host
+  // key is derived from the worktree's repo connection (local vs ssh:<id>).
+  const hostsWithTmux = useMemo(() => {
+    const tabIdToWorktreeId = new Map<string, string>()
+    for (const tabs of Object.values(hostTmuxTabsByWorktree)) {
+      for (const tab of tabs) {
+        tabIdToWorktreeId.set(tab.id, tab.worktreeId)
+      }
+    }
+    const worktreeIdToHostKey = new Map<string, string>()
+    for (const worktree of worktreeMap.values()) {
+      worktreeIdToHostKey.set(worktree.id, hostKeyForRepo(repoMap.get(worktree.repoId)))
+    }
+    return hostKeysWithOpenTmux(tmuxByPaneKey, tabIdToWorktreeId, worktreeIdToHostKey)
+  }, [tmuxByPaneKey, hostTmuxTabsByWorktree, worktreeMap, repoMap])
+
   const hostForKey = useCallback(
     (hostKey: string): SidebarHost => {
       const meta = hostMetaByKey[hostKey]
@@ -3939,10 +4013,13 @@ const WorktreeList = React.memo(function WorktreeList({
             : 'This Mac'),
         detail: meta?.detail,
         status,
-        tmuxInstalled: meta?.tmuxInstalled
+        tmuxInstalled: meta?.tmuxInstalled,
+        // Truthful per-host signal: this host has a live tmux-backed session
+        // right now (computed from the session list in the hosts slice).
+        hasTmux: hostsWithTmux.has(hostKey)
       }
     },
-    [hostMetaByKey, sshConnectionStates, sshTargetLabels]
+    [hostMetaByKey, hostsWithTmux, sshConnectionStates, sshTargetLabels]
   )
 
   // Build flat row list for rendering

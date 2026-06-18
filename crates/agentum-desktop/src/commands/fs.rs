@@ -168,10 +168,7 @@ pub async fn fs_create_file(
 }
 
 #[tauri::command]
-pub async fn fs_create_dir(
-    dir_path: String,
-    connection_id: Option<String>,
-) -> Result<(), String> {
+pub async fn fs_create_dir(dir_path: String, connection_id: Option<String>) -> Result<(), String> {
     let _ = connection_id;
     tokio::fs::create_dir_all(dir_path).await.map_err(map_err)
 }
@@ -212,7 +209,9 @@ pub async fn fs_delete_path(
     let metadata = tokio::fs::metadata(&target_path).await.map_err(map_err)?;
     if metadata.is_dir() {
         if recursive.unwrap_or(true) {
-            tokio::fs::remove_dir_all(target_path).await.map_err(map_err)
+            tokio::fs::remove_dir_all(target_path)
+                .await
+                .map_err(map_err)
         } else {
             tokio::fs::remove_dir(target_path).await.map_err(map_err)
         }
@@ -289,7 +288,10 @@ pub async fn fs_list_files(
                     continue;
                 }
                 let path_str = path.to_string_lossy();
-                if excludes.iter().any(|exclude| path_str.contains(exclude.as_str())) {
+                if excludes
+                    .iter()
+                    .any(|exclude| path_str.contains(exclude.as_str()))
+                {
                     continue;
                 }
                 match entry.file_type() {

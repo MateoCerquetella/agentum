@@ -12,10 +12,10 @@ export type EditingTarget = {
   port: string
   username: string
   identityFile: string
+  password: string
   proxyCommand: string
   jumpHost: string
   relayGracePeriodSeconds: string
-  relayKeepAliveUntilReset: boolean
 }
 
 export const EMPTY_FORM: EditingTarget = {
@@ -25,10 +25,10 @@ export const EMPTY_FORM: EditingTarget = {
   port: '22',
   username: '',
   identityFile: '',
+  password: '',
   proxyCommand: '',
   jumpHost: '',
-  relayGracePeriodSeconds: String(DEFAULT_SSH_RELAY_GRACE_PERIOD_SECONDS),
-  relayKeepAliveUntilReset: false
+  relayGracePeriodSeconds: String(DEFAULT_SSH_RELAY_GRACE_PERIOD_SECONDS)
 }
 
 export function getEditingTargetForSshTarget(target: SshTarget): EditingTarget {
@@ -42,14 +42,16 @@ export function getEditingTargetForSshTarget(target: SshTarget): EditingTarget {
     port: String(target.port),
     username: target.username,
     identityFile: target.identityFile ?? '',
+    password: target.password ?? '',
     proxyCommand: target.proxyCommand ?? '',
     jumpHost: target.jumpHost ?? '',
+    // A legacy 0 meant "keep alive until reset" (now removed); fall back to the
+    // default so the field is always a valid finite grace period.
     relayGracePeriodSeconds: String(
-      target.relayGracePeriodSeconds === 0
-        ? DEFAULT_SSH_RELAY_GRACE_PERIOD_SECONDS
-        : (target.relayGracePeriodSeconds ?? DEFAULT_SSH_RELAY_GRACE_PERIOD_SECONDS)
-    ),
-    relayKeepAliveUntilReset: target.relayGracePeriodSeconds === 0
+      target.relayGracePeriodSeconds && target.relayGracePeriodSeconds > 0
+        ? target.relayGracePeriodSeconds
+        : DEFAULT_SSH_RELAY_GRACE_PERIOD_SECONDS
+    )
   }
 }
 
@@ -133,15 +135,14 @@ export function getSshTargetDraftConnectionFields(draft: EditingTarget): {
 }
 
 export function parseRelayGracePeriodSeconds(draft: EditingTarget): number {
-  return draft.relayKeepAliveUntilReset ? 0 : parseInt(draft.relayGracePeriodSeconds, 10)
+  return parseInt(draft.relayGracePeriodSeconds, 10)
 }
 
-export function isRelayGracePeriodValid(draft: EditingTarget, graceSeconds: number): boolean {
+export function isRelayGracePeriodValid(_draft: EditingTarget, graceSeconds: number): boolean {
   return (
-    draft.relayKeepAliveUntilReset ||
-    (!isNaN(graceSeconds) &&
-      graceSeconds >= MIN_SSH_RELAY_GRACE_PERIOD_SECONDS &&
-      graceSeconds <= MAX_SSH_RELAY_GRACE_PERIOD_SECONDS)
+    !isNaN(graceSeconds) &&
+    graceSeconds >= MIN_SSH_RELAY_GRACE_PERIOD_SECONDS &&
+    graceSeconds <= MAX_SSH_RELAY_GRACE_PERIOD_SECONDS
   )
 }
 

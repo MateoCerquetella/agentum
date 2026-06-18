@@ -265,8 +265,6 @@ export default function TerminalPane({
   const clearWorktreeUnread = useAppStore((store) => store.clearWorktreeUnread)
   const clearTerminalTabUnread = useAppStore((store) => store.clearTerminalTabUnread)
   const clearTerminalPaneUnread = useAppStore((store) => store.clearTerminalPaneUnread)
-  const openSpacePage = useAppStore((store) => store.openSpacePage)
-  const refreshWorkspaceSpace = useAppStore((store) => store.refreshWorkspaceSpace)
   const settings = useAppStore((store) => store.settings)
   const updateSettings = useAppStore((store) => store.updateSettings)
   const keybindings = useAppStore((store) => store.keybindings)
@@ -290,14 +288,6 @@ export default function TerminalPane({
       consumeTabStartupCommand(tabId)
     }
   }, [startup, tabId, consumeTabStartupCommand])
-
-  const openDiskSpaceAnalyzer = useCallback(() => {
-    setSessionStateSaveFailureOpen(false)
-    openSpacePage()
-    void refreshWorkspaceSpace().catch((err: unknown) => {
-      console.warn('Failed to refresh Space Analyzer after terminal session save failure:', err)
-    })
-  }, [openSpacePage, refreshWorkspaceSpace])
 
   const quickCommandRepoId =
     worktreeId === FLOATING_TERMINAL_WORKTREE_ID ? null : getRepoIdFromWorktreeId(worktreeId)
@@ -1638,7 +1628,6 @@ export default function TerminalPane({
         <TerminalSessionStateSaveFailureDialog
           open={sessionStateSaveFailureOpen}
           onDismiss={() => setSessionStateSaveFailureOpen(false)}
-          onOpenSpaceAnalyzer={openDiskSpaceAnalyzer}
         />
       )}
       {activePane?.container &&

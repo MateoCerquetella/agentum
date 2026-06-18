@@ -4,6 +4,346 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.3] — 2026-06-15
+
+### Added
+- **Windows desktop build (x64).** `x86_64-pc-windows-msvc` now builds an NSIS
+  `.exe` installer alongside macOS `.dmg` and Linux `.deb`. Note: the daemon
+  shells out to `tmux` (no native Windows port), so the Windows app is a remote
+  client — it drives SSH hosts; local sessions need WSL. (ARM64 Windows is a
+  tracked follow-up — #13.)
+- **Open a terminal from the sidebar host header.** A hover-revealed button on
+  each host group opens a terminal scoped to that host, reusing the existing
+  terminal path (#6).
+
+### Fixed
+- **Markdown / file-open over SSH hosts.** `listRuntimeFiles` /
+  `listRuntimeMarkdownDocuments` / `statRuntimePath` had no SSH-host fallback, so
+  QuickOpen returned empty on a remote host and you couldn't open the `.md`. They
+  now route through the embedded server's `/api/fs/entries` (over SSH) (#9).
+- **Ports panel showed nothing.** The local `workspace_ports_scan` backend was a
+  hardcoded stub; implemented an `lsof`-based scan that attributes listeners to
+  worktrees by cwd, classifies external ports, and can kill them (#12).
+
+### CI
+- `ci.yml` is green again (long-standing `cargo fmt` drift cleared; added
+  `libasound2-dev`, sherpa-dylib staging, and two stale `AppState` test fixes;
+  added a Windows job).
+- `release.yml`: Windows toolchain (MSVC + nasm + `CC=cl`), `shell: bash` for the
+  bundle step, and dropped git-bash's `link.exe` so the MSVC linker wins; the
+  publish job is gated to tag pushes so dispatches can test-build without shipping.
+
+## [0.14.2] — 2026-06-15
+
+### Fixed
+- **GitHub Projects panel shows every item again.** The panel filtered project
+  rows down to repos already added to Agentum, so opening a project whose items
+  belong to a not-yet-added repo rendered a misleading "No items match this
+  view's filter" with a 0 count. It now renders the full project (like GitHub);
+  rows for repos not in Agentum are still handled per-row (the slug dialog and
+  the "Repository not in Agentum" prompt).
+- **`agentum status` reports an unreachable control plane instead of zeros.** It
+  swallowed every list error, so a server it couldn't reach at all (down, or a
+  plaintext base hitting a TLS daemon) printed a misleading `sessions 0 /
+  worktrees 0 / hosts 0`. A single missing route still counts as empty, but if
+  all of them fail it now errors with the base URL and how to point it at a
+  reachable server.
+
+### Added
+- **`agentum prune`** removes dead "zombie" sessions the control plane is still
+  tracking (left by crashed agents). Dry-run by default; `--yes` to remove,
+  `--stopped` to also include stopped sessions. Running/idle sessions are never
+  touched, and sessions started outside agentum are never in the store, so they
+  can't be killed.
+
+### CI
+- Release builds: install `libasound2-dev` on Linux (the voice-STT `alsa-sys`
+  dep) and stage the macOS sherpa/onnxruntime dylibs before bundling — the two
+  failures that blocked the v0.14.0 and v0.14.1 releases from publishing.
+
+## [0.14.1] — 2026-06-13
+
+### Fixed
+- **Remote (SSH) sessions recover the whole UI on reconnect, not just the
+  terminal.** When a dropped session stream re-attached, the pane repainted but
+  the sidebar SSH badge stayed "Disconnected" and the file tree stayed stuck on
+  the outage's `/api/fs/entries` error. A successful reconnect now marks the host
+  connected, which repaints the status-bar/sidebar badges and re-fires the file
+  explorer's failed-load retry.
+- **Blank remote panes self-heal after reopening the app.** An idle remote
+  session's only paint source is its connect snapshot; when that snapshot was
+  lost (an xterm reflow during a multi-pane restore, or an empty server snapshot
+  under SSH ControlMaster channel pressure) the pane sat blank with no live bytes
+  to recover it. The desktop now detects a still-blank pane shortly after connect
+  and forces a bounded fresh re-snapshot.
+- **"Sign in to Claude to see usage" shown while actually signed in.** Claude
+  Code keeps the OAuth token in both `~/.claude/.credentials.json` and the macOS
+  Keychain, which diverge as it rotates the token (~hourly); a fixed read order
+  surfaced the stale copy. Usage now reads every store and picks the
+  freshest-expiring token.
+
+### Changed
+- **SSH connection hardening.** Explicit-key auth now sets `IdentitiesOnly=yes`
+  and forces the publickey method, so `ssh` no longer offers every agent/default
+  key first and trips a server's `MaxAuthTries` ("Too many authentication
+  failures") before the configured key is tried. All connections set
+  `TCPKeepAlive=yes` so a dead peer is detected at the TCP layer and a stale
+  pooled ControlMaster is reset rather than left half-open.
+- Remote pane sampling backs off slightly (vs. the local 1 s cadence) to cut
+  per-tick SSH load on hosts with many open sessions.
+
+## [0.14.0] — 2026-06-11
+
+### Added
+- **The `agentum` CLI is now a control plane for the running app.** Commands run
+  inside an agentum-managed terminal auto-discover the desktop's embedded server
+  via the `AGENTUM_API_URL` injected into every pane (falling back to the active
+  profile, then `127.0.0.1:8822`). New commands: `agentum status`,
+  `agentum worktree list/current`, `agentum terminal list/read/send/wait`, and
+  `agentum exec` (run a shell command in a session and capture its output). Bare
+  `agentum terminal` still launches the TUI.
+- **Inter-agent orchestration.** A SQLite-backed mail store plus a task DAG and
+  dispatch, exposed as `agentum orchestration send/check/reply/inbox`,
+  `task-create/task-list/task-update`, and `dispatch/dispatch-show`. Handles are
+  session names (injected as `AGENTUM_TERMINAL_HANDLE`); group addresses
+  (`@all`/`@idle`/`@claude`/…/`@worktree:<id>`) fan out to one message per
+  recipient. Completing a task auto-promotes any dependents whose dependencies
+  are all done.
+- **Browser-pane automation.** `agentum tab list`, `navigate`, `click`, and
+  `fill` drive the desktop's native webviews. (DOM `snapshot` returns the URL;
+  full DOM read is still to come.)
+- **macOS computer-use.** `agentum computer list-apps/get-app-state/click/
+  set-value/type-text/press-key` inspects and drives local apps through the
+  Accessibility tree, running inside the desktop app (which holds the
+  Accessibility grant). Enable agentum under System Settings → Privacy →
+  Accessibility to use the read/act ops.
+- **Multi-account for Claude and Codex.** Capture and switch between several
+  signed-in accounts (email-only list, link sign-in, no forced System default).
+- **On-device Voice dictation** (sherpa-rs, offline) and **read-only GitHub
+  Projects**.
+- **Remote tmux discovery & attach.** Surface and attach to external tmux
+  sessions running on SSH hosts.
+
+### Changed
+- **Much faster SSH remoting.** Connection compression (~11× pane-stream
+  throughput on slow links), a persistent keystroke channel on the warm master
+  (~3× faster remote input), a shared streaming master for pane tails (kills the
+  per-session connect storm), and pipe-pane armed inside the snapshot exec
+  (~2× faster first paint).
+
+### Fixed
+- **Reopening an agent worktree no longer re-types `claude`** into the running
+  agent's composer — the launch command is only sent to a freshly spawned pane.
+- **agentum now registers in macOS Accessibility** when launched as the packaged
+  app (the registration is keyed to the `.app` bundle).
+- **Terminal "Composing…" snapshot corruption** fixed by anchoring capture-pane
+  snapshots to the pane cursor.
+- **Working state now surfaces for title-silent agents** (OpenCode, Codex) via
+  byte-flow detection.
+- The PostToolUse hook URL is derived from the server's actual base instead of a
+  hardcoded `127.0.0.1:8822`.
+
+## [0.13.8] — 2026-06-10
+
+### Fixed
+- **Re-entering an SSH password now actually takes effect.** The embedded host
+  the daemon authenticates with was matched to a native SSH target by
+  host/user/port only and **never had its stored secret refreshed** — so once a
+  host was created with a wrong password, editing the password (or even deleting
+  and re-adding the target) reused the same host and kept failing with
+  "Permission denied", even though the same password worked in a terminal.
+  Saving a target now pushes its current auth to the matching host, and the
+  connection resolver refreshes an existing host's auth instead of blindly
+  reusing it. Verified end-to-end: a host with a wrong password is rejected, and
+  PUT-ing the correct password makes it authenticate. (Re-enter the password
+  once on an affected host to store the correct value.)
+
+## [0.13.7] — 2026-06-10
+
+### Fixed
+- **Password SSH hosts no longer fail with a trimmed password.** The SSH form
+  trimmed the password before saving, so a password with a leading or trailing
+  space (common when pasting from a password manager) was stored wrong and every
+  login failed with "Permission denied" — even though the same password worked
+  in a terminal. The password is now stored and sent verbatim. (Re-enter the
+  password on an affected host to refresh the stored value.)
+
+### Changed
+- **The status-bar I/O-speed chip is SSH-only.** I/O throughput is only
+  meaningful for remote hosts (local sessions stream over loopback), so the chip
+  no longer offers the local device and hides entirely when no SSH host is
+  configured.
+
+## [0.13.6] — 2026-06-10
+
+### Added
+- **Per-agent "running in tmux" indicator.** Agents in the sidebar now show a
+  small green terminal glyph when their pane is backed by a real tmux session
+  (mirrors the existing host-header and terminal-tab tmux markers).
+
+### Changed
+- **Sidebar filter: "Show default branches" (on by default).** The default-branch
+  workspace filter is now framed positively and is *on* by default, so the
+  default branch shows out of the box and the filter badge no longer reads "1"
+  on a fresh launch. Turning it off hides default-branch workspaces. The server
+  now reports `isMainWorktree` per worktree so the filter can actually identify
+  the default branch (previously it defaulted to false for every row and the
+  filter silently did nothing).
+
+## [0.13.5] — 2026-06-10
+
+### Changed
+- **Password SSH hosts no longer need `sshpass` installed.** The daemon used to
+  shell out to an external `sshpass` binary to feed a host's password to `ssh` —
+  so a password host on a machine without `sshpass` failed at connect time with
+  a bare *"No such file or directory (os error 2)"*. Password auth now goes
+  through OpenSSH's own `SSH_ASKPASS` helper (`SSH_ASKPASS_REQUIRE=force`),
+  which the stock `ssh` on every modern macOS/Linux supports — nothing to
+  install. The password travels in the child process environment instead of on
+  the command line, so it no longer appears in `ps` (a small security
+  improvement over `sshpass -p`). `agentum doctor` no longer probes for
+  `sshpass`.
+
+## [0.13.3] — 2026-06-09
+
+### Changed
+- **Marketing landing page redesign** (`web/`): a new animated background and
+  design-system polish. The app itself is unchanged from 0.13.2; `web/` deploys
+  to Netlify independently of the desktop/CLI artifacts.
+
+## [0.13.2] — 2026-06-09
+
+### Fixed
+- **Files in remote (SSH) workspaces open again.** Opening a file in an SSH
+  workspace showed *"Unable to load file — No such file or directory (os error
+  2)"*: the file *tree* listed over SSH, but the file *read* fell back to the
+  local filesystem and ENOENT'd on the remote path. Added a host-aware
+  `GET /api/fs/read` endpoint (reads over the connection via the daemon) and
+  routed the editor's read through it, mirroring how directory listing already
+  works.
+- **The status-bar I/O-speed chip remembers its host.** The saved host was
+  clobbered on reload: SSH host labels hydrate asynchronously, so the saved SSH
+  choice was momentarily "unknown" and a fallback reset it to local *and
+  persisted that*. The selection is now preserved and the chip snaps back to the
+  chosen host once it reappears.
+
+## [0.13.1] — 2026-06-09
+
+### Fixed
+- **macOS desktop bundles build again.** The macOS CI runner's node@22 aborted
+  (SIGABRT) while closing file handles during the Vite UI build, which failed
+  `beforeBuildCommand` and blocked every macOS release since v0.11.0 (Linux +
+  CLI artifacts were unaffected). The desktop UI now builds under bun's runtime
+  (`bun run --bun build`), sidestepping the node bug. No app behavior changes.
+
+## [0.13.0] — 2026-06-09
+
+A cleanup-and-repair release: two unused surfaces are gone, several
+half-wired features now actually work, and a class of worktree errors that
+broke source control is self-healed.
+
+### Removed
+- **Automations.** The scheduled/cron automations feature (page, sidebar
+  entry, dispatch hooks, and backend commands) was removed — it was unused.
+- **Toolbox + Space Analyzer.** The Toolbox dropdown and the disk-usage
+  "Space Analyzer" were removed. **Skills** moved into the Help menu, where
+  it stays one click away.
+
+### Added
+- **CLI registration actually registers now.** "Register `agentum`" locates a
+  real `agentum` CLI binary (next to the app, on `PATH`, or in cargo/Homebrew
+  dirs) and symlinks it into `/usr/local/bin` (macOS) or `~/.local/bin`
+  (Linux). When no binary exists it stays honest and tells you how to install
+  one, instead of the old fixed "not available in this build" stub.
+- **Add Project: paste-a-path fallback.** The add-project dialog gained a
+  manual folder-path field, so adding a project still works when the native
+  folder picker can't open (e.g. Linux without a desktop portal).
+
+### Fixed
+- **"Branch compare failed" / `400 workdir does not exist`.** A session whose
+  `…/.claude/worktrees/<name>` directory went missing (pruned out-of-band or a
+  registry row that outlived its checkout) is now recreated from the parent
+  repo instead of hard-failing — restoring branch compare and every git/
+  terminal operation that opens the worktree. Applied at both session create
+  and start.
+- **Search shortcuts work again.** The command palette and quick-open
+  shortcuts relied on an Electron main-process key path that the Tauri shell
+  never replaced, so none of them fired. They're now handled in the renderer.
+- **Send feedback reaches a human.** "Send feedback" opens a prefilled GitHub
+  issue on the project repo instead of POSTing to a backend that wasn't wired
+  up and always failed.
+- **Docs link.** The Help → Docs link now points at the project README on
+  GitHub (there is no hosted docs site).
+
+## [0.11.0] — 2026-06-09
+
+A desktop-focused release: remote SSH hosts get password auth and much faster
+file/terminal operations, tmux-backed sessions become persistent and visible
+throughout the UI, and the Linear connection is now live.
+
+### Added
+- **SSH hosts support password authentication.** Add a host with a password
+  instead of a key. The old relay keep-alive toggle was removed.
+- **Host-first New Workspace.** The New Workspace flow now leads with a host
+  selector, guards against pointing at a non-git directory, and surfaces a
+  friendly error when a workspace can't be created (spec 006).
+- **Opt-in tmux persistence with silent auto-reattach.** Sessions can opt into
+  running under tmux and will silently re-attach to the live tmux pane across
+  reloads and reconnects instead of being killed and respawned (spec 005-C).
+- **tmux is visible everywhere it matters.** Terminal tabs and host headers
+  show a tmux glyph when a session is backed by a live tmux pane, with a hover
+  tooltip listing the running sessions on that host. The status bar gained a
+  per-host I/O speed chip with a host selector so you can watch throughput per
+  machine.
+- **Cleaner remote-host display.** Host IPs are hidden in the sidebar header
+  and revealed on hover.
+- **Linear integration is live.** The Linear connection surface is wired to the
+  Linear GraphQL API, backed by an on-disk credential store.
+
+### Fixed
+- **Remote operations are much faster.** The remote file tree is host-aware and
+  SSH connections are pooled via ControlMaster — with the control socket kept in
+  a private `$XDG_RUNTIME_DIR`/`$HOME` dir rather than `$TMPDIR` — so repeated
+  remote git/file calls reuse one connection.
+- **Persistent terminals survive tab switches and reconnects.** Hidden panes are
+  recovered from a snapshot instead of dropping their output, and the server
+  reattaches to a live tmux session instead of killing + respawning it.
+- **The per-host tmux glyph is now truthful and live.** It reflects actual open
+  tmux panes (not persisted session rows), refreshes by polling, and maps
+  sessions to their sidebar host from the repo list.
+- **Hookless agents no longer look stuck.** Agents without status hooks (e.g.
+  OpenCode) are detected as Working via active-redraw change detection.
+- **Desktop polish.** The macOS dock icon is no longer oversized (the artwork is
+  padded to ~80%), the custom topbar is draggable again
+  (`data-tauri-drag-region` + `core:window:allow-start-dragging`), built-in
+  notification sounds play instead of 404-ing (served via a Vite glob), and
+  renderer error-boundary reports are persisted to `renderer-errors.log`.
+
+### Internal
+- **Repaired the release pipeline.** CI still built the standalone `dashboard/`
+  crate, which was removed in the v0.10.11 thin-shell refactor — so desktop
+  bundle builds failed and the v0.10.11 `.dmg`s had to be attached by hand. CI
+  now builds the embedded Tauri UI (`crates/agentum-desktop/ui`) with bun for
+  the mac/linux desktop apps, and `tauri-build` features are pinned to `[]`.
+
+## [0.10.11] — 2026-06-06
+
+### Added
+- **Edit and delete SSH hosts from the terminal UI.** The `Ctrl-H` hosts
+  overlay can now edit a host's connection settings in place (`e`) and
+  remove a host (`d`) behind a confirmation prompt — both also reachable
+  from the command palette (`Ctrl-P` → "Edit host…" / "Delete host…").
+  Editing pre-fills the form from the host (including the stored password
+  for password auth) and preserves the host's id, so any sessions already
+  attached to it stay put. Backed by a new `PUT /api/hosts/{id}` route.
+
+### Fixed
+- **Deleting an SSH host is now discoverable and safe.** Delete was bound
+  to `d` but never advertised, had no confirmation, and surfaced the
+  daemon's "host still has sessions" rejection as a surprise error. It's
+  now listed in the overlay's help line and the command palette, and asks
+  before removing.
+
 ## [0.10.10] — 2026-06-01
 
 ### Fixed

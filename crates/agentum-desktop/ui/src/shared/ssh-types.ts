@@ -15,6 +15,12 @@ export type SshTarget = {
   username: string
   /** Path to private key file, if using key-based auth. */
   identityFile?: string
+  /** Password for password-based auth (alternative to key/agent). When set, the
+   *  server host registers with `SshAuth::Password` (shelled through `sshpass`).
+   *  Stored at rest in the local targets file — the same plaintext tradeoff the
+   *  daemon's `SshAuth::Password` already makes; offered for boxes that only
+   *  allow password login. Leave empty to use the identity file / SSH agent. */
+  password?: string
   /** SSH agent socket path from IdentityAgent, if configured. */
   identityAgent?: string
   /** Whether OpenSSH IdentitiesOnly should limit public-key auth attempts. */

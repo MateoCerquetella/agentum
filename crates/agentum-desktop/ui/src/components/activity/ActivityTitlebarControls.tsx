@@ -11,7 +11,14 @@ export function ActivityTitlebarControls(): React.JSX.Element {
   const closeActivityPage = useAppStore((s) => s.closeActivityPage)
 
   return (
-    <div className="flex h-full min-w-0 flex-1 items-center gap-3 border-l border-border px-3">
+    // Why: this fills the titlebar's center slot in the activity view, so its
+    // empty area must be window-draggable under Tauri (which uses
+    // data-tauri-drag-region, not -webkit-app-region). The inner control
+    // cluster keeps its no-drag, so Back/badge stay interactive.
+    <div
+      data-tauri-drag-region
+      className="flex h-full min-w-0 flex-1 items-center gap-3 border-l border-border px-3"
+    >
       <div
         className="flex min-w-0 items-center gap-2"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}

@@ -2812,6 +2812,58 @@ describe('connectPanePty', () => {
     disposable.dispose()
   })
 
+  it('keeps hidden output through the bounded scheduler when no main snapshot exists', async () => {
+    const { connectPanePty } = await import('./pty-connection')
+    const transport = createMockTransport('pty-id')
+    const capturedDataCallback: {
+      current: ((data: string, meta?: { seq?: number; rawLength?: number }) => void) | null
+    } = { current: null }
+    transport.connect.mockImplementation(async ({ callbacks }: { callbacks: ConnectCallbacks }) => {
+      capturedDataCallback.current = callbacks.onData ?? null
+      return 'pty-id'
+    })
+    transportFactoryQueue.push(transport)
+    const getMainBufferSnapshot = window.api.pty.getMainBufferSnapshot as unknown as ReturnType<
+      typeof vi.fn
+    >
+    // Why: the desktop's local PTY shell has no retained buffer and answers the
+    // snapshot with null. The pane must not drop the hidden bytes for a snapshot
+    // that never arrives; the bounded scheduler keeps them until the pane shows.
+    getMainBufferSnapshot.mockResolvedValue(null)
+
+    const hidden = 'hidden output that must survive\r\n'
+    const live = 'visible-after\r\n'
+
+    const pane = createPane(1)
+    const manager = createManager(1)
+    const deps = createDeps({
+      isVisibleRef: { current: false }
+    })
+    const disposable = connectPanePty(pane as never, manager as never, deps as never)
+    await flushAsyncTicks(6)
+
+    vi.useFakeTimers()
+    capturedDataCallback.current?.(hidden, { seq: hidden.length, rawLength: hidden.length })
+    vi.advanceTimersByTime(50)
+
+    ;(deps.isVisibleRef as { current: boolean }).current = true
+    capturedDataCallback.current?.(live, {
+      seq: hidden.length + live.length,
+      rawLength: live.length
+    })
+    vi.runAllTimers()
+    await flushAsyncTicks(20)
+    vi.runAllTimers()
+
+    const output = (pane.terminal.write as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .map(([data]) => data as string)
+      .join('')
+    expect(output).toContain('hidden output that must survive')
+    expect(output).not.toContain('main recovery was unavailable')
+    expect(output).not.toContain('Agentum skipped hidden terminal output')
+    disposable.dispose()
+  })
+
   it('pauses renderer PTY output while hidden and restores from main snapshot on show', async () => {
     const { connectPanePty } = await import('./pty-connection')
     const transport = createMockTransport('pty-id')

@@ -151,6 +151,7 @@ mod tests {
                     bootstrapable: false,
                 },
             ],
+            skills: vec![],
         }
     }
 

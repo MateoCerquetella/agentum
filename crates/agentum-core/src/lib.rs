@@ -102,11 +102,12 @@ pub enum SshAuth {
     Key {
         path: String,
     },
-    /// Password auth. The daemon shells out to `sshpass` to feed this
-    /// password to `ssh` non-interactively. Stored on the local host's
-    /// SQLite DB (`agentum-store` `hosts.secret`). Less secure than
-    /// key/agent (the secret lives at rest) — offered because users with
-    /// fresh boxes that only have password login asked for it.
+    /// Password auth. The daemon feeds this password to `ssh` non-interactively
+    /// via OpenSSH's own SSH_ASKPASS helper (no external `sshpass` binary —
+    /// works with the stock `ssh` on every modern macOS/Linux). Stored on the
+    /// local host's SQLite DB (`agentum-store` `hosts.secret`). Less secure than
+    /// key/agent (the secret lives at rest) — offered because users with fresh
+    /// boxes that only have password login asked for it.
     Password {
         password: String,
     },
@@ -146,6 +147,12 @@ pub struct HostReadiness {
     /// Optional agent CLIs from `agentum_executor::probed_tools()`. A
     /// missing agent only blocks if the user picks that specific tool.
     pub agents: Vec<AgentDepCheck>,
+    /// Optional agentum skills detected in the host's `~/.claude/skills`.
+    /// Like agents, a missing skill never blocks `ok` — skills are opt-in
+    /// per host and provisioned by copying the local skill files over SSH.
+    /// `#[serde(default)]` keeps older daemons' payloads parseable.
+    #[serde(default)]
+    pub skills: Vec<SkillCheck>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,6 +203,19 @@ pub struct AgentDepCheck {
     pub install_hint: Option<String>,
     /// Always `false`: agentum never auto-installs agent CLIs.
     pub bootstrapable: bool,
+}
+
+/// An optional agentum skill detected in the host's `~/.claude/skills`.
+/// Provisioned to a host by copying the local skill files over SSH
+/// (`provision-skills`); never gates host readiness (opt-in per host).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillCheck {
+    /// Skill id = directory name (e.g. "browser-verification-loop").
+    pub id: String,
+    /// Display label (defaults to the id).
+    pub label: String,
+    /// `true` when the skill's directory exists in the host's `~/.claude/skills`.
+    pub installed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -761,6 +781,15 @@ pub fn validate_username(name: &str) -> Result<(), CoreError> {
     }
     Ok(())
 }
+
+/// Marker stored in `Session::flags` when the session was created by
+/// attaching to a pre-existing (non-agentum) tmux session on its host.
+/// Sessions carrying it must never have their tmux session killed by
+/// agentum — stop/kill only detach (disarm pipe-pane and keep the stored
+/// `tmux_target`), and start may only reattach, never respawn. The flag
+/// also never reaches an adapter `launch()` because external sessions are
+/// blocked from the spawn path.
+pub const EXTERNAL_TMUX_FLAG: &str = "--agentum-external-tmux";
 
 /// Validate a session name: lowercase alphanumeric, dash, underscore. 1..=64 chars.
 pub fn validate_name(name: &str) -> Result<(), CoreError> {

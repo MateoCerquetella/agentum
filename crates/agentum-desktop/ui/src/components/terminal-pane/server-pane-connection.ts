@@ -4,9 +4,10 @@
 // lifecycle treats both identically. Off by default — see shouldUseServerTerminals.
 import type { PaneManager, ManagedPane } from '@/lib/pane-manager/pane-manager'
 import { connectPanePty, type PanePtyBinding } from './pty-connection'
+import { getSession } from '@/runtime/agentum-server-client'
 import type { PtyConnectionDeps } from './pty-connection-types'
 import { useAppStore } from '@/store'
-import { ensureWorkspaceSession } from '@/runtime/workspace-session'
+import { ensureWorkspaceSession, sessionName } from '@/runtime/workspace-session'
 import { resolveServerHostIdForConnection } from '@/runtime/server-host-client'
 import { getRepoMapFromState, getWorktreeMapFromState } from '@/store/selectors'
 import {
@@ -15,6 +16,8 @@ import {
 } from '@/runtime/server-session-terminal'
 import { detectAgentStatusFromTitle } from '@/lib/agent-status'
 import { makePaneKey } from '../../../../shared/stable-pane-id'
+import { createPaneActivityTracker, type PaneActivityTracker } from './pane-activity-tracker'
+import type { AgentType } from '../../../../shared/agent-status-types'
 
 /** The tab's launch agent (claude/codex/…) drives the server session's tool;
  *  a plain terminal tab has none, so it runs a shell. */
@@ -23,6 +26,15 @@ function resolveSessionTool(deps: PtyConnectionDeps): string {
     .getState()
     .tabsByWorktree[deps.worktreeId]?.find((t) => t.id === deps.tabId)
   return tab?.launchAgent ?? 'terminal'
+}
+
+/** The tab's pinned server session id, when it was opened by attaching to a
+ *  discovered external tmux session. Such panes must stream exactly that
+ *  session — never the workdir-keyed find-or-create. */
+function resolvePinnedSessionId(deps: PtyConnectionDeps): string | undefined {
+  return useAppStore
+    .getState()
+    .tabsByWorktree[deps.worktreeId]?.find((t) => t.id === deps.tabId)?.serverSessionId
 }
 
 /**
@@ -62,7 +74,108 @@ export function connectPaneServerSession(
   // A tab launched with an agent keeps a live agent session even when its idle
   // title is unrecognizable (codex's idle title is just the cwd basename), so
   // treat an unknown title as idle rather than dropping the status entirely.
-  const isAgentTab = resolveSessionTool(deps) !== 'terminal'
+  const sessionTool = resolveSessionTool(deps)
+  const isAgentTab = sessionTool !== 'terminal'
+
+  // ── Byte-flow activity fallback ──────────────────────────────────────────
+  // Agents whose OSC title never reports working (OpenCode, Codex) would show
+  // a permanent "idle" sidebar dot even mid-turn, because the title path has
+  // nothing to classify. We watch the pane's byte stream instead — the same
+  // "pane is redrawing" signal the daemon watchdog polls for — and write an
+  // explicit working/idle entry into agentStatusByPaneKey (which the sidebar
+  // renders ahead of title-derived rows). The moment a title DOES report
+  // working/permission for this pane, `titleCarriesState` latches true and we
+  // hand authority back to the precise title path (Claude/Cursor/Gemini), so
+  // those agents are never double-driven.
+  const ACTIVITY_IDLE_AFTER_MS = 3000
+  // Suppress the burst tmux replays on attach (RIS + one capture-pane
+  // snapshot) so a pane that is actually idle when we connect doesn't flicker
+  // working for one idle window.
+  const ACTIVITY_GRACE_MS = 1500
+  // Re-stamp a long-running working entry before the 30-min staleness decay
+  // would silently flip it to idle while the agent is still streaming.
+  const ACTIVITY_REFRESH_MS = 60_000
+  const bindStartedAt = Date.now()
+  let titleCarriesState = false
+  let lastKnownTitle: string | null = null
+  let activityTracker: PaneActivityTracker | null = null
+  let lastWorkingSetAt = 0
+
+  const setByteWorkingStatus = (): void => {
+    const store = useAppStore.getState()
+    store.clearServerAgentDone(paneKey)
+    store.setAgentStatus(paneKey, {
+      state: 'working',
+      prompt: '',
+      agentType: sessionTool as AgentType
+    })
+    lastWorkingSetAt = Date.now()
+  }
+
+  const ensureActivityTracker = (): PaneActivityTracker => {
+    if (!activityTracker) {
+      activityTracker = createPaneActivityTracker({
+        idleAfterMs: ACTIVITY_IDLE_AFTER_MS,
+        onWorking: () => {
+          if (disposed) {
+            return
+          }
+          setByteWorkingStatus()
+        },
+        onIdle: () => {
+          if (disposed) {
+            return
+          }
+          const store = useAppStore.getState()
+          // Drop the working override so the title-derived idle row surfaces,
+          // then mark the turn done (green ✓) — mirrors the title path's
+          // working→idle completion for title-signaling agents.
+          store.removeAgentStatus(paneKey)
+          store.markServerAgentDone(paneKey)
+          if (agentTaskCompleteNotificationsEnabled()) {
+            deps.dispatchNotification({
+              source: 'agent-task-complete',
+              terminalTitle: lastKnownTitle ?? sessionTool,
+              paneKey
+            })
+          }
+        }
+      })
+    }
+    return activityTracker
+  }
+
+  const disposeActivityTracker = (): void => {
+    activityTracker?.dispose()
+    activityTracker = null
+  }
+
+  // Hand authority to the precise title path the first time a title reports a
+  // real working/permission state for this pane; tear down any byte-derived
+  // override so the two never fight.
+  const yieldToTitleAuthority = (): void => {
+    if (titleCarriesState) {
+      return
+    }
+    titleCarriesState = true
+    disposeActivityTracker()
+    useAppStore.getState().removeAgentStatus(paneKey)
+  }
+
+  const handleServerSessionActivity = (): void => {
+    if (disposed || !isAgentTab || titleCarriesState) {
+      return
+    }
+    if (Date.now() - bindStartedAt < ACTIVITY_GRACE_MS) {
+      return
+    }
+    const tracker = ensureActivityTracker()
+    tracker.noteActivity()
+    // Keep a long continuous burst fresh so it doesn't decay to idle mid-turn.
+    if (Date.now() - lastWorkingSetAt >= ACTIVITY_REFRESH_MS) {
+      setByteWorkingStatus()
+    }
+  }
   // Last COMMITTED status — drives the working→idle completion notification and
   // the spinner-flicker debounce below.
   let committedTitleStatus: 'working' | 'permission' | 'idle' | null = null
@@ -127,8 +240,15 @@ export function connectPaneServerSession(
     if (title.trim().toLowerCase() === 'cursor agent') {
       return
     }
+    lastKnownTitle = title
+    const detected = detectAgentStatusFromTitle(title)
+    // This pane's title actually signals activity — let the precise title path
+    // own it and disable the byte-flow fallback.
+    if (detected === 'working' || detected === 'permission') {
+      yieldToTitleAuthority()
+    }
     const status: 'working' | 'permission' | 'idle' | null =
-      detectAgentStatusFromTitle(title) ?? (isAgentTab ? 'idle' : null)
+      detected ?? (isAgentTab ? 'idle' : null)
     if (status === null) {
       // Plain shell line on a non-agent tab — reflect it with no status meaning.
       deps.setRuntimePaneTitle(deps.tabId, pane.id, title)
@@ -172,15 +292,21 @@ export function connectPaneServerSession(
   }
 
   const workdir = deps.cwd ?? ''
-  if (!workdir) {
+  const pinnedSessionId = resolvePinnedSessionId(deps)
+  if (!workdir && !pinnedSessionId) {
     fallBackToLocal('no workdir')
   } else {
     const tool = resolveSessionTool(deps)
     // The desktop launches agents by typing a command into a shell (e.g.
     // `claude`). For a shell session, forward that startup command so the agent
     // actually attaches. For an agent-tool session the server launches it, so
-    // sending the command again would double-launch — skip it.
-    const startupCommand = tool === 'terminal' ? deps.startup?.command : undefined
+    // sending the command again would double-launch — skip it. A pinned
+    // external session already runs whatever the user left in it; never inject.
+    // This is only a CANDIDATE: an `onlyIfFresh` startup (the worktree-reopen
+    // agent relaunch) is additionally gated on `freshPane` below, so a reattach
+    // to a surviving tmux pane (agent likely still running in it) never gets
+    // the command typed into the agent's composer.
+    const startup = tool === 'terminal' && !pinnedSessionId ? deps.startup : undefined
     void (async () => {
       try {
         // Why: a remote (SSH) worktree's repo carries a `connectionId` (native
@@ -197,13 +323,42 @@ export function connectPaneServerSession(
         if (disposed) {
           return
         }
-        const session = await ensureWorkspaceSession({ workdir, tool, hostId })
+        // A pinned tab streams exactly its (externally-attached) session; the
+        // workdir find-or-create would bind a different pane. If the pinned
+        // session record is gone (deleted server-side), surface the error —
+        // falling back to a fresh local shell here would silently masquerade
+        // as the remote session.
+        // Per-tab name for AGENT tabs so each launch gets its own tmux pane:
+        // clicking Cursor (or OpenCode) three times in one project yields three
+        // independent sessions instead of reattaching to one shared pane. The
+        // name is keyed by this tab's id, so the SAME tab remounting/reconnecting
+        // reattaches to its own pane (idempotent) while a NEW tab spawns a fresh
+        // one. Plain `terminal` tabs pass no name and keep the shared workspace
+        // session (the git/fs surface depends on that single pane).
+        const sessionNameForTab =
+          tool === 'terminal' ? undefined : sessionName(workdir, tool, deps.tabId)
+        const session = pinnedSessionId
+          ? await getSession(pinnedSessionId)
+          : await ensureWorkspaceSession({ workdir, tool, hostId, name: sessionNameForTab })
         if (disposed) {
           return
         }
+        // Only type an `onlyIfFresh` launch command into a FRESHLY spawned
+        // pane (bare shell). Reattached panes still run whatever was in them —
+        // typing `claude` again would submit the word as a prompt to the
+        // already running agent. Explicit user commands (quick commands) have
+        // no `onlyIfFresh` and always run.
+        const freshPane = 'freshPane' in session && session.freshPane === true
+        const startupCommand =
+          startup && (!startup.onlyIfFresh || freshPane) ? startup.command : undefined
         binding = await bindServerSessionTerminal(session.id, pane.terminal, {
           startupCommand,
-          onTitle: handleServerSessionTitle
+          onTitle: handleServerSessionTitle,
+          onActivity: handleServerSessionActivity,
+          // Bucket this pane's WS throughput by host so the status-bar I/O chip
+          // can show per-host rates. Mirrors the hosts-slice HostKey scheme:
+          // `local` for the daemon's machine, `ssh:<connectionId>` for a remote.
+          hostKey: connectionId ? `ssh:${connectionId}` : 'local'
         })
         if (disposed) {
           binding.dispose()
@@ -213,9 +368,26 @@ export function connectPaneServerSession(
         // Mark the tab as having a live PTY so title-derived agent rows render.
         registeredPtyId = `server:${session.id}:${pane.leafId}`
         deps.updateTabPtyId(deps.tabId, registeredPtyId)
+        // Why: TRUTHFUL tmux signal for the tab bar. Record this pane as
+        // tmux-backed ONLY when the session is genuinely running in a real tmux
+        // session (`tmux_target` non-null) — the same truth the host-header glyph
+        // uses. The local-PTY fallback path never reaches here, so PTY tabs stay
+        // icon-less. (Never derive this from persistTmux — that intent flag lied
+        // about local PTYs and is explicitly not used.)
+        if (session.status === 'running' && session.tmux_target) {
+          useAppStore.getState().markPaneTmux(paneKey)
+        }
       } catch (error) {
         if (!disposed) {
-          fallBackToLocal(String(error))
+          if (pinnedSessionId) {
+            // No local fallback for an external attach — a fresh local shell
+            // would silently impersonate the remote session.
+            pane.terminal.write(
+              `\r\n\x1b[2m[agentum: could not attach to remote tmux session — ${String(error)}]\x1b[0m\r\n`
+            )
+          } else {
+            fallBackToLocal(String(error))
+          }
         }
       }
     })()
@@ -225,7 +397,14 @@ export function connectPaneServerSession(
     dispose: () => {
       disposed = true
       clearIdleHold()
+      disposeActivityTracker()
+      // Clear any byte-derived working override so a torn-down pane doesn't
+      // leave a stuck "working" row in the sidebar.
+      useAppStore.getState().removeAgentStatus(paneKey)
       useAppStore.getState().clearServerAgentDone(paneKey)
+      // Pane is gone — drop its tmux marker so the tab's glyph clears the moment
+      // the session detaches (kept in lockstep with the done marker above).
+      useAppStore.getState().clearPaneTmux(paneKey)
       if (registeredPtyId) {
         deps.clearTabPtyId(deps.tabId, registeredPtyId)
         deps.clearRuntimePaneTitle(deps.tabId, pane.id)

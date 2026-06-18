@@ -132,18 +132,17 @@ describe('WorktreeCard linked PR display', () => {
     settings = null
   })
 
-  it('shows linked GH PR metadata in detailed cards before hosted review details are cached', async () => {
+  it('does not render linked PR metadata on cards (PR card surface removed)', async () => {
     const { default: WorktreeCard } = await import('./WorktreeCard')
 
     const markup = renderWorktreeCardMarkup(
       <WorktreeCard worktree={makeWorktree({ linkedPR: 456 })} repo={makeRepo()} isActive={false} />
     )
 
-    expect(markup).toContain('Linked PR #456')
-    expect(markup).not.toContain('Loading PR')
+    expect(markup).not.toContain('Linked PR #456')
   })
 
-  it('shows issue, Linear issue, PR, and notes metadata in detailed cards', async () => {
+  it('shows issue, Linear issue, and notes metadata in detailed cards', async () => {
     worktreeCardProperties = ['issue', 'linear-issue', 'pr', 'comment']
     const { default: WorktreeCard } = await import('./WorktreeCard')
 
@@ -162,7 +161,8 @@ describe('WorktreeCard linked PR display', () => {
 
     expect(markup).toContain('Linked issue #123')
     expect(markup).toContain('Linked Linear ENG-123')
-    expect(markup).toContain('Linked PR #456')
+    // PR card surface removed — a linked PR no longer paints a badge.
+    expect(markup).not.toContain('Linked PR #456')
     expect(markup).toContain('Workspace notes')
     expect(markup).not.toContain('data-slot="badge"')
     expect(markup).not.toContain('Loading issue')
@@ -256,7 +256,7 @@ describe('WorktreeCard linked PR display', () => {
     expect(markup).not.toContain('58941')
   })
 
-  it('does not render standalone CI or linked PR status icons on the closed card', async () => {
+  it('does not render linked PR or CI status icons on the card', async () => {
     worktreeCardProperties = ['pr', 'ci']
     hostedReviewCache = {
       'local::repo-1::feature/local-branch': {
@@ -270,8 +270,9 @@ describe('WorktreeCard linked PR display', () => {
       <WorktreeCard worktree={makeWorktree({ linkedPR: 456 })} repo={makeRepo()} isActive={false} />
     )
 
-    expect(markup).toContain('Linked PR #456')
-    expect(markup).toContain('text-rose-500/85')
+    // Even with a linked PR and cached failing checks, no PR/CI surface paints.
+    expect(markup).not.toContain('Linked PR #456')
+    expect(markup).not.toContain('text-rose-500/85')
     expect(markup).not.toContain('CI checks')
   })
 })

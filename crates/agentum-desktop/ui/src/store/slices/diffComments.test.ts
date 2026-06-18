@@ -121,7 +121,6 @@ import { createLinearSlice } from './linear'
 import { createPreflightSlice } from './preflight'
 import { createEditorSlice } from './editor'
 import { createStatsSlice } from './stats'
-import { createWorkspaceSpaceSlice } from './workspace-space'
 import { createClaudeUsageSlice } from './claude-usage'
 import { createCodexUsageSlice } from './codex-usage'
 import { createOpenCodeUsageSlice } from './opencode-usage'
@@ -151,7 +150,6 @@ function createTestStore() {
     ...createPreflightSlice(...a),
     ...createEditorSlice(...a),
     ...createStatsSlice(...a),
-    ...createWorkspaceSpaceSlice(...a),
     ...createClaudeUsageSlice(...a),
     ...createCodexUsageSlice(...a),
     ...createOpenCodeUsageSlice(...a),

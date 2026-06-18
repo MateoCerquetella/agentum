@@ -23,7 +23,6 @@ import { AppearancePane } from './AppearancePane'
 import { InputPane } from './InputPane'
 import { ShortcutsPane } from './ShortcutsPane'
 import { TerminalPane } from './TerminalPane'
-import { FloatingWorkspacePane } from './FloatingWorkspacePane'
 import { useGhosttyImport } from './useGhosttyImport'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { RepositoryPane } from './RepositoryPane'
@@ -35,6 +34,7 @@ import { SshPane } from './SshPane'
 import { ExperimentalPane } from './ExperimentalPane'
 import { AgentsPane } from './AgentsPane'
 import { OrchestrationPane } from './OrchestrationPane'
+import { BrowserVerificationLoopPane } from './BrowserVerificationLoopPane'
 import { AccountsPane } from './AccountsPane'
 import { StatsPane } from '../stats/StatsPane'
 import { IntegrationsPane } from './IntegrationsPane'
@@ -42,8 +42,6 @@ import { TasksPane } from './TasksPane'
 import { QuickCommandsPane } from './QuickCommandsPane'
 import { DeveloperPermissionsPane } from './DeveloperPermissionsPane'
 import { ComputerUsePane } from './ComputerUsePane'
-import { RuntimeEnvironmentsPane } from './RuntimeEnvironmentsPane'
-import { PrivacyPane } from './PrivacyPane'
 import { SettingsSidebar } from './SettingsSidebar'
 import { ActiveSettingsSectionProvider, SettingsSection } from './SettingsSection'
 import { matchesSettingsSearch } from './settings-search'
@@ -164,7 +162,6 @@ function Settings(): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const keybindings = useAppStore((s) => s.keybindings)
   const updateSettings = useAppStore((s) => s.updateSettings)
-  const switchRuntimeEnvironment = useAppStore((s) => s.switchRuntimeEnvironment)
   const fetchSettings = useAppStore((s) => s.fetchSettings)
   const fetchKeybindings = useAppStore((s) => s.fetchKeybindings)
   const closeSettingsPage = useAppStore((s) => s.closeSettingsPage)
@@ -720,7 +717,9 @@ function Settings(): React.JSX.Element {
     if (!(await confirmDiscardSourceControlAiPromptChanges())) {
       return
     }
-    pendingNavSectionRef.current = 'computer-use'
+    // Computer Use is now a subsection of the combined Agents & Automation pane;
+    // navigate to that section, then scroll to the computer-use anchor inside it.
+    pendingNavSectionRef.current = 'agents-automation'
     pendingScrollTargetRef.current = 'computer-use'
     if (settingsSearchQuery !== '') {
       setSettingsSearchQuery('')
@@ -837,49 +836,68 @@ function Settings(): React.JSX.Element {
                 </SettingsSection>
 
                 <SettingsSection
-                  id="orchestration"
-                  title="Orchestration"
-                  description="Coordinate multiple coding agents through Agentum."
-                  searchEntries={getSectionSearchEntries('orchestration')}
+                  id="agents-automation"
+                  title="Agents & Automation"
+                  description="Coordinate multiple agents and let them operate desktop apps."
+                  searchEntries={getSectionSearchEntries('agents-automation')}
                 >
-                  {isSectionMounted('orchestration') ? <OrchestrationPane /> : null}
+                  {isSectionMounted('agents-automation') ? (
+                    <div className="space-y-10">
+                      <OrchestrationPane />
+
+                      <div className="border-t border-border/60 pt-8">
+                        <BrowserVerificationLoopPane />
+                      </div>
+
+                      {showDesktopOnlySettings ? (
+                        // Why: Computer Use lives inside this pane as a subsection. The
+                        // data-settings-section anchor keeps existing deep links (the
+                        // browser "open computer use" jump, Cmd+J) scrolling here.
+                        <div
+                          data-settings-section="computer-use"
+                          className="space-y-5 border-t border-border/60 pt-8 scroll-mt-8"
+                        >
+                          <div className="space-y-1.5">
+                            <h3 className="flex flex-wrap items-center gap-2 text-lg font-semibold text-foreground">
+                              Computer Use
+                              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.05em] text-muted-foreground">
+                                Beta
+                              </span>
+                              {showComputerUsePreviewTooltip ? (
+                                <TooltipProvider delayDuration={250}>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <button
+                                        type="button"
+                                        className="text-muted-foreground transition-colors hover:text-foreground"
+                                        aria-label={`${computerUsePlatform} Computer Use preview details`}
+                                      >
+                                        <Info className="size-3.5" />
+                                      </button>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" sideOffset={6} className="max-w-72">
+                                      <span>
+                                        {computerUsePlatform} Computer Use is an early preview. Some
+                                        apps and desktop environments may behave inconsistently.
+                                      </span>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                              ) : null}
+                            </h3>
+                            <p className="text-sm leading-6 text-muted-foreground">
+                              Enable agents to control any app on your computer.
+                            </p>
+                          </div>
+                          <ComputerUsePane />
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </SettingsSection>
 
                 {showDesktopOnlySettings ? (
                   <>
-                    <SettingsSection
-                      id="computer-use"
-                      title="Computer Use"
-                      badge="Beta"
-                      badgeAccessory={
-                        showComputerUsePreviewTooltip ? (
-                          <TooltipProvider delayDuration={250}>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <button
-                                  type="button"
-                                  className="text-muted-foreground transition-colors hover:text-foreground"
-                                  aria-label={`${computerUsePlatform} Computer Use preview details`}
-                                >
-                                  <Info className="size-3.5" />
-                                </button>
-                              </TooltipTrigger>
-                              <TooltipContent side="top" sideOffset={6} className="max-w-72">
-                                <span>
-                                  {computerUsePlatform} Computer Use is an early preview. Some apps
-                                  and desktop environments may behave inconsistently.
-                                </span>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        ) : null
-                      }
-                      description="Enable agents to control any app on your computer."
-                      searchEntries={getSectionSearchEntries('computer-use')}
-                    >
-                      {isSectionMounted('computer-use') ? <ComputerUsePane /> : null}
-                    </SettingsSection>
-
                     <SettingsSection
                       id="voice"
                       title="Voice"
@@ -1008,17 +1026,6 @@ function Settings(): React.JSX.Element {
                 ) : null}
 
                 <SettingsSection
-                  id="floating-workspace"
-                  title="Floating Workspace"
-                  description="Global terminal, browser, and markdown tabs."
-                  searchEntries={getSectionSearchEntries('floating-workspace')}
-                >
-                  {isSectionMounted('floating-workspace') ? (
-                    <FloatingWorkspacePane settings={settings} updateSettings={updateSettings} />
-                  ) : null}
-                </SettingsSection>
-
-                <SettingsSection
                   id="appearance"
                   title="Appearance"
                   description="Theme, zoom, app and terminal appearance, sidebars, and status bar."
@@ -1087,27 +1094,6 @@ function Settings(): React.JSX.Element {
                   {isSectionMounted('stats') ? <StatsPane /> : null}
                 </SettingsSection>
 
-                <SettingsSection
-                  id="servers"
-                  title="Remote Agentum Servers"
-                  badge="Beta"
-                  description={
-                    isWebClient
-                      ? 'Connect this browser to a saved Agentum server.'
-                      : 'Switch between local desktop mode and paired remote Agentum runtimes.'
-                  }
-                  searchEntries={getSectionSearchEntries('servers')}
-                >
-                  {isSectionMounted('servers') ? (
-                    <RuntimeEnvironmentsPane
-                      settings={settings}
-                      switchRuntimeEnvironment={switchRuntimeEnvironment}
-                      canGeneratePairingUrl={!isWebClient}
-                      allowLocalRuntime={!isWebClient}
-                    />
-                  ) : null}
-                </SettingsSection>
-
                 {showDesktopOnlySettings ? (
                   <>
                     <SettingsSection
@@ -1134,15 +1120,6 @@ function Settings(): React.JSX.Element {
                     ) : null}
                   </SettingsSection>
                 ) : null}
-
-                <SettingsSection
-                  id="privacy"
-                  title="Privacy & Telemetry"
-                  description="Anonymous usage data and telemetry controls."
-                  searchEntries={getSectionSearchEntries('privacy')}
-                >
-                  {isSectionMounted('privacy') ? <PrivacyPane settings={settings} /> : null}
-                </SettingsSection>
 
                 <SettingsSection
                   id="experimental"

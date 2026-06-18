@@ -2,8 +2,10 @@ import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
 import {
   listServerHosts,
+  listHostTmuxSessions,
   resolveServerHostIdForConnection,
   getServerHostReadinessInfo,
+  type DiscoveredTmuxSession,
   type ServerHost
 } from '@/runtime/server-host-client'
 
@@ -25,6 +27,16 @@ export type HostMeta = {
   tmuxInstalled?: boolean
 }
 
+/** Discovered (non-agentum) tmux sessions on one SSH host, for the sidebar's
+ *  "Remote tmux" section. `sessions` persists across refreshes so the list
+ *  doesn't flicker empty while a re-fetch is in flight. */
+export type RemoteTmuxState = {
+  status: 'loading' | 'ready' | 'error'
+  sessions: DiscoveredTmuxSession[]
+  error?: string
+  fetchedAt?: number
+}
+
 export type HostsSlice = {
   /** Per-host label + OS detail, keyed by HostKey. The host→repo structure is
    *  derived from the repo list; this slice holds only what isn't derivable. */
@@ -33,6 +45,12 @@ export type HostsSlice = {
   /** Populate label + OS detail for the local host and every known SSH target.
    *  Best-effort: never throws into the UI. */
   hydrateHosts: () => Promise<void>
+  /** Discovered external tmux sessions per SSH host (`ssh:<connectionId>`). */
+  remoteTmuxByHostKey: Record<HostKey, RemoteTmuxState>
+  /** Fetch the host's non-agentum tmux sessions (one SSH round trip; no
+   *  polling — call on project activation or manual refresh). `repoPath`
+   *  drives the per-session `related` flag. Errors land in state, never throw. */
+  fetchRemoteTmuxSessions: (connectionId: string, repoPath?: string) => Promise<void>
 }
 
 /** Compose a host's OS detail line: `<transport> · <uname>` when the readiness
@@ -47,6 +65,31 @@ export const createHostsSlice: StateCreator<AppState, [], [], HostsSlice> = (set
 
   setHostMeta: (key, meta) =>
     set((s) => ({ hostMetaByKey: { ...s.hostMetaByKey, [key]: meta } })),
+
+  remoteTmuxByHostKey: {},
+
+  fetchRemoteTmuxSessions: async (connectionId, repoPath) => {
+    const key = `ssh:${connectionId}`
+    const setEntry = (entry: RemoteTmuxState): void =>
+      set((s) => ({ remoteTmuxByHostKey: { ...s.remoteTmuxByHostKey, [key]: entry } }))
+    const prev = get().remoteTmuxByHostKey[key]
+    setEntry({ status: 'loading', sessions: prev?.sessions ?? [], fetchedAt: prev?.fetchedAt })
+    try {
+      const hostId = await resolveServerHostIdForConnection(connectionId)
+      if (!hostId) {
+        setEntry({ status: 'error', sessions: [], error: 'host not registered' })
+        return
+      }
+      const sessions = await listHostTmuxSessions(hostId, { path: repoPath })
+      setEntry({ status: 'ready', sessions, fetchedAt: Date.now() })
+    } catch (err) {
+      setEntry({
+        status: 'error',
+        sessions: prev?.sessions ?? [],
+        error: err instanceof Error ? err.message : String(err)
+      })
+    }
+  },
 
   hydrateHosts: async () => {
     // Local host: find the daemon's own host in the registry, read its uname.
@@ -91,5 +134,9 @@ export const createHostsSlice: StateCreator<AppState, [], [], HostsSlice> = (set
         console.warn('[agentum] hydrateHosts: ssh host failed', connectionId, err)
       }
     }
+    // Note: the truthful per-host "in tmux right now" signal is derived
+    // reactively in WorktreeList from the open-pane tmux map (tmuxByPaneKey),
+    // not from the session list — closed-but-persisted tmux sessions no longer
+    // mark a host. See hostKeysWithOpenTmux in worktree-list-groups.ts.
   }
 })

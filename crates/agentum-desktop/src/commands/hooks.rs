@@ -46,7 +46,11 @@ pub fn hooks_inspect_setup_script_imports() -> Vec<Value> {
 pub fn hooks_read_issue_command(repo_id: String) -> Result<Value, String> {
     let path = issue_command_path(&repo_id)?;
     let local_content = std::fs::read_to_string(&path).ok();
-    let source = if local_content.is_some() { "local" } else { "none" };
+    let source = if local_content.is_some() {
+        "local"
+    } else {
+        "none"
+    };
     Ok(json!({
         "status": "ok",
         "localContent": local_content.clone(),

@@ -1179,23 +1179,6 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
             { timeoutMs: 60_000 }
           ))
 
-      const worktreeDisplayName = get()
-        .allWorktrees()
-        .find((entry) => entry.id === worktreeId)
-        ?.displayName?.trim()
-      if (worktreeDisplayName) {
-        try {
-          await api.automations?.snapshotWorkspaceName?.({
-            workspaceId: worktreeId,
-            displayName: worktreeDisplayName
-          })
-        } catch (error) {
-          // Why: preserving automation history labels is best-effort; a stale
-          // preload/test harness must not block worktree removal cleanup.
-          console.warn('Failed to snapshot automation workspace name:', error)
-        }
-      }
-
       // Why: backend delete paths now preflight and kill PTYs only after the
       // worktree is cleanly removable. Renderer state follows the successful
       // backend result so blocked dirty deletes keep their terminals intact.
@@ -1398,7 +1381,6 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
           sortEpoch: s.sortEpoch + 1
         }
       })
-      get().removeWorkspaceSpaceWorktrees?.([worktreeId])
       showPreservedBranchToast(removalResult, (branch, expectedHead) => {
         void get().forceDeletePreservedBranch(worktreeId, branch, expectedHead)
       })

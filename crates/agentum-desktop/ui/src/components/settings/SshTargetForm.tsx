@@ -1,4 +1,4 @@
-import { FileKey } from 'lucide-react'
+import { FileKey, KeyRound } from 'lucide-react'
 import {
   DEFAULT_SSH_RELAY_GRACE_PERIOD_SECONDS,
   MAX_SSH_RELAY_GRACE_PERIOD_SECONDS,
@@ -87,6 +87,23 @@ export function SshTargetForm({
           </p>
         </div>
         <div className="col-span-2 space-y-1.5">
+          <Label className="flex items-center gap-1.5">
+            <KeyRound className="size-3.5" />
+            Password
+          </Label>
+          <Input
+            type="password"
+            autoComplete="off"
+            value={form.password}
+            onChange={(e) => onFormChange((f) => ({ ...f, password: e.target.value }))}
+            placeholder="Leave empty to use the key / SSH agent"
+          />
+          <p className="text-[11px] text-muted-foreground">
+            Optional. Alternative to a key — used when the host only allows password login
+            (requires <code>sshpass</code> on this machine). Stored locally in plaintext.
+          </p>
+        </div>
+        <div className="col-span-2 space-y-1.5">
           <Label>Proxy Command</Label>
           <Input
             value={form.proxyCommand}
@@ -111,32 +128,15 @@ export function SshTargetForm({
         <div className="col-span-2 space-y-1.5">
           <Label>Relay Grace Period (seconds)</Label>
           <Input
-            type={form.relayKeepAliveUntilReset ? 'text' : 'number'}
-            value={form.relayKeepAliveUntilReset ? 'Until reset' : form.relayGracePeriodSeconds}
+            type="number"
+            value={form.relayGracePeriodSeconds}
             onChange={(e) =>
               onFormChange((f) => ({ ...f, relayGracePeriodSeconds: e.target.value }))
             }
             placeholder={String(DEFAULT_SSH_RELAY_GRACE_PERIOD_SECONDS)}
             min={MIN_SSH_RELAY_GRACE_PERIOD_SECONDS}
             max={MAX_SSH_RELAY_GRACE_PERIOD_SECONDS}
-            disabled={form.relayKeepAliveUntilReset}
           />
-          <label className="flex cursor-pointer items-start gap-2.5 py-1 text-xs">
-            <input
-              type="checkbox"
-              className="mt-0.5 size-3.5 shrink-0 accent-foreground"
-              checked={form.relayKeepAliveUntilReset}
-              onChange={(e) =>
-                onFormChange((f) => ({ ...f, relayKeepAliveUntilReset: e.target.checked }))
-              }
-            />
-            <span className="space-y-0.5">
-              <span className="block font-medium text-foreground">Keep alive until reset</span>
-              <span className="block text-muted-foreground">
-                Remote terminals stay available until you end them or reset the relay.
-              </span>
-            </span>
-          </label>
           <p className="text-[11px] text-muted-foreground">
             How long the relay keeps terminals alive after disconnect. Default: 10800 (3 hours).
             Maximum: {MAX_SSH_RELAY_GRACE_PERIOD_SECONDS} (7 days).

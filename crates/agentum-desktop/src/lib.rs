@@ -1,23 +1,48 @@
+mod bridge;
 mod commands;
+mod computer;
+mod menu;
+mod path_env;
+// The Voice STT engine. Named `speech_engine` (not `speech`) to avoid colliding
+// with the `commands::speech` module imported below for the invoke_handler.
+#[path = "speech/mod.rs"]
+mod speech_engine;
 mod state;
 
 use commands::{
-    accounts, agent_status, app, automations, browser, cache, claude_usage, cli, clipboard,
-    codex_usage,
-    crash_reports, diagnostics, feedback, fs, gh, gl, hooks, hosted_review, html_export,
-    keybindings, linear, notebook, notifications, onboarding, open_code_usage, permissions,
-    pet, project_groups, pty,
-    rate_limits, remote_workspace, repos, runtime, server, session, settings, shell, sparse_presets,
-    speech,
-    shell_runtimes, skills, ssh, star_nag, ui, updater, window, workspace_cleanup, workspace_ports,
-    e2e, mobile, stats, telemetry, workspace_space,
+    accounts, agent_status, app, browser, browser_native, cache, claude_usage, cli, clipboard,
+    codex_usage, crash_reports, diagnostics, e2e, feedback, fs, gh, gh_projects, gl, hooks,
+    hosted_review, html_export, keybindings, linear, mobile, notebook, notifications, onboarding,
+    open_code_usage, permissions, pet, project_groups, pty, rate_limits, remote_workspace, repos,
+    runtime, server, session, settings, shell, shell_runtimes, skills, sparse_presets, speech, ssh,
+    star_nag, stats, telemetry, ui, updater, window, workspace_cleanup, workspace_ports,
+    workspace_space,
 };
 use state::AppState;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // GUI launches (Finder/Dock, .desktop/AppImage) inherit a minimal PATH that
+    // omits ~/.local/bin, Homebrew, and node version-manager shims where the
+    // agent CLIs and gh/glab live. Hydrate from the login shell before anything
+    // (plugins, the embedded server's `which` probes, child PTYs) reads PATH,
+    // otherwise detection reports "No agents detected" on installed tools.
+    path_env::hydrate_path_from_login_shell();
+
+    // The browser `grab` op's injected extractor POSTs its result to this app
+    // scheme (external HTTPS pages can't fetch the loopback http server —
+    // mixed-content — and Tauri injects no IPC into external content). The
+    // scheme handler and the bridge share this registry; created before the
+    // Builder so the handler can capture it and `setup` can `manage` it too.
+    let grab_registry = std::sync::Arc::new(bridge::GrabRegistry::default());
+    let scheme_grab_registry = grab_registry.clone();
+    let managed_grab_registry = grab_registry.clone();
+
     tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol("agentumgrab", move |ctx, request, responder| {
+            bridge::handle_grab_scheme(ctx.app_handle(), &scheme_grab_registry, request, responder);
+        })
         .plugin(
             tauri_plugin_log::Builder::default()
                 .level(log::LevelFilter::Info)
@@ -29,7 +54,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
-        .setup(|app| {
+        // Replace the default menu so ⌘W is NOT a native key-equivalent — it
+        // must reach the webview, which closes the active tab/file like VS Code
+        // instead of quitting the window. See `menu.rs`.
+        .menu(menu::build)
+        .on_menu_event(menu::on_menu_event)
+        .setup(move |app| {
             let state = AppState::new().map_err(|error| {
                 Box::<dyn std::error::Error>::from(std::io::Error::other(error.to_string()))
             })?;
@@ -38,11 +68,26 @@ pub fn run() {
             // Boot agentum-server in-process on a loopback port and expose its
             // URL to the webview. Block here so the endpoint is ready before the
             // React app asks for it; the server itself runs on background tasks.
+            // Install a DesktopBridge so the embedded server's /api/browser and
+            // /api/computer routes can drive THIS process's webviews + the macOS
+            // AX engine (the only process that can). Standalone daemons get no
+            // bridge and 501 those routes.
+            // Pending browser-tab-create replies: the bridge's `open` op parks a
+            // oneshot here and the `ui_reply_tab_create` command resolves it.
+            app.manage(bridge::TabCreateRegistry::default());
+            // Pending annotation/grab op replies (annotations/grab/annotate),
+            // resolved by the `ui_reply_browser_op` command.
+            app.manage(bridge::BrowserOpRegistry::default());
+            // Pending `grab` results, resolved by the `agentumgrab://` scheme
+            // handler; the bridge's `grab` op awaits on it.
+            app.manage(managed_grab_registry.clone());
+
+            let bridge = std::sync::Arc::new(bridge::TauriBridge::new(app.handle().clone()));
             let addr = tauri::async_runtime::block_on(async {
                 let (store, _db_path) = agentum_store::open_default()
                     .await
                     .map_err(|e| std::io::Error::other(e.to_string()))?;
-                agentum_server::serve_embedded_loopback(store)
+                agentum_server::serve_embedded_loopback_with_bridge(store, bridge)
                     .await
                     .map_err(|e| std::io::Error::other(e.to_string()))
             })?;
@@ -50,6 +95,21 @@ pub fn run() {
                 url: format!("http://{addr}"),
                 token: None,
             });
+
+            // On-device speech-to-text state (Voice dictation). Models live under
+            // the app data dir; failing to resolve it must not block app boot, so
+            // fall back to a temp dir and let downloads surface any error.
+            let models_dir = app
+                .path()
+                .app_data_dir()
+                .map(|d| d.join("speech-models"))
+                .unwrap_or_else(|_| std::env::temp_dir().join("agentum-speech-models"));
+            match speech_engine::SpeechState::new(models_dir) {
+                Ok(speech_state) => {
+                    app.manage(speech_state);
+                }
+                Err(error) => log::error!("speech state init failed: {error}"),
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -146,10 +206,10 @@ pub fn run() {
             ui::ui_get_zoom_level,
             ui::ui_set_zoom_level,
             ui::ui_set_markdown_editor_focused,
-            ui::ui_set_floating_terminal_input_focused,
             ui::ui_set_terminal_input_focused,
             ui::ui_set_shortcut_recorder_focused,
             ui::ui_reply_tab_create,
+            ui::ui_reply_browser_op,
             ui::ui_reply_tab_set_profile,
             ui::ui_reply_tab_close,
             ui::ui_reply_terminal_create,
@@ -250,6 +310,8 @@ pub fn run() {
             speech::speech_cancel_download,
             speech::speech_delete_model,
             speech::speech_start_dictation,
+            speech::speech_start_capture,
+            speech::speech_stop_capture,
             speech::speech_feed_audio,
             speech::speech_stop_dictation,
             diagnostics::diagnostics_open_trace_folder,
@@ -268,15 +330,14 @@ pub fn run() {
             crash_reports::crash_reports_copy_latest_diagnostics,
             workspace_ports::workspace_ports_scan,
             workspace_ports::workspace_ports_kill,
-            automations::automations_list,
-            automations::automations_list_runs,
-            automations::automations_list_external_managers,
-            automations::automations_run_precheck,
-            automations::automations_delete,
-            automations::automations_renderer_ready,
-            automations::automations_create_external,
-            automations::automations_update_external,
-            automations::automations_run_external_action,
+            browser_native::browser_webview_open,
+            browser_native::browser_webview_navigate,
+            browser_native::browser_webview_history,
+            browser_native::browser_webview_set_bounds,
+            browser_native::browser_webview_set_visible,
+            browser_native::browser_webview_close,
+            browser_native::browser_webview_state,
+            browser_native::browser_inpage_annotate,
             browser::browser_unregister_guest,
             browser::browser_open_dev_tools,
             browser::browser_cancel_download,
@@ -330,11 +391,17 @@ pub fn run() {
             accounts::claude_accounts_list,
             accounts::claude_accounts_select,
             accounts::claude_accounts_add,
+            accounts::claude_accounts_begin_add,
+            accounts::claude_accounts_live_login,
+            accounts::claude_accounts_sync_current,
             accounts::claude_accounts_reauthenticate,
             accounts::claude_accounts_remove,
             accounts::codex_accounts_list,
             accounts::codex_accounts_select,
             accounts::codex_accounts_add,
+            accounts::codex_accounts_begin_add,
+            accounts::codex_accounts_live_login,
+            accounts::codex_accounts_sync_current,
             accounts::codex_accounts_reauthenticate,
             accounts::codex_accounts_remove,
             feedback::feedback_submit,
@@ -348,7 +415,6 @@ pub fn run() {
             runtime::runtime_get_terminal_drivers,
             runtime::runtime_get_browser_drivers,
             runtime::runtime_reclaim_browser_for_desktop,
-            runtime::runtime_environments_list,
             clipboard::clipboard_read,
             clipboard::clipboard_write,
             cli::cli_get_install_status,
@@ -374,18 +440,18 @@ pub fn run() {
             gh::gh_add_issue_comment,
             gh::gh_add_pr_review_comment_reply,
             gh::gh_add_pr_review_comment,
-            gh::gh_list_project_views,
+            gh_projects::gh_list_project_views,
             gh::gh_list_work_items,
             gh::gh_refresh_pr_now,
-            gh::gh_list_accessible_projects,
-            gh::gh_resolve_project_ref,
+            gh_projects::gh_list_accessible_projects,
+            gh_projects::gh_resolve_project_ref,
             gh::gh_delete_issue_comment_by_slug,
             gh::gh_update_issue_comment_by_slug,
             gh::gh_add_issue_comment_by_slug,
             gh::gh_list_issue_types_by_slug,
             gh::gh_list_labels_by_slug,
             gh::gh_list_assignable_users_by_slug,
-            gh::gh_get_project_view_table,
+            gh_projects::gh_get_project_view_table,
             gh::gh_update_project_item_field,
             gh::gh_clear_project_item_field,
             gh::gh_update_issue_type_by_slug,
@@ -438,10 +504,6 @@ pub fn run() {
             linear::linear_create_issue,
             linear::linear_update_issue,
             linear::linear_add_issue_comment,
-            automations::automations_mark_dispatch_result,
-            automations::automations_run_now,
-            automations::automations_create,
-            automations::automations_update,
             gl::gl_resolve_mr_discussion,
             gl::gl_update_mr_reviewers,
             gl::gl_add_mr_inline_comment,
@@ -451,8 +513,6 @@ pub fn run() {
             runtime::runtime_call,
             runtime::runtime_sync_window_graph,
             runtime::runtime_environments_call,
-            runtime::runtime_environments_remove,
-            runtime::runtime_environments_add_from_pairing_code,
             runtime::runtime_environments_subscribe,
             diagnostics::diagnostics_get_status,
             diagnostics::diagnostics_collect_bundle,

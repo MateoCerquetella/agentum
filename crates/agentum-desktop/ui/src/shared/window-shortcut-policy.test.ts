@@ -160,12 +160,9 @@ describe('resolveWindowShortcutAction', () => {
   })
 
   it('routes menu-backed actions through the same window shortcut policy', () => {
-    expect(
-      resolveWindowShortcutAction(
-        { code: 'KeyE', key: 'e', meta: true, control: false, alt: false, shift: true },
-        'darwin'
-      )
-    ).toEqual({ type: 'exportPdf' })
+    // Why: file.exportPdf was unassigned in spec 007 C4b (Mod+Shift+E now belongs
+    // to sidebar.explorer.toggle), so it no longer resolves through this policy.
+    // forceReload remains a menu-backed action with a default chord.
     expect(
       resolveWindowShortcutAction(
         { code: 'KeyR', key: 'r', meta: false, control: true, alt: false, shift: true },
@@ -413,82 +410,6 @@ describe('resolveWindowShortcutAction', () => {
         'linux'
       )
     ).toEqual({ type: 'worktreeHistoryNavigate', direction: 'back' })
-  })
-
-  it('resolves the floating terminal chord despite carrying Alt', () => {
-    expect(
-      resolveWindowShortcutAction(
-        {
-          code: 'KeyA',
-          key: 'a',
-          meta: true,
-          control: false,
-          alt: true,
-          shift: false
-        },
-        'darwin'
-      )
-    ).toEqual({ type: 'toggleFloatingTerminal' })
-
-    expect(
-      resolveWindowShortcutAction(
-        {
-          code: 'KeyA',
-          key: 'a',
-          meta: false,
-          control: true,
-          alt: true,
-          shift: false
-        },
-        'linux'
-      )
-    ).toEqual({ type: 'toggleFloatingTerminal' })
-  })
-
-  it('resolves the floating terminal chord when macOS Option composes the letter', () => {
-    expect(
-      resolveWindowShortcutAction(
-        {
-          code: 'KeyA',
-          key: 'å',
-          meta: true,
-          control: false,
-          alt: true,
-          shift: false
-        },
-        'darwin'
-      )
-    ).toEqual({ type: 'toggleFloatingTerminal' })
-  })
-
-  it('rejects floating terminal chord variants with Shift or opposite primary modifier', () => {
-    expect(
-      resolveWindowShortcutAction(
-        {
-          code: 'KeyA',
-          key: 'a',
-          meta: true,
-          control: false,
-          alt: true,
-          shift: true
-        },
-        'darwin'
-      )
-    ).toBeNull()
-
-    expect(
-      resolveWindowShortcutAction(
-        {
-          code: 'KeyA',
-          key: 'a',
-          meta: true,
-          control: true,
-          alt: true,
-          shift: false
-        },
-        'linux'
-      )
-    ).toBeNull()
   })
 
   it('rejects the history chord when Shift is also held', () => {

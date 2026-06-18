@@ -13,7 +13,15 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
 import RepoCombobox from '@/components/repo/RepoCombobox'
+import type { ComposerHostOption } from '@/hooks/composer-host-scoping'
 import AgentCombobox from '@/components/agent/AgentCombobox'
 import { AGENT_CATALOG } from '@/lib/agent-catalog'
 import { useAppStore } from '@/store'
@@ -46,6 +54,16 @@ type NewWorkspaceComposerCardProps = {
   quickAgent: TuiAgent | null
   onQuickAgentChange: (agent: TuiAgent | null) => void
   eligibleRepos: RepoOption[]
+  /** Host selector (spec 006): local + each configured SSH host with repos.
+   *  Empty when driven by `repoIdOverride` — the host row is then hidden. */
+  eligibleHosts: ComposerHostOption[]
+  selectedHostKey: string
+  onHostChange: (hostKey: string) => void
+  /** `eligibleRepos` scoped to the selected host — what the repo picker shows. */
+  hostScopedRepos: RepoOption[]
+  /** repoId → reason for repos disabled because they aren't a git repo on the
+   *  selected host. */
+  disabledRepoIds: Map<string, string>
   repoId: string
   selectedRepoIsGit: boolean
   onRepoChange: (value: string) => void
@@ -67,6 +85,9 @@ type NewWorkspaceComposerCardProps = {
   onCreate: () => void
   note: string
   onNoteChange: (value: string) => void
+  /** When true, create the worktree only — no tmux session/agent is launched. */
+  skipSession: boolean
+  onSkipSessionChange: (value: boolean) => void
   setupConfig: SetupConfig | null
   requiresExplicitSetupChoice: boolean
   setupDecision: 'run' | 'skip' | null
@@ -211,6 +232,11 @@ export default function NewWorkspaceComposerCard({
   quickAgent,
   onQuickAgentChange,
   eligibleRepos,
+  eligibleHosts,
+  selectedHostKey,
+  onHostChange,
+  hostScopedRepos,
+  disabledRepoIds,
   repoId,
   selectedRepoIsGit,
   onRepoChange,
@@ -232,6 +258,8 @@ export default function NewWorkspaceComposerCard({
   onCreate,
   note,
   onNoteChange,
+  skipSession,
+  onSkipSessionChange,
   setupConfig,
   requiresExplicitSetupChoice,
   setupDecision,
@@ -347,8 +375,16 @@ export default function NewWorkspaceComposerCard({
   }, [detectedAgentIds, disabledTuiAgents])
 
   const handleAddRepo = React.useCallback((): void => {
-    openModal('add-repo')
-  }, [openModal])
+    // Why: the composer's host selector decides *where* the new project lives.
+    // An SSH host key is `ssh:<connectionId>` (the SSH target id); forward that
+    // so the add-repo dialog opens straight into its Remote step with the host
+    // preselected, instead of defaulting to the local "Browse folder" picker on
+    // the operator's own machine.
+    const connectionId = selectedHostKey.startsWith('ssh:')
+      ? selectedHostKey.slice('ssh:'.length)
+      : ''
+    openModal('add-repo', connectionId ? { connectionId } : {})
+  }, [openModal, selectedHostKey])
 
   return (
     <div
@@ -368,6 +404,33 @@ export default function NewWorkspaceComposerCard({
       )}
     >
       <div className="min-w-0 space-y-4 pt-3">
+        {/* Host selector (spec 006): mirrors `agentum terminal` — pick the host
+            first, then a repo on it. Hidden when there's at most one host (e.g.
+            local-only) or when an external repoIdOverride drives the composer
+            (TaskPage/JumpPalette pass no hosts). */}
+        {eligibleHosts.length > 1 ? (
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Host</label>
+            <Select value={selectedHostKey} onValueChange={onHostChange}>
+              <SelectTrigger className="h-9 w-full border-input text-sm">
+                <SelectValue placeholder="Choose host" />
+              </SelectTrigger>
+              <SelectContent>
+                {eligibleHosts.map((host) => (
+                  <SelectItem key={host.key} value={host.key}>
+                    {host.label}
+                    {host.kind === 'ssh' ? (
+                      <span className="ml-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                        SSH
+                      </span>
+                    ) : null}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        ) : null}
+
         <div className="space-y-1">
           <div className="flex items-center justify-between gap-2">
             <label className="text-xs font-medium text-muted-foreground">Project</label>
@@ -390,10 +453,11 @@ export default function NewWorkspaceComposerCard({
             </Tooltip>
           </div>
           <RepoCombobox
-            repos={eligibleRepos}
+            repos={hostScopedRepos}
             value={repoId}
             onValueChange={onRepoChange}
             onValueSelected={focusNameInput}
+            disabledRepoIds={disabledRepoIds}
             placeholder="Choose project"
             // Why: programmatic .focus() from the Dialog's onOpenAutoFocus
             // handler does not reliably trigger :focus-visible in Chromium.
@@ -403,6 +467,13 @@ export default function NewWorkspaceComposerCard({
             // focus state.
             triggerClassName="h-9 w-full border-input text-sm focus:border-ring focus:ring-[3px] focus:ring-ring/50"
             showStandaloneAddButton={false}
+            // Why: when an SSH host is selected, "Add project" must add a project
+            // on that host (its connectionId), not browse the local machine.
+            addProjectConnectionId={
+              selectedHostKey.startsWith('ssh:')
+                ? selectedHostKey.slice('ssh:'.length)
+                : undefined
+            }
           />
           {selectedRepoRequiresConnection && selectedRepoConnectionId ? (
             <div
@@ -504,6 +575,26 @@ export default function NewWorkspaceComposerCard({
             triggerClassName="h-9 w-full border-input text-sm focus:border-ring focus:ring-[3px] focus:ring-ring/50"
             onTriggerEnter={createDisabled ? undefined : onCreate}
           />
+
+          {/* No-tmux option, right under the agent selector: create the worktree
+              without launching any session/agent. Opening it later starts the
+              chosen agent (or shows the session picker). */}
+          <label className="mt-2 flex cursor-pointer items-start gap-2.5">
+            <input
+              type="checkbox"
+              checked={skipSession}
+              onChange={(event) => onSkipSessionChange(event.target.checked)}
+              className="mt-0.5 size-4 shrink-0 cursor-pointer accent-foreground"
+            />
+            <span className="min-w-0">
+              <span className="block text-xs font-medium text-foreground">
+                Don&apos;t start a session
+              </span>
+              <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                Create the worktree only — no tmux session or agent is launched.
+              </span>
+            </span>
+          </label>
         </div>
 
         <div>

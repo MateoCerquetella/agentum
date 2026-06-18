@@ -5,6 +5,10 @@
 // PTY owned by the desktop process.
 import type { Terminal } from '@xterm/xterm'
 import { openSessionStream, type SessionStream } from './agentum-server-client'
+import {
+  markHostConnectedFromHostKey,
+  markHostReconnectingFromHostKey
+} from './server-host-client'
 import { extractAllOscTitles } from '../../../shared/agent-detection'
 
 export type ServerSessionTerminalBinding = {
@@ -24,6 +28,15 @@ export type BindServerSessionTerminalOptions = {
    *  tmux-backed agent. The bytes carry the title via the pipe-pane tail; we
    *  extract it here and let the caller route it into runtimePaneTitlesByTabId. */
   onTitle?: (title: string) => void
+  /** Called on every server → client byte chunk. Why: agents whose OSC title
+   *  carries no working/idle signal (OpenCode, Codex) leave the title path
+   *  blind, so the sidebar would show them idle while they stream output. Byte
+   *  arrival is the same "pane is redrawing" signal the daemon watchdog polls
+   *  for; the caller debounces it into a working/idle state. */
+  onActivity?: () => void
+  /** Host bucket this session's WS throughput counts toward in the status-bar
+   *  I/O meter (`'local'` or `'ssh:<connectionId>'`). Omitted → local host. */
+  hostKey?: string
 }
 
 /**
@@ -79,13 +92,86 @@ export async function bindServerSessionTerminal(
       onData: (bytes) => {
         term.write(bytes)
         scanForTitles(bytes)
+        opts?.onActivity?.()
       },
-      onClose: () => term.write('\r\n\x1b[2m[agentum: session stream closed]\x1b[0m\r\n')
-    }
+      // Permanent close: the session is gone or our token was rejected. A
+      // transient drop reconnects silently (onReconnecting) instead of this.
+      onClose: () => term.write('\r\n\x1b[2m[agentum: session stream closed]\x1b[0m\r\n'),
+      // First drop of a reconnect cycle: show one dim hint. A successful
+      // reconnect repaints the pane (the server replays a snapshot) and wipes
+      // this line; printing only on attempt 1 keeps a long outage from spamming
+      // the scrollback. `attempt` resets after a connection holds, so a later
+      // independent drop hints again.
+      onReconnecting: (attempt) => {
+        if (attempt === 1) {
+          term.write('\r\n\x1b[2m[agentum: connection lost — reconnecting…]\x1b[0m\r\n')
+          // Reflect the outage in the SSH badge for this host (and arm the next
+          // recovery's generation bump). Keyed off hostKey; no-op for local.
+          void markHostReconnectingFromHostKey(opts?.hostKey)
+        }
+      },
+      // Recovered: the re-attach proves the host is reachable, so re-mark it
+      // connected. That repaints the SSH badges and bumps sshConnectedGeneration,
+      // re-triggering the file explorer's retry — fixing the bug where the
+      // terminal reconnected but the sidebar/tree stayed stuck on the outage.
+      onReconnected: () => {
+        void markHostConnectedFromHostKey(opts?.hostKey)
+      }
+    },
+    opts?.hostKey
   )
 
   const dataSub = term.onData((data) => stream.send(data))
   const resizeSub = term.onResize(({ cols, rows }) => stream.resize(cols, rows))
+
+  // ── Blank-pane self-heal ────────────────────────────────────────────────
+  // A remote IDLE pane's only paint source is the one connect snapshot — no
+  // live bytes follow it. If that snapshot never lands on screen (lost when the
+  // xterm reflows during a multi-pane restore on reopen, or the server returned
+  // an EMPTY snapshot under SSH ControlMaster channel pressure), the pane sits
+  // BLANK forever. We can't cheaply tell which boundary dropped it, so we watch
+  // the OBSERVABLE symptom: if the terminal still shows nothing a few seconds
+  // after connecting, force a fresh re-snapshot. Bounded so a genuinely-empty
+  // pane can't loop; a pane that actually painted is non-blank and never fires.
+  const PAINT_GRACE_MS = 6000
+  const MAX_REPAINTS = 2
+  let repaintAttempts = 0
+  let paintWatchdog: ReturnType<typeof setTimeout> | null = null
+
+  const paneLooksBlank = (): boolean => {
+    try {
+      const buf = term.buffer.active
+      for (let i = 0; i < buf.length; i++) {
+        if ((buf.getLine(i)?.translateToString(true).trim().length ?? 0) > 0) {
+          return false
+        }
+      }
+      return true
+    } catch {
+      // Can't introspect the buffer → assume it painted; never self-heal blind.
+      return false
+    }
+  }
+
+  const armPaintWatchdog = (): void => {
+    if (paintWatchdog) {
+      clearTimeout(paintWatchdog)
+      paintWatchdog = null
+    }
+    if (disposed || repaintAttempts >= MAX_REPAINTS) {
+      return
+    }
+    paintWatchdog = setTimeout(() => {
+      paintWatchdog = null
+      if (disposed || !paneLooksBlank()) {
+        return // painted (or torn down) — nothing to heal
+      }
+      repaintAttempts += 1
+      stream.requestRepaint()
+      armPaintWatchdog() // give the fresh snapshot its own grace window
+    }, PAINT_GRACE_MS)
+  }
+  armPaintWatchdog()
 
   // Launch the agent once the shell has had a moment to come up. tmux buffers
   // input, so an early send is harmless; the short delay just avoids racing the
@@ -104,6 +190,10 @@ export async function bindServerSessionTerminal(
       disposed = true
       if (startupTimer) {
         clearTimeout(startupTimer)
+      }
+      if (paintWatchdog) {
+        clearTimeout(paintWatchdog)
+        paintWatchdog = null
       }
       dataSub.dispose()
       resizeSub.dispose()

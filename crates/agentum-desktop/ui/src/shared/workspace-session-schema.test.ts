@@ -79,6 +79,74 @@ describe('parseWorkspaceSession', () => {
     }
   })
 
+  it('preserves a persistTmux choice on a terminal tab (spec 005-C)', () => {
+    const result = parseWorkspaceSession({
+      activeRepoId: null,
+      activeWorktreeId: null,
+      activeTabId: null,
+      tabsByWorktree: {
+        wt: [
+          {
+            id: 'persist-tab',
+            ptyId: null,
+            worktreeId: 'wt',
+            title: 'persist',
+            customTitle: null,
+            color: null,
+            sortOrder: 0,
+            createdAt: 1,
+            persistTmux: true
+          },
+          {
+            id: 'ephemeral-tab',
+            ptyId: null,
+            worktreeId: 'wt',
+            title: 'ephemeral',
+            customTitle: null,
+            color: null,
+            sortOrder: 1,
+            createdAt: 2,
+            persistTmux: false
+          }
+        ]
+      },
+      terminalLayoutsByTabId: {}
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.tabsByWorktree.wt[0].persistTmux).toBe(true)
+      expect(result.value.tabsByWorktree.wt[1].persistTmux).toBe(false)
+    }
+  })
+
+  it('drops a malformed persistTmux without failing the whole session (spec 005-C)', () => {
+    const result = parseWorkspaceSession({
+      activeRepoId: null,
+      activeWorktreeId: null,
+      activeTabId: null,
+      tabsByWorktree: {
+        wt: [
+          {
+            id: 'tab1',
+            ptyId: null,
+            worktreeId: 'wt',
+            title: 'bash',
+            customTitle: null,
+            color: null,
+            sortOrder: 0,
+            createdAt: 1,
+            persistTmux: 'yes'
+          }
+        ]
+      },
+      terminalLayoutsByTabId: {}
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.tabsByWorktree.wt[0].persistTmux).toBeUndefined()
+    }
+  })
+
   it('drops an unknown launchAgent without failing the whole session', () => {
     const result = parseWorkspaceSession({
       activeRepoId: null,

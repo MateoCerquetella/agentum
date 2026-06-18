@@ -1,13 +1,8 @@
 import { api } from '@/tauri'
 import React, { useState } from 'react'
 import {
-  BookOpen,
-  Boxes,
   CircleHelp,
-  ExternalLink,
   FolderPlus,
-  HardDrive,
-  MessageSquareText,
   RotateCw,
   School,
   Settings
@@ -25,21 +20,11 @@ import {
 import { toast } from 'sonner'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { showOnboardingFromRenderer } from '../onboarding/show-onboarding-event'
-import { SidebarFeedbackDialog } from './SidebarFeedbackDialog'
 import { ScrollToCurrentWorkspaceToolbarButton } from './ScrollToCurrentWorkspaceToolbarButton'
-
-const DOCS_URL = 'https://www.onagentum.dev/docs'
-
-function openExternalUrl(url: string): void {
-  void api.shell.openUrl(url)
-}
 
 const SidebarToolbar = React.memo(function SidebarToolbar() {
   const openModal = useAppStore((s) => s.openModal)
   const openSettingsPage = useAppStore((s) => s.openSettingsPage)
-  const openSkillsPage = useAppStore((s) => s.openSkillsPage)
-  const openSpacePage = useAppStore((s) => s.openSpacePage)
-  const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [helpMenuOpen, setHelpMenuOpen] = useState(false)
   const [showAdminHelpOptions, setShowAdminHelpOptions] = useState(false)
   const [isRestartingAgentum, setIsRestartingAgentum] = useState(false)
@@ -106,36 +91,6 @@ const SidebarToolbar = React.memo(function SidebarToolbar() {
         </Tooltip>
         <div className="flex items-center gap-1">
           <ScrollToCurrentWorkspaceToolbarButton />
-          <DropdownMenu modal={false}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    type="button"
-                    aria-label="Toolbox"
-                    className="text-muted-foreground"
-                  >
-                    <Boxes className="size-3.5" />
-                  </Button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="top" sideOffset={4}>
-                Toolbox
-              </TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent side="top" align="start" sideOffset={8} className="w-44">
-              <DropdownMenuItem onSelect={openSkillsPage}>
-                <BookOpen className="size-3.5" />
-                Skills
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={openSpacePage}>
-                <HardDrive className="size-3.5" />
-                Space Analyzer
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
           <DropdownMenu modal={false} open={helpMenuOpen} onOpenChange={handleHelpMenuOpenChange}>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -166,14 +121,6 @@ const SidebarToolbar = React.memo(function SidebarToolbar() {
                 <School className="size-3.5" />
                 Show Onboarding
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setFeedbackOpen(true)}>
-                <MessageSquareText className="size-3.5" />
-                Send feedback
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => openExternalUrl(DOCS_URL)}>
-                <ExternalLink className="size-3.5" />
-                Docs
-              </DropdownMenuItem>
               {showAdminHelpOptions ? (
                 <>
                   <DropdownMenuSeparator />
@@ -202,7 +149,6 @@ const SidebarToolbar = React.memo(function SidebarToolbar() {
           </Tooltip>
         </div>
       </div>
-      <SidebarFeedbackDialog open={feedbackOpen} onOpenChange={setFeedbackOpen} />
     </div>
   )
 })

@@ -9,6 +9,9 @@ export type PtyConnectionDeps = {
   cwd?: string
   startup?: {
     command: string
+    /** Only run in a freshly spawned pane — never type into a reattached live
+     *  one (the agent may still be running there). See pendingStartupByTabId. */
+    onlyIfFresh?: boolean
     /** Renderer-delivered startup input for callers that need xterm paste
      *  semantics before the submit Enter. */
     delivery?: 'terminal-paste'

@@ -12,6 +12,11 @@
 -->
 <plist version="1.0">
 <dict>
+  <!-- Voice dictation captures the microphone natively (cpal/CoreAudio), since
+       macOS WKWebView does not expose getUserMedia. macOS requires this usage
+       string to grant mic access (TCC prompt on first capture). -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Agentum uses the microphone for on-device voice dictation.</string>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsArbitraryLoads</key>

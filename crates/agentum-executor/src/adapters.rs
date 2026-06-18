@@ -4,7 +4,7 @@ use std::path::Path;
 
 use agentum_core::{Session, transcript};
 
-use crate::{LaunchCommand, ToolAdapter, translate_yolo_marker};
+use crate::{LaunchCommand, McpProvision, ToolAdapter, translate_yolo_marker};
 
 /// Append `--model=<v>` to argv if the session has a model set.
 fn push_model(argv: &mut Vec<String>, session: &Session) {
@@ -71,6 +71,17 @@ impl ToolAdapter for ClaudeAdapter {
         argv.push(session.id.to_string());
         push_user_flags(&mut argv, session, self.yolo_flag());
         LaunchCommand::argv_only(argv)
+    }
+
+    // Claude loads MCP servers from a file at startup; point it at the
+    // pre-written combined config (agentum + playwright + …). Additive — we
+    // deliberately omit `--strict-mcp-config` so the user's own MCP servers
+    // stay available.
+    fn mcp_args(&self, p: &McpProvision) -> Vec<String> {
+        vec![
+            "--mcp-config".to_string(),
+            p.config_file.display().to_string(),
+        ]
     }
 
     fn compact_trigger(&self) -> Option<&'static str> {
@@ -154,6 +165,25 @@ impl ToolAdapter for CodexAdapter {
         push_model(&mut argv, session);
         push_user_flags(&mut argv, session, self.yolo_flag());
         LaunchCommand::argv_only(argv)
+    }
+
+    // Codex has no `--mcp-config`; inject each server with `-c` TOML overrides at
+    // launch. Values are quoted so the URL parses as a TOML string. One block per
+    // server (agentum, playwright, …); a server with an `auth_token` also gets a
+    // `bearer_token` override so Codex authenticates to it.
+    fn mcp_args(&self, p: &McpProvision) -> Vec<String> {
+        let mut args = Vec::with_capacity(p.servers.len() * 6);
+        for s in &p.servers {
+            args.push("-c".to_string());
+            args.push(format!("mcp_servers.{}.type=\"http\"", s.name));
+            args.push("-c".to_string());
+            args.push(format!("mcp_servers.{}.url=\"{}\"", s.name, s.url));
+            if let Some(token) = &s.auth_token {
+                args.push("-c".to_string());
+                args.push(format!("mcp_servers.{}.bearer_token=\"{}\"", s.name, token));
+            }
+        }
+        args
     }
 
     // Codex CLI uses `/compact` too as of late 2025.
@@ -334,12 +364,26 @@ impl ToolAdapter for PassthroughAdapter {
         push_user_flags(&mut argv, session, self.yolo_flag());
         LaunchCommand::argv_only(argv)
     }
+
+    // Hookless agents that route through this catch-all (opencode, aider —
+    // see `PASSTHROUGH_PROBED`) still need change-based Working/Idle
+    // detection: they have no first-class adapter, so `busy_signature()`
+    // is `None`, and the watchdog only applies its no-busy-signature
+    // fallback when `is_agent()` is true. Without this, an actively
+    // rendering remote OpenCode pane classified as `Unknown` forever —
+    // never `Working`, never `Idle` — so the sidebar dot showed "Idle"
+    // while the agent was visibly streaming output. A truly unknown
+    // binary (a one-off shell command typed as a "tool") stays `false`
+    // and `Unknown`, preserving the "don't auto-fire on shells" rule.
+    fn is_agent(&self) -> bool {
+        crate::PASSTHROUGH_PROBED.contains(&self.tool.as_str())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapter_for;
+    use crate::{McpServer, adapter_for};
     use agentum_core::{Session, Status};
     use time::OffsetDateTime;
     use uuid::Uuid;
@@ -394,6 +438,113 @@ mod tests {
             ]
         );
         assert_eq!(ClaudeAdapter.compact_trigger(), Some("/compact"));
+    }
+
+    fn provision() -> McpProvision {
+        McpProvision {
+            servers: vec![McpServer {
+                name: "playwright".to_string(),
+                url: "http://127.0.0.1:8931/mcp".to_string(),
+                auth_token: None,
+            }],
+            config_file: std::path::PathBuf::from("/tmp/agentum/playwright-mcp.json"),
+        }
+    }
+
+    /// Two servers: agentum (token-guarded) + playwright (none) → Codex must emit
+    /// a `-c` block for each, plus a `bearer_token` for agentum.
+    fn provision_two() -> McpProvision {
+        McpProvision {
+            servers: vec![
+                McpServer {
+                    name: "agentum".to_string(),
+                    url: "http://127.0.0.1:8822/mcp".to_string(),
+                    auth_token: Some("secret-tok".to_string()),
+                },
+                McpServer {
+                    name: "playwright".to_string(),
+                    url: "http://127.0.0.1:8931/mcp".to_string(),
+                    auth_token: None,
+                },
+            ],
+            config_file: std::path::PathBuf::from("/tmp/agentum/mcp.json"),
+        }
+    }
+
+    #[test]
+    fn claude_mcp_args_point_at_the_config_file_additively() {
+        // Additive: no `--strict-mcp-config`, so the user's own MCP servers survive.
+        let args = ClaudeAdapter.mcp_args(&provision());
+        assert_eq!(
+            args,
+            vec![
+                "--mcp-config".to_string(),
+                "/tmp/agentum/playwright-mcp.json".to_string(),
+            ]
+        );
+        assert!(!args.iter().any(|a| a == "--strict-mcp-config"));
+    }
+
+    #[test]
+    fn codex_mcp_args_inject_http_server_via_config_overrides() {
+        let args = CodexAdapter.mcp_args(&provision());
+        assert_eq!(
+            args,
+            vec![
+                "-c".to_string(),
+                "mcp_servers.playwright.type=\"http\"".to_string(),
+                "-c".to_string(),
+                "mcp_servers.playwright.url=\"http://127.0.0.1:8931/mcp\"".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_mcp_args_emit_one_block_per_server() {
+        // N servers in order; the token-guarded agentum server also gets a
+        // `bearer_token` override, the unauthenticated playwright one doesn't.
+        let args = CodexAdapter.mcp_args(&provision_two());
+        assert_eq!(
+            args,
+            vec![
+                "-c".to_string(),
+                "mcp_servers.agentum.type=\"http\"".to_string(),
+                "-c".to_string(),
+                "mcp_servers.agentum.url=\"http://127.0.0.1:8822/mcp\"".to_string(),
+                "-c".to_string(),
+                "mcp_servers.agentum.bearer_token=\"secret-tok\"".to_string(),
+                "-c".to_string(),
+                "mcp_servers.playwright.type=\"http\"".to_string(),
+                "-c".to_string(),
+                "mcp_servers.playwright.url=\"http://127.0.0.1:8931/mcp\"".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_mcp_args_are_one_config_file_regardless_of_server_count() {
+        // Claude reads all servers from the single combined config file.
+        let args = ClaudeAdapter.mcp_args(&provision_two());
+        assert_eq!(
+            args,
+            vec![
+                "--mcp-config".to_string(),
+                "/tmp/agentum/mcp.json".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn tools_without_browser_mcp_get_no_args_by_default() {
+        let p = provision();
+        for tool in [
+            "cursor", "gemini", "hermes", "terminal", "agent", "opencode",
+        ] {
+            assert!(
+                adapter_for(tool).mcp_args(&p).is_empty(),
+                "{tool} must not inject browser MCP by default"
+            );
+        }
     }
 
     #[test]
@@ -580,5 +731,32 @@ mod tests {
         let s = fixture("cursor", Some("auto"), &[]);
         let cmd = CursorAdapter.launch(&s);
         assert_eq!(cmd.argv, vec!["cursor-agent", "--model=auto"]);
+    }
+
+    #[test]
+    fn passthrough_probed_agents_report_is_agent() {
+        // opencode / aider are hookless coding agents that route through
+        // PassthroughAdapter (they're in PASSTHROUGH_PROBED, not FIRST_CLASS).
+        // They must report is_agent() == true so the watchdog applies its
+        // change-based Working/Idle detection — otherwise classify_activity
+        // pins them at Unknown forever and the sidebar dot shows "Idle"
+        // while the agent is visibly working. Regression for the remote
+        // OpenCode "stuck on Idle" bug.
+        for &tool in crate::PASSTHROUGH_PROBED {
+            let a = adapter_for(tool);
+            assert!(
+                a.is_agent(),
+                "passthrough-probed agent {tool:?} must report is_agent() == true"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_passthrough_binary_is_not_agent() {
+        // A truly unknown binary (a one-off shell command typed as a "tool")
+        // must stay is_agent() == false so the watchdog leaves it Unknown and
+        // never auto-fires an agent.finished/idle for what may be a shell.
+        let a = adapter_for("some-random-binary");
+        assert!(!a.is_agent());
     }
 }

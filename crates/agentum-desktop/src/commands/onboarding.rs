@@ -95,7 +95,9 @@ pub fn onboarding_update(request: tauri::ipc::Request<'_>) -> Result<OnboardingS
         for (key, value) in updates {
             if key == "checklist" {
                 if let (Some(current), Some(incoming)) = (
-                    state_value.get_mut("checklist").and_then(Value::as_object_mut),
+                    state_value
+                        .get_mut("checklist")
+                        .and_then(Value::as_object_mut),
                     value.as_object(),
                 ) {
                     for (flag, flag_value) in incoming {

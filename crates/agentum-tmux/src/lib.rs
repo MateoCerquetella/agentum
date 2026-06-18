@@ -99,7 +99,8 @@ pub async fn kill_session(target: &str) -> Result<()> {
         return Ok(());
     }
     let mut c = Command::new("tmux");
-    c.arg("kill-session").arg("-t").arg(target);
+    // `--` end-of-options guard: a `-`-prefixed target is a value, never a flag.
+    c.arg("kill-session").arg("-t").arg("--").arg(target);
     run_checked(&mut c).await
 }
 
@@ -133,24 +134,100 @@ pub async fn capture_pane_visible(target: &str) -> Result<String> {
     Ok(String::from_utf8(out.stdout)?)
 }
 
-/// Capture the current visible pane state with ANSI escapes (`-e`) so a
-/// faithful redraw can be replayed into a vt100 parser. Lines are joined
-/// into LF-terminated rows with `\r\n` so the bytes are valid for a raw
-/// terminal stream — `capture-pane -p` prints `\n` between rows but xterm
-/// expects `\r\n` to return to column 0.
+/// tmux format string yielding a [`CursorSample`] line — must be sampled in
+/// the same tmux command sequence (or remote shell) as the capture it anchors.
+pub const CURSOR_SAMPLE_FORMAT: &str = "#{cursor_x} #{cursor_y} #{cursor_flag}";
+
+/// Pane cursor state sampled atomically with a `capture-pane` snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CursorSample {
+    /// 0-based column within the visible pane.
+    pub x: u32,
+    /// 0-based row within the visible pane.
+    pub y: u32,
+    /// tmux `cursor_flag` — false when the program hid the cursor (DECTCEM).
+    pub visible: bool,
+}
+
+/// Parse one line of [`CURSOR_SAMPLE_FORMAT`] output. `None` (rather than a
+/// 0,0 guess) when it doesn't parse: anchoring to a wrong position is worse
+/// than the legacy no-anchor behavior, because erase-up redraw cycles would
+/// then chew through the top of the snapshot.
+pub fn parse_cursor_sample(line: &str) -> Option<CursorSample> {
+    let mut it = line.split_whitespace();
+    let x = it.next()?.parse().ok()?;
+    let y = it.next()?.parse().ok()?;
+    let visible = it.next().is_none_or(|f| f != "0");
+    Some(CursorSample { x, y, visible })
+}
+
+/// Turn raw `capture-pane -p -e` stdout (LF-separated rows) into bytes safe
+/// to replay into a freshly-reset client parser, anchored so the live byte
+/// stream that follows renders where the pane really drew it.
+///
+/// Two invariants:
+///
+/// 1. Rows are *separated* by CRLF, never terminated. capture-pane emits
+///    every visible row (trailing blanks included), so a terminator on a
+///    full-height pane scrolls the client viewport one row — desyncing all
+///    painted content from the absolute coordinates in the live stream.
+/// 2. The pane's cursor position is restored with an absolute CUP. Agent
+///    TUIs (Claude Code, Cursor's composer) redraw in place via
+///    cursor-relative erase/rewrite cycles anchored on wherever the previous
+///    frame left the cursor. Painting the grid leaves the client cursor
+///    below the last row instead, so without this anchor every replayed
+///    frame lands rows too low and stale spinner lines pile up (the
+///    "Composing… Composing…" corruption).
+///
+/// A hidden cursor is re-hidden: the RIS that precedes the snapshot made it
+/// visible, and a TUI that hid it at startup never repeats the hide.
+pub fn assemble_anchored_snapshot(grid: &[u8], cursor: Option<CursorSample>) -> Vec<u8> {
+    // capture-pane terminates its last row with `\n`; drop exactly that one
+    // so blank trailing rows (empty splits) still paint.
+    let grid = grid.strip_suffix(b"\n").unwrap_or(grid);
+    if grid.is_empty() {
+        return Vec::new();
+    }
+    let mut buf = Vec::with_capacity(grid.len() + 32);
+    for (i, line) in grid.split(|b| *b == b'\n').enumerate() {
+        if i > 0 {
+            buf.extend_from_slice(b"\r\n");
+        }
+        buf.extend_from_slice(line);
+    }
+    if let Some(c) = cursor {
+        // CUP is 1-based; the tmux formats are 0-based.
+        buf.extend_from_slice(format!("\x1b[{};{}H", c.y + 1, c.x + 1).as_bytes());
+        if !c.visible {
+            buf.extend_from_slice(b"\x1b[?25l");
+        }
+    }
+    buf
+}
+
+/// Capture the current visible pane state with ANSI escapes (`-e`), plus the
+/// pane's cursor sampled in the same tmux command sequence, assembled for
+/// replay into a fresh client parser — see [`assemble_anchored_snapshot`].
 pub async fn capture_pane_ansi(target: &str) -> Result<Vec<u8>> {
+    // One tmux invocation, two commands (`;` separates command sequences at
+    // the argv level): the cursor line and the grid come from the same server
+    // pass, so the anchor can't drift from the content it anchors.
     let out = Command::new("tmux")
+        .args(["display-message", "-p", "-t"])
+        .arg(target)
+        .arg(CURSOR_SAMPLE_FORMAT)
+        .arg(";")
         .args(["capture-pane", "-p", "-e", "-t"])
         .arg(target)
         .output()
         .await?;
     check(&out)?;
-    let mut buf = Vec::with_capacity(out.stdout.len() + 64);
-    for line in out.stdout.split(|b| *b == b'\n') {
-        buf.extend_from_slice(line);
-        buf.extend_from_slice(b"\r\n");
-    }
-    Ok(buf)
+    let (first, rest) = match out.stdout.iter().position(|b| *b == b'\n') {
+        Some(i) => (&out.stdout[..i], &out.stdout[i + 1..]),
+        None => (&out.stdout[..], &[][..]),
+    };
+    let cursor = parse_cursor_sample(&String::from_utf8_lossy(first));
+    Ok(assemble_anchored_snapshot(rest, cursor))
 }
 
 /// Read the pane's current title (`#{pane_title}`). tmux captures the program's
@@ -264,6 +341,34 @@ pub async fn pipe_pane(target: &str, out_path: &Path) -> Result<()> {
     run_checked(&mut c).await
 }
 
+/// Disarm `pipe-pane` on a pane — running `tmux pipe-pane` with no shell
+/// command closes the existing pipe. Used when detaching from an external
+/// (non-agentum) tmux session so its output stops accumulating in our log.
+pub async fn unpipe_pane(target: &str) -> Result<()> {
+    let mut c = Command::new("tmux");
+    c.arg("pipe-pane").arg("-t").arg(target);
+    run_checked(&mut c).await
+}
+
+/// `tmux list-panes -a -F <format>` raw stdout across every session on the
+/// server. Returns `Ok("")` when tmux is not installed or no tmux server is
+/// running — for discovery both simply mean "no sessions", not an error.
+pub async fn list_panes_all(format: &str) -> Result<String> {
+    let out = match Command::new("tmux")
+        .args(["list-panes", "-a", "-F", format])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(e) => return Err(e.into()),
+    };
+    if !out.status.success() {
+        return Ok(String::new());
+    }
+    Ok(String::from_utf8(out.stdout)?)
+}
+
 /// Basename of the foreground process inside the pane (tmux's
 /// `pane_current_command` format token). Useful for figuring out which
 /// adapter the user is currently running — e.g. tells us "codex" vs
@@ -367,6 +472,112 @@ mod tests {
     #[test]
     fn target_format() {
         assert_eq!(target_for("alpha"), "agentum-alpha");
+    }
+
+    #[test]
+    fn cursor_sample_parses_and_rejects() {
+        assert_eq!(
+            parse_cursor_sample("12 3 0"),
+            Some(CursorSample {
+                x: 12,
+                y: 3,
+                visible: false
+            })
+        );
+        // Missing flag defaults to visible (older tmux without cursor_flag).
+        assert_eq!(
+            parse_cursor_sample("5 7"),
+            Some(CursorSample {
+                x: 5,
+                y: 7,
+                visible: true
+            })
+        );
+        assert_eq!(parse_cursor_sample(""), None);
+        assert_eq!(parse_cursor_sample("X"), None);
+        assert_eq!(parse_cursor_sample("3 nope 1"), None);
+    }
+
+    #[test]
+    fn anchored_snapshot_separates_rows_and_restores_cursor() {
+        let snap = assemble_anchored_snapshot(
+            b"hello\nworld\n",
+            Some(CursorSample {
+                x: 5,
+                y: 1,
+                visible: true,
+            }),
+        );
+        // No trailing CRLF (would scroll a full-height pane); CUP is 1-based.
+        assert_eq!(snap, b"hello\r\nworld\x1b[2;6H");
+    }
+
+    #[test]
+    fn anchored_snapshot_preserves_blank_trailing_rows() {
+        // Only capture-pane's own final `\n` is stripped — a blank last row
+        // (empty split) still paints, keeping absolute coordinates aligned.
+        let snap = assemble_anchored_snapshot(b"a\n\n\n", None);
+        assert_eq!(snap, b"a\r\n\r\n");
+    }
+
+    #[test]
+    fn anchored_snapshot_rehides_hidden_cursor() {
+        let snap = assemble_anchored_snapshot(
+            b"x\n",
+            Some(CursorSample {
+                x: 0,
+                y: 0,
+                visible: false,
+            }),
+        );
+        assert_eq!(snap, b"x\x1b[1;1H\x1b[?25l");
+    }
+
+    #[test]
+    fn anchored_snapshot_empty_grid_yields_empty() {
+        // Callers treat an empty snapshot as "nothing to paint" — a bare CUP
+        // with no content must not flip that gate.
+        assert_eq!(
+            assemble_anchored_snapshot(
+                b"",
+                Some(CursorSample {
+                    x: 1,
+                    y: 1,
+                    visible: true
+                })
+            ),
+            Vec::<u8>::new()
+        );
+        assert_eq!(assemble_anchored_snapshot(b"\n", None), Vec::<u8>::new());
+    }
+
+    #[tokio::test]
+    async fn capture_pane_ansi_smoke_anchors_cursor() {
+        // Skip if tmux isn't available in CI.
+        if Command::new("tmux").arg("-V").status().await.is_err() {
+            return;
+        }
+        let target = "agentum-test-capture";
+        let _ = kill_session(target).await;
+        let workdir = std::env::temp_dir();
+        new_session(target, &workdir, &["sleep".into(), "3600".into()], &[])
+            .await
+            .unwrap();
+        // Give tmux a beat to render the pane before capturing.
+        sleep(Duration::from_millis(300)).await;
+        let snap = capture_pane_ansi(target).await.unwrap();
+        let s = String::from_utf8_lossy(&snap);
+        // The cursor anchor (absolute CUP) must be present and the rows must
+        // not be newline-terminated — both are what keeps replayed redraw
+        // cycles aligned with the painted grid.
+        assert!(
+            s.rsplit('\x1b')
+                .next()
+                .is_some_and(|t| t.ends_with('H') || t.ends_with('l')),
+            "no cursor anchor suffix: {s:?}"
+        );
+        assert!(!s.ends_with("\r\n"), "row-terminated snapshot: {s:?}");
+        kill_session(target).await.unwrap();
     }
 
     #[tokio::test]

@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -76,7 +76,7 @@ fn effective_overrides(document: &KeybindingDocument, platform: &str) -> Overrid
 }
 
 fn build_snapshot(
-    path: &PathBuf,
+    path: &Path,
     document: &KeybindingDocument,
     exists: bool,
     diagnostics: Vec<KeybindingFileDiagnostic>,
@@ -135,8 +135,7 @@ fn write_document(path: &PathBuf, document: &KeybindingDocument) -> Result<(), S
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let serialized =
-        serde_json::to_string_pretty(document).map_err(|error| error.to_string())?;
+    let serialized = serde_json::to_string_pretty(document).map_err(|error| error.to_string())?;
     std::fs::write(path, format!("{serialized}\n")).map_err(|error| error.to_string())
 }
 
@@ -206,7 +205,7 @@ pub async fn keybindings_reveal_file() -> Result<KeybindingFileSnapshot, String>
 }
 
 // reveal=true shows the file in the OS file manager; reveal=false opens it.
-async fn open_in_os(path: &PathBuf, reveal: bool) -> Result<(), String> {
+async fn open_in_os(path: &Path, reveal: bool) -> Result<(), String> {
     let target = path.display().to_string();
     let mut command = if cfg!(target_os = "macos") {
         let mut command = tokio::process::Command::new("open");

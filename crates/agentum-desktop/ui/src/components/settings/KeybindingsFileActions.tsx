@@ -4,8 +4,6 @@ import { ChevronDown, Code2, ExternalLink, FileText, FolderOpen, RefreshCw } fro
 import { toast } from 'sonner'
 import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../shared/constants'
 import { useAppStore } from '../../store'
-import { TOGGLE_FLOATING_TERMINAL_EVENT } from '../../lib/floating-terminal'
-import { isFloatingWorkspacePanelVisible } from '../../lib/floating-workspace-terminal-actions'
 import { detectLanguage } from '../../lib/language-detect'
 import { Button } from '../ui/button'
 import {
@@ -38,29 +36,6 @@ export function KeybindingsFileActions(): React.JSX.Element {
   const openFiles = useAppStore((state) => state.openFiles)
   const openFile = useAppStore((state) => state.openFile)
   const closeFile = useAppStore((state) => state.closeFile)
-  const updateSettings = useAppStore((state) => state.updateSettings)
-  const floatingTerminalEnabled = useAppStore(
-    (state) => state.settings?.floatingTerminalEnabled === true
-  )
-  const floatingTerminalToggleFrameRef = React.useRef<number | null>(null)
-
-  const cancelFloatingTerminalToggleFrame = React.useCallback((): void => {
-    if (floatingTerminalToggleFrameRef.current === null) {
-      return
-    }
-    cancelAnimationFrame(floatingTerminalToggleFrameRef.current)
-    floatingTerminalToggleFrameRef.current = null
-  }, [])
-
-  const setActionsRootNode = React.useCallback(
-    (node: HTMLDivElement | null): void => {
-      // Why: the deferred floating-terminal toggle belongs to this settings control.
-      if (!node) {
-        cancelFloatingTerminalToggleFrame()
-      }
-    },
-    [cancelFloatingTerminalToggleFrame]
-  )
 
   const prepareKeybindingsPath = async (): Promise<string | null> => {
     const snapshot = await ensureKeybindingsFile()
@@ -93,16 +68,6 @@ export function KeybindingsFileActions(): React.JSX.Element {
         },
         { preview: false, suppressActiveRuntimeFallback: true }
       )
-      if (!floatingTerminalEnabled) {
-        await updateSettings({ floatingTerminalEnabled: true })
-      }
-      cancelFloatingTerminalToggleFrame()
-      floatingTerminalToggleFrameRef.current = requestAnimationFrame(() => {
-        floatingTerminalToggleFrameRef.current = null
-        if (!isFloatingWorkspacePanelVisible()) {
-          window.dispatchEvent(new CustomEvent(TOGGLE_FLOATING_TERMINAL_EVENT))
-        }
-      })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to open keybindings in Agentum.')
     }
@@ -125,10 +90,7 @@ export function KeybindingsFileActions(): React.JSX.Element {
   }
 
   return (
-    <div
-      ref={setActionsRootNode}
-      className="space-y-2 rounded-md border border-border bg-card px-3 py-2 text-card-foreground shadow-xs"
-    >
+    <div className="space-y-2 rounded-md border border-border bg-card px-3 py-2 text-card-foreground shadow-xs">
       <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
         <div className="min-w-0">
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">

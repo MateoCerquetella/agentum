@@ -7,24 +7,17 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
-import { CircleDot, ExternalLink, GitMerge, MonitorUp, Pencil, StickyNote } from 'lucide-react'
+import { CircleDot, ExternalLink, MonitorUp, Pencil, StickyNote } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { LinearIcon } from '@/components/icons/LinearIcon'
 import { SelectedTextCopyMenu } from '@/components/SelectedTextCopyMenu'
 import CommentMarkdown from './CommentMarkdown'
-import { PullRequestIcon } from './WorktreeCardHelpers'
 import { WORKTREE_NATIVE_CONTEXT_MENU_ATTR } from './WorktreeContextMenu'
 import {
   WorktreeCardDetailSection,
   WorktreeCardDetailSectionContent
 } from './WorktreeCardDetailSection'
-import {
-  IssueStateBadge,
-  LinearStateBadge,
-  ReviewChecksBadge,
-  ReviewStateBadge
-} from './WorktreeCardMetadataStatusBadges'
-import type { WorktreeCardPrDisplay } from './worktree-card-pr-display'
+import { IssueStateBadge, LinearStateBadge } from './WorktreeCardMetadataStatusBadges'
 import type { IssueInfo } from '../../../../shared/types'
 
 export type WorktreeCardIssueDisplay =
@@ -48,7 +41,6 @@ export type WorktreeCardLinearIssueDisplay = {
 type WorktreeCardMetaBadgesProps = {
   issue: WorktreeCardIssueDisplay | null
   linearIssue: WorktreeCardLinearIssueDisplay | null
-  review: WorktreeCardPrDisplay | null
   comment: string | null
 }
 
@@ -64,7 +56,6 @@ type WorktreeCardDetailsHoverProps = WorktreeCardMetaBadgesProps & {
   onEditComment: (event: React.MouseEvent) => void
   onOpenGitHubIssueInAgentum?: (event: React.MouseEvent) => void
   onOpenLinearIssueInAgentum?: (event: React.MouseEvent) => void
-  onOpenReviewInAgentum?: (event: React.MouseEvent) => void
 }
 
 function hasComment(comment: string | null): boolean {
@@ -74,65 +65,9 @@ function hasComment(comment: string | null): boolean {
 export function hasWorktreeCardDetails({
   issue,
   linearIssue,
-  review,
   comment
 }: WorktreeCardMetaBadgesProps): boolean {
-  return Boolean(issue || linearIssue || review || hasComment(comment))
-}
-
-function getReviewLabel(review: WorktreeCardPrDisplay): 'MR' | 'PR' {
-  return review.provider === 'gitlab' ? 'MR' : 'PR'
-}
-
-function getProviderName(review: WorktreeCardPrDisplay): string {
-  if (review.provider === 'gitlab') {
-    return 'GitLab'
-  }
-  if (review.provider === 'bitbucket') {
-    return 'Bitbucket'
-  }
-  if (review.provider === 'azure-devops') {
-    return 'Azure DevOps'
-  }
-  if (review.provider === 'gitea') {
-    return 'Gitea'
-  }
-  return 'GitHub'
-}
-
-function ReviewIcon({
-  review,
-  className
-}: {
-  review: WorktreeCardPrDisplay
-  className?: string
-}): React.JSX.Element {
-  const Icon = review.provider === 'gitlab' ? GitMerge : PullRequestIcon
-  // Why: the standalone CI glyph was removed from the card header, so linked
-  // PR metadata carries check health unless the review is already merged.
-  const checkTone =
-    review.state !== 'merged' && review.status === 'failure'
-      ? 'text-rose-500/85'
-      : review.state !== 'merged' && review.status === 'pending'
-        ? 'text-amber-500/85'
-        : review.state === 'open' && review.status === 'success'
-          ? 'text-emerald-500/80'
-          : null
-  return (
-    <Icon
-      className={cn(
-        className,
-        checkTone,
-        review.state === 'merged' && 'text-purple-600/70 dark:text-purple-400/70',
-        !checkTone && review.state === 'open' && 'text-emerald-500/80',
-        !checkTone && review.state === 'closed' && 'text-muted-foreground/60',
-        !checkTone && review.state === 'draft' && 'text-muted-foreground/50',
-        !checkTone &&
-          (!review.state || !['merged', 'open', 'closed', 'draft'].includes(review.state)) &&
-          'text-muted-foreground opacity-70'
-      )}
-    />
-  )
+  return Boolean(issue || linearIssue || hasComment(comment))
 }
 
 function MetaIconBadge({
@@ -223,10 +158,10 @@ export const WorktreeCardMetaBadges = React.forwardRef<
   HTMLDivElement,
   WorktreeCardMetaBadgesRootProps
 >(function WorktreeCardMetaBadges(
-  { issue, linearIssue, review, comment, className, ...props },
+  { issue, linearIssue, comment, className, ...props },
   ref
 ): React.JSX.Element | null {
-  if (!hasWorktreeCardDetails({ issue, linearIssue, review, comment })) {
+  if (!hasWorktreeCardDetails({ issue, linearIssue, comment })) {
     return null
   }
 
@@ -254,11 +189,6 @@ export const WorktreeCardMetaBadges = React.forwardRef<
           <LinearIcon className="text-muted-foreground" />
         </MetaIconBadge>
       )}
-      {review && (
-        <MetaIconBadge label={`Linked ${getReviewLabel(review)} #${review.number}`}>
-          <ReviewIcon review={review} />
-        </MetaIconBadge>
-      )}
     </div>
   )
 })
@@ -283,7 +213,6 @@ export function WorktreeCardCtxChip({
 export function WorktreeCardDetailsHover({
   issue,
   linearIssue,
-  review,
   comment,
   children,
   branchName,
@@ -292,8 +221,7 @@ export function WorktreeCardDetailsHover({
   onEditIssue,
   onEditComment,
   onOpenGitHubIssueInAgentum,
-  onOpenLinearIssueInAgentum,
-  onOpenReviewInAgentum
+  onOpenLinearIssueInAgentum
 }: WorktreeCardDetailsHoverProps): React.JSX.Element {
   const [open, setOpen] = React.useState(false)
   const dismissAndRun = React.useCallback(
@@ -308,14 +236,12 @@ export function WorktreeCardDetailsHover({
 
   if (
     !showIdentityHeader &&
-    !hasWorktreeCardDetails({ issue, linearIssue, review, comment }) &&
+    !hasWorktreeCardDetails({ issue, linearIssue, comment }) &&
     !detailsAfter
   ) {
     return children
   }
 
-  const reviewLabel = review ? getReviewLabel(review) : null
-  const reviewProvider = review ? getProviderName(review) : null
   const issueLabels = issue?.labels ?? []
 
   return (
@@ -430,43 +356,6 @@ export function WorktreeCardDetailsHover({
                         {label}
                       </Badge>
                     ))}
-                  </div>
-                )}
-              </WorktreeCardDetailSectionContent>
-            </WorktreeCardDetailSection>
-          )}
-
-          {review && reviewLabel && reviewProvider && (
-            <WorktreeCardDetailSection>
-              <DetailHeader
-                icon={<ReviewIcon review={review} className="size-3" />}
-                label={`${reviewLabel} #${review.number}`}
-                actions={
-                  <>
-                    {review.url && onOpenReviewInAgentum && (
-                      <MetadataActionIcon
-                        label="Open in Agentum"
-                        onClick={dismissAndRun(onOpenReviewInAgentum)}
-                      >
-                        <MonitorUp className="size-3" />
-                      </MetadataActionIcon>
-                    )}
-                    {review.url && (
-                      <MetadataActionIcon label={`View on ${reviewProvider}`} href={review.url}>
-                        <ExternalLink className="size-3" />
-                      </MetadataActionIcon>
-                    )}
-                  </>
-                }
-              />
-              <WorktreeCardDetailSectionContent className="space-y-1.5">
-                <div className="text-[13px] font-semibold leading-snug text-foreground break-words">
-                  {review.title}
-                </div>
-                {(review.state || (review.status && review.status !== 'neutral')) && (
-                  <div className="flex flex-wrap gap-1">
-                    <ReviewStateBadge state={review.state} label={reviewLabel} />
-                    <ReviewChecksBadge status={review.status} />
                   </div>
                 )}
               </WorktreeCardDetailSectionContent>

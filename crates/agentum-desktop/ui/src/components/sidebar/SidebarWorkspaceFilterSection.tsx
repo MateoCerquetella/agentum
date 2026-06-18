@@ -22,9 +22,9 @@ const SidebarWorkspaceFilterSection = React.memo(function SidebarWorkspaceFilter
       />
       <FilterToggleRow
         icon={<GitBranch className="size-3.5" />}
-        label="Hide default branch"
-        checked={hideDefaultBranchWorkspace}
-        onChange={setHideDefaultBranchWorkspace}
+        label="Show default branches"
+        checked={!hideDefaultBranchWorkspace}
+        onChange={(showDefault) => setHideDefaultBranchWorkspace(!showDefault)}
       />
     </>
   )

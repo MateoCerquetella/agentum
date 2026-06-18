@@ -6,8 +6,11 @@ import type { AgentumApi } from './contract'
 
 export const codexAccounts = defineNamespace('codexAccounts', {
   add: (...args: any[]) => call('codex_accounts_add', args),
+  beginAdd: (...args: any[]) => call('codex_accounts_begin_add', args),
   list: (...args: any[]) => call('codex_accounts_list', args),
+  liveLogin: (...args: any[]) => call('codex_accounts_live_login', args),
   reauthenticate: (...args: any[]) => call('codex_accounts_reauthenticate', args),
   remove: (...args: any[]) => call('codex_accounts_remove', args),
   select: (...args: any[]) => call('codex_accounts_select', args),
+  syncCurrent: (...args: any[]) => call('codex_accounts_sync_current', args),
 }) satisfies AgentumApi['codexAccounts']

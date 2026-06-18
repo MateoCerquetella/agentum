@@ -61,28 +61,42 @@ export function useRemoteRepo(
     setIsAddingRemote(false)
   }, [])
 
-  const handleOpenRemoteStep = useCallback(async () => {
-    const gen = ++remoteGenRef.current
-    setStep('remote')
-    try {
-      const targets = (await api.ssh.listTargets()) as SshTarget[]
-      if (gen !== remoteGenRef.current) {
-        return
+  const handleOpenRemoteStep = useCallback(
+    async (preferTargetId?: string) => {
+      const gen = ++remoteGenRef.current
+      setStep('remote')
+      try {
+        const targets = (await api.ssh.listTargets()) as SshTarget[]
+        if (gen !== remoteGenRef.current) {
+          return
+        }
+        const states = useAppStore.getState().sshConnectionStates
+        const withState = targets.map((t) => ({ ...t, state: states.get(t.id) }))
+        setSshTargets(withState)
+        // Why: an explicit target (the host picked in the workspace composer)
+        // wins over auto-selecting the first connected one, so "Add project" on
+        // an SSH host lands on exactly that host. Fall back to the connected
+        // target only when no preference was passed or it's no longer present.
+        const preferred = preferTargetId
+          ? withState.find((t) => t.id === preferTargetId)
+          : undefined
+        if (preferred) {
+          setSelectedTargetId(preferred.id)
+        } else {
+          const connected = withState.find((t) => t.state?.status === 'connected')
+          if (connected) {
+            setSelectedTargetId(connected.id)
+          }
+        }
+      } catch {
+        if (gen !== remoteGenRef.current) {
+          return
+        }
+        setSshTargets([])
       }
-      const states = useAppStore.getState().sshConnectionStates
-      const withState = targets.map((t) => ({ ...t, state: states.get(t.id) }))
-      setSshTargets(withState)
-      const connected = withState.find((t) => t.state?.status === 'connected')
-      if (connected) {
-        setSelectedTargetId(connected.id)
-      }
-    } catch {
-      if (gen !== remoteGenRef.current) {
-        return
-      }
-      setSshTargets([])
-    }
-  }, [setStep])
+    },
+    [setStep]
+  )
 
   // Why: keep the target list's connection state in sync while the dialog is
   // open, so clicking the inline Connect button updates the dot/label live.
@@ -228,6 +242,10 @@ type RemoteStepProps = {
   onAdd: () => void
   onOpenSshSettings: () => void
   onConnectTarget: (id: string) => Promise<void>
+  /** When true (opened from "Add project" on an SSH host), jump straight into
+   *  the remote file browser once a target is selected, so the user lands on the
+   *  SSH host's directories instead of a bare path field. */
+  autoBrowse?: boolean
 }
 
 export function RemoteStep({
@@ -240,9 +258,22 @@ export function RemoteStep({
   onRemotePathChange,
   onAdd,
   onOpenSshSettings,
-  onConnectTarget
+  onConnectTarget,
+  autoBrowse = false
 }: RemoteStepProps): React.JSX.Element {
   const [browsing, setBrowsing] = useState(false)
+  const autoBrowsedRef = useRef(false)
+
+  // Why: launched from "Add project" on an SSH host — open the remote file
+  // browser directly so the user sees that host's directories, not the local
+  // machine's. One-shot (ref-guarded): canceling the browser returns to the
+  // target/path view rather than immediately reopening it.
+  useEffect(() => {
+    if (autoBrowse && selectedTargetId && !autoBrowsedRef.current) {
+      autoBrowsedRef.current = true
+      setBrowsing(true)
+    }
+  }, [autoBrowse, selectedTargetId])
 
   if (browsing && selectedTargetId) {
     return (

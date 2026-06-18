@@ -65,6 +65,7 @@ type WorktreeActivationStore = {
     tabId: string,
     startup: {
       command: string
+      onlyIfFresh?: boolean
       env?: Record<string, string>
       initialAgentStatus?: { agent: TuiAgent; prompt: string }
       telemetry?: AgentStartedTelemetry
@@ -103,6 +104,7 @@ export type ActivateAndRevealResult = {
 function buildCreatedAgentReopenStartup(worktree: Worktree):
   | {
       command: string
+      onlyIfFresh: true
       env?: Record<string, string>
       telemetry: AgentStartedTelemetry
     }
@@ -125,6 +127,10 @@ function buildCreatedAgentReopenStartup(worktree: Worktree):
 
   return {
     command: startupPlan.launchCommand,
+    // A reopen reattaches to the workspace pane when it survived in tmux —
+    // the agent is usually still running there, so the launch command must
+    // only be typed when the pane comes up as a fresh bare shell.
+    onlyIfFresh: true,
     ...(startupPlan.env ? { env: startupPlan.env } : {}),
     telemetry: {
       agent_kind: tuiAgentToAgentKind(agent),
@@ -238,6 +244,14 @@ export function ensureWorktreeHasInitialTerminal(
   // reconciled tab-group model. Creating a terminal just because the legacy
   // terminal slice is empty would reopen worktrees with an unexpected extra tab.
   if (!shouldAutoCreateInitialTerminal(renderableTabCount)) {
+    return null
+  }
+  // Why: a plain activation (sidebar click on a session-less worktree, with no
+  // agent/setup/default-tabs/issue-command to launch) no longer auto-spawns a
+  // blank terminal — Terminal.tsx shows the WorkspaceAgentLauncher picker so the
+  // user chooses what to start. We only auto-create here when there is something
+  // concrete to launch (new-workspace flow, reopen-with-agent, repo setup).
+  if (!startup && !setup && !issueCommand && !defaultTabs) {
     return null
   }
   // Why: remote web clients mirror the runtime server's session tabs. A local
@@ -414,10 +428,6 @@ setWorktreeNavActivator(activateAndRevealWorktree)
 // (not open*Page) so back/forward does not mutate previousViewBefore* or
 // append duplicate history. See navigateToIndex for the replay branch.
 setWorktreeNavViewActivator((entry) => {
-  if (entry === 'automations') {
-    useAppStore.getState().setActiveView(entry)
-    return
-  }
   if (entry === 'tasks') {
     useAppStore.setState((state) => ({
       activeView: 'tasks',

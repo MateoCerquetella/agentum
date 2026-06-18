@@ -191,11 +191,16 @@ export function ManageSessionsSection(): React.JSX.Element {
     setIsRefreshing(true)
     try {
       const result = await api.pty.management.listSessions()
+      // Why: guard the shape — the native command returns `{ sessions: [...] }`,
+      // but a stub/older daemon (or a future drift) could return null/an array.
+      // `?? []` keeps `sessions` a real array so the render can't crash on
+      // `sessions.length` / `sessions.map`.
+      const list: PtyManagementSession[] = result?.sessions ?? []
       if (!isMounted.current || mutationInFlight.current) {
-        return result.sessions
+        return list
       }
-      setSessions(result.sessions)
-      return result.sessions
+      setSessions(list)
+      return list
     } catch (err) {
       console.error('[manage-sessions] listSessions failed', err)
       if (isMounted.current && !mutationInFlight.current) {

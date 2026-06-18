@@ -33,6 +33,39 @@ impl LaunchCommand {
     }
 }
 
+/// Inputs for wiring one or more streamable-HTTP MCP servers into an agent
+/// **at launch** (agentum's own MCP server, the shared Playwright server, …).
+///
+/// MCP servers are read only at agent-CLI startup (Claude Code / Codex have no
+/// in-session reload), so the launch site must (a) ensure each HTTP server is up
+/// → [`Self::servers`] and (b) for tools that load MCP from a file, pre-write a
+/// combined config → [`Self::config_file`]. Each adapter turns these into the
+/// right startup flags via [`ToolAdapter::mcp_args`] — the only tool-specific
+/// part. Servers are shared per machine/host, not one per session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpProvision {
+    /// Every streamable-HTTP MCP server to register with this agent. Tools that
+    /// take MCP config on the command line (Codex `-c`) emit one block per entry.
+    pub servers: Vec<McpServer>,
+    /// Path to the combined `{ "mcpServers": { … } }` file the launch site
+    /// already wrote (holding *all* of [`Self::servers`]) — used by tools that
+    /// load MCP from a file (Claude `--mcp-config <file>`).
+    pub config_file: std::path::PathBuf,
+}
+
+/// One streamable-HTTP MCP server to wire into an agent at launch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServer {
+    /// Logical key under `mcpServers` (Claude) / `mcp_servers.<name>` (Codex).
+    pub name: String,
+    /// Streamable-HTTP endpoint, e.g. `http://127.0.0.1:8931/mcp`.
+    pub url: String,
+    /// Optional bearer token sent as `Authorization: Bearer <token>` on every
+    /// request to this server. `Some` for agentum's own MCP (which requires it);
+    /// `None` for servers that don't authenticate (e.g. a local Playwright).
+    pub auth_token: Option<String>,
+}
+
 /// A first-class tool integration. Trait methods are deliberately small so a
 /// new adapter is a ~30-line file.
 pub trait ToolAdapter: Send + Sync {
@@ -41,6 +74,20 @@ pub trait ToolAdapter: Send + Sync {
 
     /// Build the argv (and any env) tmux should spawn for this session.
     fn launch(&self, session: &Session) -> LaunchCommand;
+
+    /// Extra startup args that register a Playwright MCP server with this agent.
+    ///
+    /// Default: none — most tools (and shells) get no browser MCP. First-class
+    /// agents that support launch-time MCP override this:
+    /// - Claude Code: `--mcp-config <file>` (additive; we deliberately do NOT
+    ///   pass `--strict-mcp-config`, which would disable the user's own servers).
+    /// - Codex: repeated `-c mcp_servers.playwright.*` overrides (no file flag).
+    ///
+    /// Returns args to append to [`LaunchCommand::argv`]; the launch site is
+    /// responsible for having started the server and written `p.config_file`.
+    fn mcp_args(&self, _p: &McpProvision) -> Vec<String> {
+        Vec::new()
+    }
 
     /// Tool-specific watchdog "compact context" command, if any. Watchdog
     /// sends this verbatim followed by Enter when context-low signatures appear.

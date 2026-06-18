@@ -5,6 +5,10 @@ import { call, subscribe, defineNamespace } from './core'
 import type { AgentumApi } from './contract'
 
 export const runtimeEnvironments = defineNamespace('runtimeEnvironments', {
+  // Why: the pairing methods (addFromPairingCode/list/remove) lost their native
+  // handlers with the Remote Agentum Servers UI removal (spec 007 A2). The
+  // bindings are retained as dead no-callers because the contract + web-client
+  // stub still declare them; trimming them would touch the web/** boundary.
   addFromPairingCode: (...args: any[]) => call('runtime_environments_add_from_pairing_code', args),
   call: (...args: any[]) => call('runtime_environments_call', args),
   list: (...args: any[]) => call('runtime_environments_list', args),

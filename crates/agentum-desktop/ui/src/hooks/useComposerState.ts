@@ -93,6 +93,14 @@ import {
   resolveComposerBranchNameOverrideForCreate,
   resolveComposerBranchSelection
 } from './composer-branch-selection'
+import {
+  type ComposerHostOption,
+  deriveEligibleHosts,
+  filterReposForHost,
+  gitOnHostCacheKey,
+  resolveDefaultHostKey,
+  resolveRepoIdForHost
+} from './composer-host-scoping'
 
 export type UseComposerStateOptions = {
   initialRepoId?: string
@@ -130,6 +138,18 @@ export type UseComposerStateOptions = {
 
 export type ComposerCardProps = {
   eligibleRepos: ReturnType<typeof useAppStore.getState>['repos']
+  /** Host selector (spec 006): local + each configured SSH host with repos.
+   *  Empty when driven by `repoIdOverride` (TaskPage/JumpPalette), which keeps
+   *  their existing repo-first behavior and hides the host row. */
+  eligibleHosts: ComposerHostOption[]
+  selectedHostKey: string
+  onHostChange: (hostKey: string) => void
+  /** `eligibleRepos` filtered to `selectedHostKey` — the repo picker shows only
+   *  this host's repos. Equals `eligibleRepos` when driven by `repoIdOverride`. */
+  hostScopedRepos: ReturnType<typeof useAppStore.getState>['repos']
+  /** repoId → reason for repos that aren't a git repo on the selected host;
+   *  the combobox renders these disabled with the reason as a hint. */
+  disabledRepoIds: Map<string, string>
   repoId: string
   selectedRepoIsGit: boolean
   onRepoChange: (value: string) => void
@@ -178,6 +198,9 @@ export type ComposerCardProps = {
   onCreate: () => void
   note: string
   onNoteChange: (value: string) => void
+  /** When true, create the worktree only — no tmux session/agent is launched. */
+  skipSession: boolean
+  onSkipSessionChange: (value: boolean) => void
   baseBranch: string | undefined
   onBaseBranchChange: (next: string | undefined) => void
   /** Called when a PR is selected in the Start-from picker. Updates both
@@ -275,7 +298,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       openSettingsPage: s.openSettingsPage,
       openSettingsTarget: s.openSettingsTarget,
       prefetchWorkItems: s.prefetchWorkItems,
-      fetchSparsePresets: s.fetchSparsePresets
+      fetchSparsePresets: s.fetchSparsePresets,
+      fetchDetectedWorktrees: s.fetchDetectedWorktrees
     }))
   )
   const {
@@ -288,11 +312,13 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     openSettingsPage,
     openSettingsTarget,
     prefetchWorkItems,
-    fetchSparsePresets
+    fetchSparsePresets,
+    fetchDetectedWorktrees
   } = actions
 
   const repos = useAppStore((s) => s.repos)
   const activeRepoId = useAppStore((s) => s.activeRepoId)
+  const hostMetaByKey = useAppStore((s) => s.hostMetaByKey)
   const settings = useAppStore((s) => s.settings)
   const newWorkspaceDraft = useAppStore((s) => s.newWorkspaceDraft)
   const worktreesByRepo = useAppStore((s) => s.worktreesByRepo)
@@ -344,6 +370,96 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     },
     [onRepoIdOverrideChange]
   )
+
+  // Host-first New Workspace (spec 006). When the composer is driven by an
+  // external `repoIdOverride` (TaskPage work-item list, WorktreeJumpPalette),
+  // host selection is bypassed entirely — the host is implied by the overridden
+  // repo and those surfaces keep their repo-first behavior unchanged.
+  const hostScopingEnabled = repoIdOverride === undefined
+  const eligibleHosts = useMemo<ComposerHostOption[]>(
+    () => (hostScopingEnabled ? deriveEligibleHosts(eligibleRepos, hostMetaByKey) : []),
+    [eligibleRepos, hostMetaByKey, hostScopingEnabled]
+  )
+  // Default to the active workspace/project's host, else the first eligible host
+  // (local-first), else local — resolved once when the composer mounts.
+  // Why: when initialRepoId is passed (e.g. from Add Project dialog opening a
+  // workspace composer for an SSH project), use that repo's host, not activeRepoId.
+  const [selectedHostKey, setSelectedHostKey] = useState<string>(() =>
+    resolveDefaultHostKey(eligibleRepos, initialRepoId ?? activeRepoId, deriveEligibleHosts(eligibleRepos, {}))
+  )
+  const hostScopedRepos = useMemo(
+    () => (hostScopingEnabled ? filterReposForHost(eligibleRepos, selectedHostKey) : eligibleRepos),
+    [eligibleRepos, hostScopingEnabled, selectedHostKey]
+  )
+
+  const handleHostChange = useCallback(
+    (nextHostKey: string): void => {
+      if (nextHostKey === selectedHostKey) {
+        return
+      }
+      setSelectedHostKey(nextHostKey)
+      // The current repoId likely belongs to the previous host; reset it to the
+      // new host's first repo (or clear it when that host has no repos).
+      const nextRepoId = resolveRepoIdForHost(
+        filterReposForHost(eligibleRepos, nextHostKey),
+        repoIdRef.current
+      )
+      if (nextRepoId !== repoIdRef.current) {
+        setRepoId(nextRepoId)
+      }
+    },
+    [eligibleRepos, selectedHostKey, setRepoId]
+  )
+
+  // Per-`(hostKey, repoId)` cache of the `worktrees/detected` authoritative flag
+  // (true ⇒ a real git repo on that host). Cached for the dialog's lifetime so a
+  // remote host isn't re-probed over SSH on every keystroke/re-render. `null`
+  // means "probe in flight / not yet resolved" — treated as enabled-pending so
+  // the dialog never blocks on a slow SSH round trip.
+  const [gitOnHostCache, setGitOnHostCache] = useState<Map<string, boolean>>(() => new Map())
+  const gitProbeInFlightRef = useRef<Set<string>>(new Set())
+  const isGitOnHost = useCallback(
+    (targetRepoId: string): boolean | null => {
+      const value = gitOnHostCache.get(gitOnHostCacheKey(selectedHostKey, targetRepoId))
+      return value === undefined ? null : value
+    },
+    [gitOnHostCache, selectedHostKey]
+  )
+  // Lazily probe each scoped repo's git-ness on the selected host, once.
+  useEffect(() => {
+    if (!hostScopingEnabled) {
+      return
+    }
+    let cancelled = false
+    for (const repo of hostScopedRepos) {
+      const cacheKey = gitOnHostCacheKey(selectedHostKey, repo.id)
+      if (gitOnHostCache.has(cacheKey) || gitProbeInFlightRef.current.has(cacheKey)) {
+        continue
+      }
+      gitProbeInFlightRef.current.add(cacheKey)
+      void fetchDetectedWorktrees(repo.id)
+        .then((result) => {
+          gitProbeInFlightRef.current.delete(cacheKey)
+          if (cancelled || !result) {
+            return
+          }
+          setGitOnHostCache((prev) => {
+            if (prev.has(cacheKey)) {
+              return prev
+            }
+            const next = new Map(prev)
+            next.set(cacheKey, result.authoritative)
+            return next
+          })
+        })
+        .catch(() => {
+          gitProbeInFlightRef.current.delete(cacheKey)
+        })
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [fetchDetectedWorktrees, gitOnHostCache, hostScopedRepos, hostScopingEnabled, selectedHostKey])
 
   const [name, setName] = useState<string>(
     persistDraft ? (newWorkspaceDraft?.name ?? initialName) : initialName
@@ -463,6 +579,13 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   const [setupDecision, setSetupDecision] = useState<'run' | 'skip' | null>(null)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<WorkspaceCreateErrorDisplay | null>(null)
+  // Why: "create the worktree only, don't start a tmux session/agent right now".
+  // When set, create + reveal the worktree but skip activation+launch; opening it
+  // later runs the normal activation (its remembered agent, or the picker). Held
+  // in a ref so the submit callbacks read the latest value without dep churn.
+  const [skipSession, setSkipSession] = useState(false)
+  const skipSessionRef = useRef(skipSession)
+  skipSessionRef.current = skipSession
   const [advancedOpen, setAdvancedOpen] = useState(
     persistDraft ? Boolean((newWorkspaceDraft?.note ?? '').trim()) : false
   )
@@ -792,12 +915,20 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     tuiAgent
   ])
 
-  // Auto-pick the first eligible repo if we somehow start with none selected.
+  // Auto-pick a repo for the current host when none is selected (or the prior
+  // selection belongs to a different host). Host scoping keeps the repo picker
+  // and the host selector in sync; with `repoIdOverride` set this reduces to the
+  // original "pick the first eligible repo" behavior (hostScopedRepos ===
+  // eligibleRepos and the override controls repoId anyway).
   useEffect(() => {
-    if (!repoId && eligibleRepos[0]?.id) {
-      setRepoId(eligibleRepos[0].id)
+    if (repoIdOverride !== undefined) {
+      return
     }
-  }, [eligibleRepos, repoId, setRepoId])
+    const nextRepoId = resolveRepoIdForHost(hostScopedRepos, repoId)
+    if (nextRepoId !== repoId) {
+      setRepoId(nextRepoId)
+    }
+  }, [hostScopedRepos, repoId, repoIdOverride, setRepoId])
 
   // Why: the compact sparse dropdown is always visible under Advanced, so
   // presets must load before sparse mode is enabled.
@@ -2130,6 +2261,20 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         const trimmedNote = note.trim()
         await applyWorktreeMeta(worktree.id, trimmedNote ? { comment: trimmedNote } : {})
 
+        // Why: "Don't start a session" — the worktree is created (and remembers
+        // its agent via createdWithAgent) but no tmux session/agent is launched
+        // and we don't switch to it. It just appears in the sidebar; opening it
+        // later runs the normal activation (its agent, or the empty-state picker).
+        if (skipSessionRef.current) {
+          useAppStore.getState().revealWorktreeInSidebar(worktree.id, { behavior: 'auto' })
+          setSidebarOpen(true)
+          if (persistDraft) {
+            clearNewWorkspaceDraft()
+          }
+          onCreated?.()
+          return
+        }
+
         // Why: quick create should draft linked source data for review instead
         // of auto-executing it. Rich linked context wins over URL fallback;
         // typed-only Linear entries still use the note as the startup prompt.
@@ -2290,6 +2435,32 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     ]
   )
 
+  // Repos whose path isn't a git repo on the selected host (the `detected` probe
+  // came back non-authoritative) are surfaced disabled with a reason hint rather
+  // than hidden, so the user can see why they can't pick them. Repos whose probe
+  // hasn't resolved yet stay enabled-pending (isGitOnHost === null).
+  const selectedHostLabel =
+    eligibleHosts.find((host) => host.key === selectedHostKey)?.label ??
+    (selectedHostKey === 'local' ? 'this machine' : 'this host')
+  const disabledRepoIds = useMemo<Map<string, string>>(() => {
+    const map = new Map<string, string>()
+    if (!hostScopingEnabled) {
+      return map
+    }
+    for (const repo of hostScopedRepos) {
+      if (gitOnHostCache.get(gitOnHostCacheKey(selectedHostKey, repo.id)) === false) {
+        map.set(repo.id, `not a git repository on ${selectedHostLabel}`)
+      }
+    }
+    return map
+  }, [
+    gitOnHostCache,
+    hostScopedRepos,
+    hostScopingEnabled,
+    selectedHostKey,
+    selectedHostLabel
+  ])
+
   const createGateInput = {
     repoId,
     workspaceSeedName,
@@ -2307,6 +2478,11 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       : getFullComposerCreateDisabled(createGateInput)
   const cardProps: ComposerCardProps = {
     eligibleRepos,
+    eligibleHosts,
+    selectedHostKey,
+    onHostChange: handleHostChange,
+    hostScopedRepos,
+    disabledRepoIds,
     repoId,
     selectedRepoIsGit,
     onRepoChange: handleRepoChange,
@@ -2362,6 +2538,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     startFromResetHint,
     note,
     onNoteChange: setNote,
+    skipSession,
+    onSkipSessionChange: setSkipSession,
     setupConfig,
     requiresExplicitSetupChoice,
     setupDecision,

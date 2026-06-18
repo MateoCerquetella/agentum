@@ -197,13 +197,12 @@ describe('keybindings', () => {
       'worktree.palette': ['Mod+Shift+E']
     })
 
+    // Why: file.exportPdf was unassigned in spec 007 C4b, so Mod+Shift+E now
+    // belongs to sidebar.explorer.toggle; a custom worktree.palette override still
+    // conflicts with it.
     expect(conflicts).toContainEqual({
       binding: 'Mod+Shift+E',
-      actionIds: expect.arrayContaining([
-        'file.exportPdf',
-        'sidebar.explorer.toggle',
-        'worktree.palette'
-      ])
+      actionIds: expect.arrayContaining(['sidebar.explorer.toggle', 'worktree.palette'])
     })
   })
 
@@ -251,15 +250,6 @@ describe('keybindings', () => {
       shift: true
     }
 
-    expect(
-      keybindingMatchesAction(
-        'floatingTerminal.toggle',
-        { key: 'a', code: 'KeyA', control: true, meta: false, alt: true, shift: false },
-        'linux',
-        undefined,
-        { context: 'terminal', terminalShortcutPolicy: 'terminal-first' }
-      )
-    ).toBe(true)
     expect(
       keybindingMatchesAction(
         'tab.previousRecent',

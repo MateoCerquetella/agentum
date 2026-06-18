@@ -2,10 +2,7 @@ import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
-import {
-  findPrevLiveNonTaskStackHistoryIndex,
-  findPrevLiveWorktreeHistoryIndex
-} from './worktree-nav-history'
+import { findPrevLiveNonTaskStackHistoryIndex } from './worktree-nav-history'
 import type {
   ChangelogData,
   CustomPet,
@@ -439,56 +436,12 @@ export type UISlice = {
   acknowledgedAgentsByPaneKey: Record<string, number>
   acknowledgeAgents: (paneKeys: string[]) => void
   unacknowledgeAgents: (paneKeys: string[]) => void
-  activeView:
-    | 'terminal'
-    | 'settings'
-    | 'tasks'
-    | 'activity'
-    | 'automations'
-    | 'space'
-    | 'skills'
-  previousViewBeforeTasks:
-    | 'terminal'
-    | 'settings'
-    | 'activity'
-    | 'automations'
-    | 'space'
-    | 'skills'
-  previousViewBeforeSettings:
-    | 'terminal'
-    | 'tasks'
-    | 'activity'
-    | 'automations'
-    | 'space'
-    | 'skills'
-  previousViewBeforeActivity:
-    | 'terminal'
-    | 'settings'
-    | 'tasks'
-    | 'automations'
-    | 'space'
-    | 'skills'
-  previousViewBeforeAutomations:
-    | 'terminal'
-    | 'settings'
-    | 'tasks'
-    | 'activity'
-    | 'space'
-    | 'skills'
-  previousViewBeforeSpace:
-    | 'terminal'
-    | 'settings'
-    | 'tasks'
-    | 'activity'
-    | 'automations'
-    | 'skills'
-  previousViewBeforeSkills:
-    | 'terminal'
-    | 'settings'
-    | 'tasks'
-    | 'activity'
-    | 'automations'
-    | 'space'
+  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness'
+  previousViewBeforeTasks: 'terminal' | 'settings' | 'activity' | 'skills' | 'harness'
+  previousViewBeforeSettings: 'terminal' | 'tasks' | 'activity' | 'skills' | 'harness'
+  previousViewBeforeActivity: 'terminal' | 'settings' | 'tasks' | 'skills' | 'harness'
+  previousViewBeforeSkills: 'terminal' | 'settings' | 'tasks' | 'activity' | 'harness'
+  previousViewBeforeHarness: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills'
   setActiveView: (view: UISlice['activeView']) => void
   taskPageData: {
     preselectedRepoId?: string
@@ -535,14 +488,10 @@ export type UISlice = {
   closeTaskPage: () => void
   openActivityPage: () => void
   closeActivityPage: () => void
-  selectedAutomationId: string | null
-  setSelectedAutomationId: (id: string | null) => void
-  openAutomationsPage: () => void
-  closeAutomationsPage: () => void
-  openSpacePage: () => void
-  closeSpacePage: () => void
   openSkillsPage: () => void
   closeSkillsPage: () => void
+  openHarnessPage: () => void
+  closeHarnessPage: () => void
   setNewWorkspaceDraft: (draft: NonNullable<UISlice['newWorkspaceDraft']>) => void
   clearNewWorkspaceDraft: () => void
   openSettingsPage: () => void
@@ -571,6 +520,7 @@ export type UISlice = {
       | 'voice'
       | 'experimental'
       | 'orchestration'
+      | 'agents-automation'
       | 'servers'
       | 'ssh'
     repoId: string | null
@@ -590,6 +540,7 @@ export type UISlice = {
     | 'add-repo'
     | 'quick-open'
     | 'worktree-palette'
+    | 'settings-command-palette'
     | 'workspace-cleanup'
     | 'project-added'
     | 'worktree-visibility'
@@ -881,9 +832,8 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   previousViewBeforeTasks: 'terminal',
   previousViewBeforeSettings: 'terminal',
   previousViewBeforeActivity: 'terminal',
-  previousViewBeforeAutomations: 'terminal',
-  previousViewBeforeSpace: 'terminal',
   previousViewBeforeSkills: 'terminal',
+  previousViewBeforeHarness: 'terminal',
   setActiveView: (view) => set({ activeView: view }),
   taskPageData: {},
   taskResumeState: undefined,
@@ -1048,44 +998,6 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     set((state) => ({
       activeView: state.previousViewBeforeActivity
     })),
-  selectedAutomationId: null,
-  setSelectedAutomationId: (id) => set({ selectedAutomationId: id }),
-  openAutomationsPage: () => {
-    get().recordFeatureInteraction?.('automations')
-    get().recordViewVisit('automations')
-    set((state) => ({
-      activeView: 'automations',
-      previousViewBeforeAutomations:
-        state.activeView === 'automations' ? state.previousViewBeforeAutomations : state.activeView
-    }))
-  },
-  closeAutomationsPage: () =>
-    set((state) => {
-      const currentEntry = state.worktreeNavHistory[state.worktreeNavHistoryIndex]
-      let nextHistoryIndex = state.worktreeNavHistoryIndex
-      if (currentEntry === 'automations') {
-        const prev = findPrevLiveWorktreeHistoryIndex(state)
-        if (prev !== null) {
-          nextHistoryIndex = prev
-        }
-      }
-      return {
-        activeView: state.previousViewBeforeAutomations,
-        worktreeNavHistoryIndex: nextHistoryIndex
-      }
-    }),
-  openSpacePage: () => {
-    get().recordFeatureInteraction?.('workspace-cleanup')
-    set((state) => ({
-      activeView: 'space',
-      previousViewBeforeSpace:
-        state.activeView === 'space' ? state.previousViewBeforeSpace : state.activeView
-    }))
-  },
-  closeSpacePage: () =>
-    set((state) => ({
-      activeView: state.previousViewBeforeSpace
-    })),
   openSkillsPage: () =>
     set((state) => ({
       activeView: 'skills',
@@ -1095,6 +1007,16 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   closeSkillsPage: () =>
     set((state) => ({
       activeView: state.previousViewBeforeSkills
+    })),
+  openHarnessPage: () =>
+    set((state) => ({
+      activeView: 'harness',
+      previousViewBeforeHarness:
+        state.activeView === 'harness' ? state.previousViewBeforeHarness : state.activeView
+    })),
+  closeHarnessPage: () =>
+    set((state) => ({
+      activeView: state.previousViewBeforeHarness
     })),
   setNewWorkspaceDraft: (draft) => set({ newWorkspaceDraft: draft }),
   clearNewWorkspaceDraft: () => set({ newWorkspaceDraft: null }),
@@ -1464,14 +1386,8 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   hydratePersistedUI: (ui) =>
     set((s) => {
       const validRepoIds = new Set(s.repos.map((repo) => repo.id))
-      // Why: persisted UI from pre-rename builds used sidekick* keys. Read
-      // those only as fallbacks so new pet* writes win immediately after upgrade.
-      const customPets = Array.isArray(ui.customPets)
-        ? ui.customPets
-        : Array.isArray(ui.customSidekicks)
-          ? ui.customSidekicks
-          : []
-      const petId = ui.petId ?? ui.sidekickId
+      const customPets: CustomPet[] = []
+      const petId = DEFAULT_PET_ID
       // Migration history:
       // v1: sort was called 'smart' internally
       // v2: renamed 'smart' → 'recent' (same weighted-score behavior)
@@ -1483,15 +1399,34 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       //     'recent' sort keep it across restarts.
       const sortBy = ui.sortBy
       const migratedStatusBarItems = migrateStatusBarItems(ui.statusBarItems)
-      const statusBarItems =
-        ui._portsStatusBarDefaultAdded || migratedStatusBarItems.includes('ports')
-          ? migratedStatusBarItems
-          : [...migratedStatusBarItems, 'ports' as const]
-      if (!ui._portsStatusBarDefaultAdded && typeof window !== 'undefined') {
+      const portsAdded = ui._portsStatusBarDefaultAdded || migratedStatusBarItems.includes('ports')
+      const withPorts = portsAdded
+        ? migratedStatusBarItems
+        : [...migratedStatusBarItems, 'ports' as const]
+      // Add the default-on I/O speed chip once for existing users whose persisted
+      // statusBarItems predate it (same one-shot pattern as the Ports default).
+      const ioAdded = ui._ioStatusBarDefaultAdded || withPorts.includes('io')
+      const statusBarItems = ioAdded ? withPorts : [...withPorts, 'io' as const]
+      if ((!portsAdded || !ioAdded) && typeof window !== 'undefined') {
         api.ui
-          .set({ statusBarItems, _portsStatusBarDefaultAdded: true })
+          .set({
+            statusBarItems,
+            _portsStatusBarDefaultAdded: true,
+            _ioStatusBarDefaultAdded: true
+          })
           .catch(console.error)
       }
+      // Why: force-write cleared customPets and DEFAULT_PET_ID back to disk so
+      // old custom mascots (claudino, etc.) don't reload on restart.
+      if (Array.isArray(ui.customPets) && ui.customPets.length > 0) {
+        void api.ui
+          .set({
+            customPets: [],
+            petId: DEFAULT_PET_ID
+          })
+          .catch(console.error)
+      }
+
       return {
         // Why: persisted UI data comes from disk and may be stale, corrupted,
         // or manually edited. Clamp widths during hydration so invalid values
