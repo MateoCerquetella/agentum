@@ -649,6 +649,61 @@ pub async fn plan_from_spec(workdir: &Path, spec_id: &str) -> anyhow::Result<Fea
     Ok(list)
 }
 
+/// Write a harness backlog from an explicit set of features and persist
+/// `.agentum-harness/feature_list.json` (spec 011 — chat-to-features).
+///
+/// Unlike [`plan_from_spec`], the features come from the *task tracker* (the
+/// internal board / GitHub / Linear), which is the source of truth; this only
+/// derives the harness backlog from them. Every feature starts `Pending` and the
+/// harness is left **Idle** — this function never registers or runs anything, so
+/// the user reviews the board and explicitly clicks Run (human-gated, per spec).
+///
+/// `features` is `(id, name, description)`. `id` becomes the harness feature id
+/// — and `$HARNESS_FEATURE_ID` in `verify.sh` — so pass the tracker's stable key
+/// (board key, issue number, …). Empty input and duplicate/blank ids are hard
+/// errors: a bad backlog fails here instead of misbehaving mid-run, and we never
+/// write a silently-empty backlog (mirrors [`plan_from_spec`] / load validation).
+pub async fn write_backlog_from_features(
+    workdir: &Path,
+    features: &[(String, String, String)],
+) -> anyhow::Result<FeatureList> {
+    if features.is_empty() {
+        anyhow::bail!("no features to write to the harness backlog");
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(features.len());
+    for (id, name, description) in features {
+        let id = id.trim();
+        if id.is_empty() {
+            anyhow::bail!("feature id must not be empty");
+        }
+        if !seen.insert(id.to_string()) {
+            anyhow::bail!("duplicate feature id: {id}");
+        }
+        out.push(Feature {
+            id: id.to_string(),
+            name: name.trim().to_string(),
+            description: description.trim().to_string(),
+            state: FeatureState::Pending,
+            attempts: 0,
+            last_error: None,
+            prompt: None,
+        });
+    }
+    let list = FeatureList {
+        features: out,
+        ..FeatureList::default()
+    };
+    let dir = workdir.join(HARNESS_DIR);
+    tokio::fs::create_dir_all(&dir).await?;
+    tokio::fs::write(
+        dir.join("feature_list.json"),
+        serde_json::to_string_pretty(&list)?,
+    )
+    .await?;
+    Ok(list)
+}
+
 /// Bootstrap-Contract readiness of a `.agentum-harness/` surface (spec 010d /
 /// lectures L03+L06): can-start, can-verify, has instructions, has a backlog.
 #[derive(Debug, Default, Clone, Serialize)]
@@ -2170,6 +2225,52 @@ mod surface_tests {
         assert!(
             plan_from_spec(wd, "s1").await.is_err(),
             "no criteria → explicit error, not a silent empty backlog"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_backlog_from_features_writes_loadable_idle_backlog() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        let feats = vec![
+            ("AG-1".to_string(), "Add login".to_string(), "user can log in".to_string()),
+            ("AG-2".to_string(), "Add logout".to_string(), String::new()),
+        ];
+        let list = write_backlog_from_features(wd, &feats).await.unwrap();
+
+        // Every feature is Pending — the harness is Idle, not running.
+        assert_eq!(list.features.len(), 2);
+        assert!(list.features.iter().all(|f| f.state == FeatureState::Pending));
+        // Tracker key is reused verbatim as the harness feature id.
+        assert_eq!(list.features[0].id, "AG-1");
+        assert_eq!(list.features[0].description, "user can log in");
+
+        // The written file is loadable by the engine and visible on the board.
+        let cfg = HarnessConfig::load(wd).await.unwrap();
+        assert_eq!(cfg.features.features.len(), 2);
+        let board = scan_board(wd).await;
+        assert_eq!(board.features.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn write_backlog_from_features_rejects_empty() {
+        let dir = TempDir::new().unwrap();
+        assert!(
+            write_backlog_from_features(dir.path(), &[]).await.is_err(),
+            "empty input → explicit error, never a silent empty backlog"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_backlog_from_features_rejects_duplicate_ids() {
+        let dir = TempDir::new().unwrap();
+        let feats = vec![
+            ("AG-1".to_string(), "a".to_string(), String::new()),
+            ("AG-1".to_string(), "b".to_string(), String::new()),
+        ];
+        assert!(
+            write_backlog_from_features(dir.path(), &feats).await.is_err(),
+            "duplicate ids would make state writes target the wrong feature"
         );
     }
 

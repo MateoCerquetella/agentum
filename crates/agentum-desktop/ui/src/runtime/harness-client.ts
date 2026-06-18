@@ -98,6 +98,26 @@ export function startHarness(workdir: string): Promise<{ harness_id: string }> {
   return request('/api/harness', { method: 'POST', body: JSON.stringify({ workdir }) })
 }
 
+export type PlanGoalHarnessResult = {
+  /** Which task manager backed the features: "board" | "github" | "linear". */
+  provider: string
+  workdir: string
+  feature_count: number
+  features: FeatureList
+}
+
+/**
+ * `POST /api/board/goals/{id}/harness-plan` — turn a goal's planner-produced
+ * child cards into the harness backlog (spec 011 chat-to-features). Writes
+ * `feature_list.json` and leaves the harness **Idle**; the user reviews the
+ * board and then runs it (human-gated). When an external task manager is
+ * configured (GitHub/Linear) the cards are mirrored there and `provider`
+ * reflects it; otherwise the internal board is the source of truth.
+ */
+export function planGoalHarness(goalId: number): Promise<PlanGoalHarnessResult> {
+  return request(`/api/board/goals/${goalId}/harness-plan`, { method: 'POST' })
+}
+
 /** Call one of agentum's MCP tools over JSON-RPC at `POST /mcp`. Returns the
  *  tool's text payload. Used for the spec-010 surface tools that have no REST
  *  route (scaffold/plan/board/…). */
