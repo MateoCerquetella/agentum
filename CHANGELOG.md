@@ -4,6 +4,17 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] — 2026-06-18
+
+### Added
+- **In-app auto-update.** The desktop app now checks for a new release on launch
+  and surfaces an update card in the bottom-right corner. One click downloads
+  the signed release, shows progress, and relaunches into the new version — no
+  more manually downloading and replacing the app. Powered by
+  `tauri-plugin-updater` against a signed `latest.json` published with every
+  release; the existing bottom-right `UpdateCard` now drives real
+  check/download/install commands instead of no-op stubs.
+
 ## [0.14.9] — 2026-06-18
 
 ### Added

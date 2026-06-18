@@ -54,6 +54,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // Replace the default menu so ⌘W is NOT a native key-equivalent — it
         // must reach the webview, which closes the active tab/file like VS Code
         // instead of quitting the window. See `menu.rs`.
@@ -110,6 +111,17 @@ pub fn run() {
                 }
                 Err(error) => log::error!("speech state init failed: {error}"),
             }
+
+            // Auto-update: hold the in-flight Update + downloaded bytes between the
+            // check → download → install commands the bottom-right UpdateCard drives.
+            app.manage(commands::updater::UpdaterRuntime::default());
+            // Silent check on launch so the card surfaces an available update on
+            // its own (orca-style), without the user opening Settings. Background
+            // (userInitiated=false) → a "you're up to date" result stays silent.
+            let update_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                commands::updater::run_check(update_handle, false).await;
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -158,6 +158,14 @@ jobs:
       - name: Build desktop installers
         if: ${{ matrix.desktop != '' }}
         working-directory: crates/agentum-desktop
+        # Signing keys for the updater. createUpdaterArtifacts (tauri.conf.json)
+        # makes the build emit a signed updater archive + .sig per bundle; without
+        # these secrets `cargo tauri build` aborts. Set both repo secrets BEFORE
+        # tagging a release: TAURI_SIGNING_PRIVATE_KEY (the base64 private key) and
+        # TAURI_SIGNING_PRIVATE_KEY_PASSWORD (the password chosen at key-gen).
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         # shell: bash so this multi-line script runs under bash on Windows too —
         # the default Windows shell is PowerShell, which can't parse the bash
         # `[[ ]]`/`for` syntax (ParserError). Windows runners ship git-bash.
@@ -207,6 +215,10 @@ jobs:
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
           NO_STRIP: "true"
+          # Same updater signing keys as the main bundle step — the AppImage is
+          # the Linux updater format, so its .AppImage.tar.gz must be signed too.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: cargo tauri build --target ${{ matrix.target }} --bundles appimage
 
       - name: Stage release
@@ -252,6 +264,21 @@ jobs:
                 done
           fi
 
+          # Updater artifacts (signed) for the Tauri auto-updater. With
+          # createUpdaterArtifacts the build emits, next to each installer:
+          #   macOS   → <app>.app.tar.gz            (+ .sig)
+          #   Linux   → <app>_<ver>_*.AppImage.tar.gz (+ .sig)  [best-effort target]
+          #   Windows → <app>_<ver>_*-setup.exe.sig  (sidecar to the NSIS .exe)
+          # Stage them with the same clean <stem> names so latest.json can point
+          # at predictable release-asset URLs. The setup.exe itself was copied above.
+          if [ -d "$BUNDLE_DIR" ]; then
+            while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}.app.tar.gz" ;     done < <(find "$BUNDLE_DIR" -type f -name '*.app.tar.gz' -print0)
+            while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}.app.tar.gz.sig" ; done < <(find "$BUNDLE_DIR" -type f -name '*.app.tar.gz.sig' -print0)
+            while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}.AppImage.tar.gz" ;     done < <(find "$BUNDLE_DIR" -type f -name '*.AppImage.tar.gz' -print0)
+            while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}.AppImage.tar.gz.sig" ; done < <(find "$BUNDLE_DIR" -type f -name '*.AppImage.tar.gz.sig' -print0)
+            while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}-setup.exe.sig" ;   done < <(find "$BUNDLE_DIR" -type f -name '*-setup.exe.sig' -print0)
+          fi
+
           # Raw Linux desktop binary — runs on Arch and other non-deb distros
           # (install.sh falls back to it when no AppImage). macOS users get the
           # .app inside the .dmg, so only ship it for Linux.
@@ -274,6 +301,7 @@ jobs:
             dist/*.AppImage
             dist/*.exe
             dist/*.msi
+            dist/*.sig
             dist/agentum-desktop-*
           if-no-files-found: error
           retention-days: 7
@@ -326,6 +354,40 @@ jobs:
           echo "----"
           cat release-notes.md
 
+      - name: Build updater manifest (latest.json)
+        shell: bash
+        # The Tauri updater fetches this from the `endpoints` URL
+        # (…/releases/latest/download/latest.json). Each platform entry carries the
+        # release-asset URL of the signed updater bundle plus its detached
+        # signature (the .sig file's contents). Platforms whose .sig is missing
+        # (e.g. AppImage failed its best-effort build) are logged and omitted
+        # rather than emitted with an empty signature, which would break verify.
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eux
+          ver="${TAG#v}"
+          base="https://github.com/${REPO}/releases/download/${TAG}"
+          pubdate="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          platforms='{}'
+          emit() {
+            key="$1"; asset="$2"; sigf="dist/${asset}.sig"
+            if [ -f "$sigf" ]; then
+              platforms="$(jq --arg k "$key" --arg url "${base}/${asset}" --rawfile sig "$sigf" \
+                '. + {($k): {signature: $sig, url: $url}}' <<<"$platforms")"
+            else
+              echo "WARN: missing ${sigf} — omitting ${key} from latest.json"
+            fi
+          }
+          emit darwin-aarch64 "agentum-${ver}-macos-arm64.app.tar.gz"
+          emit darwin-x86_64  "agentum-${ver}-macos-x64.app.tar.gz"
+          emit windows-x86_64 "agentum-${ver}-windows-x64-setup.exe"
+          emit linux-x86_64   "agentum-${ver}-linux-x64.AppImage.tar.gz"
+          jq -n --arg v "$ver" --arg d "$pubdate" --rawfile n release-notes.md --argjson p "$platforms" \
+            '{version: $v, notes: $n, pub_date: $d, platforms: $p}' > dist/latest.json
+          cat dist/latest.json
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -344,6 +406,8 @@ jobs:
             dist/*.AppImage
             dist/*.exe
             dist/*.msi
+            dist/*.sig
+            dist/latest.json
             dist/agentum-desktop-*
             dist/SHA256SUMS
             dist/install.sh
