@@ -266,6 +266,8 @@ export interface AgentumApi {
     getCustomView: ApiMethod
     getIssue: ApiMethod
     getProject: ApiMethod
+    getStateMap: ApiMethod
+    setStateMap: ApiMethod
     issueComments: ApiMethod
     listCustomViewIssues: ApiMethod
     listCustomViewProjects: ApiMethod

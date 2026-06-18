@@ -194,31 +194,60 @@ async fn plan_goal_harness(
     // (Re-running against an external sink re-creates issues — idempotent sync
     // is deferred to 011d.)
     let sink = crate::task_sink::TaskSink::select(&wd).await;
-    let mut feats: Vec<(String, String, String)> = Vec::with_capacity(children.len());
+    let mut feats: Vec<crate::harness::BacklogFeature> = Vec::with_capacity(children.len());
     for c in &children {
         let body = c.body.clone().unwrap_or_default();
-        let id = match sink {
-            crate::task_sink::TaskSink::Board => c.key.clone(),
-            other => other
-                .create_feature(
-                    &crate::task_sink::SinkCtx {
-                        store: &state.store,
-                        // deref Arc<Store> → &Store
-                        workdir: &wd,
-                        parent_goal_id: Some(goal_id),
-                    },
-                    &crate::task_sink::NewFeature {
-                        title: c.title.clone(),
-                        body: c.body.clone(),
-                    },
-                )
-                .await
-                .map_err(|e| {
-                    ApiError::Internal(format!("create feature in {}: {e}", other.provider()))
-                })?
-                .id,
+        // For the board the planner's cards ARE the tracker, so reuse their key
+        // and provider; an external sink mirrors the card out and we carry its
+        // provider + url so the harness can drive ticket-state transitions later.
+        let (id, provider, url) = match sink {
+            crate::task_sink::TaskSink::Board => {
+                (c.key.clone(), Some("board".to_string()), None)
+            }
+            other => {
+                let fref = other
+                    .create_feature(
+                        &crate::task_sink::SinkCtx {
+                            store: &state.store,
+                            // deref Arc<Store> → &Store
+                            workdir: &wd,
+                            parent_goal_id: Some(goal_id),
+                        },
+                        &crate::task_sink::NewFeature {
+                            title: c.title.clone(),
+                            body: c.body.clone(),
+                        },
+                    )
+                    .await
+                    .map_err(|e| {
+                        ApiError::Internal(format!("create feature in {}: {e}", other.provider()))
+                    })?;
+                (fref.id, Some(fref.provider.to_string()), fref.url)
+            }
         };
-        feats.push((id, c.title.clone(), body));
+        // A freshly created ticket starts in the tracker's "Todo" state so the
+        // board mirrors the harness's Pending backlog from the very first moment
+        // (best-effort: a tracker hiccup must not fail planning).
+        if let Some(p) = provider.as_deref() {
+            match crate::task_sink::apply_tracker_transition(
+                &state.store,
+                p,
+                &id,
+                crate::task_sink::TrackerPhase::Todo,
+            )
+            .await
+            {
+                Ok(_) => {}
+                Err(e) => tracing::warn!(provider = p, id = %id, error = %e, "initial Todo transition failed (non-fatal)"),
+            }
+        }
+        feats.push(crate::harness::BacklogFeature {
+            id,
+            name: c.title.clone(),
+            description: body,
+            provider,
+            url,
+        });
     }
 
     let list = crate::harness::write_backlog_from_features(&wd, &feats)

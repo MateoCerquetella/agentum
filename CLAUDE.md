@@ -404,6 +404,34 @@ time, blocking advancement on a red gate.
   a live event log, all fed by `runtime/harness-client.ts` over the embedded
   loopback server. A runnable example lives in `examples/harness-demo/`.
 
+### SDD → Linear → QA pipeline (spec 012)
+
+The full automated loop a user runs is: SDD intake (Chat page) → ticket created
+in the tracker (Todo) → agent codes it (In Progress) → unit gate green (Ready to
+Test) → browser QA gate green → ticket Done. The pieces:
+
+- **Two-phase gate** in `harness::drive_inner`: the unit-test gate (`verify.sh`,
+  existing) then the **browser QA gate** (`qa.sh`, new). BOTH must be green to
+  advance; a red gate at either phase hands the error back to the agent and
+  retries (shared `handle_gate_failure`). A missing `qa.sh` is a pass so non-web
+  projects aren't blocked. `scaffold_harness` writes a `qa.sh` template that
+  shows how to drive the `browser-verification-loop` skill for a web surface.
+- **New feature state** `FeatureState::ReadyToTest` (between `Verifying` and
+  `Done`) — set by `run_qa_once`; the in-app board has a "Ready to Test" column.
+- **Tracker transitions** (`task_sink::apply_tracker_transition`,
+  `TrackerPhase`): lifecycle events drive the ticket's state — Coding→InProgress,
+  unit-green→ReadyToTest, QA-green→Done; planning sets Todo. Linear uses
+  workflow-state transitions (`linear::transition_issue` + `LinearStateMap`,
+  resolved by name); the internal Board moves card `status`
+  (todo/doing/review/done); GitHub is a logged no-op for now. **Best-effort by
+  contract**: a tracker hiccup is logged (`HarnessEvent::Log`), never halts the
+  run. Each `Feature` carries `tracker_provider`/`tracker_url`, threaded from the
+  goal's task sink in `routes::board_goals::plan_goal_harness`.
+- **Linear state names** are configurable: `LinearStateMap` defaults to
+  Todo / In Progress / Ready to Test / Done, overridable via the `linear.json`
+  `state_map` (written by Settings) and `AGENTUM_LINEAR_STATE_*` env (highest
+  precedence). A missing target state is a logged skip, not an error.
+
 ---
 
 ## Common gotchas

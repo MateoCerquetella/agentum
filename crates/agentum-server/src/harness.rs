@@ -68,8 +68,12 @@ pub enum FeatureState {
     Pending,
     /// An agent is actively working this feature.
     Coding,
-    /// `verify.sh` is running for this feature.
+    /// `verify.sh` (the unit-test gate) is running for this feature.
     Verifying,
+    /// The unit-test gate passed; the browser QA gate (`qa.sh` /
+    /// browser-verification-loop) is running (spec 012). Maps to the tracker's
+    /// "Ready to Test" state.
+    ReadyToTest,
     /// Verify passed, but a human confirmation is required (HITL-at-QA, spec
     /// 010c) before the feature is locked in. The run pauses here.
     AwaitingConfirm,
@@ -98,6 +102,14 @@ pub struct Feature {
     /// prompt from `AGENTS.md` + this feature's name/description.
     #[serde(default)]
     pub prompt: Option<String>,
+    /// Which task tracker this feature mirrors (`board` / `github` / `linear`),
+    /// set when the backlog is created from a goal (spec 011/012). Drives the
+    /// lifecycle → ticket-state transitions; `None` = no external tracker.
+    #[serde(default)]
+    pub tracker_provider: Option<String>,
+    /// The tracker item's URL, surfaced in the UI (None for the internal board).
+    #[serde(default)]
+    pub tracker_url: Option<String>,
 }
 
 fn default_max_retries() -> u32 {
@@ -274,6 +286,9 @@ pub struct HarnessConfig {
     pub features: FeatureList,
     pub init_script: Option<PathBuf>,
     pub verify_script: Option<PathBuf>,
+    /// The browser QA gate (`qa.sh`), run after `verify.sh` passes (spec 012).
+    /// Absent = QA gate skipped (non-web projects aren't blocked on a browser).
+    pub qa_script: Option<PathBuf>,
 }
 
 /// Snapshot of the `.harness/` files for the in-app viewer.
@@ -333,6 +348,9 @@ impl HarnessConfig {
         let verify_script = harness_dir.join("verify.sh");
         let verify_script = verify_script.exists().then_some(verify_script);
 
+        let qa_script = harness_dir.join("qa.sh");
+        let qa_script = qa_script.exists().then_some(qa_script);
+
         Ok(Self {
             workdir: workdir.to_path_buf(),
             harness_dir,
@@ -340,6 +358,7 @@ impl HarnessConfig {
             features,
             init_script,
             verify_script,
+            qa_script,
         })
     }
 
@@ -430,6 +449,8 @@ fn scaffold_files() -> Vec<(&'static str, String)> {
             attempts: 0,
             last_error: None,
             prompt: None,
+            tracker_provider: None,
+            tracker_url: None,
         }],
         ..FeatureList::default()
     })
@@ -446,7 +467,15 @@ fn scaffold_files() -> Vec<(&'static str, String)> {
         ),
         (
             "verify.sh",
-            "#!/usr/bin/env bash\nset -euo pipefail\n# The gate. exit 0 = green (advance), non-zero = red (retry/block). $HARNESS_FEATURE_ID names the feature under test. Prefer real end-to-end checks.\necho \"verify: TODO\"\n".to_string(),
+            "#!/usr/bin/env bash\nset -euo pipefail\n# The UNIT-TEST gate. exit 0 = green (advance to QA), non-zero = red (retry/block). $HARNESS_FEATURE_ID names the feature under test. Prefer real end-to-end checks.\necho \"verify: TODO\"\n".to_string(),
+        ),
+        (
+            "qa.sh",
+            // The browser QA gate (spec 012): run AFTER verify.sh passes. exit 0 =
+            // green → feature Done + ticket Done; non-zero = red → retry like a
+            // failed unit gate. A missing qa.sh passes, so non-web projects aren't
+            // blocked. For a web surface, drive the browser-verification-loop here.
+            "#!/usr/bin/env bash\nset -euo pipefail\n# Browser QA gate — runs after verify.sh is green. $HARNESS_FEATURE_ID names the feature.\n# For a web app, verify the feature in a real browser, e.g. (requires AGENTUM_BROWSER_VERIFY + Playwright MCP):\n#   claude -p \"Use the browser-verification-loop skill to QA feature $HARNESS_FEATURE_ID against the running app. Exit non-zero if any check fails.\"\n# Default: no browser surface to check — pass.\necho \"qa: no browser checks configured — passing\"\n".to_string(),
         ),
     ]
 }
@@ -615,6 +644,8 @@ pub fn derive_backlog_from_spec(spec_md: &str) -> FeatureList {
             attempts: 0,
             last_error: None,
             prompt: None,
+            tracker_provider: None,
+            tracker_url: None,
         });
     }
     FeatureList {
@@ -649,6 +680,18 @@ pub async fn plan_from_spec(workdir: &Path, spec_id: &str) -> anyhow::Result<Fea
     Ok(list)
 }
 
+/// One feature to seed into a harness backlog, carrying the tracker provenance
+/// so the engine can later drive ticket-state transitions (spec 012). `id` is the
+/// tracker's stable handle (board key, issue number, Linear identifier).
+#[derive(Debug, Clone)]
+pub struct BacklogFeature {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub provider: Option<String>,
+    pub url: Option<String>,
+}
+
 /// Write a harness backlog from an explicit set of features and persist
 /// `.agentum-harness/feature_list.json` (spec 011 — chat-to-features).
 ///
@@ -658,22 +701,22 @@ pub async fn plan_from_spec(workdir: &Path, spec_id: &str) -> anyhow::Result<Fea
 /// harness is left **Idle** — this function never registers or runs anything, so
 /// the user reviews the board and explicitly clicks Run (human-gated, per spec).
 ///
-/// `features` is `(id, name, description)`. `id` becomes the harness feature id
-/// — and `$HARNESS_FEATURE_ID` in `verify.sh` — so pass the tracker's stable key
-/// (board key, issue number, …). Empty input and duplicate/blank ids are hard
-/// errors: a bad backlog fails here instead of misbehaving mid-run, and we never
-/// write a silently-empty backlog (mirrors [`plan_from_spec`] / load validation).
+/// `id` becomes the harness feature id — and `$HARNESS_FEATURE_ID` in
+/// `verify.sh` — so pass the tracker's stable key. Empty input and duplicate/blank
+/// ids are hard errors: a bad backlog fails here instead of misbehaving mid-run,
+/// and we never write a silently-empty backlog (mirrors [`plan_from_spec`] / load
+/// validation).
 pub async fn write_backlog_from_features(
     workdir: &Path,
-    features: &[(String, String, String)],
+    features: &[BacklogFeature],
 ) -> anyhow::Result<FeatureList> {
     if features.is_empty() {
         anyhow::bail!("no features to write to the harness backlog");
     }
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::with_capacity(features.len());
-    for (id, name, description) in features {
-        let id = id.trim();
+    for bf in features {
+        let id = bf.id.trim();
         if id.is_empty() {
             anyhow::bail!("feature id must not be empty");
         }
@@ -682,12 +725,14 @@ pub async fn write_backlog_from_features(
         }
         out.push(Feature {
             id: id.to_string(),
-            name: name.trim().to_string(),
-            description: description.trim().to_string(),
+            name: bf.name.trim().to_string(),
+            description: bf.description.trim().to_string(),
             state: FeatureState::Pending,
             attempts: 0,
             last_error: None,
             prompt: None,
+            tracker_provider: bf.provider.clone(),
+            tracker_url: bf.url.clone(),
         });
     }
     let list = FeatureList {
@@ -913,6 +958,48 @@ impl HarnessEngine {
             success,
             output: output.clone(),
         });
+        Ok((success, output))
+    }
+
+    /// Run the **browser QA gate** (`qa.sh`) for a feature WITHOUT finalizing its
+    /// state. Flips the feature to `ReadyToTest` first (the tracker's "Ready to
+    /// Test" column maps to this), then runs `qa.sh` with `$HARNESS_FEATURE_ID`
+    /// set. A missing `qa.sh` is a **pass** — a non-web project isn't blocked on a
+    /// browser check; web projects scaffold a `qa.sh` that runs the
+    /// browser-verification-loop (spec 012). The driver owns the done/retry
+    /// decision, exactly like [`Self::run_verify_once`].
+    pub async fn run_qa_once(
+        &self,
+        harness_id: Uuid,
+        feature_id: &str,
+    ) -> anyhow::Result<(bool, String)> {
+        let workdir = self.workdir(harness_id).await?;
+        self.set_feature_state(harness_id, feature_id, FeatureState::ReadyToTest)
+            .await?;
+        self.log(
+            harness_id,
+            Some(feature_id),
+            "unit gate green — running browser QA gate (qa.sh)",
+        );
+
+        let config = HarnessConfig::load(&workdir).await?;
+        let (success, output) = if let Some(script) = config.qa_script {
+            let out = Command::new("bash")
+                .arg(&script)
+                .env("HARNESS_FEATURE_ID", feature_id)
+                .current_dir(&workdir)
+                .output()
+                .await?;
+            (
+                out.status.success(),
+                combine_output(&out.stdout, &out.stderr),
+            )
+        } else {
+            (
+                true,
+                "no qa.sh — browser QA gate skipped (no web surface to verify)".to_string(),
+            )
+        };
         Ok((success, output))
     }
 
@@ -1408,6 +1495,15 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
         // 3. Reload config (agent tool/model/timeouts may have been edited).
         let config = HarnessConfig::load(&workdir).await?;
         let session = spawn_feature_agent(state, harness_id, &workdir, &config, &feature).await?;
+        // The agent is now coding this feature → move its ticket to "In Progress"
+        // (best-effort; never halts the run).
+        transition_tracker(
+            state,
+            harness_id,
+            &feature,
+            crate::task_sink::TrackerPhase::InProgress,
+        )
+        .await;
 
         // `wait_for_settle` subscribes to the lifecycle bus on entry (just after
         // the prompt is injected). The `grace` window covers the agent's initial
@@ -1424,64 +1520,171 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
         engine.log(harness_id, Some(&feature.id), "agent working…");
         wait_for_settle(&state.bus, session.id, grace, timeout).await;
 
-        // 5. Verification gate with retry. A red gate blocks advancement.
+        // 5. Two-phase gate with retry (spec 012). First the unit-test gate
+        //    (verify.sh), then the browser QA gate (qa.sh / browser-verification-
+        //    loop). A red gate at EITHER phase hands the error back to the agent
+        //    and retries; only when BOTH are green does the feature advance.
         loop {
-            engine.log(harness_id, Some(&feature.id), "running verification gate");
-            let (passed, output) = engine.run_verify_once(harness_id, &feature.id).await?;
-            if passed {
-                if engine.hitl_at_qa(harness_id).await? {
-                    // HITL-at-QA: pause for ONE human confirmation before Done.
-                    engine.await_confirm(harness_id, &feature.id).await?;
-                    engine.log(
-                        harness_id,
-                        Some(&feature.id),
-                        "✓ verify PASSED — awaiting human confirmation (HITL-at-QA). Run paused; POST /{id}/confirm to finalize and resume.",
-                    );
-                    return Ok(());
-                }
-                engine
-                    .mark_feature_done(harness_id, &feature.id, &output)
-                    .await?;
-                engine.log(
-                    harness_id,
-                    Some(&feature.id),
-                    "✓ verify PASSED — feature done",
-                );
-                break;
-            }
-
-            let blocked = engine
-                .record_feature_failure(harness_id, &feature.id, &output)
-                .await?;
-            if blocked {
-                engine.set_state(harness_id, HarnessState::Blocked).await?;
-                engine.log(
-                    harness_id,
-                    Some(&feature.id),
-                    "✗ verify FAILED — retries exhausted, feature BLOCKED. Run halted.",
-                );
-                // Leave the agent session alive so the user can intervene.
-                return Ok(());
-            }
-
             engine.log(
                 harness_id,
                 Some(&feature.id),
-                "✗ verify FAILED — handing the error back to the agent for a retry",
+                "running unit-test gate (verify.sh)",
             );
-            engine.set_state(harness_id, HarnessState::Running).await?;
-            let retry = format!(
-                "The verification gate (verify.sh) FAILED with this output:\n\n{}\n\n\
-                 Fix the problem for feature '{}' and stop when done — the gate will run again.",
-                tail(&output, 2000),
-                feature.name,
+            let (unit_ok, unit_out) = engine.run_verify_once(harness_id, &feature.id).await?;
+            if !unit_ok {
+                if handle_gate_failure(
+                    state, harness_id, &feature, &session, "unit-test gate (verify.sh)", &unit_out,
+                    grace, timeout,
+                )
+                .await?
+                {
+                    return Ok(()); // retries exhausted → run halted at Blocked
+                }
+                continue;
+            }
+
+            // Unit gate green → "Ready to Test": flip the ticket column, then run
+            // the browser QA gate. `run_qa_once` also moves the feature state to
+            // `ReadyToTest` so the in-app board matches.
+            transition_tracker(
+                state,
+                harness_id,
+                &feature,
+                crate::task_sink::TrackerPhase::ReadyToTest,
+            )
+            .await;
+            let (qa_ok, qa_out) = engine.run_qa_once(harness_id, &feature.id).await?;
+            if !qa_ok {
+                if handle_gate_failure(
+                    state, harness_id, &feature, &session, "browser QA gate (qa.sh)", &qa_out,
+                    grace, timeout,
+                )
+                .await?
+                {
+                    return Ok(());
+                }
+                continue;
+            }
+
+            // Both gates green.
+            if engine.hitl_at_qa(harness_id).await? {
+                // HITL-at-QA: pause for ONE human confirmation before Done.
+                engine.await_confirm(harness_id, &feature.id).await?;
+                engine.log(
+                    harness_id,
+                    Some(&feature.id),
+                    "✓ unit + QA gates PASSED — awaiting human confirmation (HITL-at-QA). Run paused; POST /{id}/confirm to finalize and resume.",
+                );
+                return Ok(());
+            }
+            let summary = format!(
+                "unit gate:\n{}\n\nQA gate:\n{}",
+                tail(&unit_out, 1000),
+                tail(&qa_out, 1000)
             );
-            inject_prompt(state, &session, &retry).await?;
-            wait_for_settle(&state.bus, session.id, grace, timeout).await;
+            engine
+                .mark_feature_done(harness_id, &feature.id, &summary)
+                .await?;
+            // Both gates green → ticket Done.
+            transition_tracker(
+                state,
+                harness_id,
+                &feature,
+                crate::task_sink::TrackerPhase::Done,
+            )
+            .await;
+            engine.log(
+                harness_id,
+                Some(&feature.id),
+                "✓ unit + QA gates PASSED — feature done",
+            );
+            break;
         }
 
         // 6. Feature is done — tear down its agent pane before the next one.
         teardown_session(state, &session).await;
+    }
+}
+
+/// Handle a red gate (unit or QA): record the failure and either halt the run
+/// (`Ok(true)` — retries exhausted, feature `Blocked`) or hand the error back to
+/// the agent and wait for it to settle for another attempt (`Ok(false)`).
+/// `gate_label` names the failing gate in the log + retry prompt. Shared by both
+/// phases so the retry behavior is identical (spec 012).
+#[allow(clippy::too_many_arguments)]
+async fn handle_gate_failure(
+    state: &AppState,
+    harness_id: Uuid,
+    feature: &Feature,
+    session: &agentum_core::Session,
+    gate_label: &str,
+    output: &str,
+    grace: Duration,
+    timeout: Duration,
+) -> anyhow::Result<bool> {
+    let engine = &state.harness;
+    let blocked = engine
+        .record_feature_failure(harness_id, &feature.id, output)
+        .await?;
+    if blocked {
+        engine.set_state(harness_id, HarnessState::Blocked).await?;
+        engine.log(
+            harness_id,
+            Some(&feature.id),
+            format!("✗ {gate_label} FAILED — retries exhausted, feature BLOCKED. Run halted."),
+        );
+        // Leave the agent session alive so the user can intervene.
+        return Ok(true);
+    }
+    engine.log(
+        harness_id,
+        Some(&feature.id),
+        format!("✗ {gate_label} FAILED — handing the error back to the agent for a retry"),
+    );
+    engine.set_state(harness_id, HarnessState::Running).await?;
+    let retry = format!(
+        "The {gate_label} FAILED with this output:\n\n{}\n\n\
+         Fix the problem for feature '{}' and stop when done — the gate will run again.",
+        tail(output, 2000),
+        feature.name,
+    );
+    inject_prompt(state, session, &retry).await?;
+    wait_for_settle(&state.bus, session.id, grace, timeout).await;
+    Ok(false)
+}
+
+/// Drive the feature's ticket to a pipeline phase in whatever tracker it came
+/// from (spec 012). A side-channel: the result (applied / skipped / error) is
+/// only logged — a tracker hiccup NEVER halts the harness run. A feature with no
+/// `tracker_provider` (e.g. a hand-written backlog) is a silent no-op.
+async fn transition_tracker(
+    state: &AppState,
+    harness_id: Uuid,
+    feature: &Feature,
+    phase: crate::task_sink::TrackerPhase,
+) {
+    let Some(provider) = feature.tracker_provider.as_deref() else {
+        return;
+    };
+    let engine = &state.harness;
+    match crate::task_sink::apply_tracker_transition(&state.store, provider, &feature.id, phase)
+        .await
+    {
+        Ok(crate::task_sink::TransitionResult::Applied) => engine.log(
+            harness_id,
+            Some(&feature.id),
+            format!("ticket → {phase:?}"),
+        ),
+        Ok(crate::task_sink::TransitionResult::Skipped(why)) => engine.log(
+            harness_id,
+            Some(&feature.id),
+            format!("ticket transition to {phase:?} skipped: {why}"),
+        ),
+        Err(e) => engine.log(
+            harness_id,
+            Some(&feature.id),
+            format!("ticket transition to {phase:?} failed (non-fatal): {e}"),
+        ),
     }
 }
 
@@ -1761,6 +1964,8 @@ mod tests {
                     attempts: 0,
                     last_error: None,
                     prompt: None,
+                    tracker_provider: None,
+                    tracker_url: None,
                 },
                 Feature {
                     id: "feat-2".into(),
@@ -1770,6 +1975,8 @@ mod tests {
                     attempts: 0,
                     last_error: None,
                     prompt: None,
+                    tracker_provider: None,
+                    tracker_url: None,
                 },
             ],
             max_retries: 2,
@@ -1838,6 +2045,54 @@ mod tests {
         assert!(wd.join(".harness/handoff.md").exists());
     }
 
+    /// Write a `qa.sh` into an existing harness workdir created by `setup`.
+    fn write_qa(wd: &Path, body: &str) {
+        std::fs::write(resolve_harness_dir(wd).join("qa.sh"), body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn qa_gate_passes_and_marks_ready_to_test() {
+        let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
+        write_qa(&wd, "#!/bin/bash\nexit 0\n");
+        let engine = HarnessEngine::new();
+        let id = engine.start(wd).await.unwrap();
+
+        let (ok, _out) = engine.run_qa_once(id, "feat-1").await.unwrap();
+        assert!(ok, "qa.sh exit 0 → QA gate green");
+        // run_qa_once flips the feature to ReadyToTest so the board mirrors it.
+        let f = engine.status(id).await.unwrap().features.features[0].clone();
+        assert_eq!(f.state, FeatureState::ReadyToTest);
+    }
+
+    #[tokio::test]
+    async fn qa_gate_reports_failure() {
+        let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
+        write_qa(&wd, "#!/bin/bash\necho 'pixel mismatch' >&2\nexit 1\n");
+        let engine = HarnessEngine::new();
+        let id = engine.start(wd).await.unwrap();
+
+        let (ok, out) = engine.run_qa_once(id, "feat-1").await.unwrap();
+        assert!(!ok, "qa.sh non-zero → QA gate red");
+        assert!(out.contains("pixel mismatch"));
+    }
+
+    #[tokio::test]
+    async fn qa_gate_absent_is_a_pass() {
+        // `setup` writes no qa.sh — a project with no browser surface isn't blocked.
+        let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
+        let engine = HarnessEngine::new();
+        let id = engine.start(wd).await.unwrap();
+        let (ok, out) = engine.run_qa_once(id, "feat-1").await.unwrap();
+        assert!(ok, "no qa.sh → QA gate skipped (pass)");
+        assert!(out.contains("skipped"));
+    }
+
+    #[tokio::test]
+    async fn ready_to_test_state_serializes_snake_case() {
+        let json = serde_json::to_string(&FeatureState::ReadyToTest).unwrap();
+        assert_eq!(json, "\"ready_to_test\"");
+    }
+
     #[tokio::test]
     async fn red_gate_retries_then_blocks() {
         // Always fails → after max_retries (2) the feature is Blocked.
@@ -1904,6 +2159,8 @@ mod tests {
             attempts: 0,
             last_error: None,
             prompt: None,
+            tracker_provider: None,
+            tracker_url: None,
         }
     }
 
@@ -2074,6 +2331,16 @@ mod surface_tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn bf(id: &str, name: &str, desc: &str, provider: Option<&str>) -> BacklogFeature {
+        BacklogFeature {
+            id: id.into(),
+            name: name.into(),
+            description: desc.into(),
+            provider: provider.map(|s| s.to_string()),
+            url: None,
+        }
+    }
+
     #[test]
     fn resolve_prefers_canonical_then_legacy() {
         let dir = TempDir::new().unwrap();
@@ -2233,8 +2500,8 @@ mod surface_tests {
         let dir = TempDir::new().unwrap();
         let wd = dir.path();
         let feats = vec![
-            ("AG-1".to_string(), "Add login".to_string(), "user can log in".to_string()),
-            ("AG-2".to_string(), "Add logout".to_string(), String::new()),
+            bf("AG-1", "Add login", "user can log in", Some("board")),
+            bf("AG-2", "Add logout", "", Some("board")),
         ];
         let list = write_backlog_from_features(wd, &feats).await.unwrap();
 
@@ -2244,6 +2511,8 @@ mod surface_tests {
         // Tracker key is reused verbatim as the harness feature id.
         assert_eq!(list.features[0].id, "AG-1");
         assert_eq!(list.features[0].description, "user can log in");
+        // Tracker provenance round-trips so lifecycle transitions know the sink.
+        assert_eq!(list.features[0].tracker_provider.as_deref(), Some("board"));
 
         // The written file is loadable by the engine and visible on the board.
         let cfg = HarnessConfig::load(wd).await.unwrap();
@@ -2265,8 +2534,8 @@ mod surface_tests {
     async fn write_backlog_from_features_rejects_duplicate_ids() {
         let dir = TempDir::new().unwrap();
         let feats = vec![
-            ("AG-1".to_string(), "a".to_string(), String::new()),
-            ("AG-1".to_string(), "b".to_string(), String::new()),
+            bf("AG-1", "a", "", None),
+            bf("AG-1", "b", "", None),
         ];
         assert!(
             write_backlog_from_features(dir.path(), &feats).await.is_err(),

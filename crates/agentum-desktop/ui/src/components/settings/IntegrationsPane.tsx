@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { Button } from '../ui/button'
+import { Input } from '../ui/input'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { LinearApiKeyDialog } from '@/components/linear-api-key-dialog'
 import {
@@ -31,6 +32,99 @@ function LinearIcon({ className }: { className?: string }): React.JSX.Element {
     <svg viewBox="0 0 24 24" aria-hidden className={className} fill="currentColor">
       <path d="M2.886 4.18A11.982 11.982 0 0 1 11.99 0C18.624 0 24 5.376 24 12.009c0 3.64-1.62 6.903-4.18 9.105L2.887 4.18ZM1.817 5.626l16.556 16.556c-.524.33-1.075.62-1.65.866L.951 7.277c.247-.575.537-1.126.866-1.65ZM.322 9.163l14.515 14.515c-.71.172-1.443.282-2.195.322L0 11.358a12 12 0 0 1 .322-2.195Zm-.17 4.862 9.823 9.824a12.02 12.02 0 0 1-9.824-9.824Z" />
     </svg>
+  )
+}
+
+/** Map of pipeline phase → Linear workflow-state name (spec 012). */
+type LinearStateMap = { todo: string; inProgress: string; readyToTest: string; done: string }
+
+/**
+ * Editor for the harness pipeline → Linear workflow-state names. The embedded
+ * server resolves these by name when it transitions a ticket (Todo → In Progress
+ * → Ready to Test → Done); a name that doesn't exist on the team is skipped, so
+ * these only need to match the user's actual Linear columns.
+ */
+function LinearStateMapEditor(): React.JSX.Element {
+  const mounted = useMountedRef()
+  const [map, setMap] = useState<LinearStateMap | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    void (async () => {
+      const m = (await api.linear.getStateMap()) as Partial<LinearStateMap> | null
+      if (!mounted.current || !m) return
+      setMap({
+        todo: m.todo ?? 'Todo',
+        inProgress: m.inProgress ?? 'In Progress',
+        readyToTest: m.readyToTest ?? 'Ready to Test',
+        done: m.done ?? 'Done'
+      })
+    })()
+  }, [mounted])
+
+  if (!map) return <></>
+
+  const field = (key: keyof LinearStateMap, label: string) => (
+    <label className="flex flex-col gap-1">
+      <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+      <Input
+        value={map[key]}
+        onChange={(e) => {
+          setSaved(false)
+          setMap({ ...map, [key]: e.target.value })
+        }}
+        className="h-8 text-sm"
+      />
+    </label>
+  )
+
+  const handleSave = async (): Promise<void> => {
+    setSaving(true)
+    // Param names are snake_case to match the Tauri command signature.
+    await api.linear.setStateMap({
+      todo: map.todo,
+      in_progress: map.inProgress,
+      ready_to_test: map.readyToTest,
+      done: map.done
+    })
+    if (!mounted.current) return
+    setSaving(false)
+    setSaved(true)
+  }
+
+  return (
+    <div className="mt-3 rounded-md border border-border/50 bg-background/60 p-3">
+      <p className="text-sm font-medium text-foreground">Pipeline workflow states</p>
+      <p className="mt-0.5 text-[11px] text-muted-foreground/70">
+        Names the harness moves a ticket through as it codes and verifies a feature. Match these to
+        your Linear team's columns; an unmatched name is skipped (never fails the run).
+      </p>
+      <div className="mt-2.5 grid grid-cols-2 gap-2.5">
+        {field('todo', 'Backlog / Todo')}
+        {field('inProgress', 'Coding')}
+        {field('readyToTest', 'Ready to Test')}
+        {field('done', 'Done')}
+      </div>
+      <div className="mt-2.5 flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={() => void handleSave()} disabled={saving}>
+          {saving ? (
+            <>
+              <LoaderCircle className="mr-1.5 size-3.5 animate-spin" />
+              Saving…
+            </>
+          ) : (
+            'Save states'
+          )}
+        </Button>
+        {saved ? (
+          <span className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
+            <CheckCircle2 className="size-3.5" />
+            Saved
+          </span>
+        ) : null}
+      </div>
+    </div>
   )
 }
 
@@ -638,6 +732,7 @@ export function IntegrationsPane(): React.JSX.Element {
               keys can cover all teams the key owner can access; restricted keys can be replaced any
               time.
             </p>
+            <LinearStateMapEditor />
           </div>
         )}
       </div>
