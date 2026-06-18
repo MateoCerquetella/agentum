@@ -107,6 +107,16 @@ EOF
 - The body **must** contain `Closes #<issue-number>` so merging auto-closes the issue.
 - Report back: the issue URL, the branch, and the PR URL.
 
+## Autonomous (Harness Engine) work
+
+If the work is driven autonomously by the Harness Engine rather than
+interactively, the **same issue is the live status board** — keep it updated as
+features move `coding → verifying → done/blocked`: post a progress comment on
+each transition, check off the matching acceptance-criteria box on a green gate,
+and close the issue (or rely on the PR's `Closes #N`) when the final gate is
+green. No human is watching the pane, so the issue is the only status surface.
+See the "Harness Engine" section of CLAUDE.md for the exact rule.
+
 ## Guardrails
 
 - Only commit/push/open-PR when the user asked you to ship (this command is that ask).

@@ -55,6 +55,10 @@ Claude can drive the whole flow with the **`/ship <description>`** slash command
 (`.claude/commands/ship.md`): it creates the labeled issue, branches,
 implements, and opens the linked PR — in that order, without skipping the issue.
 
+**Autonomous (Harness Engine) runs update the issue too.** When the harness
+drives features autonomously, the linked GitHub issue is the live status board —
+keep it current (see the Harness Engine section for the exact rule).
+
 ---
 
 ## Crate map
@@ -365,6 +369,16 @@ time, blocking advancement on a red gate.
   Claude agent end-to-end against `examples/harness-demo/` and asserts the gate
   goes green; run it with
   `AGENTUM_BROWSER_VERIFY=1 cargo test -p agentum-server --test harness_live_agent -- --ignored --nocapture`.
+- **Issue is the status board (always)**: an autonomous run is tracked by a
+  GitHub issue (the epic/feature), and the engine **keeps that issue updated** as
+  it drives — this is non-negotiable for autonomous work, since no human is
+  watching the pane. On each feature state transition, post/append to the issue:
+  `coding` → "▶ starting <feature>", `verifying` → "🧪 gate running",
+  `done` → "✅ <feature> green" (and check off the matching acceptance-criteria
+  box in the issue body), `blocked` → "⛔ <feature> red after N retries" (apply
+  the `priority/*` bump + a `blocked` note). When the final gate is green, close
+  the issue (or let the PR's `Closes #N` do it) with a comment linking the run +
+  `handoff.md`. This mirrors the chat→GitHub→harness pipeline (Spec 011, GH #19).
 - **Routes** (`routes/harness.rs`): `POST /api/harness` (register),
   `GET` (list/status), `POST /{id}/run` (kick off `drive` as a bg task,
   rejects double-run via `claim_driver`), `POST /{id}/init`,
