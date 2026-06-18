@@ -1,19 +1,30 @@
-import React, { useCallback, useMemo } from 'react'
+import React, { useCallback, useMemo, useState } from 'react'
 import { Terminal as TerminalIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAppStore } from '@/store'
 import { AGENT_CATALOG, AgentIcon } from '@/lib/agent-catalog'
 import { useDetectedAgents } from '@/hooks/useDetectedAgents'
 import { launchAgentInNewTab } from '@/lib/launch-agent-in-new-tab'
+import { takePendingSessionPrompt } from '@/lib/pending-session-prompt'
+import {
+  getPersistTmuxDefault,
+  setPersistTmuxDefault
+} from '@/components/terminal-pane/resolve-pane-persist'
 import { filterEnabledTuiAgents } from '../../../shared/tui-agent-selection'
 import type { TuiAgent } from '../../../shared/types'
+
+// Web clients mirror the runtime server's tmux-backed sessions and can't opt a
+// new pane out of tmux, so the toggle is hidden there (mirrors TabBar).
+const isWebClient =
+  (globalThis as { __AGENTUM_WEB_CLIENT__?: boolean }).__AGENTUM_WEB_CLIENT__ === true
 
 /**
  * Empty-state for an active workspace that has no open session. Replaces the
  * old behaviour of auto-spawning a blank terminal the instant a workspace was
  * activated — the user asked to pick which agent to start *before* anything
- * opens. Rendered as `absolute inset-0` and self-centred (mirrors Landing) so
- * it always respects the window viewport instead of growing past it.
+ * opens. The new-workspace flow now lands here too (it no longer auto-launches
+ * the composer's agent). Rendered as `absolute inset-0` and self-centred
+ * (mirrors Landing) so it always respects the window viewport.
  */
 export default function WorkspaceAgentLauncher({
   worktreeId
@@ -36,6 +47,19 @@ export default function WorkspaceAgentLauncher({
   const createTab = useAppStore((s) => s.createTab)
   const setActiveTabType = useAppStore((s) => s.setActiveTabType)
 
+  // Spec 005-C: "Run in tmux (persist)" default, surfaced here so the user can
+  // opt the session out of tmux before launching. Bound to the same persisted
+  // default `createTab` reads when seeding a new pane, so flipping it applies to
+  // both the agent buttons and the blank terminal below.
+  const [persistTmux, setPersistTmux] = useState(() => getPersistTmuxDefault())
+  const togglePersistTmux = useCallback(() => {
+    setPersistTmux((prev) => {
+      const next = !prev
+      setPersistTmuxDefault(next)
+      return next
+    })
+  }, [])
+
   // Catalog order, filtered to enabled agents and (when detection has resolved)
   // to those actually installed on this host. `null` detection = still probing,
   // so show all enabled rather than block the user behind a slow SSH probe.
@@ -53,7 +77,16 @@ export default function WorkspaceAgentLauncher({
 
   const launch = useCallback(
     (agent: TuiAgent) => {
-      const result = launchAgentInNewTab({ agent, worktreeId, launchSource: 'sidebar' })
+      // Why: the new-workspace composer no longer auto-launches, so a prompt the
+      // user typed there is stashed for this worktree. Hand it to the agent as an
+      // editable draft (read-once) so the text isn't lost.
+      const pendingPrompt = takePendingSessionPrompt(worktreeId)
+      const result = launchAgentInNewTab({
+        agent,
+        worktreeId,
+        launchSource: 'sidebar',
+        ...(pendingPrompt ? { prompt: pendingPrompt, promptDelivery: 'draft' as const } : {})
+      })
       if (!result) {
         toast.error(`Could not start ${agent}.`)
       }
@@ -95,6 +128,18 @@ export default function WorkspaceAgentLauncher({
             ))}
           </div>
         ) : null}
+
+        {isWebClient ? null : (
+          <label className="mt-3 flex items-center justify-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={persistTmux}
+              onChange={togglePersistTmux}
+              className="size-3.5 cursor-pointer accent-primary"
+            />
+            Run in tmux (persist)
+          </label>
+        )}
 
         <div className="mt-3 flex justify-center">
           <button
