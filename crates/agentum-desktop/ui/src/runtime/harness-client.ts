@@ -46,6 +46,11 @@ export type FeatureList = {
   settle_grace_secs: number
   settle_timeout_secs: number
   agent_yolo: boolean
+  hitl_at_qa?: boolean
+  /** How the browser QA gate runs (spec 012b). */
+  qa_mode?: 'auto' | 'script' | 'agent'
+  /** Agent CLI for the QA gate when it spawns one (default: the feature agent). */
+  qa_agent_tool?: string | null
 }
 
 export type HarnessStatus = {
