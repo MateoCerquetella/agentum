@@ -153,6 +153,12 @@ export function activateAndRevealWorktree(
     defaultTabs?: WorktreeDefaultTabsLaunch
     issueCommand?: IssueCommandLaunch
     sidebarRevealBehavior?: PendingSidebarWorktreeReveal['behavior']
+    // Why: the new-workspace flow no longer auto-launches an agent — it activates
+    // the worktree and lands on the "Start a session" picker. Without this guard
+    // the createdAgent reopen fallback below would relaunch `createdWithAgent`
+    // (which the composer just stamped), defeating the picker. Reopen-from-sidebar
+    // leaves this unset so it still relaunches the worktree's agent.
+    skipCreatedAgentStartup?: boolean
   }
 ): ActivateAndRevealResult | false {
   const state = useAppStore.getState()
@@ -202,7 +208,8 @@ export function activateAndRevealWorktree(
   const primaryTabId = ensureWorktreeHasInitialTerminal(
     useAppStore.getState(),
     worktreeId,
-    opts?.startup ?? buildCreatedAgentReopenStartup(wt),
+    opts?.startup ??
+      (opts?.skipCreatedAgentStartup ? undefined : buildCreatedAgentReopenStartup(wt)),
     opts?.setup,
     opts?.issueCommand,
     opts?.defaultTabs

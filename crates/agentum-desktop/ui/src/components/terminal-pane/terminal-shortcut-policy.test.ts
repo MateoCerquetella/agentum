@@ -70,11 +70,14 @@ describe('resolveTerminalShortcutAction', () => {
   })
 
   it('keeps shift-enter and delete helpers explicit', () => {
+    // Shift+Enter sends Alt+Enter (ESC + CR) so "skip a line" works at a bare
+    // shell prompt and in Claude Code / Codex composers, not only in CLIs that
+    // opt into the Kitty keyboard protocol.
     expect(
       resolveTerminalShortcutAction(event({ key: 'Enter', code: 'Enter', shiftKey: true }), true)
     ).toEqual({
       type: 'sendInput',
-      data: '\x1b[13;2u'
+      data: '\x1b\r'
     })
     expect(resolveTerminalShortcutAction(event({ key: 'Backspace', ctrlKey: true }), true)).toEqual(
       { type: 'sendInput', data: '\x17' }
@@ -92,7 +95,7 @@ describe('resolveTerminalShortcutAction', () => {
     })
   })
 
-  it('uses the Codex-compatible Shift+Enter sequence on Windows', () => {
+  it('uses the same Alt+Enter Shift+Enter sequence on Windows', () => {
     expect(
       resolveTerminalShortcutAction(
         event({ key: 'Enter', code: 'Enter', shiftKey: true }),
@@ -299,6 +302,34 @@ describe('resolveTerminalShortcutAction', () => {
     expect(
       resolveTerminalShortcutAction(event({ key: 'ArrowLeft', code: 'ArrowLeft' }), true)
     ).toBeNull()
+  })
+
+  it('sends the standard Alt+Arrow CSI for option+←/→ when an agent owns the pane', () => {
+    // paneRunsAgent=true: Claude Code / Codex read the standard cursor sequence
+    // (\e[1;3D / \e[1;3C), the same bytes every other terminal sends — not the
+    // readline \eb / \ef translation meant for bare shells.
+    expect(
+      resolveTerminalShortcutAction(
+        event({ key: 'ArrowLeft', code: 'ArrowLeft', altKey: true }),
+        true,
+        'false',
+        0,
+        false,
+        undefined,
+        true
+      )
+    ).toEqual({ type: 'sendInput', data: '\x1b[1;3D' })
+    expect(
+      resolveTerminalShortcutAction(
+        event({ key: 'ArrowRight', code: 'ArrowRight', altKey: true }),
+        true,
+        'false',
+        0,
+        false,
+        undefined,
+        true
+      )
+    ).toEqual({ type: 'sendInput', data: '\x1b[1;3C' })
   })
 
   it('translates macOS Option+B/F/D to readline escape sequences in compose mode', () => {

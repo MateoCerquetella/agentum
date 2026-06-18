@@ -53,8 +53,23 @@ describe('deriveEligibleHosts', () => {
     ])
   })
 
-  it('returns an empty list when there are no eligible repos', () => {
-    expect(deriveEligibleHosts([], {})).toEqual([])
+  it('returns local host + all known SSH hosts even when there are no eligible repos', () => {
+    const hostMetaByKey: Record<HostKey, HostMeta> = {
+      local: meta('local', 'local', 'studio'),
+      'ssh:conn-1': meta('ssh:conn-1', 'ssh', 'forge'),
+      'ssh:conn-2': meta('ssh:conn-2', 'ssh', 'vps')
+    }
+    expect(deriveEligibleHosts([], hostMetaByKey)).toEqual([
+      { key: 'local', kind: 'local', label: 'studio' },
+      { key: 'ssh:conn-1', kind: 'ssh', label: 'forge' },
+      { key: 'ssh:conn-2', kind: 'ssh', label: 'vps' }
+    ])
+  })
+
+  it('returns only local host when hostMetaByKey has no SSH hosts and there are no repos', () => {
+    expect(deriveEligibleHosts([], {})).toEqual([
+      { key: 'local', kind: 'local', label: 'This machine' }
+    ])
   })
 })
 

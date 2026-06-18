@@ -7,7 +7,7 @@ use agentum_core::{BoardItem, Event, NewBoardItem, NewSession, Status, Transitio
 use agentum_store::paths;
 use axum::Json;
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::post;
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,9 @@ use crate::error::ApiError;
 use crate::planner;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/board/goals", post(create_goal))
+    Router::new()
+        .route("/api/board/goals", post(create_goal))
+        .route("/api/board/goals/{id}/harness-plan", post(plan_goal_harness))
 }
 
 #[derive(Deserialize)]
@@ -120,6 +122,122 @@ async fn create_goal(
             ))
         }
     }
+}
+
+#[derive(Debug, Serialize)]
+struct PlanGoalHarnessResponse {
+    /// Which task manager backed the features ("board" | "github" | …).
+    provider: &'static str,
+    workdir: String,
+    feature_count: usize,
+    features: crate::harness::FeatureList,
+}
+
+/// `POST /api/board/goals/{id}/harness-plan` — take the planner-produced child
+/// cards of a goal and write them into the harness backlog (spec 011a).
+///
+/// This is the "auto-generate the backlog, human-gated Run" step: it writes
+/// `.agentum-harness/feature_list.json` (every feature `Pending`) but never
+/// registers or runs the harness — the user reviews the board and clicks Run.
+/// The board is the source of truth here (011a fallback); external sinks
+/// (GitHub/Linear) layer in via [`crate::task_sink::TaskSink`] in 011b/011c.
+async fn plan_goal_harness(
+    State(state): State<AppState>,
+    Path(goal_id): Path<i64>,
+) -> Result<Json<PlanGoalHarnessResponse>, ApiError> {
+    // The goal must exist and actually be a goal — guard against planning the
+    // harness off a random feature card.
+    let goal = state
+        .store
+        .get_board_item(goal_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("no board item {goal_id}")))?;
+    if goal.lbl.as_deref() != Some("goal") {
+        return Err(ApiError::BadRequest(format!(
+            "board item {goal_id} is not a goal"
+        )));
+    }
+
+    // The goal's workdir is where `.agentum-harness/` lives.
+    let workdir = goal.workdir.clone().ok_or_else(|| {
+        ApiError::BadRequest("goal has no workdir; cannot locate .agentum-harness".into())
+    })?;
+    let wd = super::util::expand_workdir(&workdir)?;
+    if !wd.exists() {
+        return Err(ApiError::BadRequest(format!(
+            "workdir does not exist: {}",
+            wd.display()
+        )));
+    }
+
+    // Collect the planner's child cards in board order (priority, then
+    // created_at — the order the user sees top-to-bottom). The board key is the
+    // stable tracker id; it becomes the harness feature id (and
+    // `$HARNESS_FEATURE_ID` in verify.sh).
+    let children: Vec<BoardItem> = state
+        .store
+        .list_board_items()
+        .await?
+        .into_iter()
+        .filter(|c| c.parent_goal_id == Some(goal_id))
+        .collect();
+    if children.is_empty() {
+        return Err(ApiError::BadRequest(
+            "goal has no feature cards yet; let the planner decompose it first".into(),
+        ));
+    }
+
+    // Pick the destination from what's configured (external manager = source of
+    // truth; the board is the agnostic fallback). For the board the planner's
+    // cards ARE the source, so we reuse their keys; for an external sink we
+    // mirror each card out and use the tracker's id as the harness feature id.
+    // (Re-running against an external sink re-creates issues — idempotent sync
+    // is deferred to 011d.)
+    let sink = crate::task_sink::TaskSink::select(&wd).await;
+    let mut feats: Vec<(String, String, String)> = Vec::with_capacity(children.len());
+    for c in &children {
+        let body = c.body.clone().unwrap_or_default();
+        let id = match sink {
+            crate::task_sink::TaskSink::Board => c.key.clone(),
+            other => other
+                .create_feature(
+                    &crate::task_sink::SinkCtx {
+                        store: &state.store,
+                        // deref Arc<Store> → &Store
+                        workdir: &wd,
+                        parent_goal_id: Some(goal_id),
+                    },
+                    &crate::task_sink::NewFeature {
+                        title: c.title.clone(),
+                        body: c.body.clone(),
+                    },
+                )
+                .await
+                .map_err(|e| {
+                    ApiError::Internal(format!("create feature in {}: {e}", other.provider()))
+                })?
+                .id,
+        };
+        feats.push((id, c.title.clone(), body));
+    }
+
+    let list = crate::harness::write_backlog_from_features(&wd, &feats)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let _ = state.bus.send(Event::new("goal.harness.planned").with_payload(json!({
+        "goal_id": goal_id,
+        "workdir": wd.to_string_lossy(),
+        "provider": sink.provider(),
+        "feature_count": list.features.len(),
+    })));
+
+    Ok(Json(PlanGoalHarnessResponse {
+        provider: sink.provider(),
+        workdir: wd.to_string_lossy().into_owned(),
+        feature_count: list.features.len(),
+        features: list,
+    }))
 }
 
 /// Spawn a tool session bound to the given card and atomically dual-write
@@ -724,5 +842,159 @@ mod tests {
     fn build_card_prompt_empty_returns_none() {
         let card = card_with("   ", Some("   "));
         assert!(build_card_prompt(&card).is_none());
+    }
+
+    // --- plan_goal_harness tests (spec 011a) ---
+
+    async fn make_goal_with_children(
+        state: &AppState,
+        workdir: &str,
+        children: &[(&str, Option<&str>)],
+    ) -> BoardItem {
+        let goal = state
+            .store
+            .create_board_item(agentum_core::NewBoardItem {
+                title: "Ship auth".into(),
+                body: None,
+                lbl: Some("goal".into()),
+                status: Some("todo".into()),
+                workdir: Some(workdir.to_string()),
+                parent_goal_id: None,
+                tool: None,
+                model: None,
+                session_id: None,
+                priority: None,
+            })
+            .await
+            .unwrap();
+        for (title, body) in children {
+            state
+                .store
+                .create_board_item(agentum_core::NewBoardItem {
+                    title: (*title).into(),
+                    body: body.map(str::to_string),
+                    lbl: Some("feat".into()),
+                    status: Some("todo".into()),
+                    workdir: None,
+                    parent_goal_id: Some(goal.id),
+                    tool: None,
+                    model: None,
+                    session_id: None,
+                    priority: None,
+                })
+                .await
+                .unwrap();
+        }
+        goal
+    }
+
+    /// The happy path: a goal's child cards become a Pending harness backlog on
+    /// disk, loadable by the engine, and the harness is left Idle (not run).
+    #[tokio::test]
+    async fn plan_goal_harness_writes_idle_backlog_from_children() {
+        // Force the agnostic board path under the env lock so the test never
+        // probes the dev machine's connected GitHub/Linear (no network).
+        let _env = isolate_xdg();
+        unsafe { std::env::set_var("AGENTUM_TASK_SINK", "board") };
+        let state = fresh_state().await;
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path().to_string_lossy().into_owned();
+        let goal = make_goal_with_children(
+            &state,
+            &wd,
+            &[
+                ("Login screen", Some("user sees a login form")),
+                ("Logout", None),
+            ],
+        )
+        .await;
+
+        let resp = plan_goal_harness(State(state.clone()), Path(goal.id))
+            .await
+            .expect("plan must succeed");
+        assert_eq!(resp.0.feature_count, 2);
+        // A temp workdir is not a GitHub repo, so the agnostic fallback (board)
+        // is the source of truth.
+        assert_eq!(resp.0.provider, "board");
+
+        // feature_list.json is on disk, loadable, and every feature is Pending.
+        let cfg = crate::harness::HarnessConfig::load(dir.path()).await.unwrap();
+        assert_eq!(cfg.features.features.len(), 2);
+        assert!(
+            cfg.features
+                .features
+                .iter()
+                .all(|f| f.state == crate::harness::FeatureState::Pending),
+            "harness must be Idle — every feature Pending until the user runs it"
+        );
+    }
+
+    /// `goal.harness.planned` fires so the UI can refresh the Harness view.
+    #[tokio::test]
+    async fn plan_goal_harness_emits_event() {
+        let _env = isolate_xdg();
+        unsafe { std::env::set_var("AGENTUM_TASK_SINK", "board") };
+        let state = fresh_state().await;
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path().to_string_lossy().into_owned();
+        let goal = make_goal_with_children(&state, &wd, &[("F1", None)]).await;
+        let mut rx = state.bus.subscribe();
+
+        let _resp = plan_goal_harness(State(state.clone()), Path(goal.id))
+            .await
+            .unwrap();
+
+        let mut saw = false;
+        while let Ok(ev) = rx.try_recv() {
+            if ev.kind == "goal.harness.planned" {
+                assert_eq!(ev.payload["goal_id"], goal.id);
+                assert_eq!(ev.payload["feature_count"], 1);
+                saw = true;
+                break;
+            }
+        }
+        assert!(saw, "goal.harness.planned must fire on the bus");
+    }
+
+    /// A goal whose planner hasn't produced any cards yet is rejected loudly —
+    /// we never write a silent empty backlog.
+    #[tokio::test]
+    async fn plan_goal_harness_rejects_goal_without_children() {
+        let state = fresh_state().await;
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path().to_string_lossy().into_owned();
+        let goal = make_goal_with_children(&state, &wd, &[]).await;
+
+        let err = plan_goal_harness(State(state), Path(goal.id))
+            .await
+            .expect_err("a childless goal must be rejected");
+        assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
+    }
+
+    /// Planning the harness off a non-goal card is rejected.
+    #[tokio::test]
+    async fn plan_goal_harness_rejects_non_goal() {
+        let state = fresh_state().await;
+        let card = state
+            .store
+            .create_board_item(agentum_core::NewBoardItem {
+                title: "just a feature".into(),
+                body: None,
+                lbl: Some("feat".into()),
+                status: Some("todo".into()),
+                workdir: None,
+                parent_goal_id: None,
+                tool: None,
+                model: None,
+                session_id: None,
+                priority: None,
+            })
+            .await
+            .unwrap();
+
+        let err = plan_goal_harness(State(state), Path(card.id))
+            .await
+            .expect_err("non-goal must be rejected");
+        assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
     }
 }

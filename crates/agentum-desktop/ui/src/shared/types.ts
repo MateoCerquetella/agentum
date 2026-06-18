@@ -2175,6 +2175,14 @@ export type GlobalSettings = {
   /** Legacy persisted key from before the sidekick -> pet rename. Read only
    *  during migration; new writes use experimentalPet. */
   experimentalSidekick?: boolean
+  /** Experimental (009c-3): render the agent-driven CDP browser INSIDE
+   *  agentum's pane via the embedded server's screencast bridge, instead of the
+   *  legacy hidden/separate-window browser. When on, an agent-driven page renders
+   *  the live CDP-Chromium screencast (`RemoteBrowserPagePane` pointed at
+   *  `WS /api/cdp-browser/screencast`) and the user can click/type/scroll in it.
+   *  Opt-in while the feature stabilises; replaces the old `AGENTUM_BROWSER_VERIFY`
+   *  env-var ceremony. Renderer-side, takes effect on the next page open. */
+  agentBrowserScreencast: boolean
   /** Experimental: left-sidebar Agents view with a threaded feed for agent
    *  completions, blocking states, unread state, and worktree creation events. */
   experimentalActivity: boolean

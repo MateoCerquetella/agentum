@@ -99,6 +99,24 @@ export const EXPERIMENTAL_PANE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
       'url',
       'file'
     ]
+  },
+  {
+    title: 'Agent browser in pane',
+    description:
+      "Render the agent-driven browser live inside agentum's pane (CDP screencast) instead of a hidden/separate-window browser.",
+    keywords: [
+      'experimental',
+      'agent',
+      'browser',
+      'screencast',
+      'cdp',
+      'chromium',
+      'playwright',
+      'pane',
+      'live',
+      'in-app',
+      'render'
+    ]
   }
 ]
 
@@ -119,5 +137,6 @@ export const EXPERIMENTAL_SEARCH_ENTRY = {
   terminalAttention: findEntry('Terminal attention'),
   compactWorktreeCards: findEntry('Compact worktree cards'),
   symlinks: findEntry('Symlinks on worktrees'),
-  unifiedNewTabLauncher: findEntry('Smart New Tab menu')
+  unifiedNewTabLauncher: findEntry('Smart New Tab menu'),
+  agentBrowser: findEntry('Agent browser in pane')
 } as const

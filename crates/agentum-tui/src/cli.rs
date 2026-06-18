@@ -475,6 +475,12 @@ pub enum TabCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Open a new browser tab navigated to URL, printing the new tab id.
+    Open {
+        url: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -949,6 +955,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Cmd::Orchestration { action } => dispatch_orchestration(action).await,
         Cmd::Tab { action } => match action {
             TabCmd::List { json } => crate::commands::browser::tab_list(json).await,
+            TabCmd::Open { url, json } => crate::commands::browser::tab_open(url, json).await,
         },
         Cmd::Snapshot { tab, json } => crate::commands::browser::snapshot(tab, json).await,
         Cmd::Navigate { url, tab } => crate::commands::browser::navigate(url, tab).await,

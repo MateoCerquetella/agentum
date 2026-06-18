@@ -12,12 +12,8 @@ import {
 } from '@/components/feature-wall/agents-orchestration/orchestration-types'
 import { usePrefersReducedMotion } from '@/components/feature-wall/feature-wall-modal-helpers'
 import { OnboardingInlineCommandTerminal } from '@/components/onboarding/OnboardingInlineCommandTerminal'
-import { AGENTUM_CLI_ORCHESTRATION_SKILL_INSTALL_COMMAND } from '@/lib/agent-feature-install-commands'
-import {
-  ORCHESTRATION_ENABLED_STORAGE_KEY,
-  ORCHESTRATION_SETUP_DISMISSED_STORAGE_KEY,
-  notifyOrchestrationSetupStateChanged
-} from '@/lib/orchestration-setup-state'
+import { AGENTUM_CLI_SKILL_INSTALL_COMMAND } from '@/lib/agent-feature-install-commands'
+import { persistOrchestrationEnabled } from '@/lib/orchestration-setup-state'
 import {
   Dialog,
   DialogContent,
@@ -255,10 +251,10 @@ export default function FeatureTipsModal(): JSX.Element | null {
     openSettingsPage()
   }
 
-  const enableOrchestrationSkillSetup = (): void => {
-    localStorage.setItem(ORCHESTRATION_ENABLED_STORAGE_KEY, '1')
-    localStorage.removeItem(ORCHESTRATION_SETUP_DISMISSED_STORAGE_KEY)
-    notifyOrchestrationSetupStateChanged()
+  // Orchestration is an agentum MCP capability — turn it on via the server gate
+  // (which also updates the local cache + notifies the Settings toggle).
+  const enableOrchestration = (): void => {
+    void persistOrchestrationEnabled(true)
   }
 
   const handlePrimaryAction = async (): Promise<void> => {
@@ -289,7 +285,7 @@ export default function FeatureTipsModal(): JSX.Element | null {
           const result = await installCliFromFeatureTip(() => api.cli.install())
           if (result.kind === 'installed') {
             trackAgentumCliFeatureTipSetupResult(telemetrySource, 'installed')
-            enableOrchestrationSkillSetup()
+            enableOrchestration()
             if (!mountedRef.current) {
               return
             }
@@ -314,7 +310,7 @@ export default function FeatureTipsModal(): JSX.Element | null {
             message.includes('Development mode uses a generated launcher for validation only')
           ) {
             trackAgentumCliFeatureTipSetupResult(telemetrySource, 'dev_preview')
-            enableOrchestrationSkillSetup()
+            enableOrchestration()
             if (!mountedRef.current) {
               return
             }
@@ -369,10 +365,10 @@ export default function FeatureTipsModal(): JSX.Element | null {
               </div>
               {skillTerminalOpen ? (
                 <OnboardingInlineCommandTerminal
-                  command={AGENTUM_CLI_ORCHESTRATION_SKILL_INSTALL_COMMAND}
+                  command={AGENTUM_CLI_SKILL_INSTALL_COMMAND}
                   title="Skill setup"
-                  ariaLabel="Agentum CLI and orchestration skill install terminal"
-                  description="Press Enter to install the Agentum CLI and orchestration skills for your agents."
+                  ariaLabel="Agentum CLI skill install terminal"
+                  description="Press Enter to install the Agentum CLI skill. Orchestration is already on — it's a built-in MCP, no install needed."
                   terminalHeightPx={150}
                   terminalTopMarginPx={4}
                   descriptionPaddingClassName="px-4 py-2"

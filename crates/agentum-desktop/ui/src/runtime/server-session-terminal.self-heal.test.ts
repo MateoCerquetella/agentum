@@ -6,13 +6,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const requestRepaint = vi.fn()
+const requestRedraw = vi.fn()
+// Capture the handlers bindServerSessionTerminal passes so a test can drive
+// lifecycle callbacks (e.g. onReconnected) the real WS would fire.
+let capturedHandlers: { onReconnected?: () => void } | undefined
 vi.mock('./agentum-server-client', () => ({
-  openSessionStream: vi.fn(async () => ({
-    send: vi.fn(),
-    resize: vi.fn(),
-    requestRepaint,
-    close: vi.fn()
-  }))
+  openSessionStream: vi.fn(async (_id: string, _size: unknown, handlers: { onReconnected?: () => void }) => {
+    capturedHandlers = handlers
+    return {
+      send: vi.fn(),
+      resize: vi.fn(),
+      requestRepaint,
+      requestRedraw,
+      close: vi.fn()
+    }
+  })
 }))
 vi.mock('./server-host-client', () => ({
   markHostConnectedFromHostKey: vi.fn(),
@@ -43,6 +51,7 @@ function makeTerm(blank: boolean): import('@xterm/xterm').Terminal {
 beforeEach(() => {
   vi.useFakeTimers()
   requestRepaint.mockClear()
+  requestRedraw.mockClear()
 })
 afterEach(() => {
   vi.useRealTimers()
@@ -76,5 +85,22 @@ describe('blank-pane self-heal', () => {
     binding.dispose()
     await vi.advanceTimersByTimeAsync(6000)
     expect(requestRepaint).not.toHaveBeenCalled()
+  })
+})
+
+describe('reconnect redraw heal', () => {
+  it('forces a redraw when the stream reconnects (suspend/resume path)', async () => {
+    await bindServerSessionTerminal('s', makeTerm(false), { hostKey: 'ssh:t' })
+    expect(requestRedraw).not.toHaveBeenCalled()
+    // Simulate the WS recovering after a drop — the server has already replayed
+    // the (possibly broadcast-corrupted) resume delta by now.
+    capturedHandlers?.onReconnected?.()
+    expect(requestRedraw).toHaveBeenCalledTimes(1)
+  })
+
+  it('exposes a manual forceRedraw that drives the same heal', async () => {
+    const binding = await bindServerSessionTerminal('s', makeTerm(false), { hostKey: 'ssh:t' })
+    binding.forceRedraw()
+    expect(requestRedraw).toHaveBeenCalledTimes(1)
   })
 })

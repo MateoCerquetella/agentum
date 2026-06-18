@@ -912,9 +912,11 @@ export default function TerminalPane({
 
   useTerminalKeyboardShortcuts({
     isActive,
+    tabId,
     keyboardScopeRef: containerRef,
     managerRef,
     paneTransportsRef,
+    panePtyBindingsRef,
     paneCwdRef,
     fallbackCwd: cwd ?? '',
     expandedPaneIdRef,

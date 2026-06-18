@@ -80,6 +80,7 @@ export type KeybindingActionId =
   | 'terminal.paste'
   | 'terminal.search'
   | 'terminal.clear'
+  | 'terminal.redraw'
   | 'terminal.focusNextPane'
   | 'terminal.focusPreviousPane'
   | 'terminal.equalizePaneSizes'
@@ -661,6 +662,18 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     scope: 'terminal',
     searchKeywords: ['shortcut', 'pane', 'clear'],
     defaultBindings: platformBindings(['Mod+K'])
+  },
+  {
+    id: 'terminal.redraw',
+    title: 'Force redraw active pane',
+    group: 'Terminal Panes',
+    scope: 'terminal',
+    // Heals a pane whose grid was corrupted by bytes the agent never drew —
+    // an OS `wall` broadcast (systemd suspend notice) written over the input
+    // box. Paired with Clear (Mod+K): Clear wipes scrollback, Redraw forces
+    // the agent to repaint over the garbage.
+    searchKeywords: ['shortcut', 'pane', 'redraw', 'repaint', 'refresh', 'broadcast', 'corrupt'],
+    defaultBindings: platformBindings(['Mod+Shift+K'])
   },
   {
     id: 'terminal.focusNextPane',

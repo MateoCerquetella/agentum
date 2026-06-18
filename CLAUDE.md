@@ -32,6 +32,49 @@ The marketing landing page lives in its own private repo (`agentum-www`), deploy
 
 ---
 
+## Contribution workflow (issue-first, always)
+
+**Every change starts as a GitHub issue and lands as a PR that closes it.**
+No "drive-by" commits to a feature branch without a tracked issue — the issue
+is where the documentation and labels live.
+
+1. **Open a documented issue first.** Use the templates in
+   `.github/ISSUE_TEMPLATE/` (Summary, Motivation, Proposed approach,
+   Acceptance criteria). Label it with `type/*` + `area/*` + `priority/*`
+   (run `.github/labels.sh` once to sync the label set).
+**Branch model:** `develop` (feature integration) → `staging` (QA) → `main`
+(release, default branch). Feature work bases on `develop`; promotions move it
+downstream toward `main`.
+
+2. **Always work in a dedicated git worktree** — never `git checkout` a new
+   branch in the shared checkout (many agents run concurrently here; in-place
+   checkout disturbs their working trees). Base off `develop`:
+   `git worktree add ../agentum-<kebab-desc> -b <type>/<kebab-desc> origin/develop`.
+   Clean up with `git worktree remove <path>` after the PR merges.
+3. **Implement + verify** (see "Critical: rebuild rhythm").
+4. **Open a PR into `develop`** (`gh pr create --base develop`) with
+   `Closes #<issue>` in the body **and** the commit message. Because `develop`
+   isn't the default branch, this does **not** close the issue on merge — that's
+   intentional (see step 5). The `.github/pull_request_template.md` enforces the link.
+5. **Promote develop → staging (QA) → main (release).** A merge to `develop` is
+   integration, not "done". Promote `develop` → `staging` to deploy to the staging
+   environment; the ticket enters **QA** — label the issue `status/qa`, keep it
+   open. When QA passes → relabel `status/qa-pass`, then release: promote
+   `staging` → `main` and tag `vX.Y.Z` (the repo's release convention); the
+   `Closes #<issue>` fires when the commit reaches `main` (the default branch),
+   closing the issue. When QA fails → `status/qa-fail` + findings, loop back to
+   step 2. Never close at the develop or staging merge.
+
+Claude can drive the whole flow with the **`/ship <description>`** slash command
+(`.claude/commands/ship.md`): it creates the labeled issue, branches,
+implements, and opens the linked PR — in that order, without skipping the issue.
+
+**Autonomous (Harness Engine) runs update the issue too.** When the harness
+drives features autonomously, the linked GitHub issue is the live status board —
+keep it current (see the Harness Engine section for the exact rule).
+
+---
+
 ## Crate map
 
 ```
@@ -340,6 +383,16 @@ time, blocking advancement on a red gate.
   Claude agent end-to-end against `examples/harness-demo/` and asserts the gate
   goes green; run it with
   `AGENTUM_BROWSER_VERIFY=1 cargo test -p agentum-server --test harness_live_agent -- --ignored --nocapture`.
+- **Issue is the status board (always)**: an autonomous run is tracked by a
+  GitHub issue (the epic/feature), and the engine **keeps that issue updated** as
+  it drives — this is non-negotiable for autonomous work, since no human is
+  watching the pane. On each feature state transition, post/append to the issue:
+  `coding` → "▶ starting <feature>", `verifying` → "🧪 gate running",
+  `done` → "✅ <feature> green" (and check off the matching acceptance-criteria
+  box in the issue body), `blocked` → "⛔ <feature> red after N retries" (apply
+  the `priority/*` bump + a `blocked` note). When the final gate is green, close
+  the issue (or let the PR's `Closes #N` do it) with a comment linking the run +
+  `handoff.md`. This mirrors the chat→GitHub→harness pipeline (Spec 011, GH #19).
 - **Routes** (`routes/harness.rs`): `POST /api/harness` (register),
   `GET` (list/status), `POST /{id}/run` (kick off `drive` as a bg task,
   rejects double-run via `claim_driver`), `POST /{id}/init`,

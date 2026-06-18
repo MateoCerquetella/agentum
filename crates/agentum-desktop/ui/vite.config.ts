@@ -35,6 +35,50 @@ export default defineConfig({
     outDir: 'dist',
     target: 'esnext',
     minify: 'esbuild',
+    // Raised above Rollup's 500 KB default: this bundle loads inside a Tauri
+    // webview from local disk, so a few large lazy chunks are expected. The
+    // eager entry chunk is guarded separately by scripts/check-entry-size.mjs.
+    chunkSizeWarningLimit: 2500,
+    rollupOptions: {
+      output: {
+        // Pin the heavy, lazy-only libraries into named vendor chunks so they
+        // can't silently merge back into the eager entry chunk — the regression
+        // class fixed in #21 (react-markdown and xterm had leaked in via
+        // always-mounted surfaces). These libs are only reached through lazy()
+        // boundaries today, so naming their chunks keeps them lazy and stable.
+        //
+        // React/react-dom are deliberately NOT chunked here: the single deduped
+        // copy (see `dedupe` above) must stay in the entry. Splitting it has
+        // historically tripped React's hook dispatcher to null at the app root.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+          if (
+            id.includes('react-markdown') ||
+            id.includes('/micromark') ||
+            id.includes('/mdast') ||
+            id.includes('/hast') ||
+            id.includes('/remark') ||
+            id.includes('/rehype') ||
+            id.includes('/unified') ||
+            id.includes('/unist') ||
+            id.includes('/vfile') ||
+            id.includes('/property-information')
+          ) {
+            return 'markdown-vendor'
+          }
+          if (id.includes('monaco-editor') || id.includes('@monaco-editor')) {
+            return 'monaco-vendor'
+          }
+          if (id.includes('@tiptap') || id.includes('/prosemirror')) {
+            return 'tiptap-vendor'
+          }
+          if (id.includes('/mermaid') || id.includes('/cytoscape')) {
+            return 'mermaid-vendor'
+          }
+          return undefined
+        },
+      },
+    },
   },
   envPrefix: ['VITE_', 'TAURI_'],
   test: {

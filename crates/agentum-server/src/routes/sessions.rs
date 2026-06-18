@@ -434,24 +434,50 @@ async fn delete(
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
     let session = load(&state, id).await?;
-    let host = load_host_for_session(&state, &session).await?;
-    if matches!(session.status, Status::Running) {
-        if !q.force {
-            return Err(ApiError::BadRequest(
-                "session is running; pass ?force=true to kill and remove".into(),
-            ));
-        }
-        let target = tmux_target(&session);
-        if is_external(&session) {
-            // Removing the record must leave the user's tmux session
-            // running; just stop piping its output to our log.
-            let _ = crate::host_runtime::unpipe_pane(&host, &target).await;
-        } else {
-            crate::host_runtime::kill_session(&host, &target)
-                .await
-                .map_err(|e| ApiError::Internal(e.to_string()))?;
-        }
+
+    // Guard a genuinely-running agent behind ?force=true so it isn't torn
+    // down by accident. Any other status (Idle/Crashed/Stopped) deletes freely.
+    if matches!(session.status, Status::Running) && !q.force {
+        return Err(ApiError::BadRequest(
+            "session is running; pass ?force=true to kill and remove".into(),
+        ));
     }
+
+    // Best-effort tmux teardown, then always remove the record. Two things this
+    // must NOT do — both previously surfaced as "can't delete the session":
+    //   1. Gate teardown on `Running` only. The recorded status lags reality —
+    //      a session resting in `Idle` (an agent awaiting input) still owns a
+    //      live pane, so the old `Running`-only gate orphaned it, and a stale
+    //      `agentum-<name>` pane then broke recreating a session of that name.
+    //      We always tear down now; `kill_session` is idempotent (it no-ops when
+    //      the pane is already gone).
+    //   2. Let a teardown failure block record removal. An unreachable host, or
+    //      a host record that's been deleted, must not pin the session row in the
+    //      store forever — removing the local record is always allowed; we just
+    //      can't reach a remote pane that may already be dead. Failures are
+    //      logged, never propagated.
+    match load_host_for_session(&state, &session).await {
+        Ok(host) => {
+            let target = tmux_target(&session);
+            let outcome = if is_external(&session) {
+                // Never destroy a user-owned tmux session — just disarm the pipe.
+                crate::host_runtime::unpipe_pane(&host, &target).await
+            } else {
+                crate::host_runtime::kill_session(&host, &target).await
+            };
+            if let Err(e) = outcome {
+                tracing::warn!(
+                    session = %session.id, %target,
+                    "tmux teardown failed during delete (removing record anyway): {e}"
+                );
+            }
+        }
+        Err(e) => tracing::warn!(
+            session = %session.id,
+            "host unavailable during delete (removing record anyway): {e}"
+        ),
+    }
+
     state.store.delete_session(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -770,6 +796,51 @@ async fn start(
     Ok(Json(session_with_spawned(load(&state, id).await?, true)))
 }
 
+/// Create a session record AND launch its agent into a fresh tmux pane in one
+/// call — the programmatic equivalent of `POST /create` then `POST /start`,
+/// without the HTTP envelope. Shared with the MCP `agentum_spawn_session` tool
+/// so an agent can spawn a *sibling* agent inside agentum through the exact same
+/// launch path (YOLO marker translation, loopback `pane_env`, the Claude
+/// `--settings` hook, MCP wiring) the interactive routes use — never a parallel
+/// reimplementation. Worktree isolation is out of scope here; callers pass an
+/// explicit, already-existing `workdir`.
+pub(crate) async fn create_and_spawn_session(
+    state: &AppState,
+    mut new: NewSession,
+    host_id: Option<Uuid>,
+) -> Result<Session, ApiError> {
+    let host_id = host_id.unwrap_or(LOCAL_HOST_ID);
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown host: {host_id}")))?;
+
+    // Resolve + validate the workdir exactly as `create`/`start` do (a fresh
+    // spawn has no worktree to self-heal, so a missing dir is a hard error).
+    let workdir = match &host.kind {
+        HostKind::Local => {
+            let workdir = super::util::expand_workdir(&new.workdir)?;
+            if !workdir.exists() {
+                return Err(ApiError::BadRequest(format!(
+                    "workdir does not exist: {}",
+                    workdir.display()
+                )));
+            }
+            new.workdir = workdir.to_string_lossy().into_owned();
+            workdir
+        }
+        HostKind::Ssh { .. } => PathBuf::from(new.workdir.trim()),
+    };
+
+    let session = state.store.create_session_on_host(new, Some(host_id)).await?;
+    // A freshly-created agentum session always derives its target from the name;
+    // there is no pre-existing pane to reattach to (that's the `start` route's job).
+    let target = agentum_tmux::target_for(&session.name);
+    spawn_agent_into_pane(state, &session, &host, &target, &workdir).await?;
+    load(state, session.id).await
+}
+
 async fn stop(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -944,6 +1015,22 @@ struct StreamQuery {
     /// keystroke (the v0.6.20 regression).
     #[serde(default)]
     resume: bool,
+    /// `?redraw=true` asks the handler to force the embedded TUI to fully
+    /// REPAINT before snapshotting — not just re-read the current grid.
+    /// Needed when foreign bytes were written straight into the pane's
+    /// screen, bypassing the agent's own rendering: most notably an OS
+    /// `wall` broadcast (systemd's "The system will suspend now!" notice,
+    /// sent as root so `mesg n` can't block it) that lands on top of the
+    /// input box / footer and stays there, because a ratatui app only
+    /// repaints the cells it thinks changed. A plain `capture-pane`
+    /// re-snapshot can't heal that — it re-reads the same corrupted grid.
+    /// Only the agent can repaint its own cells, and a SIGWINCH is what
+    /// makes it clear its buffer and redraw in full; we provoke one with a
+    /// momentary resize toggle. Same URL-param rationale as `resume`: old
+    /// daemons drop it and fall back to the plain snapshot — safe, just
+    /// not self-healing.
+    #[serde(default)]
+    redraw: bool,
 }
 
 async fn stream(
@@ -962,11 +1049,12 @@ async fn stream(
     let target = tmux_target(&session);
     let positions = state.stream_positions.clone();
     let resume = q.resume;
+    let redraw = q.redraw;
     Ok(ws.on_upgrade(move |socket| async move {
         if matches!(host.kind, HostKind::Local) {
-            stream_session(socket, id, target, positions, resume).await;
+            stream_session(socket, id, target, positions, resume, redraw).await;
         } else {
-            stream_remote_session(socket, host, id, target).await;
+            stream_remote_session(socket, host, id, target, redraw).await;
         }
     }))
 }
@@ -1034,12 +1122,54 @@ fn coalesce_queued(first: Bytes, rx: &mut tokio::sync::mpsc::Receiver<Bytes>) ->
     }
 }
 
+/// Block until the embedded process's post-SIGWINCH repaint burst has
+/// settled, so a `capture-pane` taken afterwards reflects a complete frame
+/// rather than a half-painted one. The pane log file (the pipe-pane sink)
+/// is a cheap activity probe: bytes the process emits are appended in real
+/// time, so file-size growth is direct evidence of repaint work. Wait for
+/// activity to start, then for it to quiet (two no-growth polls). Bail
+/// early when no activity ever shows (a no-op resize that propagated no
+/// SIGWINCH) and hard-cap so an actively-streaming agent can't pin the
+/// connect open. Shared by the resize-settle and redraw-nudge paths.
+async fn settle_repaint_burst(file: &tokio::fs::File) {
+    let mut last_size = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+    let mut activity_seen = false;
+    let mut quiet_streak: u32 = 0;
+    let start = tokio::time::Instant::now();
+    let max_deadline = start + POST_RESIZE_SETTLE_MAX;
+    loop {
+        sleep(SETTLE_POLL_INTERVAL).await;
+        let now_size = file.metadata().await.map(|m| m.len()).unwrap_or(last_size);
+        if now_size != last_size {
+            activity_seen = true;
+            quiet_streak = 0;
+            last_size = now_size;
+        } else {
+            quiet_streak = quiet_streak.saturating_add(1);
+        }
+        let now = tokio::time::Instant::now();
+        // Activity → quiet: repaint burst is over, capture is safe.
+        if activity_seen && quiet_streak >= 2 {
+            break;
+        }
+        // No activity within the bail window: nothing is going to repaint.
+        if !activity_seen && now >= start + POST_RESIZE_NO_ACTIVITY_BAIL {
+            break;
+        }
+        // Hard cap against an agent that never goes quiet.
+        if now >= max_deadline {
+            break;
+        }
+    }
+}
+
 async fn stream_session(
     mut socket: WebSocket,
     id: Uuid,
     target: String,
     positions: Arc<std::sync::Mutex<std::collections::HashMap<Uuid, StreamCheckpoint>>>,
     resume_requested: bool,
+    redraw_requested: bool,
 ) {
     let log_path = match paths::pane_log(&id.to_string()) {
         Ok(p) => p,
@@ -1140,37 +1270,32 @@ async fn stream_session(
         // Fall back to a "no activity" bail-out if the resize was a
         // no-op (size already matched), so connect doesn't pay the full
         // budget for a settle that will never come.
-        let mut last_size = file.metadata().await.map(|m| m.len()).unwrap_or(0);
-        let mut activity_seen = false;
-        let mut quiet_streak: u32 = 0;
-        let start = tokio::time::Instant::now();
-        let max_deadline = start + POST_RESIZE_SETTLE_MAX;
-        loop {
-            sleep(SETTLE_POLL_INTERVAL).await;
-            let now_size = file.metadata().await.map(|m| m.len()).unwrap_or(last_size);
-            if now_size != last_size {
-                activity_seen = true;
-                quiet_streak = 0;
-                last_size = now_size;
-            } else {
-                quiet_streak = quiet_streak.saturating_add(1);
-            }
-            let now = tokio::time::Instant::now();
-            // Activity → quiet: repaint burst is over, capture is safe.
-            if activity_seen && quiet_streak >= 2 {
-                break;
-            }
-            // No activity within the bail window: probably a no-op resize
-            // (size already matched, no SIGWINCH propagated). Don't burn
-            // the full max budget waiting for a wake-up that won't come.
-            if !activity_seen && now >= start + POST_RESIZE_NO_ACTIVITY_BAIL {
-                break;
-            }
-            // Hard cap so an actively-streaming agent can't hold connect
-            // open indefinitely.
-            if now >= max_deadline {
-                break;
-            }
+        settle_repaint_burst(&file).await;
+    }
+
+    // Redraw heal: force the agent to repaint EVERY cell before we snapshot.
+    // The reconnect after a system suspend (or any foreign write into the
+    // pane grid — an OS `wall` broadcast lands on top of the input box and
+    // footer) leaves stale bytes a ratatui app won't overpaint on its own,
+    // and a same-size reconnect emits no SIGWINCH so the agent never
+    // repaints. We provoke one with a momentary 1-row shrink-then-restore:
+    // two SIGWINCHs, each making the agent clear its buffer and redraw in
+    // full, netting to the original geometry. The intermediate settle gives
+    // the app time to observe the smaller size and start repainting before
+    // we restore — two resizes delivered too close together can collapse
+    // into a single read of the final (unchanged) size and skip the redraw.
+    // The post-restore settle lets the clean frame land in the log before
+    // the snapshot below captures it. No-op when we never learned the
+    // client's size or the pane is too short to shrink.
+    if redraw_requested
+        && let Some((cols, rows)) = current_size
+    {
+        let shrunk = rows.saturating_sub(1);
+        if shrunk >= 1 && shrunk != rows {
+            let _ = agentum_tmux::resize_window(&target, cols, shrunk).await;
+            settle_repaint_burst(&file).await;
+            let _ = agentum_tmux::resize_window(&target, cols, rows).await;
+            settle_repaint_burst(&file).await;
         }
     }
 
@@ -1217,7 +1342,13 @@ async fn stream_session(
         (Some(_), None) => true,
         _ => false,
     };
-    if let (true, Some(cp), true) = (resume_requested, saved_checkpoint, resume_size_matches) {
+    // A redraw heal always wants the fresh snapshot of the repainted grid,
+    // never a delta replay (which would just re-feed the corrupting bytes).
+    // Clients pair `redraw` with omitting `resume`, but gate here too so a
+    // client sending both still heals.
+    if let (true, Some(cp), true) =
+        (resume_requested && !redraw_requested, saved_checkpoint, resume_size_matches)
+    {
         if let Ok(end) = file.seek(std::io::SeekFrom::End(0)).await
             && end >= cp.pos
         {
@@ -1495,7 +1626,13 @@ async fn stream_session(
 /// pane bytes to a per-session log on the host, and a single persistent
 /// `ssh tail -f` streams those bytes as they appear — the same incremental
 /// model as the local file tail, just sourced over one long-lived SSH channel.
-async fn stream_remote_session(mut socket: WebSocket, host: Host, id: Uuid, target: String) {
+async fn stream_remote_session(
+    mut socket: WebSocket,
+    host: Host,
+    id: Uuid,
+    target: String,
+    redraw_requested: bool,
+) {
     let log = match paths::pane_log(&id.to_string()) {
         Ok(p) => p,
         Err(e) => {
@@ -1534,6 +1671,23 @@ async fn stream_remote_session(mut socket: WebSocket, host: Host, id: Uuid, targ
     // freshly-opened agent paint as soon as it renders. The loop breaks the
     // instant a frame is non-empty, so a fast pane isn't delayed; each retry
     // re-samples the offset so the tail still resumes exactly past what we paint.
+    // Redraw heal (see the local path and the `redraw` query doc): force the
+    // remote agent to fully repaint before we snapshot, so a corrupted grid
+    // (e.g. an OS `wall` broadcast written over the pane on the host) is
+    // overpainted rather than re-captured. We don't learn the pane's absolute
+    // size at connect here, so provoke the SIGWINCH with a RELATIVE 1-row
+    // shrink-then-restore that nets to the original geometry. No file probe on
+    // a remote host, so use a fixed inter-resize pause long enough for the
+    // agent to observe the smaller size and start repainting; the snapshot
+    // retry loop below then captures the clean frame.
+    if redraw_requested {
+        const REMOTE_NUDGE_PAUSE: Duration = Duration::from_millis(150);
+        let _ = crate::host_runtime::resize_window_relative(&host, &target, -1).await;
+        sleep(REMOTE_NUDGE_PAUSE).await;
+        let _ = crate::host_runtime::resize_window_relative(&host, &target, 1).await;
+        sleep(REMOTE_NUDGE_PAUSE).await;
+    }
+
     const SNAPSHOT_RETRY_BUDGET: Duration = Duration::from_millis(12_000);
     const SNAPSHOT_RETRY_GAP: Duration = Duration::from_millis(300);
     let snap_deadline = tokio::time::Instant::now() + SNAPSHOT_RETRY_BUDGET;

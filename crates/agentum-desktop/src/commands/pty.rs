@@ -11,16 +11,23 @@ use tauri::{Emitter, State};
 
 use crate::{
     commands::shell::default_shell_path,
-    state::{AppState, PtyHandle},
+    state::{AppState, PtyHandle, PtyOutputBuffer},
 };
 
 // Emitted on the channels the renderer's pty-dispatcher listens to (onData ->
 // "pty-data", onExit -> "pty-exit"). The old code emitted "pty:output", which no
 // listener matched — that is why the local terminal produced no output.
+//
+// `seq`/`rawLength` let the renderer dedupe live chunks against a buffer
+// snapshot during hidden-output restore: `seq` is the running total of raw
+// bytes through this chunk, `rawLength` this chunk's raw byte count.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct PtyDataEvent {
     id: String,
     data: String,
+    seq: u64,
+    raw_length: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,22 +80,32 @@ fn open_pty(app: tauri::AppHandle, id: String, cfg: SpawnConfig) -> Result<PtyHa
     drop(pair.slave);
     let child = Arc::new(Mutex::new(child));
 
+    let output = Arc::new(Mutex::new(PtyOutputBuffer::new(cfg.cols, cfg.rows)));
+
     let mut reader = pair.master.try_clone_reader().map_err(map_err)?;
     let app_reader = app.clone();
     let id_reader = id.clone();
     let child_reader = child.clone();
+    let output_reader = output.clone();
     std::thread::spawn(move || {
         let mut buffer = [0_u8; 8192];
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => {
-                    let data = String::from_utf8_lossy(&buffer[..read]).to_string();
+                    let chunk = &buffer[..read];
+                    // Retain raw bytes (not the lossy string) so the snapshot can
+                    // be rebuilt faithfully, and capture `seq` under the same lock
+                    // so it matches exactly what the snapshot would include.
+                    let seq = output_reader.lock().push(chunk);
+                    let data = String::from_utf8_lossy(chunk).to_string();
                     let _ = app_reader.emit(
                         "pty-data",
                         PtyDataEvent {
                             id: id_reader.clone(),
                             data,
+                            seq,
+                            raw_length: read as u64,
                         },
                     );
                 }
@@ -117,6 +134,7 @@ fn open_pty(app: tauri::AppHandle, id: String, cfg: SpawnConfig) -> Result<PtyHa
         master: pair.master,
         writer,
         child,
+        output,
     })
 }
 
@@ -293,7 +311,15 @@ pub fn pty_resize(
             pixel_width: 0,
             pixel_height: 0,
         })
-        .map_err(map_err)
+        .map_err(map_err)?;
+    // Keep the snapshot's reported dimensions current so a restored pane
+    // replays at the size the bytes were produced for.
+    {
+        let mut out = handle.output.lock();
+        out.cols = cols;
+        out.rows = rows;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -376,12 +402,44 @@ pub fn pty_list_sessions(state: State<'_, AppState>) -> Vec<Value> {
         .collect()
 }
 
-// Buffer snapshots, foreground-process detection, pane-serializer lifecycle, signals,
-// cwd, and the management RPC aren't ported. Snapshots/process/cwd are null; the
-// serializer + lifecycle methods no-op.
+// Foreground-process detection, pane-serializer lifecycle, signals, cwd, and the
+// management RPC aren't ported (process/cwd are best-effort below; the
+// serializer + lifecycle methods no-op).
+//
+// Return the retained output so the renderer can rebuild a hidden pane's screen.
+// Replaying these raw bytes into a cleared xterm reconstructs the current screen
+// (and as much scrollback as we kept). `seq` lets the renderer drop live chunks
+// already covered here; `cols`/`rows` let it replay at the right dimensions.
+// Args are positional: [ptyId, { scrollbackRows }] — the row hint is advisory,
+// the byte cap governs how much we retained.
 #[tauri::command]
-pub fn pty_get_main_buffer_snapshot() -> Option<String> {
-    None
+pub fn pty_get_main_buffer_snapshot(
+    state: State<'_, AppState>,
+    request: tauri::ipc::Request<'_>,
+) -> Option<Value> {
+    let args = positional_args(&request);
+    let id = args.first().and_then(Value::as_str)?;
+    let ptys = state.ptys.lock();
+    let handle = ptys.get(id)?;
+    let out = handle.output.lock();
+    // Nothing produced yet means there is nothing to restore; a null snapshot
+    // is the renderer's "unavailable" signal, but that path is unreachable
+    // while output is pending because restore is only requested after bytes
+    // have actually arrived.
+    if out.bytes.is_empty() {
+        return None;
+    }
+    let data = String::from_utf8_lossy(&out.bytes).into_owned();
+    let cols = out.cols;
+    let rows = out.rows;
+    let seq = out.total;
+    drop(out);
+    Some(serde_json::json!({
+        "data": data,
+        "cols": cols,
+        "rows": rows,
+        "seq": seq,
+    }))
 }
 
 // --- Live PTY process introspection (ports local-pty-provider getForegroundProcess/

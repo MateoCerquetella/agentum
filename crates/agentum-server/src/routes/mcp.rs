@@ -117,22 +117,75 @@ async fn dispatch(
             }))
         }
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tool_specs() })),
+        "tools/list" => Ok(json!({ "tools": tool_specs(orchestration_enabled(state).await) })),
         "tools/call" => call_tool(state, params).await,
         other => Err((-32601, format!("method not found: {other}"))),
     }
 }
 
+/// The inter-agent orchestration tools (mailbox + task DAG). Gated behind the
+/// `orchestration.enabled` setting: when off they are neither advertised
+/// (`tools/list`) nor callable (`tools/call`). The MCP server itself stays wired
+/// — only this surface toggles — so agents keep the rest of agentum's tools. The
+/// switch lives in the desktop Settings → Agent Orchestration pane.
+const ORCHESTRATION_TOOLS: &[&str] = &[
+    "agentum_send_message",
+    "agentum_check_messages",
+    "agentum_create_task",
+    "agentum_list_tasks",
+];
+
+fn is_orchestration_tool(name: &str) -> bool {
+    ORCHESTRATION_TOOLS.contains(&name)
+}
+
+/// Read the orchestration gate (opt-in: absent/unset = off). Best-effort — a
+/// store error falls back to off rather than failing the whole MCP request.
+async fn orchestration_enabled(state: &AppState) -> bool {
+    state
+        .store
+        .setting_get_bool(super::orchestration::ORCHESTRATION_ENABLED_SETTING, false)
+        .await
+        .unwrap_or(false)
+}
+
 /// The advertised tool catalog. Grows as skills get ported; each entry needs a
-/// matching arm in [`call_tool`].
-fn tool_specs() -> Value {
-    json!([
+/// matching arm in [`call_tool`]. The orchestration tools are filtered out when
+/// the gate is off (`orchestration_enabled`).
+fn tool_specs(orchestration_enabled: bool) -> Value {
+    let mut tools = json!([
         {
             "name": "agentum_list_sessions",
             "description": "List the agent sessions agentum manages on this machine \
                 (each is one tmux pane running an agent CLI). Returns name, tool, \
                 status, and working directory. Use to see sibling agents/worktrees.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        },
+        {
+            "name": "agentum_spawn_session",
+            "description": "Spawn a NEW agent session INSIDE agentum — create a session \
+                and launch its agent CLI into a fresh tmux pane on this machine, the same \
+                way the desktop/TUI 'new session' does. Use to delegate work to a sibling \
+                agent you can then coordinate with via agentum_send_message / \
+                agentum_check_messages. `name` is a unique session name (also the agent's \
+                mailbox handle); `workdir` is an existing directory to run in; `tool` is \
+                the agent CLI (claude|codex|cursor|gemini|… — default claude); optional \
+                `model`; `flags` are extra CLI args; `yolo` skips permission prompts \
+                (pushed as the canonical marker and translated per tool). Returns the new \
+                session's id, name, tool, status, and workdir.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Unique session name (also the agent's orchestration handle)" },
+                    "workdir": { "type": "string", "description": "Existing directory the agent runs in" },
+                    "tool": { "type": "string", "description": "Agent CLI: claude|codex|cursor|gemini|… (default claude)" },
+                    "model": { "type": "string", "description": "Model override (optional)" },
+                    "flags": { "type": "array", "items": { "type": "string" }, "description": "Extra CLI args passed to the agent" },
+                    "yolo": { "type": "boolean", "description": "Skip permission prompts (default false)" }
+                },
+                "required": ["name", "workdir"],
+                "additionalProperties": false,
+            },
         },
         {
             "name": "agentum_list_worktrees",
@@ -226,14 +279,30 @@ fn tool_specs() -> Value {
         {
             "name": "agentum_browser",
             "description": "Drive agentum's built-in browser webview — the agentum-cli \
-                browser skill. Pass `op` and its params: tabs | navigate (url) | \
-                snapshot | click | fill | screenshot. Requires the agentum desktop \
-                app. (For headless browser automation an agent should use the \
+                browser skill. Pass `op` and its params: open (url) — opens a NEW tab \
+                navigated to url and returns its `tab` id; tabs — lists open tabs; \
+                navigate (url) | snapshot | click (selector) | fill (selector, text) | \
+                screenshot — act on a tab (optional `tab` id, else the active one); \
+                annotations — read the design-feedback annotations the user marked on \
+                page elements (returns structured markdown the agent can act on); \
+                grab (selector) — extract an element's metadata (tag, text, selector, \
+                rect, computed styles) by CSS selector; \
+                annotate (selector, comment, intent?) — attach a design-feedback \
+                annotation to an element (intent: change|fix|question|approve), which \
+                shows in the browser tray and is returned by `annotations`. \
+                Start with `open` when no tab is listed by `tabs`. Requires the agentum \
+                desktop app. (For headless browser automation an agent should use the \
                 Playwright MCP instead.)",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "op": { "type": "string", "description": "tabs|navigate|snapshot|click|fill|screenshot" }
+                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|screenshot|annotations|grab|annotate" },
+                    "url": { "type": "string", "description": "Target URL for `open`/`navigate`" },
+                    "tab": { "type": "string", "description": "Tab id to act on (default: the active tab)" },
+                    "selector": { "type": "string", "description": "CSS selector for `click`/`fill`/`grab`/`annotate`" },
+                    "text": { "type": "string", "description": "Text to type for `fill`" },
+                    "comment": { "type": "string", "description": "Annotation feedback text for `annotate`" },
+                    "intent": { "type": "string", "description": "Annotation intent for `annotate`: change|fix|question|approve" }
                 },
                 "required": ["op"],
                 "additionalProperties": true,
@@ -336,7 +405,19 @@ fn tool_specs() -> Value {
                 "additionalProperties": false,
             },
         }
-    ])
+    ]);
+
+    if !orchestration_enabled {
+        if let Some(arr) = tools.as_array_mut() {
+            arr.retain(|t| {
+                t.get("name")
+                    .and_then(Value::as_str)
+                    .map(|n| !is_orchestration_tool(n))
+                    .unwrap_or(true)
+            });
+        }
+    }
+    tools
 }
 
 /// Execute a `tools/call`. A bad request (missing name/params) is a JSON-RPC
@@ -348,12 +429,26 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         .and_then(Value::as_str)
         .ok_or((-32602, "missing tool name".to_string()))?;
 
+    // Gate the orchestration surface: when off, these tools aren't advertised,
+    // but a client could still call one by name — reject with an actionable hint.
+    if is_orchestration_tool(name) && !orchestration_enabled(state).await {
+        return Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": "agentum orchestration is turned off. Enable it in the agentum \
+                         desktop app under Settings → Agent Orchestration.",
+            }],
+            "isError": true,
+        }));
+    }
+
     let args = params
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
     let outcome: anyhow::Result<String> = match name {
         "agentum_list_sessions" => tool_list_sessions(state).await,
+        "agentum_spawn_session" => tool_spawn_session(state, &args).await,
         "agentum_list_worktrees" => tool_list_worktrees().await,
         "agentum_send_message" => tool_send_message(state, &args).await,
         "agentum_check_messages" => tool_check_messages(state, &args).await,
@@ -377,6 +472,70 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
             "isError": true,
         }),
     })
+}
+
+/// Spawn a new agent session inside agentum — a thin view over
+/// [`super::sessions::create_and_spawn_session`] (the same create+launch path the
+/// `/create`+`/start` routes use). Lets one agent delegate to a sibling agent.
+async fn tool_spawn_session(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    use agentum_core::NewSession;
+
+    let name = args
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `name`"))?;
+    let workdir = args
+        .get("workdir")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
+    let tool = args
+        .get("tool")
+        .and_then(Value::as_str)
+        .unwrap_or("claude");
+    let model = args
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let mut flags: Vec<String> = args
+        .get("flags")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    // YOLO is the canonical marker regardless of tool — the adapter translates
+    // it to the per-tool spelling at launch (see executor::translate_yolo_marker).
+    if args.get("yolo").and_then(Value::as_bool).unwrap_or(false)
+        && !flags.iter().any(|f| f == agentum_executor::YOLO_MARKER)
+    {
+        flags.push(agentum_executor::YOLO_MARKER.to_string());
+    }
+
+    let new = NewSession {
+        name: name.to_string(),
+        workdir: workdir.to_string(),
+        tool: tool.to_string(),
+        model,
+        flags,
+        card_id: None,
+        worktree_path: None,
+        worktree_branch: None,
+        worktree_base_ref: None,
+    };
+
+    let session = super::sessions::create_and_spawn_session(state, new, None)
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn session: {e}"))?;
+    Ok(serde_json::to_string_pretty(&json!({
+        "id": session.id.to_string(),
+        "name": session.name,
+        "tool": session.tool,
+        "status": format!("{:?}", session.status),
+        "workdir": session.workdir,
+    }))?)
 }
 
 async fn tool_list_sessions(state: &AppState) -> anyhow::Result<String> {
@@ -605,11 +764,21 @@ async fn tool_harness_log_decision(args: &Value) -> anyhow::Result<String> {
 mod tests {
     use super::*;
 
+    fn tool_names(orchestration_enabled: bool) -> Vec<String> {
+        tool_specs(orchestration_enabled)
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t.get("name").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect()
+    }
+
     #[test]
     fn tool_catalog_is_well_formed() {
         // Every advertised tool needs name + description + object inputSchema,
         // or agents reject the listing.
-        let tools = tool_specs();
+        let tools = tool_specs(true);
         let arr = tools.as_array().expect("tools is an array");
         assert!(!arr.is_empty());
         for t in arr {
@@ -621,13 +790,24 @@ mod tests {
 
     #[test]
     fn list_sessions_is_in_the_catalog() {
-        let tools = tool_specs();
-        let names: Vec<&str> = tools
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|t| t.get("name").and_then(Value::as_str))
-            .collect();
-        assert!(names.contains(&"agentum_list_sessions"));
+        // A non-orchestration tool is present regardless of the gate.
+        assert!(tool_names(true).contains(&"agentum_list_sessions".to_string()));
+        assert!(tool_names(false).contains(&"agentum_list_sessions".to_string()));
+    }
+
+    #[test]
+    fn orchestration_tools_are_gated_off_the_catalog() {
+        // Enabled: the mailbox + task DAG tools are advertised.
+        let on = tool_names(true);
+        for t in ORCHESTRATION_TOOLS {
+            assert!(on.contains(&t.to_string()), "{t} should be listed when enabled");
+        }
+        // Disabled: none of them are, but the rest of the catalog survives.
+        let off = tool_names(false);
+        for t in ORCHESTRATION_TOOLS {
+            assert!(!off.contains(&t.to_string()), "{t} must be hidden when disabled");
+        }
+        assert!(off.contains(&"agentum_list_worktrees".to_string()));
+        assert!(off.len() + ORCHESTRATION_TOOLS.len() == on.len());
     }
 }

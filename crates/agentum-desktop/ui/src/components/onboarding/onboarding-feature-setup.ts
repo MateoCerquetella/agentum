@@ -7,9 +7,9 @@ import type {
 import {
   COMPUTER_USE_SKILL_NAME,
   AGENTUM_CLI_SKILL_NAME,
-  ORCHESTRATION_SKILL_NAME,
   buildAgentFeatureSkillInstallCommand
 } from '@/lib/agent-feature-install-commands'
+import { setOrchestrationSettings } from '@/runtime/agentum-server-client'
 import { BROWSER_USE_ENABLED_STORAGE_KEY } from '@/lib/browser-use-setup-state'
 import { e2eConfig } from '@/lib/e2e-config'
 import { showAgentumCliRegistrationPromptToast } from '@/lib/agent-skill-cli-prerequisite'
@@ -36,10 +36,13 @@ export const ONBOARDING_FEATURE_SETUP_IDS: readonly OnboardingFeatureSetupId[] =
   'orchestration'
 ]
 
-const FEATURE_SKILL_NAMES: Record<OnboardingFeatureSetupId, string> = {
+// Browser Use and Computer Use still install agent skills; Orchestration does
+// NOT — it's an agentum MCP capability toggled server-side (see the orchestration
+// handling in `runOnboardingFeatureSetup`), so it contributes no skill to the
+// install command.
+const FEATURE_SKILL_NAMES: Partial<Record<OnboardingFeatureSetupId, string>> = {
   browserUse: AGENTUM_CLI_SKILL_NAME,
-  computerUse: COMPUTER_USE_SKILL_NAME,
-  orchestration: ORCHESTRATION_SKILL_NAME
+  computerUse: COMPUTER_USE_SKILL_NAME
 }
 
 const FEATURE_TELEMETRY_IDS: Record<
@@ -75,6 +78,8 @@ export type OnboardingFeatureSetupDeps = {
   setStorageItem: (key: string, value: string) => void
   removeStorageItem: (key: string) => void
   notifyOrchestrationStateChanged: () => void
+  /** Write the server-side orchestration gate (the real on/off switch). */
+  setOrchestrationEnabledOnServer: (enabled: boolean) => Promise<void>
 }
 
 export function hasSelectedOnboardingFeatureSetup(
@@ -98,9 +103,9 @@ export function buildOnboardingFeatureSetupClipboardText(
 export function buildOnboardingFeatureSetupSkillCommand(
   selection: OnboardingFeatureSetupSelection
 ): string | null {
-  const skillNames = selectedOnboardingFeatureSetupIds(selection).map(
-    (id) => FEATURE_SKILL_NAMES[id]
-  )
+  const skillNames = selectedOnboardingFeatureSetupIds(selection)
+    .map((id) => FEATURE_SKILL_NAMES[id])
+    .filter((name): name is string => Boolean(name))
   if (skillNames.length === 0) {
     return null
   }
@@ -153,7 +158,10 @@ export function createOnboardingFeatureSetupDeps(): OnboardingFeatureSetupDeps {
     openComputerUsePermissionSetup: () => api.computerUsePermissions.openSetup(),
     setStorageItem: (key, value) => localStorage.setItem(key, value),
     removeStorageItem: (key) => localStorage.removeItem(key),
-    notifyOrchestrationStateChanged: notifyOrchestrationSetupStateChanged
+    notifyOrchestrationStateChanged: notifyOrchestrationSetupStateChanged,
+    setOrchestrationEnabledOnServer: async (enabled) => {
+      await setOrchestrationSettings(enabled)
+    }
   }
 }
 
@@ -179,11 +187,19 @@ export async function runOnboardingFeatureSetup(
   let computerUsePermissionsOpened = false
 
   deps.setStorageItem(BROWSER_USE_ENABLED_STORAGE_KEY, selection.browserUse ? '1' : '0')
+  // Orchestration is an MCP capability gated server-side; the localStorage key is
+  // only a cache so the Settings toggle paints synchronously. Write the cache +
+  // notify first (so the UI is responsive), then push the real flag to the server.
   deps.setStorageItem(ORCHESTRATION_ENABLED_STORAGE_KEY, selection.orchestration ? '1' : '0')
   if (selection.orchestration) {
     deps.removeStorageItem(ORCHESTRATION_SETUP_DISMISSED_STORAGE_KEY)
   }
   deps.notifyOrchestrationStateChanged()
+  try {
+    await deps.setOrchestrationEnabledOnServer(selection.orchestration)
+  } catch (error) {
+    warnings.push({ featureId: 'orchestration', message: formatFeatureSetupError(error) })
+  }
 
   if (selectedIds.length === 0) {
     return {
@@ -196,28 +212,33 @@ export async function runOnboardingFeatureSetup(
     }
   }
 
-  try {
-    const status = await deps.getCliStatus()
-    if (!status.supported) {
-      warnings.push({
-        featureId: 'cli',
-        message: status.detail ?? 'Agentum CLI registration is not available on this platform.'
-      })
-    } else if (status.state !== 'installed' || !status.pathConfigured) {
-      await deps.showCliRegistrationPrompt?.()
-      const next = await deps.installCli()
-      cliTouched = true
-      if (next.state !== 'installed') {
+  // CLI registration only matters for skill-backed features (Browser Use /
+  // Computer Use). Orchestration is an MCP and needs no CLI, so skip this when
+  // nothing is being installed.
+  if (skillInstallCommand !== null) {
+    try {
+      const status = await deps.getCliStatus()
+      if (!status.supported) {
         warnings.push({
           featureId: 'cli',
-          message: next.detail ?? 'Agentum CLI registration needs attention.'
+          message: status.detail ?? 'Agentum CLI registration is not available on this platform.'
         })
-      } else if (!next.pathConfigured && next.detail) {
-        warnings.push({ featureId: 'cli', message: next.detail })
+      } else if (status.state !== 'installed' || !status.pathConfigured) {
+        await deps.showCliRegistrationPrompt?.()
+        const next = await deps.installCli()
+        cliTouched = true
+        if (next.state !== 'installed') {
+          warnings.push({
+            featureId: 'cli',
+            message: next.detail ?? 'Agentum CLI registration needs attention.'
+          })
+        } else if (!next.pathConfigured && next.detail) {
+          warnings.push({ featureId: 'cli', message: next.detail })
+        }
       }
+    } catch (error) {
+      warnings.push({ featureId: 'cli', message: formatFeatureSetupError(error) })
     }
-  } catch (error) {
-    warnings.push({ featureId: 'cli', message: formatFeatureSetupError(error) })
   }
 
   if (selection.computerUse) {

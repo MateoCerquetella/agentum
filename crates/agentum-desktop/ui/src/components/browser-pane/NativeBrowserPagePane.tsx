@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Globe, Loader2, RefreshCw } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Globe, Loader2, MessageSquarePlus, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/tauri'
 import { useAppStore } from '@/store'
@@ -10,6 +10,10 @@ import {
   redactKagiSessionToken
 } from '../../../../shared/browser-url'
 import BrowserAddressBar from './BrowserAddressBar'
+import {
+  isNativeBrowserOverlayOpen,
+  useNativeBrowserOverlayOpen
+} from './native-browser-overlay-suppression'
 
 type BrowserTabPageState = Partial<
   Pick<
@@ -92,6 +96,10 @@ export default function NativeBrowserPagePane({
   const browserTabUrlRef = useRef(browserTab.url)
   browserTabUrlRef.current = browserTab.url
   const hasPage = isNavigableUrl(browserTab.url)
+  // A native child webview always paints ABOVE the DOM, so any open overlay
+  // (dropdown/menu/dialog/popover/select) would be hidden behind the page. Hide
+  // the webview while one is open and restore it when they all close.
+  const overlayOpen = useNativeBrowserOverlayOpen()
 
   const measureBounds = useCallback(():
     | { x: number; y: number; width: number; height: number }
@@ -248,6 +256,13 @@ export default function NativeBrowserPagePane({
       }
       createdRef.current = true
       lastBoundsRef.current = bounds
+      // If an overlay opened during the async open, honor it immediately so the
+      // freshly-shown webview doesn't flash over the menu/dialog.
+      if (isNativeBrowserOverlayOpen()) {
+        void nativeBrowser
+          .webviewSetVisible({ browserPageId: browserTab.id, visible: false })
+          .catch(() => {})
+      }
     }
     void ensureOpen().catch((error: unknown) => {
       if (!cancelled) {
@@ -271,6 +286,22 @@ export default function NativeBrowserPagePane({
       }
     }
   }, [browserTab.id, hasPage, isActive, measureBounds])
+
+  // Toggle the native webview's visibility as overlays open/close. Separate from
+  // the lifecycle effect above (which owns mount/unmount) so a menu or dialog
+  // opening over the page hides the webview — DOM overlays can't render above a
+  // native webview — and restores it when the last overlay closes.
+  useEffect(() => {
+    if (!createdRef.current) {
+      // Not opened yet; the lifecycle effect's ensureOpen applies the correct
+      // initial visibility (incl. the overlay-open guard) when it creates it.
+      return
+    }
+    const shouldShow = !overlayOpen && isActive && hasPage
+    void nativeBrowser
+      .webviewSetVisible({ browserPageId: browserTab.id, visible: shouldShow })
+      .catch(() => {})
+  }, [overlayOpen, isActive, hasPage, browserTab.id])
 
   useEffect(() => {
     if (isActive && !hasPage) {
@@ -319,6 +350,21 @@ export default function NativeBrowserPagePane({
           onNavigate={navigateToUrl}
           inputRef={addressBarInputRef}
         />
+        {/* Annotate: inject the in-page picker (orca-style). Lives on the native
+            toolbar because this — not BrowserPane — is the rendered pane. */}
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-7 w-7"
+          disabled={!hasPage || !isNavigableUrl(browserTab.url)}
+          title="Annotate page element"
+          aria-label="Annotate page element"
+          onClick={() =>
+            void api.browser.inpageAnnotate({ browserPageId: browserTab.id, enabled: true })
+          }
+        >
+          <MessageSquarePlus className="size-4" />
+        </Button>
       </div>
       <div ref={containerRef} className="relative min-h-0 flex-1 overflow-hidden bg-background">
         {!hasPage ? (

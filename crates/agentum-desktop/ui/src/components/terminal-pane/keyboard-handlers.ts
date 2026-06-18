@@ -3,6 +3,7 @@ import { api } from '@/tauri'
  * precedence in one ordered handler so shell input, pane commands, search, and
  * split actions do not race across separate window listeners. */
 import { useEffect } from 'react'
+import type { IDisposable } from '@xterm/xterm'
 import type { PaneManager } from '@/lib/pane-manager/pane-manager'
 import type { PtyTransport } from './pty-transport'
 import { resolveTerminalShortcutAction } from './terminal-shortcut-policy'
@@ -17,6 +18,10 @@ import { resolveSplitCwd, type PaneCwdMap } from './resolve-split-cwd'
 import { keyboardEventBelongsToScope } from './terminal-keyboard-scope'
 import { normalizeSelectedTextForFileSearch } from '@/lib/file-search-selection'
 import { splitWebRuntimeTerminal } from '@/runtime/web-runtime-session'
+import { useAppStore } from '@/store'
+import { isExplicitAgentStatusFresh } from '@/lib/agent-status'
+import { makePaneKey } from '../../../../shared/stable-pane-id'
+import { AGENT_STATUS_STALE_AFTER_MS } from '../../../../shared/agent-status-types'
 
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
@@ -93,9 +98,17 @@ export function matchFileSearchShortcut(
 
 type KeyboardHandlersDeps = {
   isActive: boolean
+  /** Owning tab id — combined with the active pane's leafId to look up whether
+   *  an agent is running in the focused pane (drives Option/Ctrl+Arrow encoding). */
+  tabId: string
   keyboardScopeRef: React.RefObject<HTMLElement | null>
   managerRef: React.RefObject<PaneManager | null>
   paneTransportsRef: React.RefObject<Map<number, PtyTransport>>
+  // Per-pane bindings, used by the "force redraw" shortcut to nudge the active
+  // pane's agent into a full repaint. The lifecycle hook stores them widened to
+  // IDisposable (its callers only need dispose); the concrete binding carries
+  // an optional `forceRedraw`, which we read off via a narrow cast below.
+  panePtyBindingsRef: React.RefObject<Map<number, IDisposable>>
   paneCwdRef: React.RefObject<PaneCwdMap>
   /** Worktree-root cwd used when OSC 7 and pty.getCwd both fail. */
   fallbackCwd: string
@@ -117,9 +130,11 @@ type KeyboardHandlersDeps = {
 
 export function useTerminalKeyboardShortcuts({
   isActive,
+  tabId,
   keyboardScopeRef,
   managerRef,
   paneTransportsRef,
+  panePtyBindingsRef,
   paneCwdRef,
   fallbackCwd,
   expandedPaneIdRef,
@@ -212,13 +227,28 @@ export function useTerminalKeyboardShortcuts({
         return
       }
 
+      // Why: only Option/Ctrl+Arrow word-nav cares whether an agent owns the
+      // pane (it changes the cursor-key encoding), so resolve the live agent
+      // status just for that chord instead of on every keystroke.
+      let paneRunsAgent = false
+      if ((e.altKey || e.ctrlKey) && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        const activePane = manager.getActivePane() ?? manager.getPanes()[0]
+        if (activePane) {
+          const entry =
+            useAppStore.getState().agentStatusByPaneKey[makePaneKey(tabId, activePane.leafId)]
+          paneRunsAgent =
+            entry != null && isExplicitAgentStatusFresh(entry, Date.now(), AGENT_STATUS_STALE_AFTER_MS)
+        }
+      }
+
       const action = resolveTerminalShortcutAction(
         e,
         isMac,
         macOptionAsAltRef.current,
         optionKeyLocation,
         isWindows,
-        keybindings
+        keybindings,
+        paneRunsAgent
       )
       if (!action) {
         return
@@ -274,6 +304,26 @@ export function useTerminalKeyboardShortcuts({
         const pane = manager.getActivePane() ?? manager.getPanes()[0]
         if (pane) {
           pane.terminal.clear()
+        }
+        return
+      }
+
+      // Cmd+Shift+K forces the active pane's agent to fully repaint. Unlike
+      // Clear (which just wipes the local xterm grid), this nudges the server
+      // pane (SIGWINCH) so the agent overpaints cells corrupted by bytes it
+      // never drew — e.g. an OS `wall` broadcast (systemd suspend notice)
+      // written straight into the input box. No-op on the local PTY path.
+      if (action.type === 'redrawActivePane') {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        const pane = manager.getActivePane() ?? manager.getPanes()[0]
+        if (pane) {
+          // The map is typed IDisposable; the concrete binding carries the
+          // optional forceRedraw. Narrow to read it without widening the ref.
+          const binding = panePtyBindingsRef.current.get(pane.id) as
+            | { forceRedraw?: () => void }
+            | undefined
+          binding?.forceRedraw?.()
         }
         return
       }
@@ -405,9 +455,11 @@ export function useTerminalKeyboardShortcuts({
     }
   }, [
     isActive,
+    tabId,
     keyboardScopeRef,
     managerRef,
     paneTransportsRef,
+    panePtyBindingsRef,
     paneCwdRef,
     fallbackCwd,
     expandedPaneIdRef,

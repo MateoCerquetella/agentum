@@ -160,11 +160,50 @@ pub fn ui_set_shortcut_recorder_focused(value: bool) {
     let _ = value;
 }
 
-// Request/reply responses (main-initiated tab/terminal flows) and native chrome
-// ops (traffic-light sync, context menu, close confirmation) aren't ported yet.
-// These are fire-and-forget void methods, so accept and no-op.
+// The renderer's answer to a bridge-initiated `ui-request-tab-create`: it
+// created (or failed to create) the browser tab and reports the new page id so
+// the bridge's `open` op can return it to the MCP/HTTP/CLI caller. Resolves the
+// matching oneshot parked in `TabCreateRegistry`; an unknown `request_id` is a
+// no-op (the request likely timed out). Tauri maps the camelCase JS keys
+// (`requestId`/`browserPageId`) onto these snake_case params.
 #[tauri::command]
-pub fn ui_reply_tab_create() {}
+pub fn ui_reply_tab_create(
+    registry: tauri::State<'_, crate::bridge::TabCreateRegistry>,
+    request_id: String,
+    browser_page_id: Option<String>,
+    error: Option<String>,
+) {
+    let result = match (browser_page_id, error) {
+        (Some(page_id), _) => Ok(page_id),
+        (None, Some(err)) => Err(err),
+        (None, None) => Err("renderer returned neither a page id nor an error".to_string()),
+    };
+    registry.resolve(&request_id, result);
+}
+
+// The renderer's answer to a bridge-initiated browser annotation/grab op
+// (`ui-request-browser-annotations` / `-grab` / `-annotate`). `result` carries
+// the op's payload (annotation list, grabbed element, the added annotation);
+// `error` is set instead on failure. Resolves the matching oneshot in
+// `BrowserOpRegistry`. Tauri maps the camelCase JS key `requestId`.
+#[tauri::command]
+pub fn ui_reply_browser_op(
+    registry: tauri::State<'_, crate::bridge::BrowserOpRegistry>,
+    request_id: String,
+    result: Option<Value>,
+    error: Option<String>,
+) {
+    let outcome = match (result, error) {
+        (_, Some(err)) => Err(err),
+        (Some(value), None) => Ok(value),
+        (None, None) => Ok(Value::Null),
+    };
+    registry.resolve(&request_id, outcome);
+}
+
+// Request/reply responses (other main-initiated tab/terminal flows) and native
+// chrome ops (traffic-light sync, context menu, close confirmation) aren't
+// ported yet. These are fire-and-forget void methods, so accept and no-op.
 
 #[tauri::command]
 pub fn ui_reply_tab_set_profile() {}

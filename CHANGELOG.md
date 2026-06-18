@@ -4,6 +4,72 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] — 2026-06-18
+
+### Added
+- **Chat-to-features pipeline (011).** An agnostic chat → GitHub/Linear/board →
+  harness flow: a `TaskSink` seam with GitHub Issues and Linear Issues sinks,
+  preflight-driven provider selection, and a harness backlog feed.
+- **Agent-driven CDP browser in the pane (009c-3).** A Chrome DevTools Protocol
+  browser renders inside agentum's pane, drivable over the MCP layer, with an
+  in-page element-annotate picker.
+- **Orchestration MCP toggle.** The orchestration MCP surface (inter-agent
+  mailbox + task DAG) is now gated behind a server-side setting.
+- **New-workspace session picker.** Creating a workspace lands on the session
+  picker instead of auto-launching an agent.
+- **MCP spawn-session tool** plus a delete-session tmux fix and native-browser
+  overlay z-order handling.
+
+### Fixed
+- **Terminal pane no longer stays corrupted after a system suspend.** An OS
+  `wall` broadcast (systemd's "system will suspend now!" notice) written into
+  the pane is now healed by forcing the agent to fully repaint (a SIGWINCH
+  nudge) on reconnect — automatically, plus a manual "force redraw" shortcut
+  (desktop Cmd/Ctrl+Shift+K, TUI Ctrl-K R). (#20)
+- **Option/Ctrl+Arrow word navigation** works inside agents, and **Shift+Enter**
+  inserts a newline in shells and agents.
+- **Store:** `setting_get_bool` falls back to its default on non-canonical
+  values.
+
+### Performance
+- **Faster desktop startup.** Markdown and xterm are deferred off the eager
+  startup chunk, with a size guard + chunk hygiene to lock in the win.
+
+## [0.15.0] — 2026-06-18
+
+### Added
+- **In-app auto-update.** The desktop app now checks for a new release on launch
+  and surfaces an update card in the bottom-right corner. One click downloads
+  the signed release, shows progress, and relaunches into the new version — no
+  more manually downloading and replacing the app. Powered by
+  `tauri-plugin-updater` against a signed `latest.json` published with every
+  release; the existing bottom-right `UpdateCard` now drives real
+  check/download/install commands instead of no-op stubs.
+
+## [0.14.9] — 2026-06-18
+
+### Added
+- **CDP browser + MCP annotate.** New `cdp_browser.rs` and
+  `routes/cdp_browser.rs` wire a Chrome DevTools Protocol browser pane through
+  the MCP layer, replacing the old native browser page pane with an
+  agent-drivable browser.
+- **In-page annotate picker (orca-style).** A floating element-selector pill
+  renders over the webview, letting you pick elements on the page and annotate
+  them via MCP `annotate`.
+
+### Fixed
+- **Session 409 leaking into git panels.** Stopped an HTTP 409 conflict from
+  bleeding into the sidebar Git diff/panels view when sessions were out of sync.
+- **Grab result delivered via image-src, not fetch.** The browser element
+  grabber now reads through the image element's `src` attribute, fixing
+  cross-origin issues that broke the old `fetch()` path.
+- **Annotate icon on the native toolbar.** The annotation button now lives on
+  the real native browser toolbar instead of a floating overlay.
+- **WKWebView UA fix.** The browser MCP sends a proper User-Agent so web pages
+  don't redirect to mobile views.
+- **Security: guarded tmux kill-session against option injection.** Added `--`
+  guard to `tmux kill-session` to prevent option injection attacks.
+
 ## [0.14.3] — 2026-06-15
 
 ### Added
