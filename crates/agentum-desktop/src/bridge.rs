@@ -120,10 +120,14 @@ impl GrabRegistry {
 fn grab_extractor_script(selector: &str, request_id: &str) -> String {
     let sel = serde_json::Value::String(selector.to_string());
     let rid = serde_json::Value::String(request_id.to_string());
+    // Deliver via an Image src GET (WebKit routes subresource loads to the
+    // custom scheme handler; it blocks fetch()/XHR to custom schemes). The
+    // payload rides in the `p` query param, so snippets are capped to keep the
+    // URL bounded. Chunking would lift the cap; not needed for element metadata.
     format!(
         r#"(function(){{
   var SEL={sel}, RID={rid};
-  function send(o){{o.requestId=RID;try{{fetch('agentumgrab://grab/result',{{method:'POST',headers:{{'content-type':'application/json'}},body:JSON.stringify(o)}}).catch(function(){{}});}}catch(e){{}}}}
+  function send(o){{o.requestId=RID;try{{var img=new Image();img.src='agentumgrab://grab/result?p='+encodeURIComponent(JSON.stringify(o));}}catch(e){{}}}}
   try{{
     var el=document.querySelector(SEL);
     if(!el){{send({{error:'no element matches selector '+SEL}});return;}}
@@ -134,8 +138,8 @@ fn grab_extractor_script(selector: &str, request_id: &str) -> String {
       page:{{url:location.href,title:document.title,viewport:{{width:innerWidth,height:innerHeight}},scrollX:scrollX,scrollY:scrollY,devicePixelRatio:devicePixelRatio}},
       target:{{
         tagName:el.tagName.toLowerCase(),selector:SEL,
-        textSnippet:(el.innerText||el.textContent||'').trim().slice(0,600),
-        htmlSnippet:el.outerHTML.slice(0,4000),
+        textSnippet:(el.innerText||el.textContent||'').trim().slice(0,300),
+        htmlSnippet:el.outerHTML.slice(0,1200),
         cssClasses:el.className&&el.className.toString?el.className.toString():'',
         attributes:attrs,
         accessibility:{{role:el.getAttribute('role')||'',accessibleName:el.getAttribute('aria-label')||el.getAttribute('alt')||el.title||(el.innerText||'').trim().slice(0,120)}},
@@ -408,21 +412,17 @@ pub fn handle_grab_scheme(
     request: tauri::http::Request<Vec<u8>>,
     responder: tauri::UriSchemeResponder,
 ) {
-    let ack = |status: u16| -> tauri::http::Response<std::borrow::Cow<'static, [u8]>> {
-        tauri::http::Response::builder()
-            .status(status)
-            .header("Access-Control-Allow-Origin", "*")
-            .header("Access-Control-Allow-Methods", "POST, OPTIONS")
-            .header("Access-Control-Allow-Headers", "content-type")
-            .body(std::borrow::Cow::Owned(Vec::new()))
-            .unwrap()
-    };
-    // CORS preflight for the guest's POST.
-    if request.method() == tauri::http::Method::OPTIONS {
-        responder.respond(ack(204));
-        return;
-    }
-    if let Ok(v) = serde_json::from_slice::<Value>(request.body()) {
+    // The extractor delivers via `new Image().src='agentumgrab://grab/result?p=<json>'`
+    // (WebKit routes subresource loads to the scheme handler but blocks fetch to
+    // custom schemes), so the payload is in the URL query, not a body.
+    let query = request.uri().query().unwrap_or("");
+    let raw = query
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("p="))
+        .unwrap_or("");
+    let decoded = percent_decode(raw);
+    log::info!("agentumgrab hit ({} bytes)", decoded.len());
+    if let Ok(v) = serde_json::from_str::<Value>(&decoded) {
         if let Some(id) = v.get("requestId").and_then(Value::as_str) {
             if let Some(err) = v.get("error").and_then(Value::as_str) {
                 registry.resolve(id, Err(err.to_string()));
@@ -431,7 +431,39 @@ pub fn handle_grab_scheme(
             }
         }
     }
-    responder.respond(ack(200));
+    // A 1x1 transparent GIF so the Image load resolves cleanly (the data was
+    // already captured from the URL).
+    const GIF_1PX: &[u8] = &[
+        0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2C, 0x00, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B,
+    ];
+    let resp = tauri::http::Response::builder()
+        .status(200)
+        .header("content-type", "image/gif")
+        .body(std::borrow::Cow::Borrowed(GIF_1PX))
+        .unwrap();
+    responder.respond(resp);
+}
+
+/// Decode `%XX` percent-escapes (what `encodeURIComponent` emits). Sufficient
+/// for the grab payload's JSON; unknown escapes pass through unchanged.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 3 <= bytes.len() {
+            if let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 impl DesktopBridge for TauriBridge {
