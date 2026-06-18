@@ -34,6 +34,7 @@ export interface AgentumApi {
     cancelGrab: ApiMethod
     captureSelectionScreenshot: ApiMethod
     extractHoverPayload: ApiMethod
+    inpageAnnotate: ApiMethod
     notifyActiveTabChanged: ApiMethod
     openDevTools: ApiMethod
     sessionClearDefaultCookies: ApiMethod
@@ -55,6 +56,7 @@ export interface AgentumApi {
     onGrabActionShortcut: ApiEvent
     onGrabModeToggle: ApiEvent
     onGuestLoadFailed: ApiEvent
+    onInpageAnnotation: ApiEvent
     onNavigationUpdate: ApiEvent
     onOpenLinkInAgentumTab: ApiEvent
     onPaneFocus: ApiEvent

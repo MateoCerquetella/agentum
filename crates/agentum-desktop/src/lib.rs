@@ -40,8 +40,8 @@ pub fn run() {
     let managed_grab_registry = grab_registry.clone();
 
     tauri::Builder::default()
-        .register_asynchronous_uri_scheme_protocol("agentumgrab", move |_ctx, request, responder| {
-            bridge::handle_grab_scheme(&scheme_grab_registry, request, responder);
+        .register_asynchronous_uri_scheme_protocol("agentumgrab", move |ctx, request, responder| {
+            bridge::handle_grab_scheme(ctx.app_handle(), &scheme_grab_registry, request, responder);
         })
         .plugin(
             tauri_plugin_log::Builder::default()
@@ -337,6 +337,7 @@ pub fn run() {
             browser_native::browser_webview_set_visible,
             browser_native::browser_webview_close,
             browser_native::browser_webview_state,
+            browser_native::browser_inpage_annotate,
             browser::browser_unregister_guest,
             browser::browser_open_dev_tools,
             browser::browser_cancel_download,

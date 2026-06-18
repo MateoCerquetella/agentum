@@ -1610,6 +1610,39 @@ export function useIpcEvents(): void {
       })
     )
 
+    // Why: the in-page annotate UI (injected into the guest page) submits a
+    // user annotation over the agentumgrab:// scheme; the Rust handler forwards
+    // it here as `browser-inpage-annotation`. Add it to the store so it shows in
+    // the tray and `annotations` returns it — same envelope as MCP `annotate`.
+    unsubs.push(
+      api.browser.onInpageAnnotation((data) => {
+        try {
+          const pageId = typeof data?.pageId === 'string' ? data.pageId : null
+          if (!pageId || !data?.payload) {
+            return
+          }
+          const store = useAppStore.getState()
+          const intents = ['fix', 'change', 'question', 'approve']
+          const intent = intents.includes(data?.intent) ? data.intent : 'change'
+          const id =
+            typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+              ? crypto.randomUUID()
+              : `ann-${pageId}-${Date.now()}`
+          store.addBrowserPageAnnotation({
+            id,
+            browserPageId: pageId,
+            comment: String(data?.comment ?? ''),
+            intent,
+            priority: 'important',
+            createdAt: new Date().toISOString(),
+            payload: { ...data.payload, screenshot: null }
+          })
+        } catch {
+          // Best-effort: a malformed in-page submission shouldn't break the bus.
+        }
+      })
+    )
+
     unsubs.push(
       api.ui.onRequestTabSetProfile((data) => {
         try {

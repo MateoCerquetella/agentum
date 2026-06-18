@@ -3640,7 +3640,16 @@ function BrowserPagePane({
     (nextIntent: GrabIntent): void => {
       recordFeatureInteraction('browser-grab')
       if (nextIntent === 'annotate') {
+        // Why: the legacy React grab flow drives Electron <webview> APIs that
+        // don't exist on Tauri's native webview. Instead inject the in-page
+        // picker (renders ON TOP of the native webview content, unlike React UI
+        // which paints behind it); annotations flow back to the store via the
+        // agentumgrab:// scheme → `browser-inpage-annotation`.
         recordFeatureInteraction('browser-annotations')
+        setGrabIntent('annotate')
+        setBrowserAnnotationTrayOpen(true)
+        void api.browser.inpageAnnotate({ browserPageId: browserTab.id, enabled: true })
+        return
       }
       setGrabIntent(nextIntent)
       if (nextIntent === 'copy') {

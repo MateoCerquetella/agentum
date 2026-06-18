@@ -436,22 +436,28 @@ fn js_string(s: &str) -> String {
 /// Always answers with permissive CORS so the guest `fetch` (cross-origin from
 /// the page's perspective) isn't blocked.
 pub fn handle_grab_scheme(
+    app: &AppHandle,
     registry: &GrabRegistry,
     request: tauri::http::Request<Vec<u8>>,
     responder: tauri::UriSchemeResponder,
 ) {
-    // The extractor delivers via `new Image().src='agentumgrab://grab/result?p=<json>'`
+    // The extractor/in-page UI deliver via `new Image().src='agentumgrab://…?p=<json>'`
     // (WebKit routes subresource loads to the scheme handler but blocks fetch to
     // custom schemes), so the payload is in the URL query, not a body.
+    let uri = request.uri().to_string();
     let query = request.uri().query().unwrap_or("");
     let raw = query
         .split('&')
         .find_map(|kv| kv.strip_prefix("p="))
         .unwrap_or("");
     let decoded = percent_decode(raw);
-    log::info!("agentumgrab hit ({} bytes)", decoded.len());
     if let Ok(v) = serde_json::from_str::<Value>(&decoded) {
-        if let Some(id) = v.get("requestId").and_then(Value::as_str) {
+        if uri.contains("annotation/add") {
+            // User-initiated in-page annotation → hand to the renderer to add to
+            // its store (it shows in the tray and `annotations` returns it).
+            let _ = app.emit_to("main", "browser-inpage-annotation", v);
+        } else if let Some(id) = v.get("requestId").and_then(Value::as_str) {
+            // Request/response for a bridge `grab`.
             if let Some(err) = v.get("error").and_then(Value::as_str) {
                 registry.resolve(id, Err(err.to_string()));
             } else if let Some(payload) = v.get("payload") {
