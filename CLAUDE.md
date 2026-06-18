@@ -42,24 +42,28 @@ is where the documentation and labels live.
    `.github/ISSUE_TEMPLATE/` (Summary, Motivation, Proposed approach,
    Acceptance criteria). Label it with `type/*` + `area/*` + `priority/*`
    (run `.github/labels.sh` once to sync the label set).
+**Branch model:** `develop` (feature integration) → `staging` (QA) → `main`
+(release, default branch). Feature work bases on `develop`; promotions move it
+downstream toward `main`.
+
 2. **Always work in a dedicated git worktree** — never `git checkout` a new
    branch in the shared checkout (many agents run concurrently here; in-place
-   checkout disturbs their working trees). Base off `staging` (the integration
-   branch):
-   `git worktree add ../agentum-<kebab-desc> -b <type>/<kebab-desc> origin/staging`.
+   checkout disturbs their working trees). Base off `develop`:
+   `git worktree add ../agentum-<kebab-desc> -b <type>/<kebab-desc> origin/develop`.
    Clean up with `git worktree remove <path>` after the PR merges.
 3. **Implement + verify** (see "Critical: rebuild rhythm").
-4. **Open a PR into `staging`** (`gh pr create --base staging`) with
-   `Closes #<issue>` in the body **and** the commit message. Because `staging`
+4. **Open a PR into `develop`** (`gh pr create --base develop`) with
+   `Closes #<issue>` in the body **and** the commit message. Because `develop`
    isn't the default branch, this does **not** close the issue on merge — that's
    intentional (see step 5). The `.github/pull_request_template.md` enforces the link.
-5. **QA gate on staging, then release.** A merge to `staging` deploys to the
-   staging environment; the ticket goes to **QA**, not "done". Label the issue
-   `status/qa` and keep it open. When QA passes → relabel `status/qa-pass`, then
-   **both** tag a release from staging (`vX.Y.Z`, the repo's release convention)
-   **and** promote `staging` → `main`; the `Closes #<issue>` fires when the commit
-   reaches `main` (the default branch), closing the issue. When QA fails →
-   `status/qa-fail` + findings, loop back to step 2. Never close at the staging merge.
+5. **Promote develop → staging (QA) → main (release).** A merge to `develop` is
+   integration, not "done". Promote `develop` → `staging` to deploy to the staging
+   environment; the ticket enters **QA** — label the issue `status/qa`, keep it
+   open. When QA passes → relabel `status/qa-pass`, then release: promote
+   `staging` → `main` and tag `vX.Y.Z` (the repo's release convention); the
+   `Closes #<issue>` fires when the commit reaches `main` (the default branch),
+   closing the issue. When QA fails → `status/qa-fail` + findings, loop back to
+   step 2. Never close at the develop or staging merge.
 
 Claude can drive the whole flow with the **`/ship <description>`** slash command
 (`.claude/commands/ship.md`): it creates the labeled issue, branches,
@@ -399,6 +403,42 @@ time, blocking advancement on a red gate.
   an unmistakable verification-gate banner, the `.harness/` file viewer, and
   a live event log, all fed by `runtime/harness-client.ts` over the embedded
   loopback server. A runnable example lives in `examples/harness-demo/`.
+
+### SDD → Linear → QA pipeline (spec 012)
+
+The full automated loop a user runs is: SDD intake (Chat page) → ticket created
+in the tracker (Todo) → agent codes it (In Progress) → unit gate green (Ready to
+Test) → browser QA gate green → ticket Done. The pieces:
+
+- **Two-phase gate** in `harness::drive_inner`: the unit-test gate (`verify.sh`,
+  existing) then the **browser QA gate** (`qa.sh`, new). BOTH must be green to
+  advance; a red gate at either phase hands the error back to the agent and
+  retries (shared `handle_gate_failure`). A missing `qa.sh` is a pass so non-web
+  projects aren't blocked. `scaffold_harness` writes a `qa.sh` template that
+  shows how to drive the `browser-verification-loop` skill for a web surface.
+- **QA gate as a spawned agent (012b)**: `FeatureList.qa_mode` (`auto`/`script`/
+  `agent`, default `auto`) picks how the QA gate runs. `agent` (or `auto` when no
+  `qa.sh` and `AGENTUM_BROWSER_VERIFY` is set) makes `drive_inner` call
+  `run_qa_agent_gate`, which spawns a browser-verification-loop agent
+  (`spawn_qa_agent`) that writes a verdict file `.agentum-harness/qa/<id>.json`
+  (`{"passed":bool,"summary":...}`); the harness reads it after the agent settles.
+  A missing/garbled verdict FAILS the gate (inconclusive never advances to Done).
+  `qa_agent_tool` overrides the QA CLI (default = the feature agent).
+- **New feature state** `FeatureState::ReadyToTest` (between `Verifying` and
+  `Done`) — set by `run_qa_once`; the in-app board has a "Ready to Test" column.
+- **Tracker transitions** (`task_sink::apply_tracker_transition`,
+  `TrackerPhase`): lifecycle events drive the ticket's state — Coding→InProgress,
+  unit-green→ReadyToTest, QA-green→Done; planning sets Todo. Linear uses
+  workflow-state transitions (`linear::transition_issue` + `LinearStateMap`,
+  resolved by name); the internal Board moves card `status`
+  (todo/doing/review/done); GitHub is a logged no-op for now. **Best-effort by
+  contract**: a tracker hiccup is logged (`HarnessEvent::Log`), never halts the
+  run. Each `Feature` carries `tracker_provider`/`tracker_url`, threaded from the
+  goal's task sink in `routes::board_goals::plan_goal_harness`.
+- **Linear state names** are configurable: `LinearStateMap` defaults to
+  Todo / In Progress / Ready to Test / Done, overridable via the `linear.json`
+  `state_map` (written by Settings) and `AGENTUM_LINEAR_STATE_*` env (highest
+  precedence). A missing target state is a logged skip, not an error.
 
 ---
 

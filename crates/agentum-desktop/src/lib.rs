@@ -513,6 +513,8 @@ pub fn run() {
             linear::linear_test_connection,
             linear::linear_connect,
             linear::linear_select_workspace,
+            linear::linear_get_state_map,
+            linear::linear_set_state_map,
             linear::linear_create_issue,
             linear::linear_update_issue,
             linear::linear_add_issue_comment,

@@ -436,12 +436,13 @@ export type UISlice = {
   acknowledgedAgentsByPaneKey: Record<string, number>
   acknowledgeAgents: (paneKeys: string[]) => void
   unacknowledgeAgents: (paneKeys: string[]) => void
-  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness'
-  previousViewBeforeTasks: 'terminal' | 'settings' | 'activity' | 'skills' | 'harness'
-  previousViewBeforeSettings: 'terminal' | 'tasks' | 'activity' | 'skills' | 'harness'
-  previousViewBeforeActivity: 'terminal' | 'settings' | 'tasks' | 'skills' | 'harness'
-  previousViewBeforeSkills: 'terminal' | 'settings' | 'tasks' | 'activity' | 'harness'
-  previousViewBeforeHarness: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills'
+  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'host-browser' | 'goals'
+  previousViewBeforeTasks: 'terminal' | 'settings' | 'activity' | 'skills' | 'harness' | 'host-browser' | 'goals'
+  previousViewBeforeSettings: 'terminal' | 'tasks' | 'activity' | 'skills' | 'harness' | 'host-browser' | 'goals'
+  previousViewBeforeActivity: 'terminal' | 'settings' | 'tasks' | 'skills' | 'harness' | 'host-browser' | 'goals'
+  previousViewBeforeSkills: 'terminal' | 'settings' | 'tasks' | 'activity' | 'harness' | 'host-browser' | 'goals'
+  previousViewBeforeHarness: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'host-browser' | 'goals'
+  previousViewBeforeGoals: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'host-browser'
   setActiveView: (view: UISlice['activeView']) => void
   taskPageData: {
     preselectedRepoId?: string
@@ -492,6 +493,8 @@ export type UISlice = {
   closeSkillsPage: () => void
   openHarnessPage: () => void
   closeHarnessPage: () => void
+  openGoalsPage: () => void
+  closeGoalsPage: () => void
   setNewWorkspaceDraft: (draft: NonNullable<UISlice['newWorkspaceDraft']>) => void
   clearNewWorkspaceDraft: () => void
   openSettingsPage: () => void
@@ -834,6 +837,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   previousViewBeforeActivity: 'terminal',
   previousViewBeforeSkills: 'terminal',
   previousViewBeforeHarness: 'terminal',
+  previousViewBeforeGoals: 'terminal',
   setActiveView: (view) => set({ activeView: view }),
   taskPageData: {},
   taskResumeState: undefined,
@@ -1017,6 +1021,16 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   closeHarnessPage: () =>
     set((state) => ({
       activeView: state.previousViewBeforeHarness
+    })),
+  openGoalsPage: () =>
+    set((state) => ({
+      activeView: 'goals',
+      previousViewBeforeGoals:
+        state.activeView === 'goals' ? state.previousViewBeforeGoals : state.activeView
+    })),
+  closeGoalsPage: () =>
+    set((state) => ({
+      activeView: state.previousViewBeforeGoals
     })),
   setNewWorkspaceDraft: (draft) => set({ newWorkspaceDraft: draft }),
   clearNewWorkspaceDraft: () => set({ newWorkspaceDraft: null }),
