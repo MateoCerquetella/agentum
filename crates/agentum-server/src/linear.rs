@@ -14,6 +14,11 @@ use serde_json::{Value, json};
 const LINEAR_GRAPHQL: &str = "https://api.linear.app/graphql";
 const TEAMS_QUERY: &str = "query { teams(first: 2) { nodes { id name } } }";
 const ISSUE_CREATE_MUTATION: &str = "mutation($teamId: String!, $title: String!, $description: String!) { issueCreate(input: { teamId: $teamId, title: $title, description: $description }) { success issue { identifier url } } }";
+/// Resolve an issue (by UUID *or* human identifier like `ENG-42` — Linear's
+/// `issue(id:)` accepts both) to its UUID and the workflow states of its team in
+/// one round-trip, so a transition is two calls (lookup + update) at most.
+const ISSUE_STATES_QUERY: &str = "query($id: String!) { issue(id: $id) { id team { states { nodes { id name } } } } }";
+const ISSUE_UPDATE_STATE_MUTATION: &str = "mutation($id: String!, $stateId: String!) { issueUpdate(id: $id, input: { stateId: $stateId }) { success } }";
 
 #[derive(Debug, Deserialize)]
 struct StoredWorkspace {
@@ -27,6 +32,24 @@ struct LinearCreds {
     workspaces: Vec<StoredWorkspace>,
     #[serde(default)]
     selected_workspace_id: Option<String>,
+    /// Optional per-workspace override of the pipeline → workflow-state names.
+    /// Written by the desktop Settings pane; absent fields keep the default.
+    #[serde(default)]
+    state_map: Option<StoredStateMap>,
+}
+
+/// The persisted state-name overrides (Settings → Integrations → Linear). Each
+/// field is optional so a partial override is fine.
+#[derive(Debug, Default, Deserialize)]
+struct StoredStateMap {
+    #[serde(default)]
+    todo: Option<String>,
+    #[serde(default)]
+    in_progress: Option<String>,
+    #[serde(default)]
+    ready_to_test: Option<String>,
+    #[serde(default)]
+    done: Option<String>,
 }
 
 /// Path to the desktop's Linear creds file. Mirrors
@@ -149,6 +172,169 @@ pub async fn create_issue(
     parse_issue_create(&resp)
 }
 
+/// The four pipeline phases mapped onto a team's workflow-state *names*. Linear
+/// workspaces have custom states, so we resolve by name at runtime rather than
+/// hard-coding ids. Defaults to the names the user asked for; `Ready to Test`
+/// is usually a custom state (Linear ships `In Review` instead), so a missing
+/// target is a logged skip, never a run failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinearStateMap {
+    pub todo: String,
+    pub in_progress: String,
+    pub ready_to_test: String,
+    pub done: String,
+}
+
+impl Default for LinearStateMap {
+    fn default() -> Self {
+        Self {
+            todo: "Todo".into(),
+            in_progress: "In Progress".into(),
+            ready_to_test: "Ready to Test".into(),
+            done: "Done".into(),
+        }
+    }
+}
+
+impl LinearStateMap {
+    /// Resolve the effective state map: defaults → creds-file overrides
+    /// (`linear.json` `state_map`, written by Settings) → env overrides
+    /// (`AGENTUM_LINEAR_STATE_*`, highest precedence, for tests/CI). A partial
+    /// override at any layer keeps the lower layer's value.
+    pub fn from_env() -> Self {
+        let mut m = Self::default();
+        // Layer 1: persisted Settings overrides from the creds file.
+        if let Some(sm) = read_creds().state_map {
+            if let Some(v) = sm.todo.filter(|s| !s.trim().is_empty()) {
+                m.todo = v.trim().to_string();
+            }
+            if let Some(v) = sm.in_progress.filter(|s| !s.trim().is_empty()) {
+                m.in_progress = v.trim().to_string();
+            }
+            if let Some(v) = sm.ready_to_test.filter(|s| !s.trim().is_empty()) {
+                m.ready_to_test = v.trim().to_string();
+            }
+            if let Some(v) = sm.done.filter(|s| !s.trim().is_empty()) {
+                m.done = v.trim().to_string();
+            }
+        }
+        // Layer 2: env overrides (win over the creds file).
+        if let Ok(v) = std::env::var("AGENTUM_LINEAR_STATE_TODO") {
+            if !v.trim().is_empty() {
+                m.todo = v.trim().to_string();
+            }
+        }
+        if let Ok(v) = std::env::var("AGENTUM_LINEAR_STATE_IN_PROGRESS") {
+            if !v.trim().is_empty() {
+                m.in_progress = v.trim().to_string();
+            }
+        }
+        if let Ok(v) = std::env::var("AGENTUM_LINEAR_STATE_READY_TO_TEST") {
+            if !v.trim().is_empty() {
+                m.ready_to_test = v.trim().to_string();
+            }
+        }
+        if let Ok(v) = std::env::var("AGENTUM_LINEAR_STATE_DONE") {
+            if !v.trim().is_empty() {
+                m.done = v.trim().to_string();
+            }
+        }
+        m
+    }
+
+    /// The configured state name for a pipeline phase.
+    pub fn name_for(&self, phase: crate::task_sink::TrackerPhase) -> &str {
+        use crate::task_sink::TrackerPhase::*;
+        match phase {
+            Todo => &self.todo,
+            InProgress => &self.in_progress,
+            ReadyToTest => &self.ready_to_test,
+            Done => &self.done,
+        }
+    }
+}
+
+/// Outcome of a transition attempt. `Skipped` carries why so the harness log can
+/// say *which* state was missing without surfacing it as a hard error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransitionOutcome {
+    Applied,
+    Skipped(String),
+}
+
+/// Parse the `issue { id team { states } }` response into `(issue_uuid, states)`
+/// where `states` is `(state_id, state_name)`. Pure for testability.
+fn parse_issue_states(response: &Value) -> anyhow::Result<(String, Vec<(String, String)>)> {
+    let issue = response
+        .pointer("/data/issue")
+        .filter(|v| !v.is_null())
+        .ok_or_else(|| anyhow::anyhow!("Linear issue not found: {response}"))?;
+    let id = issue
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("Linear issue has no id"))?
+        .to_string();
+    let states = issue
+        .pointer("/team/states/nodes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("Linear issue has no team workflow states"))?
+        .iter()
+        .filter_map(|s| {
+            let sid = s.get("id").and_then(Value::as_str)?;
+            let name = s.get("name").and_then(Value::as_str)?;
+            Some((sid.to_string(), name.to_string()))
+        })
+        .collect();
+    Ok((id, states))
+}
+
+/// Find a workflow-state id whose name matches `wanted` (case-insensitive, trimmed).
+/// Pure for testability. `None` = the team has no such state (caller skips).
+fn match_state_by_name(states: &[(String, String)], wanted: &str) -> Option<String> {
+    let want = wanted.trim().to_lowercase();
+    states
+        .iter()
+        .find(|(_, name)| name.trim().to_lowercase() == want)
+        .map(|(id, _)| id.clone())
+}
+
+/// Move a Linear issue (by identifier or UUID) into the workflow state named for
+/// `phase`. Best-effort by contract: a missing token, unresolved issue, or absent
+/// target state returns `Skipped`/`Err` for the caller to log — the harness must
+/// never halt because the tracker side-channel hiccuped.
+pub async fn transition_issue(
+    identifier: &str,
+    phase: crate::task_sink::TrackerPhase,
+    map: &LinearStateMap,
+) -> anyhow::Result<TransitionOutcome> {
+    let token = pick_token(&read_creds())
+        .ok_or_else(|| anyhow::anyhow!("no Linear token configured"))?;
+    let target_name = map.name_for(phase);
+    let resp = graphql(&token, ISSUE_STATES_QUERY, json!({ "id": identifier })).await?;
+    let (issue_uuid, states) = parse_issue_states(&resp)?;
+    let Some(state_id) = match_state_by_name(&states, target_name) else {
+        let available: Vec<&str> = states.iter().map(|(_, n)| n.as_str()).collect();
+        return Ok(TransitionOutcome::Skipped(format!(
+            "no Linear state named {target_name:?} on this team (have {available:?})"
+        )));
+    };
+    let update = graphql(
+        &token,
+        ISSUE_UPDATE_STATE_MUTATION,
+        json!({ "id": issue_uuid, "stateId": state_id }),
+    )
+    .await?;
+    let success = update
+        .pointer("/data/issueUpdate/success")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if success {
+        Ok(TransitionOutcome::Applied)
+    } else {
+        anyhow::bail!("Linear issueUpdate reported failure: {update}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,6 +354,7 @@ mod tests {
                 },
             ],
             selected_workspace_id: Some("b".into()),
+            state_map: None,
         };
         assert_eq!(pick_token(&creds).as_deref(), Some("tok-b"));
 
@@ -177,6 +364,7 @@ mod tests {
                 token: "tok-a".into(),
             }],
             selected_workspace_id: None,
+            state_map: None,
         };
         assert_eq!(pick_token(&first).as_deref(), Some("tok-a"));
 
@@ -216,5 +404,46 @@ mod tests {
     fn parse_issue_create_failure_errors() {
         let resp = json!({"data": {"issueCreate": {"success": false, "issue": null}}});
         assert!(parse_issue_create(&resp).is_err());
+    }
+
+    #[test]
+    fn state_map_defaults_match_requested_names() {
+        let m = LinearStateMap::default();
+        assert_eq!(m.todo, "Todo");
+        assert_eq!(m.in_progress, "In Progress");
+        assert_eq!(m.ready_to_test, "Ready to Test");
+        assert_eq!(m.done, "Done");
+    }
+
+    #[test]
+    fn parse_issue_states_extracts_uuid_and_states() {
+        let resp = json!({"data": {"issue": {
+            "id": "uuid-1",
+            "team": {"states": {"nodes": [
+                {"id": "s1", "name": "Todo"},
+                {"id": "s2", "name": "In Progress"},
+            ]}}
+        }}});
+        let (uuid, states) = parse_issue_states(&resp).unwrap();
+        assert_eq!(uuid, "uuid-1");
+        assert_eq!(states.len(), 2);
+        assert_eq!(states[1], ("s2".into(), "In Progress".into()));
+    }
+
+    #[test]
+    fn parse_issue_states_missing_issue_errors() {
+        let resp = json!({"data": {"issue": null}});
+        assert!(parse_issue_states(&resp).is_err());
+    }
+
+    #[test]
+    fn match_state_by_name_is_case_insensitive_and_trims() {
+        let states = vec![
+            ("s1".to_string(), "Todo".to_string()),
+            ("s2".to_string(), "In Progress".to_string()),
+        ];
+        assert_eq!(match_state_by_name(&states, "in progress").as_deref(), Some("s2"));
+        assert_eq!(match_state_by_name(&states, "  TODO ").as_deref(), Some("s1"));
+        assert_eq!(match_state_by_name(&states, "Ready to Test"), None);
     }
 }
