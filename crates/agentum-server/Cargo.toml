@@ -52,6 +52,10 @@ reqwest        = { version = "0.12", default-features = false, features = ["json
 # Used by planner.rs to deserialise $XDG_CONFIG_HOME/agentum/planner.toml.
 # Already a workspace dep (profiles.toml, credentials.toml read by agentum-tui).
 toml           = { workspace = true }
+# host_browser's CDP client (connect to the host Chromium's DevTools WebSocket
+# through the SSH -L tunnel and pump the screencast) reuses the tokio-tungstenite
+# + futures-util already pinned above for staging's CDP-Chromium client — same
+# crates, so the lockfile gains no new dep.
 # Locate the desktop's Linear creds file (`<data_local_dir>/Agentum/linear.json`)
 # for the server-side Linear task sink (spec 011c). Same crate + version the
 # desktop already pins, so the lockfile carries no new transitive deps.
