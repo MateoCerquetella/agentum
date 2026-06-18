@@ -395,6 +395,83 @@ pub fn ssh_control_cancel_cmd(host: &Host, host_port: u16) -> Option<Command> {
     Some(cmd)
 }
 
+/// Build an `ssh -O forward -L …` control command that adds a **local** port
+/// forward to the host's *already-established* interactive ControlMaster — no
+/// new connection. On the Mac, `127.0.0.1:<mac_port>` then tunnels to the host's
+/// `127.0.0.1:<host_port>` (where headless Chromium binds its CDP debugger).
+/// This is the mirror of [`ssh_control_forward_cmd`]'s reverse (-R) forward:
+/// the MCP server lives on the Mac (reverse), but the browser/CDP lives on the
+/// host, so the Mac reaches it with a forward (-L). Bound to loopback on BOTH
+/// ends, so it's never exposed to either machine's network.
+///
+/// Returns `None` for a non-SSH host or when no ControlPath is available (the
+/// master must exist first — warm it via the normal path). `-O forward` matches
+/// the running master purely by the `%C` ControlPath hash, so only the host
+/// identity (`-p`, `user@host`) needs to agree with how the master was opened.
+pub fn ssh_control_local_forward_cmd(
+    host: &Host,
+    mac_port: u16,
+    host_port: u16,
+) -> Option<Command> {
+    let HostKind::Ssh {
+        user,
+        hostname,
+        port,
+        ..
+    } = &host.kind
+    else {
+        return None;
+    };
+    let control_path = control_path_for(SshMux::Interactive)?;
+    // Explicit `127.0.0.1:` listen bind on the Mac side so the forwarded port is
+    // never offered on the Mac's network; the host side is loopback too (that's
+    // where Chromium's CDP binds, via `--remote-debugging-address=127.0.0.1`).
+    let spec = format!("127.0.0.1:{mac_port}:127.0.0.1:{host_port}");
+    let mut cmd = Command::new("ssh");
+    cmd.arg("-o")
+        .arg(format!("ControlPath={control_path}"))
+        .arg("-p")
+        .arg(port.to_string())
+        .arg("-O")
+        .arg("forward")
+        .arg("-L")
+        .arg(spec)
+        .arg(format!("{user}@{hostname}"));
+    Some(cmd)
+}
+
+/// `ssh -O cancel -L 127.0.0.1:<mac_port>:127.0.0.1:<host_port>` — tears down a
+/// local forward on the host's master. Unlike the reverse [`ssh_control_cancel_cmd`]
+/// (which cancels by listen side alone), OpenSSH rejects a listen-side-only
+/// `-O cancel -L` ("Bad local forwarding specification"); a local-forward cancel
+/// must pass the SAME full spec used to arm it (verified on OpenSSH 10.0p2).
+/// Best-effort cleanup run before re-arming so a re-attach refreshes the forward
+/// instead of colliding with its own still-present one.
+pub fn ssh_control_local_cancel_cmd(host: &Host, mac_port: u16, host_port: u16) -> Option<Command> {
+    let HostKind::Ssh {
+        user,
+        hostname,
+        port,
+        ..
+    } = &host.kind
+    else {
+        return None;
+    };
+    let control_path = control_path_for(SshMux::Interactive)?;
+    let spec = format!("127.0.0.1:{mac_port}:127.0.0.1:{host_port}");
+    let mut cmd = Command::new("ssh");
+    cmd.arg("-o")
+        .arg(format!("ControlPath={control_path}"))
+        .arg("-p")
+        .arg(port.to_string())
+        .arg("-O")
+        .arg("cancel")
+        .arg("-L")
+        .arg(spec)
+        .arg(format!("{user}@{hostname}"));
+    Some(cmd)
+}
+
 /// True when ssh's stderr says the *pooled ControlMaster* socket was stale or
 /// racing (the shared master died mid-op), not that the remote command failed.
 /// Such a failure happens at the multiplex layer *before* the script runs, so
@@ -1032,5 +1109,96 @@ mod tests {
         assert!(path.ends_with("cm-%C"));
         let dir = std::path::Path::new(&path).parent().expect("dir");
         assert!(dir.is_dir());
+    }
+
+    fn local_host() -> Host {
+        Host {
+            id: agentum_core::LOCAL_HOST_ID,
+            name: "local".into(),
+            kind: HostKind::Local,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+            last_seen_at: None,
+        }
+    }
+
+    #[test]
+    fn local_forward_cmd_builds_dash_l_to_host_loopback() {
+        // CDP lives on the host, so the Mac reaches it via a *local* (-L)
+        // forward: the Mac listens on `mac_port` and ssh tunnels to the host's
+        // `127.0.0.1:host_port`. Mirror of the reverse (-R) MCP tunnel.
+        let cmd = ssh_control_local_forward_cmd(&ssh_host(SshAuth::Agent), 7000, 9222)
+            .expect("ssh host yields a command");
+        assert_eq!(cmd.as_std().get_program().to_string_lossy(), "ssh");
+        let args = arg_strings(&cmd);
+        assert!(args.contains(&"-O".to_string()), "missing -O: {args:?}");
+        assert!(
+            args.contains(&"forward".to_string()),
+            "missing forward: {args:?}"
+        );
+        assert!(args.contains(&"-L".to_string()), "missing -L: {args:?}");
+        // listen on Mac loopback:mac_port → host loopback:host_port.
+        assert!(
+            args.contains(&"127.0.0.1:7000:127.0.0.1:9222".to_string()),
+            "wrong -L spec: {args:?}"
+        );
+        // Must NOT be a reverse forward.
+        assert!(
+            !args.contains(&"-R".to_string()),
+            "-L builder emitted -R: {args:?}"
+        );
+        // Rides the warm Interactive master (cm-, not the streaming cms-).
+        let control_path = args
+            .iter()
+            .find(|a| a.starts_with("ControlPath="))
+            .expect("ControlPath present");
+        assert!(
+            control_path.contains("/cm-"),
+            "not interactive master: {control_path}"
+        );
+        assert!(
+            !control_path.contains("/cms-"),
+            "must not use streaming master: {control_path}"
+        );
+        // Host identity must agree with how the master was opened.
+        assert!(
+            args.iter().any(|a| a == "2222"),
+            "host port missing: {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a == "me@box.local"),
+            "user@host missing: {args:?}"
+        );
+    }
+
+    #[test]
+    fn local_cancel_cmd_uses_full_local_forward_spec() {
+        // OpenSSH rejects a listen-side-only `-O cancel -L` ("Bad local
+        // forwarding specification") — unlike `-R`, a local-forward cancel needs
+        // the SAME full spec used to arm it. Verified against OpenSSH 10.0p2.
+        let cmd = ssh_control_local_cancel_cmd(&ssh_host(SshAuth::Agent), 7000, 9222)
+            .expect("ssh host yields a command");
+        let args = arg_strings(&cmd);
+        assert!(args.contains(&"-O".to_string()), "missing -O: {args:?}");
+        assert!(
+            args.contains(&"cancel".to_string()),
+            "missing cancel: {args:?}"
+        );
+        assert!(args.contains(&"-L".to_string()), "missing -L: {args:?}");
+        assert!(
+            args.contains(&"127.0.0.1:7000:127.0.0.1:9222".to_string()),
+            "cancel must pass the full local-forward spec: {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a == "me@box.local"),
+            "user@host missing: {args:?}"
+        );
+    }
+
+    #[test]
+    fn local_forward_and_cancel_none_for_local_host() {
+        // No tunnel for a local host — there is no ssh master to attach to.
+        assert!(ssh_control_local_forward_cmd(&local_host(), 7000, 9222).is_none());
+        assert!(ssh_control_local_cancel_cmd(&local_host(), 7000, 9222).is_none());
     }
 }
