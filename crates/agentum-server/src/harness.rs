@@ -163,6 +163,32 @@ pub struct FeatureList {
     /// autonomous; on = the run pauses at `AwaitingConfirm` until confirmed.
     #[serde(default)]
     pub hitl_at_qa: bool,
+    /// How the browser QA gate runs (spec 012b):
+    /// - `Auto` (default): use `qa.sh` if present; else, when browser-verify is
+    ///   enabled (`AGENTUM_BROWSER_VERIFY`), spawn a browser-verification-loop
+    ///   **agent**; else skip (pass).
+    /// - `Script`: always the `qa.sh` shell gate.
+    /// - `Agent`: always spawn the QA agent (drives Chrome/Playwright MCP).
+    #[serde(default)]
+    pub qa_mode: QaMode,
+    /// Agent CLI for the QA gate when `qa_mode` spawns one. Defaults to the
+    /// feature agent tool; the browser-verification-loop is a Claude skill, so
+    /// `claude` is the sensible value.
+    #[serde(default)]
+    pub qa_agent_tool: Option<String>,
+}
+
+/// How the browser QA gate is executed (spec 012b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QaMode {
+    /// `qa.sh` if present, else a QA agent when browser-verify is on, else skip.
+    #[default]
+    Auto,
+    /// Always the `qa.sh` shell gate.
+    Script,
+    /// Always spawn the browser-verification-loop agent.
+    Agent,
 }
 
 impl Default for FeatureList {
@@ -176,6 +202,8 @@ impl Default for FeatureList {
             settle_timeout_secs: default_settle_timeout_secs(),
             agent_yolo: default_agent_yolo(),
             hitl_at_qa: false,
+            qa_mode: QaMode::Auto,
+            qa_agent_tool: None,
         }
     }
 }
@@ -1413,6 +1441,60 @@ fn build_feature_prompt(instructions: &str, feature: &Feature) -> String {
     )
 }
 
+/// The machine-readable verdict the QA agent writes (spec 012b). The agent runs
+/// the browser-verification-loop, then writes this file so the harness has a
+/// deterministic pass/fail instead of trying to parse free-form chat.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QaVerdict {
+    pub passed: bool,
+    #[serde(default)]
+    pub summary: Option<String>,
+}
+
+/// Where the QA agent writes its verdict, relative to the harness dir:
+/// `qa/<feature_id>.json`. The feature id is sanitized so it's a safe filename.
+fn qa_verdict_path(harness_dir: &Path, feature_id: &str) -> PathBuf {
+    harness_dir
+        .join("qa")
+        .join(format!("{}.json", sanitize(feature_id)))
+}
+
+/// Parse a QA verdict file into `(passed, summary)`. Pure for testability. A
+/// malformed/missing verdict is an error the caller turns into a red gate — an
+/// inconclusive QA must NOT pass (we'd mark a feature Done without evidence).
+fn parse_qa_verdict(json: &str) -> anyhow::Result<(bool, String)> {
+    let v: QaVerdict = serde_json::from_str(json.trim())
+        .map_err(|e| anyhow::anyhow!("QA verdict is not valid JSON ({e}): {json}"))?;
+    Ok((v.passed, v.summary.unwrap_or_default()))
+}
+
+/// Build the prompt for the QA agent: run the browser-verification-loop for this
+/// one feature, then write the verdict file. The explicit "write this exact file"
+/// contract is what makes the gate deterministic.
+fn build_qa_prompt(instructions: &str, feature: &Feature, verdict_rel_path: &str) -> String {
+    format!(
+        "You are the QA agent in the Agentum Harness Engine. The implementation of \
+         ONE feature just passed its unit-test gate; your job is to verify it in a \
+         REAL browser and record a verdict.\n\n\
+         === HARNESS INSTRUCTIONS (AGENTS.md) ===\n{instructions}\n\n\
+         === FEATURE UNDER TEST ===\n\
+         Feature: {name}\nID: {id}\n{desc}\n\n\
+         === WHAT TO DO ===\n\
+         1. Use the `browser-verification-loop` skill (Chrome/Playwright MCP) to QA \
+         this feature against the running app. Capture a screenshot per check as evidence.\n\
+         2. When finished, WRITE your verdict to `{verdict}` (relative to the project \
+         root) as exactly this JSON:\n\
+         {{\"passed\": true|false, \"summary\": \"one line on what you verified or why it failed\"}}\n\
+         Set passed=false if ANY check fails or you cannot verify. Do not stop until \
+         the file is written.",
+        instructions = instructions.trim(),
+        name = feature.name,
+        id = feature.id,
+        desc = feature.description,
+        verdict = verdict_rel_path,
+    )
+}
+
 /// How long to let the agent CLI boot its REPL before typing the prompt in.
 const AGENT_BOOT_DELAY: Duration = Duration::from_secs(3);
 
@@ -1553,11 +1635,25 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
                 crate::task_sink::TrackerPhase::ReadyToTest,
             )
             .await;
-            let (qa_ok, qa_out) = engine.run_qa_once(harness_id, &feature.id).await?;
+            // Pick the QA gate: a spawned browser-verification-loop agent (012b)
+            // or the `qa.sh` shell gate. `Auto` prefers qa.sh, else an agent when
+            // browser-verify is on, else the skip-pass script path.
+            let qa_mode = resolve_qa_mode(&config);
+            let (qa_ok, qa_out) = match qa_mode {
+                QaMode::Agent => {
+                    run_qa_agent_gate(state, harness_id, &workdir, &config, &feature, grace, timeout)
+                        .await?
+                }
+                _ => engine.run_qa_once(harness_id, &feature.id).await?,
+            };
+            let qa_label = if qa_mode == QaMode::Agent {
+                "browser QA gate (agent)"
+            } else {
+                "browser QA gate (qa.sh)"
+            };
             if !qa_ok {
                 if handle_gate_failure(
-                    state, harness_id, &feature, &session, "browser QA gate (qa.sh)", &qa_out,
-                    grace, timeout,
+                    state, harness_id, &feature, &session, qa_label, &qa_out, grace, timeout,
                 )
                 .await?
                 {
@@ -1744,6 +1840,144 @@ async fn spawn_feature_agent(
 
     info!(%harness_id, feature = %feature.id, session = %session.id, "harness spawned agent");
     Ok(session)
+}
+
+/// Resolve the configured [`QaMode`] to a concrete gate for this run. `Auto`
+/// prefers an explicit `qa.sh`, else a QA agent when browser-verify is enabled,
+/// else the (skip-pass) script path. Pure-ish (only reads the env flag).
+fn resolve_qa_mode(config: &HarnessConfig) -> QaMode {
+    match config.features.qa_mode {
+        QaMode::Script => QaMode::Script,
+        QaMode::Agent => QaMode::Agent,
+        QaMode::Auto => {
+            if config.qa_script.is_some() {
+                QaMode::Script
+            } else if crate::playwright_mcp::feature_enabled() {
+                QaMode::Agent
+            } else {
+                // No qa.sh and no browser-verify → the script path returns a
+                // skip-pass, so a non-web project isn't blocked.
+                QaMode::Script
+            }
+        }
+    }
+}
+
+/// Spawn a real agent session for the **browser QA gate** (spec 012b). Mirrors
+/// [`spawn_feature_agent`] but does NOT bind the feature to the session or flip
+/// it to `Coding` — the feature is already `ReadyToTest` and the coding agent is
+/// torn down by now. Uses `qa_agent_tool` (default = the feature agent tool).
+async fn spawn_qa_agent(
+    state: &AppState,
+    harness_id: Uuid,
+    workdir: &Path,
+    config: &HarnessConfig,
+    feature: &Feature,
+) -> anyhow::Result<agentum_core::Session> {
+    let host = state
+        .store
+        .get_host(LOCAL_HOST_ID)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("local host missing"))?;
+    let short = harness_id.simple().to_string();
+    let name = format!("harness-qa-{}-{}", sanitize(&feature.id), &short[..8]);
+    let flags = if config.features.agent_yolo {
+        vec![agentum_executor::YOLO_MARKER.to_string()]
+    } else {
+        Vec::new()
+    };
+    let tool = config
+        .features
+        .qa_agent_tool
+        .clone()
+        .unwrap_or_else(|| config.features.agent_tool.clone());
+    let new = NewSession {
+        name: name.clone(),
+        workdir: workdir.to_string_lossy().into_owned(),
+        tool,
+        model: config.features.agent_model.clone(),
+        flags,
+        card_id: None,
+        worktree_path: None,
+        worktree_branch: None,
+        worktree_base_ref: None,
+    };
+    let session = state
+        .store
+        .create_session_on_host(new, Some(LOCAL_HOST_ID))
+        .await?;
+    let target = agentum_tmux::target_for(&session.name);
+    crate::routes::sessions::spawn_agent_into_pane(state, &session, &host, &target, workdir)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to spawn QA agent: {e}"))?;
+    info!(%harness_id, feature = %feature.id, session = %session.id, "harness spawned QA agent");
+    Ok(session)
+}
+
+/// The agent-driven browser QA gate (spec 012b): flip the feature to
+/// `ReadyToTest`, spawn a browser-verification-loop agent, wait for it to settle,
+/// then read its verdict file. Returns `(passed, summary)` exactly like
+/// [`HarnessEngine::run_qa_once`] so the driver's retry loop is unchanged. A
+/// missing/garbled verdict is a **fail** — an inconclusive QA never advances a
+/// feature to Done.
+async fn run_qa_agent_gate(
+    state: &AppState,
+    harness_id: Uuid,
+    workdir: &Path,
+    config: &HarnessConfig,
+    feature: &Feature,
+    grace: Duration,
+    timeout: Duration,
+) -> anyhow::Result<(bool, String)> {
+    let engine = &state.harness;
+    engine
+        .set_feature_state(harness_id, &feature.id, FeatureState::ReadyToTest)
+        .await?;
+
+    // Verdict file under <harness_dir>/qa/<id>.json; clear any stale one first so
+    // we never read a previous attempt's result.
+    let verdict_abs = qa_verdict_path(&config.harness_dir, &feature.id);
+    if let Some(parent) = verdict_abs.parent() {
+        tokio::fs::create_dir_all(parent).await.ok();
+    }
+    tokio::fs::remove_file(&verdict_abs).await.ok();
+    let verdict_rel = verdict_abs
+        .strip_prefix(workdir)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| verdict_abs.to_string_lossy().into_owned());
+
+    if !crate::playwright_mcp::feature_enabled() {
+        engine.log(
+            harness_id,
+            Some(&feature.id),
+            "QA agent: AGENTUM_BROWSER_VERIFY is not set, so no Playwright MCP is wired — the agent may be unable to drive a browser.",
+        );
+    }
+    engine.log(
+        harness_id,
+        Some(&feature.id),
+        "unit gate green — spawning browser QA agent (browser-verification-loop)",
+    );
+
+    let session = spawn_qa_agent(state, harness_id, workdir, config, feature).await?;
+    let prompt = build_qa_prompt(&config.agent_instructions, feature, &verdict_rel);
+    inject_prompt(state, &session, &prompt).await?;
+    engine.log(harness_id, Some(&feature.id), "QA agent verifying in browser…");
+    wait_for_settle(&state.bus, session.id, grace, timeout).await;
+    teardown_session(state, &session).await;
+
+    match tokio::fs::read_to_string(&verdict_abs).await {
+        Ok(raw) => match parse_qa_verdict(&raw) {
+            Ok((passed, summary)) => Ok((passed, summary)),
+            Err(e) => Ok((false, format!("QA verdict unreadable — failing the gate: {e}"))),
+        },
+        Err(_) => Ok((
+            false,
+            format!(
+                "QA agent wrote no verdict at {verdict_rel} — treating QA as failed (inconclusive)."
+            ),
+        )),
+    }
 }
 
 /// How long to wait after typing a multi-line prompt before sending the
@@ -2091,6 +2325,55 @@ mod tests {
     async fn ready_to_test_state_serializes_snake_case() {
         let json = serde_json::to_string(&FeatureState::ReadyToTest).unwrap();
         assert_eq!(json, "\"ready_to_test\"");
+    }
+
+    #[test]
+    fn parse_qa_verdict_reads_pass_fail_and_summary() {
+        let (p, s) = parse_qa_verdict(r#"{"passed": true, "summary": "login works"}"#).unwrap();
+        assert!(p);
+        assert_eq!(s, "login works");
+
+        let (p, s) = parse_qa_verdict(r#"{"passed": false}"#).unwrap();
+        assert!(!p);
+        assert_eq!(s, "");
+
+        // A non-verdict (or empty/garbled) is an error → the caller fails the gate.
+        assert!(parse_qa_verdict("not json").is_err());
+        assert!(parse_qa_verdict("{}").is_err(), "missing `passed` must error");
+    }
+
+    #[test]
+    fn qa_verdict_path_is_under_qa_dir_and_sanitized() {
+        let p = qa_verdict_path(Path::new("/proj/.agentum-harness"), "AG/12");
+        assert!(p.ends_with("qa/AG-12.json"), "got {}", p.display());
+    }
+
+    #[test]
+    fn qa_mode_serializes_snake_case() {
+        assert_eq!(serde_json::to_string(&QaMode::Auto).unwrap(), "\"auto\"");
+        assert_eq!(serde_json::to_string(&QaMode::Agent).unwrap(), "\"agent\"");
+        assert_eq!(serde_json::to_string(&QaMode::Script).unwrap(), "\"script\"");
+    }
+
+    #[tokio::test]
+    async fn resolve_qa_mode_honors_explicit_and_auto() {
+        let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
+        // Auto with no qa.sh and (assumed) no browser-verify → Script (skip-pass).
+        let mut cfg = HarnessConfig::load(&wd).await.unwrap();
+        cfg.features.qa_mode = QaMode::Auto;
+        assert!(matches!(resolve_qa_mode(&cfg), QaMode::Script | QaMode::Agent));
+
+        // Explicit overrides ignore detection.
+        cfg.features.qa_mode = QaMode::Agent;
+        assert_eq!(resolve_qa_mode(&cfg), QaMode::Agent);
+        cfg.features.qa_mode = QaMode::Script;
+        assert_eq!(resolve_qa_mode(&cfg), QaMode::Script);
+
+        // Auto WITH a qa.sh present → Script (an explicit script wins over an agent).
+        write_qa(&wd, "#!/bin/bash\nexit 0\n");
+        let mut cfg2 = HarnessConfig::load(&wd).await.unwrap();
+        cfg2.features.qa_mode = QaMode::Auto;
+        assert_eq!(resolve_qa_mode(&cfg2), QaMode::Script);
     }
 
     #[tokio::test]
