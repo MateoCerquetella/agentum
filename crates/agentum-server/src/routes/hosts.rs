@@ -29,6 +29,10 @@ pub fn router() -> Router<AppState> {
             "/api/hosts/{id}/tmux-sessions/{name}/attach",
             post(attach_tmux_session),
         )
+        .route(
+            "/api/hosts/{id}/tmux-sessions/{name}",
+            axum::routing::delete(kill_tmux_session_route),
+        )
 }
 
 async fn list(State(state): State<AppState>) -> Result<Json<Vec<Host>>, ApiError> {
@@ -337,6 +341,10 @@ async fn provision_skills(
 struct TmuxSessionsQuery {
     #[serde(default)]
     path: Option<String>,
+    /// When true, return ALL sessions (external + agentum-managed). The
+    /// per-repo RemoteTmuxRepoCard leaves this false; the host-level modal sets it.
+    #[serde(default)]
+    all: bool,
 }
 
 /// A discovered session plus its relation to the queried project path.
@@ -362,9 +370,12 @@ async fn tmux_sessions(
         .get_host(id)
         .await?
         .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
-    let found = crate::host_runtime::list_tmux_sessions(&host)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let found = if q.all {
+        crate::host_runtime::list_all_tmux_sessions(&host).await
+    } else {
+        crate::host_runtime::list_tmux_sessions(&host).await
+    }
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
     let _ = state.store.update_host_seen(id).await;
     let root = q
         .path
@@ -440,7 +451,8 @@ async fn attach_tmux_session(
         });
 
     // Validate liveness + grab pane metadata in the same round trip.
-    let discovered = crate::host_runtime::list_tmux_sessions(&host)
+    // Use list_all so agentum-managed sessions can also be attached for viewing.
+    let discovered = crate::host_runtime::list_all_tmux_sessions(&host)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .into_iter()
@@ -506,6 +518,26 @@ async fn attach_tmux_session(
         .await?
         .ok_or_else(|| ApiError::NotFound(session.id.to_string()))?;
     Ok((StatusCode::CREATED, Json(session)))
+}
+
+/// `DELETE /api/hosts/{id}/tmux-sessions/{name}` — kill a tmux session on the
+/// Kill a named tmux session on the host. Callers are responsible for only
+/// targeting inactive sessions — this endpoint does not protect `agentum-*`
+/// sessions from deletion.
+async fn kill_tmux_session_route(
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let host_id = parse_uuid(&id)?;
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(host_id.to_string()))?;
+    crate::host_runtime::kill_tmux_session(&host, &name)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn parse_uuid(s: &str) -> Result<Uuid, ApiError> {
