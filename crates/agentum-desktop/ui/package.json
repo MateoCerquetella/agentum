@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
+    "check:entry-size": "node scripts/check-entry-size.mjs",
+    "build:check": "vite build && node scripts/check-entry-size.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },
