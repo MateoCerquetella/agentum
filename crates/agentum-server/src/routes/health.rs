@@ -20,7 +20,13 @@ pub fn router() -> Router<AppState> {
 /// CDP-Chromium into the pane over `WS /api/cdp-browser/screencast`. The desktop
 /// screencast pane checks for it before pointing at the embedded server, the same
 /// tag the dormant client already gated on (`shared/protocol-version.ts`).
-const CAPABILITIES: &[&str] = &["resize", "resume", "refresh", "browser.screencast.v1"];
+/// `redraw`: the WS stream honours `?redraw=true`, forcing the agent to fully
+/// repaint (a SIGWINCH nudge) before snapshotting so a corrupted pane grid —
+/// e.g. an OS `wall` broadcast written over it during system suspend — heals
+/// instead of being re-captured. Clients use it for self-heal on reconnect and
+/// a manual "force redraw"; old daemons drop the param and just don't heal.
+const CAPABILITIES: &[&str] =
+    &["resize", "resume", "refresh", "redraw", "browser.screencast.v1"];
 
 #[derive(Serialize)]
 struct Health {
