@@ -892,6 +892,10 @@ mod tests {
     /// disk, loadable by the engine, and the harness is left Idle (not run).
     #[tokio::test]
     async fn plan_goal_harness_writes_idle_backlog_from_children() {
+        // Force the agnostic board path under the env lock so the test never
+        // probes the dev machine's connected GitHub/Linear (no network).
+        let _env = isolate_xdg();
+        unsafe { std::env::set_var("AGENTUM_TASK_SINK", "board") };
         let state = fresh_state().await;
         let dir = TempDir::new().unwrap();
         let wd = dir.path().to_string_lossy().into_owned();
@@ -928,6 +932,8 @@ mod tests {
     /// `goal.harness.planned` fires so the UI can refresh the Harness view.
     #[tokio::test]
     async fn plan_goal_harness_emits_event() {
+        let _env = isolate_xdg();
+        unsafe { std::env::set_var("AGENTUM_TASK_SINK", "board") };
         let state = fresh_state().await;
         let dir = TempDir::new().unwrap();
         let wd = dir.path().to_string_lossy().into_owned();
