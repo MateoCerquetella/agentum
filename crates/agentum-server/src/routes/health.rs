@@ -15,7 +15,12 @@ pub fn router() -> Router<AppState> {
 /// feature-detect without parsing version strings. Whenever you add a
 /// new capability that depends on server-side behaviour (currently:
 /// PTY resize messages over the WS terminal stream), append a tag.
-const CAPABILITIES: &[&str] = &["resize", "resume", "refresh"];
+///
+/// `browser.screencast.v1` (009c-3): this server can render an agent-driven
+/// CDP-Chromium into the pane over `WS /api/cdp-browser/screencast`. The desktop
+/// screencast pane checks for it before pointing at the embedded server, the same
+/// tag the dormant client already gated on (`shared/protocol-version.ts`).
+const CAPABILITIES: &[&str] = &["resize", "resume", "refresh", "browser.screencast.v1"];
 
 #[derive(Serialize)]
 struct Health {

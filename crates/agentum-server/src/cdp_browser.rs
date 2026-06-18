@@ -1,11 +1,14 @@
-//! Local CDP-Chromium browser: launch + lifecycle (009c-1).
+//! Local CDP-Chromium browser: launch + lifecycle (009c-1, headless since 009c-3).
 //!
-//! agentum launches a **headed** Chromium-class browser with a known
+//! agentum launches a **headless** Chromium-class browser with a known
 //! `--remote-debugging-port`, so a Playwright MCP bound over `--cdp-endpoint`
 //! (see [`crate::playwright_mcp::ensure_playwright_mcp_bound`]) drives the
-//! **same** browser the user is watching — instead of a hidden headless one the
-//! user can't see. This is the local de-risking slice of 009c; 009c-2 reuses the
-//! same wiring shape on an SSH host (sourcing the CDP endpoint from a tunnel).
+//! **same** browser agentum renders. Originally (009c-1) this browser was headed
+//! — a separate OS window the user watched — but user feedback rejected the
+//! out-of-app window: 009c-3 makes it **headless** and renders it live *inside*
+//! agentum's pane over a CDP screencast ([`crate::cdp_screencast`]). One window
+//! the user sees, the same instance the agent drives — no OS window at all. 009c-2
+//! reuses the wiring on an SSH host (sourcing the CDP endpoint from a tunnel).
 //!
 //! Shape deliberately mirrors [`crate::playwright_mcp`]: ONE shared instance per
 //! machine, kept in its own long-lived tmux session (`agentum-cdp-browser`), and
@@ -117,14 +120,15 @@ pub async fn ensure_local_cdp_browser() -> Result<String> {
         .await
         .context("start the shared local CDP-Chromium tmux session")?;
 
-    // Chromium opens its window then binds the debugging port; allow a window.
+    // Headless Chromium boots then binds the debugging port; allow boot time
+    // (an MCP-cold machine populating the profile can take a few seconds).
     if wait_until_listening(port, Duration::from_secs(20)).await {
         Ok(endpoint)
     } else {
         anyhow::bail!(
             "Chromium launched but did not expose CDP on 127.0.0.1:{port} within 20s \
              (tmux session `{CDP_TMUX_TARGET}`). Check the pane; the browser may have \
-             failed to open a window."
+             failed to start."
         )
     }
 }
@@ -154,19 +158,26 @@ fn launch_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-/// Build the headed-Chromium argv. Split out so the flag shape is unit-testable
+/// Build the headless-Chromium argv. Split out so the flag shape is unit-testable
 /// without launching a browser.
 ///
+/// `--headless=new` runs Chrome's modern headless (full rendering + CDP
+/// `Page.startScreencast`, unlike the reduced `chromium_headless_shell`) — agentum
+/// renders the frames inside its own pane (009c-3), so there is no OS window.
+/// `--window-size` fixes the headless viewport so screencast frames have a sane
+/// default size (the screencast `maxWidth/maxHeight` caps it further).
 /// `--remote-debugging-address=127.0.0.1` keeps CDP loopback-only (never a public
-/// interface; 009c-2 reaches it solely via the authenticated SSH tunnel). NO
-/// `--headless`: the whole point is a window the user watches. `--no-first-run`
-/// / `--no-default-browser-check` suppress the first-run nags that would
-/// otherwise block automation. An isolated `--user-data-dir` keeps this browser
-/// off the user's real profile. `about:blank` is a benign initial page (the
-/// agent navigates its own tab afterwards).
+/// interface; 009c-2 reaches it solely via the authenticated SSH tunnel).
+/// `--no-first-run` / `--no-default-browser-check` suppress the first-run nags
+/// that would otherwise block automation. An isolated `--user-data-dir` keeps
+/// this browser off the user's real profile. `about:blank` is a benign initial
+/// page (the agent navigates its own tab afterwards).
 fn build_chrome_argv(exe: &std::path::Path, port: u16, user_data_dir: &std::path::Path) -> Vec<String> {
     vec![
         exe.to_string_lossy().into_owned(),
+        "--headless=new".to_string(),
+        "--hide-scrollbars".to_string(),
+        "--window-size=1280,800".to_string(),
         "--remote-debugging-address=127.0.0.1".to_string(),
         format!("--remote-debugging-port={port}"),
         format!("--user-data-dir={}", user_data_dir.to_string_lossy()),
@@ -190,8 +201,9 @@ fn chromium_executable() -> Result<PathBuf> {
     })?;
 
     // `chromium-<rev>` only — `chromium_headless_shell-<rev>` (note the `_`)
-    // never matches `strip_prefix("chromium-")`, so we never pick the headless
-    // shell, which has no window.
+    // never matches `strip_prefix("chromium-")`, so we never pick the reduced
+    // headless shell. We run the FULL Chromium in `--headless=new` mode instead,
+    // because the shell lacks `Page.startScreencast` (no frames to render).
     let mut candidates: Vec<(u64, PathBuf)> = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -213,12 +225,13 @@ fn chromium_executable() -> Result<PathBuf> {
 }
 
 /// Parse the revision from a `chromium-<rev>` cache dir name, or `None` for
-/// anything else (including the windowless `chromium_headless_shell-<rev>`).
+/// anything else (including the reduced `chromium_headless_shell-<rev>`, which
+/// can't screencast).
 fn parse_chromium_rev(dir_name: &str) -> Option<u64> {
     dir_name.strip_prefix("chromium-")?.parse::<u64>().ok()
 }
 
-/// Locate the headed Chrome/Chromium executable inside a `chromium-<rev>` cache
+/// Locate the full Chrome/Chromium executable inside a `chromium-<rev>` cache
 /// dir. Discovered by **searching the layout** rather than hardcoding a path,
 /// because Playwright varies it by version AND arch: the platform subdir is
 /// `chrome-mac` / `chrome-mac-x64` / `chrome-mac-arm64` (or `chrome-linux*` /
@@ -345,13 +358,17 @@ mod tests {
     }
 
     #[test]
-    fn chrome_argv_is_headed_with_debugging_and_isolated_profile() {
+    fn chrome_argv_is_headless_with_debugging_and_isolated_profile() {
         let argv = build_chrome_argv(Path::new("/x/Chromium"), 9300, Path::new("/tmp/prof"));
-        // Headed — the user must be able to watch it.
-        assert!(!argv.iter().any(|a| a == "--headless"));
+        // Headless since 009c-3 — agentum renders the frames in its own pane.
+        // Must be the full `--headless=new` (screencast-capable), not the bare
+        // legacy flag, and never windowed.
+        assert!(argv.iter().any(|a| a == "--headless=new"));
         // CDP exposed on the exact port we probe, loopback-only.
         assert!(argv.iter().any(|a| a == "--remote-debugging-port=9300"));
         assert!(argv.iter().any(|a| a == "--remote-debugging-address=127.0.0.1"));
+        // A fixed viewport so screencast frames have a sane default size.
+        assert!(argv.iter().any(|a| a == "--window-size=1280,800"));
         // Isolated profile + first-run nags suppressed.
         assert!(argv.iter().any(|a| a == "--user-data-dir=/tmp/prof"));
         assert!(argv.iter().any(|a| a == "--no-first-run"));

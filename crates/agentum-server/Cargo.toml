@@ -38,6 +38,12 @@ notify         = "8"
 sysinfo        = { version = "0.32", default-features = false, features = ["system"] }
 which          = "7"
 shlex          = "1"
+# CDP-over-WebSocket client for the in-agentum screencast bridge (009c-3): connect
+# to the headless CDP-Chromium, drive Page.startScreencast, dispatch Input.*/Page.*.
+# Same version + features agentum-tui already pins (ws:// to loopback CDP; the TLS
+# feature is shared so the lockfile carries no new transitive deps).
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+futures-util   = "0.3"
 # Used by usage::claude_oauth to fetch `GET /api/oauth/usage` from
 # Anthropic (spec 001). rustls (no native-tls) so release binaries
 # don't need system OpenSSL — mirrors the feature set agentum-tui

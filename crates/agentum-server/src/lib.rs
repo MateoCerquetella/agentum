@@ -23,6 +23,7 @@ use tokio::sync::broadcast;
 pub mod auth;
 pub mod bridge;
 pub mod cdp_browser;
+pub mod cdp_screencast;
 mod error;
 pub mod git;
 pub mod harness;
@@ -267,6 +268,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::orchestration::router())
         .merge(routes::browser::router())
         .merge(routes::cdp_browser::router())
+        .merge(routes::cdp_screencast::router())
         .merge(routes::computer::router())
         .merge(routes::clipboard::router())
         .merge(routes::events::router())
