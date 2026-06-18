@@ -219,6 +219,7 @@ const TaskPage = lazy(() => import('./components/TaskPage'))
 const ActivityPrototypePage = lazy(() => import('./components/activity/ActivityPrototypePage'))
 const Settings = lazy(() => import('./components/settings/Settings'))
 const ChatPage = lazy(() => import('./components/harness/ChatPage'))
+const GoalsPage = lazy(() => import('./components/goals/GoalsPage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
 const WorktreeJumpPalette = lazy(() => import('./components/WorktreeJumpPalette'))
 const SettingsCommandPalette = lazy(() => import('./components/settings/SettingsCommandPalette'))
@@ -1023,7 +1024,8 @@ function App(): React.JSX.Element {
     activeView !== 'settings' &&
     activeView !== 'activity' &&
     activeView !== 'skills' &&
-    activeView !== 'harness'
+    activeView !== 'harness' &&
+    activeView !== 'goals'
   // Why: only the terminal workspace replaces the full-width titlebar with
   // split-column chrome. Full-page navigation views keep the draggable app
   // titlebar so their page-level controls can live in that window strip.
@@ -1724,6 +1726,7 @@ function App(): React.JSX.Element {
                           {activeView === 'tasks' ? <TaskPage /> : null}
                           {activeView === 'activity' ? <ActivityPrototypePage /> : null}
                           {activeView === 'harness' ? <ChatPage /> : null}
+                          {activeView === 'goals' ? <GoalsPage /> : null}
                           {activeView === 'terminal' && !activeWorktreeId ? <Landing /> : null}
                         </RecoverableRenderErrorBoundary>
                       </Suspense>
