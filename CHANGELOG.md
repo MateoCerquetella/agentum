@@ -4,6 +4,37 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] — 2026-06-18
+
+### Added
+- **Chat-to-features pipeline (011).** An agnostic chat → GitHub/Linear/board →
+  harness flow: a `TaskSink` seam with GitHub Issues and Linear Issues sinks,
+  preflight-driven provider selection, and a harness backlog feed.
+- **Agent-driven CDP browser in the pane (009c-3).** A Chrome DevTools Protocol
+  browser renders inside agentum's pane, drivable over the MCP layer, with an
+  in-page element-annotate picker.
+- **Orchestration MCP toggle.** The orchestration MCP surface (inter-agent
+  mailbox + task DAG) is now gated behind a server-side setting.
+- **New-workspace session picker.** Creating a workspace lands on the session
+  picker instead of auto-launching an agent.
+- **MCP spawn-session tool** plus a delete-session tmux fix and native-browser
+  overlay z-order handling.
+
+### Fixed
+- **Terminal pane no longer stays corrupted after a system suspend.** An OS
+  `wall` broadcast (systemd's "system will suspend now!" notice) written into
+  the pane is now healed by forcing the agent to fully repaint (a SIGWINCH
+  nudge) on reconnect — automatically, plus a manual "force redraw" shortcut
+  (desktop Cmd/Ctrl+Shift+K, TUI Ctrl-K R). (#20)
+- **Option/Ctrl+Arrow word navigation** works inside agents, and **Shift+Enter**
+  inserts a newline in shells and agents.
+- **Store:** `setting_get_bool` falls back to its default on non-canonical
+  values.
+
+### Performance
+- **Faster desktop startup.** Markdown and xterm are deferred off the eager
+  startup chunk, with a size guard + chunk hygiene to lock in the win.
+
 ## [0.15.0] — 2026-06-18
 
 ### Added

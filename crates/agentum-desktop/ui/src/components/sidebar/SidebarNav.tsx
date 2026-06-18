@@ -1,5 +1,5 @@
 import React from 'react'
-import { Bell, Github, Gitlab, List, MessagesSquare, Search } from 'lucide-react'
+import { Bell, Github, Gitlab, List, MessagesSquare, Search, Target } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { useRepoMap } from '@/store/selectors'
 import { cn } from '@/lib/utils'
@@ -26,6 +26,7 @@ const SidebarNav = React.memo(function SidebarNav() {
   const openTaskPage = useAppStore((s) => s.openTaskPage)
   const openActivityPage = useAppStore((s) => s.openActivityPage)
   const openHarnessPage = useAppStore((s) => s.openHarnessPage)
+  const openGoalsPage = useAppStore((s) => s.openGoalsPage)
   const openModal = useAppStore((s) => s.openModal)
   const activeView = useAppStore((s) => s.activeView)
   const repos = useAppStore((s) => s.repos)
@@ -116,6 +117,7 @@ const SidebarNav = React.memo(function SidebarNav() {
   const tasksActive = activeView === 'tasks'
   const activityActive = activeView === 'activity'
   const harnessActive = activeView === 'harness'
+  const goalsActive = activeView === 'goals'
   const activityUnreadCount = useActivityUnreadCount(showAgentsButton, 'sidebar-badge')
 
   return (
@@ -241,6 +243,23 @@ const SidebarNav = React.memo(function SidebarNav() {
           strokeWidth={harnessActive ? 2.25 : 1.75}
         />
         <span className="flex-1">Chat</span>
+      </button>
+      <button
+        type="button"
+        onClick={openGoalsPage}
+        aria-current={goalsActive ? 'page' : undefined}
+        className={cn(
+          'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight transition-colors',
+          goalsActive
+            ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+            : 'text-sidebar-foreground/60 hover:bg-sidebar-foreground/8'
+        )}
+      >
+        <Target
+          className={cn('size-4 shrink-0', !goalsActive && 'text-sidebar-foreground/30')}
+          strokeWidth={goalsActive ? 2.25 : 1.75}
+        />
+        <span className="flex-1">Goals</span>
       </button>
       <button
         type="button"
