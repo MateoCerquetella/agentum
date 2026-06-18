@@ -40,7 +40,6 @@ import { isRemoteWorkspaceSnapshotApplyInProgress, useIpcEvents } from './hooks/
 import RetainedAgentsSyncGate from './components/dashboard/RetainedAgentsSyncGate'
 import { ActivityTitlebarControls } from './components/activity/ActivityTitlebarControls'
 import Sidebar from './components/Sidebar'
-import Terminal from './components/Terminal'
 import { shutdownBufferCaptures } from './components/terminal-pane/shutdown-buffer-captures'
 import RightSidebar from './components/right-sidebar'
 import { StatusBar } from './components/status-bar/StatusBar'
@@ -207,6 +206,14 @@ function WindowControls(): React.JSX.Element {
   )
 }
 
+// Why lazy: Terminal pulls in xterm.js + its addons (~250 KB), the single
+// largest dependency in the eager startup graph. The terminal workbench is
+// always mounted (to preserve panes across view toggles), so this dynamic
+// import fires right after first paint rather than blocking the entry chunk's
+// parse — meaningfully faster launch on weak CPUs. A Suspense(null) boundary
+// at the render site keeps the (CSS-hidden) workbench area blank for the one
+// frame it takes the chunk to resolve.
+const Terminal = lazy(() => import('./components/Terminal'))
 const Landing = lazy(() => import('./components/Landing'))
 const TaskPage = lazy(() => import('./components/TaskPage'))
 const ActivityPrototypePage = lazy(() => import('./components/activity/ActivityPrototypePage'))
@@ -1700,7 +1707,9 @@ function App(): React.JSX.Element {
                           title="The workspace workbench hit an error."
                           description="Terminal, browser, or editor rendering failed in this workspace. Retry to remount it."
                         >
-                          <Terminal />
+                          <Suspense fallback={null}>
+                            <Terminal />
+                          </Suspense>
                         </RecoverableRenderErrorBoundary>
                       </div>
                       <Suspense fallback={null}>

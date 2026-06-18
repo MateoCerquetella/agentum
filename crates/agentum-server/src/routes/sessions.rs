@@ -434,24 +434,50 @@ async fn delete(
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
     let session = load(&state, id).await?;
-    let host = load_host_for_session(&state, &session).await?;
-    if matches!(session.status, Status::Running) {
-        if !q.force {
-            return Err(ApiError::BadRequest(
-                "session is running; pass ?force=true to kill and remove".into(),
-            ));
-        }
-        let target = tmux_target(&session);
-        if is_external(&session) {
-            // Removing the record must leave the user's tmux session
-            // running; just stop piping its output to our log.
-            let _ = crate::host_runtime::unpipe_pane(&host, &target).await;
-        } else {
-            crate::host_runtime::kill_session(&host, &target)
-                .await
-                .map_err(|e| ApiError::Internal(e.to_string()))?;
-        }
+
+    // Guard a genuinely-running agent behind ?force=true so it isn't torn
+    // down by accident. Any other status (Idle/Crashed/Stopped) deletes freely.
+    if matches!(session.status, Status::Running) && !q.force {
+        return Err(ApiError::BadRequest(
+            "session is running; pass ?force=true to kill and remove".into(),
+        ));
     }
+
+    // Best-effort tmux teardown, then always remove the record. Two things this
+    // must NOT do — both previously surfaced as "can't delete the session":
+    //   1. Gate teardown on `Running` only. The recorded status lags reality —
+    //      a session resting in `Idle` (an agent awaiting input) still owns a
+    //      live pane, so the old `Running`-only gate orphaned it, and a stale
+    //      `agentum-<name>` pane then broke recreating a session of that name.
+    //      We always tear down now; `kill_session` is idempotent (it no-ops when
+    //      the pane is already gone).
+    //   2. Let a teardown failure block record removal. An unreachable host, or
+    //      a host record that's been deleted, must not pin the session row in the
+    //      store forever — removing the local record is always allowed; we just
+    //      can't reach a remote pane that may already be dead. Failures are
+    //      logged, never propagated.
+    match load_host_for_session(&state, &session).await {
+        Ok(host) => {
+            let target = tmux_target(&session);
+            let outcome = if is_external(&session) {
+                // Never destroy a user-owned tmux session — just disarm the pipe.
+                crate::host_runtime::unpipe_pane(&host, &target).await
+            } else {
+                crate::host_runtime::kill_session(&host, &target).await
+            };
+            if let Err(e) = outcome {
+                tracing::warn!(
+                    session = %session.id, %target,
+                    "tmux teardown failed during delete (removing record anyway): {e}"
+                );
+            }
+        }
+        Err(e) => tracing::warn!(
+            session = %session.id,
+            "host unavailable during delete (removing record anyway): {e}"
+        ),
+    }
+
     state.store.delete_session(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -768,6 +794,51 @@ async fn start(
     // harness-engine driver goes through the exact same path.
     spawn_agent_into_pane(&state, &session, &host, &target, &workdir).await?;
     Ok(Json(session_with_spawned(load(&state, id).await?, true)))
+}
+
+/// Create a session record AND launch its agent into a fresh tmux pane in one
+/// call — the programmatic equivalent of `POST /create` then `POST /start`,
+/// without the HTTP envelope. Shared with the MCP `agentum_spawn_session` tool
+/// so an agent can spawn a *sibling* agent inside agentum through the exact same
+/// launch path (YOLO marker translation, loopback `pane_env`, the Claude
+/// `--settings` hook, MCP wiring) the interactive routes use — never a parallel
+/// reimplementation. Worktree isolation is out of scope here; callers pass an
+/// explicit, already-existing `workdir`.
+pub(crate) async fn create_and_spawn_session(
+    state: &AppState,
+    mut new: NewSession,
+    host_id: Option<Uuid>,
+) -> Result<Session, ApiError> {
+    let host_id = host_id.unwrap_or(LOCAL_HOST_ID);
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown host: {host_id}")))?;
+
+    // Resolve + validate the workdir exactly as `create`/`start` do (a fresh
+    // spawn has no worktree to self-heal, so a missing dir is a hard error).
+    let workdir = match &host.kind {
+        HostKind::Local => {
+            let workdir = super::util::expand_workdir(&new.workdir)?;
+            if !workdir.exists() {
+                return Err(ApiError::BadRequest(format!(
+                    "workdir does not exist: {}",
+                    workdir.display()
+                )));
+            }
+            new.workdir = workdir.to_string_lossy().into_owned();
+            workdir
+        }
+        HostKind::Ssh { .. } => PathBuf::from(new.workdir.trim()),
+    };
+
+    let session = state.store.create_session_on_host(new, Some(host_id)).await?;
+    // A freshly-created agentum session always derives its target from the name;
+    // there is no pre-existing pane to reattach to (that's the `start` route's job).
+    let target = agentum_tmux::target_for(&session.name);
+    spawn_agent_into_pane(state, &session, &host, &target, &workdir).await?;
+    load(state, session.id).await
 }
 
 async fn stop(

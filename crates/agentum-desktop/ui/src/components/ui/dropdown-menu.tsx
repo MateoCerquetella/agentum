@@ -3,6 +3,7 @@ import { CheckIcon, ChevronRightIcon, CircleIcon } from 'lucide-react'
 import { DropdownMenu as DropdownMenuPrimitive } from 'radix-ui'
 
 import { cn } from '@/lib/utils'
+import { useSuppressNativeBrowserWhileOpen } from '../browser-pane/native-browser-overlay-suppression'
 
 function DropdownMenu({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
   return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />
@@ -26,6 +27,9 @@ function DropdownMenuContent({
   style,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
+  // Hide the native browser webview while this menu is open (it can't paint
+  // under a native webview — see native-browser-overlay-suppression).
+  useSuppressNativeBrowserWhileOpen()
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content

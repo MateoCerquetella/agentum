@@ -1,0 +1,55 @@
+name: "✨ Feature / change"
+description: "Propose a new feature, enhancement, or non-bug change. Required before opening a PR."
+title: "feat: "
+labels: ["type/feat"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Every change starts as a documented issue. Fill this in, pick the right
+        labels (type + area + priority), then branch and open a PR that closes it.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences — what and why.
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation / problem
+      description: What pain or opportunity does this address? Who is affected?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: How you'd implement it. Reference crates/files (e.g. crates/agentum-server/src/routes/sessions.rs).
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: A checklist a reviewer can verify against.
+      value: |
+        - [ ]
+        - [ ]
+    validations:
+      required: true
+  - type: input
+    id: area
+    attributes:
+      label: Area(s)
+      description: "Which crate(s)/surface — also add the matching area/* label. e.g. desktop, tui, server, executor."
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks / out of scope
+      description: Known gotchas, migrations, or things explicitly NOT covered here.
+    validations:
+      required: false

@@ -3,6 +3,7 @@ import { CheckIcon, ChevronRightIcon, CircleIcon } from 'lucide-react'
 import { ContextMenu as ContextMenuPrimitive } from 'radix-ui'
 
 import { cn } from '@/lib/utils'
+import { useSuppressNativeBrowserWhileOpen } from '../browser-pane/native-browser-overlay-suppression'
 
 function ContextMenu({ ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Root>) {
   return <ContextMenuPrimitive.Root data-slot="context-menu" modal={false} {...props} />
@@ -76,6 +77,9 @@ function ContextMenuContent({
   className,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) {
+  // Hide the native browser webview while this context menu is open (it can't
+  // paint under a native webview — see native-browser-overlay-suppression).
+  useSuppressNativeBrowserWhileOpen()
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content

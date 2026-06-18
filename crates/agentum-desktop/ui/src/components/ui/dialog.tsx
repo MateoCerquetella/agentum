@@ -6,6 +6,7 @@ import { Dialog as DialogPrimitive } from 'radix-ui'
 
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { useSuppressNativeBrowserWhileOpen } from '../browser-pane/native-browser-overlay-suppression'
 
 function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />
@@ -49,6 +50,9 @@ function DialogContent({
   overlayClassName?: string
   showCloseButton?: boolean
 }) {
+  // Hide the native browser webview while this dialog is open — it can't paint
+  // under a native webview (see native-browser-overlay-suppression).
+  useSuppressNativeBrowserWhileOpen()
   return (
     <DialogPortal data-slot="dialog-portal">
       <DialogOverlay className={overlayClassName} />

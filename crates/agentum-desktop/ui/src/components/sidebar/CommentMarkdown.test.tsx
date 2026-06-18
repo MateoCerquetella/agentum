@@ -1,6 +1,10 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import CommentMarkdown, { remarkGitHubReferences } from './CommentMarkdown'
+// CommentMarkdown is a lazy wrapper (defers the markdown engine off the startup
+// chunk); render assertions target the synchronous impl, and the pure autolink
+// plugin is tested via its react-markdown-free module.
+import CommentMarkdown from './CommentMarkdownImpl'
+import { remarkGitHubReferences } from './comment-github-references'
 
 describe('CommentMarkdown', () => {
   it('autolinks same-repo GitHub issue references when repo context is provided', () => {

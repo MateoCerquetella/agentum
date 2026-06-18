@@ -5,6 +5,7 @@ import { Popover as PopoverPrimitive } from 'radix-ui'
 
 import { cn } from '@/lib/utils'
 import { updatePopoverContentRef } from './popover-content-ref'
+import { useSuppressNativeBrowserWhileOpen } from '../browser-pane/native-browser-overlay-suppression'
 
 function Popover(props: React.ComponentProps<typeof PopoverPrimitive.Root>) {
   return <PopoverPrimitive.Root data-slot="popover" {...props} />
@@ -30,6 +31,9 @@ function PopoverContent({
 }: React.ComponentProps<typeof PopoverPrimitive.Content> & {
   portalContainer?: HTMLElement | null
 }) {
+  // Hide the native browser webview while this popover is open (it can't paint
+  // under a native webview — see native-browser-overlay-suppression).
+  useSuppressNativeBrowserWhileOpen()
   const wheelFrameIdsRef = React.useRef<Set<number>>(new Set())
 
   const cancelWheelFrames = React.useCallback(() => {
