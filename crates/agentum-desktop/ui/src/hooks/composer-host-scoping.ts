@@ -15,8 +15,10 @@ export type ComposerHostOption = {
   label: string
 }
 
-/** Distinct hosts present in `eligibleRepos`, local first then first-seen order.
- *  Labels come from the hosts slice (`hostMetaByKey`); a host with no meta yet
+/** Distinct hosts: local + every known SSH host from `hostMetaByKey`, then any
+ *  additional hosts referenced by repos. SSH hosts always appear (even without
+ *  repos) so the composer host selector works on fresh installs after adding an
+ *  SSH connection. Labels come from `hostMetaByKey`; a host with no meta yet
  *  (readiness still hydrating) falls back to a kind-derived placeholder so the
  *  selector renders before `hydrateHosts` lands. */
 export function deriveEligibleHosts(
@@ -25,6 +27,21 @@ export function deriveEligibleHosts(
 ): ComposerHostOption[] {
   const seen = new Set<HostKey>()
   const order: HostKey[] = []
+
+  // Always include local first.
+  seen.add(LOCAL_HOST_KEY)
+  order.push(LOCAL_HOST_KEY)
+
+  // Include every known SSH host (even those without repos yet).
+  for (const key of Object.keys(hostMetaByKey)) {
+    if (key !== LOCAL_HOST_KEY && !seen.has(key)) {
+      seen.add(key)
+      order.push(key)
+    }
+  }
+
+  // Include any additional hosts referenced by repos (catches hosts not yet
+  // hydrated into hostMetaByKey).
   for (const repo of eligibleRepos) {
     const key = hostKeyForRepo(repo)
     if (!seen.has(key)) {
@@ -32,7 +49,7 @@ export function deriveEligibleHosts(
       order.push(key)
     }
   }
-  order.sort((a, b) => (a === LOCAL_HOST_KEY ? -1 : b === LOCAL_HOST_KEY ? 1 : 0))
+
   return order.map((key) => {
     const meta = hostMetaByKey[key]
     const kind: 'local' | 'ssh' = key === LOCAL_HOST_KEY ? 'local' : 'ssh'
