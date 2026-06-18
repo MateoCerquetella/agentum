@@ -416,6 +416,14 @@ Test) → browser QA gate green → ticket Done. The pieces:
   retries (shared `handle_gate_failure`). A missing `qa.sh` is a pass so non-web
   projects aren't blocked. `scaffold_harness` writes a `qa.sh` template that
   shows how to drive the `browser-verification-loop` skill for a web surface.
+- **QA gate as a spawned agent (012b)**: `FeatureList.qa_mode` (`auto`/`script`/
+  `agent`, default `auto`) picks how the QA gate runs. `agent` (or `auto` when no
+  `qa.sh` and `AGENTUM_BROWSER_VERIFY` is set) makes `drive_inner` call
+  `run_qa_agent_gate`, which spawns a browser-verification-loop agent
+  (`spawn_qa_agent`) that writes a verdict file `.agentum-harness/qa/<id>.json`
+  (`{"passed":bool,"summary":...}`); the harness reads it after the agent settles.
+  A missing/garbled verdict FAILS the gate (inconclusive never advances to Done).
+  `qa_agent_tool` overrides the QA CLI (default = the feature agent).
 - **New feature state** `FeatureState::ReadyToTest` (between `Verifying` and
   `Done`) — set by `run_qa_once`; the in-app board has a "Ready to Test" column.
 - **Tracker transitions** (`task_sink::apply_tracker_transition`,
