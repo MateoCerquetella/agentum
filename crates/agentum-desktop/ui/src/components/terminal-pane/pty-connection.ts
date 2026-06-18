@@ -135,6 +135,11 @@ let codexRestartNoticePresence = false
 export type PanePtyBinding = IDisposable & {
   syncRendererOutputVisibility: () => void
   syncProcessTracking: () => void
+  /** Force the pane's agent to fully repaint (server path only — a SIGWINCH
+   *  nudge + fresh snapshot). Backs the "force redraw" shortcut, which heals a
+   *  grid corrupted by bytes the agent never drew (an OS suspend `wall`
+   *  broadcast). Absent / no-op on the local PTY path. */
+  forceRedraw?: () => void
 }
 
 function isAgentTaskCompleteNotificationEnabled(): boolean {

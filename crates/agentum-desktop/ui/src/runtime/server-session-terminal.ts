@@ -14,6 +14,10 @@ import { extractAllOscTitles } from '../../../shared/agent-detection'
 export type ServerSessionTerminalBinding = {
   /** Tear down the WS stream and detach the xterm listeners. */
   dispose: () => void
+  /** Force the agent to fully repaint the pane (SIGWINCH nudge + fresh
+   *  snapshot). Backs the manual "force redraw" shortcut; the binding also
+   *  fires this automatically on reconnect. */
+  forceRedraw: () => void
 }
 
 export type BindServerSessionTerminalOptions = {
@@ -85,6 +89,10 @@ export async function bindServerSessionTerminal(
     }
   }
 
+  // Forward handle so the reconnect callback (defined inline below, before the
+  // handle exists) can ask for a redraw heal once the stream is live.
+  let sessionStream: SessionStream | null = null
+
   const stream: SessionStream = await openSessionStream(
     sessionId,
     { cols: term.cols, rows: term.rows },
@@ -116,10 +124,18 @@ export async function bindServerSessionTerminal(
       // terminal reconnected but the sidebar/tree stayed stuck on the outage.
       onReconnected: () => {
         void markHostConnectedFromHostKey(opts?.hostKey)
+        // A reconnect is the suspend/resume path: while we were gone, an OS
+        // `wall` broadcast (e.g. systemd's "system will suspend now!") may
+        // have been written straight into the pane grid, and the resume
+        // replay just re-feeds it — the agent won't overpaint cells it didn't
+        // draw. Force a full repaint (SIGWINCH nudge) so the garbage heals
+        // instead of persisting until the user types. No-op on old daemons.
+        sessionStream?.requestRedraw()
       }
     },
     opts?.hostKey
   )
+  sessionStream = stream
 
   const dataSub = term.onData((data) => stream.send(data))
   const resizeSub = term.onResize(({ cols, rows }) => stream.resize(cols, rows))
@@ -198,6 +214,11 @@ export async function bindServerSessionTerminal(
       dataSub.dispose()
       resizeSub.dispose()
       stream.close()
+    },
+    forceRedraw: () => {
+      if (!disposed) {
+        stream.requestRedraw()
+      }
     }
   }
 }

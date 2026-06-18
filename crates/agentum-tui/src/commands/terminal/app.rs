@@ -4289,6 +4289,41 @@ async fn handle_key(
             // message explains the local-only constraint when no
             // helper is on PATH.
             Some('i') => paste_from_system_clipboard(app),
+            // Ctrl-K R — force the focused pane's agent to fully repaint.
+            // A momentary 1-row resize toggle provokes a SIGWINCH, and a
+            // ratatui agent (claude/codex/opencode) clears its buffer and
+            // redraws in full — overpainting cells corrupted by bytes it
+            // never drew, e.g. an OS `wall` broadcast (systemd's "system
+            // will suspend now!" notice) written straight into the pane on
+            // a laptop suspend. Reuses the universally-supported resize
+            // frame (no daemon capability gate); the restore is delayed a
+            // beat so the agent observes the smaller size first — two
+            // SIGWINCHs too close together can collapse into one read of the
+            // unchanged size and skip the redraw.
+            Some('r') => {
+                let (tx, (cols, rows)) = match app.focus {
+                    Focus::TermRight => app
+                        .split_right
+                        .as_ref()
+                        .map(|s| (s.term_in.clone(), s.term_size))
+                        .unwrap_or((app.term_in.clone(), app.term_size)),
+                    _ => (app.term_in.clone(), app.term_size),
+                };
+                if let Some(tx) = tx
+                    && cols > 0
+                    && rows > 1
+                    && tx.send(TermOut::Resize { cols, rows: rows - 1 }).is_ok()
+                {
+                    let tx2 = tx.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                        let _ = tx2.send(TermOut::Resize { cols, rows });
+                    });
+                    app.status_msg = Some("forcing pane redraw…".into());
+                } else {
+                    app.status_msg = Some("no active terminal to redraw".into());
+                }
+            }
             _ => {
                 app.status_msg = Some("(chord cancelled)".into());
             }
@@ -4318,7 +4353,7 @@ async fn handle_key(
     if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('k')) {
         app.chord = Some('K');
         app.status_msg = Some(
-            "Ctrl-K · waiting (Z fullscreen · B sidebar · I image paste · , / . lazygit width) · Ctrl-V: paste clipboard image"
+            "Ctrl-K · waiting (Z fullscreen · B sidebar · R redraw · I image paste · , / . lazygit width) · Ctrl-V: paste clipboard image"
                 .into(),
         );
         return;

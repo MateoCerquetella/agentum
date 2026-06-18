@@ -418,6 +418,11 @@ export function connectPaneServerSession(
     // Delegate to the local binding when we fell back; no-ops for the server
     // path (the server owns pane lifecycle / process tracking).
     syncRendererOutputVisibility: () => localFallback?.syncRendererOutputVisibility(),
-    syncProcessTracking: () => localFallback?.syncProcessTracking()
+    syncProcessTracking: () => localFallback?.syncProcessTracking(),
+    // Force a clean repaint: the server binding nudges the agent (SIGWINCH +
+    // fresh snapshot) to heal a corrupted grid. When we fell back to a local
+    // PTY there's no server pane to nudge — delegate if that path ever grows
+    // the capability, else it's a no-op.
+    forceRedraw: () => (binding ? binding.forceRedraw() : localFallback?.forceRedraw?.())
   }
 }
