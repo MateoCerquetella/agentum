@@ -119,7 +119,16 @@ impl Store {
         Ok(self
             .setting_get(key)
             .await?
-            .map(|v| v == "1")
+            // Why: fall back to `default` for any value that isn't a canonical
+            // "1"/"0" — not just when the key is absent. `setting_set_bool`
+            // only ever writes the canonical pair, but a value written by a
+            // different code path (or a future non-boolean reuse of the key)
+            // should not silently read as `false`, which `== "1"` would do.
+            .map(|v| match v.as_str() {
+                "1" => true,
+                "0" => false,
+                _ => default,
+            })
             .unwrap_or(default))
     }
 
