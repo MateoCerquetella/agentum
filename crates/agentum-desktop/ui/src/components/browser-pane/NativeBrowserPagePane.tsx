@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Globe, Loader2, RefreshCw } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Globe, Loader2, MessageSquarePlus, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/tauri'
 import { useAppStore } from '@/store'
@@ -319,6 +319,21 @@ export default function NativeBrowserPagePane({
           onNavigate={navigateToUrl}
           inputRef={addressBarInputRef}
         />
+        {/* Annotate: inject the in-page picker (orca-style). Lives on the native
+            toolbar because this — not BrowserPane — is the rendered pane. */}
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-7 w-7"
+          disabled={!hasPage || !isNavigableUrl(browserTab.url)}
+          title="Annotate page element"
+          aria-label="Annotate page element"
+          onClick={() =>
+            void api.browser.inpageAnnotate({ browserPageId: browserTab.id, enabled: true })
+          }
+        >
+          <MessageSquarePlus className="size-4" />
+        </Button>
       </div>
       <div ref={containerRef} className="relative min-h-0 flex-1 overflow-hidden bg-background">
         {!hasPage ? (
