@@ -316,6 +316,34 @@ impl TauriBridge {
         }
     }
 
+    /// Add an annotation programmatically: grab the element by selector (reusing
+    /// the verified extraction channel) and hand the payload + comment + intent
+    /// to the renderer, which owns the annotation store, so it shows in the tray
+    /// and the `annotations` read returns it.
+    async fn annotate_element(&self, args: &Value) -> anyhow::Result<Value> {
+        let comment = args
+            .get("comment")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("missing `comment`"))?;
+        // Extract the target first (errors here if the selector matches nothing).
+        let payload = self.grab_element(args).await?;
+        let intent = args
+            .get("intent")
+            .and_then(Value::as_str)
+            .unwrap_or("change");
+        let mut req = json!({
+            "comment": comment,
+            "intent": intent,
+            "payload": payload,
+        });
+        if let Some(tab) = args.get("tab") {
+            req["tab"] = tab.clone();
+        }
+        self.renderer_op("ui-request-browser-annotate", req).await
+    }
+
     fn browser_sync(&self, op: &str, args: &Value) -> anyhow::Result<Value> {
         match op {
             "tabs" => {
@@ -481,7 +509,7 @@ impl DesktopBridge for TauriBridge {
             match name.as_str() {
                 "annotations" => return self.renderer_op("ui-request-browser-annotations", op).await,
                 "grab" => return self.grab_element(&op).await,
-                "annotate" => return self.renderer_op("ui-request-browser-annotate", op).await,
+                "annotate" => return self.annotate_element(&op).await,
                 _ => {}
             }
             self.browser_sync(&name, &op)

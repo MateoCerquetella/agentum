@@ -1554,6 +1554,62 @@ export function useIpcEvents(): void {
       })
     )
 
+    // Why: the agentum MCP `agentum_browser {op:"annotate"}` round-trips here
+    // with an already-extracted element `payload` (the bridge grabbed it by
+    // selector) plus the agent's comment/intent. We own the annotation store,
+    // so build the annotation and add it — it then shows in the tray and the
+    // `annotations` read returns it.
+    unsubs.push(
+      api.ui.onRequestBrowserAnnotate((data) => {
+        try {
+          const store = useAppStore.getState()
+          const tab = typeof data?.tab === 'string' ? data.tab.trim() : ''
+          let pageId: string | null = null
+          if (tab) {
+            for (const pages of Object.values(store.browserPagesByWorkspace)) {
+              const hit = pages.find((p) => p.id === tab || p.id.endsWith(tab))
+              if (hit) {
+                pageId = hit.id
+                break
+              }
+            }
+          }
+          if (!pageId) {
+            const worktreeId = store.activeWorktreeId
+            const workspaceId =
+              (worktreeId ? store.activeBrowserTabIdByWorktree[worktreeId] : null) ??
+              store.activeBrowserTabId
+            pageId = workspaceId ? (store.browserPagesByWorkspace[workspaceId]?.[0]?.id ?? null) : null
+          }
+          if (!pageId) {
+            api.ui.replyBrowserOp({ requestId: data.requestId, error: 'No browser tab open' })
+            return
+          }
+          const intents = ['fix', 'change', 'question', 'approve']
+          const intent = intents.includes(data?.intent) ? data.intent : 'change'
+          const id =
+            typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+              ? crypto.randomUUID()
+              : `ann-${pageId}-${data.requestId}`
+          store.addBrowserPageAnnotation({
+            id,
+            browserPageId: pageId,
+            comment: String(data?.comment ?? ''),
+            intent,
+            priority: 'important',
+            createdAt: new Date().toISOString(),
+            payload: { ...data.payload, screenshot: null }
+          })
+          api.ui.replyBrowserOp({ requestId: data.requestId, result: { ok: true, id, tab: pageId } })
+        } catch (err) {
+          api.ui.replyBrowserOp({
+            requestId: data.requestId,
+            error: err instanceof Error ? err.message : 'Failed to add annotation'
+          })
+        }
+      })
+    )
+
     unsubs.push(
       api.ui.onRequestTabSetProfile((data) => {
         try {

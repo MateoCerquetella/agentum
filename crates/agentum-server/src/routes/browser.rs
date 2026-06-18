@@ -22,6 +22,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/browser/screenshot", post(screenshot))
         .route("/api/browser/annotations", post(annotations))
         .route("/api/browser/grab", post(grab))
+        .route("/api/browser/annotate", post(annotate))
 }
 
 /// Forward a browser op to the desktop bridge, or 501 if there is no desktop.
@@ -92,4 +93,10 @@ async fn annotations(
 /// agent-driven; the desktop bridge injects an extractor into the page.
 async fn grab(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
     forward(&s, "grab", b).await
+}
+/// Add an annotation to a page element (body: `{ "selector", "comment", "intent"?, "tab"? }`).
+/// The bridge grabs the element then adds the annotation to the renderer's store
+/// (so it appears in the tray and is returned by `annotations`).
+async fn annotate(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
+    forward(&s, "annotate", b).await
 }

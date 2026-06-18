@@ -233,18 +233,23 @@ fn tool_specs() -> Value {
                 annotations — read the design-feedback annotations the user marked on \
                 page elements (returns structured markdown the agent can act on); \
                 grab (selector) — extract an element's metadata (tag, text, selector, \
-                rect, computed styles) by CSS selector. \
+                rect, computed styles) by CSS selector; \
+                annotate (selector, comment, intent?) — attach a design-feedback \
+                annotation to an element (intent: change|fix|question|approve), which \
+                shows in the browser tray and is returned by `annotations`. \
                 Start with `open` when no tab is listed by `tabs`. Requires the agentum \
                 desktop app. (For headless browser automation an agent should use the \
                 Playwright MCP instead.)",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|screenshot|annotations|grab" },
+                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|screenshot|annotations|grab|annotate" },
                     "url": { "type": "string", "description": "Target URL for `open`/`navigate`" },
                     "tab": { "type": "string", "description": "Tab id to act on (default: the active tab)" },
-                    "selector": { "type": "string", "description": "CSS selector for `click`/`fill`" },
-                    "text": { "type": "string", "description": "Text to type for `fill`" }
+                    "selector": { "type": "string", "description": "CSS selector for `click`/`fill`/`grab`/`annotate`" },
+                    "text": { "type": "string", "description": "Text to type for `fill`" },
+                    "comment": { "type": "string", "description": "Annotation feedback text for `annotate`" },
+                    "intent": { "type": "string", "description": "Annotation intent for `annotate`: change|fix|question|approve" }
                 },
                 "required": ["op"],
                 "additionalProperties": true,
