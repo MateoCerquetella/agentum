@@ -32,4 +32,9 @@ label "priority/p1" "d93f0b" "High — next up"
 label "priority/p2" "fbca04" "Normal"
 label "priority/p3" "0e8a16" "Low / someday"
 
+# --- status/* : lifecycle after a PR merges into staging -----------------
+label "status/qa"      "fbca04" "Merged to staging — under QA on the staging environment"
+label "status/qa-pass" "0e8a16" "QA verified on staging — ready to tag/promote"
+label "status/qa-fail" "d73a4a" "QA found issues on staging — back to dev"
+
 echo "Labels synced."
