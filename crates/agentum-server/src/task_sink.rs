@@ -172,6 +172,94 @@ impl TaskSink {
     }
 }
 
+/// A pipeline phase, mapped onto whatever the backing tracker calls it. The
+/// harness drives these as a feature moves Pending → Coding → green unit gate →
+/// green QA gate (spec 012).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackerPhase {
+    Todo,
+    InProgress,
+    ReadyToTest,
+    Done,
+}
+
+/// Outcome of a transition, for the harness log. Transitions are a side-channel:
+/// a tracker hiccup must never halt the run, so even failures come back as a
+/// value the caller logs rather than an error that propagates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransitionResult {
+    /// The tracker state was changed.
+    Applied,
+    /// Nothing to do (provider has no such concept, or no external tracker).
+    Skipped(String),
+}
+
+/// The board column for a phase. Pure so the mapping is unit-tested. The board
+/// ships `todo`/`doing`/`review`/`done` columns (see board_column_rule tests).
+fn board_status_for(phase: TrackerPhase) -> &'static str {
+    match phase {
+        TrackerPhase::Todo => "todo",
+        TrackerPhase::InProgress => "doing",
+        TrackerPhase::ReadyToTest => "review",
+        TrackerPhase::Done => "done",
+    }
+}
+
+/// Drive a created feature's tracker item to `phase`, dispatching on the provider
+/// recorded when the feature was created. **Best-effort by contract**: returns
+/// `Ok(Skipped)` for providers/states that don't apply and only `Err` for a real
+/// transport failure the caller should log — never a reason to halt the harness.
+///
+/// `tracker_id` is the provider's stable handle (board key, Linear identifier,
+/// GitHub issue number) — the same value stored as the harness feature id.
+pub async fn apply_tracker_transition(
+    store: &Store,
+    provider: &str,
+    tracker_id: &str,
+    phase: TrackerPhase,
+) -> anyhow::Result<TransitionResult> {
+    match provider {
+        "linear" => {
+            let map = crate::linear::LinearStateMap::from_env();
+            match crate::linear::transition_issue(tracker_id, phase, &map).await? {
+                crate::linear::TransitionOutcome::Applied => Ok(TransitionResult::Applied),
+                crate::linear::TransitionOutcome::Skipped(why) => {
+                    Ok(TransitionResult::Skipped(why))
+                }
+            }
+        }
+        "board" => {
+            // The board key (e.g. `AG-12`) is the feature id; resolve it to the
+            // numeric row id to patch status.
+            let items = store.list_board_items().await?;
+            let Some(item) = items.into_iter().find(|i| i.key == tracker_id) else {
+                return Ok(TransitionResult::Skipped(format!(
+                    "no board card with key {tracker_id}"
+                )));
+            };
+            let status = board_status_for(phase);
+            store
+                .patch_board_item(
+                    item.id,
+                    agentum_core::BoardPatch {
+                        status: Some(status.to_string()),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            Ok(TransitionResult::Applied)
+        }
+        // GitHub Issues has no built-in workflow column; a label/comment sync is a
+        // future refinement (spec 012 follow-up). No-op for now, logged by caller.
+        "github" => Ok(TransitionResult::Skipped(
+            "github issue state sync not implemented".into(),
+        )),
+        other => Ok(TransitionResult::Skipped(format!(
+            "unknown tracker provider {other:?}"
+        ))),
+    }
+}
+
 /// `gh issue create` argv for a non-interactive create. Kept as a pure helper so
 /// the argument shape is unit-tested without spawning a process.
 fn gh_create_argv<'a>(title: &'a str, body: &'a str) -> [&'a str; 6] {
@@ -278,6 +366,61 @@ mod tests {
     #[test]
     fn parse_gh_issue_url_errors_without_url() {
         assert!(parse_gh_issue_url("nothing useful here\n").is_err());
+    }
+
+    #[test]
+    fn board_status_mapping_covers_all_phases() {
+        assert_eq!(board_status_for(TrackerPhase::Todo), "todo");
+        assert_eq!(board_status_for(TrackerPhase::InProgress), "doing");
+        assert_eq!(board_status_for(TrackerPhase::ReadyToTest), "review");
+        assert_eq!(board_status_for(TrackerPhase::Done), "done");
+    }
+
+    #[tokio::test]
+    async fn board_transition_moves_card_status() {
+        let store = fresh_store().await;
+        let here = std::env::temp_dir();
+        let r = TaskSink::Board
+            .create_feature(
+                &ctx(&store, &here, None),
+                &NewFeature {
+                    title: "Add OAuth login".into(),
+                    body: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let res = apply_tracker_transition(&store, "board", &r.id, TrackerPhase::InProgress)
+            .await
+            .unwrap();
+        assert_eq!(res, TransitionResult::Applied);
+        let card = store
+            .list_board_items()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|c| c.key == r.id)
+            .unwrap();
+        assert_eq!(card.status, "doing");
+    }
+
+    #[tokio::test]
+    async fn board_transition_unknown_key_is_skipped() {
+        let store = fresh_store().await;
+        let res = apply_tracker_transition(&store, "board", "AG-9999", TrackerPhase::Done)
+            .await
+            .unwrap();
+        assert!(matches!(res, TransitionResult::Skipped(_)));
+    }
+
+    #[tokio::test]
+    async fn github_transition_is_a_logged_noop() {
+        let store = fresh_store().await;
+        let res = apply_tracker_transition(&store, "github", "42", TrackerPhase::Done)
+            .await
+            .unwrap();
+        assert!(matches!(res, TransitionResult::Skipped(_)));
     }
 
     #[tokio::test]
