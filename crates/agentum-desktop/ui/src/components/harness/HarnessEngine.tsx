@@ -201,6 +201,8 @@ function deriveGate(status: HarnessStatus | null): { tone: GateTone; title: stri
     case 'verifying':
     case 'init_verifying':
       return { tone: 'verifying', title: 'VERIFYING…', detail: 'Running the gate. Advancement is blocked until it passes.' }
+    case 'awaiting_confirmation':
+      return { tone: 'passed', title: 'AWAITING CONFIRMATION', detail: 'Gates passed — waiting for human confirmation (HITL-at-QA) to finalize.' }
     case 'running':
       return { tone: 'working', title: 'AGENT WORKING', detail: 'An agent is implementing the current feature.' }
     case 'idle':
@@ -267,6 +269,7 @@ const COLUMN_DEFS: { key: FeatureState; label: string }[] = [
   { key: 'pending', label: 'Backlog' },
   { key: 'coding', label: 'Coding' },
   { key: 'verifying', label: 'Verifying' },
+  { key: 'ready_to_test', label: 'Ready to Test' },
   { key: 'done', label: 'Done' }
 ]
 
@@ -277,6 +280,8 @@ function featureAccent(state: FeatureState): string {
     case 'coding':
       return 'border-l-[var(--chart-3)]'
     case 'verifying':
+    case 'ready_to_test':
+    case 'awaiting_confirm':
       return 'border-l-[var(--chart-3)]'
     case 'blocked':
       return 'border-l-destructive'
@@ -302,7 +307,26 @@ function FeatureCard({ feature, isCurrent }: { feature: Feature; isCurrent: bool
           </Badge>
         ) : null}
       </div>
-      <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">{feature.id}</div>
+      <div className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
+        {feature.tracker_url ? (
+          <a
+            href={feature.tracker_url}
+            target="_blank"
+            rel="noreferrer"
+            className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+            title={`Open in ${feature.tracker_provider ?? 'tracker'}`}
+          >
+            {feature.id}
+          </a>
+        ) : (
+          <span>{feature.id}</span>
+        )}
+        {feature.tracker_provider && feature.tracker_provider !== 'board' ? (
+          <span className="rounded bg-muted px-1 text-[9px] uppercase tracking-wide">
+            {feature.tracker_provider}
+          </span>
+        ) : null}
+      </div>
       {feature.state === 'blocked' && feature.last_error ? (
         <pre className="mt-1.5 max-h-24 overflow-auto rounded bg-destructive/10 p-1.5 font-mono text-[10px] leading-snug text-destructive whitespace-pre-wrap">
           {feature.last_error.slice(-600)}
@@ -361,6 +385,7 @@ const STATE_LABEL: Record<HarnessState, string> = {
   init_verifying: 'Checking env',
   running: 'Running',
   verifying: 'Verifying',
+  awaiting_confirmation: 'Awaiting confirmation',
   blocked: 'Blocked',
   done: 'Done',
   failed: 'Failed'

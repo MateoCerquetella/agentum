@@ -40,6 +40,26 @@ struct LinearCreds {
     workspaces: Vec<StoredWorkspace>,
     #[serde(default)]
     selected_workspace_id: Option<String>,
+    /// Pipeline → Linear workflow-state name overrides (spec 012). Read by the
+    /// embedded server's `linear::LinearStateMap` to drive ticket transitions.
+    /// Kept here (and preserved across writes) so it lives beside the token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    state_map: Option<StoredStateMap>,
+}
+
+/// The four pipeline phases → Linear workflow-state names. Each optional so a
+/// partial override keeps the default for the rest. Field names match the
+/// server's `linear::StoredStateMap` exactly — the server reads this same file.
+#[derive(Default, Clone, Serialize, Deserialize)]
+struct StoredStateMap {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    todo: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    in_progress: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ready_to_test: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    done: Option<String>,
 }
 
 // Serialize read-modify-write so concurrent connect/disconnect calls can't clobber
@@ -439,6 +459,42 @@ pub fn linear_select_workspace(workspace_id: String) -> Value {
         Ok(creds) => status_to_json(&creds),
         Err(_) => status_to_json(&read_creds()),
     }
+}
+
+/// The effective pipeline → Linear state-name map (spec 012): stored overrides
+/// filled in with the defaults the server uses, so the Settings inputs always
+/// show concrete names the user can edit.
+#[tauri::command]
+pub fn linear_get_state_map() -> Value {
+    let sm = read_creds().state_map.unwrap_or_default();
+    json!({
+        "todo": sm.todo.unwrap_or_else(|| "Todo".into()),
+        "inProgress": sm.in_progress.unwrap_or_else(|| "In Progress".into()),
+        "readyToTest": sm.ready_to_test.unwrap_or_else(|| "Ready to Test".into()),
+        "done": sm.done.unwrap_or_else(|| "Done".into()),
+    })
+}
+
+/// Persist the pipeline → Linear state-name overrides into `linear.json`. An
+/// empty/blank field clears that override (the server falls back to its
+/// default). Returns the effective map so the UI can re-render.
+#[tauri::command]
+pub fn linear_set_state_map(
+    todo: Option<String>,
+    in_progress: Option<String>,
+    ready_to_test: Option<String>,
+    done: Option<String>,
+) -> Value {
+    let norm = |s: Option<String>| s.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    let _ = update_creds(move |creds| {
+        creds.state_map = Some(StoredStateMap {
+            todo: norm(todo),
+            in_progress: norm(in_progress),
+            ready_to_test: norm(ready_to_test),
+            done: norm(done),
+        });
+    });
+    linear_get_state_map()
 }
 
 #[tauri::command]

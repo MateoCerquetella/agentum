@@ -5,13 +5,21 @@
 // is one source of truth and no silent field drift.
 import { apiUrl, wsUrl, getServerEndpoint } from './server-endpoint'
 
-export type FeatureState = 'pending' | 'coding' | 'verifying' | 'done' | 'blocked'
+export type FeatureState =
+  | 'pending'
+  | 'coding'
+  | 'verifying'
+  | 'ready_to_test'
+  | 'awaiting_confirm'
+  | 'done'
+  | 'blocked'
 
 export type HarnessState =
   | 'idle'
   | 'init_verifying'
   | 'running'
   | 'verifying'
+  | 'awaiting_confirmation'
   | 'blocked'
   | 'done'
   | 'failed'
@@ -24,6 +32,10 @@ export type Feature = {
   attempts: number
   last_error?: string | null
   prompt?: string | null
+  /** Task tracker this feature mirrors (`board` / `github` / `linear`). */
+  tracker_provider?: string | null
+  /** The tracker item's URL (null for the internal board). */
+  tracker_url?: string | null
 }
 
 export type FeatureList = {
