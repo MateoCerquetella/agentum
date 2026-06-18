@@ -9,7 +9,7 @@
 // is the next slice; this surface already lists runs as chats, renders each
 // run's backlog as cards, streams live state, and Approves (runs) a backlog.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, MessagesSquare, Plus, Send, Sparkles } from 'lucide-react'
+import { ChevronLeft, Clock, MessagesSquare, Plus, Send, Sparkles } from 'lucide-react'
 
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
@@ -22,6 +22,7 @@ import {
   listHarnesses,
   openHarnessEventStream,
   runHarness,
+  scaffoldHarness,
   startHarness
 } from '@/runtime/harness-client'
 
@@ -73,6 +74,20 @@ export default function ChatPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const streamRef = useRef<{ close: () => void } | null>(null)
+
+  // Feature intake (describe → draft spec) isn't finished yet, so the composer
+  // is a disabled "SOON" chip. Easter egg: 5 clicks on the chip unlocks it for
+  // testing. Keeping it locked also avoids the `no .agentum-harness/` 400 from
+  // firing startHarness against a repo that hasn't been scaffolded.
+  const [unlocked, setUnlocked] = useState(false)
+  const [, setSoonClicks] = useState(0)
+  const bumpSoon = useCallback(() => {
+    setSoonClicks((n) => {
+      const next = n + 1
+      if (next >= 5) setUnlocked(true)
+      return next
+    })
+  }, [])
 
   const refresh = useCallback(async () => {
     try {
@@ -157,6 +172,9 @@ export default function ChatPage() {
     setBusy(true)
     setError(null)
     try {
+      // Scaffold the surface first (idempotent) so a repo without an
+      // `.agentum-harness/` doesn't 400 — then register the run.
+      await scaffoldHarness(workdir)
       const { harness_id } = await startHarness(workdir)
       setDraft('')
       await refresh()
@@ -344,28 +362,49 @@ export default function ChatPage() {
 
           {/* composer */}
           <div className="flex-none border-t border-border px-5 pb-4.5 pt-3">
-            <div className="mx-auto flex max-w-[720px] items-center gap-2.5 rounded-lg border border-border bg-card px-3 py-2.5">
+            <div
+              className={cn(
+                'mx-auto flex max-w-[720px] items-center gap-2.5 rounded-lg border border-border bg-card px-3 py-2.5',
+                !unlocked && 'opacity-80'
+              )}
+            >
               <input
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
+                disabled={!unlocked}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
+                  if (unlocked && e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
                     void submit()
                   }
                 }}
-                placeholder='Try "Add a CSV export to the board"…'
-                className="flex-1 bg-transparent text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none"
+                placeholder={
+                  unlocked
+                    ? 'Try "Add a CSV export to the board"…'
+                    : 'Feature intake — drafts a spec from a description'
+                }
+                className="flex-1 bg-transparent text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed"
               />
-              <button
-                type="button"
-                onClick={() => void submit()}
-                disabled={busy || !draft.trim()}
-                className="inline-flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground hover:opacity-85 disabled:opacity-40"
-                aria-label="Send"
-              >
-                <Send className="size-4" />
-              </button>
+              {unlocked ? (
+                <button
+                  type="button"
+                  onClick={() => void submit()}
+                  disabled={busy || !draft.trim()}
+                  className="inline-flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground hover:opacity-85 disabled:opacity-40"
+                  aria-label="Send"
+                >
+                  <Send className="size-4" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={bumpSoon}
+                  title="Coming soon"
+                  className="inline-flex select-none items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground hover:bg-muted/60"
+                >
+                  <Clock className="size-3.5" /> Soon
+                </button>
+              )}
             </div>
           </div>
         </div>
