@@ -1079,23 +1079,39 @@ impl Client {
             // worked, which is why the bug only bit reconnects.
             let path = format!("/api/sessions/{id}/stream");
             let mut want_resume = initial_resume;
+            // One-shot per reconnect: ask the server to force a full repaint
+            // (`?redraw=true`, a SIGWINCH nudge) before snapshotting. A
+            // reconnect is the suspend/resume path — while the WS was down an
+            // OS `wall` broadcast (systemd's "system will suspend now!") may
+            // have been written straight into the pane grid, and the resume
+            // delta just re-feeds it; the agent won't overpaint cells it never
+            // drew. Same URL-query rationale as `resume`: old daemons drop it.
+            // Never set on the first connect (nothing to heal yet).
+            let mut want_redraw = false;
             let mut attempt: u32 = 0;
             loop {
                 if tx.is_closed() {
                     return;
                 }
-                let extra: &[(&str, &str)] = if want_resume {
-                    &[("resume", "true")]
-                } else {
-                    &[]
-                };
-                let url = ws_url(&base, &path, &token, extra);
+                let mut extra: Vec<(&str, &str)> = Vec::new();
+                if want_resume {
+                    extra.push(("resume", "true"));
+                }
+                if want_redraw {
+                    extra.push(("redraw", "true"));
+                }
+                let url = ws_url(&base, &path, &token, &extra);
                 let connector = ws_connector(&url, &trust);
                 let result =
                     connect_async_tls_with_config(url.as_str(), None, false, connector).await;
                 let stream = match result {
                     Ok((s, _)) => {
                         attempt = 0;
+                        // want_redraw is intentionally NOT reset here: it starts
+                        // false (first connect never heals) and every reconnect
+                        // path below re-arms it, so the redraw fires once per
+                        // reconnect — exactly when a suspend could have corrupted
+                        // the grid.
                         let _ = tx.send(TerminalMsg::Connected);
                         s
                     }
@@ -1136,6 +1152,10 @@ impl Client {
                         // history with whatever the agent's UI happens to look
                         // like *now* (often near-empty after a task finishes).
                         want_resume = true;
+                        // ...and force a repaint once we reconnect, in case the
+                        // outage was a suspend that left broadcast garbage in
+                        // the grid (see want_redraw's declaration).
+                        want_redraw = true;
                         continue;
                     }
                 };
@@ -1206,6 +1226,9 @@ impl Client {
                 });
                 tokio::time::sleep(delay).await;
                 want_resume = true;
+                // Heal on reconnect: a dropped established connection is the
+                // suspend/resume path too (see want_redraw's declaration).
+                want_redraw = true;
             }
         })
     }
@@ -1451,6 +1474,23 @@ mod tests {
             !u.as_str().contains("%3F"),
             "URL must not contain a percent-encoded `?`: {u}"
         );
+    }
+
+    #[test]
+    fn ws_url_carries_resume_and_redraw_together_on_reconnect() {
+        // A reconnect after a suspend sends both: resume (replay the missed
+        // delta) and redraw (force the agent to repaint over any broadcast
+        // garbage the resume delta would otherwise re-feed). Both must be real
+        // query pairs so old daemons can drop the unknown one and still route.
+        let u = ws_url(
+            &base("https"),
+            "/api/sessions/abc/stream",
+            "tok",
+            &[("resume", "true"), ("redraw", "true")],
+        );
+        assert_eq!(u.path(), "/api/sessions/abc/stream");
+        assert_eq!(u.query(), Some("token=tok&resume=true&redraw=true"));
+        assert!(!u.as_str().contains("%3F"));
     }
 
     #[test]

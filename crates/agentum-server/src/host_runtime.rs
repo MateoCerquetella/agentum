@@ -1121,6 +1121,27 @@ pub async fn resize_window(host: &Host, target: &str, cols: u16, rows: u16) -> R
     }
 }
 
+/// Relative height nudge (see [`agentum_tmux::resize_window_relative`]). Used by
+/// the remote redraw heal, which doesn't learn the pane's absolute size at
+/// connect, to provoke a SIGWINCH with a shrink-then-restore toggle.
+pub async fn resize_window_relative(host: &Host, target: &str, rows_delta: i16) -> Result<()> {
+    match &host.kind {
+        HostKind::Local => Ok(agentum_tmux::resize_window_relative(target, rows_delta).await?),
+        HostKind::Ssh { .. } => {
+            if rows_delta == 0 {
+                return Ok(());
+            }
+            let flag = if rows_delta > 0 { "-U" } else { "-D" };
+            let count = rows_delta.unsigned_abs();
+            let target = q(target)?;
+            let script = format!(
+                "tmux set-option -q -t {target} window-size manual; tmux resize-window -t {target} {flag} {count}"
+            );
+            ssh_checked(host, &script).await
+        }
+    }
+}
+
 pub async fn pipe_pane(host: &Host, target: &str, out_path: &Path) -> Result<()> {
     match &host.kind {
         HostKind::Local => Ok(agentum_tmux::pipe_pane(target, out_path).await?),

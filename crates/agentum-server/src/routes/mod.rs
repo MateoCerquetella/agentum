@@ -6,6 +6,8 @@ pub mod board_goals;
 pub mod board_links;
 pub mod board_rules;
 pub mod browser;
+pub mod cdp_browser;
+pub mod cdp_screencast;
 pub mod cert;
 pub mod channels;
 pub mod clipboard;

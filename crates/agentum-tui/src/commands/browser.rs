@@ -39,6 +39,23 @@ pub async fn tab_list(json_out: bool) -> Result<()> {
     Ok(())
 }
 
+pub async fn tab_open(url: String, json_out: bool) -> Result<()> {
+    let client = ApiClient::from_env();
+    let resp = client
+        .post_json("/api/browser/open", &json!({ "url": url }))
+        .await?;
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+    } else {
+        // The new tab id is what the other ops take as `--tab`; print it plainly.
+        match resp.get("tab").and_then(Value::as_str) {
+            Some(tab) => println!("{tab}"),
+            None => println!("{resp}"),
+        }
+    }
+    Ok(())
+}
+
 pub async fn snapshot(tab: Option<String>, json_out: bool) -> Result<()> {
     let client = ApiClient::from_env();
     let resp = client
