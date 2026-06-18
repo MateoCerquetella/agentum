@@ -238,6 +238,103 @@ fn tool_specs() -> Value {
                 "required": ["op"],
                 "additionalProperties": true,
             },
+        },
+        {
+            "name": "agentum_harness_scaffold",
+            "description": "Scaffold the unified `.agentum-harness/` surface into a \
+                project (spec 010). Writes ONLY `.agentum-harness/` (a small AGENTS.md \
+                router, feature_list.json, init.sh, verify.sh) into `workdir` — no \
+                generic playbooks/engine are copied in. Idempotent; the folder is \
+                committable to git.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workdir": { "type": "string", "description": "Project directory to scaffold" }
+                },
+                "required": ["workdir"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "agentum_harness_migrate",
+            "description": "Migrate a pre-010 project into `.agentum-harness/` without \
+                hand-rewrite: copies SDD `ai/specs/*` and any legacy `.harness/` contract \
+                files into `.agentum-harness/`. Idempotent; pass `remove_legacy: true` to \
+                delete the old `.harness/` after copying.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workdir": { "type": "string", "description": "Project directory to migrate" },
+                    "remove_legacy": { "type": "boolean", "description": "Delete legacy .harness/ after copying (default false)" }
+                },
+                "required": ["workdir"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "agentum_harness_board",
+            "description": "Reconstruct a project's harness board by scanning \
+                `.agentum-harness/` on disk (spec 010b) — the spec deliverables under \
+                specs/* and the active feature_list.json states. Pure read; the repo is \
+                the durable source of truth, so this rebuilds the board with no agentum \
+                store consulted (survives a store wipe). Empty when there's no surface.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workdir": { "type": "string", "description": "Project directory to scan" }
+                },
+                "required": ["workdir"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "agentum_harness_plan",
+            "description": "Turn an authored spec into the engine's verify-gated backlog \
+                (spec 010c): reads `.agentum-harness/specs/<spec_id>/spec.md`, maps each \
+                acceptance-criteria checkbox (`- [ ]`/`- [x]`) to a feature, and writes \
+                `.agentum-harness/feature_list.json`. Deterministic; errors if the spec \
+                has no criteria.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workdir": { "type": "string", "description": "Project directory" },
+                    "spec_id": { "type": "string", "description": "Spec dir under .agentum-harness/specs/ (e.g. 010a-agentum-harness-surface)" }
+                },
+                "required": ["workdir", "spec_id"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "agentum_harness_check",
+            "description": "Bootstrap-Contract readiness check (spec 010d): scan \
+                `.agentum-harness/` and report whether it can start (init.sh), can verify \
+                (verify.sh), has instructions (AGENTS.md), and has a non-empty backlog — \
+                plus an overall `ready`. Names what's missing. Pure read; the mechanized \
+                cold-start test.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workdir": { "type": "string", "description": "Project directory to check" }
+                },
+                "required": ["workdir"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "agentum_harness_log_decision",
+            "description": "Append one entry to the project's append-only decision log \
+                (`.agentum-harness/decisions.md`, spec 010e) — the durable 'why', incl. \
+                rejected alternatives. Never overwrites prior entries. Returns the updated \
+                log. Use to record a deliberate choice so a resumed session won't reverse it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workdir": { "type": "string", "description": "Project directory" },
+                    "entry": { "type": "string", "description": "The decision (one line; include the why + any rejected alternative)" }
+                },
+                "required": ["workdir", "entry"],
+                "additionalProperties": false,
+            },
         }
     ])
 }
@@ -264,6 +361,12 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         "agentum_list_tasks" => tool_list_tasks(state, &args).await,
         "agentum_computer" => tool_bridge(state, "computer", &args).await,
         "agentum_browser" => tool_bridge(state, "browser", &args).await,
+        "agentum_harness_scaffold" => tool_harness_scaffold(&args).await,
+        "agentum_harness_migrate" => tool_harness_migrate(&args).await,
+        "agentum_harness_board" => tool_harness_board(&args).await,
+        "agentum_harness_plan" => tool_harness_plan(&args).await,
+        "agentum_harness_check" => tool_harness_check(&args).await,
+        "agentum_harness_log_decision" => tool_harness_log_decision(&args).await,
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
 
@@ -406,6 +509,96 @@ async fn tool_bridge(state: &AppState, kind: &str, args: &Value) -> anyhow::Resu
         other => anyhow::bail!("unknown bridge kind: {other}"),
     }?;
     Ok(serde_json::to_string_pretty(&result)?)
+}
+
+/// Scaffold the unified `.agentum-harness/` surface — a thin view over
+/// [`crate::harness::scaffold_harness`] (the only thing agentum writes into a repo).
+async fn tool_harness_scaffold(args: &Value) -> anyhow::Result<String> {
+    let raw = args
+        .get("workdir")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
+    let workdir =
+        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
+    let out = crate::harness::scaffold_harness(&workdir).await?;
+    Ok(serde_json::to_string_pretty(&out)?)
+}
+
+/// Migrate a pre-010 project into `.agentum-harness/` — thin view over
+/// [`crate::harness::migrate_harness`].
+async fn tool_harness_migrate(args: &Value) -> anyhow::Result<String> {
+    let raw = args
+        .get("workdir")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
+    let workdir =
+        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
+    let remove_legacy = args
+        .get("remove_legacy")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let out = crate::harness::migrate_harness(&workdir, remove_legacy).await?;
+    Ok(serde_json::to_string_pretty(&out)?)
+}
+
+/// Reconstruct a project's harness board by scanning `.agentum-harness/` — a thin
+/// view over [`crate::harness::scan_board`] (spec 010b; the rebuildable index).
+async fn tool_harness_board(args: &Value) -> anyhow::Result<String> {
+    let raw = args
+        .get("workdir")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
+    let workdir =
+        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
+    let board = crate::harness::scan_board(&workdir).await;
+    Ok(serde_json::to_string_pretty(&board)?)
+}
+
+/// Turn a spec into the engine backlog — a thin view over
+/// [`crate::harness::plan_from_spec`] (spec 010c).
+async fn tool_harness_plan(args: &Value) -> anyhow::Result<String> {
+    let raw = args
+        .get("workdir")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
+    let spec_id = args
+        .get("spec_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `spec_id`"))?;
+    let workdir =
+        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
+    let list = crate::harness::plan_from_spec(&workdir, spec_id).await?;
+    Ok(serde_json::to_string_pretty(&list)?)
+}
+
+/// Bootstrap-Contract readiness — a thin view over [`crate::harness::check_bootstrap`]
+/// (spec 010d).
+async fn tool_harness_check(args: &Value) -> anyhow::Result<String> {
+    let raw = args
+        .get("workdir")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
+    let workdir =
+        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
+    let report = crate::harness::check_bootstrap(&workdir).await;
+    Ok(serde_json::to_string_pretty(&report)?)
+}
+
+/// Append to the project decision log + return it — thin view over
+/// [`crate::harness::append_decision`] / [`crate::harness::read_decisions`] (010e).
+async fn tool_harness_log_decision(args: &Value) -> anyhow::Result<String> {
+    let raw = args
+        .get("workdir")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
+    let entry = args
+        .get("entry")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `entry`"))?;
+    let workdir =
+        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
+    crate::harness::append_decision(&workdir, entry).await?;
+    Ok(crate::harness::read_decisions(&workdir).await)
 }
 
 #[cfg(test)]

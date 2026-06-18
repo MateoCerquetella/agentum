@@ -6,6 +6,11 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
+    // Force a single React/React-DOM copy. A transitive dep can pull a second
+    // react-dom (e.g. 19.2.3 vs the top-level 19.2.7); two copies in one bundle
+    // make React's hook dispatcher null → "null is not an object (B.H.useEffect)"
+    // crash at the app root. Deduping resolves every import to the top-level copy.
+    dedupe: ['react', 'react-dom', 'react/jsx-runtime'],
     alias: {
       '@renderer': resolve('src'),
       '@': resolve('src'),

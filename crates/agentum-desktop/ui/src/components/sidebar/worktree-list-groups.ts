@@ -767,13 +767,6 @@ export function buildRows(
           nestLineage,
           collapsedGroups
         })
-        if (groupBy === 'repo' && repo?.connectionId) {
-          result.push({
-            type: 'remote-tmux-card',
-            key: `remote-tmux-card:${repo.id}`,
-            repo
-          })
-        }
       }
     }
   }

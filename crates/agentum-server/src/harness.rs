@@ -34,6 +34,30 @@ use uuid::Uuid;
 
 use crate::AppState;
 
+/// Canonical per-project harness directory (spec 010). Holds the committable
+/// deliverables: `AGENTS.md`, `feature_list.json`, `init.sh`, `verify.sh`,
+/// `handoff.md`. Supersedes the legacy `.harness/`.
+pub const HARNESS_DIR: &str = ".agentum-harness";
+/// Pre-010 directory name. Still read when `.agentum-harness/` is absent so the
+/// demo, in-flight worktrees, and the live test keep working — no flag day.
+pub const LEGACY_HARNESS_DIR: &str = ".harness";
+
+/// Resolve a project's harness directory: prefer the canonical
+/// `.agentum-harness/`, fall back to the legacy `.harness/` when only it exists.
+/// Returns the canonical path when neither exists (callers check existence or
+/// scaffold).
+pub fn resolve_harness_dir(workdir: &Path) -> PathBuf {
+    let canonical = workdir.join(HARNESS_DIR);
+    if canonical.is_dir() {
+        return canonical;
+    }
+    let legacy = workdir.join(LEGACY_HARNESS_DIR);
+    if legacy.is_dir() {
+        return legacy;
+    }
+    canonical
+}
+
 /// Feature state in the harness pipeline. Persisted into `feature_list.json` so
 /// a restarted daemon (or the file viewer) sees the live board.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -46,6 +70,9 @@ pub enum FeatureState {
     Coding,
     /// `verify.sh` is running for this feature.
     Verifying,
+    /// Verify passed, but a human confirmation is required (HITL-at-QA, spec
+    /// 010c) before the feature is locked in. The run pauses here.
+    AwaitingConfirm,
     /// Verified green — locked in.
     Done,
     /// Exhausted `max_retries` against a red verify; the run halts here.
@@ -119,6 +146,11 @@ pub struct FeatureList {
     /// drive without bypass, or for debugging.
     #[serde(default = "default_agent_yolo")]
     pub agent_yolo: bool,
+    /// Require ONE human confirmation when `verify.sh` passes, before a feature
+    /// is marked `Done` (HITL-at-QA, spec 010c). Off by default = fully
+    /// autonomous; on = the run pauses at `AwaitingConfirm` until confirmed.
+    #[serde(default)]
+    pub hitl_at_qa: bool,
 }
 
 impl Default for FeatureList {
@@ -131,6 +163,7 @@ impl Default for FeatureList {
             settle_grace_secs: default_settle_grace_secs(),
             settle_timeout_secs: default_settle_timeout_secs(),
             agent_yolo: default_agent_yolo(),
+            hitl_at_qa: false,
         }
     }
 }
@@ -148,6 +181,9 @@ pub enum HarnessState {
     Running,
     /// A `verify.sh` gate is running.
     Verifying,
+    /// A feature passed verify and is awaiting human confirmation (HITL-at-QA);
+    /// the run is paused until `POST /{id}/confirm`.
+    AwaitingConfirmation,
     /// A feature exhausted its retries — the run halted at the gate.
     Blocked,
     /// All features verified green.
@@ -231,6 +267,9 @@ pub struct HarnessRun {
 #[derive(Debug, Clone)]
 pub struct HarnessConfig {
     pub workdir: PathBuf,
+    /// The resolved harness dir — `.agentum-harness/` or the legacy `.harness/`.
+    /// All reads/writes go through this so a project never mixes the two.
+    pub harness_dir: PathBuf,
     pub agent_instructions: String,
     pub features: FeatureList,
     pub init_script: Option<PathBuf>,
@@ -250,9 +289,12 @@ pub struct HarnessFiles {
 impl HarnessConfig {
     /// Load harness config from a project directory (the parent of `.harness/`).
     pub async fn load(workdir: &Path) -> anyhow::Result<Self> {
-        let harness_dir = workdir.join(".harness");
-        if !harness_dir.exists() {
-            anyhow::bail!("no .harness/ directory found in {}", workdir.display());
+        let harness_dir = resolve_harness_dir(workdir);
+        if !harness_dir.is_dir() {
+            anyhow::bail!(
+                "no {HARNESS_DIR}/ (or legacy {LEGACY_HARNESS_DIR}/) directory found in {}",
+                workdir.display()
+            );
         }
 
         let agents_md = harness_dir.join("AGENTS.md");
@@ -268,7 +310,7 @@ impl HarnessConfig {
             serde_json::from_str(&content)
                 .map_err(|e| anyhow::anyhow!("feature_list.json is invalid: {e}"))?
         } else {
-            anyhow::bail!("no .harness/feature_list.json found");
+            anyhow::bail!("no feature_list.json in {}", harness_dir.display());
         };
 
         // A run with no features would register and instantly report "done"; a
@@ -293,6 +335,7 @@ impl HarnessConfig {
 
         Ok(Self {
             workdir: workdir.to_path_buf(),
+            harness_dir,
             agent_instructions,
             features,
             init_script,
@@ -303,7 +346,7 @@ impl HarnessConfig {
     /// Persist the (possibly mutated) feature list back to disk so the board on
     /// disk always matches the live run.
     pub async fn save_features(&self, features: &FeatureList) -> anyhow::Result<()> {
-        let path = self.workdir.join(".harness/feature_list.json");
+        let path = self.harness_dir.join("feature_list.json");
         let content = serde_json::to_string_pretty(features)?;
         tokio::fs::write(&path, content).await?;
         Ok(())
@@ -311,7 +354,7 @@ impl HarnessConfig {
 
     /// Write `handoff.md` after a feature is verified green.
     pub async fn write_handoff(&self, feature: &Feature, output: &str) -> anyhow::Result<()> {
-        let path = self.workdir.join(".harness/handoff.md");
+        let path = self.harness_dir.join("handoff.md");
         let content = format!(
             "# Handoff — {name}\n\n\
              - **Feature ID:** `{id}`\n\
@@ -333,7 +376,7 @@ impl HarnessConfig {
 
     /// Read the current `.harness/` file contents for the viewer.
     pub async fn read_files(workdir: &Path) -> HarnessFiles {
-        let dir = workdir.join(".harness");
+        let dir = resolve_harness_dir(workdir);
         async fn read(p: PathBuf) -> Option<String> {
             tokio::fs::read_to_string(p).await.ok()
         }
@@ -345,6 +388,326 @@ impl HarnessConfig {
             handoff_md: read(dir.join("handoff.md")).await,
         }
     }
+}
+
+/// Result of scaffolding / migrating a project's harness surface.
+#[derive(Debug, Default, Serialize)]
+pub struct HarnessScaffold {
+    /// Files (relative to workdir) created or written.
+    pub written: Vec<String>,
+    /// For a migration: where content was sourced (`ai/specs`, `.harness`, or none).
+    pub from: Option<String>,
+}
+
+/// Scaffold a fresh `.agentum-harness/` skeleton into `workdir` — the only thing
+/// agentum writes into a repo (spec 010a). Idempotent: existing files are kept.
+pub async fn scaffold_harness(workdir: &Path) -> anyhow::Result<HarnessScaffold> {
+    let dir = workdir.join(HARNESS_DIR);
+    tokio::fs::create_dir_all(&dir).await?;
+    let mut out = HarnessScaffold::default();
+    for (name, body) in scaffold_files() {
+        let path = dir.join(name);
+        if path.exists() {
+            continue;
+        }
+        tokio::fs::write(&path, body).await?;
+        out.written.push(format!("{HARNESS_DIR}/{name}"));
+    }
+    Ok(out)
+}
+
+/// The skeleton file set written by [`scaffold_harness`]. `AGENTS.md` is a small
+/// router stub (spec 010 L04); `feature_list.json` seeds one pending feature so
+/// the surface loads immediately.
+fn scaffold_files() -> Vec<(&'static str, String)> {
+    let feature_list = serde_json::to_string_pretty(&FeatureList {
+        features: vec![Feature {
+            id: "F1".into(),
+            name: "First feature".into(),
+            description: "Describe one observable behavior; the engine drives it behind verify.sh."
+                .into(),
+            state: FeatureState::Pending,
+            attempts: 0,
+            last_error: None,
+            prompt: None,
+        }],
+        ..FeatureList::default()
+    })
+    .unwrap_or_else(|_| "{}".into());
+    vec![
+        (
+            "AGENTS.md",
+            "# AGENTS\n\n<!-- Router: keep <=200 lines, <=15 hard constraints; link detail into .agentum-harness/docs/*. -->\n\n## Project\n\nTODO: one-paragraph summary.\n\n## Run / Test\n\n- start: `./init.sh`\n- verify: `./verify.sh`\n".to_string(),
+        ),
+        ("feature_list.json", feature_list),
+        (
+            "init.sh",
+            "#!/usr/bin/env bash\nset -euo pipefail\n# Environment smoke-test: prove the project can build/start. Non-zero aborts the run.\necho \"init: TODO\"\n".to_string(),
+        ),
+        (
+            "verify.sh",
+            "#!/usr/bin/env bash\nset -euo pipefail\n# The gate. exit 0 = green (advance), non-zero = red (retry/block). $HARNESS_FEATURE_ID names the feature under test. Prefer real end-to-end checks.\necho \"verify: TODO\"\n".to_string(),
+        ),
+    ]
+}
+
+/// Migrate a pre-010 project into the unified `.agentum-harness/` surface without
+/// hand-rewrite (spec 010a): copies any legacy `.harness/` contract files and any
+/// SDD `ai/specs/*` (deliverables only — generic playbooks stay central) into
+/// `.agentum-harness/`. Idempotent; never deletes unless `remove_legacy`.
+pub async fn migrate_harness(
+    workdir: &Path,
+    remove_legacy: bool,
+) -> anyhow::Result<HarnessScaffold> {
+    let dest = workdir.join(HARNESS_DIR);
+    tokio::fs::create_dir_all(&dest).await?;
+    let mut out = HarnessScaffold::default();
+
+    // 1) legacy .harness/ contract files → .agentum-harness/
+    let legacy = workdir.join(LEGACY_HARNESS_DIR);
+    if legacy.is_dir() {
+        out.from = Some(LEGACY_HARNESS_DIR.to_string());
+        copy_dir_contents(&legacy, &dest, &mut out.written, HARNESS_DIR).await?;
+        if remove_legacy {
+            tokio::fs::remove_dir_all(&legacy).await.ok();
+        }
+    }
+
+    // 2) SDD ai/specs/* → .agentum-harness/specs/* (deliverables only)
+    let ai_specs = workdir.join("ai").join("specs");
+    if ai_specs.is_dir() {
+        if out.from.is_none() {
+            out.from = Some("ai/specs".to_string());
+        }
+        let specs_dest = dest.join("specs");
+        copy_dir_contents(
+            &ai_specs,
+            &specs_dest,
+            &mut out.written,
+            &format!("{HARNESS_DIR}/specs"),
+        )
+        .await?;
+    }
+
+    Ok(out)
+}
+
+/// Recursively copy the *contents* of `src` into `dst`, recording each written
+/// file as `<label>/<relpath>`. Iterative (no async recursion). Existing
+/// destination files are overwritten — migration is explicit + idempotent.
+async fn copy_dir_contents(
+    src: &Path,
+    dst: &Path,
+    written: &mut Vec<String>,
+    label: &str,
+) -> anyhow::Result<()> {
+    let mut stack = vec![(src.to_path_buf(), dst.to_path_buf(), label.to_string())];
+    while let Some((from, to, lbl)) = stack.pop() {
+        tokio::fs::create_dir_all(&to).await?;
+        let mut rd = tokio::fs::read_dir(&from).await?;
+        while let Some(entry) = rd.next_entry().await? {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy().to_string();
+            let to_child = to.join(&name);
+            if entry.file_type().await?.is_dir() {
+                stack.push((entry.path(), to_child, format!("{lbl}/{name_str}")));
+            } else {
+                tokio::fs::copy(entry.path(), &to_child).await?;
+                written.push(format!("{lbl}/{name_str}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One spec deliverable found under `.agentum-harness/specs/`.
+#[derive(Debug, Clone, Serialize)]
+pub struct BoardSpec {
+    /// Directory name, e.g. `010a-agentum-harness-surface`.
+    pub id: String,
+    pub has_spec: bool,
+    pub has_architecture: bool,
+    pub has_tasks: bool,
+}
+
+/// A worktree's harness board, reconstructed purely from disk (spec 010b).
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct HarnessBoard {
+    /// The resolved surface dir (`.agentum-harness/` or legacy `.harness/`).
+    pub harness_dir: Option<String>,
+    /// Spec deliverables under `.agentum-harness/specs/*`.
+    pub specs: Vec<BoardSpec>,
+    /// The active backlog features (from `feature_list.json`), if present.
+    pub features: Vec<Feature>,
+}
+
+/// Reconstruct a worktree's board by scanning `.agentum-harness/` **only** — no
+/// agentum store / DB consulted. The repo is the durable source of truth; the
+/// store is just a rebuildable index. An absent/empty surface yields an empty
+/// board (never an error). Pure read — never writes (the mutating lifecycle is
+/// 010c).
+pub async fn scan_board(workdir: &Path) -> HarnessBoard {
+    let dir = resolve_harness_dir(workdir);
+    let mut board = HarnessBoard::default();
+    if !dir.is_dir() {
+        return board;
+    }
+    board.harness_dir = Some(dir.to_string_lossy().to_string());
+
+    // Active backlog (best-effort: a malformed file leaves features empty).
+    if let Ok(content) = tokio::fs::read_to_string(dir.join("feature_list.json")).await {
+        if let Ok(list) = serde_json::from_str::<FeatureList>(&content) {
+            board.features = list.features;
+        }
+    }
+
+    // Spec deliverables: any subdir of specs/ is a spec; report which files exist.
+    if let Ok(mut rd) = tokio::fs::read_dir(dir.join("specs")).await {
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+                let p = entry.path();
+                board.specs.push(BoardSpec {
+                    id: entry.file_name().to_string_lossy().to_string(),
+                    has_spec: p.join("spec.md").exists(),
+                    has_architecture: p.join("architecture.md").exists(),
+                    has_tasks: p.join("tasks.md").exists(),
+                });
+            }
+        }
+        board.specs.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+    board
+}
+
+/// Parse a spec's acceptance-criteria checkboxes into a verify-gated backlog
+/// (spec 010c — the SDD→Harness bridge). Each `- [ ]` / `- [x]` line becomes one
+/// feature: unchecked → `Pending`, checked → `Done`. Features are numbered `F1..`
+/// in document order. Pure/deterministic — no agent call. No checkboxes → empty
+/// backlog (the caller decides whether that's an error).
+pub fn derive_backlog_from_spec(spec_md: &str) -> FeatureList {
+    let mut features = Vec::new();
+    for line in spec_md.lines() {
+        let t = line.trim_start();
+        let (done, rest) = if let Some(r) = t.strip_prefix("- [ ] ") {
+            (false, r)
+        } else if let Some(r) = t
+            .strip_prefix("- [x] ")
+            .or_else(|| t.strip_prefix("- [X] "))
+        {
+            (true, r)
+        } else {
+            continue;
+        };
+        let name = rest.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let n = features.len() + 1;
+        features.push(Feature {
+            id: format!("F{n}"),
+            name: name.to_string(),
+            description: String::new(),
+            state: if done {
+                FeatureState::Done
+            } else {
+                FeatureState::Pending
+            },
+            attempts: 0,
+            last_error: None,
+            prompt: None,
+        });
+    }
+    FeatureList {
+        features,
+        ..FeatureList::default()
+    }
+}
+
+/// Build the engine backlog for a spec under `.agentum-harness/specs/<spec_id>/`
+/// from its `spec.md` acceptance criteria and write
+/// `.agentum-harness/feature_list.json`. Returns the derived list; errors if the
+/// spec.md is missing or has no criteria (no silent empty backlog).
+pub async fn plan_from_spec(workdir: &Path, spec_id: &str) -> anyhow::Result<FeatureList> {
+    let dir = workdir.join(HARNESS_DIR);
+    let spec_md = dir.join("specs").join(spec_id).join("spec.md");
+    let content = tokio::fs::read_to_string(&spec_md)
+        .await
+        .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", spec_md.display()))?;
+    let list = derive_backlog_from_spec(&content);
+    if list.features.is_empty() {
+        anyhow::bail!(
+            "no acceptance-criteria checkboxes (`- [ ]`) found in {}",
+            spec_md.display()
+        );
+    }
+    tokio::fs::create_dir_all(&dir).await?;
+    tokio::fs::write(
+        dir.join("feature_list.json"),
+        serde_json::to_string_pretty(&list)?,
+    )
+    .await?;
+    Ok(list)
+}
+
+/// Bootstrap-Contract readiness of a `.agentum-harness/` surface (spec 010d /
+/// lectures L03+L06): can-start, can-verify, has instructions, has a backlog.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct BootstrapReport {
+    pub harness_dir: Option<String>,
+    pub agents_md: bool,
+    pub init_sh: bool,
+    pub verify_sh: bool,
+    /// `feature_list.json` parses with ≥1 feature.
+    pub backlog: bool,
+    /// All of the above → ready to drive.
+    pub ready: bool,
+}
+
+/// Mechanized cold-start test: scan `.agentum-harness/` and report what's present
+/// vs missing. Pure read; an absent surface reports not-ready (no error). Names
+/// the gaps so a fresh agent knows exactly what to fix before a run.
+pub async fn check_bootstrap(workdir: &Path) -> BootstrapReport {
+    let dir = resolve_harness_dir(workdir);
+    let mut r = BootstrapReport::default();
+    if !dir.is_dir() {
+        return r;
+    }
+    r.harness_dir = Some(dir.to_string_lossy().to_string());
+    r.agents_md = dir.join("AGENTS.md").is_file();
+    r.init_sh = dir.join("init.sh").is_file();
+    r.verify_sh = dir.join("verify.sh").is_file();
+    r.backlog = match tokio::fs::read_to_string(dir.join("feature_list.json")).await {
+        Ok(content) => serde_json::from_str::<FeatureList>(&content)
+            .map(|l| !l.features.is_empty())
+            .unwrap_or(false),
+        Err(_) => false,
+    };
+    r.ready = r.agents_md && r.init_sh && r.verify_sh && r.backlog;
+    r
+}
+
+/// Append one line to the project's **append-only** decision log
+/// (`.agentum-harness/decisions.md`, spec 010e / lecture L05) — the durable
+/// "why," never overwritten (unlike the lossy rolling `STATE.md`). Creates the
+/// surface dir + file on first use.
+pub async fn append_decision(workdir: &Path, entry: &str) -> anyhow::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let dir = resolve_harness_dir(workdir);
+    tokio::fs::create_dir_all(&dir).await?;
+    let mut f = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("decisions.md"))
+        .await?;
+    f.write_all(format!("- {}\n", entry.trim()).as_bytes())
+        .await?;
+    Ok(())
+}
+
+/// Read the decision log (empty string if there is none).
+pub async fn read_decisions(workdir: &Path) -> String {
+    let path = resolve_harness_dir(workdir).join("decisions.md");
+    tokio::fs::read_to_string(path).await.unwrap_or_default()
 }
 
 /// Manages every concurrent harness run + the event bus they publish on.
@@ -531,6 +894,51 @@ impl HarnessEngine {
         Ok(())
     }
 
+    /// Whether this run requires one human confirmation at the QA gate (HITL-at-QA, 010c).
+    pub async fn hitl_at_qa(&self, harness_id: Uuid) -> anyhow::Result<bool> {
+        let run = self.get_run(harness_id).await?;
+        let r = run.read().await;
+        Ok(r.features.hitl_at_qa)
+    }
+
+    /// Verify passed but HITL-at-QA is on: park the feature in `AwaitingConfirm`
+    /// and pause the run. Persisted so the board shows the pending confirmation.
+    pub async fn await_confirm(&self, harness_id: Uuid, feature_id: &str) -> anyhow::Result<()> {
+        self.set_feature_state(harness_id, feature_id, FeatureState::AwaitingConfirm)
+            .await?;
+        self.set_state(harness_id, HarnessState::AwaitingConfirmation)
+            .await?;
+        Ok(())
+    }
+
+    /// Human confirms a feature parked in `AwaitingConfirm` → finalize it `Done`
+    /// (writes `handoff.md`). Errors if the feature isn't awaiting confirmation,
+    /// so a stray confirm can't fast-track an unverified feature.
+    pub async fn confirm_feature(&self, harness_id: Uuid, feature_id: &str) -> anyhow::Result<()> {
+        let state = {
+            let run = self.get_run(harness_id).await?;
+            let r = run.read().await;
+            r.features
+                .features
+                .iter()
+                .find(|f| f.id == feature_id)
+                .map(|f| f.state)
+        };
+        match state {
+            Some(FeatureState::AwaitingConfirm) => {}
+            Some(other) => {
+                anyhow::bail!("feature {feature_id} is {other:?}, not awaiting confirmation")
+            }
+            None => anyhow::bail!("no such feature: {feature_id}"),
+        }
+        self.mark_feature_done(
+            harness_id,
+            feature_id,
+            "Human-confirmed at the QA gate (HITL-at-QA).",
+        )
+        .await
+    }
+
     /// Record a verify failure: bump `attempts`, store the error. Returns
     /// `true` when the feature has now exhausted `max_retries` and is `Blocked`;
     /// otherwise the feature is left `Coding` for another attempt.
@@ -580,8 +988,13 @@ impl HarnessEngine {
     pub async fn run_verify(&self, harness_id: Uuid, feature_id: &str) -> anyhow::Result<bool> {
         let (success, output) = self.run_verify_once(harness_id, feature_id).await?;
         if success {
-            self.mark_feature_done(harness_id, feature_id, &output)
-                .await?;
+            if self.hitl_at_qa(harness_id).await? {
+                // Park for human confirmation instead of locking in (HITL-at-QA).
+                self.await_confirm(harness_id, feature_id).await?;
+            } else {
+                self.mark_feature_done(harness_id, feature_id, &output)
+                    .await?;
+            }
         } else {
             self.record_feature_failure(harness_id, feature_id, &output)
                 .await?;
@@ -961,6 +1374,16 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
             engine.log(harness_id, Some(&feature.id), "running verification gate");
             let (passed, output) = engine.run_verify_once(harness_id, &feature.id).await?;
             if passed {
+                if engine.hitl_at_qa(harness_id).await? {
+                    // HITL-at-QA: pause for ONE human confirmation before Done.
+                    engine.await_confirm(harness_id, &feature.id).await?;
+                    engine.log(
+                        harness_id,
+                        Some(&feature.id),
+                        "✓ verify PASSED — awaiting human confirmation (HITL-at-QA). Run paused; POST /{id}/confirm to finalize and resume.",
+                    );
+                    return Ok(());
+                }
                 engine
                     .mark_feature_done(harness_id, &feature.id, &output)
                     .await?;
@@ -1588,5 +2011,278 @@ mod tests {
         wait_for_settle(&tx, sid, grace, timeout).await;
         // No event for `sid` ever arrives → we fall through at the settle timeout.
         assert!(begin.elapsed() >= timeout, "should wait out the timeout");
+    }
+}
+
+#[cfg(test)]
+mod surface_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn resolve_prefers_canonical_then_legacy() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        // neither exists → canonical path returned (callers scaffold).
+        assert_eq!(resolve_harness_dir(wd), wd.join(HARNESS_DIR));
+        // only legacy exists → legacy.
+        std::fs::create_dir_all(wd.join(LEGACY_HARNESS_DIR)).unwrap();
+        assert_eq!(resolve_harness_dir(wd), wd.join(LEGACY_HARNESS_DIR));
+        // canonical present → canonical wins over legacy.
+        std::fs::create_dir_all(wd.join(HARNESS_DIR)).unwrap();
+        assert_eq!(resolve_harness_dir(wd), wd.join(HARNESS_DIR));
+    }
+
+    #[tokio::test]
+    async fn scaffold_creates_loadable_surface() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        let out = scaffold_harness(wd).await.unwrap();
+        assert!(wd.join(".agentum-harness/feature_list.json").exists());
+        assert!(wd.join(".agentum-harness/AGENTS.md").exists());
+        assert!(out.written.iter().any(|w| w.contains("feature_list.json")));
+        // the scaffolded surface loads through the normal engine path.
+        let cfg = HarnessConfig::load(wd).await.unwrap();
+        assert_eq!(cfg.harness_dir, wd.join(HARNESS_DIR));
+        assert!(!cfg.features.features.is_empty());
+        // idempotent: a second scaffold writes nothing new.
+        let again = scaffold_harness(wd).await.unwrap();
+        assert!(again.written.is_empty());
+    }
+
+    #[tokio::test]
+    async fn migrate_maps_legacy_and_specs() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        // a legacy .harness with a (minimal) feature list
+        std::fs::create_dir_all(wd.join(".harness")).unwrap();
+        std::fs::write(wd.join(".harness/feature_list.json"), "{\"features\":[]}").unwrap();
+        // an SDD spec deliverable
+        std::fs::create_dir_all(wd.join("ai/specs/001-demo")).unwrap();
+        std::fs::write(wd.join("ai/specs/001-demo/spec.md"), "# Spec").unwrap();
+
+        let out = migrate_harness(wd, false).await.unwrap();
+        assert!(wd.join(".agentum-harness/feature_list.json").exists());
+        assert!(wd.join(".agentum-harness/specs/001-demo/spec.md").exists());
+        assert!(
+            wd.join(".harness").exists(),
+            "legacy kept when remove_legacy=false"
+        );
+        assert!(!out.written.is_empty());
+    }
+
+    #[tokio::test]
+    async fn load_still_reads_legacy_harness() {
+        // Back-compat: a project with only `.harness/` (no `.agentum-harness/`)
+        // must still load — this is what keeps the demo + in-flight worktrees green.
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        std::fs::create_dir_all(wd.join(".harness")).unwrap();
+        std::fs::write(
+            wd.join(".harness/feature_list.json"),
+            "{\"features\":[{\"id\":\"F1\",\"name\":\"x\"}]}",
+        )
+        .unwrap();
+        let cfg = HarnessConfig::load(wd).await.unwrap();
+        assert_eq!(cfg.harness_dir, wd.join(LEGACY_HARNESS_DIR));
+    }
+
+    // --- 010b: per-worktree rebuildable board ---
+
+    #[tokio::test]
+    async fn board_empty_when_no_surface() {
+        let dir = TempDir::new().unwrap();
+        let board = scan_board(dir.path()).await;
+        assert!(board.harness_dir.is_none());
+        assert!(board.specs.is_empty());
+        assert!(board.features.is_empty());
+    }
+
+    #[tokio::test]
+    async fn board_reflects_scaffold_and_migrate() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        // scaffold seeds one feature → board sees it (read purely from disk).
+        scaffold_harness(wd).await.unwrap();
+        let board = scan_board(wd).await;
+        assert!(board.harness_dir.is_some());
+        assert_eq!(
+            board.features.len(),
+            1,
+            "seeded feature visible on the board"
+        );
+        // add an SDD spec + migrate it → board lists the spec deliverable.
+        std::fs::create_dir_all(wd.join("ai/specs/001-demo")).unwrap();
+        std::fs::write(wd.join("ai/specs/001-demo/spec.md"), "# Spec").unwrap();
+        migrate_harness(wd, false).await.unwrap();
+        let board = scan_board(wd).await;
+        let demo = board.specs.iter().find(|s| s.id == "001-demo");
+        assert!(demo.is_some(), "migrated spec appears on the board");
+        assert!(demo.unwrap().has_spec, "spec.md detected on disk");
+    }
+
+    // --- 010c: spec→backlog pipeline ---
+
+    #[test]
+    fn derive_backlog_maps_checkboxes() {
+        let spec = "# Spec\n\n## Acceptance Criteria\n\n\
+            - [ ] First criterion\n\
+            - [x] Already done criterion\n\
+            - [ ] Third criterion\n\n\
+            Some prose, not a checkbox.\n";
+        let list = derive_backlog_from_spec(spec);
+        assert_eq!(list.features.len(), 3, "one feature per checkbox");
+        assert_eq!(list.features[0].id, "F1");
+        assert_eq!(list.features[0].name, "First criterion");
+        assert_eq!(list.features[0].state, FeatureState::Pending);
+        assert_eq!(list.features[1].state, FeatureState::Done, "[x] → Done");
+        assert_eq!(list.features[2].id, "F3");
+    }
+
+    #[tokio::test]
+    async fn plan_from_spec_writes_loadable_backlog() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        let spec_dir = wd.join(".agentum-harness/specs/s1");
+        std::fs::create_dir_all(&spec_dir).unwrap();
+        std::fs::write(
+            spec_dir.join("spec.md"),
+            "## Acceptance Criteria\n- [ ] A\n- [ ] B\n",
+        )
+        .unwrap();
+
+        let list = plan_from_spec(wd, "s1").await.unwrap();
+        assert_eq!(list.features.len(), 2);
+        // written feature_list.json is loadable by the engine + visible on the board.
+        let cfg = HarnessConfig::load(wd).await.unwrap();
+        assert_eq!(cfg.features.features.len(), 2);
+        let board = scan_board(wd).await;
+        assert_eq!(board.features.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn plan_rejects_spec_without_criteria() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        let spec_dir = wd.join(".agentum-harness/specs/s1");
+        std::fs::create_dir_all(&spec_dir).unwrap();
+        std::fs::write(spec_dir.join("spec.md"), "# Spec\n\nNo checkboxes here.\n").unwrap();
+        assert!(
+            plan_from_spec(wd, "s1").await.is_err(),
+            "no criteria → explicit error, not a silent empty backlog"
+        );
+    }
+
+    // --- 010c slice 2: HITL-at-QA gate ---
+
+    #[tokio::test]
+    async fn hitl_at_qa_parks_then_confirm_finalizes() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        let hd = wd.join(".agentum-harness");
+        std::fs::create_dir_all(&hd).unwrap();
+        std::fs::write(
+            hd.join("feature_list.json"),
+            r#"{"features":[{"id":"F1","name":"x"}],"hitl_at_qa":true}"#,
+        )
+        .unwrap();
+        std::fs::write(hd.join("verify.sh"), "#!/usr/bin/env bash\nexit 0\n").unwrap();
+
+        let engine = HarnessEngine::new();
+        let id = engine.start(wd.to_path_buf()).await.unwrap();
+
+        // Verify passes, but HITL-at-QA PARKS it at AwaitingConfirm — not Done.
+        assert!(engine.run_verify(id, "F1").await.unwrap(), "verify passed");
+        assert_eq!(
+            scan_board(wd).await.features[0].state,
+            FeatureState::AwaitingConfirm,
+            "parked for human confirmation, persisted to disk"
+        );
+
+        // Confirming finalizes it to Done.
+        engine.confirm_feature(id, "F1").await.unwrap();
+        assert_eq!(scan_board(wd).await.features[0].state, FeatureState::Done);
+
+        // A stray confirm on a non-awaiting (now Done) feature errors.
+        assert!(
+            engine.confirm_feature(id, "F1").await.is_err(),
+            "confirm guard: only AwaitingConfirm can be confirmed"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_hitl_marks_done_directly() {
+        // Default (hitl_at_qa absent/false): green verify → Done immediately.
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        let hd = wd.join(".agentum-harness");
+        std::fs::create_dir_all(&hd).unwrap();
+        std::fs::write(
+            hd.join("feature_list.json"),
+            r#"{"features":[{"id":"F1","name":"x"}]}"#,
+        )
+        .unwrap();
+        std::fs::write(hd.join("verify.sh"), "#!/usr/bin/env bash\nexit 0\n").unwrap();
+        let engine = HarnessEngine::new();
+        let id = engine.start(wd.to_path_buf()).await.unwrap();
+        assert!(engine.run_verify(id, "F1").await.unwrap());
+        assert_eq!(scan_board(wd).await.features[0].state, FeatureState::Done);
+    }
+
+    // --- 010d: Bootstrap-Contract readiness check ---
+
+    #[tokio::test]
+    async fn bootstrap_ready_after_scaffold_and_gaps() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        // empty surface → not ready, no error.
+        assert!(!check_bootstrap(wd).await.ready);
+
+        // scaffold writes all four contract items → ready.
+        scaffold_harness(wd).await.unwrap();
+        let r = check_bootstrap(wd).await;
+        assert!(
+            r.ready && r.agents_md && r.init_sh && r.verify_sh && r.backlog,
+            "scaffolded surface satisfies the Bootstrap Contract"
+        );
+
+        // remove verify.sh → not ready; names the gap; others still true.
+        std::fs::remove_file(wd.join(".agentum-harness/verify.sh")).unwrap();
+        let r = check_bootstrap(wd).await;
+        assert!(!r.ready && !r.verify_sh && r.agents_md && r.init_sh);
+    }
+
+    #[tokio::test]
+    async fn bootstrap_backlog_false_when_no_features() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        let hd = wd.join(".agentum-harness");
+        std::fs::create_dir_all(&hd).unwrap();
+        std::fs::write(hd.join("feature_list.json"), r#"{"features":[]}"#).unwrap();
+        let r = check_bootstrap(wd).await;
+        assert!(
+            !r.backlog && !r.ready,
+            "empty backlog → not bootstrap-ready"
+        );
+    }
+
+    // --- 010e: append-only decision log ---
+
+    #[tokio::test]
+    async fn decision_log_is_append_only() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        assert_eq!(read_decisions(wd).await, "", "no log yet");
+        append_decision(wd, "chose per-repo durable specs over agentum-only")
+            .await
+            .unwrap();
+        append_decision(wd, "rejected agentum-only storage (data-loss risk)")
+            .await
+            .unwrap();
+        let log = read_decisions(wd).await;
+        let first = log.find("chose per-repo").expect("first entry present");
+        let second = log.find("rejected agentum-only").expect("second present");
+        assert!(first < second, "append-only, kept in order");
+        assert!(wd.join(".agentum-harness/decisions.md").exists());
     }
 }

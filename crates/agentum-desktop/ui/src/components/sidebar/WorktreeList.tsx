@@ -77,10 +77,10 @@ import {
   groupRowsByHost,
   getHostHeaderKey,
   hostKeyForRepo,
-  hostKeysWithOpenTmux,
-  pickWorktreeForHost
+  hostKeysWithOpenTmux
 } from './worktree-list-groups'
 import { HostGroupHeader } from './HostGroupHeader'
+import { TmuxSessionsModal, type TmuxSessionsModalHost } from './TmuxSessionsModal'
 import { SessionActivityCard } from './SessionActivityCard'
 import {
   estimateRenderRowSize,
@@ -190,7 +190,6 @@ import {
   type ImportedWorktreeCardActionState
 } from './imported-worktrees-card-actions'
 import { buildImportedWorktreesCardCandidates } from './imported-worktrees-card-candidates'
-import RemoteTmuxRepoCard from './RemoteTmuxRepoCard'
 import {
   buildWorktreeSectionActivitySummaries,
   EMPTY_WORKTREE_SECTION_ACTIVITY,
@@ -721,9 +720,6 @@ export function getRenderRowKey(row: RenderRow): string {
   if (row.type === 'host-header') {
     return `host:${row.key}`
   }
-  if (row.type === 'remote-tmux-card') {
-    return `remote-tmux:${row.key}`
-  }
   return `wt:${row.worktree.id}`
 }
 
@@ -743,9 +739,6 @@ export function getWorktreeDragGroups(rows: Row[]): WorktreeDragGroup[] {
     // Host-header rows are a super-level above repo groups — not a drag group
     // boundary and not a worktree item; skip so they don't pollute drag ids.
     if (row.type === 'host-header') {
-      continue
-    }
-    if (row.type === 'remote-tmux-card') {
       continue
     }
     if (!current) {
@@ -859,6 +852,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   // Host Readiness & Provisioning dialog target (sidebar host key + label), or
   // null when closed. Opened from the host header's readiness chip.
   const [readinessHost, setReadinessHost] = useState<{ key: string; label: string } | null>(null)
+  const [tmuxModalHost, setTmuxModalHost] = useState<TmuxSessionsModalHost | null>(null)
   const [lineageReconnectWorktreeId, setLineageReconnectWorktreeId] = useState<string | null>(null)
   const [worktreeDragState, setWorktreeDragState] = useState<WorktreeRowDragState>(
     WORKTREE_ROW_DRAG_INITIAL_STATE
@@ -878,26 +872,6 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   // Open a terminal scoped to a sidebar host header. Host headers don't own a
   // workdir, so resolve a representative worktree on the host, activate it
   // (which sets activeWorktreeId synchronously), then reuse the same terminal
-  // creation path as Cmd+J / the titlebar `+`. Returns false to callers when no
-  // worktree exists on the host so the header can hide the affordance.
-  const handleOpenTerminalForHost = useCallback(
-    (hostKey: string): boolean => {
-      const target = pickWorktreeForHost(hostKey, worktrees, repoMap, activeWorktreeId)
-      if (!target) {
-        return false
-      }
-      activateAndRevealWorktree(target.id)
-      const state = useAppStore.getState()
-      const targetGroupId =
-        state.activeGroupIdByWorktree[target.id] ?? state.groupsByWorktree[target.id]?.[0]?.id
-      if (!targetGroupId) {
-        return false
-      }
-      void state.openNewTerminalTabInActiveWorkspace(targetGroupId)
-      return true
-    },
-    [worktrees, repoMap, activeWorktreeId]
-  )
   const worktreeDragSessionRef = useRef<WorktreeSidebarDragSession | null>(null)
   const worktreePointerDragRef = useRef<WorktreePointerDrag | null>(null)
   const worktreePointerAutoscrollFrameIdRef = useRef<number | null>(null)
@@ -2601,6 +2575,10 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
             if (!open) setReadinessHost(null)
           }}
         />
+        <TmuxSessionsModal
+          host={tmuxModalHost}
+          onClose={() => setTmuxModalHost(null)}
+        />
         {activeLineageChildConnectionId && activeLineageChildSshStatus ? (
           <SshDisconnectedDialog
             open={
@@ -2677,12 +2655,12 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                     onOpenReadiness={() =>
                       setReadinessHost({ key: row.host.key, label: row.host.label })
                     }
-                    onOpenTerminal={
-                      // Hide the affordance for hosts with no worktree to anchor
-                      // a terminal to (resolved against the same host bucketing).
-                      pickWorktreeForHost(row.host.key, worktrees, repoMap, activeWorktreeId)
-                        ? () => handleOpenTerminalForHost(row.host.key)
-                        : undefined
+                    onOpenTmuxSessions={() =>
+                      setTmuxModalHost({
+                        key: row.host.key,
+                        label: row.host.label,
+                        kind: row.host.kind
+                      })
                     }
                   />
                 </div>
@@ -3366,23 +3344,6 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
               )
             }
 
-            if (row.type === 'remote-tmux-card') {
-              return (
-                <div
-                  key={vItem.key}
-                  role="presentation"
-                  data-worktree-virtual-row
-                  data-worktree-virtual-row-key={String(vItem.key)}
-                  data-worktree-virtual-row-start={vItem.start}
-                  data-index={vItem.index}
-                  ref={measureVirtualRowElement}
-                  className="absolute left-0 right-0 top-0"
-                  style={{ transform: getVirtualRowTransform(vItem.start) }}
-                >
-                  <RemoteTmuxRepoCard repo={row.repo} />
-                </div>
-              )
-            }
 
             const itemWorkspaceStatus =
               groupBy === 'workspace-status'

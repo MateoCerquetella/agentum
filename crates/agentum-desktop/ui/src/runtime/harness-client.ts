@@ -98,6 +98,40 @@ export function startHarness(workdir: string): Promise<{ harness_id: string }> {
   return request('/api/harness', { method: 'POST', body: JSON.stringify({ workdir }) })
 }
 
+/** Call one of agentum's MCP tools over JSON-RPC at `POST /mcp`. Returns the
+ *  tool's text payload. Used for the spec-010 surface tools that have no REST
+ *  route (scaffold/plan/board/…). */
+export async function callMcpTool(
+  name: string,
+  args: Record<string, unknown>
+): Promise<string> {
+  const url = await apiUrl('/mcp')
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name, arguments: args }
+    })
+  })
+  if (!res.ok) throw new Error(`mcp ${res.status} on ${name}`)
+  const j = (await res.json()) as {
+    error?: { message?: string }
+    result?: { content?: Array<{ text?: string }>; isError?: boolean }
+  }
+  if (j.error) throw new Error(j.error.message ?? `mcp error on ${name}`)
+  const text = j.result?.content?.[0]?.text ?? ''
+  if (j.result?.isError) throw new Error(text || `mcp tool ${name} failed`)
+  return text
+}
+
+/** Scaffold the unified `.agentum-harness/` surface into `workdir` (spec 010a). */
+export function scaffoldHarness(workdir: string): Promise<string> {
+  return callMcpTool('agentum_harness_scaffold', { workdir })
+}
+
 /** `GET /api/harness` — status for every registered run. */
 export function listHarnesses(): Promise<HarnessStatus[]> {
   return request('/api/harness')

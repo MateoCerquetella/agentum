@@ -211,7 +211,7 @@ const Landing = lazy(() => import('./components/Landing'))
 const TaskPage = lazy(() => import('./components/TaskPage'))
 const ActivityPrototypePage = lazy(() => import('./components/activity/ActivityPrototypePage'))
 const Settings = lazy(() => import('./components/settings/Settings'))
-const HarnessEngine = lazy(() => import('./components/harness/HarnessEngine'))
+const ChatPage = lazy(() => import('./components/harness/ChatPage'))
 const HostBrowserView = lazy(() => import('./components/host-browser/HostBrowserView'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
 const WorktreeJumpPalette = lazy(() => import('./components/WorktreeJumpPalette'))
@@ -1716,7 +1716,7 @@ function App(): React.JSX.Element {
                           {activeView === 'settings' ? <Settings /> : null}
                           {activeView === 'tasks' ? <TaskPage /> : null}
                           {activeView === 'activity' ? <ActivityPrototypePage /> : null}
-                          {activeView === 'harness' ? <HarnessEngine /> : null}
+                          {activeView === 'harness' ? <ChatPage /> : null}
                           {activeView === 'host-browser' ? <HostBrowserView /> : null}
                           {activeView === 'terminal' && !activeWorktreeId ? <Landing /> : null}
                         </RecoverableRenderErrorBoundary>
