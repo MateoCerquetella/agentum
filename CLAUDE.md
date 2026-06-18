@@ -42,24 +42,28 @@ is where the documentation and labels live.
    `.github/ISSUE_TEMPLATE/` (Summary, Motivation, Proposed approach,
    Acceptance criteria). Label it with `type/*` + `area/*` + `priority/*`
    (run `.github/labels.sh` once to sync the label set).
+**Branch model:** `develop` (feature integration) → `staging` (QA) → `main`
+(release, default branch). Feature work bases on `develop`; promotions move it
+downstream toward `main`.
+
 2. **Always work in a dedicated git worktree** — never `git checkout` a new
    branch in the shared checkout (many agents run concurrently here; in-place
-   checkout disturbs their working trees). Base off `staging` (the integration
-   branch):
-   `git worktree add ../agentum-<kebab-desc> -b <type>/<kebab-desc> origin/staging`.
+   checkout disturbs their working trees). Base off `develop`:
+   `git worktree add ../agentum-<kebab-desc> -b <type>/<kebab-desc> origin/develop`.
    Clean up with `git worktree remove <path>` after the PR merges.
 3. **Implement + verify** (see "Critical: rebuild rhythm").
-4. **Open a PR into `staging`** (`gh pr create --base staging`) with
-   `Closes #<issue>` in the body **and** the commit message. Because `staging`
+4. **Open a PR into `develop`** (`gh pr create --base develop`) with
+   `Closes #<issue>` in the body **and** the commit message. Because `develop`
    isn't the default branch, this does **not** close the issue on merge — that's
    intentional (see step 5). The `.github/pull_request_template.md` enforces the link.
-5. **QA gate on staging, then release.** A merge to `staging` deploys to the
-   staging environment; the ticket goes to **QA**, not "done". Label the issue
-   `status/qa` and keep it open. When QA passes → relabel `status/qa-pass`, then
-   **both** tag a release from staging (`vX.Y.Z`, the repo's release convention)
-   **and** promote `staging` → `main`; the `Closes #<issue>` fires when the commit
-   reaches `main` (the default branch), closing the issue. When QA fails →
-   `status/qa-fail` + findings, loop back to step 2. Never close at the staging merge.
+5. **Promote develop → staging (QA) → main (release).** A merge to `develop` is
+   integration, not "done". Promote `develop` → `staging` to deploy to the staging
+   environment; the ticket enters **QA** — label the issue `status/qa`, keep it
+   open. When QA passes → relabel `status/qa-pass`, then release: promote
+   `staging` → `main` and tag `vX.Y.Z` (the repo's release convention); the
+   `Closes #<issue>` fires when the commit reaches `main` (the default branch),
+   closing the issue. When QA fails → `status/qa-fail` + findings, loop back to
+   step 2. Never close at the develop or staging merge.
 
 Claude can drive the whole flow with the **`/ship <description>`** slash command
 (`.claude/commands/ship.md`): it creates the labeled issue, branches,

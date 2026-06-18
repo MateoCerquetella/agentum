@@ -62,11 +62,11 @@ checkout disturbs other sessions' working trees.
   you're targeting):
   ```sh
   git fetch origin
-  git worktree add ../agentum-<kebab-desc> -b <type>/<kebab-desc> origin/staging
+  git worktree add ../agentum-<kebab-desc> -b <type>/<kebab-desc> origin/develop
   cd ../agentum-<kebab-desc>
   ```
-  Base off **`staging`** — that's the integration branch feature work targets
-  (it flows staging → QA → release/main, see Phase 6).
+  Base off **`develop`** — the feature-integration branch. It flows
+  `develop → staging (QA) → main (release)` (see Phase 6).
   (agentum keeps worktrees as siblings of the main checkout and under
   `.claude/worktrees/` — match whatever the user already uses.)
 - If you're already in a dedicated worktree for this work, reuse it.
@@ -93,7 +93,7 @@ checkout disturbs other sessions' working trees.
 
 ```sh
 gh pr create \
-  --base staging \
+  --base develop \
   --title "<type>: <concise title>" \
   --body "$(cat <<'EOF'
 Closes #<issue-number>
@@ -107,29 +107,33 @@ EOF
 )"
 ```
 
-- **Target `staging`** (`--base staging`) — feature PRs merge into the
-  integration branch, not `main`.
+- **Target `develop`** (`--base develop`) — feature PRs merge into the
+  feature-integration branch, not `staging` or `main`.
 - Put `Closes #<issue-number>` in both the PR body **and** the commit message.
-  Because `staging` is **not** the default branch, the issue does **not** close
-  on the staging merge — it stays open for QA (Phase 6). It auto-closes later
-  when that commit reaches `main` (the default branch) on promotion.
+  Because `develop` is **not** the default branch, the issue does **not** close
+  on the develop merge — it stays open through QA (Phase 6). It auto-closes later
+  when that commit reaches `main` (the default branch) on release.
 - Report back: the issue URL, the branch, and the PR URL.
 
-## Phase 6 — QA on staging, then release
+## Phase 6 — Promote: develop → staging (QA) → main (release)
 
-The ticket is **not done when it merges to staging** — it goes to QA first.
+The ticket is **not done when it merges to `develop`** — that's just integration.
+It still has to clear QA on staging and a release to main.
 
-1. **On merge to staging**: label the issue `status/qa` and comment that it's
-   deployed to the staging environment and awaiting QA. Keep the issue open.
-2. **QA tests on staging.**
-   - **Pass** → relabel `status/qa-pass`, then ship it **both** ways:
-     - tag a release from staging: `git tag vX.Y.Z && git push origin vX.Y.Z`
-       (matches the repo's "Release = staging + vX.Y.Z tag" convention), and
-     - promote `staging` → `main` (open/merge the promotion PR). The original
-       `Closes #<issue>` fires when the commit lands on `main`, closing the issue.
+1. **Merged to `develop`**: the change is integrated with other in-flight work.
+   Issue stays open.
+2. **Promote `develop` → `staging`** (open/merge the promotion PR). This deploys
+   to the staging environment → the ticket enters **QA**. Label the issue
+   `status/qa` and keep it open.
+3. **QA tests on staging.**
+   - **Pass** → relabel `status/qa-pass`, then release: promote `staging` → `main`
+     and tag `vX.Y.Z` (`git tag vX.Y.Z && git push origin vX.Y.Z` — matches the
+     repo's "Release = staging + vX.Y.Z tag" convention). The original
+     `Closes #<issue>` fires when the commit lands on `main`, closing the issue.
    - **Fail** → relabel `status/qa-fail`, comment the findings, and loop back to
-     Phase 3 (fix in a worktree → new PR into staging). Don't close.
-3. Only close the issue once it's on `main` / released — never at the staging merge.
+     Phase 3 (fix in a worktree → new PR into `develop`). Don't close.
+4. Only close the issue once it's on `main` / released — never at the develop or
+   staging merge.
 
 ## Autonomous (Harness Engine) work
 
