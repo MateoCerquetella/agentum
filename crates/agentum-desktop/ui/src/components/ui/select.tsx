@@ -5,6 +5,7 @@ import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from 'lucide-react'
 import { Select as SelectPrimitive } from 'radix-ui'
 
 import { cn } from '@/lib/utils'
+import { useSuppressNativeBrowserWhileOpen } from '../browser-pane/native-browser-overlay-suppression'
 
 function Select({ ...props }: React.ComponentProps<typeof SelectPrimitive.Root>) {
   return <SelectPrimitive.Root data-slot="select" {...props} />
@@ -54,6 +55,9 @@ function SelectContent({
 }: React.ComponentProps<typeof SelectPrimitive.Content> & {
   portalContainer?: HTMLElement | null
 }) {
+  // Hide the native browser webview while this select dropdown is open (it can't
+  // paint under a native webview — see native-browser-overlay-suppression).
+  useSuppressNativeBrowserWhileOpen()
   return (
     <SelectPrimitive.Portal container={portalContainer ?? undefined}>
       <SelectPrimitive.Content

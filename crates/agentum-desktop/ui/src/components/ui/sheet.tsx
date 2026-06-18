@@ -6,6 +6,7 @@ import { Dialog as SheetPrimitive } from 'radix-ui'
 import { cva, type VariantProps } from 'class-variance-authority'
 
 import { cn } from '@/lib/utils'
+import { useSuppressNativeBrowserWhileOpen } from '../browser-pane/native-browser-overlay-suppression'
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />
@@ -78,6 +79,9 @@ function SheetContent({
     overlayClassName?: string
     overlayStyle?: React.CSSProperties
   }) {
+  // Hide the native browser webview while this sheet is open (it can't paint
+  // under a native webview — see native-browser-overlay-suppression).
+  useSuppressNativeBrowserWhileOpen()
   return (
     <SheetPortal>
       <SheetOverlay className={overlayClassName} style={overlayStyle} />
