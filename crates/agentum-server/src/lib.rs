@@ -35,6 +35,7 @@ pub mod planner;
 pub mod playwright_mcp;
 pub mod ratelimit;
 mod routes;
+pub mod task_sink;
 mod rules;
 pub mod tls;
 mod transcript_store;
