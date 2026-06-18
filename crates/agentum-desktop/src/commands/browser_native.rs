@@ -13,6 +13,16 @@ use tauri::{
 
 const LABEL_PREFIX: &str = "browser-page-";
 
+/// User-agent for the browser-pane webviews. Without an explicit UA, macOS
+/// WKWebView reports a bare WebKit build with no `Version/…Safari` tokens, which
+/// Google (and other UA sniffers) misidentify as the old Mail.app webview
+/// ("Apple Mail 13") and then serve a degraded page. The engine really is
+/// WebKit, so we present an honest, current Safari UA rather than spoofing
+/// Chrome (which would invite Chrome-only code paths WebKit can't run). A true
+/// Chromium engine would require the host-resident-browser route, not a UA swap.
+const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
+    AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
+
 fn webview_label(browser_page_id: &str) -> String {
     // Tauri labels only allow [a-zA-Z0-9-/:_]; page ids are uuid-ish but coerce
     // anything else rather than erroring at create time.
@@ -91,6 +101,7 @@ pub fn browser_webview_open(
     let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
     app.run_on_main_thread(move || {
         let builder = tauri::webview::WebviewBuilder::new(&label, WebviewUrl::External(parsed))
+            .user_agent(BROWSER_USER_AGENT)
             .on_page_load(move |webview, payload| {
                 let event = match payload.event() {
                     PageLoadEvent::Started => "started",

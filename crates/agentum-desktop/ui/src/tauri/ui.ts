@@ -16,6 +16,7 @@ export const ui = defineNamespace('ui', {
   recordFeatureInteraction: (...args: any[]) => call('ui_record_feature_interaction', args),
   replyTabClose: (...args: any[]) => call('ui_reply_tab_close', args),
   replyTabCreate: (...args: any[]) => call('ui_reply_tab_create', args),
+  replyBrowserOp: (...args: any[]) => call('ui_reply_browser_op', args),
   replyTabSetProfile: (...args: any[]) => call('ui_reply_tab_set_profile', args),
   replyTerminalCreate: (...args: any[]) => call('ui_reply_terminal_create', args),
   requestClose: (...args: any[]) => call('ui_request_close', args),
@@ -62,6 +63,10 @@ export const ui = defineNamespace('ui', {
   onRenameTerminal: (cb: (p: any) => void) => subscribe('ui-rename-terminal', cb),
   onRequestTabClose: (cb: (p: any) => void) => subscribe('ui-request-tab-close', cb),
   onRequestTabCreate: (cb: (p: any) => void) => subscribe('ui-request-tab-create', cb),
+  onRequestBrowserAnnotations: (cb: (p: any) => void) =>
+    subscribe('ui-request-browser-annotations', cb),
+  onRequestBrowserGrab: (cb: (p: any) => void) => subscribe('ui-request-browser-grab', cb),
+  onRequestBrowserAnnotate: (cb: (p: any) => void) => subscribe('ui-request-browser-annotate', cb),
   onRequestTabSetProfile: (cb: (p: any) => void) => subscribe('ui-request-tab-set-profile', cb),
   onRequestTerminalCreate: (cb: (p: any) => void) => subscribe('ui-request-terminal-create', cb),
   onRichMarkdownContextCommand: (cb: (p: any) => void) => subscribe('ui-rich-markdown-context-command', cb),

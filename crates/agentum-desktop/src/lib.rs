@@ -30,7 +30,19 @@ pub fn run() {
     // otherwise detection reports "No agents detected" on installed tools.
     path_env::hydrate_path_from_login_shell();
 
+    // The browser `grab` op's injected extractor POSTs its result to this app
+    // scheme (external HTTPS pages can't fetch the loopback http server —
+    // mixed-content — and Tauri injects no IPC into external content). The
+    // scheme handler and the bridge share this registry; created before the
+    // Builder so the handler can capture it and `setup` can `manage` it too.
+    let grab_registry = std::sync::Arc::new(bridge::GrabRegistry::default());
+    let scheme_grab_registry = grab_registry.clone();
+    let managed_grab_registry = grab_registry.clone();
+
     tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol("agentumgrab", move |_ctx, request, responder| {
+            bridge::handle_grab_scheme(&scheme_grab_registry, request, responder);
+        })
         .plugin(
             tauri_plugin_log::Builder::default()
                 .level(log::LevelFilter::Info)
@@ -47,7 +59,7 @@ pub fn run() {
         // instead of quitting the window. See `menu.rs`.
         .menu(menu::build)
         .on_menu_event(menu::on_menu_event)
-        .setup(|app| {
+        .setup(move |app| {
             let state = AppState::new().map_err(|error| {
                 Box::<dyn std::error::Error>::from(std::io::Error::other(error.to_string()))
             })?;
@@ -60,6 +72,16 @@ pub fn run() {
             // /api/computer routes can drive THIS process's webviews + the macOS
             // AX engine (the only process that can). Standalone daemons get no
             // bridge and 501 those routes.
+            // Pending browser-tab-create replies: the bridge's `open` op parks a
+            // oneshot here and the `ui_reply_tab_create` command resolves it.
+            app.manage(bridge::TabCreateRegistry::default());
+            // Pending annotation/grab op replies (annotations/grab/annotate),
+            // resolved by the `ui_reply_browser_op` command.
+            app.manage(bridge::BrowserOpRegistry::default());
+            // Pending `grab` results, resolved by the `agentumgrab://` scheme
+            // handler; the bridge's `grab` op awaits on it.
+            app.manage(managed_grab_registry.clone());
+
             let bridge = std::sync::Arc::new(bridge::TauriBridge::new(app.handle().clone()));
             let addr = tauri::async_runtime::block_on(async {
                 let (store, _db_path) = agentum_store::open_default()
@@ -187,6 +209,7 @@ pub fn run() {
             ui::ui_set_terminal_input_focused,
             ui::ui_set_shortcut_recorder_focused,
             ui::ui_reply_tab_create,
+            ui::ui_reply_browser_op,
             ui::ui_reply_tab_set_profile,
             ui::ui_reply_tab_close,
             ui::ui_reply_terminal_create,

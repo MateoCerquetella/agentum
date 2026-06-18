@@ -495,6 +495,7 @@ export interface AgentumApi {
     recordFeatureInteraction: ApiMethod
     replyTabClose: ApiMethod
     replyTabCreate: ApiMethod
+    replyBrowserOp: ApiMethod
     replyTabSetProfile: ApiMethod
     replyTerminalCreate: ApiMethod
     requestClose: ApiMethod
@@ -541,6 +542,9 @@ export interface AgentumApi {
     onRenameTerminal: ApiEvent
     onRequestTabClose: ApiEvent
     onRequestTabCreate: ApiEvent
+    onRequestBrowserAnnotations: ApiEvent
+    onRequestBrowserGrab: ApiEvent
+    onRequestBrowserAnnotate: ApiEvent
     onRequestTabSetProfile: ApiEvent
     onRequestTerminalCreate: ApiEvent
     onRichMarkdownContextCommand: ApiEvent

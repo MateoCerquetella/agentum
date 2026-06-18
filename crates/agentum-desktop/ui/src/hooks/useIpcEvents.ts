@@ -3,6 +3,7 @@ import { api } from '@/tauri'
 import { useEffect } from 'react'
 import { toast } from 'sonner'
 import { useAppStore } from '../store'
+import { formatBrowserAnnotationsAsMarkdown } from '../components/browser-pane/browser-annotation-output'
 import { getWorktreeMapFromState, getRepoMapFromState } from '@/store/selectors'
 import { applyUIZoom } from '@/lib/ui-zoom'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
@@ -1465,11 +1466,16 @@ export function useIpcEvents(): void {
               )
             : undefined
 
+          // Why: activate the tab so its native webview actually mounts (the
+          // bootstrap lease alone left it unmounted, so `tabs`/navigate/click
+          // found nothing after an MCP `open`). This path is only driven by the
+          // bridge's `open` op, so showing the opened tab is the intended,
+          // non-surprising behaviour.
           const workspace = store.createBrowserTab(worktreeId, data.url, {
             title: data.url,
             targetGroupId: activeBrowserUnifiedTab?.groupId,
             sessionProfileId: data.sessionProfileId,
-            activate: false
+            activate: true
           })
           // Why: registerGuest fires with the page ID (not workspace ID) as
           // browserPageId. Return the page ID so waitForTabRegistration can
@@ -1482,6 +1488,67 @@ export function useIpcEvents(): void {
           api.ui.replyTabCreate({
             requestId: data.requestId,
             error: err instanceof Error ? err.message : 'Tab creation failed'
+          })
+        }
+      })
+    )
+
+    // Why: the agentum MCP `agentum_browser {op:"annotations"}` round-trips
+    // here (via the desktop bridge) so a running agent can READ the page
+    // annotations the user made — until now they only left the browser when the
+    // user clicked "Send". Resolve the target page (explicit `tab` id, else the
+    // active browser page) and reply with the same markdown the Send button
+    // builds, plus a structured list.
+    unsubs.push(
+      api.ui.onRequestBrowserAnnotations((data) => {
+        try {
+          const store = useAppStore.getState()
+          const resolvePageId = (): string | null => {
+            const tab = typeof data?.tab === 'string' ? data.tab.trim() : ''
+            if (tab) {
+              for (const pages of Object.values(store.browserPagesByWorkspace)) {
+                const hit = pages.find((p) => p.id === tab || p.id.endsWith(tab))
+                if (hit) return hit.id
+              }
+            }
+            const worktreeId = store.activeWorktreeId
+            const workspaceId =
+              (worktreeId ? store.activeBrowserTabIdByWorktree[worktreeId] : null) ??
+              store.activeBrowserTabId
+            if (!workspaceId) return null
+            return store.browserPagesByWorkspace[workspaceId]?.[0]?.id ?? null
+          }
+          const pageId = resolvePageId()
+          if (!pageId) {
+            api.ui.replyBrowserOp({ requestId: data.requestId, error: 'No browser tab open' })
+            return
+          }
+          const annotations = store.browserAnnotationsByPageId[pageId] ?? []
+          api.ui.replyBrowserOp({
+            requestId: data.requestId,
+            result: {
+              tab: pageId,
+              count: annotations.length,
+              markdown: formatBrowserAnnotationsAsMarkdown(annotations),
+              annotations: annotations.map((a) => ({
+                id: a.id,
+                intent: a.intent,
+                priority: a.priority,
+                comment: a.comment,
+                selector: a.payload?.target?.selector ?? null,
+                element:
+                  a.payload?.target?.accessibility?.accessibleName ||
+                  a.payload?.target?.textSnippet ||
+                  a.payload?.target?.tagName ||
+                  null,
+                createdAt: a.createdAt
+              }))
+            }
+          })
+        } catch (err) {
+          api.ui.replyBrowserOp({
+            requestId: data.requestId,
+            error: err instanceof Error ? err.message : 'Failed to read annotations'
           })
         }
       })
