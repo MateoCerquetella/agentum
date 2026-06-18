@@ -916,6 +916,7 @@ export default function TerminalPane({
     keyboardScopeRef: containerRef,
     managerRef,
     paneTransportsRef,
+    panePtyBindingsRef,
     paneCwdRef,
     fallbackCwd: cwd ?? '',
     expandedPaneIdRef,

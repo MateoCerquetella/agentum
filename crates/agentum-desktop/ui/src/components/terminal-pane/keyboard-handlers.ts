@@ -3,6 +3,7 @@ import { api } from '@/tauri'
  * precedence in one ordered handler so shell input, pane commands, search, and
  * split actions do not race across separate window listeners. */
 import { useEffect } from 'react'
+import type { IDisposable } from '@xterm/xterm'
 import type { PaneManager } from '@/lib/pane-manager/pane-manager'
 import type { PtyTransport } from './pty-transport'
 import { resolveTerminalShortcutAction } from './terminal-shortcut-policy'
@@ -103,6 +104,11 @@ type KeyboardHandlersDeps = {
   keyboardScopeRef: React.RefObject<HTMLElement | null>
   managerRef: React.RefObject<PaneManager | null>
   paneTransportsRef: React.RefObject<Map<number, PtyTransport>>
+  // Per-pane bindings, used by the "force redraw" shortcut to nudge the active
+  // pane's agent into a full repaint. The lifecycle hook stores them widened to
+  // IDisposable (its callers only need dispose); the concrete binding carries
+  // an optional `forceRedraw`, which we read off via a narrow cast below.
+  panePtyBindingsRef: React.RefObject<Map<number, IDisposable>>
   paneCwdRef: React.RefObject<PaneCwdMap>
   /** Worktree-root cwd used when OSC 7 and pty.getCwd both fail. */
   fallbackCwd: string
@@ -128,6 +134,7 @@ export function useTerminalKeyboardShortcuts({
   keyboardScopeRef,
   managerRef,
   paneTransportsRef,
+  panePtyBindingsRef,
   paneCwdRef,
   fallbackCwd,
   expandedPaneIdRef,
@@ -301,6 +308,26 @@ export function useTerminalKeyboardShortcuts({
         return
       }
 
+      // Cmd+Shift+K forces the active pane's agent to fully repaint. Unlike
+      // Clear (which just wipes the local xterm grid), this nudges the server
+      // pane (SIGWINCH) so the agent overpaints cells corrupted by bytes it
+      // never drew — e.g. an OS `wall` broadcast (systemd suspend notice)
+      // written straight into the input box. No-op on the local PTY path.
+      if (action.type === 'redrawActivePane') {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        const pane = manager.getActivePane() ?? manager.getPanes()[0]
+        if (pane) {
+          // The map is typed IDisposable; the concrete binding carries the
+          // optional forceRedraw. Narrow to read it without widening the ref.
+          const binding = panePtyBindingsRef.current.get(pane.id) as
+            | { forceRedraw?: () => void }
+            | undefined
+          binding?.forceRedraw?.()
+        }
+        return
+      }
+
       // Cmd+[ / Cmd+] cycles active split pane focus.
       if (action.type === 'focusPane') {
         const panes = manager.getPanes()
@@ -432,6 +459,7 @@ export function useTerminalKeyboardShortcuts({
     keyboardScopeRef,
     managerRef,
     paneTransportsRef,
+    panePtyBindingsRef,
     paneCwdRef,
     fallbackCwd,
     expandedPaneIdRef,

@@ -85,6 +85,16 @@ export type SessionStream = {
    *  pressure) — for an idle remote pane there are no live bytes to recover it
    *  otherwise. Silent: it does NOT count as a reconnect (no onReconnecting). */
   requestRepaint: () => void
+  /** Like {@link requestRepaint}, but also asks the server to make the agent
+   *  fully REPAINT (a SIGWINCH nudge, `?redraw=true`) before snapshotting —
+   *  not just re-read the current grid. Use when the pane grid itself is
+   *  corrupted by bytes the agent didn't draw, which a plain re-snapshot would
+   *  faithfully reproduce: an OS `wall` broadcast (systemd's "system will
+   *  suspend now!" notice) written over the input box, or a half-painted
+   *  frame. Fired automatically on reconnect (the suspend/resume path) and by
+   *  the manual "force redraw" shortcut. Old daemons ignore the param and fall
+   *  back to a plain repaint. */
+  requestRedraw: () => void
   close: () => void
 }
 
@@ -279,6 +289,13 @@ export async function openSessionStream(
   // snapshot (omit `resume`), so a blank-pane self-heal actually repaints
   // instead of replaying an empty delta on the local path. Consumed once.
   let forceFreshNext = false
+  // Set by `requestRedraw` to add `?redraw=true` to the NEXT connect, asking
+  // the server to make the agent fully repaint (a SIGWINCH nudge) before
+  // snapshotting — heals a corrupted grid (e.g. a suspend `wall` broadcast
+  // written over the pane) that a plain re-snapshot would just re-capture.
+  // Consumed once, alongside `forceFreshNext` (a redraw always wants a fresh
+  // snapshot, never a resume delta).
+  let redrawNext = false
   let attempt = 0
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let stableTimer: ReturnType<typeof setTimeout> | null = null
@@ -301,6 +318,9 @@ export async function openSessionStream(
     }
     if (connectedOnce && !forceFreshNext) {
       params.set('resume', 'true')
+    }
+    if (redrawNext) {
+      params.set('redraw', 'true')
     }
     const qs = params.toString()
     return qs ? `${base}?${qs}` : base
@@ -357,6 +377,7 @@ export async function openSessionStream(
     }
     const url = streamUrl()
     forceFreshNext = false // consumed for this connect
+    redrawNext = false // consumed for this connect
     const sock = new WebSocket(url)
     sock.binaryType = 'arraybuffer'
     ws = sock
@@ -427,6 +448,25 @@ export async function openSessionStream(
       // old socket's close handler sees `sock !== ws` and bails early, so this
       // does NOT schedule a backoff reconnect or fire onReconnecting — it's a
       // silent in-place repaint, not a recovery. Then connect fresh now.
+      const old = ws
+      ws = null
+      try {
+        old?.close()
+      } catch {
+        // already closing/closed — connect() below still re-establishes
+      }
+      connect()
+    },
+    requestRedraw: () => {
+      if (disposed) {
+        return
+      }
+      // Same silent in-place reconnect as requestRepaint (no backoff, no
+      // onReconnecting), but with `?redraw=true` so the server forces the
+      // agent to fully repaint before snapshotting. A redraw always wants the
+      // fresh snapshot, never a resume delta — so set forceFreshNext too.
+      forceFreshNext = true
+      redrawNext = true
       const old = ws
       ws = null
       try {
