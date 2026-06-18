@@ -28,6 +28,7 @@ mod error;
 pub mod git;
 pub mod harness;
 mod headers;
+pub mod host_browser;
 pub mod host_install_hints;
 pub mod host_runtime;
 mod logging;
@@ -249,6 +250,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::health::router())
         .merge(routes::host::router())
+        .merge(routes::host_browser::router())
         .merge(routes::hosts::router())
         .merge(routes::mcp::router())
         .merge(routes::cert::router())
