@@ -27,10 +27,20 @@ use tokio_tungstenite::tungstenite::Message as CdpMessage;
 
 use crate::host_runtime::{self, HostRuntimeError, Result};
 
-/// Browser binary launched on the host. Preflight / selection across
-/// `chromium-browser` / `google-chrome` is a later phase; Phase 1 targets the
-/// common `chromium` (present on the Arch/Omarchy test host at `/usr/bin/chromium`).
-const CHROMIUM_BIN: &str = "chromium";
+/// Chromium-family binaries probed on the host's PATH, in preference order.
+const BROWSER_CANDIDATES: &[&str] = &[
+    "chromium",
+    "chromium-browser",
+    "google-chrome-stable",
+    "google-chrome",
+    "chrome",
+];
+
+/// Stated reason when no browser is found — names the install path so the failure
+/// is actionable (the UI offers to run it), never a silent `await_cdp_port` hang.
+const MISSING_BROWSER_MSG: &str =
+    "No Chromium found on the host PATH (tried chromium, chromium-browser, google-chrome). \
+     Install it — e.g. `npx playwright install chromium` — and retry.";
 
 /// How long to wait for headless Chromium to bind its CDP port and write the
 /// `DevToolsActivePort` file before giving up (a cold start + MCP-free boot is
@@ -328,7 +338,12 @@ pub async fn launch_host_browser(host: &Host, workdir: &Path) -> Result<HostBrow
 
     let attached = host_runtime::has_session(host, &target).await?;
     if !attached {
-        let cmd = launch_command(CHROMIUM_BIN, &user_data_dir, &port_file)?;
+        // Preflight: find a browser binary or fail loud with an install hint —
+        // otherwise a missing browser silently hangs `await_cdp_port` for 20s.
+        let bin = host_runtime::which_first(host, BROWSER_CANDIDATES)
+            .await?
+            .ok_or_else(|| HostRuntimeError::Bootstrap(MISSING_BROWSER_MSG.to_string()))?;
+        let cmd = launch_command(&bin, &user_data_dir, &port_file)?;
         host_runtime::new_session(host, &target, workdir, &cmd, &[]).await?;
     }
 

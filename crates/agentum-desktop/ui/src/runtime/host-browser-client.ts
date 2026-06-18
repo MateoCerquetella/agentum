@@ -86,6 +86,18 @@ export function stopHostBrowser(id: string): Promise<void> {
   return request(`/api/host-browser/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
+/** Result of `POST /api/host-browser/install`. */
+export type InstallResult = { ok: boolean; output: string }
+
+/** `POST /api/host-browser/install` — offer-install: run `npx playwright install
+ *  chromium` on the host when preflight found no browser. */
+export function installHostChromium(hostId: string): Promise<InstallResult> {
+  return request('/api/host-browser/install', {
+    method: 'POST',
+    body: JSON.stringify({ host_id: hostId })
+  })
+}
+
 /** Live screencast handle: push input in, frames flow out via the `onFrame` callback. */
 export type HostBrowserScreencast = {
   sendInput: (msg: HostBrowserInput) => void

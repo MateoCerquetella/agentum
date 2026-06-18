@@ -168,7 +168,10 @@ async fn screencast_streams_jpeg_frames_and_navigate_changes_them() {
         eprintln!("skipping: AGENTUM_LIVE_SSH_PASSWORD not set");
         return;
     };
-    let workdir = PathBuf::from(env_or("AGENTUM_LIVE_SSH_WORKDIR", "/home/malloc"));
+    // A DISTINCT workdir from the Phase-1 test (different basename → different
+    // per-worktree session name), so the two #[ignore] tests can run concurrently
+    // without colliding on `agentum-hostbrowser-<wt>`. `/tmp` exists on any host.
+    let workdir = PathBuf::from("/tmp");
     let _ = host_browser::teardown_host_browser(&host, &workdir).await;
 
     // Mount ONLY the stateless screencast route on a minimal axum server — not

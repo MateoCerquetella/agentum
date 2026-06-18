@@ -19,7 +19,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::AppState;
@@ -29,6 +29,7 @@ use crate::host_browser::{self, HostBrowserStatus, StartedHostBrowser};
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/host-browser", post(start))
+        .route("/api/host-browser/install", post(install))
         .route("/api/host-browser/{id}", get(get_status).delete(delete))
         .route("/api/host-browser/{id}/navigate", post(navigate))
         .route("/api/host-browser/{id}/screencast", get(screencast))
@@ -43,6 +44,17 @@ struct StartRequest {
 #[derive(Debug, Deserialize)]
 struct NavigateRequest {
     url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InstallRequest {
+    host_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct InstallResult {
+    ok: bool,
+    output: String,
 }
 
 /// Resolve a host UUID against the store (404 when unknown, 400 when malformed).
@@ -65,6 +77,19 @@ async fn start(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(started))
+}
+
+/// `POST /api/host-browser/install` — offer-install: run `npx playwright install
+/// chromium` on the host when preflight found no browser (spec 009a AC #5).
+async fn install(
+    State(state): State<AppState>,
+    Json(req): Json<InstallRequest>,
+) -> Result<Json<InstallResult>, ApiError> {
+    let host = resolve_host(&state, &req.host_id).await?;
+    let output = crate::host_runtime::install_host_chromium(&host)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(InstallResult { ok: true, output }))
 }
 
 async fn get_status(Path(id): Path<String>) -> Result<Json<HostBrowserStatus>, ApiError> {

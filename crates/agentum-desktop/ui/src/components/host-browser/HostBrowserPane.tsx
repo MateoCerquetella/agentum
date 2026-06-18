@@ -10,6 +10,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { BrowserScreencastFrameMetadata } from '../../shared/browser-screencast-protocol'
 import {
+  installHostChromium,
   navigateHostBrowser,
   openHostBrowserScreencast,
   startHostBrowser,
@@ -63,6 +64,10 @@ export function HostBrowserPane({ hostId, workdir, initialUrl }: Props): React.J
   const [status, setStatus] = useState<Status>('starting')
   const [error, setError] = useState<string | null>(null)
   const [id, setId] = useState<string | null>(null)
+  const [attached, setAttached] = useState(false)
+  const [installing, setInstalling] = useState(false)
+  // Bumping this re-runs the start effect (after an install or a manual retry).
+  const [retryKey, setRetryKey] = useState(0)
   const [urlInput, setUrlInput] = useState(initialUrl ?? '')
 
   useEffect(() => {
@@ -74,6 +79,7 @@ export function HostBrowserPane({ hostId, workdir, initialUrl }: Props): React.J
       .then(async (started) => {
         if (disposed) return
         setId(started.id)
+        setAttached(started.attached)
         setStatus('connecting')
         const screencast = await openHostBrowserScreencast(started.id, {
           onOpen: () => {
@@ -128,11 +134,30 @@ export function HostBrowserPane({ hostId, workdir, initialUrl }: Props): React.J
         lastObjectUrl.current = null
       }
     }
-  }, [hostId, workdir, initialUrl])
+  }, [hostId, workdir, initialUrl, retryKey])
 
   const send = useCallback((msg: HostBrowserInput) => {
     screencastRef.current?.sendInput(msg)
   }, [])
+
+  // Offer-install: when preflight reports no browser, run the host install then
+  // retry the launch (AC #5).
+  const onInstall = useCallback(() => {
+    setInstalling(true)
+    setError(null)
+    installHostChromium(hostId)
+      .then(() => {
+        setInstalling(false)
+        setRetryKey((k) => k + 1)
+      })
+      .catch((e: unknown) => {
+        setInstalling(false)
+        setError(e instanceof Error ? e.message : String(e))
+      })
+  }, [hostId])
+
+  // A missing-browser preflight error is the one we can offer to fix in place.
+  const missingBrowser = !!error && /chromium|install/i.test(error)
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLImageElement>) => {
@@ -238,11 +263,33 @@ export function HostBrowserPane({ hostId, workdir, initialUrl }: Props): React.J
           Stop
         </button>
         <span style={{ fontSize: 12, opacity: 0.7 }}>
-          {status === 'live' ? '● live' : status === 'error' ? '✕ error' : '… ' + status}
+          {status === 'live'
+            ? attached
+              ? '● live (re-attached)'
+              : '● live'
+            : status === 'error'
+              ? '✕ error'
+              : '… ' + status}
         </span>
       </form>
       {error ? (
-        <div style={{ padding: 8, color: 'var(--error, #c00)' }}>{error}</div>
+        <div
+          style={{
+            padding: 8,
+            color: 'var(--error, #c00)',
+            display: 'flex',
+            gap: 8,
+            alignItems: 'center',
+            flexWrap: 'wrap'
+          }}
+        >
+          <span>{error}</span>
+          {missingBrowser ? (
+            <button type="button" onClick={onInstall} disabled={installing}>
+              {installing ? 'Installing Chromium…' : 'Install Chromium'}
+            </button>
+          ) : null}
+        </div>
       ) : null}
       <div style={{ flex: 1, minHeight: 0, background: '#111', position: 'relative' }}>
         {/* Frame is painted fill; pointer coords are scaled to device dims. */}

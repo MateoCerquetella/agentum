@@ -1606,6 +1606,81 @@ pub async fn path_exists(host: &Host, abs_path: &str) -> Result<bool> {
     }
 }
 
+/// Playwright's browser install can download ~150 MB; the readiness `SSH_TIMEOUT`
+/// is far too short, and even `BOOTSTRAP_TIMEOUT` (180s) is tight on a slow link.
+const BROWSER_INSTALL_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// POSIX script that prints the first of `candidates` found on `PATH` (or
+/// nothing). `command -v` keeps it portable across the host's login shell
+/// (fish/zsh/bash). Pure so the probe shape is unit-testable.
+fn which_first_script(candidates: &[&str]) -> String {
+    let names = candidates.join(" ");
+    format!(
+        "for b in {names}; do if command -v \"$b\" >/dev/null 2>&1; then printf %s \"$b\"; exit 0; fi; done"
+    )
+}
+
+/// Return the first of `candidates` on the host's `PATH`, or `None`. One round
+/// trip. `candidates` must be plain binary names (no shell metacharacters) — they
+/// are embedded directly in the probe loop.
+pub async fn which_first(host: &Host, candidates: &[&str]) -> Result<Option<String>> {
+    let script = which_first_script(candidates);
+    let out = match &host.kind {
+        HostKind::Local => {
+            let o = Command::new("sh")
+                .arg("-c")
+                .arg(&script)
+                .output()
+                .await
+                .map_err(map_ssh_io)?;
+            String::from_utf8_lossy(&o.stdout).into_owned()
+        }
+        HostKind::Ssh { .. } => ssh_stdout(host, &format!("sh -c {}", q(&script)?)).await?,
+    };
+    let name = out.trim();
+    Ok((!name.is_empty()).then(|| name.to_string()))
+}
+
+/// Best-effort install of Chromium on the host via Playwright (`npx playwright
+/// install chromium`). Login shell (`sh -lc`) so node/npx on a user PATH (nvm,
+/// fnm) resolve. Returns the combined output tail; errors on a non-zero exit so
+/// the caller can surface a stated reason. Needs node/npx on the host.
+pub async fn install_host_chromium(host: &Host) -> Result<String> {
+    let cmd = "npx --yes playwright install chromium";
+    match &host.kind {
+        HostKind::Local => {
+            let o = Command::new("sh")
+                .arg("-lc")
+                .arg(cmd)
+                .output()
+                .await
+                .map_err(map_ssh_io)?;
+            let tail = String::from_utf8_lossy(&o.stdout).into_owned();
+            if o.status.success() {
+                Ok(tail)
+            } else {
+                Err(HostRuntimeError::NonZero {
+                    status: o.status.code(),
+                    stderr: String::from_utf8_lossy(&o.stderr).trim().to_string(),
+                })
+            }
+        }
+        HostKind::Ssh { .. } => {
+            let out = ssh_output(host, &format!("sh -lc {}", q(cmd)?), BROWSER_INSTALL_TIMEOUT)
+                .await
+                .map_err(map_ssh_io)?;
+            if out.status.success() {
+                Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+            } else {
+                Err(HostRuntimeError::NonZero {
+                    status: out.status.code(),
+                    stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+                })
+            }
+        }
+    }
+}
+
 /// Build the inner POSIX script that writes `content` to `$HOME/<rel_path>` on
 /// the host, creating the parent dir and keeping the file owner-only. `$HOME` is
 /// left for the remote `sh` to expand (the login shell may be fish/zsh, so this
@@ -2054,6 +2129,36 @@ mod tests {
         assert!(!path_exists(&host, &nested).await.unwrap());
         mkdir_p(&host, &nested).await.unwrap();
         assert!(path_exists(&host, &nested).await.unwrap());
+    }
+
+    #[test]
+    fn which_first_script_probes_candidates_in_order() {
+        let s = which_first_script(&["chromium", "chromium-browser", "google-chrome"]);
+        assert!(
+            s.contains("for b in chromium chromium-browser google-chrome"),
+            "candidates not probed in order: {s}"
+        );
+        assert!(s.contains("command -v"), "not a portable PATH probe: {s}");
+        assert!(s.contains("printf"), "first hit not printed: {s}");
+    }
+
+    #[tokio::test]
+    async fn which_first_finds_present_binary_locally() {
+        let host = local_host();
+        // `sh` is on PATH everywhere; the bogus name precedes it to prove order.
+        assert_eq!(
+            which_first(&host, &["definitely-not-a-real-bin-xyz", "sh"])
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("sh")
+        );
+        assert!(
+            which_first(&host, &["definitely-not-a-real-bin-xyz"])
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
