@@ -193,9 +193,12 @@ pub async fn provision(
         auth_token: Some(state.mcp_token.as_str().to_string()),
     });
 
-    // Playwright browser MCP — opt-in, spawns npx, best-effort. No auth.
+    // Playwright browser MCP — opt-in, spawns npx, best-effort. No auth. The
+    // engine seam (`browser_mcp_engine`) decides whether the MCP is BOUND to
+    // agentum's displayed CDP-Chromium (009c-1: the agent drives the browser the
+    // user watches) or spawns its own HIDDEN headless one (the legacy path).
     if playwright_mcp::feature_enabled() {
-        match playwright_mcp::ensure_playwright_mcp().await {
+        match provision_browser_mcp(browser_mcp_engine()).await {
             Ok(url) => servers.push(McpServer {
                 name: "playwright".to_string(),
                 url,
@@ -219,6 +222,72 @@ pub async fn provision(
         Err(e) => {
             tracing::warn!("could not write MCP config; launching without MCP: {e:#}");
             None
+        }
+    }
+}
+
+/// The browser MCP engine for this machine — the **agnostic seam**. A closed set
+/// (Playwright is the concrete reference binding), NOT a plugin registry: a
+/// future engine adds an arm here + a launch fn, no dynamic loader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserMcpEngine {
+    /// Playwright MCP **bound** to agentum's displayed CDP-Chromium over
+    /// `--cdp-endpoint` — the agent drives the same browser the user watches
+    /// (009c-1). The default whenever a local CDP browser can be launched.
+    PlaywrightBound,
+    /// Playwright MCP spawning its **own hidden headless** Chromium (the original
+    /// lightweight verify path; the fallback when the bound browser is absent).
+    PlaywrightHeadless,
+}
+
+/// Select the browser MCP engine. Defaults to bound (009c-1); an explicit
+/// `AGENTUM_BROWSER_MCP_ENGINE=headless` forces the legacy hidden path. This one
+/// function is the seam.
+pub fn browser_mcp_engine() -> BrowserMcpEngine {
+    parse_engine(
+        std::env::var("AGENTUM_BROWSER_MCP_ENGINE")
+            .ok()
+            .as_deref(),
+    )
+}
+
+/// Pure engine parser (split out so it's unit-testable without mutating
+/// process-global env — tests run in parallel).
+fn parse_engine(val: Option<&str>) -> BrowserMcpEngine {
+    match val.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("headless") => BrowserMcpEngine::PlaywrightHeadless,
+        _ => BrowserMcpEngine::PlaywrightBound,
+    }
+}
+
+/// Provision the browser MCP per the chosen engine, returning the agent-facing
+/// `…/mcp` URL.
+///
+/// Bound engine: launch agentum's displayed CDP-Chromium, then bind the MCP to
+/// it. The degrade-to-headless leg fires **only when the CDP browser itself
+/// can't launch** (not installed, no display) — there, headless is the sensible
+/// fallback since the user couldn't watch a browser anyway. If the browser *did*
+/// launch but binding the MCP fails, that error is propagated (NOT degraded):
+/// silently falling back to a hidden headless browser while a visible one is
+/// open would be exactly the confusing split this feature exists to remove.
+async fn provision_browser_mcp(engine: BrowserMcpEngine) -> Result<String> {
+    match engine {
+        BrowserMcpEngine::PlaywrightHeadless => playwright_mcp::ensure_playwright_mcp().await,
+        BrowserMcpEngine::PlaywrightBound => {
+            match crate::cdp_browser::ensure_local_cdp_browser().await {
+                Ok(endpoint) => playwright_mcp::ensure_playwright_mcp_bound(&endpoint).await,
+                Err(e) => {
+                    // CDP browser couldn't launch — degrade, loudly logged: the
+                    // user can still verify via the hidden headless browser, they
+                    // just can't watch it. (A bound-MCP failure above is NOT
+                    // degraded — see the doc comment.)
+                    tracing::warn!(
+                        "local CDP browser unavailable ({e:#}); \
+                         falling back to headless Playwright MCP"
+                    );
+                    playwright_mcp::ensure_playwright_mcp().await
+                }
+            }
         }
     }
 }
@@ -275,6 +344,25 @@ fn write_combined_config_in(state_dir: &Path, servers: &[McpServer]) -> Result<P
 mod tests {
     use super::*;
     use uuid::Uuid;
+
+    #[test]
+    fn engine_seam_defaults_to_bound_and_honors_headless_override() {
+        // Default (unset / empty / unknown) → bound: the agent drives the
+        // browser the user watches (009c-1).
+        assert_eq!(parse_engine(None), BrowserMcpEngine::PlaywrightBound);
+        assert_eq!(parse_engine(Some("")), BrowserMcpEngine::PlaywrightBound);
+        assert_eq!(parse_engine(Some("bound")), BrowserMcpEngine::PlaywrightBound);
+        assert_eq!(parse_engine(Some("whatever")), BrowserMcpEngine::PlaywrightBound);
+        // Explicit opt-out → the legacy hidden headless path.
+        assert_eq!(
+            parse_engine(Some("headless")),
+            BrowserMcpEngine::PlaywrightHeadless
+        );
+        assert_eq!(
+            parse_engine(Some("  HEADLESS  ")),
+            BrowserMcpEngine::PlaywrightHeadless
+        );
+    }
 
     #[test]
     fn only_claude_and_codex_take_mcp_args() {

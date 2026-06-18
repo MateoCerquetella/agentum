@@ -5,7 +5,8 @@
   "build": {
     "frontendDist": "ui/dist",
     "beforeDevCommand": "bun run dev",
-    "beforeBuildCommand": "bun run --bun build"
+    "beforeBuildCommand": "bun run --bun build",
+    "devUrl": "http://127.0.0.1:1420"
   },
   "app": {
     "windows": [

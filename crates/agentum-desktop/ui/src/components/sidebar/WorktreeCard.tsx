@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Why: the worktree card centralizes sidebar card state (selection, drag, agent status, git info, context menu) in one cohesive component so sidebar rendering doesn't fan out across files. */
-import React, { useEffect, useCallback, useState } from 'react'
+import React, { useEffect, useCallback, useRef, useState } from 'react'
 import { useAppStore } from '@/store'
 import { getHostedReviewCacheKey } from '@/store/slices/hosted-review'
 import { Badge } from '@/components/ui/badge'
@@ -183,12 +183,16 @@ const WorktreeCard = React.memo(function WorktreeCard({
   // Why: on restart the previously-active worktree is auto-restored without a
   // click, so the dialog never opens. Auto-show it for the active card when SSH
   // is disconnected, but keep dismissals sticky until that prompt key changes.
-  if (sshDisconnectedPromptKey !== lastSshDisconnectedPromptKey) {
-    setLastSshDisconnectedPromptKey(sshDisconnectedPromptKey)
+  const lastPromptKeyRef = useRef(lastSshDisconnectedPromptKey)
+  lastPromptKeyRef.current = lastSshDisconnectedPromptKey
+  useEffect(() => {
     if (sshDisconnectedPromptKey) {
-      setShowDisconnectedDialog(true)
+      if (sshDisconnectedPromptKey !== lastPromptKeyRef.current) {
+        setLastSshDisconnectedPromptKey(sshDisconnectedPromptKey)
+        setShowDisconnectedDialog(true)
+      }
     }
-  }
+  }, [sshDisconnectedPromptKey])
   // Why: read the target label from the store (populated during hydration in
   // useIpcEvents.ts) instead of calling listTargets IPC per card instance.
   const sshTargetLabel = useAppStore((s) =>
