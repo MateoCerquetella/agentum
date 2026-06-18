@@ -56,7 +56,8 @@ pub enum TaskSink {
     Board,
     /// GitHub Issues via the authenticated `gh` CLI (spec 011b).
     Github,
-    // Linear,  // spec 011c — GraphQL `issueCreate`
+    /// Linear via the GraphQL `issueCreate` mutation (spec 011c).
+    Linear,
 }
 
 impl TaskSink {
@@ -65,6 +66,7 @@ impl TaskSink {
         match self {
             TaskSink::Board => "board",
             TaskSink::Github => "github",
+            TaskSink::Linear => "linear",
         }
     }
 
@@ -73,10 +75,13 @@ impl TaskSink {
     /// [`TaskSink::select`].
     ///
     /// An external manager is the source of truth when configured; the internal
-    /// board is the agnostic fallback. (Linear precedence lands with 011c.)
-    pub fn pick_provider(github_available: bool) -> TaskSink {
+    /// board is the agnostic fallback. GitHub takes precedence over Linear when
+    /// both are present (deterministic + documented).
+    pub fn pick_provider(github_available: bool, linear_available: bool) -> TaskSink {
         if github_available {
             TaskSink::Github
+        } else if linear_available {
+            TaskSink::Linear
         } else {
             TaskSink::Board
         }
@@ -84,8 +89,17 @@ impl TaskSink {
 
     /// Resolve the destination for a goal's `workdir` by probing what's
     /// configured, then delegating to [`TaskSink::pick_provider`].
+    ///
+    /// `AGENTUM_TASK_SINK=board|github|linear` forces a provider, overriding
+    /// detection — useful to pin a destination (and to keep tests hermetic).
     pub async fn select(workdir: &Path) -> TaskSink {
-        TaskSink::pick_provider(github_ready(workdir).await)
+        match std::env::var("AGENTUM_TASK_SINK").as_deref() {
+            Ok("board") => return TaskSink::Board,
+            Ok("github") => return TaskSink::Github,
+            Ok("linear") => return TaskSink::Linear,
+            _ => {}
+        }
+        TaskSink::pick_provider(github_ready(workdir).await, crate::linear::available())
     }
 
     /// Create one feature in the backing task manager. Returns a [`FeatureRef`]
@@ -141,6 +155,18 @@ impl TaskSink {
                     );
                 }
                 parse_gh_issue_url(&String::from_utf8_lossy(&output.stdout))
+            }
+            TaskSink::Linear => {
+                let (id, url) = crate::linear::create_issue(
+                    &feature.title,
+                    feature.body.as_deref().unwrap_or_default(),
+                )
+                .await?;
+                Ok(FeatureRef {
+                    provider: self.provider(),
+                    id,
+                    url,
+                })
             }
         }
     }
@@ -214,16 +240,20 @@ mod tests {
     }
 
     #[test]
-    fn pick_provider_prefers_github_else_board() {
+    fn pick_provider_precedence_github_then_linear_then_board() {
         // External manager = truth when configured; board = agnostic fallback.
-        assert_eq!(TaskSink::pick_provider(true), TaskSink::Github);
-        assert_eq!(TaskSink::pick_provider(false), TaskSink::Board);
+        // GitHub wins over Linear when both are present (deterministic).
+        assert_eq!(TaskSink::pick_provider(true, true), TaskSink::Github);
+        assert_eq!(TaskSink::pick_provider(true, false), TaskSink::Github);
+        assert_eq!(TaskSink::pick_provider(false, true), TaskSink::Linear);
+        assert_eq!(TaskSink::pick_provider(false, false), TaskSink::Board);
     }
 
     #[test]
     fn provider_ids_are_stable() {
         assert_eq!(TaskSink::Board.provider(), "board");
         assert_eq!(TaskSink::Github.provider(), "github");
+        assert_eq!(TaskSink::Linear.provider(), "linear");
     }
 
     #[test]
