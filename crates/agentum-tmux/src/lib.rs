@@ -317,6 +317,33 @@ pub async fn resize_window(target: &str, cols: u16, rows: u16) -> Result<()> {
     run_checked(&mut c).await
 }
 
+/// Adjust the window height by `rows_delta` rows *relative* to its current
+/// size (positive = taller via `-U`, negative = shorter via `-D`). Unlike
+/// [`resize_window`], the caller needn't know the absolute size — used by the
+/// redraw heal to provoke a SIGWINCH (shrink then restore) when only a row
+/// delta, not the current geometry, is on hand. Forces `window-size manual`
+/// first for the same unattached-session reason as [`resize_window`].
+pub async fn resize_window_relative(target: &str, rows_delta: i16) -> Result<()> {
+    if rows_delta == 0 {
+        return Ok(());
+    }
+    let _ = Command::new("tmux")
+        .args(["set-option", "-q", "-t"])
+        .arg(target)
+        .args(["window-size", "manual"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
+
+    // `-U`/`-D` take a positive count; map the signed delta onto the flag.
+    let flag = if rows_delta > 0 { "-U" } else { "-D" };
+    let count = rows_delta.unsigned_abs().to_string();
+    let mut c = Command::new("tmux");
+    c.arg("resize-window").arg("-t").arg(target).arg(flag).arg(count);
+    run_checked(&mut c).await
+}
+
 /// Pipe the pane's output to `out_path` (append). Uses `-o`: noop if a pipe
 /// is already active for this pane.
 ///
