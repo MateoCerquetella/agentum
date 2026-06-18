@@ -32,6 +32,31 @@ The marketing landing page lives in its own private repo (`agentum-www`), deploy
 
 ---
 
+## Contribution workflow (issue-first, always)
+
+**Every change starts as a GitHub issue and lands as a PR that closes it.**
+No "drive-by" commits to a feature branch without a tracked issue — the issue
+is where the documentation and labels live.
+
+1. **Open a documented issue first.** Use the templates in
+   `.github/ISSUE_TEMPLATE/` (Summary, Motivation, Proposed approach,
+   Acceptance criteria). Label it with `type/*` + `area/*` + `priority/*`
+   (run `.github/labels.sh` once to sync the label set).
+2. **Always work in a dedicated git worktree** — never `git checkout` a new
+   branch in the shared checkout (many agents run concurrently here; in-place
+   checkout disturbs their working trees). Create one off an up-to-date base:
+   `git worktree add ../agentum-<kebab-desc> -b <type>/<kebab-desc> origin/main`.
+   Clean up with `git worktree remove <path>` after the PR merges.
+3. **Implement + verify** (see "Critical: rebuild rhythm").
+4. **Open a PR** whose body contains `Closes #<issue>` so the merge
+   auto-closes the issue. The `.github/pull_request_template.md` enforces this.
+
+Claude can drive the whole flow with the **`/ship <description>`** slash command
+(`.claude/commands/ship.md`): it creates the labeled issue, branches,
+implements, and opens the linked PR — in that order, without skipping the issue.
+
+---
+
 ## Crate map
 
 ```

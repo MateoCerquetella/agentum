@@ -1,0 +1,2 @@
+# Force the templates — no blank issues, so every issue is documented + labeled.
+blank_issues_enabled: false
