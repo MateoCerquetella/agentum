@@ -153,6 +153,7 @@ import {
 } from './browser-notices'
 import { shouldPollChromiumErrorPage } from './chromium-error-page-polling'
 import NativeBrowserPagePane from './NativeBrowserPagePane'
+import AgentBrowserScreencastPane from './AgentBrowserScreencastPane'
 
 type BrowserTabPageState = Partial<
   Pick<
@@ -741,8 +742,28 @@ export default function BrowserPane({
     browserPages.find((page) => page.id === browserTab.activePageId) ?? browserPages[0] ?? null
   const updateBrowserPageState = useAppStore((s) => s.updateBrowserPageState)
   const setBrowserPageUrl = useAppStore((s) => s.setBrowserPageUrl)
+  // Why: when the in-pane CDP screencast is enabled (009c-3) AND this page is
+  // marked agent-driven (a remote handle was registered for it), render the live
+  // CDP screencast of the SAME browser the agent drives instead of a local
+  // WKWebView. Default-off + handle-gated, so ordinary browsing is unaffected
+  // and a regular page never gets hijacked into the screencast surface.
+  const screencastEnabled = useAppStore((s) => s.settings?.agentBrowserScreencast ?? false)
+  const remoteHandle = useAppStore((s) =>
+    activeBrowserPage ? s.remoteBrowserPageHandlesByPageId[activeBrowserPage.id] : undefined
+  )
+  const renderScreencast = screencastEnabled && !!remoteHandle
 
-  return activeBrowserPage ? (
+  if (!activeBrowserPage) {
+    return <div className="flex h-full min-h-0 flex-1 bg-background" />
+  }
+
+  return renderScreencast ? (
+    <AgentBrowserScreencastPane
+      key={`screencast-${activeBrowserPage.id}`}
+      page={activeBrowserPage}
+      isActive={isActive}
+    />
+  ) : (
     <NativeBrowserPagePane
       key={activeBrowserPage.id}
       browserTab={activeBrowserPage}
@@ -750,8 +771,6 @@ export default function BrowserPane({
       onUpdatePageState={updateBrowserPageState}
       onSetUrl={setBrowserPageUrl}
     />
-  ) : (
-    <div className="flex h-full min-h-0 flex-1 bg-background" />
   )
 }
 
