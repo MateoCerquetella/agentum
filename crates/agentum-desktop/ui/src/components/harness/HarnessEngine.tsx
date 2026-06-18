@@ -544,7 +544,7 @@ export default function HarnessEngine(): React.JSX.Element {
           <ChevronLeft className="size-4" /> Back
         </Button>
         <ShieldCheck className="size-5 text-primary" />
-        <span className="text-sm font-semibold tracking-tight">Harness Engine</span>
+        <span className="text-sm font-semibold tracking-tight">Chat</span>
         {status ? (
           <span className="ml-2 inline-flex items-center gap-1.5 rounded-full bg-card px-2 py-0.5 text-[11px]">
             <span className={cn('size-2 rounded-full', stateDot(status.state))} />
