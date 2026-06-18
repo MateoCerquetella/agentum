@@ -99,7 +99,8 @@ pub async fn kill_session(target: &str) -> Result<()> {
         return Ok(());
     }
     let mut c = Command::new("tmux");
-    c.arg("kill-session").arg("-t").arg(target);
+    // `--` end-of-options guard: a `-`-prefixed target is a value, never a flag.
+    c.arg("kill-session").arg("-t").arg("--").arg(target);
     run_checked(&mut c).await
 }
 

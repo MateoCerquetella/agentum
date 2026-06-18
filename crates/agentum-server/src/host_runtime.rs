@@ -685,7 +685,9 @@ pub async fn kill_session(host: &Host, target: &str) -> Result<()> {
             if !has_session(host, target).await? {
                 return Ok(());
             }
-            ssh_checked(host, &format!("tmux kill-session -t {}", q(target)?)).await
+            // `--` end-of-options guard: a session name starting with `-` must
+            // never be parsed by tmux as a flag (option injection).
+            ssh_checked(host, &format!("tmux kill-session -t -- {}", q(target)?)).await
         }
     }
 }
@@ -1313,7 +1315,8 @@ pub async fn kill_tmux_session(host: &Host, name: &str) -> Result<()> {
     match &host.kind {
         HostKind::Local => Ok(agentum_tmux::kill_session(name).await?),
         HostKind::Ssh { .. } => {
-            let script = format!("tmux kill-session -t {}", q(name)?);
+            // `--` end-of-options guard so a `-`-prefixed name can't be parsed as a flag.
+            let script = format!("tmux kill-session -t -- {}", q(name)?);
             ssh_checked(host, &script).await
         }
     }
