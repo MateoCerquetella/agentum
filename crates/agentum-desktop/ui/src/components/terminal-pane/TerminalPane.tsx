@@ -912,6 +912,7 @@ export default function TerminalPane({
 
   useTerminalKeyboardShortcuts({
     isActive,
+    tabId,
     keyboardScopeRef: containerRef,
     managerRef,
     paneTransportsRef,

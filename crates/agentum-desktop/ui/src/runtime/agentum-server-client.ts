@@ -117,6 +117,27 @@ export function listAgents(): Promise<AgentInfo[]> {
   return request<AgentInfo[]>('/api/agents')
 }
 
+/** Wire shape of `/api/orchestration/settings`. */
+export type OrchestrationSettings = { enabled: boolean }
+
+/**
+ * `GET /api/orchestration/settings` — is agentum's orchestration MCP surface
+ * (inter-agent mailbox + task DAG) turned on? The server-side gate read by
+ * `routes/mcp.rs` at tools/list + tools/call, so this is the source of truth the
+ * Settings toggle reflects (not localStorage).
+ */
+export function getOrchestrationSettings(): Promise<OrchestrationSettings> {
+  return request<OrchestrationSettings>('/api/orchestration/settings')
+}
+
+/** `PUT /api/orchestration/settings` — turn the orchestration MCP surface on/off. */
+export function setOrchestrationSettings(enabled: boolean): Promise<OrchestrationSettings> {
+  return request<OrchestrationSettings>('/api/orchestration/settings', {
+    method: 'PUT',
+    body: JSON.stringify({ enabled })
+  })
+}
+
 /**
  * Boot-time smoke check: confirm the embedded server answers a real
  * session-model round-trip (not just /api/health) and log what it sees.

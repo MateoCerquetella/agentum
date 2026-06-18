@@ -45,7 +45,12 @@ export function resolveTerminalShortcutAction(
   macOptionAsAlt: MacOptionAsAlt = 'false',
   optionKeyLocation: number = 0,
   isWindows: boolean = false,
-  keybindings?: KeybindingOverrides
+  keybindings?: KeybindingOverrides,
+  // Why: when an agent CLI (Claude Code, Codex, …) owns the pane it reads the
+  // standard cursor-key encoding for word motion, not readline's Meta-b/f. The
+  // caller resolves this from the pane's live agent status so word-nav matches
+  // what the agent gets in every other terminal (iTerm2, Ghostty, …).
+  paneRunsAgent: boolean = false
 ): TerminalShortcutAction | null {
   const platform: NodeJS.Platform = isMac ? 'darwin' : isWindows ? 'win32' : 'linux'
   if (!event.repeat) {
@@ -97,9 +102,15 @@ export function resolveTerminalShortcutAction(
     event.shiftKey &&
     event.key === 'Enter'
   ) {
-    // Why: Codex on Windows PowerShell treats CSI-u Shift+Enter as inert,
-    // while the Alt+Enter byte path inserts a composer newline.
-    return { type: 'sendInput', data: isWindows ? '\x1b\r' : '\x1b[13;2u' }
+    // Why: send Alt+Enter (ESC + CR) on every platform so Shift+Enter inserts a
+    // newline broadly. The CSI-u encoding (\e[13;2u) only lands a newline in
+    // CLIs that opt into the Kitty keyboard protocol (Codex); it is inert in a
+    // plain shell and in Claude Code, which is exactly the "skip a line doesn't
+    // work" report. The Alt+Enter byte path inserts a composer newline in Codex
+    // and Claude Code (Meta+Enter) alike and is harmless at a bare shell prompt,
+    // so it is the most broadly-compatible choice. (Windows PowerShell already
+    // relied on this same byte path.)
+    return { type: 'sendInput', data: '\x1b\r' }
   }
 
   if (
@@ -148,12 +159,20 @@ export function resolveTerminalShortcutAction(
     !event.shiftKey &&
     (event.key === 'ArrowLeft' || event.key === 'ArrowRight')
   ) {
-    // Why: xterm.js would otherwise emit \e[1;3D / \e[1;3C for option/alt+arrow,
-    // which default readline (bash, zsh) does not bind to backward-word /
-    // forward-word — so word navigation silently doesn't work without a custom
-    // inputrc. Translate to \eb / \ef (readline's default word-nav bindings) so
-    // option+←/→ on macOS and alt+←/→ on Linux/Windows behave like they do in
-    // iTerm2's "Esc+" option-key mode. Platform-agnostic: both produce altKey.
+    // Why: an agent CLI expects the standard Alt+Arrow cursor sequence
+    // (\e[1;3D / \e[1;3C) — the same bytes every other terminal (iTerm2,
+    // Ghostty, Terminal.app) sends — so its editor moves by word. Translating
+    // to readline's \eb / \ef instead is what made option+←/→ silently fail
+    // inside Claude Code / Codex.
+    if (paneRunsAgent) {
+      return { type: 'sendInput', data: event.key === 'ArrowLeft' ? '\x1b[1;3D' : '\x1b[1;3C' }
+    }
+    // Why: at a bare shell, xterm.js would emit \e[1;3D / \e[1;3C, which default
+    // readline (bash, zsh) does not bind to backward-word / forward-word — so
+    // word navigation silently doesn't work without a custom inputrc. Translate
+    // to \eb / \ef (readline's default word-nav bindings) so option+←/→ on macOS
+    // and alt+←/→ on Linux/Windows behave like iTerm2's "Esc+" option-key mode.
+    // Platform-agnostic: both produce altKey.
     return { type: 'sendInput', data: event.key === 'ArrowLeft' ? '\x1bb' : '\x1bf' }
   }
 
@@ -165,12 +184,17 @@ export function resolveTerminalShortcutAction(
     !event.shiftKey &&
     (event.key === 'ArrowLeft' || event.key === 'ArrowRight')
   ) {
+    // Why: an agent CLI expects the standard Ctrl+Arrow cursor sequence
+    // (\e[1;5D / \e[1;5C) for word motion, so send that when the pane runs one.
+    if (paneRunsAgent) {
+      return { type: 'sendInput', data: event.key === 'ArrowLeft' ? '\x1b[1;5D' : '\x1b[1;5C' }
+    }
     // Why: Windows Terminal, GNOME Terminal, and Konsole all bind Ctrl+←/→ for
-    // word navigation on Linux/Windows — but xterm.js emits \e[1;5D / \e[1;5C,
-    // which default readline (bash, zsh) does not bind to backward-word /
-    // forward-word. Translate to \eb / \ef (same bytes as our Alt+Arrow rule)
-    // so Ctrl+←/→ works for word-nav matching user expectations on those
-    // platforms without requiring a custom inputrc.
+    // word navigation on Linux/Windows — but at a bare shell xterm.js emits
+    // \e[1;5D / \e[1;5C, which default readline (bash, zsh) does not bind to
+    // backward-word / forward-word. Translate to \eb / \ef (same bytes as our
+    // Alt+Arrow rule) so Ctrl+←/→ works for word-nav matching user expectations
+    // on those platforms without requiring a custom inputrc.
     //
     // Mac-gated: Ctrl+Arrow on macOS is reserved for Mission Control / Spaces
     // navigation at the OS level and should never reach the app.

@@ -36,6 +36,33 @@ describe('non-mac Ctrl+Left/Right word-nav', () => {
     ).toEqual({ type: 'sendInput', data: '\x1bf' })
   })
 
+  it('sends the standard Ctrl+Arrow CSI when an agent owns the pane', () => {
+    // paneRunsAgent=true: an agent CLI reads \e[1;5D / \e[1;5C for word motion,
+    // not readline's \eb / \ef.
+    expect(
+      resolveTerminalShortcutAction(
+        event({ key: 'ArrowLeft', code: 'ArrowLeft', ctrlKey: true }),
+        false,
+        'false',
+        0,
+        false,
+        undefined,
+        true
+      )
+    ).toEqual({ type: 'sendInput', data: '\x1b[1;5D' })
+    expect(
+      resolveTerminalShortcutAction(
+        event({ key: 'ArrowRight', code: 'ArrowRight', ctrlKey: true }),
+        false,
+        'false',
+        0,
+        false,
+        undefined,
+        true
+      )
+    ).toEqual({ type: 'sendInput', data: '\x1b[1;5C' })
+  })
+
   it('does not translate Ctrl+Arrow on macOS (reserved by OS)', () => {
     // Mac uses Cmd+Arrow for line-nav and Option+Arrow for word-nav.
     // Ctrl+Arrow is the macOS Mission Control / Spaces chord.

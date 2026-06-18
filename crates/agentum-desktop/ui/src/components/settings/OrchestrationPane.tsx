@@ -1,63 +1,53 @@
 import { useEffect, useState } from 'react'
-import { Workflow } from 'lucide-react'
 import { Label } from '../ui/label'
-import { ORCHESTRATION_SKILL_NAME } from '@/lib/agent-feature-install-commands'
 import {
-  AGENT_SKILL_CLI_PREREQUISITE_NOTICE,
-  ensureAgentumCliAvailableForAgentSkillTerminal
-} from '@/lib/agent-skill-cli-prerequisite'
-import { ORCHESTRATION_SKILL_INSTALL_COMMAND } from '@/lib/orchestration-install-command'
-import {
-  GLOBAL_AGENT_SKILL_SOURCE_KINDS,
-  useInstalledAgentSkill
-} from '@/hooks/useInstalledAgentSkills'
-import {
-  ORCHESTRATION_ENABLED_STORAGE_KEY,
   ORCHESTRATION_SETUP_STATE_EVENT,
   isOrchestrationSetupEnabled,
-  notifyOrchestrationSetupStateChanged
+  persistOrchestrationEnabled,
+  syncOrchestrationEnabledFromServer
 } from '@/lib/orchestration-setup-state'
 import { SearchableSetting } from './SearchableSetting'
 import { matchesSettingsSearch } from './settings-search'
 import { useAppStore } from '../../store'
 import { ORCHESTRATION_PANE_SEARCH_ENTRIES } from './orchestration-search'
-import { AgentSkillSetupPanel } from './AgentSkillSetupPanel'
 
 export function OrchestrationPane(): React.JSX.Element {
   const searchQuery = useAppStore((s) => s.settingsSearchQuery)
   const showOrchestration = matchesSettingsSearch(searchQuery, ORCHESTRATION_PANE_SEARCH_ENTRIES)
 
-  const [orchestrationEnabled, setOrchestrationEnabled] = useState<boolean>(() => {
-    return isOrchestrationSetupEnabled()
-  })
-
-  const {
-    installed: orchestrationSkillDetected,
-    loading: orchestrationSkillLoading,
-    error: orchestrationSkillError,
-    refresh: refreshOrchestrationSkill
-  } = useInstalledAgentSkill(ORCHESTRATION_SKILL_NAME, {
-    enabled: orchestrationEnabled,
-    sourceKinds: GLOBAL_AGENT_SKILL_SOURCE_KINDS
-  })
+  // Paint synchronously from the cache, then reconcile with the server flag —
+  // the real gate lives server-side (agentum-server `routes/mcp.rs`), not here.
+  const [orchestrationEnabled, setOrchestrationEnabled] = useState<boolean>(() =>
+    isOrchestrationSetupEnabled()
+  )
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    let cancelled = false
+    void syncOrchestrationEnabledFromServer().then((enabled) => {
+      if (!cancelled) setOrchestrationEnabled(enabled)
+    })
     const syncSetupState = (): void => {
       setOrchestrationEnabled(isOrchestrationSetupEnabled())
     }
     window.addEventListener(ORCHESTRATION_SETUP_STATE_EVENT, syncSetupState)
     return () => {
+      cancelled = true
       window.removeEventListener(ORCHESTRATION_SETUP_STATE_EVENT, syncSetupState)
     }
   }, [])
 
   const toggleOrchestration = (value: boolean): void => {
+    // Optimistic: flip the UI, write the server flag, revert if it fails.
     setOrchestrationEnabled(value)
-    localStorage.setItem(ORCHESTRATION_ENABLED_STORAGE_KEY, value ? '1' : '0')
+    setError(null)
     if (value) {
       useAppStore.getState().recordFeatureInteraction('agent-orchestration-setup')
     }
-    notifyOrchestrationSetupStateChanged()
+    void persistOrchestrationEnabled(value).catch((err: unknown) => {
+      setOrchestrationEnabled(!value)
+      setError(err instanceof Error ? err.message : 'Could not update orchestration.')
+    })
   }
 
   if (!showOrchestration) {
@@ -75,8 +65,9 @@ export function OrchestrationPane(): React.JSX.Element {
         <div className="min-w-0 shrink space-y-0.5">
           <Label>Agent Orchestration</Label>
           <p className="text-xs text-muted-foreground">
-            Coordinate multiple coding agents with messaging, task DAGs, dispatch with preamble
-            injection, decision gates, and coordinator loops.
+            A built-in agentum MCP capability — no skill to install. When on, agentum&apos;s MCP
+            server exposes the orchestration tools (inter-agent messaging and the task DAG) to every
+            agent it launches, so agents can hand off work, coordinate, and dispatch tasks.
           </p>
         </div>
         <button
@@ -95,25 +86,15 @@ export function OrchestrationPane(): React.JSX.Element {
         </button>
       </div>
 
+      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+
       {orchestrationEnabled ? (
-        <AgentSkillSetupPanel
-          title="Orchestration skill"
-          description="Enables agents to hand off context and coordinate work through Agentum."
-          command={ORCHESTRATION_SKILL_INSTALL_COMMAND}
-          terminalTitle="Orchestration setup"
-          terminalAriaLabel="Orchestration skill install terminal"
-          terminalWorktreeId="settings-orchestration-skill-terminal"
-          installed={orchestrationSkillDetected}
-          loading={orchestrationSkillLoading}
-          error={orchestrationSkillError}
-          icon={<Workflow className="size-5" />}
-          preInstallNotice={AGENT_SKILL_CLI_PREREQUISITE_NOTICE}
-          onBeforeOpenTerminal={async () => {
-            useAppStore.getState().recordFeatureInteraction('agent-orchestration-setup')
-            await ensureAgentumCliAvailableForAgentSkillTerminal()
-          }}
-          onRecheck={refreshOrchestrationSkill}
-        />
+        <p className="rounded-lg border border-border/60 p-3 text-xs text-muted-foreground">
+          Orchestration tools are live: agents launched by agentum can call{' '}
+          <code className="text-foreground">agentum_send_message</code>,{' '}
+          <code className="text-foreground">agentum_check_messages</code>, and the task-DAG tools
+          over the MCP. Turn this off to remove them from every agent.
+        </p>
       ) : null}
     </SearchableSetting>
   )

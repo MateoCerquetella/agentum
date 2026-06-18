@@ -8,12 +8,18 @@ use agentum_store::orchestration::{NewOrchMessage, OrchMessage};
 use axum::extract::{Path, Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
+
+/// Setting key gating whether agentum's MCP server exposes the orchestration
+/// tools (mailbox + task DAG). Read in `routes/mcp.rs`; written by the desktop
+/// Settings → Agent Orchestration toggle via the endpoint below. Absent = off
+/// (orchestration is opt-in; the user turns it on).
+pub const ORCHESTRATION_ENABLED_SETTING: &str = "orchestration.enabled";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -30,6 +36,48 @@ pub fn router() -> Router<AppState> {
             "/api/orchestration/dispatch",
             get(dispatch_show).post(dispatch),
         )
+        .route(
+            "/api/orchestration/settings",
+            get(get_settings).put(put_settings),
+        )
+}
+
+/// The orchestration enable state — what the desktop toggle reflects and what
+/// the MCP tool gate reads.
+#[derive(Serialize)]
+struct OrchestrationSettings {
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct OrchestrationSettingsReq {
+    enabled: bool,
+}
+
+/// `GET /api/orchestration/settings` — is the orchestration MCP surface on?
+async fn get_settings(
+    State(state): State<AppState>,
+) -> Result<Json<OrchestrationSettings>, ApiError> {
+    let enabled = state
+        .store
+        .setting_get_bool(ORCHESTRATION_ENABLED_SETTING, false)
+        .await?;
+    Ok(Json(OrchestrationSettings { enabled }))
+}
+
+/// `PUT /api/orchestration/settings` — turn the orchestration MCP surface on/off.
+/// Takes effect on the next `tools/list`/`tools/call` (no agent restart needed).
+async fn put_settings(
+    State(state): State<AppState>,
+    Json(req): Json<OrchestrationSettingsReq>,
+) -> Result<Json<OrchestrationSettings>, ApiError> {
+    state
+        .store
+        .setting_set_bool(ORCHESTRATION_ENABLED_SETTING, req.enabled)
+        .await?;
+    Ok(Json(OrchestrationSettings {
+        enabled: req.enabled,
+    }))
 }
 
 /// Minimal session facts the recipient resolver needs. Decoupled from the full

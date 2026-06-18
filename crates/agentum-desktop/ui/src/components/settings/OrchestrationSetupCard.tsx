@@ -3,7 +3,6 @@ import {
   AGENT_SKILL_CLI_PREREQUISITE_NOTICE,
   ensureAgentumCliAvailableForAgentSkillTerminal
 } from '@/lib/agent-skill-cli-prerequisite'
-import { ORCHESTRATION_SKILL_INSTALL_COMMAND } from '@/lib/orchestration-install-command'
 import type { InstalledAgentSkillState } from '@/hooks/useInstalledAgentSkills'
 import { AgentSkillSetupPanel } from './AgentSkillSetupPanel'
 
@@ -17,11 +16,11 @@ export function OrchestrationSetupCard(props: {
   const setupPanel = (
     <AgentSkillSetupPanel
       className={compact ? 'w-full max-w-[520px]' : undefined}
-      title="Orchestration skill"
-      description="Enables agents to hand off context and coordinate work through Agentum."
-      command={ORCHESTRATION_SKILL_INSTALL_COMMAND}
-      terminalTitle="Orchestration setup"
-      terminalAriaLabel="Orchestration skill install terminal"
+      title="Agent Orchestration"
+      description="A built-in agentum MCP — agents hand off context and coordinate work through Agentum. No skill to install."
+      command=""
+      terminalTitle="Orchestration"
+      terminalAriaLabel="Orchestration setup"
       terminalWorktreeId="feature-wall-orchestration-skill-terminal"
       installed={skill.installed}
       loading={skill.loading}

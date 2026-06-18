@@ -13,11 +13,9 @@ import {
   parseGitHubIssueOrPRLink,
   normalizeGitHubLinkQuery
 } from '@/lib/github-links'
-import { activateAndRevealWorktree, type AgentStartedTelemetry } from '@/lib/worktree-activation'
-import { buildAgentDraftLaunchPlan, buildAgentStartupPlan } from '@/lib/tui-agent-startup'
-import { TUI_AGENT_CONFIG } from '../../../shared/tui-agent-config'
+import { activateAndRevealWorktree } from '@/lib/worktree-activation'
+import { stashPendingSessionPrompt } from '@/lib/pending-session-prompt'
 import { filterEnabledTuiAgents, isTuiAgentEnabled } from '../../../shared/tui-agent-selection'
-import { tuiAgentToAgentKind } from '@/lib/telemetry'
 import { isGitRepoKind } from '../../../shared/repo-kind'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { connectSshTargetViaServer } from '@/runtime/server-host-client'
@@ -38,10 +36,8 @@ import type {
 } from '../../../shared/types'
 import { isWorkspaceStatusId } from '../../../shared/workspace-statuses'
 import {
-  CLIENT_PLATFORM,
   DEFAULT_ISSUE_COMMAND_TEMPLATE,
   buildAgentPromptWithContext,
-  ensureAgentStartupInTerminal,
   getAttachmentLabel,
   getLinkedWorkItemSuggestedName,
   getSetupConfig,
@@ -2049,55 +2045,22 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
               })
             }
           : undefined
-      const startupPlan = buildAgentStartupPlan({
-        agent: tuiAgent,
-        prompt: submitStartupPrompt,
-        cmdOverrides: settings?.agentCmdOverrides ?? {},
-        platform: CLIENT_PLATFORM
-      })
-
-      // Why: thread agent_started telemetry through the queued startup so
-      // main fires the event after the spawn succeeds. The composer
-      // "create" path is the new-workspace surface; request_kind is
-      // `'new'` because this is always a fresh session (issue/PR-driven
-      // follow-ups go through launch-work-item-direct.ts).
-      // Why: when the composer is opened from onboarding, the first
-      // `agent_started` must attribute to `onboarding` so D1 activation
-      // can be measured against the funnel.
-      const composerTelemetry: AgentStartedTelemetry = {
-        agent_kind: tuiAgentToAgentKind(tuiAgent),
-        launch_source: telemetrySource === 'onboarding' ? 'onboarding' : 'new_workspace_composer',
-        request_kind: 'new'
-      }
+      // Why: creating a workspace no longer auto-launches an agent. Stash any
+      // prompt the user typed so the "Start a session" picker can deliver it as
+      // an editable draft once an agent is chosen — otherwise it would be lost.
+      // Then activate + reveal the worktree (branch selected, user lands on it);
+      // `skipCreatedAgentStartup` stops the activation fallback from relaunching
+      // the agent the composer stamped, so the WorkspaceAgentLauncher picker
+      // shows instead. Repo `setup`/`defaultTabs`/`issueCommand` still apply —
+      // those are project config, not the agent.
+      stashPendingSessionPrompt(worktree.id, submitStartupPrompt)
       activateAndRevealWorktree(worktree.id, {
         sidebarRevealBehavior: 'auto',
         setup: result.setup,
         defaultTabs: result.defaultTabs,
         issueCommand,
-        ...(startupPlan
-          ? {
-              startup: {
-                command: startupPlan.launchCommand,
-                ...(startupPlan.env ? { env: startupPlan.env } : {}),
-                ...(tuiAgent === 'command-code' && submitStartupPrompt.trim().length > 0
-                  ? {
-                      initialAgentStatus: {
-                        agent: tuiAgent,
-                        prompt: submitStartupPrompt.trim()
-                      }
-                    }
-                  : {}),
-                telemetry: composerTelemetry
-              }
-            }
-          : {})
+        skipCreatedAgentStartup: true
       })
-      if (startupPlan) {
-        void ensureAgentStartupInTerminal({
-          worktreeId: worktree.id,
-          startup: startupPlan
-        })
-      }
       setSidebarOpen(true)
       if (persistDraft) {
         clearNewWorkspaceDraft()
@@ -2275,109 +2238,26 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           return
         }
 
-        // Why: quick create should draft linked source data for review instead
-        // of auto-executing it. Rich linked context wins over URL fallback;
-        // typed-only Linear entries still use the note as the startup prompt.
+        // Why: quick create no longer auto-launches the agent — it lands on the
+        // "Start a session" picker (WorkspaceAgentLauncher) so the user picks
+        // what to start. Resolve any linked/typed prompt and stash it so the
+        // picker can deliver it as an editable draft once an agent is chosen;
+        // otherwise the text would be silently dropped. Rich linked context wins
+        // over URL fallback; typed-only Linear entries use the note.
         const { prompt: quickPrompt, draftPrompt: quickDraftPrompt } =
           resolveQuickCreateLinkedWorkItemPrompt(submitLinkedWorkItem, trimmedNote)
+        stashPendingSessionPrompt(worktree.id, quickDraftPrompt || quickPrompt)
 
-        // Why: agents that gate first-launch behind a "Do you trust this
-        // folder?" menu (cursor-agent, copilot) consume the bracketed paste
-        // as menu input. Pre-write the trust artifact so the menu is
-        // skipped — best-effort, errors swallowed by main. Guard the IPC
-        // presence so a stale preload bundle doesn't crash the launch with
-        // "Cannot read properties of undefined".
-        if (agent && worktree.path && api.agentTrust?.markTrusted) {
-          const preflight = TUI_AGENT_CONFIG[agent].preflightTrust
-          if (preflight) {
-            try {
-              await api.agentTrust.markTrusted({
-                preset: preflight,
-                workspacePath: worktree.path
-              })
-            } catch {
-              // Best-effort: continue with launch.
-            }
-          }
-        }
-
-        // Why: prefer the agent's native prefill flag (currently Claude's
-        // `--prefill`) when it has one — sidesteps the readiness/paste race
-        // entirely. Falls through to the type-after-ready path for every
-        // other agent.
-        const draftLaunchPlan =
-          agent === null || !quickDraftPrompt
-            ? null
-            : buildAgentDraftLaunchPlan({
-                agent,
-                draft: quickDraftPrompt,
-                cmdOverrides: settings?.agentCmdOverrides ?? {},
-                platform: CLIENT_PLATFORM
-              })
-
-        let startupPlan: ReturnType<typeof buildAgentStartupPlan> = null
-        if (draftLaunchPlan) {
-          startupPlan = {
-            agent: draftLaunchPlan.agent,
-            launchCommand: draftLaunchPlan.launchCommand,
-            expectedProcess: draftLaunchPlan.expectedProcess,
-            followupPrompt: null,
-            ...(draftLaunchPlan.env ? { env: draftLaunchPlan.env } : {})
-          }
-        } else if (agent !== null) {
-          startupPlan = buildAgentStartupPlan({
-            agent,
-            prompt: quickPrompt,
-            cmdOverrides: settings?.agentCmdOverrides ?? {},
-            platform: CLIENT_PLATFORM,
-            allowEmptyPromptLaunch: true
-          })
-          if (startupPlan && quickDraftPrompt) {
-            startupPlan.draftPrompt = quickDraftPrompt
-          }
-        }
-
-        // Why: only attach telemetry when an agent was selected — the
-        // quick path also handles "blank shell" (agent === null) where no
-        // agent_started event should fire. When telemetry is present main
-        // emits the event after pty:spawn succeeds.
-        const quickTelemetry: AgentStartedTelemetry | null =
-          agent === null
-            ? null
-            : {
-                agent_kind: tuiAgentToAgentKind(agent),
-                launch_source:
-                  telemetrySource === 'onboarding' ? 'onboarding' : 'new_workspace_composer',
-                request_kind: 'new'
-              }
+        // Why: activate + reveal so the new branch is selected and the user
+        // lands on the picker. `skipCreatedAgentStartup` stops the activation
+        // fallback from relaunching the stamped agent. Repo setup/default-tabs
+        // still apply — they are project config, not the agent.
         activateAndRevealWorktree(worktree.id, {
           sidebarRevealBehavior: 'auto',
           setup: result.setup,
           defaultTabs: result.defaultTabs,
-          ...(startupPlan
-            ? {
-                startup: {
-                  command: startupPlan.launchCommand,
-                  ...(startupPlan.env ? { env: startupPlan.env } : {}),
-                  ...(agent === 'command-code' && quickPrompt.trim().length > 0
-                    ? {
-                        initialAgentStatus: {
-                          agent,
-                          prompt: quickPrompt.trim()
-                        }
-                      }
-                    : {}),
-                  ...(quickTelemetry ? { telemetry: quickTelemetry } : {})
-                }
-              }
-            : {})
+          skipCreatedAgentStartup: true
         })
-        if (startupPlan) {
-          void ensureAgentStartupInTerminal({
-            worktreeId: worktree.id,
-            startup: startupPlan
-          })
-        }
         setSidebarOpen(true)
         if (persistDraft) {
           clearNewWorkspaceDraft()

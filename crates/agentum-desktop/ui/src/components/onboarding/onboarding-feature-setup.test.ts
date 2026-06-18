@@ -7,8 +7,7 @@ import type {
 import {
   buildAgentFeatureSkillInstallCommand,
   COMPUTER_USE_SKILL_NAME,
-  AGENTUM_CLI_SKILL_NAME,
-  ORCHESTRATION_SKILL_NAME
+  AGENTUM_CLI_SKILL_NAME
 } from '@/lib/agent-feature-install-commands'
 import { BROWSER_USE_ENABLED_STORAGE_KEY } from '@/lib/browser-use-setup-state'
 import {
@@ -26,13 +25,11 @@ import {
   type OnboardingFeatureSetupSelection
 } from './onboarding-feature-setup'
 
+// Orchestration is an MCP, not a skill — it never appears in the skill install
+// command. The bundled command covers only the skill-backed features.
 const ALL_SKILL_INSTALL_COMMAND = buildAgentFeatureSkillInstallCommand([
   AGENTUM_CLI_SKILL_NAME,
-  COMPUTER_USE_SKILL_NAME,
-  ORCHESTRATION_SKILL_NAME
-])
-const ORCHESTRATION_ONLY_SKILL_INSTALL_COMMAND = buildAgentFeatureSkillInstallCommand([
-  ORCHESTRATION_SKILL_NAME
+  COMPUTER_USE_SKILL_NAME
 ])
 
 const INSTALLED_CLI_STATUS: CliInstallStatus = {
@@ -72,12 +69,15 @@ function createDeps(
 ): OnboardingFeatureSetupDeps & {
   storage: Map<string, string>
   clipboardWrites: string[]
+  serverOrchestrationWrites: boolean[]
 } {
   const storage = new Map<string, string>()
   const clipboardWrites: string[] = []
+  const serverOrchestrationWrites: boolean[] = []
   return {
     storage,
     clipboardWrites,
+    serverOrchestrationWrites,
     getCliStatus: vi.fn(async () => INSTALLED_CLI_STATUS),
     showCliRegistrationPrompt: vi.fn(async () => undefined),
     installCli: vi.fn(async () => INSTALLED_CLI_STATUS),
@@ -93,6 +93,9 @@ function createDeps(
       storage.delete(key)
     }),
     notifyOrchestrationStateChanged: vi.fn(),
+    setOrchestrationEnabledOnServer: vi.fn(async (enabled: boolean) => {
+      serverOrchestrationWrites.push(enabled)
+    }),
     ...overrides
   }
 }
@@ -106,7 +109,7 @@ describe('onboarding feature setup runner', () => {
     })
   })
 
-  it('builds one skill command for the selected Browser Use, Computer Use, and Orchestration features', () => {
+  it('builds one skill command for Browser Use and Computer Use, excluding the Orchestration MCP', () => {
     const text = buildOnboardingFeatureSetupClipboardText({
       browserUse: true,
       computerUse: true,
@@ -115,8 +118,18 @@ describe('onboarding feature setup runner', () => {
 
     expect(text).toBe(ALL_SKILL_INSTALL_COMMAND)
     expect(text).toBe(
-      'npx skills add https://github.com/mateocerquetella/agentum --skill agentum-cli computer-use orchestration --global'
+      'npx skills add https://github.com/mateocerquetella/agentum --skill agentum-cli computer-use --global'
     )
+  })
+
+  it('builds no skill command when only the Orchestration MCP is selected', () => {
+    expect(
+      buildOnboardingFeatureSetupClipboardText({
+        browserUse: false,
+        computerUse: false,
+        orchestration: true
+      })
+    ).toBeNull()
   })
 
   it('builds privacy-safe telemetry payloads for selected feature setup items', () => {
@@ -137,8 +150,8 @@ describe('onboarding feature setup runner', () => {
       onboardingFeatureSetupRunTelemetry(selection, {
         selectedIds: ['browserUse', 'orchestration'],
         cliTouched: true,
-        skillCommandsCopied: false,
-        skillInstallCommand: ORCHESTRATION_ONLY_SKILL_INSTALL_COMMAND,
+        skillCommandsCopied: true,
+        skillInstallCommand: buildAgentFeatureSkillInstallCommand([AGENTUM_CLI_SKILL_NAME]),
         computerUsePermissionsOpened: false,
         warnings: [{ featureId: 'skills', message: 'Clipboard unavailable' }]
       })
@@ -148,7 +161,7 @@ describe('onboarding feature setup runner', () => {
       orchestration: true,
       selected_count: 2,
       cli_touched: true,
-      skill_commands_copied: false,
+      skill_commands_copied: true,
       skill_install_command_prepared: true,
       computer_use_permissions_opened: false,
       warning_count: 1
@@ -192,10 +205,12 @@ describe('onboarding feature setup runner', () => {
     expect(deps.storage.get(ORCHESTRATION_ENABLED_STORAGE_KEY)).toBe('1')
     expect(deps.removeStorageItem).toHaveBeenCalledWith(ORCHESTRATION_SETUP_DISMISSED_STORAGE_KEY)
     expect(deps.notifyOrchestrationStateChanged).toHaveBeenCalledTimes(1)
+    // Orchestration is enabled via the server gate, not the skill command.
+    expect(deps.serverOrchestrationWrites).toEqual([true])
     expect(deps.clipboardWrites).toEqual([ALL_SKILL_INSTALL_COMMAND])
   })
 
-  it('keeps invasive Browser Use and Computer Use setup untouched when only Orchestration is selected', async () => {
+  it('enables the Orchestration MCP without any skill install or CLI registration when only it is selected', async () => {
     const deps = createDeps()
     const selection: OnboardingFeatureSetupSelection = {
       browserUse: false,
@@ -206,17 +221,20 @@ describe('onboarding feature setup runner', () => {
     const result = await runOnboardingFeatureSetup(selection, deps)
 
     expect(result.selectedIds).toEqual(['orchestration'])
-    expect(result.skillCommandsCopied).toBe(true)
-    expect(result.skillInstallCommand).toBe(ORCHESTRATION_ONLY_SKILL_INSTALL_COMMAND)
+    // No skill to install → no command, no clipboard write, no CLI registration.
+    expect(result.skillCommandsCopied).toBe(false)
+    expect(result.skillInstallCommand).toBeNull()
     expect(result.computerUsePermissionsOpened).toBe(false)
-    expect(deps.getCliStatus).toHaveBeenCalledTimes(1)
+    expect(deps.getCliStatus).not.toHaveBeenCalled()
     expect(deps.showCliRegistrationPrompt).not.toHaveBeenCalled()
     expect(deps.installCli).not.toHaveBeenCalled()
     expect(deps.getComputerUsePermissionStatus).not.toHaveBeenCalled()
     expect(deps.openComputerUsePermissionSetup).not.toHaveBeenCalled()
     expect(deps.storage.get(BROWSER_USE_ENABLED_STORAGE_KEY)).toBe('0')
     expect(deps.storage.get(ORCHESTRATION_ENABLED_STORAGE_KEY)).toBe('1')
-    expect(deps.clipboardWrites).toEqual([ORCHESTRATION_ONLY_SKILL_INSTALL_COMMAND])
+    // The real switch: the server-side orchestration gate is turned on.
+    expect(deps.serverOrchestrationWrites).toEqual([true])
+    expect(deps.clipboardWrites).toEqual([])
   })
 
   it('clears feature markers when no setup items are selected', async () => {
@@ -237,6 +255,8 @@ describe('onboarding feature setup runner', () => {
     })
     expect(deps.storage.get(BROWSER_USE_ENABLED_STORAGE_KEY)).toBe('0')
     expect(deps.storage.get(ORCHESTRATION_ENABLED_STORAGE_KEY)).toBe('0')
+    // Deselecting orchestration turns the server gate off too.
+    expect(deps.serverOrchestrationWrites).toEqual([false])
     expect(deps.getCliStatus).not.toHaveBeenCalled()
     expect(deps.showCliRegistrationPrompt).not.toHaveBeenCalled()
     expect(deps.getComputerUsePermissionStatus).not.toHaveBeenCalled()
@@ -249,14 +269,15 @@ describe('onboarding feature setup runner', () => {
         throw new Error('Clipboard unavailable')
       })
     })
+    const browserUseOnlyCommand = buildAgentFeatureSkillInstallCommand([AGENTUM_CLI_SKILL_NAME])
 
     const result = await runOnboardingFeatureSetup(
-      { browserUse: false, computerUse: false, orchestration: true },
+      { browserUse: true, computerUse: false, orchestration: false },
       deps
     )
 
     expect(result.skillCommandsCopied).toBe(false)
-    expect(result.skillInstallCommand).toBe(ORCHESTRATION_ONLY_SKILL_INSTALL_COMMAND)
+    expect(result.skillInstallCommand).toBe(browserUseOnlyCommand)
     expect(result.warnings).toEqual([
       {
         featureId: 'skills',
@@ -264,6 +285,24 @@ describe('onboarding feature setup runner', () => {
       }
     ])
     expect(deps.clipboardWrites).toEqual([])
+  })
+
+  it('reports a warning when the server orchestration write fails but still finishes setup', async () => {
+    const deps = createDeps({
+      setOrchestrationEnabledOnServer: vi.fn(async () => {
+        throw new Error('server unreachable')
+      })
+    })
+
+    const result = await runOnboardingFeatureSetup(
+      { browserUse: false, computerUse: false, orchestration: true },
+      deps
+    )
+
+    expect(result.selectedIds).toEqual(['orchestration'])
+    expect(result.warnings).toEqual([
+      { featureId: 'orchestration', message: 'server unreachable' }
+    ])
   })
 
   it('shows CLI registration context before installing a missing CLI during onboarding', async () => {
