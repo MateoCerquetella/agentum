@@ -62,9 +62,11 @@ checkout disturbs other sessions' working trees.
   you're targeting):
   ```sh
   git fetch origin
-  git worktree add ../agentum-<kebab-desc> -b <type>/<kebab-desc> origin/main
+  git worktree add ../agentum-<kebab-desc> -b <type>/<kebab-desc> origin/staging
   cd ../agentum-<kebab-desc>
   ```
+  Base off **`staging`** — that's the integration branch feature work targets
+  (it flows staging → QA → release/main, see Phase 6).
   (agentum keeps worktrees as siblings of the main checkout and under
   `.claude/worktrees/` — match whatever the user already uses.)
 - If you're already in a dedicated worktree for this work, reuse it.
@@ -91,6 +93,7 @@ checkout disturbs other sessions' working trees.
 
 ```sh
 gh pr create \
+  --base staging \
   --title "<type>: <concise title>" \
   --body "$(cat <<'EOF'
 Closes #<issue-number>
@@ -104,8 +107,29 @@ EOF
 )"
 ```
 
-- The body **must** contain `Closes #<issue-number>` so merging auto-closes the issue.
+- **Target `staging`** (`--base staging`) — feature PRs merge into the
+  integration branch, not `main`.
+- Put `Closes #<issue-number>` in both the PR body **and** the commit message.
+  Because `staging` is **not** the default branch, the issue does **not** close
+  on the staging merge — it stays open for QA (Phase 6). It auto-closes later
+  when that commit reaches `main` (the default branch) on promotion.
 - Report back: the issue URL, the branch, and the PR URL.
+
+## Phase 6 — QA on staging, then release
+
+The ticket is **not done when it merges to staging** — it goes to QA first.
+
+1. **On merge to staging**: label the issue `status/qa` and comment that it's
+   deployed to the staging environment and awaiting QA. Keep the issue open.
+2. **QA tests on staging.**
+   - **Pass** → relabel `status/qa-pass`, then ship it **both** ways:
+     - tag a release from staging: `git tag vX.Y.Z && git push origin vX.Y.Z`
+       (matches the repo's "Release = staging + vX.Y.Z tag" convention), and
+     - promote `staging` → `main` (open/merge the promotion PR). The original
+       `Closes #<issue>` fires when the commit lands on `main`, closing the issue.
+   - **Fail** → relabel `status/qa-fail`, comment the findings, and loop back to
+     Phase 3 (fix in a worktree → new PR into staging). Don't close.
+3. Only close the issue once it's on `main` / released — never at the staging merge.
 
 ## Autonomous (Harness Engine) work
 
