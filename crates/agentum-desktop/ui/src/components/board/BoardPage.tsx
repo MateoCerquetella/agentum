@@ -11,7 +11,13 @@ import { Columns3, Loader2, Play, RefreshCw } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { DrillInHeader } from '@/components/nav/DrillInHeader'
-import { type BoardItem, type GroupedBoard, listBoard, startCard } from '@/runtime/board-client'
+import {
+  type BoardItem,
+  type GroupedBoard,
+  listBoard,
+  openBoardEventStream,
+  startCard
+} from '@/runtime/board-client'
 import CardWorkspace from './CardWorkspace'
 
 /**
@@ -176,13 +182,24 @@ export default function BoardPage() {
     )
   }
 
-  // Poll: agents move cards (planner adds cards, lifecycle flips status), so a
-  // periodic refresh keeps the columns live without a WS subscription yet
-  // (live events are wired in a later step).
+  // Live + polled: subscribe to the global bus so a card transitions columns
+  // the instant its agent's lifecycle fires (started → Building, finished →
+  // Review/Done). A slow poll remains as a backstop for the planner adding
+  // cards and for any event the socket missed during a reconnect.
   useEffect(() => {
     void refresh()
     const t = setInterval(() => void refresh(), 5000)
-    return () => clearInterval(t)
+    let stream: { close: () => void } | null = null
+    let cancelled = false
+    void openBoardEventStream(() => void refresh()).then((s) => {
+      if (cancelled) s.close()
+      else stream = s
+    })
+    return () => {
+      cancelled = true
+      clearInterval(t)
+      stream?.close()
+    }
   }, [refresh])
 
   // Bucket every board item into its column by `status`. Unknown statuses fall
