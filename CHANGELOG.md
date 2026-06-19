@@ -4,6 +4,20 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.1] — 2026-06-18
+
+### Fixed
+- **Desktop app black-screened on launch (regression in 0.17.0).** The
+  `manualChunks` config added for startup-chunk hygiene pinned React-dependent
+  libraries (`react-markdown`, `@tiptap`/`prosemirror`, `mermaid`) into named
+  vendor chunks while React stayed in the eager entry chunk. That created an
+  import cycle, so a vendor chunk evaluated before React was initialized and its
+  top-level `React.Activity = …` (React 19) threw — aborting the entire entry
+  module graph and leaving `#root` empty (black window). Removed the hand-authored
+  `manualChunks`; Rollup's automatic code-splitting (driven by the existing
+  `lazy()` boundaries) keeps the heavy libs off the eager chunk and orders module
+  evaluation correctly. (#38)
+
 ## [0.17.0] — 2026-06-18
 
 ### Added
