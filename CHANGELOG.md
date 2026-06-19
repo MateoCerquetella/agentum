@@ -4,6 +4,23 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.2] — 2026-06-18
+
+### Added
+- **Autonomous SDD role phases in the Harness Engine (013).** The SDD role
+  sequence (PM → Architect → Reviewer) is now server-tracked phases that wrap
+  the existing feature loop and **auto-advance with zero human prompts**. Each
+  role gate is an agent that writes a deterministic verdict file
+  (`.agentum-harness/roles/<phase>.json`); the run blocks/retries on a failed
+  gate but never pauses for a human unless `hitl_on_block` is opted in
+  (supersedes 010's HITL-at-QA default). New `PhaseChanged`/`GateResult` events
+  and a phase strip in the desktop Harness board. Off by default
+  (`roles=false`), so existing feature-only runs are unchanged.
+
+### Fixed
+- Carries the v0.17.1 desktop black-screen fix (dropped the `manualChunks`
+  splitting that blanked the app on load) into the develop release line.
+
 ## [0.17.0] — 2026-06-18
 
 ### Added
