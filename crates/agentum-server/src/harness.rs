@@ -176,6 +176,21 @@ pub struct FeatureList {
     /// `claude` is the sensible value.
     #[serde(default)]
     pub qa_agent_tool: Option<String>,
+    /// SDD spec id to author + decompose when `roles` is on (spec 013). Points at
+    /// `.agentum-harness/specs/<spec_id>/`. `None` = a plain feature run.
+    #[serde(default)]
+    pub spec_id: Option<String>,
+    /// Run the SDD role-gate phases (PM → Architect → … → Reviewer) around the
+    /// feature loop (spec 013). Default OFF so existing feature-only backlogs are
+    /// driven exactly as before; the SDD intake turns it on.
+    #[serde(default)]
+    pub roles: bool,
+    /// When a role gate exhausts its retries, pause for a human
+    /// (`AwaitingConfirm`) instead of halting at `Blocked`. Default OFF = fully
+    /// autonomous, including the final review gate (spec 013; supersedes 010's
+    /// HITL-at-QA default).
+    #[serde(default)]
+    pub hitl_on_block: bool,
 }
 
 /// How the browser QA gate is executed (spec 012b).
@@ -204,7 +219,47 @@ impl Default for FeatureList {
             hitl_at_qa: false,
             qa_mode: QaMode::Auto,
             qa_agent_tool: None,
+            spec_id: None,
+            roles: false,
+            hitl_on_block: false,
         }
+    }
+}
+
+impl FeatureList {
+    /// Copy every run knob (everything EXCEPT the `features` vector) from `src`.
+    /// Used after `decompose` so deriving a fresh backlog from the spec doesn't
+    /// reset the run's configured knobs (`spec_id`/`roles`/`agent_tool`/…) back to
+    /// defaults (spec 013). Destructured so a newly-added knob fails to compile
+    /// here until it's handled.
+    fn copy_knobs_from(&mut self, src: &FeatureList) {
+        let FeatureList {
+            features: _,
+            max_retries,
+            agent_tool,
+            agent_model,
+            settle_grace_secs,
+            settle_timeout_secs,
+            agent_yolo,
+            hitl_at_qa,
+            qa_mode,
+            qa_agent_tool,
+            spec_id,
+            roles,
+            hitl_on_block,
+        } = src.clone();
+        self.max_retries = max_retries;
+        self.agent_tool = agent_tool;
+        self.agent_model = agent_model;
+        self.settle_grace_secs = settle_grace_secs;
+        self.settle_timeout_secs = settle_timeout_secs;
+        self.agent_yolo = agent_yolo;
+        self.hitl_at_qa = hitl_at_qa;
+        self.qa_mode = qa_mode;
+        self.qa_agent_tool = qa_agent_tool;
+        self.spec_id = spec_id;
+        self.roles = roles;
+        self.hitl_on_block = hitl_on_block;
     }
 }
 
@@ -230,6 +285,171 @@ pub enum HarnessState {
     Done,
     /// `init.sh` failed, or an unrecoverable orchestration error.
     Failed,
+}
+
+/// The SDD authoring/role phase a run is in, layered ABOVE the per-feature
+/// backlog (spec 013). The existing feature loop is the `Executing` phase; the
+/// role gates (`Authoring`/`Architecture`/`Review`) wrap it. Persisted with the
+/// run and surfaced in status; every transition is appended to `decisions.md`
+/// so it rebuilds on a store-wipe rescan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpecPhase {
+    /// PM gate: sharpen the spec (acceptance criteria, scope, value).
+    #[default]
+    Authoring,
+    /// Architect gate: validate boundaries, write `architecture.md`.
+    Architecture,
+    /// Agentless: derive the verify-gated backlog from the spec (`plan_from_spec`).
+    Decompose,
+    /// The existing feature loop (developer/tester): code → verify → done, WIP=1.
+    Executing,
+    /// Reviewer gate: final maintainability / completion sign-off.
+    Review,
+    /// All phases passed.
+    Done,
+    /// A role gate exhausted its retries — the run halted here.
+    Blocked,
+    /// A role gate exhausted retries with `hitl_on_block` on — paused for a human.
+    AwaitingConfirm,
+}
+
+impl SpecPhase {
+    /// The role behind this phase's gate, if it is an agent-played gate. `None`
+    /// for the agentless (`Decompose`) and terminal phases.
+    pub fn role(self) -> Option<RoleKind> {
+        match self {
+            SpecPhase::Authoring => Some(RoleKind::Pm),
+            SpecPhase::Architecture => Some(RoleKind::Architect),
+            SpecPhase::Review => Some(RoleKind::Reviewer),
+            _ => None,
+        }
+    }
+
+    /// The next phase once this one's gate passes. Terminal phases return self.
+    pub fn advance(self) -> SpecPhase {
+        match self {
+            SpecPhase::Authoring => SpecPhase::Architecture,
+            SpecPhase::Architecture => SpecPhase::Decompose,
+            SpecPhase::Decompose => SpecPhase::Executing,
+            SpecPhase::Executing => SpecPhase::Review,
+            SpecPhase::Review => SpecPhase::Done,
+            other => other,
+        }
+    }
+
+    /// Stable lower-case slug for verdict filenames + `decisions.md` markers.
+    pub fn slug(self) -> &'static str {
+        match self {
+            SpecPhase::Authoring => "authoring",
+            SpecPhase::Architecture => "architecture",
+            SpecPhase::Decompose => "decompose",
+            SpecPhase::Executing => "executing",
+            SpecPhase::Review => "review",
+            SpecPhase::Done => "done",
+            SpecPhase::Blocked => "blocked",
+            SpecPhase::AwaitingConfirm => "awaiting_confirm",
+        }
+    }
+
+    /// Inverse of [`Self::slug`]. `None` for an unrecognized slug.
+    pub fn from_slug(slug: &str) -> Option<SpecPhase> {
+        Some(match slug {
+            "authoring" => SpecPhase::Authoring,
+            "architecture" => SpecPhase::Architecture,
+            "decompose" => SpecPhase::Decompose,
+            "executing" => SpecPhase::Executing,
+            "review" => SpecPhase::Review,
+            "done" => SpecPhase::Done,
+            "blocked" => SpecPhase::Blocked,
+            "awaiting_confirm" => SpecPhase::AwaitingConfirm,
+            _ => return None,
+        })
+    }
+}
+
+/// Re-derive the current SDD phase from a `decisions.md` body (spec 013): the
+/// last `phase: entered <slug>` marker wins. `None` when no phase has been
+/// recorded yet (a fresh or pre-013 run). Pure for testability + used to restore
+/// a run's phase on a store-wipe rescan.
+pub fn rebuild_phase_from_decisions(decisions_md: &str) -> Option<SpecPhase> {
+    decisions_md.lines().rev().find_map(|line| {
+        let marker = "phase: entered ";
+        let idx = line.find(marker)?;
+        let rest = &line[idx + marker.len()..];
+        let slug = rest.split_whitespace().next()?;
+        SpecPhase::from_slug(slug)
+    })
+}
+
+/// The SDD role behind an agent-played gate (spec 013).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoleKind {
+    Pm,
+    Architect,
+    Reviewer,
+}
+
+impl RoleKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RoleKind::Pm => "pm",
+            RoleKind::Architect => "architect",
+            RoleKind::Reviewer => "reviewer",
+        }
+    }
+
+    /// The embedded role brief shipped in the binary — central machinery, never
+    /// copied per-repo (spec 013; the SDD `ai/roles/*.md` are gitignored and
+    /// machine-local, so the harness ships its own gate briefs).
+    pub fn brief(self) -> &'static str {
+        match self {
+            RoleKind::Pm => include_str!("harness_roles/pm.md"),
+            RoleKind::Architect => include_str!("harness_roles/architect.md"),
+            RoleKind::Reviewer => include_str!("harness_roles/reviewer.md"),
+        }
+    }
+}
+
+/// What to do after a role gate produces a verdict. A pure decision so the
+/// autonomy contract — "never prompt a human on a default run" — is unit-testable
+/// without spawning an agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GateDecision {
+    /// Verdict passed — advance to the next phase.
+    Advance,
+    /// Verdict failed and retries remain — re-run the role agent.
+    Retry,
+    /// Retries exhausted, autonomous — halt the run at `Blocked`.
+    Block,
+    /// Retries exhausted, `hitl_on_block` on — pause for a human.
+    AwaitConfirm,
+}
+
+/// Decide a role gate's outcome from its verdict + attempt budget. `attempt` is
+/// the number of attempts ALREADY made (1 after the first run). With
+/// `hitl_on_block` off (the default) this NEVER returns `AwaitConfirm`: the run
+/// stays fully autonomous, blocking rather than waiting on a human — including at
+/// the final review gate (spec 013, supersedes 010's HITL-at-QA default).
+pub fn decide_gate(
+    passed: bool,
+    attempt: u32,
+    max_retries: u32,
+    hitl_on_block: bool,
+) -> GateDecision {
+    if passed {
+        return GateDecision::Advance;
+    }
+    if attempt > max_retries {
+        if hitl_on_block {
+            GateDecision::AwaitConfirm
+        } else {
+            GateDecision::Block
+        }
+    } else {
+        GateDecision::Retry
+    }
 }
 
 /// Event emitted by the engine onto its dedicated broadcast bus and streamed to
@@ -282,6 +502,20 @@ pub enum HarnessEvent {
         harness_id: Uuid,
         success: bool,
     },
+    /// The run advanced from one SDD phase to another (spec 013).
+    PhaseChanged {
+        harness_id: Uuid,
+        from: SpecPhase,
+        to: SpecPhase,
+    },
+    /// A role gate produced a verdict (spec 013).
+    GateResult {
+        harness_id: Uuid,
+        role: RoleKind,
+        passed: bool,
+        attempt: u32,
+        summary: String,
+    },
     Error {
         harness_id: Uuid,
         message: String,
@@ -301,6 +535,12 @@ pub struct HarnessRun {
     pub agent_instructions: String,
     /// Set once [`drive`] has been kicked off so the run can't be driven twice.
     pub driving: bool,
+    /// Current SDD phase (spec 013). `Executing` for a plain feature run (so the
+    /// status surface is honest even when role gates are off); the role flow
+    /// resets it to `Authoring` at the start of [`drive_inner`].
+    pub phase: SpecPhase,
+    /// How many times the current phase's gate has run (role-gate retry counter).
+    pub phase_attempts: u32,
 }
 
 /// Config loaded from a project's `.harness/` directory.
@@ -864,6 +1104,12 @@ impl HarnessEngine {
         let config = HarnessConfig::load(&workdir).await?;
         let id = Uuid::new_v4();
 
+        // Restore the SDD phase from the durable decision log so a re-registered
+        // run (store wipe, daemon restart) resumes where it left off (spec 013).
+        // Defaults to `Executing` for a fresh or pre-013 run.
+        let phase = rebuild_phase_from_decisions(&read_decisions(&workdir).await)
+            .unwrap_or(SpecPhase::Executing);
+
         let run = HarnessRun {
             id,
             workdir,
@@ -874,6 +1120,8 @@ impl HarnessEngine {
             started_at: Instant::now(),
             agent_instructions: config.agent_instructions.clone(),
             driving: false,
+            phase,
+            phase_attempts: 0,
         };
 
         self.runs
@@ -1196,6 +1444,8 @@ impl HarnessEngine {
             current_session: r.current_session,
             elapsed_secs: r.started_at.elapsed().as_secs(),
             agent_instructions: r.agent_instructions.clone(),
+            phase: r.phase,
+            phase_attempts: r.phase_attempts,
         })
     }
 
@@ -1373,6 +1623,62 @@ impl HarnessEngine {
         Ok(())
     }
 
+    /// Advance the run to a new SDD phase (spec 013): update in-memory state,
+    /// reset the gate attempt counter, append a durable marker to `decisions.md`
+    /// (the canonical record [`rebuild_phase_from_decisions`] reads on rescan),
+    /// and emit `PhaseChanged`.
+    async fn set_phase(&self, harness_id: Uuid, to: SpecPhase) -> anyhow::Result<()> {
+        let (workdir, from) = {
+            let run = self.get_run(harness_id).await?;
+            let mut r = run.write().await;
+            let from = r.phase;
+            r.phase = to;
+            r.phase_attempts = 0;
+            (r.workdir.clone(), from)
+        };
+        if from != to {
+            // One canonical "entered <phase>" marker per transition.
+            let _ = append_decision(
+                &workdir,
+                &format!("phase: entered {} (from {})", to.slug(), from.slug()),
+            )
+            .await;
+        }
+        self.emit(HarnessEvent::PhaseChanged {
+            harness_id,
+            from,
+            to,
+        });
+        Ok(())
+    }
+
+    /// The run's current SDD phase.
+    pub async fn phase(&self, harness_id: Uuid) -> anyhow::Result<SpecPhase> {
+        let run = self.get_run(harness_id).await?;
+        let p = run.read().await.phase;
+        Ok(p)
+    }
+
+    /// Bump the current phase's gate attempt counter; returns the new count.
+    async fn bump_phase_attempt(&self, harness_id: Uuid) -> anyhow::Result<u32> {
+        let run = self.get_run(harness_id).await?;
+        let mut r = run.write().await;
+        r.phase_attempts += 1;
+        Ok(r.phase_attempts)
+    }
+
+    /// Reload the in-memory backlog from disk after `decompose` rewrites
+    /// `feature_list.json` via [`plan_from_spec`]. `next_pending_feature` reads
+    /// the in-memory list, so without this the freshly-derived features are
+    /// invisible to the loop.
+    async fn reload_features(&self, harness_id: Uuid) -> anyhow::Result<()> {
+        let workdir = self.workdir(harness_id).await?;
+        let config = HarnessConfig::load(&workdir).await?;
+        let run = self.get_run(harness_id).await?;
+        run.write().await.features = config.features;
+        Ok(())
+    }
+
     fn emit(&self, event: HarnessEvent) {
         // Err only means no subscribers — fine, the event is best-effort.
         let _ = self.event_tx.send(event);
@@ -1396,6 +1702,12 @@ pub struct HarnessStatus {
     pub current_session: Option<Uuid>,
     pub elapsed_secs: u64,
     pub agent_instructions: String,
+    /// Current SDD phase (spec 013). `executing` for a plain feature run.
+    #[serde(default)]
+    pub phase: SpecPhase,
+    /// Role-gate retry counter for the current phase (spec 013).
+    #[serde(default)]
+    pub phase_attempts: u32,
 }
 
 fn combine_output(stdout: &[u8], stderr: &[u8]) -> String {
@@ -1438,6 +1750,63 @@ fn build_feature_prompt(instructions: &str, feature: &Feature) -> String {
         name = feature.name,
         id = feature.id,
         desc = feature.description,
+    )
+}
+
+/// The verdict a role-agent writes after its gate turn (spec 013). Same
+/// deterministic-file shape as [`QaVerdict`]: the harness reads a file instead of
+/// parsing free-form chat. Written to `.agentum-harness/roles/<phase>.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoleVerdict {
+    pub passed: bool,
+    #[serde(default)]
+    pub summary: Option<String>,
+}
+
+/// Where a role-agent writes its verdict, relative to the harness dir:
+/// `roles/<phase>.json`.
+fn role_verdict_path(harness_dir: &Path, phase: SpecPhase) -> PathBuf {
+    harness_dir
+        .join("roles")
+        .join(format!("{}.json", phase.slug()))
+}
+
+/// Parse a role verdict file into `(passed, summary)`. Pure for testability. A
+/// malformed/missing verdict is an error the caller turns into a failed gate —
+/// an inconclusive role gate must NOT pass (mirrors [`parse_qa_verdict`] and the
+/// harness's "agent self-report is never sufficient" rule).
+fn parse_role_verdict(json: &str) -> anyhow::Result<(bool, String)> {
+    let v: RoleVerdict = serde_json::from_str(json.trim())
+        .map_err(|e| anyhow::anyhow!("role verdict is not valid JSON ({e}): {json}"))?;
+    Ok((v.passed, v.summary.unwrap_or_default()))
+}
+
+/// Build the prompt for a role-agent gate (spec 013): the embedded role brief +
+/// the harness instructions + the spec context + the exact verdict-file
+/// contract. The "write this exact file" instruction is what makes the gate
+/// deterministic and keeps the run fully autonomous (no chat-parsing, no human).
+fn build_role_prompt(
+    role: RoleKind,
+    instructions: &str,
+    spec_id: &str,
+    spec_md: &str,
+    verdict_rel_path: &str,
+) -> String {
+    format!(
+        "{brief}\n\n\
+         === HARNESS INSTRUCTIONS (AGENTS.md) ===\n{instructions}\n\n\
+         === SPEC UNDER REVIEW: {spec_id} ===\n{spec}\n\n\
+         === HOW TO RECORD YOUR VERDICT ===\n\
+         When finished, WRITE your verdict to `{verdict}` (relative to the project \
+         root) as exactly this JSON:\n\
+         {{\"passed\": true|false, \"summary\": \"one line on what passed or the single most important gap\"}}\n\
+         Set passed=false if the gate does not pass. Do not stop until the file is \
+         written. Do not ask the human anything.",
+        brief = role.brief().trim(),
+        instructions = instructions.trim(),
+        spec_id = spec_id,
+        spec = spec_md.trim(),
+        verdict = verdict_rel_path,
     )
 }
 
@@ -1550,9 +1919,35 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
 
     let workdir = engine.workdir(harness_id).await?;
 
+    // 1b. SDD role phases wrap the feature loop (spec 013). OFF by default → a
+    // plain feature run skips straight to the loop below, behaving exactly as
+    // before. When on, PM/architect gates + decompose run first; the feature
+    // loop is the `Executing` phase; the reviewer gate runs after all are green.
+    let phases_on = {
+        let cfg = HarnessConfig::load(&workdir).await?;
+        cfg.features.roles && cfg.features.spec_id.is_some()
+    };
+    if phases_on {
+        run_pre_feature_phases(state, harness_id, &workdir).await?;
+        // A role gate (or decompose) may have halted the run — stop unless it
+        // reached the feature-execution phase.
+        if engine.phase(harness_id).await? != SpecPhase::Executing {
+            return Ok(());
+        }
+    }
+
     // 2. One feature at a time.
     loop {
         let Some(feature) = engine.next_pending_feature(harness_id).await? else {
+            // All features green. With role phases on, the reviewer gate is the
+            // last gate before Done; a blocked/parked review halts here without
+            // claiming success.
+            if phases_on {
+                run_review_phase(state, harness_id, &workdir).await?;
+                if engine.phase(harness_id).await? != SpecPhase::Done {
+                    return Ok(());
+                }
+            }
             engine.clear_current(harness_id).await;
             engine.set_state(harness_id, HarnessState::Done).await?;
             engine.emit(HarnessEvent::HarnessCompleted {
@@ -1615,8 +2010,14 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
             let (unit_ok, unit_out) = engine.run_verify_once(harness_id, &feature.id).await?;
             if !unit_ok {
                 if handle_gate_failure(
-                    state, harness_id, &feature, &session, "unit-test gate (verify.sh)", &unit_out,
-                    grace, timeout,
+                    state,
+                    harness_id,
+                    &feature,
+                    &session,
+                    "unit-test gate (verify.sh)",
+                    &unit_out,
+                    grace,
+                    timeout,
                 )
                 .await?
                 {
@@ -1641,8 +2042,10 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
             let qa_mode = resolve_qa_mode(&config);
             let (qa_ok, qa_out) = match qa_mode {
                 QaMode::Agent => {
-                    run_qa_agent_gate(state, harness_id, &workdir, &config, &feature, grace, timeout)
-                        .await?
+                    run_qa_agent_gate(
+                        state, harness_id, &workdir, &config, &feature, grace, timeout,
+                    )
+                    .await?
                 }
                 _ => engine.run_qa_once(harness_id, &feature.id).await?,
             };
@@ -1766,11 +2169,9 @@ async fn transition_tracker(
     match crate::task_sink::apply_tracker_transition(&state.store, provider, &feature.id, phase)
         .await
     {
-        Ok(crate::task_sink::TransitionResult::Applied) => engine.log(
-            harness_id,
-            Some(&feature.id),
-            format!("ticket → {phase:?}"),
-        ),
+        Ok(crate::task_sink::TransitionResult::Applied) => {
+            engine.log(harness_id, Some(&feature.id), format!("ticket → {phase:?}"))
+        }
         Ok(crate::task_sink::TransitionResult::Skipped(why)) => engine.log(
             harness_id,
             Some(&feature.id),
@@ -1962,14 +2363,21 @@ async fn run_qa_agent_gate(
     let session = spawn_qa_agent(state, harness_id, workdir, config, feature).await?;
     let prompt = build_qa_prompt(&config.agent_instructions, feature, &verdict_rel);
     inject_prompt(state, &session, &prompt).await?;
-    engine.log(harness_id, Some(&feature.id), "QA agent verifying in browser…");
+    engine.log(
+        harness_id,
+        Some(&feature.id),
+        "QA agent verifying in browser…",
+    );
     wait_for_settle(&state.bus, session.id, grace, timeout).await;
     teardown_session(state, &session).await;
 
     match tokio::fs::read_to_string(&verdict_abs).await {
         Ok(raw) => match parse_qa_verdict(&raw) {
             Ok((passed, summary)) => Ok((passed, summary)),
-            Err(e) => Ok((false, format!("QA verdict unreadable — failing the gate: {e}"))),
+            Err(e) => Ok((
+                false,
+                format!("QA verdict unreadable — failing the gate: {e}"),
+            )),
         },
         Err(_) => Ok((
             false,
@@ -1978,6 +2386,286 @@ async fn run_qa_agent_gate(
             ),
         )),
     }
+}
+
+/// Read the spec under review for a role gate (spec 013). Best-effort: an empty
+/// string if the spec is absent (the gate will then most likely emit CONCERNS).
+async fn read_spec_md(harness_dir: &Path, spec_id: &str) -> String {
+    let path = harness_dir.join("specs").join(spec_id).join("spec.md");
+    tokio::fs::read_to_string(path).await.unwrap_or_default()
+}
+
+/// Spawn a real agent session for a **role gate** (spec 013). Mirrors
+/// [`spawn_qa_agent`]: not bound to a feature, uses the feature agent tool, YOLO
+/// pushed so the role-agent runs unattended.
+async fn spawn_role_agent(
+    state: &AppState,
+    harness_id: Uuid,
+    workdir: &Path,
+    config: &HarnessConfig,
+    role: RoleKind,
+) -> anyhow::Result<agentum_core::Session> {
+    let host = state
+        .store
+        .get_host(LOCAL_HOST_ID)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("local host missing"))?;
+    let short = harness_id.simple().to_string();
+    let name = format!("harness-{}-{}", role.as_str(), &short[..8]);
+    let flags = if config.features.agent_yolo {
+        vec![agentum_executor::YOLO_MARKER.to_string()]
+    } else {
+        Vec::new()
+    };
+    let new = NewSession {
+        name: name.clone(),
+        workdir: workdir.to_string_lossy().into_owned(),
+        tool: config.features.agent_tool.clone(),
+        model: config.features.agent_model.clone(),
+        flags,
+        card_id: None,
+        worktree_path: None,
+        worktree_branch: None,
+        worktree_base_ref: None,
+    };
+    let session = state
+        .store
+        .create_session_on_host(new, Some(LOCAL_HOST_ID))
+        .await?;
+    let target = agentum_tmux::target_for(&session.name);
+    crate::routes::sessions::spawn_agent_into_pane(state, &session, &host, &target, workdir)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to spawn role agent: {e}"))?;
+    info!(%harness_id, role = %role.as_str(), session = %session.id, "harness spawned role agent");
+    Ok(session)
+}
+
+/// Run one agent-played role gate (spec 013): spawn the role-agent with its brief
+/// and the spec, wait for it to settle, read its verdict file, and decide
+/// advance/retry/block via [`decide_gate`]. Fully autonomous — no human prompt
+/// unless `hitl_on_block` is on AND retries are exhausted. A missing/garbled
+/// verdict is a **fail** (an inconclusive gate never advances). Returns `true`
+/// when the gate passed, `false` when the run halted (blocked / awaiting human).
+async fn run_role_gate(
+    state: &AppState,
+    harness_id: Uuid,
+    workdir: &Path,
+    phase: SpecPhase,
+) -> anyhow::Result<bool> {
+    let engine = &state.harness;
+    let Some(role) = phase.role() else {
+        return Ok(true); // a non-agent phase (e.g. Decompose) — nothing to gate
+    };
+
+    loop {
+        let config = HarnessConfig::load(workdir).await?;
+        let spec_id = config
+            .features
+            .spec_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("role gate requires features.spec_id"))?;
+        let grace = Duration::from_secs(config.features.settle_grace_secs);
+        let timeout = Duration::from_secs(config.features.settle_timeout_secs);
+        let spec_md = read_spec_md(&config.harness_dir, &spec_id).await;
+
+        // Verdict file under <harness_dir>/roles/<phase>.json; clear any stale one
+        // first so we never read a previous attempt's result.
+        let verdict_abs = role_verdict_path(&config.harness_dir, phase);
+        if let Some(parent) = verdict_abs.parent() {
+            tokio::fs::create_dir_all(parent).await.ok();
+        }
+        tokio::fs::remove_file(&verdict_abs).await.ok();
+        let verdict_rel = verdict_abs
+            .strip_prefix(workdir)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| verdict_abs.to_string_lossy().into_owned());
+
+        engine.log(
+            harness_id,
+            None,
+            format!("{} gate: spawning {} agent", phase.slug(), role.as_str()),
+        );
+        let session = spawn_role_agent(state, harness_id, workdir, &config, role).await?;
+        let prompt = build_role_prompt(
+            role,
+            &config.agent_instructions,
+            &spec_id,
+            &spec_md,
+            &verdict_rel,
+        );
+        inject_prompt(state, &session, &prompt).await?;
+        engine.log(
+            harness_id,
+            None,
+            format!("{} agent working…", role.as_str()),
+        );
+        wait_for_settle(&state.bus, session.id, grace, timeout).await;
+        teardown_session(state, &session).await;
+
+        let (passed, summary) = match tokio::fs::read_to_string(&verdict_abs).await {
+            Ok(raw) => match parse_role_verdict(&raw) {
+                Ok(v) => v,
+                Err(e) => (
+                    false,
+                    format!("role verdict unreadable — failing the gate: {e}"),
+                ),
+            },
+            Err(_) => (
+                false,
+                format!(
+                    "{} agent wrote no verdict at {verdict_rel} — gate failed (inconclusive)",
+                    role.as_str()
+                ),
+            ),
+        };
+
+        let attempt = engine.bump_phase_attempt(harness_id).await?;
+        engine.emit(HarnessEvent::GateResult {
+            harness_id,
+            role,
+            passed,
+            attempt,
+            summary: summary.clone(),
+        });
+
+        match decide_gate(
+            passed,
+            attempt,
+            config.features.max_retries,
+            config.features.hitl_on_block,
+        ) {
+            GateDecision::Advance => {
+                let _ = append_decision(
+                    workdir,
+                    &format!("{} gate PASS (attempt {attempt}): {summary}", phase.slug()),
+                )
+                .await;
+                engine.log(
+                    harness_id,
+                    None,
+                    format!("{} gate PASS: {summary}", role.as_str()),
+                );
+                return Ok(true);
+            }
+            GateDecision::Retry => {
+                engine.log(
+                    harness_id,
+                    None,
+                    format!(
+                        "{} gate CONCERNS (attempt {attempt}/{}) — retrying: {summary}",
+                        role.as_str(),
+                        config.features.max_retries
+                    ),
+                );
+                continue;
+            }
+            GateDecision::Block => {
+                let _ = append_decision(
+                    workdir,
+                    &format!(
+                        "{} gate BLOCKED after {attempt} attempts: {summary}",
+                        phase.slug()
+                    ),
+                )
+                .await;
+                engine.set_phase(harness_id, SpecPhase::Blocked).await?;
+                engine.set_state(harness_id, HarnessState::Blocked).await?;
+                engine.log(
+                    harness_id,
+                    None,
+                    format!(
+                        "{} gate blocked after {attempt} attempts: {summary}",
+                        role.as_str()
+                    ),
+                );
+                return Ok(false);
+            }
+            GateDecision::AwaitConfirm => {
+                let _ = append_decision(
+                    workdir,
+                    &format!(
+                        "{} gate AWAITING HUMAN after {attempt} attempts: {summary}",
+                        phase.slug()
+                    ),
+                )
+                .await;
+                engine
+                    .set_phase(harness_id, SpecPhase::AwaitingConfirm)
+                    .await?;
+                engine
+                    .set_state(harness_id, HarnessState::AwaitingConfirmation)
+                    .await?;
+                engine.log(
+                    harness_id,
+                    None,
+                    format!(
+                        "{} gate awaiting human confirmation: {summary}",
+                        role.as_str()
+                    ),
+                );
+                return Ok(false);
+            }
+        }
+    }
+}
+
+/// Run the SDD phases BEFORE the feature loop (spec 013): PM authoring gate →
+/// architect gate → agentless decompose. On a blocked/parked gate it leaves the
+/// run halted and returns early (the caller checks the phase before proceeding).
+async fn run_pre_feature_phases(
+    state: &AppState,
+    harness_id: Uuid,
+    workdir: &Path,
+) -> anyhow::Result<()> {
+    let engine = &state.harness;
+
+    engine.set_phase(harness_id, SpecPhase::Authoring).await?;
+    if !run_role_gate(state, harness_id, workdir, SpecPhase::Authoring).await? {
+        return Ok(());
+    }
+    engine
+        .set_phase(harness_id, SpecPhase::Architecture)
+        .await?;
+    if !run_role_gate(state, harness_id, workdir, SpecPhase::Architecture).await? {
+        return Ok(());
+    }
+
+    // Agentless decompose: derive the verify-gated backlog from the (now
+    // PM-refined) spec, re-apply the run knobs the fresh list would reset, then
+    // make it visible to the feature loop.
+    engine.set_phase(harness_id, SpecPhase::Decompose).await?;
+    let config = HarnessConfig::load(workdir).await?;
+    let spec_id = config
+        .features
+        .spec_id
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("decompose requires features.spec_id"))?;
+    engine.log(
+        harness_id,
+        None,
+        format!("decompose: deriving backlog from spec {spec_id}"),
+    );
+    let mut derived = plan_from_spec(workdir, &spec_id).await?;
+    derived.copy_knobs_from(&config.features);
+    config.save_features(&derived).await?;
+    engine.reload_features(harness_id).await?;
+    engine.set_phase(harness_id, SpecPhase::Executing).await?;
+    Ok(())
+}
+
+/// Run the reviewer gate AFTER all features are green (spec 013). On pass the
+/// phase advances to `Done`; a blocked/parked gate leaves it halted.
+async fn run_review_phase(
+    state: &AppState,
+    harness_id: Uuid,
+    workdir: &Path,
+) -> anyhow::Result<()> {
+    let engine = &state.harness;
+    engine.set_phase(harness_id, SpecPhase::Review).await?;
+    if run_role_gate(state, harness_id, workdir, SpecPhase::Review).await? {
+        engine.set_phase(harness_id, SpecPhase::Done).await?;
+    }
+    Ok(())
 }
 
 /// How long to wait after typing a multi-line prompt before sending the
@@ -2339,7 +3027,10 @@ mod tests {
 
         // A non-verdict (or empty/garbled) is an error → the caller fails the gate.
         assert!(parse_qa_verdict("not json").is_err());
-        assert!(parse_qa_verdict("{}").is_err(), "missing `passed` must error");
+        assert!(
+            parse_qa_verdict("{}").is_err(),
+            "missing `passed` must error"
+        );
     }
 
     #[test]
@@ -2352,7 +3043,10 @@ mod tests {
     fn qa_mode_serializes_snake_case() {
         assert_eq!(serde_json::to_string(&QaMode::Auto).unwrap(), "\"auto\"");
         assert_eq!(serde_json::to_string(&QaMode::Agent).unwrap(), "\"agent\"");
-        assert_eq!(serde_json::to_string(&QaMode::Script).unwrap(), "\"script\"");
+        assert_eq!(
+            serde_json::to_string(&QaMode::Script).unwrap(),
+            "\"script\""
+        );
     }
 
     #[tokio::test]
@@ -2361,7 +3055,10 @@ mod tests {
         // Auto with no qa.sh and (assumed) no browser-verify → Script (skip-pass).
         let mut cfg = HarnessConfig::load(&wd).await.unwrap();
         cfg.features.qa_mode = QaMode::Auto;
-        assert!(matches!(resolve_qa_mode(&cfg), QaMode::Script | QaMode::Agent));
+        assert!(matches!(
+            resolve_qa_mode(&cfg),
+            QaMode::Script | QaMode::Agent
+        ));
 
         // Explicit overrides ignore detection.
         cfg.features.qa_mode = QaMode::Agent;
@@ -2790,7 +3487,11 @@ mod surface_tests {
 
         // Every feature is Pending — the harness is Idle, not running.
         assert_eq!(list.features.len(), 2);
-        assert!(list.features.iter().all(|f| f.state == FeatureState::Pending));
+        assert!(
+            list.features
+                .iter()
+                .all(|f| f.state == FeatureState::Pending)
+        );
         // Tracker key is reused verbatim as the harness feature id.
         assert_eq!(list.features[0].id, "AG-1");
         assert_eq!(list.features[0].description, "user can log in");
@@ -2816,12 +3517,11 @@ mod surface_tests {
     #[tokio::test]
     async fn write_backlog_from_features_rejects_duplicate_ids() {
         let dir = TempDir::new().unwrap();
-        let feats = vec![
-            bf("AG-1", "a", "", None),
-            bf("AG-1", "b", "", None),
-        ];
+        let feats = vec![bf("AG-1", "a", "", None), bf("AG-1", "b", "", None)];
         assert!(
-            write_backlog_from_features(dir.path(), &feats).await.is_err(),
+            write_backlog_from_features(dir.path(), &feats)
+                .await
+                .is_err(),
             "duplicate ids would make state writes target the wrong feature"
         );
     }
@@ -2937,5 +3637,215 @@ mod surface_tests {
         let second = log.find("rejected agentum-only").expect("second present");
         assert!(first < second, "append-only, kept in order");
         assert!(wd.join(".agentum-harness/decisions.md").exists());
+    }
+
+    // ---- spec 013: autonomous SDD role phases -----------------------------
+
+    #[test]
+    fn decide_gate_advances_on_pass() {
+        assert_eq!(decide_gate(true, 1, 3, false), GateDecision::Advance);
+        // A pass advances regardless of attempt / hitl.
+        assert_eq!(decide_gate(true, 9, 0, true), GateDecision::Advance);
+    }
+
+    #[test]
+    fn decide_gate_retries_while_budget_remains() {
+        assert_eq!(decide_gate(false, 1, 3, false), GateDecision::Retry);
+        assert_eq!(decide_gate(false, 3, 3, false), GateDecision::Retry);
+    }
+
+    #[test]
+    fn decide_gate_blocks_when_exhausted_and_autonomous() {
+        assert_eq!(decide_gate(false, 4, 3, false), GateDecision::Block);
+        assert_eq!(decide_gate(false, 100, 3, false), GateDecision::Block);
+    }
+
+    #[test]
+    fn decide_gate_awaits_human_only_when_hitl_on_block() {
+        assert_eq!(decide_gate(false, 4, 3, true), GateDecision::AwaitConfirm);
+    }
+
+    /// The autonomy contract: with `hitl_on_block` off (the default) the engine
+    /// NEVER asks a human — across the entire failure space it blocks, never
+    /// awaits. This is the core "don't prompt me to continue" guarantee (013).
+    #[test]
+    fn decide_gate_default_run_never_prompts_a_human() {
+        for attempt in 1..=10u32 {
+            for max in 0..=5u32 {
+                assert_ne!(
+                    decide_gate(false, attempt, max, false),
+                    GateDecision::AwaitConfirm,
+                    "autonomous run must never await a human (attempt={attempt}, max={max})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn parse_role_verdict_reads_pass_fail_and_summary() {
+        let (p, s) = parse_role_verdict(r#"{"passed":true,"summary":"looks good"}"#).unwrap();
+        assert!(p);
+        assert_eq!(s, "looks good");
+        let (p, s) = parse_role_verdict(r#"{"passed":false,"summary":"missing AC"}"#).unwrap();
+        assert!(!p);
+        assert_eq!(s, "missing AC");
+    }
+
+    #[test]
+    fn parse_role_verdict_summary_is_optional() {
+        let (p, s) = parse_role_verdict(r#"{"passed":true}"#).unwrap();
+        assert!(p);
+        assert_eq!(s, "");
+    }
+
+    #[test]
+    fn parse_role_verdict_rejects_garbage() {
+        // An inconclusive/garbled verdict must error so the caller fails the gate
+        // — it must never silently read as a pass.
+        assert!(parse_role_verdict("not json").is_err());
+        assert!(parse_role_verdict("").is_err());
+        assert!(parse_role_verdict("{}").is_err());
+    }
+
+    #[test]
+    fn build_role_prompt_includes_brief_spec_and_verdict_contract() {
+        let p = build_role_prompt(
+            RoleKind::Pm,
+            "AGENTS instructions",
+            "013-x",
+            "# Spec body",
+            "roles/authoring.json",
+        );
+        assert!(p.contains("Product Manager"), "embeds the PM brief");
+        assert!(p.contains("# Spec body"), "embeds the spec");
+        assert!(p.contains("013-x"), "names the spec id");
+        assert!(p.contains("roles/authoring.json"), "names the verdict path");
+        assert!(p.contains("\"passed\""), "states the JSON verdict contract");
+    }
+
+    #[test]
+    fn role_briefs_are_embedded_and_demand_a_verdict() {
+        for role in [RoleKind::Pm, RoleKind::Architect, RoleKind::Reviewer] {
+            let b = role.brief();
+            assert!(!b.trim().is_empty(), "{} brief is embedded", role.as_str());
+            assert!(
+                b.contains("verdict") && b.contains("passed"),
+                "{} brief states the verdict contract",
+                role.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn spec_phase_advances_through_the_lifecycle() {
+        use SpecPhase::*;
+        assert_eq!(Authoring.advance(), Architecture);
+        assert_eq!(Architecture.advance(), Decompose);
+        assert_eq!(Decompose.advance(), Executing);
+        assert_eq!(Executing.advance(), Review);
+        assert_eq!(Review.advance(), Done);
+        assert_eq!(Done.advance(), Done, "terminal phase stays put");
+    }
+
+    #[test]
+    fn spec_phase_role_mapping_is_correct() {
+        assert_eq!(SpecPhase::Authoring.role(), Some(RoleKind::Pm));
+        assert_eq!(SpecPhase::Architecture.role(), Some(RoleKind::Architect));
+        assert_eq!(SpecPhase::Review.role(), Some(RoleKind::Reviewer));
+        assert_eq!(SpecPhase::Decompose.role(), None);
+        assert_eq!(SpecPhase::Executing.role(), None);
+        assert_eq!(SpecPhase::Done.role(), None);
+    }
+
+    #[test]
+    fn spec_phase_slug_round_trips() {
+        for p in [
+            SpecPhase::Authoring,
+            SpecPhase::Architecture,
+            SpecPhase::Decompose,
+            SpecPhase::Executing,
+            SpecPhase::Review,
+            SpecPhase::Done,
+            SpecPhase::Blocked,
+            SpecPhase::AwaitingConfirm,
+        ] {
+            assert_eq!(SpecPhase::from_slug(p.slug()), Some(p));
+        }
+        assert_eq!(SpecPhase::from_slug("nonsense"), None);
+    }
+
+    #[test]
+    fn rebuild_phase_takes_the_last_marker() {
+        let log = "phase: entered authoring (from executing)\n\
+                   note: pm refined the spec\n\
+                   phase: entered architecture (from authoring)\n";
+        assert_eq!(
+            rebuild_phase_from_decisions(log),
+            Some(SpecPhase::Architecture)
+        );
+    }
+
+    #[test]
+    fn rebuild_phase_is_none_when_absent() {
+        assert_eq!(rebuild_phase_from_decisions("no markers here"), None);
+        assert_eq!(rebuild_phase_from_decisions(""), None);
+    }
+
+    #[test]
+    fn role_verdict_path_is_under_roles_dir() {
+        let p = role_verdict_path(Path::new("/x/.agentum-harness"), SpecPhase::Authoring);
+        assert!(p.ends_with("roles/authoring.json"), "got {p:?}");
+    }
+
+    #[test]
+    fn default_feature_list_keeps_roles_off_and_autonomous() {
+        let f = FeatureList::default();
+        assert!(
+            !f.roles,
+            "role phases off by default — feature-only runs unchanged"
+        );
+        assert!(!f.hitl_on_block, "fully autonomous by default");
+        assert!(f.spec_id.is_none());
+    }
+
+    #[test]
+    fn copy_knobs_preserves_config_but_not_features() {
+        let mut src = FeatureList {
+            spec_id: Some("013-x".into()),
+            roles: true,
+            hitl_on_block: true,
+            agent_tool: "codex".into(),
+            max_retries: 9,
+            ..FeatureList::default()
+        };
+        // A knob source carries no meaningful features.
+        src.features.clear();
+
+        let mut derived = FeatureList {
+            features: vec![Feature {
+                id: "F1".into(),
+                name: "f".into(),
+                description: String::new(),
+                state: FeatureState::Pending,
+                attempts: 0,
+                last_error: None,
+                prompt: None,
+                tracker_provider: None,
+                tracker_url: None,
+            }],
+            ..FeatureList::default()
+        };
+        derived.copy_knobs_from(&src);
+
+        assert_eq!(derived.spec_id.as_deref(), Some("013-x"));
+        assert!(derived.roles);
+        assert!(derived.hitl_on_block);
+        assert_eq!(derived.agent_tool, "codex");
+        assert_eq!(derived.max_retries, 9);
+        assert_eq!(
+            derived.features.len(),
+            1,
+            "the derived backlog's features are preserved, not overwritten"
+        );
     }
 }

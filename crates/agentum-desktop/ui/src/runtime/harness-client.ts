@@ -24,6 +24,20 @@ export type HarnessState =
   | 'done'
   | 'failed'
 
+/** SDD phase a run is in, layered above the feature backlog (spec 013). */
+export type SpecPhase =
+  | 'authoring'
+  | 'architecture'
+  | 'decompose'
+  | 'executing'
+  | 'review'
+  | 'done'
+  | 'blocked'
+  | 'awaiting_confirm'
+
+/** The SDD role behind an agent-played gate (spec 013). */
+export type RoleKind = 'pm' | 'architect' | 'reviewer'
+
 export type Feature = {
   id: string
   name: string
@@ -51,6 +65,12 @@ export type FeatureList = {
   qa_mode?: 'auto' | 'script' | 'agent'
   /** Agent CLI for the QA gate when it spawns one (default: the feature agent). */
   qa_agent_tool?: string | null
+  /** SDD spec id to author + decompose when `roles` is on (spec 013). */
+  spec_id?: string | null
+  /** Run the SDD role-gate phases around the feature loop (spec 013). */
+  roles?: boolean
+  /** Pause (vs. block) when a role gate exhausts retries (spec 013). */
+  hitl_on_block?: boolean
 }
 
 export type HarnessStatus = {
@@ -62,6 +82,10 @@ export type HarnessStatus = {
   current_session?: string | null
   elapsed_secs: number
   agent_instructions: string
+  /** Current SDD phase (spec 013); `executing` for a plain feature run. */
+  phase?: SpecPhase
+  /** Role-gate retry counter for the current phase (spec 013). */
+  phase_attempts?: number
 }
 
 export type HarnessFiles = {
@@ -84,6 +108,15 @@ export type HarnessEvent =
   | { type: 'verify_completed'; harness_id: string; feature_id: string; success: boolean; output: string }
   | { type: 'handoff_written'; harness_id: string; feature_id: string }
   | { type: 'harness_completed'; harness_id: string; success: boolean }
+  | { type: 'phase_changed'; harness_id: string; from: SpecPhase; to: SpecPhase }
+  | {
+      type: 'gate_result'
+      harness_id: string
+      role: RoleKind
+      passed: boolean
+      attempt: number
+      summary: string
+    }
   | { type: 'error'; harness_id: string; message: string }
   | { type: 'lagged'; skipped: number }
 

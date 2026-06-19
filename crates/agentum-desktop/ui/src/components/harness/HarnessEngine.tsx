@@ -38,7 +38,8 @@ import {
   type HarnessEvent,
   type HarnessFiles,
   type HarnessState,
-  type HarnessStatus
+  type HarnessStatus,
+  type SpecPhase
 } from '@/runtime/harness-client'
 
 type LogLine = { id: number; text: string; tone: 'info' | 'good' | 'bad' | 'warn' }
@@ -81,6 +82,14 @@ function describeEvent(ev: HarnessEvent): LogLine | null {
         id: 0,
         tone: ev.success ? 'good' : 'bad',
         text: ev.success ? 'harness completed — all features verified' : 'harness stopped'
+      }
+    case 'phase_changed':
+      return { id: 0, tone: 'info', text: `phase ${ev.from} → ${ev.to}` }
+    case 'gate_result':
+      return {
+        id: 0,
+        tone: ev.passed ? 'good' : 'warn',
+        text: `${ev.role} gate (attempt ${ev.attempt}): ${ev.passed ? 'PASS ✓' : 'CONCERNS'} — ${ev.summary}`
       }
     case 'error':
       return { id: 0, tone: 'bad', text: `error: ${ev.message}` }
@@ -258,6 +267,59 @@ function VerificationGate({ status }: { status: HarnessStatus | null }) {
           </div>
           <div className="text-[11px] uppercase tracking-wide opacity-70">verified</div>
         </div>
+      ) : null}
+    </div>
+  )
+}
+
+// ---- SDD phase strip (spec 013) -------------------------------------------
+
+const PHASE_STEPS: { key: SpecPhase; label: string }[] = [
+  { key: 'authoring', label: 'Authoring' },
+  { key: 'architecture', label: 'Architecture' },
+  { key: 'decompose', label: 'Decompose' },
+  { key: 'executing', label: 'Building' },
+  { key: 'review', label: 'Review' },
+  { key: 'done', label: 'Done' }
+]
+
+const PHASE_ORDER: SpecPhase[] = PHASE_STEPS.map((p) => p.key)
+
+// The SDD lifecycle strip above the feature board: PM/architect gates →
+// decompose → the feature loop (Building) → reviewer gate → done. Only shown for
+// a role-gated run; a plain feature run has no phases and renders nothing.
+function PhaseStrip({ status }: { status: HarnessStatus | null }) {
+  if (!status?.features.roles) return null
+  const current = status.phase ?? 'executing'
+  const halted = current === 'blocked' || current === 'awaiting_confirm'
+  const activeIdx = PHASE_ORDER.indexOf(current)
+  return (
+    <div className="flex items-center gap-1 overflow-x-auto rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs">
+      <span className="mr-1 shrink-0 font-semibold uppercase tracking-wide opacity-60">SDD</span>
+      {PHASE_STEPS.map((step, i) => {
+        const done = activeIdx >= 0 && i < activeIdx
+        const active = step.key === current
+        return (
+          <React.Fragment key={step.key}>
+            {i > 0 ? <span className="shrink-0 opacity-30">→</span> : null}
+            <span
+              className={cn(
+                'shrink-0 rounded px-2 py-0.5 font-medium transition-colors',
+                active && !halted && 'bg-primary text-primary-foreground',
+                active && halted && 'bg-destructive text-destructive-foreground',
+                done && 'text-foreground opacity-90',
+                !active && !done && 'opacity-50'
+              )}
+            >
+              {step.label}
+            </span>
+          </React.Fragment>
+        )
+      })}
+      {halted ? (
+        <span className="ml-2 shrink-0 font-semibold text-destructive">
+          {current === 'blocked' ? '⛔ blocked' : '⏸ awaiting human'}
+        </span>
       ) : null}
     </div>
   )
@@ -630,6 +692,7 @@ export default function HarnessEngine(): React.JSX.Element {
       {/* Body */}
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
         <VerificationGate status={status} />
+        <PhaseStrip status={status} />
 
         {status?.workdir ? (
           <div className="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
