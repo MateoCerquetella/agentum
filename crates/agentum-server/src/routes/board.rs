@@ -283,6 +283,14 @@ async fn patch(
 
     let item = state.store.patch_board_item(id, patch).await?;
 
+    // Prune-on-done: when a card reaches `done`, clean up its per-card worktree
+    // (design 2026-06-18). Best-effort + safe (skips a live or dirty worktree),
+    // so it never blocks the transition. Runs before the auto-spawn branch
+    // below, which only fires for `doing` — the two are mutually exclusive.
+    if status_changing && item.status == "done" {
+        super::board_goals::prune_card_worktree_on_done(&state, &item).await;
+    }
+
     // CONTEXT D-01: auto-spawn branch — AFTER gate + patch_board_item so the
     // card row already reads the new status before we bind the session.
     // Condition: status changed to "doing" AND the merged item has no session_id

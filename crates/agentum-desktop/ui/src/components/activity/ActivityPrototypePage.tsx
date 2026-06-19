@@ -9,6 +9,7 @@ import {
   ExternalLink,
   MessageSquareText,
   MoreVertical,
+  Radar,
   Search,
   TerminalSquare
 } from 'lucide-react'
@@ -1586,13 +1587,21 @@ export default function ActivityPrototypePage(): React.JSX.Element {
     storeData.acknowledgeAgents(unreadKeys)
   }
 
-  // Why (page padding): drop top + horizontal padding so the page extends to
-  // the window's left and right edges (matching how sidebars abut the chrome
-  // elsewhere). The titlebar (ActivityTitlebarControls) already provides the
-  // breathing-room band above; the right pane's title row supplies its own
-  // top padding (pt-2) so the heading isn't pinned to the titlebar.
+  // Why (Phase 1 nav shell, #48): Mission Control is the home view, so it owns
+  // an explicit title + one-line description header — and intentionally no back
+  // button, since the always-visible left rail is the way out. The two-pane
+  // body (thread list + detail) sits below the header.
   return (
     <div ref={setActivityPageRef} className="flex h-full min-h-0 flex-col bg-background pb-3">
+      <header className="flex flex-none items-center gap-2 border-b border-border px-4 py-2.5">
+        <Radar className="size-4 shrink-0 text-primary" aria-hidden />
+        <div className="min-w-0">
+          <h1 className="text-sm font-semibold leading-tight tracking-tight">Mission Control</h1>
+          <p className="truncate text-[12px] leading-tight text-muted-foreground">
+            Every agent you&apos;re running, grouped by what needs your attention.
+          </p>
+        </div>
+      </header>
       <main className="flex min-h-0 flex-1 overflow-hidden">
         <aside
           ref={threadListRef}
@@ -1826,10 +1835,15 @@ export default function ActivityPrototypePage(): React.JSX.Element {
           ) : (
             <div className="flex h-full min-h-[240px] flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
               {visibleThreads.length === 0 ? (
-                <>
-                  <MessageSquareText className="size-7" />
-                  No activity yet.
-                </>
+                <div className="max-w-sm px-6 text-center">
+                  <MessageSquareText className="mx-auto mb-3 size-7 opacity-70" />
+                  <p className="text-sm font-medium text-foreground">No agents running yet</p>
+                  <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
+                    Start an agent from a workspace in the sidebar, the Chat spec
+                    intake, or the Board — it&apos;ll show up here grouped by what
+                    needs your attention.
+                  </p>
+                </div>
               ) : (
                 <>
                   <TerminalSquare className="size-7" />
