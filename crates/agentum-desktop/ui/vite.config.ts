@@ -39,46 +39,24 @@ export default defineConfig({
     // webview from local disk, so a few large lazy chunks are expected. The
     // eager entry chunk is guarded separately by scripts/check-entry-size.mjs.
     chunkSizeWarningLimit: 2500,
-    rollupOptions: {
-      output: {
-        // Pin the heavy, lazy-only libraries into named vendor chunks so they
-        // can't silently merge back into the eager entry chunk — the regression
-        // class fixed in #21 (react-markdown and xterm had leaked in via
-        // always-mounted surfaces). These libs are only reached through lazy()
-        // boundaries today, so naming their chunks keeps them lazy and stable.
-        //
-        // React/react-dom are deliberately NOT chunked here: the single deduped
-        // copy (see `dedupe` above) must stay in the entry. Splitting it has
-        // historically tripped React's hook dispatcher to null at the app root.
-        manualChunks(id) {
-          if (!id.includes('node_modules')) return undefined
-          if (
-            id.includes('react-markdown') ||
-            id.includes('/micromark') ||
-            id.includes('/mdast') ||
-            id.includes('/hast') ||
-            id.includes('/remark') ||
-            id.includes('/rehype') ||
-            id.includes('/unified') ||
-            id.includes('/unist') ||
-            id.includes('/vfile') ||
-            id.includes('/property-information')
-          ) {
-            return 'markdown-vendor'
-          }
-          if (id.includes('monaco-editor') || id.includes('@monaco-editor')) {
-            return 'monaco-vendor'
-          }
-          if (id.includes('@tiptap') || id.includes('/prosemirror')) {
-            return 'tiptap-vendor'
-          }
-          if (id.includes('/mermaid') || id.includes('/cytoscape')) {
-            return 'mermaid-vendor'
-          }
-          return undefined
-        },
-      },
-    },
+    // No hand-authored `manualChunks`: it shipped the v0.17.0 black-screen.
+    // The heavy libs here (react-markdown, @tiptap/prosemirror, mermaid) all
+    // depend on React, and pinning them into named vendor chunks while React
+    // stayed in the eager entry created a cycle (entry → *-vendor → entry-for-
+    // React). The browser evaluated a vendor chunk before the entry had
+    // initialized its React binding, so React read back `undefined` and the
+    // vendor's top-level `React.Activity = …` (React 19) threw — aborting the
+    // whole entry graph and rendering a black app. Splitting React into its own
+    // chunk only moved the cycle elsewhere (tiptap ↔ react ↔ mermaid), because
+    // these libraries are genuinely interdependent and any arbitrary cut line
+    // reintroduces a cross-chunk cycle.
+    //
+    // Rollup's automatic code-splitting, driven by the `lazy()` dynamic imports
+    // in App.tsx (Terminal, CommentMarkdownImpl, MarkdownPreview, editors, …),
+    // already keeps markdown/xterm/monaco off the eager entry chunk AND orders
+    // module evaluation correctly. scripts/check-entry-size.mjs guards the entry
+    // size as a regression backstop. Do not reintroduce manualChunks for these
+    // React-dependent libraries without verifying the built app actually mounts.
   },
   envPrefix: ['VITE_', 'TAURI_'],
   test: {
