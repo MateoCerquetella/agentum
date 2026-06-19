@@ -300,6 +300,53 @@ async fn provision_card_worktree(
     }
 }
 
+/// Best-effort cleanup of a card's isolated worktree once the card reaches
+/// `done` (design 2026-06-18 "Open questions": per-card worktree, prune on
+/// done). Safe by construction — it only removes the worktree when:
+///   * the card has a bound session with a `worktree_path` (it was isolated),
+///   * that session is no longer `Running` (don't yank a worktree out from
+///     under a live agent), and
+///   * the worktree is clean (never silently discard uncommitted work — the
+///     same guard the manual `/worktree/prune` route enforces).
+/// Any unmet condition (or a git error) is a logged skip, never a caller
+/// error: marking a card done must not fail because cleanup couldn't run.
+/// Returns `true` only when a worktree was actually pruned.
+pub(crate) async fn prune_card_worktree_on_done(state: &AppState, card: &BoardItem) -> bool {
+    let session_id = match card.session_id.as_deref().and_then(|s| s.parse().ok()) {
+        Some(id) => id,
+        None => return false,
+    };
+    let session = match state.store.get_session_by_id(session_id).await {
+        Ok(Some(s)) => s,
+        _ => return false,
+    };
+    let Some(wt_path) = session.worktree_path.as_deref() else {
+        return false; // non-isolated card (e.g. non-git project) — nothing to prune
+    };
+    if matches!(session.status, Status::Running) {
+        return false; // a live agent still owns the checkout
+    }
+    let wt = std::path::Path::new(wt_path);
+    if let Ok(status) = crate::git::worktree_status(wt).await {
+        if !status.is_clean() {
+            tracing::info!(card = %card.key, "skip prune-on-done: worktree has uncommitted changes");
+            return false;
+        }
+    }
+    // `git worktree remove` runs from the project root, not the worktree.
+    let repo = std::path::Path::new(&session.workdir);
+    match crate::git::prune_worktree(repo, wt, session.worktree_branch.as_deref(), false).await {
+        Ok(()) => {
+            let _ = state.store.clear_session_worktree(session.id).await;
+            true
+        }
+        Err(e) => {
+            tracing::warn!(card = %card.key, "prune-on-done failed (non-fatal): {e}");
+            false
+        }
+    }
+}
+
 /// CONTEXT D-02: tool defaults to "claude"; workdir falls through to
 /// parent_goal.workdir, then HTTP 400.
 /// CONTEXT D-03 (superseded): the ticket title+body is sent as the first
@@ -906,6 +953,101 @@ mod tests {
         assert!(
             resolved.is_none(),
             "a non-git project dir must yield None (direct-spawn fallback)"
+        );
+    }
+
+    /// Create a card bound to a session whose worktree is `resolved`, in the
+    /// given repo, with the given session status. Returns the persisted card.
+    async fn card_bound_to_worktree(
+        state: &AppState,
+        repo: &std::path::Path,
+        resolved: &crate::git::ResolvedWorktree,
+        name: &str,
+        status: Status,
+    ) -> BoardItem {
+        let session = state
+            .store
+            .create_session(NewSession {
+                name: name.into(),
+                workdir: repo.to_string_lossy().into_owned(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: None,
+                worktree_path: Some(resolved.path.to_string_lossy().into_owned()),
+                worktree_branch: Some(resolved.branch.clone()),
+                worktree_base_ref: Some(resolved.base_ref.clone()),
+            })
+            .await
+            .unwrap();
+        if !matches!(status, Status::Idle) {
+            state
+                .store
+                .update_status_and_target(session.id, status, None)
+                .await
+                .unwrap();
+        }
+        state
+            .store
+            .create_board_item(NewBoardItem {
+                title: "done card".into(),
+                body: None,
+                status: Some("done".into()),
+                lbl: Some("feat".into()),
+                tool: Some("claude".into()),
+                workdir: Some(repo.to_string_lossy().into_owned()),
+                model: None,
+                session_id: Some(session.id.to_string()),
+                priority: None,
+                parent_goal_id: None,
+            })
+            .await
+            .unwrap()
+    }
+
+    /// A done card with a clean, non-running worktree IS pruned (design
+    /// 2026-06-18 "prune on card done").
+    #[tokio::test]
+    async fn prune_on_done_removes_a_clean_idle_worktree() {
+        let dir = TempDir::new().unwrap();
+        init_git_repo(dir.path());
+        let resolved = crate::git::create_worktree(dir.path(), "card-ag-3", None, None)
+            .await
+            .unwrap();
+        assert!(resolved.path.exists());
+
+        let state = fresh_state().await;
+        let card =
+            card_bound_to_worktree(&state, dir.path(), &resolved, "card-ag-3", Status::Idle).await;
+
+        let pruned = prune_card_worktree_on_done(&state, &card).await;
+        assert!(pruned, "a clean, non-running worktree must be pruned on done");
+        assert!(
+            !resolved.path.exists(),
+            "the worktree directory must be gone after prune"
+        );
+    }
+
+    /// A done card whose agent is still RUNNING is NOT pruned — never yank a
+    /// worktree out from under a live agent.
+    #[tokio::test]
+    async fn prune_on_done_skips_a_running_session() {
+        let dir = TempDir::new().unwrap();
+        init_git_repo(dir.path());
+        let resolved = crate::git::create_worktree(dir.path(), "card-ag-4", None, None)
+            .await
+            .unwrap();
+
+        let state = fresh_state().await;
+        let card =
+            card_bound_to_worktree(&state, dir.path(), &resolved, "card-ag-4", Status::Running)
+                .await;
+
+        let pruned = prune_card_worktree_on_done(&state, &card).await;
+        assert!(!pruned, "a running session's worktree must be left intact");
+        assert!(
+            resolved.path.exists(),
+            "the worktree directory must still exist when the agent is running"
         );
     }
 
