@@ -222,6 +222,7 @@ const GoalsPage = lazy(() => import('./components/goals/GoalsPage'))
 const BoardPage = lazy(() => import('./components/board/BoardPage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
 const WorktreeJumpPalette = lazy(() => import('./components/WorktreeJumpPalette'))
+const CommandPalette = lazy(() => import('./components/CommandPalette'))
 const SettingsCommandPalette = lazy(() => import('./components/settings/SettingsCommandPalette'))
 const NewWorkspaceComposerModal = lazy(() => import('./components/NewWorkspaceComposerModal'))
 const WorkspaceCleanupDialog = lazy(
@@ -1197,6 +1198,20 @@ function App(): React.JSX.Element {
         return
       }
 
+      // Cmd+K — the nav command palette: jump to any view or agent from
+      // anywhere (Phase 1 nav shell, #48). Same toggle pattern as Cmd+J.
+      if (matchShortcut('view.commandPalette')) {
+        e.preventDefault()
+        notifyTerminalCapture('view.commandPalette')
+        const store = useAppStore.getState()
+        if (store.activeModal === 'command-palette') {
+          store.closeModal()
+        } else {
+          store.openModal('command-palette')
+        }
+        return
+      }
+
       if (matchShortcut('worktree.quickOpen')) {
         const store = useAppStore.getState()
         if (store.activeView === 'terminal' && store.activeWorktreeId !== null) {
@@ -1815,6 +1830,16 @@ function App(): React.JSX.Element {
                 compact
               >
                 <SettingsCommandPalette />
+              </RecoverableRenderErrorBoundary>
+            ) : null}
+            {resolvedMountedLazyModalIds.has('command-palette') ? (
+              <RecoverableRenderErrorBoundary
+                boundaryId="modal.command-palette"
+                surface="modal"
+                resetKey={activeModal === 'command-palette'}
+                compact
+              >
+                <CommandPalette />
               </RecoverableRenderErrorBoundary>
             ) : null}
             {resolvedMountedLazyModalIds.has('feature-wall') ? (

@@ -544,6 +544,7 @@ export type UISlice = {
     | 'quick-open'
     | 'worktree-palette'
     | 'settings-command-palette'
+    | 'command-palette'
     | 'workspace-cleanup'
     | 'project-added'
     | 'worktree-visibility'
