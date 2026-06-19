@@ -32,6 +32,70 @@ Do not promote to staging/main. Ask before any destructive git operation.
 
 ---
 
+## Resume on the VPS (use a worktree, NOT `git checkout`)
+
+`git checkout feat/desktop-nav-shell` in the shared clone aborts when untracked files
+(e.g. `examples/harness-demo/.harness/*`) would be overwritten — and this repo's rule is
+to never checkout a new branch in the shared checkout. Spin a dedicated worktree instead
+(leaves the staging checkout and its files untouched):
+
+```sh
+cd ~/D/p/agentum          # your shared clone (on staging)
+git fetch origin
+git worktree add ../agentum-nav-shell feat/desktop-nav-shell
+cd ../agentum-nav-shell   # dedicated worktree, on feat/desktop-nav-shell
+```
+
+## ▶ Autonomous ralph-loop job (single job)
+
+Start a Ralph loop (`/ralph-loop`) and paste the prompt below. It re-orients each
+iteration, does the next incomplete item, commits + pushes, and self-terminates via a
+`PHASE1_DONE` sentinel.
+
+```
+RALPH LOOP — agentum desktop Phase 1 (nav shell). This prompt runs every iteration;
+context may be fresh each time, so RE-ORIENT before acting.
+
+Repo: agentum, branch feat/desktop-nav-shell (off develop), issue #48.
+Desktop UI = React/Vite in crates/agentum-desktop/ui/src. Phase 1 is UI-only; NO backend.
+
+STEP 0 — stop check: if PHASE1_DONE exists at repo root, print "PHASE 1 COMPLETE — STOP"
+and end the iteration immediately.
+
+STEP 1 — orient: read docs/superpowers/specs/2026-06-18-phase1-handoff.md and
+.../2026-06-18-desktop-ux-redesign-design.md. Run `git log --oneline -15` and
+`npm run build --prefix crates/agentum-desktop/ui`. Inspect the CODE to judge what is
+actually done — do not trust this static list.
+
+STEP 2 — do the NEXT single incomplete item (Phase 1 ONLY; do NOT start Phase 2/3):
+  1. Left rail renders on EVERY view. Bug: App.tsx (~:1015) hides the sidebar for the
+     'activity'/'harness'/'settings'/'skills' views. Make the rail always visible.
+  2. A shared Back + breadcrumb header on every non-home view (reuse existing back
+     buttons in ChatPage.tsx / TaskPage.tsx / settings/Settings.tsx).
+  3. Rail relabeled + reordered: Home (Mission Control) → Chat → Board → Settings, with
+     plain labels + a one-line description per view. Board = labeled "coming soon" placeholder.
+  4. The 'activity' view becomes Mission Control / home (title + description + empty state).
+  5. A Cmd+K command palette to jump to any view/agent (basic is fine; reuse if one exists).
+
+STEP 3 — after each change: build must pass, then commit + push:
+  npm run build --prefix crates/agentum-desktop/ui
+  git add -A   (dedicated worktree — safe)
+  git commit -m "feat(desktop): <what you did>"
+  git push origin feat/desktop-nav-shell
+
+STOP CONDITION — when every item above is truly done AND the build is green:
+  gh pr create --base develop      # body MUST contain: Closes #48
+  touch PHASE1_DONE
+  print "PHASE 1 COMPLETE — STOP"
+
+GUARDRAILS: Phase 1 only. No backend changes. Never run destructive git
+(reset --hard, clean -fd, checking out other branches). Do not promote to staging/main.
+If a build error survives 2 fix attempts, or you are blocked, print "BLOCKED: <reason>"
+and stop.
+```
+
+---
+
 ## Mission (Phase 1)
 
 Make the desktop app impossible to get stuck in, and make every screen explain
