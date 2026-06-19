@@ -1,5 +1,5 @@
 import React from 'react'
-import { Bell, Github, Gitlab, List, MessagesSquare, MonitorPlay, Search, Target } from 'lucide-react'
+import { Bell, Github, Gitlab, List, MessagesSquare, Search, Target } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { useRepoMap } from '@/store/selectors'
 import { cn } from '@/lib/utils'
@@ -118,7 +118,6 @@ const SidebarNav = React.memo(function SidebarNav() {
   const tasksActive = activeView === 'tasks'
   const activityActive = activeView === 'activity'
   const harnessActive = activeView === 'harness'
-  const hostBrowserActive = activeView === 'host-browser'
   const goalsActive = activeView === 'goals'
   const activityUnreadCount = useActivityUnreadCount(showAgentsButton, 'sidebar-badge')
 
@@ -245,23 +244,6 @@ const SidebarNav = React.memo(function SidebarNav() {
           strokeWidth={harnessActive ? 2.25 : 1.75}
         />
         <span className="flex-1">Chat</span>
-      </button>
-      <button
-        type="button"
-        onClick={() => setActiveView('host-browser')}
-        aria-current={hostBrowserActive ? 'page' : undefined}
-        className={cn(
-          'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight transition-colors',
-          hostBrowserActive
-            ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-            : 'text-sidebar-foreground/60 hover:bg-sidebar-foreground/8'
-        )}
-      >
-        <MonitorPlay
-          className={cn('size-4 shrink-0', !hostBrowserActive && 'text-sidebar-foreground/30')}
-          strokeWidth={hostBrowserActive ? 2.25 : 1.75}
-        />
-        <span className="flex-1">Host Browser</span>
       </button>
       <button
         type="button"
