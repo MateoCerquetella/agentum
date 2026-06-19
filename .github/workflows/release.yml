@@ -42,14 +42,21 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04
             cross: true
+          # macOS MUST build `app` alongside `dmg`: the Tauri auto-updater
+          # artifact (the signed `*.app.tar.gz` + `.sig`) is emitted by the `app`
+          # bundler, NOT `dmg`. With `dmg` alone the installer shipped but no
+          # update bundle, so the release step's `emit` dropped both darwin
+          # platforms from latest.json and every macOS auto-update failed with
+          # "platform not found" (silently broken since the updater landed in
+          # v0.15.0). The dmg is still built for first-time downloads.
           - target: x86_64-apple-darwin
             runner: macos-14
             cross: false
-            desktop: dmg
+            desktop: app,dmg
           - target: aarch64-apple-darwin
             runner: macos-14
             cross: false
-            desktop: dmg
+            desktop: app,dmg
           # Windows x64. NSIS produces the .exe installer (like Orca's
           # orca-windows-setup.exe). The daemon shells out to tmux (no native
           # Windows port), so this ships as a remote client; local sessions need
