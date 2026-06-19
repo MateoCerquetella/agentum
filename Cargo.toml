@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.17.1"
+version = "0.17.2"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -48,7 +48,11 @@ toml              = "0.8"
 toml_edit         = "0.22"
 exec              = "0.3"
 
+# Tuned for CI build time over marginal runtime perf: agentum is I/O-bound
+# (it proxies bytes between tmux panes, WS, and SQLite), so thin-LTO +
+# codegen-units=1 cost ~2x compile time — dominant on the Windows MSVC linker —
+# for a runtime gain this workload can't use. codegen-units=16 parallelizes
+# codegen across runner cores; strip keeps binaries small.
 [profile.release]
-lto = "thin"
-codegen-units = 1
+codegen-units = 16
 strip = "symbols"
