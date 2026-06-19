@@ -220,6 +220,7 @@ const ActivityPrototypePage = lazy(() => import('./components/activity/ActivityP
 const Settings = lazy(() => import('./components/settings/Settings'))
 const ChatPage = lazy(() => import('./components/harness/ChatPage'))
 const GoalsPage = lazy(() => import('./components/goals/GoalsPage'))
+const BoardPage = lazy(() => import('./components/board/BoardPage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
 const WorktreeJumpPalette = lazy(() => import('./components/WorktreeJumpPalette'))
 const SettingsCommandPalette = lazy(() => import('./components/settings/SettingsCommandPalette'))
@@ -1726,6 +1727,7 @@ function App(): React.JSX.Element {
                           {activeView === 'activity' ? <ActivityPrototypePage /> : null}
                           {activeView === 'harness' ? <ChatPage /> : null}
                           {activeView === 'goals' ? <GoalsPage /> : null}
+                          {activeView === 'board' ? <BoardPage /> : null}
                           {activeView === 'terminal' && !activeWorktreeId ? <Landing /> : null}
                         </RecoverableRenderErrorBoundary>
                       </Suspense>
