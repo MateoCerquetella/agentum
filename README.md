@@ -36,15 +36,17 @@ One Rust binary spawns AI coding agents (Claude, Codex, Gemini, Cursor, Hermes, 
 
 **One install, on your machine.** It runs the agentum daemon (API server + TLS + tmux). To control *other* machines you don't install anything on them — you point agentum at them over SSH and it provisions them for you (see below).
 
+> **The CLI/TUI (`agentum terminal`) now lives in a separate repo:** [`github.com/mateocerquetella/agentum-tui`](https://github.com/mateocerquetella/agentum-tui). This repo is the **desktop app** plus the shared backend crates. CLI install/run commands below point at that repo.
+
 ```sh
-# Install (interactive prompts for LAN exposure + autostart only)
+# Desktop install (interactive prompts for LAN exposure + autostart only)
 curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh | sh
 
-# From source (installs the `agentum` command)
-cargo install --git https://github.com/mateocerquetella/agentum agentum-tui
+# CLI from source (installs the `agentum` command) — from the CLI repo:
+cargo install --git https://github.com/mateocerquetella/agentum-tui agentum-tui
 ```
 
-After install:
+After installing the CLI (from the [`agentum-tui`](https://github.com/mateocerquetella/agentum-tui) repo):
 
 ```sh
 # Open the terminal UI — it boots its own server in-process, no daemon to start
@@ -54,7 +56,7 @@ agentum terminal
 agentum new alpha --tool claude --dir ~/Developer/my-project --up
 ```
 
-The **desktop app** is a separate download (or `cargo tauri build` from `crates/agentum-desktop`). It boots `agentum-server` in-process, so a desktop session and a TUI session on the same machine share one SQLite store.
+The **desktop app** (this repo) is a separate download (or `cargo tauri build` from `crates/agentum-desktop`). It boots `agentum-server` in-process, so a desktop session and a TUI session on the same machine share one SQLite store.
 
 ### Control other machines (no second install)
 
@@ -114,28 +116,31 @@ See [`docs/`](docs/) for the data model, HTTP API, and CLI reference.
 
 ```
 crates/
-  agentum-tui/       # binary `agentum` + clap CLI; houses the TUI (commands/terminal/)
-  agentum-server/    # axum HTTP(S) + WS API (API-only; no embedded web UI)
   agentum-desktop/   # desktop app: Tauri 2 Rust shell in src/ (embeds agentum-server in-process)
                       #   + React/Vite UI in ui/ (native, no Electron bridge)
+  agentum-server/    # axum HTTP(S) + WS API (API-only; no embedded web UI)
   agentum-tmux/      # tokio process adapter for tmux
   agentum-watchdog/  # per-session pane monitor + event emitter
   agentum-executor/  # ToolAdapter trait + Claude/Codex/Gemini/Hermes/Opencode adapters
   agentum-store/     # sqlx + SQLite (WAL) + XDG paths + migrations
   agentum-core/      # shared domain types
 docs/                # architecture, data model, API, CLI reference
+
+# The CLI/TUI (binary `agentum`, package agentum-tui; the TUI in
+# commands/terminal/) moved to its own repo:
+#   github.com/mateocerquetella/agentum-tui
 ```
 
 ## Development
 
 ```sh
-# TUI dev loop (boots its own embedded server in-process)
-cargo run -p agentum-tui -- terminal
-
 # Desktop UI dev loop (Vite HMR)
 npm --prefix crates/agentum-desktop/ui run dev
 # Desktop app (Tauri shell + embedded server)
 cargo run -p agentum-desktop
+
+# TUI dev loop (`cargo run -p agentum-tui -- terminal`) lives in the
+# separate CLI repo: github.com/mateocerquetella/agentum-tui
 
 # Lint + test
 cargo fmt --all -- --check
