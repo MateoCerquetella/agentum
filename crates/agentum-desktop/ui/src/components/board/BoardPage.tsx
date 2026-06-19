@@ -7,11 +7,12 @@
 // the planner's child cards both render here; GitHub/Linear issues flow in as
 // ordinary board items too. Starting/moving a card is wired in a later step.
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Columns3, Loader2, RefreshCw } from 'lucide-react'
+import { Columns3, Loader2, Play, RefreshCw } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { DrillInHeader } from '@/components/nav/DrillInHeader'
-import { type BoardItem, type GroupedBoard, listBoard } from '@/runtime/board-client'
+import { type BoardItem, type GroupedBoard, listBoard, startCard } from '@/runtime/board-client'
+import CardWorkspace from './CardWorkspace'
 
 /**
  * The fixed column set, in workflow order. `key` is the backend `status`
@@ -32,9 +33,32 @@ function cardSource(item: BoardItem): string {
   return item.lbl ?? 'card'
 }
 
-function Card({ item }: { item: BoardItem }) {
+function Card({
+  item,
+  starting,
+  onStart,
+  onOpen
+}: {
+  item: BoardItem
+  starting: boolean
+  onStart: (item: BoardItem) => void
+  onOpen: (item: BoardItem) => void
+}) {
+  const isGoal = item.lbl === 'goal'
+  const hasSession = Boolean(item.session_id)
+  // Start is only meaningful for an unstarted feature card (a goal is a
+  // container the planner fills; a card with a session is already running).
+  const canStart = !isGoal && !hasSession && item.status === 'todo'
+
   return (
-    <div className="rounded-md border border-border/60 bg-card/60 p-2.5 shadow-sm">
+    <div
+      className={cn(
+        'rounded-md border border-border/60 bg-card/60 p-2.5 shadow-sm',
+        hasSession && 'cursor-pointer hover:border-foreground/30'
+      )}
+      onClick={hasSession ? () => onOpen(item) : undefined}
+      role={hasSession ? 'button' : undefined}
+    >
       <div className="flex items-center gap-2">
         <span className="rounded bg-foreground/10 px-1.5 py-0.5 font-mono text-[10px] text-foreground/60">
           {item.key}
@@ -42,10 +66,10 @@ function Card({ item }: { item: BoardItem }) {
         <span className="rounded bg-foreground/[0.06] px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-foreground/45">
           {cardSource(item)}
         </span>
-        {item.session_id ? (
+        {hasSession ? (
           <span
             className="ml-auto inline-flex size-2 shrink-0 rounded-full bg-emerald-500"
-            title="An agent session is bound to this card"
+            title="An agent session is bound to this card — click to watch live"
           />
         ) : null}
       </div>
@@ -58,14 +82,42 @@ function Card({ item }: { item: BoardItem }) {
       {item.tool ? (
         <div className="mt-1 text-[10px] text-foreground/45">{item.tool}</div>
       ) : null}
+      {canStart ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onStart(item)
+          }}
+          disabled={starting}
+          className={cn(
+            'mt-2 flex w-full items-center justify-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium',
+            starting
+              ? 'cursor-not-allowed bg-foreground/10 text-foreground/40'
+              : 'bg-foreground/10 text-foreground hover:bg-foreground/20'
+          )}
+        >
+          {starting ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <Play className="size-3.5" />
+          )}
+          {starting ? 'Starting…' : 'Start'}
+        </button>
+      ) : null}
     </div>
   )
 }
+
+/** The card whose live agent workspace is open in the drill-in. */
+type OpenWorkspace = { sessionId: string; cardKey: string; cardTitle: string }
 
 export default function BoardPage() {
   const [board, setBoard] = useState<GroupedBoard | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [startingId, setStartingId] = useState<number | null>(null)
+  const [workspace, setWorkspace] = useState<OpenWorkspace | null>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -78,6 +130,51 @@ export default function BoardPage() {
       setLoading(false)
     }
   }, [])
+
+  // Start a card: spawn its agent (per-card worktree + shared launch path),
+  // then drill straight into the live workspace so the user watches it work.
+  const onStart = useCallback(
+    async (item: BoardItem) => {
+      setStartingId(item.id)
+      setError(null)
+      try {
+        const started = await startCard(item.id)
+        if (started.session_id) {
+          setWorkspace({
+            sessionId: started.session_id,
+            cardKey: started.key,
+            cardTitle: started.title
+          })
+        }
+        await refresh()
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setStartingId(null)
+      }
+    },
+    [refresh]
+  )
+
+  const onOpen = useCallback((item: BoardItem) => {
+    if (item.session_id) {
+      setWorkspace({ sessionId: item.session_id, cardKey: item.key, cardTitle: item.title })
+    }
+  }, [])
+
+  if (workspace) {
+    return (
+      <CardWorkspace
+        sessionId={workspace.sessionId}
+        cardKey={workspace.cardKey}
+        cardTitle={workspace.cardTitle}
+        onBack={() => {
+          setWorkspace(null)
+          void refresh()
+        }}
+      />
+    )
+  }
 
   // Poll: agents move cards (planner adds cards, lifecycle flips status), so a
   // periodic refresh keeps the columns live without a WS subscription yet
@@ -178,7 +275,15 @@ export default function BoardPage() {
                       {col.hint}
                     </div>
                   ) : (
-                    items.map((item) => <Card key={item.id} item={item} />)
+                    items.map((item) => (
+                      <Card
+                        key={item.id}
+                        item={item}
+                        starting={startingId === item.id}
+                        onStart={onStart}
+                        onOpen={onOpen}
+                      />
+                    ))
                   )}
                 </div>
               </section>

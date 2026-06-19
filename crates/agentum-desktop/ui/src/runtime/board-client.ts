@@ -87,6 +87,28 @@ export function createGoal(input: {
 }
 
 /**
+ * `PATCH /api/board/{id}` with a new status. Moving a card to `"doing"`
+ * triggers the server's card-start path (`spawn_card_session`): it provisions
+ * a per-card worktree and spawns the agent into it, returning the card with
+ * its now-bound `session_id`. Other status moves just update the column.
+ */
+export function moveCard(id: number, status: string): Promise<BoardItem> {
+  return request(`/api/board/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status })
+  })
+}
+
+/**
+ * Start a card: move it to `"doing"`, which spawns its agent (per-card
+ * worktree + shared launch path). Returns the card with `session_id` set so
+ * the caller can immediately open the live agent workspace.
+ */
+export function startCard(id: number): Promise<BoardItem> {
+  return moveCard(id, 'doing')
+}
+
+/**
  * Flatten a grouped board into goals (`lbl: 'goal'`) each paired with their
  * child cards (`parent_goal_id === goal.id`). Pure — no IO — so it's trivial
  * to unit-test and to reuse across renders.
