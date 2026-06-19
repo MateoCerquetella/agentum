@@ -38,7 +38,6 @@ import { useAppStore } from './store'
 import { useShallow } from 'zustand/react/shallow'
 import { isRemoteWorkspaceSnapshotApplyInProgress, useIpcEvents } from './hooks/useIpcEvents'
 import RetainedAgentsSyncGate from './components/dashboard/RetainedAgentsSyncGate'
-import { ActivityTitlebarControls } from './components/activity/ActivityTitlebarControls'
 import Sidebar from './components/Sidebar'
 import { shutdownBufferCaptures } from './components/terminal-pane/shutdown-buffer-captures'
 import RightSidebar from './components/right-sidebar'
@@ -1554,15 +1553,15 @@ function App(): React.JSX.Element {
                     >
                       {titlebarLeftControls}
                     </div>
-                    {activeView === 'activity' ? (
-                      <ActivityTitlebarControls />
-                    ) : (
-                      <div
-                        id="titlebar-tabs"
-                        data-tauri-drag-region
-                        className={`flex flex-1 min-w-0 self-stretch${activeView !== 'terminal' || !activeWorktreeId ? ' invisible pointer-events-none' : ''}`}
-                      />
-                    )}
+                    {/* Why (#48): Mission Control (activity) is now a normal
+                        page with its own in-page header, so the titlebar no
+                        longer special-cases it — every non-terminal view shows
+                        the same empty draggable strip. */}
+                    <div
+                      id="titlebar-tabs"
+                      data-tauri-drag-region
+                      className={`flex flex-1 min-w-0 self-stretch${activeView !== 'terminal' || !activeWorktreeId ? ' invisible pointer-events-none' : ''}`}
+                    />
                     {showTitlebarExpandButton && (
                       <Tooltip>
                         <TooltipTrigger asChild>
