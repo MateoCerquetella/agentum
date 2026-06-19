@@ -275,6 +275,31 @@ async fn plan_goal_harness(
 ///
 /// CONTEXT D-01: PATCH→doing auto-spawn fires this from board.rs::patch
 /// after `enforce_transition` passes.
+/// Provision a per-card git worktree so a card-start agent runs in an
+/// isolated checkout instead of mutating the project's main working tree
+/// (design 2026-06-18: "the agent creates the worktree of that project").
+///
+/// Reuses the same `crate::git::create_worktree` primitive the session
+/// `worktree` spec consumes — we do NOT fork worktree creation. Returns:
+///   * `Ok(Some(resolved))` — a fresh worktree on branch `agentum/card-<key>`.
+///   * `Ok(None)` — the project dir is not a git repo, so isolation is
+///     impossible; the caller falls back to spawning directly in `repo`
+///     (preserves card-start for non-git workdirs rather than 400-ing them).
+///   * `Err(_)` — git was a repo but the worktree could not be created
+///     (e.g. the per-card branch already exists from a prior un-pruned run).
+async fn provision_card_worktree(
+    repo: &std::path::Path,
+    session_name: &str,
+) -> Result<Option<crate::git::ResolvedWorktree>, ApiError> {
+    if !crate::git::is_git_repo(repo).await {
+        return Ok(None);
+    }
+    match crate::git::create_worktree(repo, session_name, None, None).await {
+        Ok(resolved) => Ok(Some(resolved)),
+        Err(e) => Err(ApiError::BadRequest(format!("card worktree: {e}"))),
+    }
+}
+
 /// CONTEXT D-02: tool defaults to "claude"; workdir falls through to
 /// parent_goal.workdir, then HTTP 400.
 /// CONTEXT D-03 (superseded): the ticket title+body is sent as the first
@@ -338,12 +363,20 @@ pub(crate) async fn spawn_card_session(
         )));
     }
     let workdir = wd.to_string_lossy().into_owned();
+    let session_name = format!("card-{}", card.key.to_lowercase());
 
-    // 4. Build NewSession with the canonical YOLO marker pushed verbatim —
+    // 4. Provision a per-card worktree so the agent runs in an isolated
+    //    checkout (design 2026-06-18 "Open questions": per-card, prune on
+    //    done). Falls through to a direct workdir spawn for non-git projects.
+    let worktree = provision_card_worktree(&wd, &session_name).await?;
+
+    // 5. Build NewSession with the canonical YOLO marker pushed verbatim —
     //    adapters call translate_yolo_marker on launch (CLAUDE.md YOLO rule).
     //    agentum_executor::YOLO_MARKER = "--dangerously-skip-permissions".
+    //    The worktree_* fields (when present) make session.effective_cwd()
+    //    resolve to the isolated checkout instead of the project root.
     let new_session = NewSession {
-        name: format!("card-{}", card.key.to_lowercase()),
+        name: session_name,
         workdir: workdir.clone(),
         tool: tool.clone(),
         model: None,
@@ -351,12 +384,14 @@ pub(crate) async fn spawn_card_session(
         // card_id is overwritten unconditionally by claim_card — set it
         // here for clarity but claim_card will enforce it.
         card_id: Some(card.id),
-        worktree_path: None,
-        worktree_branch: None,
-        worktree_base_ref: None,
+        worktree_path: worktree
+            .as_ref()
+            .map(|w| w.path.to_string_lossy().into_owned()),
+        worktree_branch: worktree.as_ref().map(|w| w.branch.clone()),
+        worktree_base_ref: worktree.as_ref().map(|w| w.base_ref.clone()),
     };
 
-    // 5. Atomic dual-write: INSERT session row + UPDATE card.session_id in one tx.
+    // 6. Atomic dual-write: INSERT session row + UPDATE card.session_id in one tx.
     //    claim_card returns AlreadyExists (→ HTTP 409) if the card is already bound.
     let (_card_after, session) = state
         .store
@@ -364,30 +399,18 @@ pub(crate) async fn spawn_card_session(
         .await
         .map_err(ApiError::from)?;
 
-    // 6. Spawn tmux pane (mirrors spawn_planner_session :152-173).
-    let target = agentum_tmux::target_for(&session.name);
-    let adapter = agentum_executor::adapter_for(&session.tool);
-    let launch = adapter.launch(&session);
-
-    if let Err(e) = agentum_tmux::new_session(&target, &wd, &launch.argv, &launch.env).await {
-        return Err(ApiError::Internal(e.to_string()));
-    }
-
-    let log =
-        paths::pane_log(&session.id.to_string()).map_err(|e| ApiError::Internal(e.to_string()))?;
-    if let Err(e) = agentum_tmux::pipe_pane(&target, &log).await {
-        let _ = agentum_tmux::kill_session(&target).await;
-        return Err(ApiError::Internal(e.to_string()));
-    }
-
-    // 7. Mark session Running so the watchdog reconciler picks it up.
-    //    The watchdog's watch_session loop emits `session.started` on the bus
-    //    once it observes Status::Running — this route does NOT emit that event
-    //    itself (plan-checker iter-1 W-3: avoid duplicate signal on the bus).
-    state
+    // 7. Launch through the ONE shared spawn path (YOLO translation, loopback
+    //    env, Claude --settings hook, MCP wiring, pipe-pane, status→Running) —
+    //    never a parallel reimplementation. `effective_cwd()` returns the
+    //    worktree when isolation was provisioned, else the project workdir.
+    let host = state
         .store
-        .update_status_and_target(session.id, Status::Running, Some(&target))
-        .await?;
+        .get_host(agentum_core::LOCAL_HOST_ID)
+        .await?
+        .ok_or_else(|| ApiError::Internal("local host missing".into()))?;
+    let target = agentum_tmux::target_for(&session.name);
+    let spawn_wd = super::util::expand_workdir(session.effective_cwd())?;
+    super::sessions::spawn_agent_into_pane(state, &session, &host, &target, &spawn_wd).await?;
 
     // 8. Send the ticket title+body as the first prompt so the agent
     //    starts with context. Fire-and-forget on a tokio task because
@@ -821,6 +844,69 @@ mod tests {
     #[ignore = "requires a live tmux server; covered by plan 02-06 e2e"]
     async fn spawn_card_session_happy_path_requires_live_tmux() {
         // Deferred to plan 02-06 end-to-end integration tests.
+    }
+
+    /// `git init` + one commit so `git worktree add … HEAD` has a born HEAD.
+    fn init_git_repo(dir: &std::path::Path) {
+        use std::process::Command;
+        let run = |args: &[&str]| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .output()
+                .expect("git available in test env")
+                .status
+                .success();
+            assert!(ok, "git {args:?} failed");
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "test@agentum.dev"]);
+        run(&["config", "user.name", "agentum-test"]);
+        std::fs::write(dir.join("README.md"), "seed").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-q", "-m", "seed"]);
+    }
+
+    /// card-start MUST provision an isolated worktree when the project is a
+    /// git repo — this is the backend gap closed in Phase 2 (design 2026-06-18).
+    #[tokio::test]
+    async fn provision_card_worktree_creates_worktree_in_git_repo() {
+        let dir = TempDir::new().unwrap();
+        init_git_repo(dir.path());
+
+        let resolved = provision_card_worktree(dir.path(), "card-ag-1")
+            .await
+            .expect("worktree provisioning must succeed in a git repo")
+            .expect("a git repo must yield Some(worktree)");
+
+        assert!(
+            resolved.path.exists(),
+            "the worktree directory must exist on disk: {}",
+            resolved.path.display()
+        );
+        assert_eq!(
+            resolved.branch, "agentum/card-ag-1",
+            "branch must be derived per-card from the session name"
+        );
+        assert!(
+            resolved.path != dir.path(),
+            "the worktree must be a separate checkout, not the project root"
+        );
+    }
+
+    /// Non-git project dirs can't be isolated — card-start falls back to a
+    /// direct spawn (None) rather than 400-ing, so the card still runs.
+    #[tokio::test]
+    async fn provision_card_worktree_returns_none_for_non_git_dir() {
+        let dir = TempDir::new().unwrap();
+        let resolved = provision_card_worktree(dir.path(), "card-ag-2")
+            .await
+            .expect("non-git dir must not error");
+        assert!(
+            resolved.is_none(),
+            "a non-git project dir must yield None (direct-spawn fallback)"
+        );
     }
 
     fn card_with(title: &str, body: Option<&str>) -> BoardItem {
