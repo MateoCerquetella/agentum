@@ -38,7 +38,6 @@ import { useAppStore } from './store'
 import { useShallow } from 'zustand/react/shallow'
 import { isRemoteWorkspaceSnapshotApplyInProgress, useIpcEvents } from './hooks/useIpcEvents'
 import RetainedAgentsSyncGate from './components/dashboard/RetainedAgentsSyncGate'
-import { ActivityTitlebarControls } from './components/activity/ActivityTitlebarControls'
 import Sidebar from './components/Sidebar'
 import { shutdownBufferCaptures } from './components/terminal-pane/shutdown-buffer-captures'
 import RightSidebar from './components/right-sidebar'
@@ -220,8 +219,10 @@ const ActivityPrototypePage = lazy(() => import('./components/activity/ActivityP
 const Settings = lazy(() => import('./components/settings/Settings'))
 const ChatPage = lazy(() => import('./components/harness/ChatPage'))
 const GoalsPage = lazy(() => import('./components/goals/GoalsPage'))
+const BoardPage = lazy(() => import('./components/board/BoardPage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
 const WorktreeJumpPalette = lazy(() => import('./components/WorktreeJumpPalette'))
+const CommandPalette = lazy(() => import('./components/CommandPalette'))
 const SettingsCommandPalette = lazy(() => import('./components/settings/SettingsCommandPalette'))
 const NewWorkspaceComposerModal = lazy(() => import('./components/NewWorkspaceComposerModal'))
 const WorkspaceCleanupDialog = lazy(
@@ -1018,14 +1019,13 @@ function App(): React.JSX.Element {
     activeWorktreeId !== null &&
     !hasTabBar &&
     effectiveActiveTabExpanded
-  // Why: Activity and Space are full-page navigation surfaces — same
-  // treatment as Settings — so the worktree sidebar is removed for those views.
-  const showSidebar =
-    activeView !== 'settings' &&
-    activeView !== 'activity' &&
-    activeView !== 'skills' &&
-    activeView !== 'harness' &&
-    activeView !== 'goals'
+  // Why (Phase 1 nav shell, #48): the left rail must render on EVERY view so the
+  // app can never trap the user in a full-page takeover. This previously hid the
+  // rail for settings/activity/skills/harness/goals, stranding the user with no
+  // visible navigation (the only escape was a secret Cmd+B). The rail (nav +
+  // worktree list) now stays put on every view — the same way the `tasks` view
+  // already rendered alongside the sidebar.
+  const showSidebar = true
   // Why: only the terminal workspace replaces the full-width titlebar with
   // split-column chrome. Full-page navigation views keep the draggable app
   // titlebar so their page-level controls can live in that window strip.
@@ -1194,6 +1194,20 @@ function App(): React.JSX.Element {
           store.closeModal()
         } else {
           store.openModal('settings-command-palette')
+        }
+        return
+      }
+
+      // Cmd+K — the nav command palette: jump to any view or agent from
+      // anywhere (Phase 1 nav shell, #48). Same toggle pattern as Cmd+J.
+      if (matchShortcut('view.commandPalette')) {
+        e.preventDefault()
+        notifyTerminalCapture('view.commandPalette')
+        const store = useAppStore.getState()
+        if (store.activeModal === 'command-palette') {
+          store.closeModal()
+        } else {
+          store.openModal('command-palette')
         }
         return
       }
@@ -1554,15 +1568,15 @@ function App(): React.JSX.Element {
                     >
                       {titlebarLeftControls}
                     </div>
-                    {activeView === 'activity' ? (
-                      <ActivityTitlebarControls />
-                    ) : (
-                      <div
-                        id="titlebar-tabs"
-                        data-tauri-drag-region
-                        className={`flex flex-1 min-w-0 self-stretch${activeView !== 'terminal' || !activeWorktreeId ? ' invisible pointer-events-none' : ''}`}
-                      />
-                    )}
+                    {/* Why (#48): Mission Control (activity) is now a normal
+                        page with its own in-page header, so the titlebar no
+                        longer special-cases it — every non-terminal view shows
+                        the same empty draggable strip. */}
+                    <div
+                      id="titlebar-tabs"
+                      data-tauri-drag-region
+                      className={`flex flex-1 min-w-0 self-stretch${activeView !== 'terminal' || !activeWorktreeId ? ' invisible pointer-events-none' : ''}`}
+                    />
                     {showTitlebarExpandButton && (
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -1727,6 +1741,7 @@ function App(): React.JSX.Element {
                           {activeView === 'activity' ? <ActivityPrototypePage /> : null}
                           {activeView === 'harness' ? <ChatPage /> : null}
                           {activeView === 'goals' ? <GoalsPage /> : null}
+                          {activeView === 'board' ? <BoardPage /> : null}
                           {activeView === 'terminal' && !activeWorktreeId ? <Landing /> : null}
                         </RecoverableRenderErrorBoundary>
                       </Suspense>
@@ -1815,6 +1830,16 @@ function App(): React.JSX.Element {
                 compact
               >
                 <SettingsCommandPalette />
+              </RecoverableRenderErrorBoundary>
+            ) : null}
+            {resolvedMountedLazyModalIds.has('command-palette') ? (
+              <RecoverableRenderErrorBoundary
+                boundaryId="modal.command-palette"
+                surface="modal"
+                resetKey={activeModal === 'command-palette'}
+                compact
+              >
+                <CommandPalette />
               </RecoverableRenderErrorBoundary>
             ) : null}
             {resolvedMountedLazyModalIds.has('feature-wall') ? (

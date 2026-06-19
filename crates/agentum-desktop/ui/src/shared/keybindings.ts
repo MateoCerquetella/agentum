@@ -26,6 +26,7 @@ export type KeybindingActionId =
   | 'worktree.quickOpen'
   | 'worktree.palette'
   | 'settings.commandPalette'
+  | 'view.commandPalette'
   | 'worktree.navigateUp'
   | 'worktree.navigateDown'
   | 'app.settings'
@@ -216,6 +217,14 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     scope: 'global',
     searchKeywords: ['shortcut', 'settings', 'search', 'palette', 'preferences'],
     defaultBindings: platformBindings(['Mod+Shift+P'])
+  },
+  {
+    id: 'view.commandPalette',
+    title: 'Go to View or Agent',
+    group: 'Global',
+    scope: 'global',
+    searchKeywords: ['shortcut', 'global', 'command', 'palette', 'go to', 'navigate', 'view'],
+    defaultBindings: platformBindings(['Mod+K'])
   },
   {
     id: 'worktree.navigateUp',
