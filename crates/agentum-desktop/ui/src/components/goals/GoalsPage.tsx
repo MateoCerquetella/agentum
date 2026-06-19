@@ -4,10 +4,11 @@
 // exposes the per-goal "Plan harness" action (spec 011) that writes the harness
 // backlog. Running the harness stays a deliberate, separate step.
 import { type FormEvent, useCallback, useEffect, useState } from 'react'
-import { ChevronLeft, Loader2, Plus, RefreshCw, Rocket, Target } from 'lucide-react'
+import { Loader2, Plus, RefreshCw, Rocket, Target } from 'lucide-react'
 
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
+import { DrillInHeader } from '@/components/nav/DrillInHeader'
 import {
   type GoalWithChildren,
   createGoal,
@@ -23,7 +24,6 @@ type PlanState =
   | { status: 'error'; message: string }
 
 export default function GoalsPage() {
-  const closeGoalsPage = useAppStore((s) => s.closeGoalsPage)
   const openHarnessPage = useAppStore((s) => s.openHarnessPage)
 
   const [goals, setGoals] = useState<GoalWithChildren[]>([])
@@ -99,28 +99,22 @@ export default function GoalsPage() {
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
-      {/* Header */}
-      <div className="flex items-center gap-2 border-b border-border/60 px-4 py-3">
-        <button
-          type="button"
-          onClick={closeGoalsPage}
-          className="flex items-center gap-1 rounded-md px-2 py-1 text-[13px] text-foreground/60 hover:bg-foreground/8"
-        >
-          <ChevronLeft className="size-4" />
-          Back
-        </button>
-        <Target className="size-4 text-foreground/70" />
-        <span className="text-sm font-medium tracking-tight">Goals</span>
-        <button
-          type="button"
-          onClick={() => void refresh()}
-          aria-label="Refresh"
-          className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-foreground/60 hover:bg-foreground/8"
-        >
-          <RefreshCw className="size-3.5" />
-          Refresh
-        </button>
-      </div>
+      <DrillInHeader
+        icon={Target}
+        title="Goals"
+        description="Turn a goal into planned feature cards"
+        actions={
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            aria-label="Refresh"
+            className="flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-foreground/60 hover:bg-foreground/8"
+          >
+            <RefreshCw className="size-3.5" />
+            Refresh
+          </button>
+        }
+      />
 
       <div className="mx-auto w-full max-w-3xl flex-1 overflow-y-auto p-4">
         {/* Create goal */}

@@ -9,7 +9,8 @@
 // is the next slice; this surface already lists runs as chats, renders each
 // run's backlog as cards, streams live state, and Approves (runs) a backlog.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, Clock, MessagesSquare, Plus, Send, Sparkles } from 'lucide-react'
+import { Clock, MessagesSquare, Plus, Send, Sparkles } from 'lucide-react'
+import { DrillInHeader } from '@/components/nav/DrillInHeader'
 
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
@@ -65,7 +66,6 @@ function runSubtitle(run: HarnessStatus): string {
 }
 
 export default function ChatPage() {
-  const closeHarnessPage = useAppStore((s) => s.closeHarnessPage)
   const repos = useAppStore((s) => s.repos)
 
   const [runs, setRuns] = useState<HarnessStatus[]>([])
@@ -188,19 +188,11 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      {/* header */}
-      <div className="flex h-11 flex-none items-center gap-2 border-b border-border px-3">
-        <button
-          type="button"
-          onClick={closeHarnessPage}
-          className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-muted-foreground hover:bg-foreground/5"
-        >
-          <ChevronLeft className="size-4" /> Back
-        </button>
-        <MessagesSquare className="size-5 text-primary" />
-        <span className="text-sm font-semibold tracking-tight">Chat</span>
-        <span className="ml-1 font-mono text-[11px] text-muted-foreground">SDD intake · repo-grounded</span>
-      </div>
+      <DrillInHeader
+        icon={MessagesSquare}
+        title="Chat"
+        description="Describe what you want in plain words — SDD intake, repo-grounded"
+      />
 
       <div className="flex min-h-0 flex-1">
         {/* ---- Chats history ---- */}
