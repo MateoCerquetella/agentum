@@ -1,5 +1,5 @@
 {
-  "productName": "agentum",
+  "productName": "Agentum",
   "version": "0.17.2",
   "identifier": "dev.agentum.app",
   "build": {
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "agentum",
+        "title": "Agentum",
         "width": 1400,
         "height": 900,
         "minWidth": 800,

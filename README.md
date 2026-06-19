@@ -54,7 +54,24 @@ agentum terminal
 agentum new alpha --tool claude --dir ~/Developer/my-project --up
 ```
 
-The **desktop app** is a separate download (or `cargo tauri build` from `crates/agentum-desktop`). It boots `agentum-server` in-process, so a desktop session and a TUI session on the same machine share one SQLite store.
+### Desktop app (macOS)
+
+The **desktop app** boots `agentum-server` in-process, so a desktop session and a TUI session on the same machine share one SQLite store.
+
+```sh
+# Homebrew — recommended. Installs Agentum.app with no Gatekeeper warning.
+brew tap MateoCerquetella/tap
+brew trust MateoCerquetella/tap   # one-time — lets the cask clear the quarantine flag
+brew install --cask agentum       # later: brew upgrade --cask agentum (stays warning-free)
+```
+
+Or download the `.dmg` from the [latest release](https://github.com/MateoCerquetella/agentum/releases/latest). Agentum isn't Apple-notarized yet, so a direct download shows a *"developer cannot be verified"* warning on first launch. After dragging **Agentum.app** into Applications, clear it once:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Agentum.app
+```
+
+(From source: `cargo tauri build` from `crates/agentum-desktop`.)
 
 ### Control other machines (no second install)
 
