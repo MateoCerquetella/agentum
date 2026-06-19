@@ -71,6 +71,6 @@ export type FsFileContent = {
  * opening files in a remote SSH workspace, where the native local read would
  * ENOENT on the remote path.
  */
-export function fsReadFile(path: string, opts: { hostId: string }): Promise<FsFileContent> {
-  return getJson<FsFileContent>(`/api/fs/read${qs({ path, host_id: opts.hostId })}`)
+export function fsReadFile(path: string, opts?: { hostId?: string }): Promise<FsFileContent> {
+  return getJson<FsFileContent>(`/api/fs/read${qs({ path, host_id: opts?.hostId })}`)
 }

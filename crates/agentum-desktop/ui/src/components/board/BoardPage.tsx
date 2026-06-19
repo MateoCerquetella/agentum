@@ -115,15 +115,13 @@ function Card({
   )
 }
 
-/** The card whose live agent workspace is open in the drill-in. */
-type OpenWorkspace = { sessionId: string; cardKey: string; cardTitle: string }
-
 export default function BoardPage() {
   const [board, setBoard] = useState<GroupedBoard | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [startingId, setStartingId] = useState<number | null>(null)
-  const [workspace, setWorkspace] = useState<OpenWorkspace | null>(null)
+  // The card whose live agent workspace is open in the drill-in.
+  const [workspace, setWorkspace] = useState<BoardItem | null>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -146,11 +144,7 @@ export default function BoardPage() {
       try {
         const started = await startCard(item.id)
         if (started.session_id) {
-          setWorkspace({
-            sessionId: started.session_id,
-            cardKey: started.key,
-            cardTitle: started.title
-          })
+          setWorkspace(started)
         }
         await refresh()
       } catch (e) {
@@ -163,17 +157,13 @@ export default function BoardPage() {
   )
 
   const onOpen = useCallback((item: BoardItem) => {
-    if (item.session_id) {
-      setWorkspace({ sessionId: item.session_id, cardKey: item.key, cardTitle: item.title })
-    }
+    if (item.session_id) setWorkspace(item)
   }, [])
 
   if (workspace) {
     return (
       <CardWorkspace
-        sessionId={workspace.sessionId}
-        cardKey={workspace.cardKey}
-        cardTitle={workspace.cardTitle}
+        item={workspace}
         onBack={() => {
           setWorkspace(null)
           void refresh()
