@@ -1018,14 +1018,13 @@ function App(): React.JSX.Element {
     activeWorktreeId !== null &&
     !hasTabBar &&
     effectiveActiveTabExpanded
-  // Why: Activity and Space are full-page navigation surfaces — same
-  // treatment as Settings — so the worktree sidebar is removed for those views.
-  const showSidebar =
-    activeView !== 'settings' &&
-    activeView !== 'activity' &&
-    activeView !== 'skills' &&
-    activeView !== 'harness' &&
-    activeView !== 'goals'
+  // Why (Phase 1 nav shell, #48): the left rail must render on EVERY view so the
+  // app can never trap the user in a full-page takeover. This previously hid the
+  // rail for settings/activity/skills/harness/goals, stranding the user with no
+  // visible navigation (the only escape was a secret Cmd+B). The rail (nav +
+  // worktree list) now stays put on every view — the same way the `tasks` view
+  // already rendered alongside the sidebar.
+  const showSidebar = true
   // Why: only the terminal workspace replaces the full-width titlebar with
   // split-column chrome. Full-page navigation views keep the draggable app
   // titlebar so their page-level controls can live in that window strip.
