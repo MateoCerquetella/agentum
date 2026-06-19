@@ -1,7 +1,7 @@
 #!/bin/sh
 # agentum installer — one install, no "mode" question.
 #
-# curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh | sh
+# curl -fsSL https://github.com/mateocerquetella/agentum-tui/releases/latest/download/install.sh | sh
 #
 # There is only ever ONE install: this machine. It runs the agentum
 # daemon. To control OTHER machines you do NOT install agentum on them —
@@ -29,7 +29,7 @@
 set -eu
 
 # ── Configuration ──────────────────────────────────────────────
-REPO="mateocerquetella/agentum"
+REPO="mateocerquetella/agentum-tui"
 GH_API="https://api.github.com/repos/${REPO}/releases/latest"
 GH_DL="https://github.com/${REPO}/releases/download"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"

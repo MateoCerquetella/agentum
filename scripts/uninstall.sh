@@ -1,7 +1,7 @@
 #!/bin/sh
 # agentum uninstaller — reverses scripts/install.sh.
 #
-# curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/uninstall.sh | sh
+# curl -fsSL https://github.com/mateocerquetella/agentum-tui/releases/latest/download/uninstall.sh | sh
 #
 # Options (passed after -- when piping):
 #   sh -s -- --purge              # also remove the data directory (no prompt)

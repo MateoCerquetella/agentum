@@ -10,9 +10,9 @@
 
 > Rust control plane for AI coding agents. One binary, a fast TUI, and a **native desktop app (main client)** — fully native Tauri 2, no Electron.
 
-[![release](https://img.shields.io/github/v/release/mateocerquetella/agentum?display_name=tag)](https://github.com/mateocerquetella/agentum/releases)
-[![ci](https://github.com/mateocerquetella/agentum/actions/workflows/ci.yml/badge.svg)](https://github.com/mateocerquetella/agentum/actions/workflows/ci.yml)
-[![license](https://img.shields.io/github/license/mateocerquetella/agentum)](LICENSE)
+[![release](https://img.shields.io/github/v/release/mateocerquetella/agentum-tui?display_name=tag)](https://github.com/mateocerquetella/agentum-tui/releases)
+[![ci](https://github.com/mateocerquetella/agentum-tui/actions/workflows/ci.yml/badge.svg)](https://github.com/mateocerquetella/agentum-tui/actions/workflows/ci.yml)
+[![license](https://img.shields.io/github/license/mateocerquetella/agentum-tui)](LICENSE)
 
 ## The Story
 
@@ -38,10 +38,10 @@ One Rust binary spawns AI coding agents (Claude, Codex, Gemini, Cursor, Hermes, 
 
 ```sh
 # Install (interactive prompts for LAN exposure + autostart only)
-curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/mateocerquetella/agentum-tui/releases/latest/download/install.sh | sh
 
 # From source (installs the `agentum` command)
-cargo install --git https://github.com/mateocerquetella/agentum agentum-tui
+cargo install --git https://github.com/mateocerquetella/agentum-tui agentum-tui
 ```
 
 After install:
