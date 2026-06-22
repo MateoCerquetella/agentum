@@ -13,7 +13,8 @@ function countWorkspaces(count: number): number {
 }
 
 function branchDisplayName(worktree: Worktree): string {
-  return worktree.branch.replace(/^refs\/heads\//, '')
+  // branch is typed `string` but can be null at runtime (unresolved/SSH-down).
+  return (worktree.branch ?? '').replace(/^refs\/heads\//, '')
 }
 
 function pathBasename(pathValue: string): string {
