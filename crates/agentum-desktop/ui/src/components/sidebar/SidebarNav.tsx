@@ -1,5 +1,15 @@
 import React from 'react'
-import { Bell, Github, Gitlab, List, MessagesSquare, MonitorPlay, Search, Target } from 'lucide-react'
+import {
+  Columns3,
+  Github,
+  Gitlab,
+  List,
+  MessagesSquare,
+  Radar,
+  Search,
+  Target,
+  type LucideIcon
+} from 'lucide-react'
 import { useAppStore } from '@/store'
 import { useRepoMap } from '@/store/selectors'
 import { cn } from '@/lib/utils'
@@ -19,6 +29,66 @@ export function shouldShowAgentsButton(
   settings: Pick<GlobalSettings, 'experimentalActivity'> | null | undefined
 ): boolean {
   return settings?.experimentalActivity === true
+}
+
+/**
+ * A primary workflow rail item (Phase 1 nav shell, #48): icon + plain label + a
+ * one-line description, so every destination explains itself instead of relying
+ * on a tooltip the user has to discover ("nothing is explained" was the bug).
+ */
+function PrimaryNavItem({
+  icon: Icon,
+  label,
+  description,
+  active,
+  onClick,
+  badge,
+  soon
+}: {
+  icon: LucideIcon
+  label: string
+  description: string
+  active: boolean
+  onClick: () => void
+  badge?: number
+  soon?: boolean
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current={active ? 'page' : undefined}
+      className={cn(
+        'flex w-full items-start gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors',
+        active
+          ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+          : 'text-sidebar-foreground/70 hover:bg-sidebar-foreground/8'
+      )}
+    >
+      <Icon
+        className={cn('mt-0.5 size-4 shrink-0', !active && 'text-sidebar-foreground/40')}
+        strokeWidth={active ? 2.25 : 1.75}
+      />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="flex items-center gap-1.5">
+          <span className="text-[13px] font-medium tracking-tight">{label}</span>
+          {soon ? (
+            <span className="rounded-full border border-sidebar-foreground/20 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-sidebar-foreground/50">
+              Soon
+            </span>
+          ) : null}
+          {badge && badge > 0 ? (
+            <span className="ml-auto rounded-full bg-primary px-1.5 py-px text-[10px] font-semibold text-primary-foreground">
+              {badge}
+            </span>
+          ) : null}
+        </span>
+        <span className="truncate text-[11px] leading-tight text-sidebar-foreground/45">
+          {description}
+        </span>
+      </span>
+    </button>
+  )
 }
 
 const SidebarNav = React.memo(function SidebarNav() {
@@ -44,7 +114,6 @@ const SidebarNav = React.memo(function SidebarNav() {
   const linearStatus = useAppStore((s) => s.linearStatus)
   const linearStatusChecked = useAppStore((s) => s.linearStatusChecked)
   const checkLinearConnection = useAppStore((s) => s.checkLinearConnection)
-  const showAgentsButton = useAppStore((s) => shouldShowAgentsButton(s.settings))
   const preferredVisibleTaskProviders = React.useMemo(
     () => normalizeVisibleTaskProviders(rawVisibleTaskProviders),
     [rawVisibleTaskProviders]
@@ -118,12 +187,46 @@ const SidebarNav = React.memo(function SidebarNav() {
   const tasksActive = activeView === 'tasks'
   const activityActive = activeView === 'activity'
   const harnessActive = activeView === 'harness'
-  const hostBrowserActive = activeView === 'host-browser'
   const goalsActive = activeView === 'goals'
-  const activityUnreadCount = useActivityUnreadCount(showAgentsButton, 'sidebar-badge')
+  const boardActive = activeView === 'board'
+  // Why: Mission Control is now the always-on home, so its "needs you" badge is
+  // always tracked (no longer gated behind the old experimental Agents button).
+  const activityUnreadCount = useActivityUnreadCount(true, 'sidebar-badge')
 
   return (
     <div className="flex flex-col gap-0.5 px-2 pt-2 pb-1">
+      {/* Primary workflow rail (Phase 1 nav shell, #48): Mission Control → Chat
+          → Board mirrors the spec → board → agent pipeline. Settings lives in
+          the bottom toolbar, so the rail reads Home → Chat → Board → Settings
+          top-to-bottom. */}
+      <PrimaryNavItem
+        icon={Radar}
+        label="Mission Control"
+        description="Every agent you're running"
+        active={activityActive}
+        onClick={openActivityPage}
+        badge={activityUnreadCount}
+      />
+      <PrimaryNavItem
+        icon={MessagesSquare}
+        label="Chat"
+        description="Describe what you want → a spec"
+        active={harnessActive}
+        onClick={openHarnessPage}
+      />
+      <PrimaryNavItem
+        icon={Columns3}
+        label="Board"
+        description="Your Kanban of agent tickets"
+        active={boardActive}
+        onClick={() => setActiveView('board')}
+        soon
+      />
+
+      <div className="my-1 h-px bg-sidebar-foreground/8" aria-hidden />
+
+      {/* Secondary utilities: external task trackers, the goals pipeline, and
+          fuzzy search. Tasks + Goals fold into Board in Phase 2/3. */}
       {showTasksButton ? (
         <button
           type="button"
@@ -205,64 +308,6 @@ const SidebarNav = React.memo(function SidebarNav() {
           </span>
         </button>
       ) : null}
-      {showAgentsButton ? (
-        <button
-          type="button"
-          onClick={openActivityPage}
-          aria-current={activityActive ? 'page' : undefined}
-          className={cn(
-            'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight transition-colors',
-            activityActive
-              ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-              : 'text-sidebar-foreground/60 hover:bg-sidebar-foreground/8'
-          )}
-        >
-          <Bell
-            className={cn('size-4 shrink-0', !activityActive && 'text-sidebar-foreground/30')}
-            strokeWidth={activityActive ? 2.25 : 1.75}
-          />
-          <span className="flex-1">Agents</span>
-          {activityUnreadCount > 0 ? (
-            <span className="rounded-full bg-primary px-1.5 py-px text-[10px] font-semibold text-primary-foreground">
-              {activityUnreadCount}
-            </span>
-          ) : null}
-        </button>
-      ) : null}
-      <button
-        type="button"
-        onClick={openHarnessPage}
-        aria-current={harnessActive ? 'page' : undefined}
-        className={cn(
-          'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight transition-colors',
-          harnessActive
-            ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-            : 'text-sidebar-foreground/60 hover:bg-sidebar-foreground/8'
-        )}
-      >
-        <MessagesSquare
-          className={cn('size-4 shrink-0', !harnessActive && 'text-sidebar-foreground/30')}
-          strokeWidth={harnessActive ? 2.25 : 1.75}
-        />
-        <span className="flex-1">Chat</span>
-      </button>
-      <button
-        type="button"
-        onClick={() => setActiveView('host-browser')}
-        aria-current={hostBrowserActive ? 'page' : undefined}
-        className={cn(
-          'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight transition-colors',
-          hostBrowserActive
-            ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-            : 'text-sidebar-foreground/60 hover:bg-sidebar-foreground/8'
-        )}
-      >
-        <MonitorPlay
-          className={cn('size-4 shrink-0', !hostBrowserActive && 'text-sidebar-foreground/30')}
-          strokeWidth={hostBrowserActive ? 2.25 : 1.75}
-        />
-        <span className="flex-1">Host Browser</span>
-      </button>
       <button
         type="button"
         onClick={openGoalsPage}

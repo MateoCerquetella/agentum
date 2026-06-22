@@ -1,6 +1,6 @@
 {
-  "productName": "agentum",
-  "version": "0.17.2",
+  "productName": "Agentum",
+  "version": "0.18.0",
   "identifier": "dev.agentum.app",
   "build": {
     "frontendDist": "ui/dist",
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "agentum",
+        "title": "Agentum",
         "width": 1400,
         "height": 900,
         "minWidth": 800,

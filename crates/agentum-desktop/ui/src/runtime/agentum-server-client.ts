@@ -27,6 +27,10 @@ export type Session = {
   last_activity_at?: string | null
   tokens?: number | null
   cost?: number | null
+  /** Isolated worktree checkout for this session, when one was provisioned
+   *  (e.g. a board card-start). Absent → the agent runs in `workdir`. */
+  worktree_path?: string | null
+  worktree_branch?: string | null
 }
 
 // Wire shape of /api/agents (AgentInfo).

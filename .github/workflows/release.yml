@@ -42,14 +42,21 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04
             cross: true
+          # macOS MUST build `app` alongside `dmg`: the Tauri auto-updater
+          # artifact (the signed `*.app.tar.gz` + `.sig`) is emitted by the `app`
+          # bundler, NOT `dmg`. With `dmg` alone the installer shipped but no
+          # update bundle, so the release step's `emit` dropped both darwin
+          # platforms from latest.json and every macOS auto-update failed with
+          # "platform not found" (silently broken since the updater landed in
+          # v0.15.0). The dmg is still built for first-time downloads.
           - target: x86_64-apple-darwin
             runner: macos-14
             cross: false
-            desktop: dmg
+            desktop: app,dmg
           - target: aarch64-apple-darwin
             runner: macos-14
             cross: false
-            desktop: dmg
+            desktop: app,dmg
           # Windows x64. NSIS produces the .exe installer (like Orca's
           # orca-windows-setup.exe). The daemon shells out to tmux (no native
           # Windows port), so this ships as a remote client; local sessions need
@@ -351,6 +358,10 @@ jobs:
             found && /^## \[/ { exit }
             found { print }
           ' CHANGELOG.md > release-notes.md
+          # Append the macOS desktop install instructions (Homebrew + the
+          # quarantine-clear one-liner) so every release tells downloaders how to
+          # launch the un-notarized .app without the Gatekeeper bypass dance.
+          cat .github/release-macos-note.md >> release-notes.md
           echo "----"
           cat release-notes.md
 
@@ -412,3 +423,68 @@ jobs:
             dist/SHA256SUMS
             dist/install.sh
             dist/uninstall.sh
+
+  # Keep the Homebrew cask (MateoCerquetella/homebrew-tap) in lockstep with
+  # each release so `brew install --cask MateoCerquetella/tap/agentum` always
+  # fetches the just-published .dmg. The cask's postflight strips quarantine, so
+  # brew users never hit the un-notarized-app Gatekeeper warning.
+  homebrew:
+    name: bump homebrew cask
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update the Agentum cask in the tap
+        # Best-effort: a missing key (or any push failure) must never fail the
+        # release. GITHUB_TOKEN can't push to a different repo, so the tap is
+        # written over SSH with a deploy key scoped to MateoCerquetella/homebrew-tap
+        # (write-only on that one repo). Its private half is the
+        # HOMEBREW_TAP_DEPLOY_KEY secret; without it this step no-ops and the cask
+        # is bumped by hand.
+        continue-on-error: true
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          if [ -z "${DEPLOY_KEY:-}" ]; then
+            echo "::warning::HOMEBREW_TAP_DEPLOY_KEY not set — skipping cask bump for ${TAG}."
+            exit 0
+          fi
+          ver="${TAG#v}"
+          # The release job published SHA256SUMS (sha + filename per asset). Pull
+          # the two macOS .dmg digests from it instead of re-downloading the dmgs.
+          gh release download "$TAG" --repo "$REPO" --pattern SHA256SUMS --dir . --clobber
+          arm_sha="$(awk -v f="agentum-${ver}-macos-arm64.dmg" '$2 == f {print $1}' SHA256SUMS)"
+          x64_sha="$(awk -v f="agentum-${ver}-macos-x64.dmg"  '$2 == f {print $1}' SHA256SUMS)"
+          if [ -z "$arm_sha" ] || [ -z "$x64_sha" ]; then
+            echo "::warning::macOS .dmg checksums not found in SHA256SUMS — skipping cask bump."
+            exit 0
+          fi
+          # Route git over SSH using the scoped deploy key (IdentitiesOnly so it
+          # ignores any ambient agent keys; accept-new for github.com's host key).
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/tap_deploy
+          chmod 600 ~/.ssh/tap_deploy
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          tap="$(mktemp -d)"
+          git clone --depth 1 git@github.com:MateoCerquetella/homebrew-tap.git "$tap"
+          mkdir -p "$tap/Casks"
+          sed -e "s|__VERSION__|${ver}|g" \
+              -e "s|__ARM_SHA__|${arm_sha}|g" \
+              -e "s|__X64_SHA__|${x64_sha}|g" \
+              .github/agentum.cask.tmpl > "$tap/Casks/agentum.rb"
+          cd "$tap"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/agentum.rb
+          if git diff --cached --quiet; then
+            echo "Homebrew cask already at ${ver} — nothing to push."
+          else
+            git commit -m "agentum ${ver}"
+            git push origin HEAD
+            echo "Pushed Homebrew cask bump to ${ver}."
+          fi

@@ -436,13 +436,13 @@ export type UISlice = {
   acknowledgedAgentsByPaneKey: Record<string, number>
   acknowledgeAgents: (paneKeys: string[]) => void
   unacknowledgeAgents: (paneKeys: string[]) => void
-  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'host-browser' | 'goals'
-  previousViewBeforeTasks: 'terminal' | 'settings' | 'activity' | 'skills' | 'harness' | 'host-browser' | 'goals'
-  previousViewBeforeSettings: 'terminal' | 'tasks' | 'activity' | 'skills' | 'harness' | 'host-browser' | 'goals'
-  previousViewBeforeActivity: 'terminal' | 'settings' | 'tasks' | 'skills' | 'harness' | 'host-browser' | 'goals'
-  previousViewBeforeSkills: 'terminal' | 'settings' | 'tasks' | 'activity' | 'harness' | 'host-browser' | 'goals'
-  previousViewBeforeHarness: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'host-browser' | 'goals'
-  previousViewBeforeGoals: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'host-browser'
+  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'goals' | 'board'
+  previousViewBeforeTasks: 'terminal' | 'settings' | 'activity' | 'skills' | 'harness' | 'goals' | 'board'
+  previousViewBeforeSettings: 'terminal' | 'tasks' | 'activity' | 'skills' | 'harness' | 'goals' | 'board'
+  previousViewBeforeActivity: 'terminal' | 'settings' | 'tasks' | 'skills' | 'harness' | 'goals' | 'board'
+  previousViewBeforeSkills: 'terminal' | 'settings' | 'tasks' | 'activity' | 'harness' | 'goals' | 'board'
+  previousViewBeforeHarness: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'goals' | 'board'
+  previousViewBeforeGoals: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'board'
   setActiveView: (view: UISlice['activeView']) => void
   taskPageData: {
     preselectedRepoId?: string
@@ -544,6 +544,7 @@ export type UISlice = {
     | 'quick-open'
     | 'worktree-palette'
     | 'settings-command-palette'
+    | 'command-palette'
     | 'workspace-cleanup'
     | 'project-added'
     | 'worktree-visibility'
@@ -989,9 +990,10 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       }
     }),
   openActivityPage: () => {
-    if (get().settings?.experimentalActivity !== true) {
-      return
-    }
+    // Why (Phase 1 nav shell, #48): Mission Control (the activity view) is now
+    // the always-available home, not an experimental opt-in. The old
+    // `experimentalActivity` gate is intentionally gone so the Home rail button
+    // and every breadcrumb "Mission Control" link work regardless of settings.
     set((state) => ({
       activeView: 'activity',
       previousViewBeforeActivity:
@@ -1049,14 +1051,9 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     }))
   },
   closeSettingsPage: () =>
-    set((state) => {
-      const previousView =
-        state.previousViewBeforeSettings === 'activity' &&
-        state.settings?.experimentalActivity !== true
-          ? 'terminal'
-          : state.previousViewBeforeSettings
-      return { activeView: previousView }
-    }),
+    // Why: Mission Control (activity) is now always reachable, so Settings can
+    // always restore the view it was opened from — no activity→terminal fallback.
+    set((state) => ({ activeView: state.previousViewBeforeSettings })),
   settingsNavigationTarget: null,
   openSettingsTarget: (target) => set({ settingsNavigationTarget: target }),
   clearSettingsTarget: () => set({ settingsNavigationTarget: null }),
