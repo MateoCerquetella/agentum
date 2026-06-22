@@ -12,6 +12,7 @@ import { Columns3, Loader2, MessagesSquare, Plus, Send, Sparkles } from 'lucide-
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
 import { DrillInHeader } from '@/components/nav/DrillInHeader'
+import { type AgentInfo, listAgents } from '@/runtime/agentum-server-client'
 import {
   type BoardItem,
   type GoalWithChildren,
@@ -58,6 +59,28 @@ export default function ChatPage() {
   // thread can show a "drafting…" state until its first card lands.
   const [pendingGoalId, setPendingGoalId] = useState<number | null>(null)
   const streamRef = useRef<{ close: () => void } | null>(null)
+
+  // Which agent runs the planner (and the cards inherit). Populated from the
+  // installed-agents probe so the picker only offers tools that are on PATH.
+  const [agents, setAgents] = useState<AgentInfo[]>([])
+  const [selectedTool, setSelectedTool] = useState('claude')
+  useEffect(() => {
+    let alive = true
+    void listAgents()
+      .then((list) => {
+        if (!alive) return
+        setAgents(list)
+        // Default to the first available agent (prefer claude when present).
+        const available = list.filter((a) => a.available)
+        if (available.length && !available.some((a) => a.name === 'claude')) {
+          setSelectedTool(available[0].name)
+        }
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
 
   const refresh = useCallback(async () => {
     try {
@@ -115,7 +138,7 @@ export default function ChatPage() {
       setBusy(true)
       setError(null)
       try {
-        const { goal } = await createGoal({ title: text, workdir })
+        const { goal } = await createGoal({ title: text, workdir, tool: selectedTool })
         setDraft('')
         setSelectedId(goal.id)
         setPendingGoalId(goal.id)
@@ -126,7 +149,7 @@ export default function ChatPage() {
         setBusy(false)
       }
     },
-    [draft, repos, refresh]
+    [draft, repos, refresh, selectedTool]
   )
 
   const drafting = pendingGoalId === selected?.goal.id && cards.length === 0
@@ -309,6 +332,25 @@ export default function ChatPage() {
                 placeholder='Try "Add a CSV export to the board"…'
                 className="flex-1 bg-transparent text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none"
               />
+              {/* Agent picker — which agent drafts the backlog (and the cards
+                  inherit). Only installed agents are selectable. */}
+              <select
+                value={selectedTool}
+                onChange={(e) => setSelectedTool(e.target.value)}
+                aria-label="Agent that drafts the backlog"
+                title="Which agent runs the planner"
+                className="shrink-0 rounded-md border border-border/60 bg-background px-2 py-1 text-[12px] text-foreground/80 outline-none focus:border-foreground/40"
+              >
+                {(agents.length
+                  ? agents
+                  : [{ name: 'claude', available: true } as AgentInfo]
+                ).map((a) => (
+                  <option key={a.name} value={a.name} disabled={!a.available}>
+                    {a.name}
+                    {a.available ? '' : ' (not installed)'}
+                  </option>
+                ))}
+              </select>
               <button
                 type="submit"
                 disabled={busy || !draft.trim()}
