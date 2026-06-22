@@ -9,8 +9,13 @@ import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
 
 // ── Pure helper functions ────────────────────────────────────────────
 
-export function branchDisplayName(branch: string): string {
-  return branch.replace(/^refs\/heads\//, '')
+// `Worktree.branch` is typed `string`, but at runtime it can be null/undefined
+// for a worktree whose branch is unresolved (e.g. an SSH host that's
+// disconnected). Guard here — this helper is the single chokepoint every card
+// renders through, so a null branch must degrade to '' rather than crash the
+// whole worktree-list sidebar.
+export function branchDisplayName(branch: string | null | undefined): string {
+  return (branch ?? '').replace(/^refs\/heads\//, '')
 }
 
 export function prStateLabel(state: PRState): string {
