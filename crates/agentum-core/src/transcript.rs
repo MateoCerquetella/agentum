@@ -133,7 +133,17 @@ impl AgentTaskState {
 
 /// Translate a workdir into the directory Claude Code uses for its
 /// JSONL transcripts. Claude encodes the absolute path by replacing
-/// every `/` with `-` (e.g. `/home/me/proj` → `-home-me-proj`).
+/// every *non-alphanumeric* character with `-` (its `[^a-zA-Z0-9]`
+/// → `-`), e.g. `/home/me/proj` → `-home-me-proj`.
+///
+/// Replacing only `/` was a latent bug: worktrees live under
+/// `.claude-worktrees/`, so a worktree workdir like
+/// `…/proj/.claude-worktrees/feat` must encode to `…-proj--claude-worktrees-feat`
+/// (the `.` collapses with the leading `/` into `--`). A `/`-only
+/// replacement kept the dot and pointed at the wrong (empty) project
+/// dir; `ClaudeAdapter::launch` then mistook the live session for a
+/// first launch, re-issued `--session-id`, and Claude crashed with
+/// `Error: Session ID <X> is already in use` on every worktree restart.
 ///
 /// Returns `None` if `$HOME` is unavailable.
 pub fn project_dir_for(workdir: &Path) -> Option<PathBuf> {
@@ -143,7 +153,11 @@ pub fn project_dir_for(workdir: &Path) -> Option<PathBuf> {
     } else {
         return None;
     };
-    let s = abs.to_string_lossy().replace('/', "-");
+    let s: String = abs
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
     Some(home.join(".claude").join("projects").join(s))
 }
 
@@ -585,6 +599,42 @@ mod tests {
         assert_eq!(
             dir,
             PathBuf::from("/tmp/h/.claude/projects/-home-me-proj-x")
+        );
+        unsafe {
+            match saved {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
+
+    #[test]
+    fn project_dir_encodes_non_alnum_like_claude() {
+        // Regression for the "Session ID <X> is already in use" crash:
+        // Claude Code encodes the cwd by replacing EVERY non-alphanumeric
+        // char with `-` (its `[^a-zA-Z0-9] -> -`), not just `/`. Worktrees
+        // live under `.claude-worktrees/`, so the `.` matters: `/.claude`
+        // must become `--claude` (two dashes), or our transcript-existence
+        // check looks in the wrong dir, falls through to `--session-id`,
+        // and Claude rejects the already-claimed id on restart.
+        let saved = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", "/tmp/h");
+        }
+        let dir =
+            project_dir_for(Path::new("/home/me/proj/.claude-worktrees/feat-x")).unwrap();
+        assert_eq!(
+            dir,
+            PathBuf::from(
+                "/tmp/h/.claude/projects/-home-me-proj--claude-worktrees-feat-x"
+            ),
+            "`/.claude` must encode to `--claude` (dot -> dash), matching Claude"
+        );
+        // A space in the path is also non-alphanumeric and must become `-`.
+        let spaced = project_dir_for(Path::new("/home/me/My Proj")).unwrap();
+        assert_eq!(
+            spaced,
+            PathBuf::from("/tmp/h/.claude/projects/-home-me-My-Proj")
         );
         unsafe {
             match saved {
