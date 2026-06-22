@@ -667,7 +667,99 @@ impl Store {
             session_id: new.session_id,
             priority,
             parent_goal_id: new.parent_goal_id,
+            // Native cards carry no external link; the tracker-sync path
+            // (`upsert_board_item_by_external_url`) is the only writer of these.
+            external_url: None,
+            external_provider: None,
         })
+    }
+
+    /// Idempotent tracker sync: upsert a card keyed on `external_url`. If a
+    /// card already mirrors that issue, refresh its mutable mirror fields
+    /// (title/body/status/lbl/provider) in place; otherwise insert a fresh
+    /// card carrying the external link. This is what makes "fold the
+    /// GitHub/Linear Tasks view into the Board as a sync source" (#48)
+    /// re-runnable without duplicating cards — the external issue is the
+    /// source of truth for these fields, so a re-sync overwrites them.
+    ///
+    /// Self-contained (does not go through `create_board_item`) so the common
+    /// `NewBoardItem` path stays free of external-tracker concerns.
+    pub async fn upsert_board_item_by_external_url(
+        &self,
+        external_url: &str,
+        external_provider: Option<&str>,
+        title: &str,
+        body: Option<&str>,
+        status: &str,
+        lbl: Option<&str>,
+    ) -> Result<BoardItem> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+
+        if let Some(existing) = self.board_item_by_external_url(external_url).await? {
+            sqlx::query(
+                r#"UPDATE board_items
+                   SET title = ?, body = ?, status = ?, lbl = ?, external_provider = ?,
+                       updated_at = ?
+                   WHERE id = ?"#,
+            )
+            .bind(title)
+            .bind(body)
+            .bind(status)
+            .bind(lbl)
+            .bind(external_provider)
+            .bind(&now_s)
+            .bind(existing.id)
+            .execute(&self.pool)
+            .await?;
+            return self
+                .get_board_item(existing.id)
+                .await?
+                .ok_or_else(|| StoreError::NotFound(format!("board item {}", existing.id)));
+        }
+
+        // Insert a new external card. Mirrors create_board_item's key dance
+        // (empty key → derive AG-<id> post-insert) but writes the external link.
+        let mut tx = self.pool.begin().await?;
+        let result = sqlx::query(
+            r#"INSERT INTO board_items
+                (key, title, body, status, lbl, priority, created_at, updated_at,
+                 external_url, external_provider)
+               VALUES ('', ?, ?, ?, ?, 0, ?, ?, ?, ?)"#,
+        )
+        .bind(title)
+        .bind(body)
+        .bind(status)
+        .bind(lbl)
+        .bind(&now_s)
+        .bind(&now_s)
+        .bind(external_url)
+        .bind(external_provider)
+        .execute(&mut *tx)
+        .await?;
+        let id = result.last_insert_rowid();
+        let key = format!("AG-{id}");
+        sqlx::query("UPDATE board_items SET key = ? WHERE id = ?")
+            .bind(&key)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+
+        self.get_board_item(id)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(format!("board item {id}")))
+    }
+
+    /// Look up a board card by the external issue URL it mirrors (the sync
+    /// dedupe key). `None` when no card mirrors that issue yet.
+    pub async fn board_item_by_external_url(&self, url: &str) -> Result<Option<BoardItem>> {
+        let row = sqlx::query_as::<_, BoardItemRow>(
+            "SELECT * FROM board_items WHERE external_url = ?",
+        )
+        .bind(url)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(BoardItem::try_from).transpose()
     }
 
     pub async fn list_board_items(&self) -> Result<Vec<BoardItem>> {
@@ -2119,6 +2211,11 @@ struct BoardItemRow {
     /* ---- orchestrator goal binding (migration 0015) ---- */
     #[sqlx(default)]
     parent_goal_id: Option<i64>,
+    /* ---- external tracker link (migration 0022) ---- */
+    #[sqlx(default)]
+    external_url: Option<String>,
+    #[sqlx(default)]
+    external_provider: Option<String>,
 }
 
 impl TryFrom<BoardItemRow> for BoardItem {
@@ -2140,6 +2237,8 @@ impl TryFrom<BoardItemRow> for BoardItem {
             session_id: r.session_id,
             priority: r.priority,
             parent_goal_id: r.parent_goal_id,
+            external_url: r.external_url,
+            external_provider: r.external_provider,
         })
     }
 }
@@ -2247,6 +2346,66 @@ mod tests {
         // Leak the tempdir handle to keep it alive for the test duration.
         std::mem::forget(dir);
         Store::open(&p).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn upsert_by_external_url_is_idempotent_and_updates_in_place() {
+        let s = tmp_store().await;
+
+        // First sync of an issue inserts a card carrying its external link.
+        let first = s
+            .upsert_board_item_by_external_url(
+                "https://github.com/o/r/issues/7",
+                Some("github"),
+                "Add CSV export",
+                Some("body v1"),
+                "todo",
+                Some("github"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.external_url.as_deref(), Some("https://github.com/o/r/issues/7"));
+        assert_eq!(first.external_provider.as_deref(), Some("github"));
+        assert_eq!(first.title, "Add CSV export");
+
+        // Re-syncing the SAME issue must update the same row, not duplicate it.
+        let second = s
+            .upsert_board_item_by_external_url(
+                "https://github.com/o/r/issues/7",
+                Some("github"),
+                "Add CSV export (renamed)",
+                Some("body v2"),
+                "doing",
+                Some("github"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.id, first.id, "re-sync must hit the same card");
+        assert_eq!(second.title, "Add CSV export (renamed)", "tracker wins on re-sync");
+        assert_eq!(second.status, "doing");
+
+        // Exactly one card exists for that issue.
+        let all = s.list_board_items().await.unwrap();
+        let mirrors: Vec<_> = all
+            .iter()
+            .filter(|c| c.external_url.as_deref() == Some("https://github.com/o/r/issues/7"))
+            .collect();
+        assert_eq!(mirrors.len(), 1, "external sync must not duplicate cards");
+
+        // A different issue is a distinct card.
+        let other = s
+            .upsert_board_item_by_external_url(
+                "https://linear.app/t/issue/ABC-1",
+                Some("linear"),
+                "Linear thing",
+                None,
+                "todo",
+                Some("linear"),
+            )
+            .await
+            .unwrap();
+        assert_ne!(other.id, first.id);
+        assert_eq!(s.list_board_items().await.unwrap().len(), 2);
     }
 
     #[tokio::test]

@@ -7,8 +7,9 @@
 // the planner's child cards both render here; GitHub/Linear issues flow in as
 // ordinary board items too. Starting/moving a card is wired in a later step.
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Columns3, Loader2, Play, RefreshCw } from 'lucide-react'
+import { Columns3, ExternalLink, Loader2, Play, RefreshCw } from 'lucide-react'
 
+import { api } from '@/tauri'
 import { cn } from '@/lib/utils'
 import { DrillInHeader } from '@/components/nav/DrillInHeader'
 import {
@@ -72,9 +73,25 @@ function Card({
         <span className="rounded bg-foreground/[0.06] px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-foreground/45">
           {cardSource(item)}
         </span>
+        {item.external_url ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              void api.shell.openUrl(item.external_url)
+            }}
+            title={`Open ${item.external_provider ?? 'issue'} in your browser`}
+            className="ml-auto inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] text-foreground/45 hover:bg-foreground/8 hover:text-foreground/70"
+          >
+            <ExternalLink className="size-3" />
+          </button>
+        ) : null}
         {hasSession ? (
           <span
-            className="ml-auto inline-flex size-2 shrink-0 rounded-full bg-emerald-500"
+            className={cn(
+              'inline-flex size-2 shrink-0 rounded-full bg-emerald-500',
+              !item.external_url && 'ml-auto'
+            )}
             title="An agent session is bound to this card — click to watch live"
           />
         ) : null}
