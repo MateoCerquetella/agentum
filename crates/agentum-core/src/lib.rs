@@ -538,6 +538,14 @@ pub struct BoardItem {
     /// cards and for the goal card itself. Added in migration 0015.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_goal_id: Option<i64>,
+    /// Web URL of the external issue this card mirrors (the stable dedupe
+    /// key for tracker sync). NULL for native agentum cards. Migration 0022.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_url: Option<String>,
+    /// Source of an external card — `github` | `linear` | `gitlab`. Drives
+    /// the card's source badge + open-in-tracker link. NULL when native.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

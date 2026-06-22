@@ -23,8 +23,9 @@ use crate::error::ApiError;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/board", get(list).post(create))
-        // /reorder must come before /{id} so axum doesn't route the
-        // bare path through the id-extractor and 400 on "reorder".
+        // /sync + /reorder must come before /{id} so axum doesn't route the
+        // bare path through the id-extractor and 400 on "sync"/"reorder".
+        .route("/api/board/sync", post(sync))
         .route("/api/board/reorder", post(reorder))
         .route("/api/board/{id}", get(get_one).patch(patch).delete(delete))
         .route("/api/board/{id}/claim", post(claim))
@@ -175,6 +176,76 @@ async fn create(
             "parent_goal_id": item.parent_goal_id,
         })));
     Ok((StatusCode::CREATED, Json(item)))
+}
+
+/// One external issue to mirror onto the board. The desktop Tasks view fetches
+/// GitHub/Linear issues (Tauri-side) and POSTs them here; `external_url` is the
+/// idempotency key so re-syncing updates the same card.
+#[derive(Deserialize)]
+struct SyncIssue {
+    external_url: String,
+    /// `github` | `linear` | `gitlab`.
+    external_provider: Option<String>,
+    title: String,
+    #[serde(default)]
+    body: Option<String>,
+    /// Board column the issue maps to (todo/doing/review/done). Defaults to todo.
+    #[serde(default)]
+    status: Option<String>,
+    /// Source label so the card's foot badge reads "github"/"linear".
+    #[serde(default)]
+    lbl: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SyncRequest {
+    items: Vec<SyncIssue>,
+}
+
+#[derive(Serialize)]
+struct SyncResult {
+    /// The board cards after the sync (created or updated), in request order.
+    synced: Vec<BoardItem>,
+}
+
+/// `POST /api/board/sync` — fold GitHub/Linear issues into the board (#48).
+/// Idempotently upserts each issue as a card keyed on `external_url`, so the
+/// Tasks view becomes a sync source feeding the one board. Best-effort per
+/// item: a single bad issue is skipped (logged), the rest still sync.
+async fn sync(
+    State(state): State<AppState>,
+    Json(payload): Json<SyncRequest>,
+) -> Result<Json<SyncResult>, ApiError> {
+    let mut synced = Vec::with_capacity(payload.items.len());
+    for issue in &payload.items {
+        let status = issue.status.as_deref().unwrap_or("todo");
+        match state
+            .store
+            .upsert_board_item_by_external_url(
+                &issue.external_url,
+                issue.external_provider.as_deref(),
+                &issue.title,
+                issue.body.as_deref(),
+                status,
+                issue.lbl.as_deref(),
+            )
+            .await
+        {
+            Ok(item) => {
+                let _ = state.bus.send(Event::new("board.updated").with_payload(json!({
+                    "id": item.id,
+                    "key": item.key,
+                    "status": item.status,
+                    "external_url": item.external_url,
+                })));
+                synced.push(item);
+            }
+            Err(e) => {
+                tracing::warn!(url = %issue.external_url, "board sync skipped one issue: {e}");
+            }
+        }
+    }
+    Ok(Json(SyncResult { synced }))
 }
 
 async fn get_one(
@@ -601,6 +672,39 @@ mod tests {
         assert_eq!(code, StatusCode::CREATED);
         assert_eq!(json.0.status, "todo");
         assert_eq!(json.0.lbl.as_deref(), Some("feat"));
+    }
+
+    #[tokio::test]
+    async fn sync_folds_external_issues_idempotently() {
+        let state = fresh_state().await;
+        let issue = || SyncIssue {
+            external_url: "https://github.com/o/r/issues/12".into(),
+            external_provider: Some("github".into()),
+            title: "Fix the thing".into(),
+            body: Some("repro steps".into()),
+            status: Some("todo".into()),
+            lbl: Some("github".into()),
+        };
+
+        // First sync creates the card.
+        let r1 = sync(State(state.clone()), Json(SyncRequest { items: vec![issue()] }))
+            .await
+            .expect("sync ok");
+        assert_eq!(r1.0.synced.len(), 1);
+        assert_eq!(
+            r1.0.synced[0].external_url.as_deref(),
+            Some("https://github.com/o/r/issues/12")
+        );
+
+        // Second sync of the same issue updates in place — board still has 1 card.
+        let r2 = sync(State(state.clone()), Json(SyncRequest { items: vec![issue()] }))
+            .await
+            .expect("re-sync ok");
+        assert_eq!(r2.0.synced[0].id, r1.0.synced[0].id, "re-sync hits the same card");
+
+        let board = list(State(state.clone())).await.unwrap();
+        let total: usize = board.0.columns.values().map(|v| v.len()).sum();
+        assert_eq!(total, 1, "external sync must not duplicate board cards");
     }
 
     #[tokio::test]

@@ -1068,6 +1068,8 @@ mod tests {
             session_id: None,
             priority: 0,
             parent_goal_id: None,
+            external_url: None,
+            external_provider: None,
         }
     }
 
