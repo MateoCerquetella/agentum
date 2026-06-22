@@ -30,6 +30,14 @@ struct CreateGoalBody {
     body: Option<String>,
     #[serde(default)]
     workdir: Option<String>,
+    /// Which agent runs the planner (and which the goal's child cards inherit) —
+    /// e.g. "claude" | "codex" | "gemini". When absent, the planner config's
+    /// default tool is used. Chosen in the Chat intake's agent picker (#48).
+    #[serde(default)]
+    tool: Option<String>,
+    /// Optional model hint passed through to the chosen agent.
+    #[serde(default)]
+    model: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -60,6 +68,9 @@ async fn create_goal(
     // Step 2: create the goal BoardItem (lbl=goal, status=todo).
     // `board.created` is emitted inside `create_board_item` → our handler emits
     // `goal.created` separately for consumers that filter on goal-specific events.
+    // The chosen agent rides on the goal card so the planner's child cards
+    // inherit it (spawn_card_session resolves tool/model via parent_goal).
+    let tool = body.tool.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let new_item = NewBoardItem {
         title: body.title.clone(),
         body: body.body.clone(),
@@ -67,8 +78,8 @@ async fn create_goal(
         status: Some(target_status.into()),
         workdir: body.workdir.clone(),
         parent_goal_id: None,
-        tool: None,
-        model: None,
+        tool: tool.map(str::to_string),
+        model: body.model.clone(),
         session_id: None,
         priority: None,
     };
@@ -83,7 +94,11 @@ async fn create_goal(
 
     // Step 3: load planner config (tool + prompt, with bundled defaults).
     // D-12: reads from disk on every submit (no in-memory cache).
-    let cfg = planner::load_planner_config().await?;
+    // The Chat intake's agent picker overrides which agent runs the planner.
+    let mut cfg = planner::load_planner_config().await?;
+    if let Some(t) = tool {
+        cfg.tool = t.to_string();
+    }
 
     // Step 4: derive workdir. Body wins; else daemon cwd.
     let workdir = body.workdir.clone().unwrap_or_else(|| {
@@ -524,7 +539,7 @@ async fn spawn_planner_session(
         name: session_name.clone(),
         workdir: workdir_resolved,
         tool: cfg.tool.clone(),
-        model: None,
+        model: goal.model.clone(),
         flags: vec![],
         // card_id binds this session to the goal; the watchdog (plan 01-04)
         // uses this FK to decide which goal to recompute on session events.
@@ -665,6 +680,8 @@ mod tests {
                 title: "build OAuth".into(),
                 body: None,
                 workdir: None,
+                tool: None,
+                model: None,
             }),
         )
         .await
@@ -691,6 +708,8 @@ mod tests {
                 title: "event test".into(),
                 body: None,
                 workdir: None,
+                tool: None,
+                model: None,
             }),
         )
         .await
@@ -748,6 +767,8 @@ mod tests {
                 title: "missing workdir".into(),
                 body: None,
                 workdir: None,
+                tool: None,
+                model: None,
             }),
         )
         .await
@@ -792,6 +813,8 @@ mod tests {
                 title: "spawn fail test".into(),
                 body: None,
                 workdir: Some("/tmp".into()),
+                tool: None,
+                model: None,
             }),
         )
         .await

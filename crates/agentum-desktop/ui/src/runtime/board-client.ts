@@ -99,6 +99,10 @@ export function createGoal(input: {
   title: string
   body?: string
   workdir?: string
+  /** Which agent runs the planner (and the goal's child cards inherit), e.g.
+   *  "claude" | "codex" | "gemini". Omitted → planner-config default. */
+  tool?: string
+  model?: string
 }): Promise<CreateGoalResult> {
   return request('/api/board/goals', { method: 'POST', body: JSON.stringify(input) })
 }

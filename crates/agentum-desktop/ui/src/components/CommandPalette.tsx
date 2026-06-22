@@ -5,7 +5,6 @@ import {
   MessagesSquare,
   Radar,
   Settings as SettingsIcon,
-  Target,
   type LucideIcon
 } from 'lucide-react'
 
@@ -43,7 +42,6 @@ export default function CommandPalette(): React.JSX.Element {
   const setActiveView = useAppStore((s) => s.setActiveView)
   const openActivityPage = useAppStore((s) => s.openActivityPage)
   const openHarnessPage = useAppStore((s) => s.openHarnessPage)
-  const openGoalsPage = useAppStore((s) => s.openGoalsPage)
   const openTaskPage = useAppStore((s) => s.openTaskPage)
   const openSettingsPage = useAppStore((s) => s.openSettingsPage)
   const repos = useAppStore((s) => s.repos)
@@ -90,13 +88,6 @@ export default function CommandPalette(): React.JSX.Element {
       hint: 'GitHub / GitLab / Linear issues',
       icon: List,
       run: go(() => openTaskPage())
-    },
-    {
-      id: 'view-goals',
-      label: 'Goals',
-      hint: 'Turn a goal into feature cards',
-      icon: Target,
-      run: go(openGoalsPage)
     },
     {
       id: 'view-settings',
