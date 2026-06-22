@@ -22,13 +22,14 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::routes::forge::{ForgeKind, classify_remote, forge_get, token_for};
+use crate::routes::forge::{ForgeKind, classify_remote, forge_get, forge_send, token_for};
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/board/bindings", post(create_binding).get(list_bindings))
         .route("/api/board/bindings/{id}", delete(delete_binding))
         .route("/api/board/sync", post(sync))
+        .route("/api/board/{id}/push", post(push_card))
 }
 
 // ── Pure sync core (unit-tested; no I/O) ─────────────────────────────────────
@@ -140,6 +141,25 @@ pub(crate) fn parse_github_issues(v: &Value) -> Vec<ExternalIssue> {
             })
         })
         .collect()
+}
+
+/// Board column → tracker issue state for push-back (spec 014b). Inverse of
+/// the pull-side `state_to_status`: only the `done` column closes an issue;
+/// everything else (todo/doing/custom) keeps it open.
+fn status_to_state(status: &str) -> &'static str {
+    if status == "done" { "closed" } else { "open" }
+}
+
+/// Derive `owner/repo` from a GitHub issue URL
+/// (`https://github.com/owner/repo/issues/123`). The card stores its issue
+/// URL but not the repo, so push-back of a linked card recovers the repo from
+/// here rather than guessing a binding.
+fn parse_repo_from_issue_url(url: &str) -> Option<String> {
+    let rest = url.split("github.com/").nth(1)?;
+    let mut parts = rest.split('/');
+    let owner = parts.next().filter(|s| !s.is_empty())?;
+    let repo = parts.next().filter(|s| !s.is_empty())?;
+    Some(format!("{owner}/{repo}"))
 }
 
 // ── Bindings CRUD ────────────────────────────────────────────────────────────
@@ -295,6 +315,169 @@ async fn sync_one(state: &AppState, binding: &TrackerBinding) -> Result<SyncResu
     })
 }
 
+// ── Push (board → tracker, spec 014b) ────────────────────────────────────────
+
+#[derive(Deserialize, Default)]
+struct PushBody {
+    /// Target repo for a NATIVE card with no external ref yet (`owner/repo`).
+    #[serde(default)]
+    project: Option<String>,
+    /// Or pick the target from an existing binding.
+    #[serde(default)]
+    binding_id: Option<i64>,
+}
+
+/// `POST /api/board/{id}/push` — write one card to GitHub (014b).
+///
+/// - linked card (has external ref) → PATCH the issue (title/body/state).
+/// - native card → create an issue in the target repo, stamp the ref back
+///   onto the card (stable identity, so the next pull updates not re-creates),
+///   then close it if the card is already `done`.
+///
+/// Fail-loud: missing token/target/repo or a forge error aborts.
+async fn push_card(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    body: Option<Json<PushBody>>,
+) -> Result<Json<Value>, ApiError> {
+    let card = state
+        .store
+        .get_board_item(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("card {id}")))?;
+    let token = token_for(ForgeKind::Github)?;
+    let target_state = status_to_state(&card.status);
+
+    match (card.external_provider.as_deref(), card.external_id.as_deref()) {
+        // Linked GitHub card → update the existing issue.
+        (Some("github"), Some(number)) => {
+            let url = card.external_url.as_deref().unwrap_or_default();
+            let project = parse_repo_from_issue_url(url).ok_or_else(|| {
+                ApiError::BadRequest(format!("cannot derive owner/repo from issue url: {url}"))
+            })?;
+            let remote = classify_remote("github.com", project.clone())
+                .ok_or_else(|| ApiError::BadRequest(format!("bad github project: {project}")))?;
+            let api = format!("{}/repos/{}/issues/{}", remote.api_base, project, number);
+            let payload = json!({ "title": card.title, "body": card.body, "state": target_state });
+            forge_send(&remote, &token, reqwest::Method::PATCH, &api, &payload).await?;
+
+            // Refresh the sync marker so the next pull treats it as reconciled.
+            let synced = now_rfc3339()?;
+            state
+                .store
+                .set_card_external_ref(id, "github", number, url, &synced)
+                .await?;
+            let _ = state.bus.send(Event::new("board.push.completed").with_payload(json!({
+                "id": id, "action": "updated", "provider": "github",
+                "project": project, "external_id": number, "state": target_state,
+            })));
+            Ok(Json(json!({
+                "action": "updated", "provider": "github", "project": project,
+                "external_id": number, "state": target_state,
+            })))
+        }
+        // Non-github external provider → not supported in 014b.
+        (Some(p), _) => Err(ApiError::BadRequest(format!(
+            "push for provider '{p}' not supported in 014b (github only)"
+        ))),
+        // Native card → create a new issue in the resolved target repo.
+        (None, _) => {
+            let project = resolve_push_target(&state, body).await?;
+            let remote = classify_remote("github.com", project.clone())
+                .ok_or_else(|| ApiError::BadRequest(format!("bad github project: {project}")))?;
+            let create_url = format!("{}/repos/{}/issues", remote.api_base, project);
+            let payload = json!({ "title": card.title, "body": card.body });
+            let created =
+                forge_send(&remote, &token, reqwest::Method::POST, &create_url, &payload).await?;
+
+            let number = created
+                .get("number")
+                .and_then(|n| n.as_i64())
+                .ok_or_else(|| ApiError::Internal("github create issue: no number".into()))?;
+            let html_url = created
+                .get("html_url")
+                .and_then(|u| u.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let synced = now_rfc3339()?;
+            state
+                .store
+                .set_card_external_ref(id, "github", &number.to_string(), &html_url, &synced)
+                .await?;
+
+            // A done card's freshly-created issue opens open — close it to match.
+            if target_state == "closed" {
+                let close_url = format!("{}/repos/{}/issues/{}", remote.api_base, project, number);
+                forge_send(
+                    &remote,
+                    &token,
+                    reqwest::Method::PATCH,
+                    &close_url,
+                    &json!({ "state": "closed" }),
+                )
+                .await?;
+            }
+            let _ = state.bus.send(Event::new("board.push.completed").with_payload(json!({
+                "id": id, "action": "created", "provider": "github",
+                "project": project, "external_id": number, "url": html_url,
+            })));
+            Ok(Json(json!({
+                "action": "created", "provider": "github", "project": project,
+                "external_id": number, "url": html_url, "state": target_state,
+            })))
+        }
+    }
+}
+
+/// Resolve which repo a native card pushes to: explicit `project`, then
+/// `binding_id`, then the sole github binding. Ambiguity (0 or many) errors
+/// rather than guessing.
+async fn resolve_push_target(
+    state: &AppState,
+    body: Option<Json<PushBody>>,
+) -> Result<String, ApiError> {
+    if let Some(Json(b)) = &body {
+        if let Some(p) = b.project.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+            if !p.contains('/') {
+                return Err(ApiError::BadRequest("project must be 'owner/repo'".into()));
+            }
+            return Ok(p.to_string());
+        }
+        if let Some(bid) = b.binding_id {
+            return state
+                .store
+                .list_tracker_bindings()
+                .await?
+                .into_iter()
+                .find(|x| x.id == bid)
+                .map(|x| x.project)
+                .ok_or_else(|| ApiError::NotFound(format!("tracker binding {bid}")));
+        }
+    }
+    let gh: Vec<_> = state
+        .store
+        .list_tracker_bindings()
+        .await?
+        .into_iter()
+        .filter(|b| b.provider == "github")
+        .collect();
+    match gh.len() {
+        1 => Ok(gh.into_iter().next().unwrap().project),
+        0 => Err(ApiError::BadRequest(
+            "no github binding — specify project, or POST /api/board/bindings first".into(),
+        )),
+        _ => Err(ApiError::BadRequest(
+            "multiple github bindings — specify binding_id or project".into(),
+        )),
+    }
+}
+
+fn now_rfc3339() -> Result<String, ApiError> {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|e| ApiError::Internal(e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,5 +567,39 @@ mod tests {
     #[test]
     fn parse_github_issues_non_array_is_empty() {
         assert!(parse_github_issues(&json!({ "message": "Not Found" })).is_empty());
+    }
+
+    #[test]
+    fn status_to_state_only_done_closes() {
+        assert_eq!(status_to_state("done"), "closed");
+        assert_eq!(status_to_state("todo"), "open");
+        assert_eq!(status_to_state("doing"), "open");
+        assert_eq!(status_to_state("review"), "open"); // custom column stays open
+    }
+
+    #[test]
+    fn status_round_trips_with_pull_side() {
+        // Push then pull must be stable: done→closed→done, todo→open→todo.
+        assert_eq!(state_to_status(status_to_state("done")), "done");
+        assert_eq!(state_to_status(status_to_state("todo")), "todo");
+    }
+
+    #[test]
+    fn parse_repo_from_issue_url_extracts_owner_repo() {
+        assert_eq!(
+            parse_repo_from_issue_url("https://github.com/acme/api/issues/42").as_deref(),
+            Some("acme/api")
+        );
+        assert_eq!(
+            parse_repo_from_issue_url("https://github.com/o/r/issues/1").as_deref(),
+            Some("o/r")
+        );
+    }
+
+    #[test]
+    fn parse_repo_from_issue_url_rejects_non_github_or_malformed() {
+        assert!(parse_repo_from_issue_url("https://gitlab.com/o/r/issues/1").is_none());
+        assert!(parse_repo_from_issue_url("https://github.com/onlyowner").is_none());
+        assert!(parse_repo_from_issue_url("not a url").is_none());
     }
 }

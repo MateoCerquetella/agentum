@@ -811,6 +811,39 @@ impl Store {
         Ok(())
     }
 
+    /// Stamp a card's external linkage (spec 014b push-back). Used when a
+    /// native card is pushed to a tracker and gets a freshly-created issue —
+    /// recording the ref here gives the card a stable identity so the next
+    /// pull (014a) updates it in place instead of re-creating. Also used to
+    /// refresh `external_synced_at` after pushing an already-linked card.
+    pub async fn set_card_external_ref(
+        &self,
+        card_id: i64,
+        provider: &str,
+        external_id: &str,
+        url: &str,
+        synced_at: &str,
+    ) -> Result<()> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let affected = sqlx::query(
+            "UPDATE board_items SET external_provider = ?, external_id = ?, \
+             external_url = ?, external_synced_at = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(provider)
+        .bind(external_id)
+        .bind(url)
+        .bind(synced_at)
+        .bind(&now_s)
+        .bind(card_id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if affected == 0 {
+            return Err(StoreError::NotFound(card_id.to_string()));
+        }
+        Ok(())
+    }
+
     pub async fn patch_board_item(&self, id: i64, patch: BoardPatch) -> Result<BoardItem> {
         let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
         let body_set = patch.body.is_some();
@@ -3029,6 +3062,62 @@ mod tests {
         assert!(
             s.delete_tracker_binding(b.id).await.is_err(),
             "second delete must be NotFound"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_card_external_ref_stamps_native_card() {
+        let s = tmp_store().await;
+        // A native card with no external linkage.
+        let card = s
+            .create_board_item(NewBoardItem {
+                title: "local idea".into(),
+                body: None,
+                status: None,
+                lbl: Some("feat".into()),
+                tool: None,
+                workdir: None,
+                model: None,
+                session_id: None,
+                priority: None,
+                parent_goal_id: None,
+            })
+            .await
+            .unwrap();
+        assert!(card.external_provider.is_none());
+
+        // Push-back stamps its newly-created issue ref onto the card.
+        s.set_card_external_ref(
+            card.id,
+            "github",
+            "77",
+            "https://github.com/o/r/issues/77",
+            "2026-06-22T02:00:00Z",
+        )
+        .await
+        .unwrap();
+
+        let reloaded = s.get_board_item(card.id).await.unwrap().unwrap();
+        assert_eq!(reloaded.external_provider.as_deref(), Some("github"));
+        assert_eq!(reloaded.external_id.as_deref(), Some("77"));
+        assert_eq!(
+            reloaded.external_url.as_deref(),
+            Some("https://github.com/o/r/issues/77")
+        );
+        assert_eq!(
+            reloaded.external_synced_at.as_deref(),
+            Some("2026-06-22T02:00:00Z")
+        );
+
+        // Now it reconciles as an external ref (stable identity for re-sync).
+        let refs = s.list_external_refs("github").await.unwrap();
+        assert_eq!(refs, vec![(card.id, "77".to_string(), reloaded.status)]);
+
+        // Unknown card id is a NotFound, not a silent no-op.
+        assert!(
+            s.set_card_external_ref(999_999, "github", "1", "u", "t")
+                .await
+                .is_err()
         );
     }
 
