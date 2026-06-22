@@ -7,7 +7,6 @@ import {
   MessagesSquare,
   Radar,
   Search,
-  Target,
   type LucideIcon
 } from 'lucide-react'
 import { useAppStore } from '@/store'
@@ -97,7 +96,6 @@ const SidebarNav = React.memo(function SidebarNav() {
   const openActivityPage = useAppStore((s) => s.openActivityPage)
   const openHarnessPage = useAppStore((s) => s.openHarnessPage)
   const setActiveView = useAppStore((s) => s.setActiveView)
-  const openGoalsPage = useAppStore((s) => s.openGoalsPage)
   const openModal = useAppStore((s) => s.openModal)
   const activeView = useAppStore((s) => s.activeView)
   const repos = useAppStore((s) => s.repos)
@@ -187,7 +185,6 @@ const SidebarNav = React.memo(function SidebarNav() {
   const tasksActive = activeView === 'tasks'
   const activityActive = activeView === 'activity'
   const harnessActive = activeView === 'harness'
-  const goalsActive = activeView === 'goals'
   const boardActive = activeView === 'board'
   // Why: Mission Control is now the always-on home, so its "needs you" badge is
   // always tracked (no longer gated behind the old experimental Agents button).
@@ -308,23 +305,6 @@ const SidebarNav = React.memo(function SidebarNav() {
           </span>
         </button>
       ) : null}
-      <button
-        type="button"
-        onClick={openGoalsPage}
-        aria-current={goalsActive ? 'page' : undefined}
-        className={cn(
-          'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight transition-colors',
-          goalsActive
-            ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-            : 'text-sidebar-foreground/60 hover:bg-sidebar-foreground/8'
-        )}
-      >
-        <Target
-          className={cn('size-4 shrink-0', !goalsActive && 'text-sidebar-foreground/30')}
-          strokeWidth={goalsActive ? 2.25 : 1.75}
-        />
-        <span className="flex-1">Goals</span>
-      </button>
       <button
         type="button"
         onClick={() => openModal('worktree-palette')}
