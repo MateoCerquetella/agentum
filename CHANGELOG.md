@@ -4,6 +4,22 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] — 2026-06-22
+
+### Added
+- **Pick the planner agent in Chat (#48).** The Chat intake has an agent picker
+  (populated from `/api/agents`, installed agents only). It feeds the new
+  `tool`/`model` on `POST /api/board/goals`, which overrides the planner
+  config's tool for the planner session and rides on the goal card so the
+  planner's child cards inherit the chosen agent.
+
+### Removed
+- **The redundant Goals view (#48).** Per the design ("Board only — a card *is*
+  a goal/ticket; no separate Goals screen"), the Goals rail item, its page,
+  route, store actions, and ⌘K entry are gone. The goal concept stays
+  (Chat → board cards); only the duplicate screen + its erroring "Plan harness"
+  button were removed.
+
 ## [0.19.1] — 2026-06-22
 
 ### Fixed
