@@ -4,6 +4,25 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] — 2026-06-19
+
+### Added
+- **Desktop UX redesign — the Spec→Kanban→Agent pipeline (#48).** A three-phase
+  reshape of the desktop app around running and watching agents:
+  - **Navigation shell (Phase 1).** A persistent left rail that never disappears
+    (kills the old hidden-sidebar hardlock), Mission Control as the home, Back +
+    breadcrumb on every drill-in, and ⌘K to jump to any view or agent.
+  - **Board pipeline (Phase 2).** A real 4-column Kanban (Backlog → Building →
+    Review → Done) backed by `/api/board`. Starting a card now provisions a
+    **per-card git worktree** and launches the agent into it through the shared
+    spawn path (worktree isolation + prune-on-done), then drills into a live
+    agent workspace. Cards transition columns live off the global event bus.
+  - **Spec→tickets front door (Phase 3).** The Chat page is un-gated and rewired
+    to produce **board cards**: describe a feature → the planner decomposes it
+    into cards on the board (one source of truth). The card workspace gains
+    Chat / Code / Card tabs (live agent pane · read-only worktree browser · the
+    goal + verify status).
+
 ## [0.17.2] — 2026-06-18
 
 ### Added
@@ -17,9 +36,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and a phase strip in the desktop Harness board. Off by default
   (`roles=false`), so existing feature-only runs are unchanged.
 
+## [0.17.1] — 2026-06-18
+
 ### Fixed
-- Carries the v0.17.1 desktop black-screen fix (dropped the `manualChunks`
-  splitting that blanked the app on load) into the develop release line.
+- **Desktop app black-screened on launch (regression in 0.17.0).** The
+  `manualChunks` config added for startup-chunk hygiene pinned React-dependent
+  libraries (`react-markdown`, `@tiptap`/`prosemirror`, `mermaid`) into named
+  vendor chunks while React stayed in the eager entry chunk. That created an
+  import cycle, so a vendor chunk evaluated before React was initialized and its
+  top-level `React.Activity = …` (React 19) threw — aborting the entire entry
+  module graph and leaving `#root` empty (black window). Removed the hand-authored
+  `manualChunks`; Rollup's automatic code-splitting (driven by the existing
+  `lazy()` boundaries) keeps the heavy libs off the eager chunk and orders module
+  evaluation correctly. (#38)
 
 ## [0.17.0] — 2026-06-18
 

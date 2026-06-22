@@ -24,6 +24,23 @@ export type BoardItem = {
   /** Set on child cards; points at the parent goal's `id`. */
   parent_goal_id?: number | null
   priority: number
+  /** Web URL of the external issue this card mirrors (GitHub/Linear), when the
+   *  card came from a tracker sync. Absent for native agentum cards. */
+  external_url?: string | null
+  /** `github` | `linear` | `gitlab` — drives the source badge + open link. */
+  external_provider?: string | null
+}
+
+/** One external issue to fold onto the board via `POST /api/board/sync`. */
+export type SyncIssueInput = {
+  external_url: string
+  external_provider?: string
+  title: string
+  body?: string
+  /** Board column (todo/doing/review/done). Defaults to todo server-side. */
+  status?: string
+  /** Source label for the card foot badge, e.g. 'github' / 'linear'. */
+  lbl?: string
 }
 
 /** `GET /api/board` response — items grouped by status column. */
@@ -106,6 +123,16 @@ export function moveCard(id: number, status: string): Promise<BoardItem> {
  */
 export function startCard(id: number): Promise<BoardItem> {
   return moveCard(id, 'doing')
+}
+
+/**
+ * `POST /api/board/sync` — fold GitHub/Linear issues onto the board (#48).
+ * Idempotently upserts each issue as a card keyed on `external_url`, so the
+ * Tasks view becomes a sync source feeding the one board (re-syncing updates
+ * the same cards instead of duplicating them). Returns the synced cards.
+ */
+export function syncExternalIssues(items: SyncIssueInput[]): Promise<{ synced: BoardItem[] }> {
+  return request('/api/board/sync', { method: 'POST', body: JSON.stringify({ items }) })
 }
 
 /** Handle for the live board event subscription. */
