@@ -259,6 +259,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::board_goals::router())
         .merge(routes::board_links::router())
         .merge(routes::board_rules::router())
+        .merge(routes::board_sync::router())
         .merge(routes::notes::router())
         .merge(routes::preferences::router())
         .merge(routes::preflight::router())

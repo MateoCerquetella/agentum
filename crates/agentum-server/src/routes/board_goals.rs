@@ -693,6 +693,10 @@ mod tests {
             session_id: None,
             priority: 0,
             parent_goal_id: None,
+            external_provider: None,
+            external_id: None,
+            external_url: None,
+            external_synced_at: None,
         }
     }
 

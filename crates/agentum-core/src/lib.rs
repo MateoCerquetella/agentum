@@ -538,6 +538,39 @@ pub struct BoardItem {
     /// cards and for the goal card itself. Added in migration 0015.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_goal_id: Option<i64>,
+    /// External tracker linkage (migration 0022, spec 014). When a card
+    /// mirrors a GitHub/GitLab/Linear issue these carry the provider
+    /// (`github` | `gitlab` | `linear`), the provider-native id (GitHub
+    /// issue number as text), and the issue web URL — so a re-sync updates
+    /// the existing card instead of duplicating it, and the UI can deep-link
+    /// out. NULL for native cards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_url: Option<String>,
+    /// RFC3339 timestamp of the last sync that touched this card. Kept as a
+    /// string (not `OffsetDateTime`) since it round-trips straight from the
+    /// `external_synced_at` TEXT column and is only ever displayed/compared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_synced_at: Option<String>,
+}
+
+/// A durable binding from the board to an external issue tracker
+/// (spec 014). `project` is `owner/repo` for GitHub. The sync engine reads
+/// these to know which tracker(s) to pull/push. Added in migration 0022.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackerBinding {
+    pub id: i64,
+    /// `github` (014a) | `gitlab` | `linear` (later slices).
+    pub provider: String,
+    /// `owner/repo` for GitHub.
+    pub project: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
