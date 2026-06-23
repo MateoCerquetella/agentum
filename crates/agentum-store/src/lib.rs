@@ -361,6 +361,11 @@ impl Store {
             worktree_path: wt_path,
             worktree_branch: wt_branch,
             worktree_base_ref: wt_base,
+            // A freshly-created session has not been launched yet, so it has no
+            // provisioned endpoint and nothing to reconnect. Recorded at spawn.
+            provisioned_api_base: None,
+            provisioned_token_hash: None,
+            provisioned_needs_reconnect: false,
         })
     }
 
@@ -494,6 +499,57 @@ impl Store {
         )
         .bind(status.as_str())
         .bind(tmux_target)
+        .bind(now_s)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if affected == 0 {
+            return Err(StoreError::NotFound(id.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Record what a session was provisioned with — the live `api_base` URL +
+    /// hex token hash its MCP config/env were written against. Also clears the
+    /// `provisioned_needs_reconnect` flag, since by definition the session is now
+    /// current. Called at spawn (Local only) and after the boot drift scan
+    /// rewrites a session. NotFound when the row is gone.
+    pub async fn set_session_provisioned(
+        &self,
+        id: Uuid,
+        api_base: Option<&str>,
+        token_hash: Option<&str>,
+    ) -> Result<()> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let affected = sqlx::query(
+            "UPDATE sessions SET provisioned_api_base = ?, provisioned_token_hash = ?, \
+             provisioned_needs_reconnect = 0, updated_at = ? WHERE id = ?",
+        )
+        .bind(api_base)
+        .bind(token_hash)
+        .bind(now_s)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if affected == 0 {
+            return Err(StoreError::NotFound(id.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Mark a session "endpoint drifted / needs reconnect". Set by the boot drift
+    /// scan after it rewrites a live session's config+env to the current endpoint:
+    /// the running agent only re-reads its MCP config at launch, so it must
+    /// reconnect to pick up the change. The flag survives a restart (it's a
+    /// column) and rides along in the session JSON so the UI can surface it.
+    /// NotFound when the row is gone.
+    pub async fn flag_session_needs_reconnect(&self, id: Uuid) -> Result<()> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let affected = sqlx::query(
+            "UPDATE sessions SET provisioned_needs_reconnect = 1, updated_at = ? WHERE id = ?",
+        )
         .bind(now_s)
         .bind(id.to_string())
         .execute(&self.pool)
@@ -2287,6 +2343,13 @@ struct SessionRow {
     #[sqlx(default)]
     #[allow(dead_code)]
     hook_events_enabled: i64,
+    /* ---- provisioned endpoint drift tracking (migration 0023) ---- */
+    #[sqlx(default)]
+    provisioned_api_base: Option<String>,
+    #[sqlx(default)]
+    provisioned_token_hash: Option<String>,
+    #[sqlx(default)]
+    provisioned_needs_reconnect: i64,
 }
 
 #[derive(Debug, FromRow)]
@@ -2501,6 +2564,9 @@ impl TryFrom<SessionRow> for Session {
             worktree_path: r.worktree_path,
             worktree_branch: r.worktree_branch,
             worktree_base_ref: r.worktree_base_ref,
+            provisioned_api_base: r.provisioned_api_base,
+            provisioned_token_hash: r.provisioned_token_hash,
+            provisioned_needs_reconnect: r.provisioned_needs_reconnect != 0,
         })
     }
 }
@@ -2650,7 +2716,10 @@ mod tests {
         assert_eq!(b.id, a.id, "same card id — no duplicate");
         assert_eq!(b.title, "Add login (v2)");
         assert_eq!(b.status, "done");
-        assert_eq!(b.external_synced_at.as_deref(), Some("2026-06-22T01:00:00Z"));
+        assert_eq!(
+            b.external_synced_at.as_deref(),
+            Some("2026-06-22T01:00:00Z")
+        );
 
         // Exactly one external card exists for the provider.
         let refs = s.list_external_refs("github").await.unwrap();
@@ -3520,6 +3589,65 @@ mod tests {
         s.update_status(sess.id, Status::Running).await.unwrap();
         let got = s.get_session_by_id(sess.id).await.unwrap().unwrap();
         assert_eq!(got.status, Status::Running);
+    }
+
+    #[tokio::test]
+    async fn provisioned_endpoint_round_trips_and_flag_toggles() {
+        // S3: the migration-0023 columns persist + read back, the setter clears
+        // the flag, and the flag setter raises it. Also implicitly verifies the
+        // migration applies cleanly (tmp_store runs all migrations on open).
+        let s = tmp_store().await;
+        let sess = make_session(&s, "drift").await;
+
+        // Fresh session: nothing recorded, not flagged.
+        assert_eq!(sess.provisioned_api_base, None);
+        assert_eq!(sess.provisioned_token_hash, None);
+        assert!(!sess.provisioned_needs_reconnect);
+
+        // Record an endpoint → reads back; flag stays clear.
+        s.set_session_provisioned(sess.id, Some("http://127.0.0.1:8822"), Some("hashA"))
+            .await
+            .unwrap();
+        let got = s.get_session_by_id(sess.id).await.unwrap().unwrap();
+        assert_eq!(
+            got.provisioned_api_base.as_deref(),
+            Some("http://127.0.0.1:8822")
+        );
+        assert_eq!(got.provisioned_token_hash.as_deref(), Some("hashA"));
+        assert!(!got.provisioned_needs_reconnect);
+
+        // Flag it → reads back true, recorded endpoint untouched.
+        s.flag_session_needs_reconnect(sess.id).await.unwrap();
+        let got = s.get_session_by_id(sess.id).await.unwrap().unwrap();
+        assert!(got.provisioned_needs_reconnect);
+        assert_eq!(
+            got.provisioned_api_base.as_deref(),
+            Some("http://127.0.0.1:8822")
+        );
+
+        // Re-provisioning to a new endpoint clears the flag (the session is current
+        // again) and overwrites base+hash.
+        s.set_session_provisioned(sess.id, Some("http://127.0.0.1:60102"), Some("hashB"))
+            .await
+            .unwrap();
+        let got = s.get_session_by_id(sess.id).await.unwrap().unwrap();
+        assert_eq!(
+            got.provisioned_api_base.as_deref(),
+            Some("http://127.0.0.1:60102")
+        );
+        assert_eq!(got.provisioned_token_hash.as_deref(), Some("hashB"));
+        assert!(!got.provisioned_needs_reconnect);
+
+        // Both methods are NotFound on a missing row.
+        let ghost = Uuid::new_v4();
+        assert!(matches!(
+            s.set_session_provisioned(ghost, None, None).await,
+            Err(StoreError::NotFound(_))
+        ));
+        assert!(matches!(
+            s.flag_session_needs_reconnect(ghost).await,
+            Err(StoreError::NotFound(_))
+        ));
     }
 
     /// End-to-end smoke for the Phase 1 orchestrator schema additions:

@@ -16,8 +16,8 @@
 //! no-token path by isolating the forge-token store under an empty
 //! `AGENTUM_HOME`. Env mutations are serialised behind `ENV_LOCK`.
 
-use std::sync::{Mutex, MutexGuard};
 use std::sync::Arc;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use agentum_core::Event;

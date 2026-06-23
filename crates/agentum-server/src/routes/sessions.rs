@@ -702,7 +702,279 @@ pub(crate) async fn spawn_agent_into_pane(
         .store
         .update_status_and_target(session.id, Status::Running, Some(target))
         .await?;
+
+    // Record what this session was provisioned with so the boot drift scan can
+    // later tell whether the live endpoint moved (Local only — SSH sessions are
+    // best-effort and reach agentum over a reverse tunnel, not the embedded base).
+    // Best-effort: a failed record must never fail the spawn.
+    if matches!(host.kind, HostKind::Local) {
+        let hash = crate::mcp_provision::token_hash(state.mcp_token.as_str());
+        let _ = state
+            .store
+            .set_session_provisioned(session.id, state.api_base_url.as_deref(), Some(&hash))
+            .await;
+    }
     Ok(())
+}
+
+/// Outcome of a [`reprovision_session`] pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reprovision {
+    /// At least one config/env leg wrote new state for the current endpoint.
+    Rewritten,
+    /// Nothing was rewritten — endpoint couldn't be resolved (SSH tunnel down)
+    /// or there was nothing to write for this tool/host.
+    Skipped,
+}
+
+/// The `AGENTUM_*` env to re-apply to a live pane when the endpoint drifts.
+/// Pure (no I/O) so the URL→env mapping is unit-testable without a tmux mock.
+///
+/// Mirrors the *connection* half of [`pane_env`] but DELIBERATELY omits the hook
+/// vars unless the caller still holds the session's in-memory hook token: a
+/// re-provision must not mint a fresh hook token (that would orphan the agent's
+/// already-exported `AGENTUM_HOOK_TOKEN`). When `hook_token` is `None` we only
+/// re-apply the API URL + orchestration handle.
+fn reprovision_env(
+    api_base: Option<&str>,
+    session_id: Uuid,
+    session_name: &str,
+    hook_token: Option<&str>,
+) -> Vec<(String, String)> {
+    match hook_token {
+        Some(tok) => pane_env(api_base, session_id, session_name, tok),
+        None => {
+            let base = api_base.unwrap_or("http://127.0.0.1:8822");
+            vec![
+                ("AGENTUM_API_URL".to_string(), base.to_string()),
+                (
+                    "AGENTUM_TERMINAL_HANDLE".to_string(),
+                    session_name.to_string(),
+                ),
+            ]
+        }
+    }
+}
+
+/// Re-provision a session's **agentum** MCP wiring to the *current* `state`
+/// endpoint, without recreating the session. Rewrites the launch-arg combined
+/// config (`<state_dir>/mcp.json`) and any file-based agent config, and re-applies
+/// the `AGENTUM_*` env to the live tmux pane. Every leg is best-effort
+/// (log-and-continue): a failure here must never bubble up to 500 a `/start`.
+///
+/// This intentionally does NOT call the full [`crate::mcp_provision::provision`]
+/// (that re-spawns Playwright/CDP — N `npx` launches); it rewrites the agentum
+/// entry only. tmux `set-environment` only affects *future* pane children, so the
+/// already-running agent still needs to reconnect to pick up the new endpoint —
+/// the rewrite makes its config current for that reconnect; we never kill it.
+///
+/// SSH hosts are best-effort, Local-record-only in v1: if the reverse tunnel
+/// can't be resolved we return [`Reprovision::Skipped`] rather than erroring.
+pub(crate) async fn reprovision_session(
+    state: &AppState,
+    session: &Session,
+    host: &Host,
+) -> Reprovision {
+    // 1. Resolve the endpoint this session's agent should reach agentum at.
+    let url = match &host.kind {
+        HostKind::Local => {
+            let base = state
+                .api_base_url
+                .as_deref()
+                .unwrap_or("http://127.0.0.1:8822");
+            format!("{base}/mcp")
+        }
+        HostKind::Ssh { .. } => match crate::mcp_provision::local_mcp_port(state) {
+            Some(mac_port) => {
+                match crate::host_runtime::ensure_reverse_tunnel(host, mac_port).await {
+                    Ok(host_port) => format!("http://127.0.0.1:{host_port}/mcp"),
+                    Err(e) => {
+                        tracing::warn!(session = %session.id, "reprovision: reverse tunnel unavailable; skipping ({e})");
+                        return Reprovision::Skipped;
+                    }
+                }
+            }
+            None => {
+                tracing::warn!(session = %session.id, "reprovision: no embedded api_base_url for SSH host; skipping");
+                return Reprovision::Skipped;
+            }
+        },
+    };
+
+    let mut rewrote = false;
+
+    // 2. Launch-arg config: rewrite the agentum-only combined config in place.
+    //    Local → the stable `<state_dir>/mcp.json`; SSH Claude → the host's
+    //    `/tmp/agentum-mcp-{id}.json`; SSH Codex injects inline, nothing to write.
+    let servers = vec![crate::mcp_provision::agentum_server(state, &url)];
+    match &host.kind {
+        HostKind::Local => match crate::mcp_provision::write_combined_config(&servers) {
+            Ok(_) => rewrote = true,
+            Err(e) => {
+                tracing::warn!(session = %session.id, "reprovision: could not rewrite mcp.json: {e:#}")
+            }
+        },
+        HostKind::Ssh { .. } if session.tool == "claude" => {
+            let host_cfg = format!("/tmp/agentum-mcp-{}.json", session.id);
+            let json = crate::mcp_provision::config_json(&servers);
+            match crate::host_runtime::write_remote_file(host, &host_cfg, &json).await {
+                Ok(()) => rewrote = true,
+                Err(e) => {
+                    tracing::warn!(session = %session.id, "reprovision: could not rewrite remote MCP config: {e}")
+                }
+            }
+        }
+        HostKind::Ssh { .. } => { /* Codex inline `-c`: nothing to rewrite */ }
+    }
+
+    // 3. File-based agents (Cursor/Gemini/OpenCode): merge the agentum server into
+    //    the project config (no-op for claude/codex; host-aware; preserves the
+    //    user's own servers).
+    if crate::mcp_provision::agent_mcp_file(&session.tool).is_some() {
+        crate::mcp_provision::write_agent_project_config(
+            state,
+            host,
+            session.effective_cwd(),
+            &session.tool,
+            &url,
+        )
+        .await;
+        rewrote = true;
+    }
+
+    // 4. Live pane env: re-apply the AGENTUM_* connection vars to the pane so
+    //    *future* commands in it (and a reconnect) see the current endpoint.
+    //    Reuse the in-memory hook token if present; never mint a fresh one.
+    let hook_token = state.hook_tokens.lock().unwrap().get(&session.id).cloned();
+    let target = tmux_target(session);
+    for (k, v) in reprovision_env(
+        state.api_base_url.as_deref(),
+        session.id,
+        &session.name,
+        hook_token.as_deref(),
+    ) {
+        if let Err(e) = crate::host_runtime::set_pane_env(host, &target, &k, &v).await {
+            tracing::warn!(session = %session.id, "reprovision: set_pane_env {k} failed: {e}");
+        } else {
+            rewrote = true;
+        }
+    }
+
+    if rewrote {
+        Reprovision::Rewritten
+    } else {
+        Reprovision::Skipped
+    }
+}
+
+/// Has a session's *recorded* provisioned endpoint drifted from the live one?
+/// Drift = the base URL moved OR the `/mcp` token rotated (hash differs). Pure so
+/// the comparison is unit-testable without a store. `rec_base == None` is handled
+/// by the caller (never provisioned → not drift); here a recorded base that
+/// differs, or a recorded hash that doesn't match the live hash, is drift.
+fn endpoint_drifted(
+    rec_base: &str,
+    rec_hash: Option<&str>,
+    live_base: &str,
+    live_hash: &str,
+) -> bool {
+    rec_base != live_base || rec_hash != Some(live_hash)
+}
+
+/// R3: at boot, re-sync any *running* session whose recorded provisioned endpoint
+/// has drifted from the live one. R1+R2 keep the port+token stable across the
+/// common restart, so this is normally a no-op; it catches the residual case
+/// where the persisted port was taken and the server fell back to an ephemeral
+/// one (the endpoint moved out from under live sessions).
+///
+/// Spawned once inside [`crate::spawn_background_workers`] AFTER the live
+/// `state.mcp_token` and `state.api_base_url` are final, so it reads the
+/// authoritative values. Every leg is best-effort; this never blocks boot and
+/// never errors out.
+///
+/// Scope (per PM ruling — v1 is Local-only, conservative):
+/// - Standalone daemon (`api_base_url == None`) → skip entirely (no embedded
+///   endpoint to drift from).
+/// - Local hosts only; SSH sessions are best-effort and recorded nowhere.
+/// - Skip rows with no recorded endpoint (never provisioned / not Local).
+/// - Skip rows that aren't drifted (recorded == live).
+/// - Gate on `has_session(...)==Ok(true)`: a Running-but-dead row is the
+///   watchdog's to reconcile — we must not touch a pane that no longer exists.
+///
+/// For each drifted+alive session: rewrite its config/env to the live endpoint,
+/// re-record the provisioned endpoint, set the `needs_reconnect` flag (the live
+/// agent only re-reads MCP config at launch, so it must reconnect), and emit a
+/// `session.endpoint_drifted` bus event for any connected UI.
+pub(crate) async fn boot_drift_rescan(state: AppState) {
+    let Some(live_base) = state.api_base_url.as_deref() else {
+        return; // standalone serve(): no embedded endpoint, nothing can drift
+    };
+    let live_hash = crate::mcp_provision::token_hash(state.mcp_token.as_str());
+
+    let running = match state.store.list_sessions(Some(Status::Running)).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("boot drift rescan: could not list running sessions: {e}");
+            return;
+        }
+    };
+
+    for session in running {
+        let host = match load_host_for_session(&state, &session).await {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!(session = %session.id, "boot drift rescan: host load failed: {e}");
+                continue;
+            }
+        };
+        // Local-only in v1.
+        if !matches!(host.kind, HostKind::Local) {
+            continue;
+        }
+        // Nothing recorded → never provisioned here; leave it alone.
+        let Some(rec_base) = session.provisioned_api_base.as_deref() else {
+            continue;
+        };
+        // Drift = endpoint URL moved OR the token rotated.
+        if !endpoint_drifted(
+            rec_base,
+            session.provisioned_token_hash.as_deref(),
+            live_base,
+            &live_hash,
+        ) {
+            continue;
+        }
+        // Don't touch a Running-but-dead row: if the pane is gone the watchdog
+        // owns reconciling its status; re-provisioning a corpse is pointless and
+        // would set a misleading needs-reconnect flag.
+        let target = tmux_target(&session);
+        match crate::host_runtime::has_session(&host, &target).await {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(e) => {
+                tracing::warn!(session = %session.id, "boot drift rescan: has_session probe failed: {e}");
+                continue;
+            }
+        }
+
+        tracing::info!(
+            session = %session.id,
+            "endpoint drifted (recorded {rec_base} → live {live_base}); re-provisioning"
+        );
+        if reprovision_session(&state, &session, &host).await == Reprovision::Rewritten {
+            // Re-record the now-current endpoint (this also clears the flag), then
+            // raise the needs-reconnect flag: the live agent must reconnect to use
+            // the rewritten config. Order matters — flag AFTER the record.
+            let _ = state
+                .store
+                .set_session_provisioned(session.id, Some(live_base), Some(&live_hash))
+                .await;
+            let _ = state.store.flag_session_needs_reconnect(session.id).await;
+            let _ = state.bus.send(
+                Event::new("session.endpoint_drifted").with_session(session.id, session.name),
+            );
+        }
+    }
 }
 
 async fn start(
@@ -742,6 +1014,24 @@ async fn start(
                 .store
                 .update_status_and_target(id, Status::Running, Some(&target))
                 .await?;
+        }
+        // R4: the live endpoint may have drifted from what this session was
+        // provisioned with (R1+R2 keep it stable across the common restart, but a
+        // forced ephemeral rebind still moves it). Rewrite the MCP config + pane
+        // env to the current endpoint before returning. Best-effort: discard the
+        // result — a manual `/start` IS the user already reconnecting, so we don't
+        // set the needs-reconnect flag here.
+        if reprovision_session(&state, &session, &host).await == Reprovision::Rewritten
+            && matches!(host.kind, HostKind::Local)
+        {
+            // Refresh the recorded endpoint + clear any stale needs-reconnect flag:
+            // a manual reattach IS the reconnect, so the next boot drift scan must
+            // not re-flag this already-current session.
+            let hash = crate::mcp_provision::token_hash(state.mcp_token.as_str());
+            let _ = state
+                .store
+                .set_session_provisioned(session.id, state.api_base_url.as_deref(), Some(&hash))
+                .await;
         }
         return Ok(Json(session_with_spawned(load(&state, id).await?, false)));
     }
@@ -2093,7 +2383,9 @@ fn parse_refresh(t: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{coalesce_queued, pane_env, parse_refresh, parse_resize};
+    use super::{
+        coalesce_queued, endpoint_drifted, pane_env, parse_refresh, parse_resize, reprovision_env,
+    };
     use bytes::Bytes;
 
     #[test]
@@ -2122,6 +2414,82 @@ mod tests {
         let env = pane_env(None, uuid::Uuid::nil(), "sh", "tok");
         let url = env.iter().find(|(k, _)| k == "AGENTUM_API_URL").unwrap();
         assert_eq!(url.1, "http://127.0.0.1:8822");
+    }
+
+    #[test]
+    fn reprovision_env_with_hook_token_reapplies_full_connection_env() {
+        // When the in-memory hook token survives, a re-provision re-applies the
+        // SAME vars `pane_env` exported at launch — anchored to the NEW base.
+        let sid = uuid::Uuid::nil();
+        let env = reprovision_env(Some("http://127.0.0.1:9001"), sid, "dbg", Some("htok"));
+        let get = |k: &str| {
+            env.iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(get("AGENTUM_API_URL"), Some("http://127.0.0.1:9001"));
+        assert_eq!(
+            get("AGENTUM_HOOK_URL"),
+            Some(format!("http://127.0.0.1:9001/api/sessions/{sid}/hook").as_str())
+        );
+        // The existing hook token is reused verbatim — never re-minted.
+        assert_eq!(get("AGENTUM_HOOK_TOKEN"), Some("htok"));
+        assert_eq!(get("AGENTUM_TERMINAL_HANDLE"), Some("dbg"));
+    }
+
+    #[test]
+    fn reprovision_env_without_hook_token_skips_hook_vars() {
+        // No surviving hook token → only the API URL + handle are re-applied;
+        // we must NOT emit AGENTUM_HOOK_* (that would imply a fresh token we
+        // deliberately never mint on re-provision).
+        let env = reprovision_env(
+            Some("http://127.0.0.1:9001"),
+            uuid::Uuid::nil(),
+            "dbg",
+            None,
+        );
+        let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"AGENTUM_API_URL"));
+        assert!(keys.contains(&"AGENTUM_TERMINAL_HANDLE"));
+        assert!(!keys.contains(&"AGENTUM_HOOK_URL"));
+        assert!(!keys.contains(&"AGENTUM_HOOK_TOKEN"));
+    }
+
+    #[test]
+    fn reprovision_env_falls_back_to_8822_when_base_unknown() {
+        let env = reprovision_env(None, uuid::Uuid::nil(), "sh", None);
+        let url = env.iter().find(|(k, _)| k == "AGENTUM_API_URL").unwrap();
+        assert_eq!(url.1, "http://127.0.0.1:8822");
+    }
+
+    #[test]
+    fn endpoint_drift_detects_port_and_token_changes() {
+        let live_base = "http://127.0.0.1:8822";
+        let live_hash = "abc123";
+        // Same base + same token → no drift (the R1+R2 common-restart case).
+        assert!(!endpoint_drifted(
+            live_base,
+            Some(live_hash),
+            live_base,
+            live_hash
+        ));
+        // Base moved (ephemeral rebind) → drift.
+        assert!(endpoint_drifted(
+            "http://127.0.0.1:60102",
+            Some(live_hash),
+            live_base,
+            live_hash
+        ));
+        // Token rotated (hash differs) → drift.
+        assert!(endpoint_drifted(
+            live_base,
+            Some("stale-hash"),
+            live_base,
+            live_hash
+        ));
+        // Recorded base matches but no recorded hash → treat as drift (re-sync to
+        // be safe rather than leave a half-recorded row stale).
+        assert!(endpoint_drifted(live_base, None, live_base, live_hash));
     }
 
     #[tokio::test]

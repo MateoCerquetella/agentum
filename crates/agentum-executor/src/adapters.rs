@@ -416,6 +416,9 @@ mod tests {
             worktree_path: None,
             worktree_branch: None,
             worktree_base_ref: None,
+            provisioned_api_base: None,
+            provisioned_token_hash: None,
+            provisioned_needs_reconnect: false,
         }
     }
 

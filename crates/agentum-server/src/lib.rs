@@ -24,6 +24,7 @@ pub mod auth;
 pub mod bridge;
 pub mod cdp_browser;
 pub mod cdp_screencast;
+pub mod endpoint;
 mod error;
 pub mod git;
 pub mod harness;
@@ -464,6 +465,18 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
             }
         });
     }
+
+    // R3: one-shot boot drift rescan. Re-syncs any running session whose
+    // provisioned endpoint drifted from the live one (the ephemeral-rebind case
+    // R1+R2 can't cover). Spawned here — after `mcp_token`/`api_base_url` are
+    // final — so it reads the authoritative live endpoint. Best-effort; a
+    // standalone daemon (no `api_base_url`) returns immediately.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            routes::sessions::boot_drift_rescan(state).await;
+        });
+    }
 }
 
 /// Boot the API server in-process on an ephemeral loopback port with auth
@@ -497,9 +510,12 @@ pub async fn serve_embedded_loopback_with_bridge(
     bridge: Arc<dyn bridge::DesktopBridge>,
 ) -> anyhow::Result<SocketAddr> {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    // Prefer the persisted/stable port so a restart doesn't invalidate live
+    // sessions' baked-in MCP config (R2); reuse the persisted /mcp token (R1).
+    let listener = endpoint::bind_stable_loopback().await?;
     let addr = listener.local_addr()?;
     let (mut state, bus) = embedded_app_state(store, addr);
+    state.mcp_token = Arc::new(endpoint::load_or_create_mcp_token());
     state.desktop_bridge = Some(bridge);
     spawn_background_workers(&state, &bus);
     let app = router(state);
@@ -524,12 +540,14 @@ pub async fn serve_embedded_loopback_state(store: Store) -> anyhow::Result<(Sock
     // rustls provider selection is process-global; harmless if already set.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    // Bind first so we know the ephemeral port BEFORE building the state — it
-    // must carry its own URL.
-    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    // Bind first so we know the port BEFORE building the state — it must carry
+    // its own URL. Prefer the persisted/stable port so a restart doesn't
+    // invalidate live sessions' baked-in MCP config (R2); reuse the token (R1).
+    let listener = endpoint::bind_stable_loopback().await?;
     let addr = listener.local_addr()?;
 
-    let (state, bus) = embedded_app_state(store, addr);
+    let (mut state, bus) = embedded_app_state(store, addr);
+    state.mcp_token = Arc::new(endpoint::load_or_create_mcp_token());
 
     spawn_background_workers(&state, &bus);
 

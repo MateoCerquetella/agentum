@@ -292,6 +292,24 @@ pub struct Session {
     /// base" actions. Added in migration 0016.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_base_ref: Option<String>,
+    /// The embedded server base URL this session's MCP config + `AGENTUM_*`
+    /// env were last provisioned against (e.g. `http://127.0.0.1:8822`).
+    /// `None` until first recorded at spawn (Local sessions only). The boot
+    /// drift scan compares this against the live `api_base_url` to decide
+    /// whether the session needs re-provisioning. Added in migration 0023.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioned_api_base: Option<String>,
+    /// Hex SHA-256 of the `/mcp` bearer token in effect when this session was
+    /// provisioned. The hash (never the token) lets the boot scan detect a
+    /// rotated token without storing the secret. Added in migration 0023.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioned_token_hash: Option<String>,
+    /// Set when the boot drift scan rewrote this session's config/env to a new
+    /// endpoint: the live agent only re-reads MCP config at launch, so it must
+    /// reconnect to pick up the change. Surfaces the "needs reconnect" affordance
+    /// to the UI; survives a restart (persisted). Added in migration 0023.
+    #[serde(default)]
+    pub provisioned_needs_reconnect: bool,
 }
 
 /// Opt-in spec submitted with `NewSession` to request a `git worktree`
@@ -927,6 +945,9 @@ mod tests {
             worktree_path: None,
             worktree_branch: None,
             worktree_base_ref: None,
+            provisioned_api_base: None,
+            provisioned_token_hash: None,
+            provisioned_needs_reconnect: false,
         };
 
         // card_id = None → absent from wire.

@@ -4,7 +4,6 @@
 //! `session.card_id = goal.id` (CONTEXT D-07).
 
 use agentum_core::{BoardItem, Event, NewBoardItem, NewSession, Status, TransitionCtx};
-use agentum_store::paths;
 use axum::Json;
 use axum::Router;
 use axum::extract::{Path, State};
@@ -486,17 +485,17 @@ pub(crate) async fn spawn_card_session(
     let spawn_wd = super::util::expand_workdir(session.effective_cwd())?;
     super::sessions::spawn_agent_into_pane(state, &session, &host, &target, &spawn_wd).await?;
 
-    // 8. Send the ticket title+body as the first prompt so the agent
-    //    starts with context. Fire-and-forget on a tokio task because
-    //    Claude's splash + trust dialog can swallow keystrokes that
-    //    arrive too early — wait ~1.5s before send_keys. The HTTP
-    //    response doesn't block on this; if the send fails the user
-    //    can paste the prompt manually.
+    // 8. Send the ticket title+body as the first prompt so the agent starts with
+    //    context. Fire-and-forget via the harness's `inject_prompt`: it waits for
+    //    the REPL (accepting Claude's trust dialog, outlasting an MCP-slowed boot)
+    //    then submits in two steps. A fixed-delay one-shot `send_keys(.., true)`
+    //    raced the splash and was swallowed by bracketed-paste — the prompt never
+    //    ran. The HTTP response doesn't block on this.
     if let Some(prompt) = build_card_prompt(card) {
-        let target_for_prompt = target.clone();
+        let state = state.clone();
+        let session = session.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-            if let Err(e) = agentum_tmux::send_keys(&target_for_prompt, &prompt, true).await {
+            if let Err(e) = crate::harness::inject_prompt(&state, &session, &prompt).await {
                 tracing::warn!(error = %e, "send card prompt failed; session still running");
             }
         });
@@ -525,8 +524,10 @@ fn build_card_prompt(card: &BoardItem) -> Option<String> {
 
 /// Spawn a planner agent session bound to the given goal.
 ///
-/// Mirrors `routes::sessions::start` lines 256-274 exactly — any
-/// change to that flow must be reflected here.
+/// Goes through the centralized `sessions::spawn_agent_into_pane` + the
+/// harness's `inject_prompt` — the same one launch+prompt path as the card
+/// spawn and the harness, so `pane_env`/MCP/trust-dialog handling stay in one
+/// place. Do not reintroduce a hand-rolled tmux spawn here.
 async fn spawn_planner_session(
     state: &AppState,
     goal: &BoardItem,
@@ -566,37 +567,47 @@ async fn spawn_planner_session(
         worktree_branch: None,
         worktree_base_ref: None,
     };
-    let session = state.store.create_session(new_session).await?;
-
-    // Spawn the tmux pane — mirrors sessions::start lines 259-273.
-    let target = agentum_tmux::target_for(&session.name);
-    let adapter = agentum_executor::adapter_for(&session.tool);
-    let launch = adapter.launch(&session);
-
-    agentum_tmux::new_session(&target, &wd, &launch.argv, &launch.env)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-
-    let log =
-        paths::pane_log(&session.id.to_string()).map_err(|e| ApiError::Internal(e.to_string()))?;
-    if let Err(e) = agentum_tmux::pipe_pane(&target, &log).await {
-        let _ = agentum_tmux::kill_session(&target).await;
-        return Err(ApiError::Internal(e.to_string()));
-    }
-
-    state
+    // The planner runs locally: planning reads the repo on this machine, and the
+    // agent shells out to `agentum board add-card` — which only reaches THIS
+    // (ephemeral-port) embedded server because `spawn_agent_into_pane` publishes
+    // its URL via `pane_env`. Resolve the local host so the launch goes through
+    // the one centralized path, exactly like the harness.
+    let host = state
         .store
-        .update_status_and_target(session.id, Status::Running, Some(&target))
+        .get_host(agentum_core::LOCAL_HOST_ID)
+        .await?
+        .ok_or_else(|| ApiError::Internal("local host missing".into()))?;
+    let session = state
+        .store
+        .create_session_on_host(new_session, Some(agentum_core::LOCAL_HOST_ID))
         .await?;
 
-    // Send the planner prompt as the first agent message.
-    // <AG-KEY> is substituted with the real goal key (e.g. AG-42) so the
-    // prompt can reference the card on the board without hard-coding IDs.
+    // Launch through the ONE shared spawn path (YOLO translation, loopback
+    // `pane_env` with the embedded API URL the `agentum board add-card` CLI
+    // needs, Claude `--settings` hook, MCP wiring, pipe-pane, status→Running).
+    // The old hand-rolled spawn bypassed all of this — the planner pane never
+    // got `AGENTUM_API_URL`, so add-card couldn't find the server and no cards
+    // were ever created.
+    let target = agentum_tmux::target_for(&session.name);
+    super::sessions::spawn_agent_into_pane(state, &session, &host, &target, &wd).await?;
+
+    // Deliver the planner prompt robustly, in the background. `inject_prompt`
+    // waits for the REPL (accepting Claude's "trust this folder?" dialog and
+    // outlasting an MCP-slowed boot), then submits in two steps (type, pause,
+    // bare Enter). A one-shot `send_keys(prompt, true)` is swallowed by the
+    // REPL's bracketed-paste for a multi-line prompt — the text lands in the box
+    // but never executes, which left the chat stuck at "Drafting cards…".
+    // Fire-and-forget so the HTTP response returns the session id immediately;
+    // the UI polls the board for the cards the planner then drafts.
     let prompt = cfg.prompt.replace("<AG-KEY>", &goal.key);
-    if let Err(e) = agentum_tmux::send_keys(&target, &prompt, true).await {
-        // Prompt delivery failure is not fatal — the session is already
-        // running; the user can send the prompt manually via /send.
-        tracing::warn!(error = %e, "send planner prompt failed; session still running");
+    {
+        let state = state.clone();
+        let session = session.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::harness::inject_prompt(&state, &session, &prompt).await {
+                tracing::warn!(error = %e, "planner prompt injection failed; session still running");
+            }
+        });
     }
 
     let _ = state
