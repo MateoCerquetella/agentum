@@ -70,6 +70,19 @@ jobs:
       # $ORIGIN on Linux.)
       - name: Stage sherpa libs (download-binaries)
         run: cargo build --release -p sherpa-rs
+      # tauri.conf.json's macOS frameworks reference target/release/lib{sherpa,onnx}*.dylib,
+      # copied there by sherpa-rs-sys's build script. On a warm rust-cache that
+      # build script is skipped, so the loose dylibs go missing and tauri_build
+      # fails with "Library not found". Copy them from wherever they were
+      # built/cached so target/release/ always has them.
+      - name: Ensure sherpa dylibs sit in target/release (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          dest="$PWD/target/release"
+          find "$PWD/target" \( -name 'libsherpa*.dylib' -o -name 'libonnxruntime*.dylib' \) 2>/dev/null \
+            | while IFS= read -r f; do [ "$(dirname "$f")" = "$dest" ] || cp -f "$f" "$dest/"; done
+          ls -1 "$dest"/libsherpa*.dylib "$dest"/libonnxruntime*.dylib 2>/dev/null || echo "WARN: sherpa dylibs not staged"
       # `cargo test` links the desktop crate's onnxruntime/sherpa deps fine, but
       # the test binary's rpath ($ORIGIN = target/debug/deps/) doesn't hold the
       # .so files, so they fail to LOAD at runtime

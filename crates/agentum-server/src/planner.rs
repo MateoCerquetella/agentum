@@ -198,8 +198,10 @@ mod tests {
         let fixture_path = env._dir.path().join("custom_prompt.md");
         std::fs::write(&fixture_path, "file-prompt-content").unwrap();
 
+        // TOML literal string ('...') so a Windows fixture path's backslashes
+        // aren't parsed as escapes (a basic "..." string would fail to parse).
         let toml_content = format!(
-            "[planner]\nprompt_file = \"{}\"\nprompt = \"inline-content\"\n",
+            "[planner]\nprompt_file = '{}'\nprompt = \"inline-content\"\n",
             fixture_path.display()
         );
         std::fs::write(cfg_dir.join("planner.toml"), toml_content).unwrap();
@@ -254,9 +256,17 @@ mod tests {
         let _env = isolate_xdg();
         let cfg_dir = agentum_store::paths::config_dir().unwrap();
         std::fs::create_dir_all(&cfg_dir).unwrap();
+        // Absolute (so it clears the absolute-path check and reaches the
+        // existence check) but non-existent — `/tmp/...` is not absolute on
+        // Windows, where it would trip "must be an absolute path" instead.
+        let missing = if cfg!(windows) {
+            r"C:\definitely-not-a-real-path-XYZZY"
+        } else {
+            "/tmp/definitely-not-a-real-path-XYZZY"
+        };
         std::fs::write(
             cfg_dir.join("planner.toml"),
-            "[planner]\nprompt_file = \"/tmp/definitely-not-a-real-path-XYZZY\"\n",
+            format!("[planner]\nprompt_file = '{missing}'\n"),
         )
         .unwrap();
 
