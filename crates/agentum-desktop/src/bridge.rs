@@ -277,7 +277,9 @@ impl TauriBridge {
             Ok(Err(_dropped)) => Err(anyhow::anyhow!("browser-op reply channel dropped")),
             Err(_elapsed) => {
                 registry.cancel(&request_id);
-                Err(anyhow::anyhow!("timed out waiting for the renderer (op: {event})"))
+                Err(anyhow::anyhow!(
+                    "timed out waiting for the renderer (op: {event})"
+                ))
             }
         }
     }
@@ -513,7 +515,9 @@ impl DesktopBridge for TauriBridge {
             // guest, so they round-trip there too. `op` is forwarded verbatim;
             // the renderer reads `tab`/`selector`/`comment`/`intent` as needed.
             match name.as_str() {
-                "annotations" => return self.renderer_op("ui-request-browser-annotations", op).await,
+                "annotations" => {
+                    return self.renderer_op("ui-request-browser-annotations", op).await
+                }
                 "grab" => return self.grab_element(&op).await,
                 "annotate" => return self.annotate_element(&op).await,
                 _ => {}

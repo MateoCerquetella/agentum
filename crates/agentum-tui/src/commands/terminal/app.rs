@@ -4312,7 +4312,12 @@ async fn handle_key(
                 if let Some(tx) = tx
                     && cols > 0
                     && rows > 1
-                    && tx.send(TermOut::Resize { cols, rows: rows - 1 }).is_ok()
+                    && tx
+                        .send(TermOut::Resize {
+                            cols,
+                            rows: rows - 1,
+                        })
+                        .is_ok()
                 {
                     let tx2 = tx.clone();
                     tokio::spawn(async move {

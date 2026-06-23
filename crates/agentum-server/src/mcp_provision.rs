@@ -244,11 +244,7 @@ pub enum BrowserMcpEngine {
 /// `AGENTUM_BROWSER_MCP_ENGINE=headless` forces the legacy hidden path. This one
 /// function is the seam.
 pub fn browser_mcp_engine() -> BrowserMcpEngine {
-    parse_engine(
-        std::env::var("AGENTUM_BROWSER_MCP_ENGINE")
-            .ok()
-            .as_deref(),
-    )
+    parse_engine(std::env::var("AGENTUM_BROWSER_MCP_ENGINE").ok().as_deref())
 }
 
 /// Pure engine parser (split out so it's unit-testable without mutating
@@ -351,8 +347,14 @@ mod tests {
         // browser the user watches (009c-1).
         assert_eq!(parse_engine(None), BrowserMcpEngine::PlaywrightBound);
         assert_eq!(parse_engine(Some("")), BrowserMcpEngine::PlaywrightBound);
-        assert_eq!(parse_engine(Some("bound")), BrowserMcpEngine::PlaywrightBound);
-        assert_eq!(parse_engine(Some("whatever")), BrowserMcpEngine::PlaywrightBound);
+        assert_eq!(
+            parse_engine(Some("bound")),
+            BrowserMcpEngine::PlaywrightBound
+        );
+        assert_eq!(
+            parse_engine(Some("whatever")),
+            BrowserMcpEngine::PlaywrightBound
+        );
         // Explicit opt-out → the legacy hidden headless path.
         assert_eq!(
             parse_engine(Some("headless")),

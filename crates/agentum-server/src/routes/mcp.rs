@@ -488,10 +488,7 @@ async fn tool_spawn_session(state: &AppState, args: &Value) -> anyhow::Result<St
         .get("workdir")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
-    let tool = args
-        .get("tool")
-        .and_then(Value::as_str)
-        .unwrap_or("claude");
+    let tool = args.get("tool").and_then(Value::as_str).unwrap_or("claude");
     let model = args
         .get("model")
         .and_then(Value::as_str)
@@ -800,12 +797,18 @@ mod tests {
         // Enabled: the mailbox + task DAG tools are advertised.
         let on = tool_names(true);
         for t in ORCHESTRATION_TOOLS {
-            assert!(on.contains(&t.to_string()), "{t} should be listed when enabled");
+            assert!(
+                on.contains(&t.to_string()),
+                "{t} should be listed when enabled"
+            );
         }
         // Disabled: none of them are, but the rest of the catalog survives.
         let off = tool_names(false);
         for t in ORCHESTRATION_TOOLS {
-            assert!(!off.contains(&t.to_string()), "{t} must be hidden when disabled");
+            assert!(
+                !off.contains(&t.to_string()),
+                "{t} must be hidden when disabled"
+            );
         }
         assert!(off.contains(&"agentum_list_worktrees".to_string()));
         assert!(off.len() + ORCHESTRATION_TOOLS.len() == on.len());

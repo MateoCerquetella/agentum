@@ -230,10 +230,25 @@ export default function ChatPage() {
           await Promise.resolve(swap)
           setActiveAccountId(selectedAccountId)
         }
-        const { goal } = await createGoal({ title: text, workdir, tool: selectedTool })
+        const { goal, planner_session_id } = await createGoal({
+          title: text,
+          workdir,
+          tool: selectedTool
+        })
         setDraft('')
         setSelectedId(goal.id)
-        setPendingGoalId(goal.id)
+        if (planner_session_id) {
+          // Planner is running — show "drafting…" until its first card lands.
+          setPendingGoalId(goal.id)
+        } else {
+          // Empty session id = the server created the goal but the planner
+          // failed to spawn (e.g. the project is a disconnected SSH host —
+          // planning runs locally — or the agent isn't installed). Surface it
+          // instead of spinning "Drafting cards…" forever.
+          setError(
+            'The goal was created but the planner could not start. Open a local project (planning runs on this machine, not a disconnected SSH host) and make sure the selected agent is installed, then try again.'
+          )
+        }
         await refresh()
       } catch (e2) {
         setError(e2 instanceof Error ? e2.message : String(e2))

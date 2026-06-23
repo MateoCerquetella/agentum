@@ -483,7 +483,9 @@ pub async fn gh_add_issue_comment(
     }
     let created: Value = match serde_json::from_slice(&output.stdout) {
         Ok(value) => value,
-        Err(e) => return json!({ "ok": false, "error": format!("Couldn't parse gh response: {e}") }),
+        Err(e) => {
+            return json!({ "ok": false, "error": format!("Couldn't parse gh response: {e}") })
+        }
     };
     let user = created.get("user");
     json!({

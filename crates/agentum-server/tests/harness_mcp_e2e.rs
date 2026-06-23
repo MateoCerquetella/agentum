@@ -13,7 +13,13 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 /// POST one JSON-RPC `tools/call` and return the tool's text payload.
-async fn call(client: &reqwest::Client, base: &str, token: &str, tool: &str, args: Value) -> String {
+async fn call(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    tool: &str,
+    args: Value,
+) -> String {
     let body = json!({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": { "name": tool, "arguments": args }
@@ -95,7 +101,14 @@ async fn harness_mcp_tools_drive_a_real_repo() {
     // 3. scaffold — the ONLY thing agentum writes into the repo.
     println!(
         ">> agentum_harness_scaffold\n{}\n",
-        call(&client, &base, &token, "agentum_harness_scaffold", json!({ "workdir": wd })).await
+        call(
+            &client,
+            &base,
+            &token,
+            "agentum_harness_scaffold",
+            json!({ "workdir": wd })
+        )
+        .await
     );
 
     // 4. author a spec, then turn its acceptance criteria into the backlog.
@@ -107,19 +120,40 @@ async fn harness_mcp_tools_drive_a_real_repo() {
     .unwrap();
     println!(
         ">> agentum_harness_plan (specs/demo acceptance criteria -> backlog)\n{}\n",
-        call(&client, &base, &token, "agentum_harness_plan", json!({ "workdir": wd, "spec_id": "demo" })).await
+        call(
+            &client,
+            &base,
+            &token,
+            "agentum_harness_plan",
+            json!({ "workdir": wd, "spec_id": "demo" })
+        )
+        .await
     );
 
     // 5. Bootstrap-Contract readiness check.
     println!(
         ">> agentum_harness_check (Bootstrap Contract / cold-start test)\n{}\n",
-        call(&client, &base, &token, "agentum_harness_check", json!({ "workdir": wd })).await
+        call(
+            &client,
+            &base,
+            &token,
+            "agentum_harness_check",
+            json!({ "workdir": wd })
+        )
+        .await
     );
 
     // 6. board, rebuilt PURELY from disk (no agentum store consulted).
     println!(
         ">> agentum_harness_board (rebuilt from disk)\n{}\n",
-        call(&client, &base, &token, "agentum_harness_board", json!({ "workdir": wd })).await
+        call(
+            &client,
+            &base,
+            &token,
+            "agentum_harness_board",
+            json!({ "workdir": wd })
+        )
+        .await
     );
 
     // 7. append to the durable, append-only decision log.
@@ -143,9 +177,17 @@ async fn harness_mcp_tools_drive_a_real_repo() {
     println!("===========================================================\n");
 
     // Assertions so this is a real test, not just prints.
-    assert!(repo.path().join(".agentum-harness/feature_list.json").exists());
+    assert!(
+        repo.path()
+            .join(".agentum-harness/feature_list.json")
+            .exists()
+    );
     assert!(repo.path().join(".agentum-harness/decisions.md").exists());
-    assert!(repo.path().join(".agentum-harness/specs/demo/spec.md").exists());
+    assert!(
+        repo.path()
+            .join(".agentum-harness/specs/demo/spec.md")
+            .exists()
+    );
     println!("\n✅ all 6 harness MCP tools verified end-to-end over real HTTP.\n");
 
     // The embedded server runs as a detached task that would otherwise block
