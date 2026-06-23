@@ -622,60 +622,65 @@ pub(crate) async fn spawn_agent_into_pane(
         // the tunnel URL. Best-effort: a tunnel failure logs and launches the
         // agent without the MCP rather than blocking.
         match crate::mcp_provision::local_mcp_port(state) {
-            Some(mac_port) => match crate::host_runtime::ensure_reverse_tunnel(host, mac_port).await
-            {
-                Ok(host_port) => {
-                    // The remote agent needs its own orchestration handle and an
-                    // AGENTUM_API_URL pointing at the tunnel.
-                    launch
-                        .env
-                        .push(("AGENTUM_TERMINAL_HANDLE".into(), session.name.clone()));
-                    launch.env.push((
-                        "AGENTUM_API_URL".into(),
-                        format!("http://127.0.0.1:{host_port}"),
-                    ));
-                    let agentum_mcp_url = format!("http://127.0.0.1:{host_port}/mcp");
-                    let servers =
-                        vec![crate::mcp_provision::agentum_server(state, &agentum_mcp_url)];
-                    let provision = if session.tool == "claude" {
-                        // Claude needs the --mcp-config FILE on the HOST.
-                        let host_cfg = format!("/tmp/agentum-mcp-{}.json", session.id);
-                        let json = crate::mcp_provision::config_json(&servers);
-                        match crate::host_runtime::write_remote_file(host, &host_cfg, &json).await {
-                            Ok(()) => Some(agentum_executor::McpProvision {
-                                servers,
-                                config_file: PathBuf::from(host_cfg),
-                            }),
-                            Err(e) => {
-                                tracing::warn!(session = %session.id, "could not write remote MCP config to host: {e}");
-                                None
+            Some(mac_port) => {
+                match crate::host_runtime::ensure_reverse_tunnel(host, mac_port).await {
+                    Ok(host_port) => {
+                        // The remote agent needs its own orchestration handle and an
+                        // AGENTUM_API_URL pointing at the tunnel.
+                        launch
+                            .env
+                            .push(("AGENTUM_TERMINAL_HANDLE".into(), session.name.clone()));
+                        launch.env.push((
+                            "AGENTUM_API_URL".into(),
+                            format!("http://127.0.0.1:{host_port}"),
+                        ));
+                        let agentum_mcp_url = format!("http://127.0.0.1:{host_port}/mcp");
+                        let servers = vec![crate::mcp_provision::agentum_server(
+                            state,
+                            &agentum_mcp_url,
+                        )];
+                        let provision = if session.tool == "claude" {
+                            // Claude needs the --mcp-config FILE on the HOST.
+                            let host_cfg = format!("/tmp/agentum-mcp-{}.json", session.id);
+                            let json = crate::mcp_provision::config_json(&servers);
+                            match crate::host_runtime::write_remote_file(host, &host_cfg, &json)
+                                .await
+                            {
+                                Ok(()) => Some(agentum_executor::McpProvision {
+                                    servers,
+                                    config_file: PathBuf::from(host_cfg),
+                                }),
+                                Err(e) => {
+                                    tracing::warn!(session = %session.id, "could not write remote MCP config to host: {e}");
+                                    None
+                                }
                             }
+                        } else {
+                            // Codex injects MCP inline via `-c` — no host file needed.
+                            Some(agentum_executor::McpProvision {
+                                servers,
+                                config_file: PathBuf::new(),
+                            })
+                        };
+                        if let Some(p) = provision {
+                            launch.argv.extend(adapter.mcp_args(&p));
                         }
-                    } else {
-                        // Codex injects MCP inline via `-c` — no host file needed.
-                        Some(agentum_executor::McpProvision {
-                            servers,
-                            config_file: PathBuf::new(),
-                        })
-                    };
-                    if let Some(p) = provision {
-                        launch.argv.extend(adapter.mcp_args(&p));
+                        // File-based agents: write the config on the HOST in the workdir.
+                        crate::mcp_provision::write_agent_project_config(
+                            state,
+                            host,
+                            &workdir.to_string_lossy(),
+                            &session.tool,
+                            &agentum_mcp_url,
+                        )
+                        .await;
                     }
-                    // File-based agents: write the config on the HOST in the workdir.
-                    crate::mcp_provision::write_agent_project_config(
-                        state,
-                        host,
-                        &workdir.to_string_lossy(),
-                        &session.tool,
-                        &agentum_mcp_url,
-                    )
-                    .await;
+                    Err(e) => tracing::warn!(
+                        session = %session.id,
+                        "reverse MCP tunnel to host failed; launching remote agent without agentum MCP: {e}"
+                    ),
                 }
-                Err(e) => tracing::warn!(
-                    session = %session.id,
-                    "reverse MCP tunnel to host failed; launching remote agent without agentum MCP: {e}"
-                ),
-            },
+            }
             None => tracing::warn!(
                 "no embedded api_base_url; cannot reverse-tunnel the agentum MCP to an SSH host"
             ),
@@ -833,7 +838,10 @@ pub(crate) async fn create_and_spawn_session(
         HostKind::Ssh { .. } => PathBuf::from(new.workdir.trim()),
     };
 
-    let session = state.store.create_session_on_host(new, Some(host_id)).await?;
+    let session = state
+        .store
+        .create_session_on_host(new, Some(host_id))
+        .await?;
     // A freshly-created agentum session always derives its target from the name;
     // there is no pre-existing pane to reattach to (that's the `start` route's job).
     let target = agentum_tmux::target_for(&session.name);
@@ -1287,9 +1295,7 @@ async fn stream_session(
     // The post-restore settle lets the clean frame land in the log before
     // the snapshot below captures it. No-op when we never learned the
     // client's size or the pane is too short to shrink.
-    if redraw_requested
-        && let Some((cols, rows)) = current_size
-    {
+    if redraw_requested && let Some((cols, rows)) = current_size {
         let shrunk = rows.saturating_sub(1);
         if shrunk >= 1 && shrunk != rows {
             let _ = agentum_tmux::resize_window(&target, cols, shrunk).await;
@@ -1346,9 +1352,11 @@ async fn stream_session(
     // never a delta replay (which would just re-feed the corrupting bytes).
     // Clients pair `redraw` with omitting `resume`, but gate here too so a
     // client sending both still heals.
-    if let (true, Some(cp), true) =
-        (resume_requested && !redraw_requested, saved_checkpoint, resume_size_matches)
-    {
+    if let (true, Some(cp), true) = (
+        resume_requested && !redraw_requested,
+        saved_checkpoint,
+        resume_size_matches,
+    ) {
         if let Ok(end) = file.seek(std::io::SeekFrom::End(0)).await
             && end >= cp.pos
         {

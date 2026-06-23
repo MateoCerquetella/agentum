@@ -99,7 +99,9 @@ async fn run(socket: WebSocket, cdp_http_base: String, opts: ScreencastOptions) 
     };
     let _ = ws_tx
         .send(Message::Text(
-            json!({ "type": "ready", "format": format }).to_string().into(),
+            json!({ "type": "ready", "format": format })
+                .to_string()
+                .into(),
         ))
         .await;
 

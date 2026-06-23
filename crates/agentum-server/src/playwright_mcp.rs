@@ -345,7 +345,10 @@ mod tests {
         // Headless mode never attaches to an external browser.
         assert!(!argv.iter().any(|a| a == "--cdp-endpoint"));
         // Base flags stay consistent (IPv4 host, the port we probe).
-        assert!(argv.windows(2).any(|w| w[0] == "--host" && w[1] == "127.0.0.1"));
+        assert!(
+            argv.windows(2)
+                .any(|w| w[0] == "--host" && w[1] == "127.0.0.1")
+        );
         assert!(argv.windows(2).any(|w| w[0] == "--port" && w[1] == "8931"));
     }
 
