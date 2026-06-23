@@ -8,6 +8,13 @@
 // path for local AND SSH-host browsers (only `cdpPort` differs; a host's port is
 // the 009a `ssh -L` tunnel on 127.0.0.1). Reuses the FIXED `0x62` decoder and the
 // `remote-browser-keyboard` serializer so it matches the server byte-for-byte.
+//
+// Frames are painted to a <canvas> via `createImageBitmap` (decodes off the main
+// thread) on a `requestAnimationFrame` tick, keeping only the newest bitmap. This
+// avoids the per-frame `URL.createObjectURL` churn + React `setState` the first
+// cut used — both of which caused flicker, decode backlog, and GC pressure that
+// made the stream feel like a laggy VPS. Mouse-move is likewise coalesced to one
+// send per frame so a drag doesn't flood the input channel.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { BrowserPage } from '../../../../shared/types'
 import {
@@ -37,20 +44,22 @@ type AgentBrowserScreencastPaneProps = {
   cdpPort?: number
 }
 
-/** Map a value normalized to the rendered <img> rect onto the CDP device
- *  coordinate space the page expects. Mirrors the legacy pane's formula
+/** Map a client point onto the CDP device coordinate space the page expects.
+ *  Mirrors the legacy pane's formula against the rendered <canvas> rect
  *  (`x = round(((clientX-rectLeft)/rectWidth)*deviceWidth)`). */
 function toDevicePoint(
   event: { clientX: number; clientY: number },
-  img: HTMLImageElement | null,
+  canvas: HTMLCanvasElement | null,
   metadata: BrowserScreencastFrameMetadata | null
 ): { x: number; y: number } | null {
-  if (!img) {
+  if (!canvas) {
     return null
   }
-  const rect = img.getBoundingClientRect()
-  const deviceWidth = metadata?.deviceWidth ?? img.naturalWidth
-  const deviceHeight = metadata?.deviceHeight ?? img.naturalHeight
+  const rect = canvas.getBoundingClientRect()
+  // The canvas intrinsic size IS the frame's device size (we set it from the
+  // decoded bitmap), so it's the natural fallback when metadata is absent.
+  const deviceWidth = metadata?.deviceWidth ?? canvas.width
+  const deviceHeight = metadata?.deviceHeight ?? canvas.height
   if (rect.width <= 0 || rect.height <= 0 || deviceWidth <= 0 || deviceHeight <= 0) {
     return null
   }
@@ -65,11 +74,16 @@ export default function AgentBrowserScreencastPane({
   isActive,
   cdpPort
 }: AgentBrowserScreencastPaneProps): React.JSX.Element {
-  const imgRef = useRef<HTMLImageElement | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const subRef = useRef<CdpScreencastSubscription | null>(null)
-  const frameUrlRef = useRef<string | null>(null)
   const metadataRef = useRef<BrowserScreencastFrameMetadata | null>(null)
-  const [frameUrl, setFrameUrl] = useState<string | null>(null)
+  // Newest decoded-but-not-yet-painted frame; the rAF tick draws and frees it.
+  const pendingBitmapRef = useRef<ImageBitmap | null>(null)
+  const drawRafRef = useRef<number | null>(null)
+  // First-frame latch: flips the "Connecting…" overlay off exactly once (no
+  // per-frame React render).
+  const hasFrameRef = useRef(false)
+  const [hasFrame, setHasFrame] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [addressBar, setAddressBar] = useState(toDisplayUrl(page.url))
   // Latest tab URL, read inside the open effect without making it a dep — which
@@ -77,9 +91,48 @@ export default function AgentBrowserScreencastPane({
   const pageUrlRef = useRef(page.url)
   pageUrlRef.current = page.url
 
+  // Coalesced mouse-move: keep only the latest position and emit one send per
+  // animation frame, so a fast drag doesn't spam the input channel (and the CDP
+  // browser) with dozens of moves per frame.
+  const pendingMoveRef = useRef<{ x: number; y: number } | null>(null)
+  const moveRafRef = useRef<number | null>(null)
+
   // Send one browser.* interaction; a no-op while the stream is down.
   const sendInput = useCallback((method: string, params?: Record<string, unknown>): void => {
     subRef.current?.sendInput(method, params)
+  }, [])
+
+  // Paint the newest decoded frame on the next animation frame. Latest-wins: if
+  // more frames decode before the tick fires, only the freshest is drawn.
+  const scheduleDraw = useCallback((): void => {
+    if (drawRafRef.current != null) {
+      return
+    }
+    drawRafRef.current = requestAnimationFrame(() => {
+      drawRafRef.current = null
+      const bmp = pendingBitmapRef.current
+      if (!bmp) {
+        return
+      }
+      pendingBitmapRef.current = null
+      const canvas = canvasRef.current
+      if (!canvas) {
+        bmp.close()
+        return
+      }
+      if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
+        canvas.width = bmp.width
+        canvas.height = bmp.height
+      }
+      // `drawImage` copies the pixels synchronously, so the bitmap can be freed
+      // immediately afterward — no need to retain it across ticks.
+      canvas.getContext('2d')?.drawImage(bmp, 0, 0)
+      bmp.close()
+      if (!hasFrameRef.current) {
+        hasFrameRef.current = true
+        setHasFrame(true)
+      }
+    })
   }, [])
 
   // Open the screencast when the pane is the active surface; tear it down when it
@@ -92,7 +145,7 @@ export default function AgentBrowserScreencastPane({
     setError(null)
 
     void openCdpScreencast(
-      { cdpPort, format: 'jpeg', quality: 70, everyNthFrame: 1 },
+      { cdpPort, format: 'jpeg', quality: 80, everyNthFrame: 1 },
       {
         onBinary: (bytes) => {
           if (disposed) {
@@ -102,16 +155,23 @@ export default function AgentBrowserScreencastPane({
           if (!frame) {
             return
           }
-          // Copy out of the shared buffer before wrapping in a Blob.
-          const image = frame.image.slice()
-          const url = URL.createObjectURL(new Blob([image], { type: `image/${frame.format}` }))
-          const prev = frameUrlRef.current
-          frameUrlRef.current = url
           metadataRef.current = frame.metadata
-          setFrameUrl(url)
-          if (prev) {
-            URL.revokeObjectURL(prev)
-          }
+          // Copy out of the shared buffer before handing it to createImageBitmap.
+          const image = frame.image.slice()
+          void createImageBitmap(new Blob([image], { type: `image/${frame.format}` }))
+            .then((bmp) => {
+              if (disposed) {
+                bmp.close()
+                return
+              }
+              // Latest-wins: a decoded frame not yet painted is now stale — free it.
+              pendingBitmapRef.current?.close()
+              pendingBitmapRef.current = bmp
+              scheduleDraw()
+            })
+            .catch(() => {
+              // A corrupt frame fails to decode — skip it, keep the stream alive.
+            })
         },
         onError: (message) => {
           if (!disposed) {
@@ -149,20 +209,52 @@ export default function AgentBrowserScreencastPane({
       disposed = true
       subRef.current?.close()
       subRef.current = null
-      if (frameUrlRef.current) {
-        URL.revokeObjectURL(frameUrlRef.current)
-        frameUrlRef.current = null
+      if (drawRafRef.current != null) {
+        cancelAnimationFrame(drawRafRef.current)
+        drawRafRef.current = null
       }
+      if (moveRafRef.current != null) {
+        cancelAnimationFrame(moveRafRef.current)
+        moveRafRef.current = null
+      }
+      pendingBitmapRef.current?.close()
+      pendingBitmapRef.current = null
+      pendingMoveRef.current = null
     }
-  }, [isActive, cdpPort])
+  }, [isActive, cdpPort, scheduleDraw])
 
   // --- input handlers (forward to the same CDP instance the agent drives) -----
 
+  // Emit the queued move immediately (cancelling the coalesce tick) — used before
+  // discrete events so a press/scroll lands at the current cursor without a
+  // one-frame lag.
+  const sendMoveNow = useCallback(
+    (p: { x: number; y: number }) => {
+      pendingMoveRef.current = null
+      if (moveRafRef.current != null) {
+        cancelAnimationFrame(moveRafRef.current)
+        moveRafRef.current = null
+      }
+      sendInput('browser.mouseMove', { x: p.x, y: p.y })
+    },
+    [sendInput]
+  )
+
   const onMouseMove = useCallback(
     (e: React.MouseEvent) => {
-      const p = toDevicePoint(e, imgRef.current, metadataRef.current)
-      if (p) {
-        sendInput('browser.mouseMove', { x: p.x, y: p.y })
+      const p = toDevicePoint(e, canvasRef.current, metadataRef.current)
+      if (!p) {
+        return
+      }
+      pendingMoveRef.current = p
+      if (moveRafRef.current == null) {
+        moveRafRef.current = requestAnimationFrame(() => {
+          moveRafRef.current = null
+          const latest = pendingMoveRef.current
+          if (latest) {
+            sendInput('browser.mouseMove', { x: latest.x, y: latest.y })
+          }
+        })
       }
     },
     [sendInput]
@@ -173,15 +265,15 @@ export default function AgentBrowserScreencastPane({
 
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      const p = toDevicePoint(e, imgRef.current, metadataRef.current)
+      const p = toDevicePoint(e, canvasRef.current, metadataRef.current)
       if (p) {
         // Move first so the press lands at the cursor (the server tracks the last
         // moved position for button events).
-        sendInput('browser.mouseMove', { x: p.x, y: p.y })
+        sendMoveNow(p)
         sendInput('browser.mouseDown', { button: buttonName(e) })
       }
     },
-    [sendInput]
+    [sendInput, sendMoveNow]
   )
 
   const onMouseUp = useCallback(
@@ -193,13 +285,13 @@ export default function AgentBrowserScreencastPane({
 
   const onWheel = useCallback(
     (e: React.WheelEvent) => {
-      const p = toDevicePoint(e, imgRef.current, metadataRef.current)
+      const p = toDevicePoint(e, canvasRef.current, metadataRef.current)
       if (p) {
-        sendInput('browser.mouseMove', { x: p.x, y: p.y })
+        sendMoveNow(p)
         sendInput('browser.mouseWheel', { dx: e.deltaX, dy: e.deltaY })
       }
     },
-    [sendInput]
+    [sendInput, sendMoveNow]
   )
 
   const onKeyDown = useCallback(
@@ -273,27 +365,27 @@ export default function AgentBrowserScreencastPane({
 
       <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">
         {error ? (
-          <div className="px-4 text-center text-xs text-muted-foreground">
-            {error}
-          </div>
-        ) : frameUrl ? (
-          // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
-          <img
-            ref={imgRef}
-            src={frameUrl}
-            alt="Agent browser"
-            tabIndex={0}
-            draggable={false}
-            className="h-full w-full object-contain outline-none"
-            onMouseMove={onMouseMove}
-            onMouseDown={onMouseDown}
-            onMouseUp={onMouseUp}
-            onWheel={onWheel}
-            onKeyDown={onKeyDown}
-            onContextMenu={(e) => e.preventDefault()}
-          />
+          <div className="px-4 text-center text-xs text-muted-foreground">{error}</div>
         ) : (
-          <div className="text-xs text-muted-foreground">Connecting to the agent browser…</div>
+          <>
+            {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
+            <canvas
+              ref={canvasRef}
+              tabIndex={0}
+              className="h-full w-full object-contain outline-none"
+              onMouseMove={onMouseMove}
+              onMouseDown={onMouseDown}
+              onMouseUp={onMouseUp}
+              onWheel={onWheel}
+              onKeyDown={onKeyDown}
+              onContextMenu={(e) => e.preventDefault()}
+            />
+            {!hasFrame ? (
+              <div className="absolute text-xs text-muted-foreground">
+                Connecting to the agent browser…
+              </div>
+            ) : null}
+          </>
         )}
       </div>
     </div>

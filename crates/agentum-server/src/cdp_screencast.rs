@@ -99,11 +99,11 @@ use anyhow::{Context, Result};
 use base64::Engine as _;
 use futures_util::{SinkExt as _, StreamExt as _};
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::tungstenite::Message;
 
 /// Screencast knobs passed straight to `Page.startScreencast`. `format=jpeg,
-/// quality=70` match the pane's subscribe params.
+/// quality=80` match the pane's subscribe params.
 #[derive(Debug, Clone, Copy)]
 pub struct ScreencastOptions {
     pub format: FrameFormat,
@@ -123,7 +123,7 @@ impl Default for ScreencastOptions {
     fn default() -> Self {
         Self {
             format: FrameFormat::Jpeg,
-            quality: 70,
+            quality: 80,
             max_width: 3840,
             max_height: 2160,
             every_nth_frame: 1,
@@ -411,8 +411,9 @@ async fn discover_page_ws_url(cdp_http_base: &str) -> Result<String> {
 
 /// Connect to the headless CDP browser at `cdp_http_base`, start a screencast on
 /// its page target, and run the bridge until either side closes:
-///   - each `Page.screencastFrame` → [`encode_frame`] → `frame_tx` → (ack back to
-///     CDP, **required** or CDP stops sending frames);
+///   - each `Page.screencastFrame` → ack back to CDP **immediately** (required, or
+///     CDP stops sending) → [`encode_frame`] → `frame_tx` (latest-wins `watch`, so
+///     a slow pane never stalls Chrome's compositor);
 ///   - each [`InputCommand`] from `input_rx` → the CDP command(s) that realize it.
 ///
 /// Returns `Ok(())` on a clean close (pane disconnected, frame sink dropped, or
@@ -422,7 +423,7 @@ pub async fn run_screencast_bridge(
     cdp_http_base: &str,
     opts: ScreencastOptions,
     mut input_rx: mpsc::Receiver<InputCommand>,
-    frame_tx: mpsc::Sender<Vec<u8>>,
+    frame_tx: watch::Sender<Option<Vec<u8>>>,
 ) -> Result<()> {
     let ws_url = discover_page_ws_url(cdp_http_base).await?;
     let (ws, _) = tokio_tungstenite::connect_async(&ws_url)
@@ -462,11 +463,20 @@ pub async fn run_screencast_bridge(
         tokio::select! {
             msg = read.next() => match msg {
                 Some(Ok(Message::Text(txt))) => {
-                    if let Some(ack) = handle_cdp_message(&txt, opts.format, &mut seq, &frame_tx).await {
-                        // Frame delivered — ack so CDP keeps sending. A missing ack
+                    if let Some((frame, ack)) = decode_cdp_frame(&txt, opts.format, &mut seq) {
+                        // Ack IMMEDIATELY — before forwarding — so CDP keeps
+                        // compositing. The old code gated the ack on the pane draining
+                        // the frame, so a slow pane stalled Chrome's compositor; that
+                        // is what made motion feel choppy / VPS-like. A missing ack
                         // stalls the stream after the first frame.
                         if write.send(Message::Text(ack)).await.is_err() {
                             break;
+                        }
+                        // Forward latest-wins: `watch` overwrites any frame the pane
+                        // hasn't drained yet, so the pane always paints the freshest
+                        // frame and never buffers a backlog. Err = receiver gone.
+                        if frame_tx.send(Some(frame)).is_err() {
+                            break; // pane gone
                         }
                     }
                 }
@@ -488,16 +498,12 @@ pub async fn run_screencast_bridge(
     Ok(())
 }
 
-/// Handle one CDP text message. On a `Page.screencastFrame`, encode the frame and
-/// push it to `frame_tx`, returning the `Page.screencastFrameAck` JSON the caller
-/// must send back. Returns `None` for every other message (responses, other
-/// events) and when the frame sink has been dropped (caller then breaks the loop).
-async fn handle_cdp_message(
-    txt: &str,
-    format: FrameFormat,
-    seq: &mut u32,
-    frame_tx: &mpsc::Sender<Vec<u8>>,
-) -> Option<String> {
+/// Decode one CDP text message. On a `Page.screencastFrame`, return the encoded
+/// `0x62` frame bytes and the `Page.screencastFrameAck` JSON to send back; `None`
+/// for every other message (responses, other events). PURE (no I/O) so the caller
+/// controls ordering: it acks IMMEDIATELY (so CDP keeps compositing) and then
+/// forwards the frame latest-wins — decoupling Chrome from a slow pane.
+fn decode_cdp_frame(txt: &str, format: FrameFormat, seq: &mut u32) -> Option<(Vec<u8>, String)> {
     let v: Value = serde_json::from_str(txt).ok()?;
     if v.get("method").and_then(Value::as_str)? != "Page.screencastFrame" {
         return None;
@@ -514,10 +520,8 @@ async fn handle_cdp_message(
         .unwrap_or_default();
     let frame = encode_frame(*seq, format, &metadata, &image);
     *seq = seq.wrapping_add(1);
-    if frame_tx.send(frame).await.is_err() {
-        return None; // pane gone — stop acking, let the loop end
-    }
-    Some(json!({ "id": -1, "method": "Page.screencastFrameAck", "params": { "sessionId": session_id } }).to_string())
+    let ack = json!({ "id": -1, "method": "Page.screencastFrameAck", "params": { "sessionId": session_id } }).to_string();
+    Some((frame, ack))
 }
 
 #[cfg(test)]
@@ -741,12 +745,12 @@ mod tests {
         assert_eq!(pick_page_ws_url(&json!([{"type": "worker"}])), None);
     }
 
-    #[tokio::test]
-    async fn screencast_frame_is_encoded_forwarded_and_acked() {
-        // A synthetic CDP `Page.screencastFrame` (base64 of [0xDE,0xAD]) must
-        // become a valid 0x62 frame on the channel AND yield an ack — without a
-        // real browser. A non-frame message yields neither.
-        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(4);
+    #[test]
+    fn screencast_frame_is_decoded_and_acked() {
+        // A synthetic CDP `Page.screencastFrame` (base64 of [0xDE,0xAD]) must decode
+        // to a valid 0x62 frame AND yield an ack — without a real browser. A
+        // non-frame message yields neither. The decode is pure (the caller acks then
+        // forwards latest-wins), so this needs no channel.
         let mut seq = 0u32;
         let data = base64::engine::general_purpose::STANDARD.encode([0xDE, 0xAD]);
         let frame_msg = json!({
@@ -755,24 +759,18 @@ mod tests {
         })
         .to_string();
 
-        let ack = handle_cdp_message(&frame_msg, FrameFormat::Jpeg, &mut seq, &tx)
-            .await
-            .expect("a frame must produce an ack");
+        let (frame, ack) =
+            decode_cdp_frame(&frame_msg, FrameFormat::Jpeg, &mut seq).expect("a frame must decode");
         let ackv: Value = serde_json::from_str(&ack).unwrap();
         assert_eq!(ackv["method"], "Page.screencastFrameAck");
         assert_eq!(ackv["params"]["sessionId"], 7);
 
-        let bytes = rx.try_recv().expect("frame forwarded");
-        let decoded = decode_for_test(&bytes);
+        let decoded = decode_for_test(&frame);
         assert_eq!(decoded, vec![0xDEu8, 0xAD]);
         assert_eq!(seq, 1, "seq advances per frame");
 
         // A CDP command response (no `method`) is not a frame.
-        assert!(
-            handle_cdp_message(r#"{"id":2,"result":{}}"#, FrameFormat::Jpeg, &mut seq, &tx)
-                .await
-                .is_none()
-        );
+        assert!(decode_cdp_frame(r#"{"id":2,"result":{}}"#, FrameFormat::Jpeg, &mut seq).is_none());
     }
 
     /// Strip the 16-byte header + metadata JSON, returning the image bytes — the
