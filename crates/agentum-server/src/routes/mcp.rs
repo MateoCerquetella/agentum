@@ -455,7 +455,7 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         "agentum_create_task" => tool_create_task(state, &args).await,
         "agentum_list_tasks" => tool_list_tasks(state, &args).await,
         "agentum_computer" => tool_bridge(state, "computer", &args).await,
-        "agentum_browser" => tool_bridge(state, "browser", &args).await,
+        "agentum_browser" => tool_browser(state, &args).await,
         "agentum_harness_scaffold" => tool_harness_scaffold(&args).await,
         "agentum_harness_migrate" => tool_harness_migrate(&args).await,
         "agentum_harness_board" => tool_harness_board(&args).await,
@@ -647,6 +647,20 @@ async fn tool_list_tasks(state: &AppState, args: &Value) -> anyhow::Result<Strin
     let ready = args.get("ready").and_then(Value::as_bool).unwrap_or(false);
     let tasks = state.store.orch_list_tasks(status, ready).await?;
     Ok(serde_json::to_string_pretty(&json!({ "tasks": tasks }))?)
+}
+
+/// `agentum_browser`: the page-driving ops (navigate/snapshot/screenshot/click/
+/// fill) go SERVER-SIDE over CDP to the persistent Chromium — so they return REAL
+/// page state and work headless (no desktop app / GUI webview needed), which is
+/// the QA-agent case. The rest (open/tabs/grab/annotate/annotations) stay on the
+/// desktop bridge, which owns the tab lifecycle + annotation store.
+async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let op = args.get("op").and_then(Value::as_str).unwrap_or_default();
+    if crate::cdp_driver::handles_op(op) {
+        let result = crate::cdp_driver::run_browser_op(op, args).await?;
+        return Ok(serde_json::to_string_pretty(&result)?);
+    }
+    tool_bridge(state, "browser", args).await
 }
 
 /// Forward a `{op, …}` payload to the desktop bridge (`computer`/`browser`).

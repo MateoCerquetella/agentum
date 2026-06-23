@@ -246,7 +246,7 @@ fn system_chrome_executable() -> Option<PathBuf> {
 /// system-installed full Chrome (no download), then falls back to the
 /// Playwright-managed Chromium from the ms-playwright cache (highest-revision
 /// `chromium-<rev>`). Fails loud with an install hint when neither is found.
-fn chromium_executable() -> Result<PathBuf> {
+pub(crate) fn chromium_executable() -> Result<PathBuf> {
     if let Some(exe) = system_chrome_executable() {
         return Ok(exe);
     }

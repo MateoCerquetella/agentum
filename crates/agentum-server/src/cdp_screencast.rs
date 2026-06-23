@@ -394,7 +394,7 @@ pub fn pick_page_ws_url(listing: &Value) -> Option<String> {
 /// Resolve the CDP page-target WebSocket URL for a browser exposing CDP at
 /// `cdp_http_base` (e.g. `http://127.0.0.1:9300`). Fetches `/json` and returns
 /// the first `type:"page"` target — the tab the agent drives and the user watches.
-async fn discover_page_ws_url(cdp_http_base: &str) -> Result<String> {
+pub(crate) async fn discover_page_ws_url(cdp_http_base: &str) -> Result<String> {
     let url = format!("{}/json", cdp_http_base.trim_end_matches('/'));
     let body: Value = reqwest::Client::new()
         .get(&url)
