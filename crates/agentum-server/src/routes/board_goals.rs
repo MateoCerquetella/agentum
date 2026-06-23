@@ -550,7 +550,13 @@ async fn spawn_planner_session(
         workdir: workdir_resolved,
         tool: cfg.tool.clone(),
         model: goal.model.clone(),
-        flags: vec![],
+        // YOLO is mandatory for an autonomous planner: it must run
+        // `agentum board add-card` (a bash tool call) without stopping at a
+        // permission prompt — otherwise it hangs forever and never drafts
+        // (the chat sits at "Drafting cards…"). Mirrors spawn_card_session and
+        // the harness, which CLAUDE.md calls non-negotiable. The adapter
+        // translates the marker per-tool via translate_yolo_marker.
+        flags: vec![agentum_executor::YOLO_MARKER.to_string()],
         // card_id binds this session to the goal; the watchdog (plan 01-04)
         // uses this FK to decide which goal to recompute on session events.
         card_id: Some(goal.id),
