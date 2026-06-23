@@ -4,6 +4,16 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.7] — 2026-06-23
+
+### Changed
+- **One Board.** The sidebar "Board" entry is now the Tasks view — your real
+  GitHub/Linear issues. The standalone Kanban (Backlog/Building/Review/Done) was
+  removed; "Board" and "Tasks" are the same surface.
+- **Chat creates GitHub issues.** Describe a feature in Chat and the planner
+  decomposes it into **GitHub issues** (`gh issue create`) on your Board, instead
+  of the board cards that previously never drafted ("No cards drafted yet").
+
 ## [0.20.6] — 2026-06-23
 
 ### Added
