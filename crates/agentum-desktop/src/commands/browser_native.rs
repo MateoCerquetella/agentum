@@ -141,7 +141,6 @@ pub fn browser_webview_open(
     {
         let app = app.clone();
         let page_id = browser_page_id.clone();
-        let bounds = bounds;
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(60));
             let app_main = app.clone();
