@@ -115,12 +115,14 @@ pub fn run() {
             // Auto-update: hold the in-flight Update + downloaded bytes between the
             // check → download → install commands the bottom-right UpdateCard drives.
             app.manage(commands::updater::UpdaterRuntime::default());
-            // Silent check on launch so the card surfaces an available update on
-            // its own (orca-style), without the user opening Settings. Background
-            // (userInitiated=false) → a "you're up to date" result stays silent.
+            // Silent check on launch AND on a recurring interval so the card
+            // surfaces a new release on its own (orca-style), without the user
+            // opening Settings — and crucially without a relaunch: a long-running
+            // instance re-checks periodically. Background (userInitiated=false) →
+            // a "you're up to date" result stays silent.
             let update_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                commands::updater::run_check(update_handle, false).await;
+                commands::updater::run_check_loop(update_handle).await;
             });
             Ok(())
         })
