@@ -140,6 +140,46 @@ pub async fn run_check(app: AppHandle, user_initiated: bool) {
     }
 }
 
+/// Cadence for the background re-check loop. The launch check runs immediately;
+/// thereafter we re-check on this interval so an app that's left open surfaces a
+/// new release on its own — previously the check was launch-only, so a running
+/// instance never noticed newer versions until a relaunch.
+const RECHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// True when an update is already surfaced or installing — the periodic loop
+/// skips a re-check then, so it neither clobbers an in-flight download nor
+/// re-emits a card the user is already looking at.
+fn update_in_flight(app: &AppHandle) -> bool {
+    let Some(rt) = app.try_state::<UpdaterRuntime>() else {
+        return false;
+    };
+    let Ok(inner) = rt.inner.lock() else {
+        return false;
+    };
+    matches!(
+        inner.last_status.as_ref(),
+        Some(UpdateStatus::Available { .. })
+            | Some(UpdateStatus::Downloading { .. })
+            | Some(UpdateStatus::Downloaded { .. })
+    )
+}
+
+/// Immediate launch check, then silent background re-checks every
+/// [`RECHECK_INTERVAL`]. Spawned once from `setup`. Re-emitting `Available` for a
+/// version the user already dismissed is suppressed renderer-side
+/// (`dismissedUpdateVersion`), so this doesn't re-nag; a genuinely newer version
+/// surfaces the card.
+pub async fn run_check_loop(app: AppHandle) {
+    run_check(app.clone(), false).await;
+    loop {
+        tokio::time::sleep(RECHECK_INTERVAL).await;
+        if update_in_flight(&app) {
+            continue;
+        }
+        run_check(app.clone(), false).await;
+    }
+}
+
 #[tauri::command]
 pub fn updater_get_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()

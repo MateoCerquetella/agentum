@@ -4,24 +4,35 @@
 > when you change architecture, add a crate, move a primitive, or
 > introduce a non-obvious gotcha.
 
+> **Repo split (2026-06):** the CLI/TUI (package `agentum-tui`, binary
+> `agentum`) was extracted into its own repository,
+> [`github.com/mateocerquetella/agentum-tui`](https://github.com/mateocerquetella/agentum-tui).
+> **This** repo is now the **desktop app** (`crates/agentum-desktop`)
+> plus the shared backend crates it depends on (agentum-core, -store,
+> -tmux, -watchdog, -executor, -server). The TUI repo depends on the
+> same backend crates (currently by its own copy). Anything below that
+> describes building or running the `agentum` CLI/TUI now happens in
+> that separate repo — references are kept here for context.
+
 agentum is a self-hosted control plane for AI coding agents (Claude
 Code, Codex, Gemini, Cursor, …). It boots a local daemon (`agentum
 serve`) that owns:
 
 - a SQLite database of session metadata
 - a tmux server where each session is one pane running one agent CLI
-- an HTTP/WS API that the TUI (`agentum terminal`) and the desktop app
-  drive
+- an HTTP/WS API that the TUI (`agentum terminal`, separate repo) and
+  the desktop app drive
 
 A "session" is a `(name, workdir, tool, model, flags)` tuple. The
 daemon spawns the right binary into a tmux pane and streams its
 output to clients.
 
-Two clients consume that API: the **TUI** (`agentum terminal`) boots
-`agentum-server` in-process on an ephemeral loopback port — the same
-embedded server the desktop uses — so it is self-contained (no separate
-`agentum serve` daemon; remote machines are reached as SSH hosts); the
-**desktop app** (the Tauri crate
+Two clients consume that API. The **TUI** (`agentum terminal`, now in
+the separate `agentum-tui` repo) boots `agentum-server` in-process on
+an ephemeral loopback port — the same embedded server the desktop uses
+— so it is self-contained (no separate `agentum serve` daemon; remote
+machines are reached as SSH hosts). The **desktop app** — the only
+client that lives in **this** repo (the Tauri crate
 `crates/agentum-desktop/`, with its Rust shell in `src/` and its
 React/Vite UI in `ui/`) boots
 `agentum-server` *in-process* on a loopback port (see
@@ -85,8 +96,10 @@ crates/
   agentum-watchdog/    # Background loop. Tails panes, emits Event::AgentFinished/AwaitingInput/Crashed.
   agentum-executor/    # ToolAdapter trait + per-agent argv builders. Owns YOLO marker translation.
   agentum-server/      # axum HTTP+WS API + TLS + auth + routes/. API-only (no embedded web UI).
-  agentum-tui/         # Package `agentum-tui` (binary `agentum`). The TUI
-                       #   (commands/terminal/, boots agentum-server in-process) + scriptable CLI.
+  # agentum-tui/       # MOVED OUT (2026-06) → github.com/mateocerquetella/agentum-tui.
+  #                    #   Package `agentum-tui` (binary `agentum`): the TUI
+  #                    #   (commands/terminal/, boots agentum-server in-process) + scriptable CLI.
+  #                    #   No longer in this workspace; the new repo depends on the backend crates above.
   agentum-desktop/     # The desktop app, self-contained:
     src/               #   Tauri 2 Rust shell — embeds agentum-server in-process (loopback) and exposes
                        #   native commands (window, dialogs, clipboard, local PTY) to the webview.
@@ -115,11 +128,12 @@ Each `crates/<x>/Cargo.toml` declares its deps; the workspace root
 The daemon is **API-only** — it serves no web UI, so there is no
 compile-time asset embed. The two clients build independently:
 
-- **TUI** (Rust): `cargo build --release`, then restart by re-running
-  `agentum terminal` (it boots its own embedded server; `pkill agentum`
-  first if a previous instance is still holding its loopback port).
-  There's no hot reload; rebuild after touching
-  `crates/agentum-tui/src/commands/terminal/*.rs`.
+- **TUI** (Rust): builds in the **separate `agentum-tui` repo** now —
+  `cargo build --release` there, then restart by re-running `agentum
+  terminal` (it boots its own embedded server; `pkill agentum` first if
+  a previous instance is still holding its loopback port). There's no
+  hot reload; rebuild after touching that repo's
+  `src/commands/terminal/*.rs`. Not built from this repo.
 - **Desktop UI** (React/Vite): `npm run build --prefix crates/agentum-desktop/ui`
   (or `npm run dev --prefix crates/agentum-desktop/ui` for HMR). The Tauri shell
   loads it; `cargo build` the `agentum-desktop` crate after changing
@@ -145,15 +159,20 @@ if it has a UI/dashboard surface):
    `PASSTHROUGH_PROBED` if you only want availability gating without
    a bespoke launch). Add a `binary_for(tool)` arm if the binary
    name disagrees with the tool id (e.g. cursor → cursor-agent).
-3. **`crates/agentum/src/commands/terminal/app.rs`** — append to
-   `TOOL_SUGGESTIONS` so the TUI Tab-cycle picks it up. If the
-   adapter has a YOLO flag, also extend `YOLO_TOOLS`. Extend
-   `is_probed_tool()` so the picker gates it.
-4. **`crates/agentum/src/cli.rs`** — touch the `--tool` help text
-   example string.
-5. **`dashboard/src/lib/components/NewSessionDialog.svelte`** — add
-   to the `TOOLS` array (`firstClass: true` if the binary should be
-   gated; `yoloable: true` if `yolo_flag()` returns `Some`).
+3. **TUI tool list** (in the separate `agentum-tui` repo —
+   `src/commands/terminal/app.rs`) — append to `TOOL_SUGGESTIONS` so
+   the TUI Tab-cycle picks it up. If the adapter has a YOLO flag, also
+   extend `YOLO_TOOLS`. Extend `is_probed_tool()` so the picker gates
+   it.
+4. **TUI CLI help** (in the separate `agentum-tui` repo —
+   `src/cli.rs`) — touch the `--tool` help text example string.
+5. **`crates/agentum-desktop/ui/src`** — add the tool to the desktop
+   UI's tool list (the React new-session surface) so it shows in the
+   picker (`firstClass: true` if the binary should be gated;
+   `yoloable: true` if `yolo_flag()` returns `Some`).
+
+Steps 1–2 (the executor adapter) live in this repo; steps 3–4 (TUI)
+live in the `agentum-tui` repo; step 5 (desktop UI) lives here.
 
 Tests live in `adapters.rs`'s `#[cfg(test)] mod tests`. Add at minimum
 a "registry routes" assertion + a YOLO-translation test.
@@ -212,13 +231,17 @@ without retyping the URL. Two layers:
 
 ### CLI / TUI
 
+> These paths live in the separate `agentum-tui` repo now
+> (`github.com/mateocerquetella/agentum-tui`); the `crates/agentum/…`
+> prefixes below are relative to that repo's crate, not this one.
+
 - **Storage**: `$XDG_CONFIG_HOME/agentum/profiles.toml`. One
   `default = "name"` pointer plus `[profiles.<name>]` tables with
   `url`, optional `fingerprint`, optional `insecure`.
-- **Module**: `crates/agentum/src/commands/terminal/profiles.rs`
+- **Module**: `src/commands/terminal/profiles.rs`
   (`Profiles::load/upsert/remove/set_default`).
 - **CLI**: `agentum profiles list/add/rm/use` lives in
-  `crates/agentum/src/commands/profiles.rs`.
+  `src/commands/profiles.rs`.
 - **TUI flag**: `agentum terminal --profile NAME` resolves to the
   profile's URL+fingerprint before the loopback probe runs.
 - **TUI overlay**: `Ctrl-S` opens `Overlay::Profiles`. Pick + Enter
@@ -226,8 +249,7 @@ without retyping the URL. Two layers:
   `app::RunOutcome::SwitchProfile(name)` bubbles up to
   `commands::terminal::run`, which tears down the alt-screen,
   reconnects via `connect_once`, and re-enters `run_tui_session`.
-  See `crates/agentum/src/commands/terminal/mod.rs::run` for the
-  loop.
+  See `src/commands/terminal/mod.rs::run` for the loop.
 - **Active-profile indicator**: rendered in the title bar
   (`ui::draw_title`) as `· @vps`.
 
@@ -494,19 +516,18 @@ Test) → browser QA gate green → ticket Done. The pieces:
 ## Quick reference
 
 ```sh
-# Build everything
-cargo build --release
-npm run build --prefix dashboard
-cargo build --release   # rebake the embedded SPA
+# Build the desktop app (this repo)
+npm run build --prefix crates/agentum-desktop/ui
+cargo build --release -p agentum-desktop
 
-# Run the TUI (boots its own embedded server in-process)
-agentum terminal
+# Run the desktop app
+cargo run -p agentum-desktop
 
-# Run with mute
-AGENTUM_TUI_NO_SOUND=1 agentum terminal
+# The TUI (`agentum terminal`) lives in the separate agentum-tui repo
+# (github.com/mateocerquetella/agentum-tui); build/run it there.
 
-# Tests
-cargo test -p agentum-executor -p agentum-server -p agentum --lib
-npm run check --prefix dashboard
+# Tests (backend crates that remain in this repo)
+cargo test -p agentum-executor -p agentum-server --lib
+npm run build --prefix crates/agentum-desktop/ui
 ```
 
