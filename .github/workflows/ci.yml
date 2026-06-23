@@ -59,12 +59,16 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: echo "CC=cl" >> "$GITHUB_ENV"
-      # macOS: stage the sherpa/onnxruntime dylibs where tauri.conf's frameworks
-      # (and build.rs's tauri_build check) expect them — target/release/ — so the
-      # desktop crate compiles under clippy/test. A native release build of just
-      # sherpa-rs drops them straight there.
-      - name: Stage sherpa dylibs (macOS)
-        if: runner.os == 'macOS'
+      # Stage the sherpa/onnxruntime native libs before clippy/test on EVERY OS.
+      # sherpa-rs's `download-binaries` feature fetches the per-target prebuilts,
+      # and a standalone release build of just sherpa-rs drops them where the
+      # desktop crate's link step looks (target/release/) — so `cargo test --all`
+      # links on Linux and Windows too, not only macOS. clippy doesn't link, so
+      # it passed without this; `cargo test` does link and failed with
+      # `unable to find library -lonnxruntime / -lsherpa-onnx-c-api` until this
+      # step ran cross-OS. (build.rs sets the rpath: @loader_path on macOS,
+      # $ORIGIN on Linux.)
+      - name: Stage sherpa libs (download-binaries)
         run: cargo build --release -p sherpa-rs
       - uses: oven-sh/setup-bun@v2
         with:
