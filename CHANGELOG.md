@@ -4,6 +4,27 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.4] — 2026-06-23
+
+### Added
+- **Unified external Kanban — Tasks is the board.** The Tasks view now renders
+  a real Kanban board (status normalization + a generic board) with a GitHub
+  view that supports two-way drag-to-transition. The redundant "Board (SOON)"
+  primary-nav placeholder is retired — there's one board now, not two.
+- **Server-side board ↔ tracker sync (016a/016b).** The server pulls board
+  cards from GitHub and persists tracker bindings (016a), and pushes board
+  changes back to the tracker on top of those bindings (016b).
+
+### Changed
+- **CLI/TUI extracted to its own repo.** `agentum-tui` (binary `agentum`) now
+  lives in `github.com/mateocerquetella/agentum-tui`; this repo is the desktop
+  app plus the shared backend crates.
+
+### Fixed
+- **Running app now notices new releases.** The desktop updater re-checks
+  periodically so a long-running instance picks up a published release without
+  a restart.
+
 ## [0.20.3] — 2026-06-23
 
 ### Fixed
