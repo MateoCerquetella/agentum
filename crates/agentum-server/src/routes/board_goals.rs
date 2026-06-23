@@ -553,12 +553,12 @@ async fn spawn_planner_session(
         workdir: workdir_resolved,
         tool: cfg.tool.clone(),
         model: goal.model.clone(),
-        // YOLO is mandatory for an autonomous planner: it must run
-        // `agentum board add-card` (a bash tool call) without stopping at a
-        // permission prompt — otherwise it hangs forever and never drafts
-        // (the chat sits at "Drafting cards…"). Mirrors spawn_card_session and
-        // the harness, which CLAUDE.md calls non-negotiable. The adapter
-        // translates the marker per-tool via translate_yolo_marker.
+        // YOLO is mandatory for an autonomous planner: it must run `gh issue
+        // create` (a bash tool call) without stopping at a permission prompt —
+        // otherwise it hangs forever and never creates issues (the chat sits at
+        // "Drafting…"). Mirrors spawn_card_session and the harness, which
+        // CLAUDE.md calls non-negotiable. The adapter translates the marker
+        // per-tool via translate_yolo_marker.
         flags: vec![agentum_executor::YOLO_MARKER.to_string()],
         // card_id binds this session to the goal; the watchdog (plan 01-04)
         // uses this FK to decide which goal to recompute on session events.
@@ -567,11 +567,10 @@ async fn spawn_planner_session(
         worktree_branch: None,
         worktree_base_ref: None,
     };
-    // The planner runs locally: planning reads the repo on this machine, and the
-    // agent shells out to `agentum board add-card` — which only reaches THIS
-    // (ephemeral-port) embedded server because `spawn_agent_into_pane` publishes
-    // its URL via `pane_env`. Resolve the local host so the launch goes through
-    // the one centralized path, exactly like the harness.
+    // The planner runs locally inside the repo: it reads the project on this
+    // machine and shells out to `gh issue create`, which uses the repo's own
+    // `gh` auth (no agentum server round-trip). Resolve the local host so the
+    // launch still goes through the one centralized spawn path, like the harness.
     let host = state
         .store
         .get_host(agentum_core::LOCAL_HOST_ID)
@@ -583,11 +582,8 @@ async fn spawn_planner_session(
         .await?;
 
     // Launch through the ONE shared spawn path (YOLO translation, loopback
-    // `pane_env` with the embedded API URL the `agentum board add-card` CLI
-    // needs, Claude `--settings` hook, MCP wiring, pipe-pane, status→Running).
-    // The old hand-rolled spawn bypassed all of this — the planner pane never
-    // got `AGENTUM_API_URL`, so add-card couldn't find the server and no cards
-    // were ever created.
+    // `pane_env`, Claude `--settings` hook, MCP wiring, pipe-pane, status→Running)
+    // — the same helper the harness and spawn_card_session use.
     let target = agentum_tmux::target_for(&session.name);
     super::sessions::spawn_agent_into_pane(state, &session, &host, &target, &wd).await?;
 
@@ -599,7 +595,17 @@ async fn spawn_planner_session(
     // but never executes, which left the chat stuck at "Drafting cards…".
     // Fire-and-forget so the HTTP response returns the session id immediately;
     // the UI polls the board for the cards the planner then drafts.
-    let prompt = cfg.prompt.replace("<AG-KEY>", &goal.key);
+    // Inject the goal's description so the planner knows what to decompose into
+    // GitHub issues — it previously received only the AG-key and had nothing to
+    // plan from.
+    let goal_text = match goal.body.as_deref().map(str::trim) {
+        Some(b) if !b.is_empty() => format!("{}\n\n{}", goal.title, b),
+        _ => goal.title.clone(),
+    };
+    let prompt = cfg
+        .prompt
+        .replace("<GOAL>", &goal_text)
+        .replace("<AG-KEY>", &goal.key);
     {
         let state = state.clone();
         let session = session.clone();
