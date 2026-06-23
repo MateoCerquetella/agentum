@@ -30,7 +30,10 @@ pub struct NewFeature {
 /// key like `AG-12`, a GitHub issue number, a Linear identifier) — the
 /// chat-to-features pipeline reuses it as the harness feature id so
 /// `$HARNESS_FEATURE_ID` in `verify.sh` points back at the real tracker item.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Serialize` so the `/api/board/goals` handler can return it verbatim as the
+/// Chat-create response (spec 018) — `provider`/`id`/`url` are the wire contract.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct FeatureRef {
     pub provider: &'static str,
     pub id: String,
@@ -268,8 +271,10 @@ fn gh_create_argv<'a>(title: &'a str, body: &'a str) -> [&'a str; 6] {
 
 /// Parse the issue URL `gh issue create` prints to stdout into a [`FeatureRef`].
 /// The number (after `/issues/`) becomes the harness feature id; the full URL is
-/// surfaced to the user.
-fn parse_gh_issue_url(stdout: &str) -> anyhow::Result<FeatureRef> {
+/// surfaced to the user. `pub(crate)` so the remote (SSH) GitHub path in
+/// `routes::board_goals` can reuse it against `gh`'s stdout from `gh_in_dir`
+/// (spec 018 S3) — same parser, local or remote.
+pub(crate) fn parse_gh_issue_url(stdout: &str) -> anyhow::Result<FeatureRef> {
     let url = stdout
         .lines()
         .map(str::trim)

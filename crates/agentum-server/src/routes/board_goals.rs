@@ -1,9 +1,20 @@
-//! `/api/board/goals` — atomic create-goal + spawn-planner-session.
+//! `/api/board/goals` — atomic create-goal + deterministic issue create.
 //! The goal IS a `BoardItem` with `lbl="goal"` (CONTEXT D-01); no
-//! parallel table. The planner is a normal agent session bound via
-//! `session.card_id = goal.id` (CONTEXT D-07).
+//! parallel table.
+//!
+//! Spec 018: Chat submit no longer spawns an autonomous planner agent (which
+//! had no completion guarantee and gave the UI nothing to render on failure —
+//! the "planning…" hang). Instead `create_goal` makes a **synchronous,
+//! server-side** `TaskSink::create_feature` call and returns the created
+//! [`crate::task_sink::FeatureRef`] (the real GitHub issue / Linear ticket /
+//! board card) — or a typed, loud error — as the HTTP response. The planner
+//! (`spawn_planner_session`, `planner.rs`) stays in the tree but is OUT of the
+//! issue-creation critical path (dormant), so the decomposition vision can
+//! return later (spec 018 §5 Non-goals).
 
-use agentum_core::{BoardItem, Event, NewBoardItem, NewSession, Status, TransitionCtx};
+use agentum_core::{
+    BoardItem, Event, Host, HostKind, NewBoardItem, NewSession, Status, TransitionCtx,
+};
 use axum::Json;
 use axum::Router;
 use axum::extract::{Path, State};
@@ -11,10 +22,12 @@ use axum::http::StatusCode;
 use axum::routing::post;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
 use crate::planner;
+use crate::task_sink::{FeatureRef, NewFeature, SinkCtx, TaskSink};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -32,31 +45,66 @@ struct CreateGoalBody {
     body: Option<String>,
     #[serde(default)]
     workdir: Option<String>,
-    /// Which agent runs the planner (and which the goal's child cards inherit) —
-    /// e.g. "claude" | "codex" | "gemini". When absent, the planner config's
-    /// default tool is used. Chosen in the Chat intake's agent picker (#48).
+    /// Which agent the goal's child cards inherit when later started from the
+    /// board (`spawn_card_session` resolves tool/model via the parent goal) —
+    /// e.g. "claude" | "codex" | "gemini". No longer drives a planner (spec
+    /// 018), but still rides on the goal row for the board-start path.
     #[serde(default)]
     tool: Option<String>,
-    /// Optional model hint passed through to the chosen agent.
+    /// Optional model hint inherited the same way.
     #[serde(default)]
     model: Option<String>,
+    /// SSH host the `workdir` lives on (spec 018 S3 / AC-6). Absent or the
+    /// nil-UUID (`LOCAL_HOST_ID`) means the repo is local. Mirrors
+    /// `sessions::create`'s explicit `host_id` — path→host has no reliable
+    /// mapping, so the client states it.
+    #[serde(default)]
+    host_id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize)]
 struct CreateGoalResponse {
     goal: BoardItem,
-    planner_session_id: String,
+    /// The created tracker item (GitHub issue / Linear ticket / board card).
+    /// `FeatureRef` serialized verbatim: `{ provider, id, url }`. For
+    /// `provider:"board"`/`"linear"` the `url` may be null — render
+    /// conditionally. Replaces the old `planner_session_id` (no live consumer).
+    feature: FeatureRef,
 }
 
+/// `POST /api/board/goals` — create a goal card and **deterministically** create
+/// one tracker item (GitHub issue / Linear ticket / board card) for it, returning
+/// the [`FeatureRef`] (spec 018 S1). No agent is spawned.
+///
+/// **Error contract (AC-3, loud + specific):** failures return
+/// `422 { "error": { code, message, provider } }` via [`ApiError::Custom`]
+/// (chosen over the default `{"error": string}` so the UI can branch on `code`).
+/// `code` ∈ `empty_title` | `no_gh` | `not_github_repo` | `gh_failed`
+/// | `linear_failed` | `remote_unsupported`. A `Board` fallback (no GitHub/Linear
+/// configured) is a **surfaced success** with `provider:"board"`, not an error
+/// (AC-4) — the UI labels it ("created on the internal board").
 async fn create_goal(
     State(state): State<AppState>,
     Json(body): Json<CreateGoalBody>,
 ) -> Result<(StatusCode, Json<CreateGoalResponse>), ApiError> {
+    // AC-3: reject an empty/whitespace title up front with the typed envelope,
+    // BEFORE the column gate or any sink call — a blank description can never
+    // become a meaningful issue title, and the error must be specific.
+    let title = body.title.trim();
+    if title.is_empty() {
+        return Err(create_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "empty_title",
+            "Describe the feature — the title can't be empty.",
+            None,
+        ));
+    }
+
     // Step 1: enforce column rules for `todo` exactly like routes/board::create.
     // Goals land in todo by definition (CONTEXT D-02) so the target is hardcoded.
     let target_status = "todo";
     let mut ctx = TransitionCtx {
-        title: Some(body.title.as_str()),
+        title: Some(title),
         lbl: Some("goal"),
         workdir: body.workdir.as_deref(),
         tool: None,
@@ -67,27 +115,34 @@ async fn create_goal(
     super::board::enforce_transition(&state.store, &state.bus, None, target_status, &mut ctx)
         .await?;
 
-    // Step 2: load + validate the planner config BEFORE writing the goal row.
-    // D-12: reads from disk on every submit (no in-memory cache). Loading first
-    // means a bad planner.toml (e.g. a `prompt_file` that fails the path guard)
-    // returns 400 here WITHOUT orphaning a stuck "planning…" goal — the
-    // create_board_item write below only runs once the planner is known-good.
-    // The Chat intake's agent picker overrides which agent runs the planner.
+    // The chosen agent still rides on the goal row so child cards inherit it
+    // when started from the board (spawn_card_session resolves tool/model via
+    // parent_goal). It no longer drives a planner — spec 018.
     let tool = body
         .tool
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    let mut cfg = planner::load_planner_config().await?;
-    if let Some(t) = tool {
-        cfg.tool = t.to_string();
-    }
 
-    // Step 3: create the goal BoardItem (lbl=goal, status=todo).
-    // The chosen agent rides on the goal card so the planner's child cards
-    // inherit it (spawn_card_session resolves tool/model via parent_goal).
+    // Step 2: resolve the host (S3 / AC-6) and the workdir BEFORE writing the
+    // goal row, so a bad host_id or a missing remote-workdir is a loud error
+    // that never orphans a goal. Body workdir wins; else the daemon cwd.
+    let host_id = body.host_id.unwrap_or(agentum_core::LOCAL_HOST_ID);
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown host: {host_id}")))?;
+    let workdir = body.workdir.clone().unwrap_or_else(|| {
+        std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "/".to_string())
+    });
+
+    // Step 3: create the goal BoardItem (lbl=goal, status=todo) — the Chat-side
+    // tracking record, returned regardless of which sink backs the feature.
     let new_item = NewBoardItem {
-        title: body.title.clone(),
+        title: title.to_string(),
         body: body.body.clone(),
         lbl: Some("goal".into()),
         status: Some(target_status.into()),
@@ -107,42 +162,194 @@ async fn create_goal(
             .with_payload(json!({"id": goal.id, "key": goal.key, "title": goal.title})),
     );
 
-    // Step 4: derive workdir. Body wins; else daemon cwd.
-    let workdir = body.workdir.clone().unwrap_or_else(|| {
-        std::env::current_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "/".to_string())
-    });
+    // Step 4: create the feature SYNCHRONOUSLY in the configured task sink and
+    // return the FeatureRef (or a typed error). This replaces the autonomous
+    // planner: a direct call returns a terminal result in one round trip. The
+    // call shape mirrors `plan_goal_harness` (the proven, unit-tested seam).
+    let feature = create_feature_for_goal(
+        &state,
+        &host,
+        &workdir,
+        &NewFeature {
+            title: title.to_string(),
+            body: body.body.clone(),
+        },
+    )
+    .await;
 
-    // Step 5: spawn the planner session (card_id = goal.id binds them).
-    // Per CONTEXT D-07: if spawn fails, the goal card is NOT deleted.
-    // The dashboard renders a warning chip from the `goal.planner.spawn_failed` event.
-    let planner_session_id = spawn_planner_session(&state, &goal, &cfg, &workdir).await;
-
-    match planner_session_id {
-        Ok(sid) => Ok((
-            StatusCode::CREATED,
-            Json(CreateGoalResponse {
-                goal,
-                planner_session_id: sid,
-            }),
-        )),
-        Err(e) => {
-            tracing::warn!(error = %e, goal_id = goal.id, "planner spawn failed; goal retained");
-            let _ = state.bus.send(
-                Event::new("goal.planner.spawn_failed")
-                    .with_payload(json!({"goal_id": goal.id, "error": e.to_string()})),
-            );
-            // Return 201 + empty session id so callers can detect the failure
-            // while still having the goal row to work with.
-            Ok((
-                StatusCode::CREATED,
-                Json(CreateGoalResponse {
-                    goal,
-                    planner_session_id: String::new(),
-                }),
-            ))
+    match feature {
+        Ok(fref) => {
+            let _ = state.bus.send(Event::new("goal.feature.created").with_payload(json!({
+                "goal_id": goal.id,
+                "provider": fref.provider,
+                "id": fref.id,
+                "url": fref.url,
+            })));
+            Ok((StatusCode::CREATED, Json(CreateGoalResponse { goal, feature: fref })))
         }
+        Err(e) => {
+            // The goal row stays (the Chat-side record); the error is loud and
+            // specific so the UI never sits at an indefinite "planning…".
+            tracing::warn!(error = %e, goal_id = goal.id, "feature create failed; goal retained");
+            let _ = state.bus.send(Event::new("goal.feature.failed").with_payload(json!({
+                "goal_id": goal.id,
+                "error": e.to_string(),
+            })));
+            Err(e)
+        }
+    }
+}
+
+/// Build the typed AC-3 error envelope: `{ "error": { code, message, provider } }`.
+/// Nested under `error` (an object) — distinct from the default
+/// `{"error": string}` envelope — so the UI can branch on `code`.
+fn create_error(
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    provider: Option<&str>,
+) -> ApiError {
+    ApiError::Custom(
+        status,
+        json!({ "error": { "code": code, "message": message, "provider": provider } }),
+    )
+}
+
+/// Create one feature for a goal in the configured [`TaskSink`], dispatching the
+/// GitHub path local-vs-remote (S3 / AC-6). Maps `create_feature`'s
+/// `anyhow::Error` onto the typed AC-3 envelope.
+///
+/// A `Board` fallback is returned as a normal `Ok(FeatureRef{provider:"board"})`
+/// (AC-4 — surfaced, not silent). Only real failures (`gh` missing/non-zero,
+/// Linear transport, an unsupported remote) become `Err`.
+async fn create_feature_for_goal(
+    state: &AppState,
+    host: &Host,
+    workdir: &str,
+    feature: &NewFeature,
+) -> Result<FeatureRef, ApiError> {
+    let wd = super::util::expand_workdir(workdir)?;
+
+    match &host.kind {
+        HostKind::Local => {
+            // Local workdir must exist on disk before we probe/select a sink.
+            if !wd.exists() {
+                return Err(ApiError::BadRequest(format!(
+                    "workdir does not exist: {}",
+                    wd.display()
+                )));
+            }
+            // AC-4: GitHub preferred when available; Linear next; board fallback.
+            let sink = TaskSink::select(&wd).await;
+            sink.create_feature(
+                &SinkCtx {
+                    store: &state.store,
+                    workdir: &wd,
+                    parent_goal_id: None,
+                },
+                feature,
+            )
+            .await
+            .map_err(|e| map_sink_error(sink, &e))
+        }
+        HostKind::Ssh { .. } => {
+            // S3 / AC-6: the repo lives on an SSH host. Run `gh issue create`
+            // ON that host via host_runtime (never a silent local `gh` against
+            // a path that doesn't exist locally).
+            create_github_issue_remote(host, workdir, feature).await
+        }
+    }
+}
+
+/// Run `gh issue create` on an SSH host's `workdir` and parse the issue URL —
+/// the remote analogue of `TaskSink::Github` (S3 / AC-6). Goes through
+/// `host_runtime::gh_in_dir` (mirrors `git_in_dir`), so quoting + the bounded
+/// SSH timeout are shared with every other host-aware exec.
+async fn create_github_issue_remote(
+    host: &Host,
+    workdir: &str,
+    feature: &NewFeature,
+) -> Result<FeatureRef, ApiError> {
+    let body = feature.body.clone().unwrap_or_default();
+    let args = ["issue", "create", "--title", feature.title.as_str(), "--body", body.as_str()];
+    let out = crate::host_runtime::gh_in_dir(host, workdir, &args)
+        .await
+        .map_err(|e| {
+            create_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "remote_unsupported",
+                &format!("could not run `gh` on the remote host: {e}"),
+                Some("github"),
+            )
+        })?;
+    if !out.success {
+        let stderr = out.stderr.trim();
+        let code = classify_gh_stderr(stderr);
+        return Err(create_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            code,
+            if stderr.is_empty() {
+                "remote `gh issue create` failed"
+            } else {
+                stderr
+            },
+            Some("github"),
+        ));
+    }
+    crate::task_sink::parse_gh_issue_url(&out.stdout_string()).map_err(|e| {
+        create_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "gh_failed",
+            &format!("could not parse the created issue URL: {e}"),
+            Some("github"),
+        )
+    })
+}
+
+/// Map a sink `create_feature` error onto the typed AC-3 envelope by inspecting
+/// the message the sink emits (`task_sink.rs` raises distinct strings). The
+/// provider is known from `sink`, so the UI can show "Connect GitHub" vs.
+/// "Linear failed".
+fn map_sink_error(sink: TaskSink, err: &anyhow::Error) -> ApiError {
+    let msg = err.to_string();
+    let (code, message): (&str, String) = match sink {
+        TaskSink::Github => {
+            // `task_sink.rs`: "failed to run `gh`: …" (binary missing) vs.
+            // "gh issue create failed: <stderr>" (non-zero). Classify the
+            // stderr so "no default remote repository" reads as not_github_repo.
+            if msg.contains("failed to run `gh`") {
+                ("no_gh", "GitHub CLI (`gh`) is not installed or not on PATH.".to_string())
+            } else {
+                (classify_gh_stderr(&msg), msg.clone())
+            }
+        }
+        TaskSink::Linear => ("linear_failed", msg.clone()),
+        // Board create only fails on a real store error → surface as a generic
+        // gh_failed-shaped envelope is wrong; report it plainly.
+        TaskSink::Board => ("board_failed", msg.clone()),
+    };
+    create_error(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        code,
+        &message,
+        Some(sink.provider()),
+    )
+}
+
+/// Pick a finer error code from `gh`'s stderr: a repo that `gh` can't resolve
+/// (no remote, not a git repo) is `not_github_repo`; everything else (auth,
+/// rate-limit, validation) is `gh_failed`. Heuristic on `gh`'s own wording —
+/// kept lenient so a wording change degrades to `gh_failed`, not a panic.
+fn classify_gh_stderr(stderr: &str) -> &'static str {
+    let s = stderr.to_lowercase();
+    if s.contains("no default remote repository")
+        || s.contains("not a git repository")
+        || s.contains("none of the git remotes")
+        || s.contains("could not determine")
+    {
+        "not_github_repo"
+    } else {
+        "gh_failed"
     }
 }
 
@@ -528,6 +735,13 @@ fn build_card_prompt(card: &BoardItem) -> Option<String> {
 /// harness's `inject_prompt` — the same one launch+prompt path as the card
 /// spawn and the harness, so `pane_env`/MCP/trust-dialog handling stay in one
 /// place. Do not reintroduce a hand-rolled tmux spawn here.
+///
+/// DORMANT (spec 018): removed from the Chat→issue critical path (it was the
+/// non-deterministic "planning…" hang). Retained in-tree so the decomposition
+/// vision (one description → many issues) can return as a follow-up spec without
+/// re-deriving the launch wiring. `#[allow(dead_code)]` because nothing calls it
+/// today — deleting it would lose that path; see spec 018 §5 Non-goals.
+#[allow(dead_code)]
 async fn spawn_planner_session(
     state: &AppState,
     goal: &BoardItem,
@@ -713,24 +927,39 @@ mod tests {
         }
     }
 
-    /// POST /api/board/goals creates a BoardItem with lbl=goal, status=todo.
+    /// Build a `CreateGoalBody` with the spec-018 defaults (local host, no
+    /// agent inheritance). Keeps the per-test sites focused on what they vary.
+    fn goal_body(title: &str, workdir: Option<&str>) -> CreateGoalBody {
+        CreateGoalBody {
+            title: title.into(),
+            body: None,
+            workdir: workdir.map(str::to_string),
+            tool: None,
+            model: None,
+            host_id: None,
+        }
+    }
+
+    /// Force the agnostic board sink under the env lock so create-goal tests are
+    /// hermetic — they never probe the dev machine's connected GitHub/Linear and
+    /// never shell out to `gh` (spec 018 AC-5: "no live gh needed").
+    fn force_board_sink() {
+        // SAFETY: serialised by `isolate_xdg`'s crate-wide TEST_ENV_LOCK, which
+        // every create-goal test holds for the duration of the call.
+        unsafe { std::env::set_var("AGENTUM_TASK_SINK", "board") };
+    }
+
+    /// POST /api/board/goals creates a BoardItem with lbl=goal, status=todo and
+    /// returns the created feature (board fallback → provider "board").
     #[tokio::test]
     async fn create_goal_inserts_board_item_with_lbl_goal() {
         let _env = isolate_xdg();
+        force_board_sink();
         let state = fresh_state().await;
 
-        let (code, body) = create_goal(
-            State(state.clone()),
-            Json(CreateGoalBody {
-                title: "build OAuth".into(),
-                body: None,
-                workdir: None,
-                tool: None,
-                model: None,
-            }),
-        )
-        .await
-        .expect("create_goal must succeed");
+        let (code, body) = create_goal(State(state.clone()), Json(goal_body("build OAuth", None)))
+            .await
+            .expect("create_goal must succeed");
 
         assert_eq!(code, StatusCode::CREATED);
         let goal = &body.0.goal;
@@ -738,72 +967,138 @@ mod tests {
         assert_eq!(goal.status, "todo", "goal must land in todo");
         assert_eq!(goal.title, "build OAuth");
         assert!(goal.parent_goal_id.is_none(), "goals have no parent goal");
+        // Spec 018: the response carries the created tracker item, not a
+        // planner_session_id. With the board sink forced it's a board card.
+        assert_eq!(body.0.feature.provider, "board");
+        assert!(body.0.feature.url.is_none(), "board cards have no external url");
     }
 
-    /// A planner-config error must reject the submit BEFORE any goal row is
-    /// written — otherwise a bad `planner.toml` orphans a stuck "planning…"
-    /// goal that the user can't get rid of. Regression for the leaked
-    /// `prompt_file = "../etc/passwd"` fixture that 400'd every submit.
+    /// Spec 018 AC-1/AC-5: create-goal returns a `FeatureRef` for the created
+    /// issue/card — deterministically, no agent spawned. With the board sink
+    /// forced the FeatureRef's id is the new feat card's board key and that card
+    /// actually exists in the store.
     #[tokio::test]
-    async fn invalid_planner_config_does_not_orphan_goal() {
+    async fn create_goal_returns_feature_ref_for_created_card() {
         let _env = isolate_xdg();
-        // A relative `prompt_file` is rejected by the path-traversal guard.
-        let cfg_dir = agentum_store::paths::config_dir().unwrap();
-        std::fs::create_dir_all(&cfg_dir).unwrap();
-        std::fs::write(
-            cfg_dir.join("planner.toml"),
-            "[planner]\nprompt_file = \"../etc/passwd\"\n",
-        )
-        .unwrap();
-
+        force_board_sink();
         let state = fresh_state().await;
 
-        let err = create_goal(
+        let (code, body) = create_goal(
             State(state.clone()),
-            Json(CreateGoalBody {
-                title: "should not orphan".into(),
-                body: None,
-                workdir: Some("/tmp".into()),
-                tool: None,
-                model: None,
-            }),
+            Json(goal_body("Add CSV export to the board", None)),
         )
         .await
-        .expect_err("invalid planner config must reject the submit");
+        .expect("create_goal must succeed with the board sink");
 
+        assert_eq!(code, StatusCode::CREATED);
+        let fref = &body.0.feature;
+        assert_eq!(fref.provider, "board");
         assert!(
-            matches!(err, ApiError::BadRequest(_)),
-            "expected BadRequest from planner config, got {err:?}"
+            fref.id.starts_with("AG-"),
+            "board FeatureRef id must be the card key, got {}",
+            fref.id
         );
 
-        // The goal row must NOT exist — the config error fired before the write.
+        // The feature card the FeatureRef points at must be a real `feat` card
+        // in `todo` — proof the create happened synchronously, no agent needed.
+        let items = state.store.list_board_items().await.unwrap();
+        let card = items
+            .iter()
+            .find(|c| c.key == fref.id)
+            .expect("the created feature card must be listable");
+        assert_eq!(card.lbl.as_deref(), Some("feat"));
+        assert_eq!(card.status, "todo");
+        assert_eq!(card.title, "Add CSV export to the board");
+    }
+
+    /// Spec 018 AC-3: a GitHub repo that `gh` can't create against (here: a temp
+    /// dir that is not a GitHub repo, with the GitHub sink forced) returns a
+    /// LOUD, TYPED `422 { error: { code, message, provider } }` envelope — never
+    /// a silent fallback and never a generic 500. Hermetic: it asserts the error
+    /// is typed regardless of whether `gh` is installed (a missing `gh` yields
+    /// `no_gh`, a present `gh` in a non-repo yields `not_github_repo`/`gh_failed`
+    /// — all three are acceptable typed GitHub failures).
+    #[tokio::test]
+    async fn create_goal_not_a_github_repo_returns_typed_error() {
+        let _env = isolate_xdg();
+        // Force GitHub so we exercise the gh path against a non-repo temp dir.
+        // SAFETY: serialised by isolate_xdg's TEST_ENV_LOCK.
+        unsafe { std::env::set_var("AGENTUM_TASK_SINK", "github") };
+        let state = fresh_state().await;
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path().to_string_lossy().into_owned();
+
+        let err = create_goal(State(state.clone()), Json(goal_body("ship it", Some(&wd))))
+            .await
+            .expect_err("a non-GitHub repo with the github sink forced must error");
+
+        // Must be the typed AC-3 envelope: Custom(422, {error:{code,message,provider}}).
+        match err {
+            ApiError::Custom(status, ref v) => {
+                assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "AC-3 uses 422");
+                let e = &v["error"];
+                let code = e["code"].as_str().unwrap_or_default();
+                assert!(
+                    matches!(code, "no_gh" | "not_github_repo" | "gh_failed"),
+                    "expected a typed github failure code, got {code:?} in {v}"
+                );
+                assert_eq!(e["provider"], "github", "provider must be surfaced");
+                assert!(
+                    e["message"].as_str().is_some_and(|m| !m.is_empty()),
+                    "message must be a non-empty, human-readable reason"
+                );
+            }
+            other => panic!("expected Custom 422 typed envelope, got {other:?}"),
+        }
+
+        // The goal row is retained (the Chat-side record) even though the
+        // feature create failed — only the feature creation errored.
         let items = state.store.list_board_items().await.unwrap();
         assert!(
-            items.is_empty(),
-            "a planner-config error must not orphan a goal row; found {} item(s)",
-            items.len()
+            items.iter().any(|i| i.lbl.as_deref() == Some("goal")),
+            "the goal row must be retained on a feature-create failure"
         );
+
+        unsafe { std::env::remove_var("AGENTUM_TASK_SINK") };
+    }
+
+    /// Spec 018 AC-3: an empty/whitespace title is rejected up front with a
+    /// typed `422 {code:"empty_title"}` envelope — before the column gate or any
+    /// sink call — so a blank description can never silently create a junk issue.
+    #[tokio::test]
+    async fn create_goal_empty_title_is_rejected() {
+        let _env = isolate_xdg();
+        force_board_sink();
+        let state = fresh_state().await;
+
+        let err = create_goal(State(state.clone()), Json(goal_body("   ", None)))
+            .await
+            .expect_err("a whitespace-only title must be rejected");
+
+        match err {
+            ApiError::Custom(status, ref v) => {
+                assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+                assert_eq!(v["error"]["code"], "empty_title");
+            }
+            other => panic!("expected Custom 422 empty_title, got {other:?}"),
+        }
+
+        // Nothing was written — the reject fired before the goal row.
+        let items = state.store.list_board_items().await.unwrap();
+        assert!(items.is_empty(), "empty-title reject must not write a goal");
     }
 
     /// POST /api/board/goals emits a goal.created event on the bus.
     #[tokio::test]
     async fn create_goal_emits_goal_created_event() {
         let _env = isolate_xdg();
+        force_board_sink();
         let state = fresh_state().await;
         let mut rx = state.bus.subscribe();
 
-        let (_, body) = create_goal(
-            State(state.clone()),
-            Json(CreateGoalBody {
-                title: "event test".into(),
-                body: None,
-                workdir: None,
-                tool: None,
-                model: None,
-            }),
-        )
-        .await
-        .expect("create_goal must succeed");
+        let (_, body) = create_goal(State(state.clone()), Json(goal_body("event test", None)))
+            .await
+            .expect("create_goal must succeed");
 
         // Two events should be on the bus: board.created (from create_board_item path
         // handled inside the handler) then goal.created.  Drain until we see goal.created.
@@ -828,6 +1123,7 @@ mod tests {
     #[tokio::test]
     async fn create_goal_respects_column_rule_gate() {
         let _env = isolate_xdg();
+        force_board_sink();
         let state = fresh_state().await;
 
         // Raise the bar: require body for the todo column.
@@ -850,19 +1146,11 @@ mod tests {
             .await
             .unwrap();
 
-        // POST goal without workdir — must be rejected by the gate.
-        let err = create_goal(
-            State(state),
-            Json(CreateGoalBody {
-                title: "missing workdir".into(),
-                body: None,
-                workdir: None,
-                tool: None,
-                model: None,
-            }),
-        )
-        .await
-        .expect_err("gate must reject when body is required");
+        // POST goal without workdir — must be rejected by the gate (the gate
+        // fires after the empty-title check but before any sink call).
+        let err = create_goal(State(state), Json(goal_body("missing workdir", None)))
+            .await
+            .expect_err("gate must reject when workdir is required");
 
         // The error must be the Custom(400, {missing, status}) envelope shape.
         assert!(
@@ -874,70 +1162,45 @@ mod tests {
         );
     }
 
-    /// When the planner tool binary does not exist, the goal card is retained
-    /// and the response is still 201 with an empty planner_session_id.
-    ///
-    /// Marked `#[ignore]` because the full path tries to create a session row
-    /// and then call tmux — which requires a live tmux server. Run with
-    /// `cargo test -- --ignored` inside a tmux session to exercise this path.
-    #[tokio::test]
-    #[ignore = "requires a live tmux server; run with --ignored inside tmux"]
-    async fn create_goal_with_missing_planner_binary_returns_201_and_emits_spawn_failed() {
-        let _env = isolate_xdg();
-
-        // Write a planner.toml that points at a non-existent binary.
-        let cfg_dir = agentum_store::paths::config_dir().unwrap();
-        std::fs::create_dir_all(&cfg_dir).unwrap();
-        std::fs::write(
-            cfg_dir.join("planner.toml"),
-            "[planner]\ntool = \"definitely-not-a-binary-XYZZY\"\n",
-        )
-        .unwrap();
-
-        let state = fresh_state().await;
-        let mut rx = state.bus.subscribe();
-
-        let (code, body) = create_goal(
-            State(state.clone()),
-            Json(CreateGoalBody {
-                title: "spawn fail test".into(),
-                body: None,
-                workdir: Some("/tmp".into()),
-                tool: None,
-                model: None,
-            }),
-        )
-        .await
-        .expect("create_goal must return Ok even on spawn failure");
-
-        assert_eq!(code, StatusCode::CREATED, "must be 201 even on spawn fail");
-        assert!(
-            body.0.planner_session_id.is_empty(),
-            "planner_session_id must be empty on spawn fail"
+    /// Spec 018 unit: the AC-3 error envelope nests under `error` (an object)
+    /// with `code`/`message`/`provider`, distinct from the default
+    /// `{"error": string}` shape — so the UI can branch on `code`.
+    #[test]
+    fn create_error_builds_the_typed_envelope() {
+        let err = create_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "no_gh",
+            "GitHub CLI not installed",
+            Some("github"),
         );
-        // The goal board item must still exist.
-        let goal_in_db = state
-            .store
-            .get_board_item(body.0.goal.id)
-            .await
-            .unwrap()
-            .expect("goal must remain in DB after spawn failure");
-        assert_eq!(goal_in_db.lbl.as_deref(), Some("goal"));
-
-        // goal.planner.spawn_failed must fire on the bus.
-        let mut saw_spawn_failed = false;
-        loop {
-            match rx.try_recv() {
-                Ok(ev) if ev.kind == "goal.planner.spawn_failed" => {
-                    assert_eq!(ev.payload["goal_id"], body.0.goal.id);
-                    saw_spawn_failed = true;
-                    break;
-                }
-                Ok(_) => continue,
-                Err(_) => break,
+        match err {
+            ApiError::Custom(status, v) => {
+                assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+                assert_eq!(v["error"]["code"], "no_gh");
+                assert_eq!(v["error"]["message"], "GitHub CLI not installed");
+                assert_eq!(v["error"]["provider"], "github");
             }
+            other => panic!("expected Custom, got {other:?}"),
         }
-        assert!(saw_spawn_failed, "goal.planner.spawn_failed must fire");
+    }
+
+    /// Spec 018 unit: `gh` stderr is classified into a finer error code — a repo
+    /// `gh` can't resolve is `not_github_repo`; everything else is `gh_failed`.
+    #[test]
+    fn classify_gh_stderr_distinguishes_repo_from_other_failures() {
+        assert_eq!(
+            classify_gh_stderr("none of the git remotes configured for this repository point to a known GitHub host"),
+            "not_github_repo"
+        );
+        assert_eq!(
+            classify_gh_stderr("fatal: not a git repository (or any of the parent directories)"),
+            "not_github_repo"
+        );
+        // Auth / rate-limit / validation → gh_failed (the generic GitHub error).
+        assert_eq!(
+            classify_gh_stderr("HTTP 401: Bad credentials"),
+            "gh_failed"
+        );
     }
 
     /// Auth middleware is verified at the lib.rs::router() merge site via the

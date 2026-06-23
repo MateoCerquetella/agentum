@@ -7,7 +7,7 @@
 // Left: your goals ("chats"). Right: the conversation + the drafted cards +
 // the (un-gated) composer. Backed by board-client over the embedded server.
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Columns3, Loader2, MessagesSquare, Plus, Send, Sparkles, Trash2, TriangleAlert } from 'lucide-react'
+import { CheckCircle2, Columns3, ExternalLink, Loader2, MessagesSquare, Plus, Send, Sparkles, Trash2, TriangleAlert } from 'lucide-react'
 
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
@@ -16,7 +16,9 @@ import { DrillInHeader } from '@/components/nav/DrillInHeader'
 import { type AgentInfo, listAgents } from '@/runtime/agentum-server-client'
 import {
   type BoardItem,
+  type FeatureRef,
   type GoalWithChildren,
+  CreateGoalError,
   createGoal,
   deleteGoalWithChildren,
   listBoard,
@@ -79,9 +81,10 @@ export default function ChatPage() {
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // The goal id we just created and are waiting on the planner to fill, so the
-  // thread can show a "drafting…" state until its first card lands.
-  const [pendingGoalId, setPendingGoalId] = useState<number | null>(null)
+  // Spec 018: submit creates the tracker item synchronously, so we keep the
+  // created FeatureRef (issue link) per goal id to render it in the thread —
+  // replacing the old indefinite "planning…"/children-poll model.
+  const [createdFeatures, setCreatedFeatures] = useState<Map<number, FeatureRef>>(new Map())
   const streamRef = useRef<{ close: () => void } | null>(null)
 
   // Which agent runs the planner (and the cards inherit). Populated from the
@@ -197,68 +200,48 @@ export default function ChatPage() {
     [goals, selectedId]
   )
   const cards = selected?.children ?? []
-
-  // Clear the "drafting…" flag once the planner's first card lands.
-  useEffect(() => {
-    if (pendingGoalId != null) {
-      const g = goals.find((x) => x.goal.id === pendingGoalId)
-      if (g && g.children.length > 0) setPendingGoalId(null)
-    }
-  }, [goals, pendingGoalId])
+  const selectedFeature = selectedId != null ? createdFeatures.get(selectedId) ?? null : null
 
   const submit = useCallback(
     async (e?: FormEvent) => {
       e?.preventDefault()
       const text = draft.trim()
       if (!text) return
-      const workdir = repos[0]?.path
+      const repo = repos[0]
+      const workdir = repo?.path
       if (!workdir) {
-        setError('Open a repo first — Chat drafts a backlog grounded in your project.')
+        setError('Open a repo first — Chat creates issues grounded in your project.')
         return
       }
       setBusy(true)
       setError(null)
       try {
-        // Account swap (global, before spawn): the planner pane inherits the
-        // live login, so make the chosen account live first. macOS has no
-        // per-process credential isolation (one Keychain), so this switches the
-        // active account machine-wide — which is why the picker defaults to it.
-        const provider = accountProviderFor(selectedTool)
-        if (provider && selectedAccountId && selectedAccountId !== activeAccountId) {
-          const swap =
-            provider === 'claude'
-              ? api.claudeAccounts.select({ accountId: selectedAccountId, runtime: 'host', wslDistro: null })
-              : api.codexAccounts.select({ accountId: selectedAccountId, runtime: 'host', wslDistro: null })
-          await Promise.resolve(swap)
-          setActiveAccountId(selectedAccountId)
-        }
-        const { goal, planner_session_id } = await createGoal({
+        // Spec 018: create the issue deterministically server-side and render
+        // the result. `host_id` routes `gh` to the repo's SSH host when it's a
+        // remote repo (S3 / AC-6); local repos pass none.
+        const { goal, feature } = await createGoal({
           title: text,
           workdir,
-          tool: selectedTool
+          tool: selectedTool,
+          host_id: repo?.hostId ?? null
         })
         setDraft('')
         setSelectedId(goal.id)
-        if (planner_session_id) {
-          // Planner is running — show "drafting…" until its first card lands.
-          setPendingGoalId(goal.id)
-        } else {
-          // Empty session id = the server created the goal but the planner
-          // failed to spawn (e.g. the project is a disconnected SSH host —
-          // planning runs locally — or the agent isn't installed). Surface it
-          // instead of spinning "Drafting cards…" forever.
-          setError(
-            'The goal was created but the planner could not start. Open a local project (planning runs on this machine, not a disconnected SSH host) and make sure the selected agent is installed, then try again.'
-          )
-        }
+        setCreatedFeatures((prev) => {
+          const next = new Map(prev)
+          next.set(goal.id, feature)
+          return next
+        })
         await refresh()
       } catch (e2) {
-        setError(e2 instanceof Error ? e2.message : String(e2))
+        // AC-3: show the SPECIFIC reason. A typed CreateGoalError carries an
+        // actionable code (no GitHub, not a GitHub repo, remote unsupported, …).
+        setError(e2 instanceof CreateGoalError ? describeGoalError(e2) : e2 instanceof Error ? e2.message : String(e2))
       } finally {
         setBusy(false)
       }
     },
-    [draft, repos, refresh, selectedTool, selectedAccountId, activeAccountId]
+    [draft, repos, refresh, selectedTool]
   )
 
   // Delete a chat (goal) and its drafted cards. Children-first so nothing is
@@ -276,7 +259,12 @@ export default function ChatPage() {
       try {
         await deleteGoalWithChildren(g)
         setSelectedId((cur) => (cur === g.goal.id ? null : cur))
-        setPendingGoalId((cur) => (cur === g.goal.id ? null : cur))
+        setCreatedFeatures((prev) => {
+          if (!prev.has(g.goal.id)) return prev
+          const next = new Map(prev)
+          next.delete(g.goal.id)
+          return next
+        })
         await refresh()
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
@@ -285,14 +273,12 @@ export default function ChatPage() {
     [refresh]
   )
 
-  const drafting = pendingGoalId === selected?.goal.id && cards.length === 0
-
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <DrillInHeader
         icon={MessagesSquare}
         title="Chat"
-        description="Describe what you want — the planner creates GitHub issues on your Board"
+        description="Describe a feature — Agentum creates a GitHub issue on your Board"
       />
 
       <div className="flex min-h-0 flex-1">
@@ -385,25 +371,22 @@ export default function ChatPage() {
                   <MessagesSquare className="mx-auto mb-3 size-6 opacity-60" />
                   <div className="text-sm">Describe a feature to begin.</div>
                   <div className="mt-1 font-mono text-[11px]">
-                    The planner reads the repo and creates GitHub issues on your Board.
+                    Agentum creates a GitHub issue on your Board from your description.
                   </div>
                 </div>
               ) : (
                 <>
                   <Message who="you" isUser text={selected.goal.title} />
                   <Message
-                    who="agentum · planner"
-                    text={
-                      drafting
-                        ? 'Reading the repo and creating GitHub issues from your description — they show up on your Board…'
-                        : 'Creating GitHub issues from your description — open the Board to review and start them.'
-                    }
+                    who="agentum"
+                    text={featureBlurb(selectedFeature)}
                   />
 
-                  {drafting ? (
-                    <div className="flex items-center gap-2 rounded-lg border border-border bg-card/60 px-4 py-3 text-[13px] text-muted-foreground">
-                      <Loader2 className="size-4 animate-spin" /> Drafting cards…
-                    </div>
+                  {/* The created tracker item (spec 018): a real GitHub issue /
+                      Linear ticket / board card — rendered as a link the moment
+                      the server returns it, no "planning…" wait. */}
+                  {selectedFeature ? (
+                    <CreatedFeatureCard feature={selectedFeature} onOpenBoard={() => setActiveView('tasks')} />
                   ) : null}
 
                   {cards.length > 0 ? (
@@ -532,6 +515,91 @@ export default function ChatPage() {
             ) : null}
           </form>
         </div>
+      </div>
+    </div>
+  )
+}
+
+/** Human-readable provider label for the created-feature copy. */
+function providerLabel(provider: string): string {
+  switch (provider) {
+    case 'github':
+      return 'GitHub issue'
+    case 'linear':
+      return 'Linear issue'
+    case 'board':
+      return 'board card'
+    default:
+      return `${provider} item`
+  }
+}
+
+/** The agentum-side blurb shown once an issue/card is created (or before one). */
+function featureBlurb(feature: FeatureRef | null): string {
+  if (!feature) return 'Creating a GitHub issue from your description on your Board…'
+  if (feature.provider === 'board') {
+    return 'Created a card on your internal board. Connect GitHub to create real issues instead.'
+  }
+  return `Created a ${providerLabel(feature.provider)} from your description — open it below or on your Board.`
+}
+
+/** Map a typed CreateGoalError code to an actionable, human message (AC-3). */
+function describeGoalError(err: CreateGoalError): string {
+  switch (err.code) {
+    case 'empty_title':
+      return 'Describe the feature first — the title can’t be empty.'
+    case 'no_gh':
+      return 'GitHub CLI (`gh`) isn’t installed or on PATH. Install gh (and `gh auth login`) to create issues.'
+    case 'not_github_repo':
+      return 'This folder isn’t a GitHub repo `gh` can use. Connect GitHub / add a GitHub remote, or it’ll fall back to the internal board.'
+    case 'gh_failed':
+      return `GitHub rejected the issue: ${err.message}`
+    case 'linear_failed':
+      return `Linear rejected the issue: ${err.message}`
+    case 'remote_unsupported':
+      return 'This repo lives on an SSH host — creating issues there isn’t supported yet. Open a local copy to create the issue.'
+    default:
+      return err.message
+  }
+}
+
+/** The created tracker item, rendered as a link the moment the server returns
+ *  it — the deterministic replacement for the old "Drafting cards…" spinner. */
+function CreatedFeatureCard({
+  feature,
+  onOpenBoard
+}: {
+  feature: FeatureRef
+  onOpenBoard: () => void
+}) {
+  const label = providerLabel(feature.provider)
+  // For GitHub the id is the issue number; show `#42`. Others show the raw id.
+  const idLabel = feature.provider === 'github' ? `#${feature.id}` : feature.id
+  return (
+    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <CheckCircle2 className="size-4 text-emerald-500" />
+        <span className="text-[13px] font-medium">Created {label}</span>
+        <span className="font-mono text-[11px] text-muted-foreground">{idLabel}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        {feature.url ? (
+          <a
+            href={feature.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border bg-card px-3 text-[12.5px] font-medium hover:border-foreground/30"
+          >
+            <ExternalLink className="size-3.5" /> Open {label}
+          </a>
+        ) : null}
+        <button
+          type="button"
+          onClick={onOpenBoard}
+          className="inline-flex h-8 items-center gap-1.5 rounded-full bg-primary px-3.5 text-[12.5px] font-medium text-primary-foreground hover:opacity-85"
+        >
+          <Columns3 className="size-3.5" /> Open Board
+        </button>
       </div>
     </div>
   )

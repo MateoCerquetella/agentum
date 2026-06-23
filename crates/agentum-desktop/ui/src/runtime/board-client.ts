@@ -50,10 +50,39 @@ export type GroupedBoard = {
   comment_counts: Record<number, number>
 }
 
-/** `POST /api/board/goals` response. */
+/** Where a created feature landed — `crate::task_sink::FeatureRef` (serde). The
+ *  GitHub issue / Linear ticket / board card the server created on Chat submit
+ *  (spec 018). `url` is absent for board cards (and may be for Linear). */
+export type FeatureRef = {
+  /** `github` | `linear` | `board` — drives the link + the "created on …" copy. */
+  provider: string
+  /** Provider-stable handle: a GitHub issue number, a Linear id, or a board key. */
+  id: string
+  url?: string | null
+}
+
+/** `POST /api/board/goals` response (spec 018) — the goal tracking row plus the
+ *  created feature (issue/card). Replaces the old `planner_session_id`. */
 export type CreateGoalResult = {
   goal: BoardItem
-  planner_session_id: string
+  feature: FeatureRef
+}
+
+/** The server's typed AC-3 error body: `{ error: { code, message, provider } }`.
+ *  Thrown by `createGoal` so the Chat UI can show the *specific* reason (e.g.
+ *  "Connect GitHub / not a GitHub repo") and branch on `code` — never a silent
+ *  indefinite "planning…". */
+export class CreateGoalError extends Error {
+  readonly code: string
+  readonly provider: string | null
+  readonly status: number
+  constructor(args: { code: string; message: string; provider: string | null; status: number }) {
+    super(args.message)
+    this.name = 'CreateGoalError'
+    this.code = args.code
+    this.provider = args.provider
+    this.status = args.status
+  }
 }
 
 /** A goal together with the feature cards the planner produced under it. */
@@ -91,20 +120,62 @@ export function listBoard(): Promise<GroupedBoard> {
 }
 
 /**
- * `POST /api/board/goals` — create a goal from a natural-language description.
- * The server's planner then decomposes it into child feature cards
- * asynchronously, so callers should refresh the board afterwards.
+ * `POST /api/board/goals` — create a goal from a natural-language description and
+ * (spec 018) **deterministically** create one tracker item for it server-side
+ * (GitHub issue / Linear ticket / board card). Resolves to the created
+ * {@link FeatureRef}; on failure throws a {@link CreateGoalError} carrying the
+ * server's typed `{ code, message, provider }` so the caller shows the specific
+ * reason. No agent is spawned — the promise settles when the issue exists or a
+ * loud error is known (no indefinite "planning…").
+ *
+ * Has its own fetch path (not the string-flattening `request`) precisely so the
+ * AC-3 error envelope survives as structured fields.
  */
-export function createGoal(input: {
+export async function createGoal(input: {
   title: string
   body?: string
   workdir?: string
-  /** Which agent runs the planner (and the goal's child cards inherit), e.g.
-   *  "claude" | "codex" | "gemini". Omitted → planner-config default. */
+  /** Which agent the goal's child cards inherit when started from the board,
+   *  e.g. "claude" | "codex" | "gemini". No longer drives a planner. */
   tool?: string
   model?: string
+  /** SSH host the `workdir` lives on (S3 / AC-6). Omitted = local repo. */
+  host_id?: string | null
 }): Promise<CreateGoalResult> {
-  return request('/api/board/goals', { method: 'POST', body: JSON.stringify(input) })
+  const url = await apiUrl('/api/board/goals')
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(await authHeaders())
+    },
+    body: JSON.stringify(input)
+  })
+  const text = await res.text()
+  if (res.ok) {
+    return (text ? JSON.parse(text) : undefined) as CreateGoalResult
+  }
+  // Parse the typed envelope `{ error: { code, message, provider } }`. Fall back
+  // to the raw body / status when the shape is unexpected (older server, proxy
+  // error) so the user still sees *something* specific, never a silent hang.
+  let code = 'error'
+  let message = `board ${res.status}`
+  let provider: string | null = null
+  try {
+    const parsed = JSON.parse(text) as {
+      error?: { code?: string; message?: string; provider?: string | null } | string
+    }
+    if (parsed.error && typeof parsed.error === 'object') {
+      code = parsed.error.code ?? code
+      message = parsed.error.message ?? message
+      provider = parsed.error.provider ?? null
+    } else if (typeof parsed.error === 'string') {
+      message = parsed.error
+    }
+  } catch {
+    if (text) message = text
+  }
+  throw new CreateGoalError({ code, message, provider, status: res.status })
 }
 
 /**

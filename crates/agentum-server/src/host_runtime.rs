@@ -1645,6 +1645,47 @@ pub async fn git_in_dir(host: &Host, cwd: &str, args: &[&str]) -> Result<HostCom
     }
 }
 
+/// Run `gh <args>` with `cwd` as the working directory on `host` — the
+/// host-aware analogue of [`git_in_dir`], for the remote GitHub-issue path
+/// (spec 018 S3 / AC-6). Local → `gh` in `cwd`; SSH → `sh -c 'cd <cwd> && gh
+/// <args>'` with every token shell-quoted. A non-zero `gh` exit is reported via
+/// `success`, not as an `Err` (only transport/timeout failures error), so the
+/// caller can surface `gh`'s stderr as a typed error instead of a 500.
+///
+/// `gh` runs on the remote with that host's own auth/PATH (the same way the
+/// local `TaskSink::Github` uses the repo's local `gh` auth) — agentum does not
+/// forward credentials.
+pub async fn gh_in_dir(host: &Host, cwd: &str, args: &[&str]) -> Result<HostCommandOutput> {
+    match &host.kind {
+        HostKind::Local => {
+            let out = Command::new("gh").current_dir(cwd).args(args).output().await?;
+            Ok(HostCommandOutput {
+                success: out.status.success(),
+                code: out.status.code(),
+                stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+                stdout: out.stdout,
+            })
+        }
+        HostKind::Ssh { .. } => {
+            let mut inner = format!("cd {} && gh", q(cwd)?);
+            for a in args {
+                inner.push(' ');
+                inner.push_str(&q(a)?);
+            }
+            let script = format!("sh -c {}", q(&inner)?);
+            let out = ssh_output(host, &script, GIT_TIMEOUT)
+                .await
+                .map_err(map_ssh_io)?;
+            Ok(HostCommandOutput {
+                success: out.status.success(),
+                code: out.status.code(),
+                stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+                stdout: out.stdout,
+            })
+        }
+    }
+}
+
 /// True when `cwd` is inside a git work tree on `host`
 /// (`git rev-parse --is-inside-work-tree`). Host-aware replacement for
 /// `crate::git::is_git_repo`, which is local-only.
