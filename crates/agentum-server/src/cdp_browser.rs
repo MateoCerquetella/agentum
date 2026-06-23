@@ -191,15 +191,71 @@ fn build_chrome_argv(
     ]
 }
 
-/// Resolve the Playwright-managed Chromium executable from the ms-playwright
-/// browser cache, picking the highest-revision `chromium-<rev>` build present.
-/// Fails loud with an install hint when none is found.
+/// Candidate locations for a system-installed full Chrome/Chromium, by OS. Pure
+/// (no env, no filesystem) so it's unit-testable; `system_chrome_executable`
+/// filters these to the ones that actually exist.
+fn chrome_candidate_paths() -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        candidates.push("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".into());
+        candidates.push("/Applications/Chromium.app/Contents/MacOS/Chromium".into());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        candidates.push(r"C:\Program Files\Google\Chrome\Application\chrome.exe".into());
+        candidates.push(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe".into());
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            candidates.push(PathBuf::from(local).join(r"Google\Chrome\Application\chrome.exe"));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        for c in [
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/snap/bin/chromium",
+        ] {
+            candidates.push(c.into());
+        }
+    }
+    candidates
+}
+
+/// Locate a system-installed **full** Chrome/Chromium (it supports
+/// `Page.startScreencast`, unlike `chrome-headless-shell`). Preferred over the
+/// Playwright cache so the common case needs no `npx playwright install`
+/// download — most machines already have Chrome. Escape hatches:
+/// `AGENTUM_CDP_CHROME_PATH` pins an exact binary; `AGENTUM_CDP_USE_PLAYWRIGHT=1`
+/// skips system Chrome entirely (force the pinned Playwright build for version
+/// determinism).
+fn system_chrome_executable() -> Option<PathBuf> {
+    if std::env::var_os("AGENTUM_CDP_USE_PLAYWRIGHT").is_some() {
+        return None;
+    }
+    if let Some(p) = std::env::var_os("AGENTUM_CDP_CHROME_PATH") {
+        let path = PathBuf::from(p);
+        return path.is_file().then_some(path);
+    }
+    chrome_candidate_paths().into_iter().find(|p| p.is_file())
+}
+
+/// Resolve the Chrome/Chromium executable to drive over CDP. Prefers a
+/// system-installed full Chrome (no download), then falls back to the
+/// Playwright-managed Chromium from the ms-playwright cache (highest-revision
+/// `chromium-<rev>`). Fails loud with an install hint when neither is found.
 fn chromium_executable() -> Result<PathBuf> {
+    if let Some(exe) = system_chrome_executable() {
+        return Ok(exe);
+    }
     let root = playwright_browsers_root();
     let entries = std::fs::read_dir(&root).with_context(|| {
         format!(
-            "Chromium for the agent browser isn't installed (no Playwright browser cache at {}). \
-             Run `npx playwright install chromium`.",
+            "No browser for the agent browser: system Chrome wasn't found and the Playwright \
+             browser cache is missing ({}). Install Google Chrome, or run \
+             `npx playwright install chromium`.",
             root.display()
         )
     })?;
@@ -221,8 +277,9 @@ fn chromium_executable() -> Result<PathBuf> {
     candidates.sort_by_key(|(rev, _)| *rev);
     candidates.pop().map(|(_, exe)| exe).ok_or_else(|| {
         anyhow::anyhow!(
-            "Chromium for the agent browser isn't installed (no `chromium-*` build with an \
-             executable under {}). Run `npx playwright install chromium`.",
+            "No browser for the agent browser: system Chrome wasn't found and no `chromium-*` \
+             build with an executable exists under {}. Install Google Chrome, or run \
+             `npx playwright install chromium`.",
             root.display()
         )
     })
@@ -393,6 +450,26 @@ mod tests {
         assert_eq!(parse_chromium_rev("firefox-1234"), None);
         assert_eq!(parse_chromium_rev("chromium-"), None);
         assert_eq!(parse_chromium_rev("ffmpeg-1011"), None);
+    }
+
+    #[test]
+    fn system_chrome_candidates_are_listed_per_os() {
+        let candidates = chrome_candidate_paths();
+        // Every OS we ship on must offer at least one well-known Chrome path so
+        // the no-download path (system Chrome) is reachable.
+        assert!(!candidates.is_empty());
+        #[cfg(target_os = "macos")]
+        assert!(candidates.iter().any(|p| p
+            == Path::new("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")));
+        #[cfg(target_os = "linux")]
+        assert!(
+            candidates
+                .iter()
+                .any(|p| p == Path::new("/usr/bin/google-chrome"))
+        );
+        #[cfg(target_os = "windows")]
+        assert!(candidates.iter().any(|p| p
+            == Path::new(r"C:\Program Files\Google\Chrome\Application\chrome.exe")));
     }
 
     #[cfg(target_os = "macos")]
