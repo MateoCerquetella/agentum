@@ -204,16 +204,17 @@ impl Profiles {
 ///   exported `XDG_CONFIG_HOME=""` and silently resolved profiles to
 ///   a CWD-relative `agentum/profiles.toml`.
 ///
-/// Errors only when `HOME` is missing on a Unix-like host — that's a
-/// misconfigured environment, not a missing file (an absent file is
-/// fine; an absent path resolver isn't).
+/// Errors only when the home dir can't be resolved (`HOME` on a Unix-like
+/// host, or `%USERPROFILE%` on Windows) — that's a misconfigured
+/// environment, not a missing file (an absent file is fine; an absent path
+/// resolver isn't).
 ///
 /// Kept private — callers should prefer `Profiles::load()` so the
 /// resolved path doesn't leak into other code's path-handling.
 fn default_path() -> Result<PathBuf> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| anyhow::anyhow!("HOME is not set; cannot resolve profiles.toml"))?;
+    let home = crate::home_dir().ok_or_else(|| {
+        anyhow::anyhow!("no home dir (HOME / USERPROFILE); cannot resolve profiles.toml")
+    })?;
 
     // On macOS the `directories` crate (which the TUI used pre-0.8.7)
     // returns `$HOME/Library/Application Support/agentum` for the
@@ -369,16 +370,30 @@ mod tests {
         .unwrap();
 
         // SAFETY: serialised by ENV_LOCK; no other test in this crate
-        // mutates XDG_CONFIG_HOME at the same time.
+        // mutates XDG_CONFIG_HOME / USERPROFILE at the same time.
         let prev = std::env::var_os("XDG_CONFIG_HOME");
+        // On Windows `default_path()` resolves the home dir (via
+        // `%USERPROFILE%`, since HOME is unset there) *before* consulting
+        // XDG, so it must succeed even though the absolute XDG path means
+        // the home value isn't used in the final path. Pin USERPROFILE so
+        // the resolver doesn't bail on a CI box that hasn't set it.
+        #[cfg(windows)]
+        let prev_userprofile = std::env::var_os("USERPROFILE");
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", &cfg_home);
+            #[cfg(windows)]
+            std::env::set_var("USERPROFILE", tmp.path());
         }
         let result = Profiles::load();
         unsafe {
             match prev {
                 Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
                 None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+            #[cfg(windows)]
+            match prev_userprofile {
+                Some(v) => std::env::set_var("USERPROFILE", v),
+                None => std::env::remove_var("USERPROFILE"),
             }
         }
         let p = result.unwrap();

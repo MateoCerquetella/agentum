@@ -48,6 +48,18 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 
     // ⌘⇧W instead of the default ⌘W. Leaving ⌘W unbound at the native level is
     // the entire point: the webview owns ⌘W and closes the active tab/file.
+    //
+    // Gated to the same platforms as the "File" submenu below (its only
+    // consumer): the File menu — and hence this item — doesn't exist on
+    // Linux/BSD, so binding it there is an unused-variable error under
+    // clippy's `-D warnings`.
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    )))]
     let close_window = MenuItem::with_id(
         app,
         CLOSE_WINDOW_MENU_ID,

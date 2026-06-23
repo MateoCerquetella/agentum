@@ -17,6 +17,23 @@ pub use board_schema::{
     RequiredField, TransitionCtx, required_fields_for, validate_against, validate_transition,
 };
 
+/// Cross-platform user home directory, std-only (no `dirs`/`directories`
+/// dependency — `agentum-core` stays filesystem-light on purpose).
+///
+/// Resolves `$HOME` on Unix and falls back to `%USERPROFILE%` on Windows,
+/// where `HOME` is conventionally unset. Returns `None` when neither is
+/// present (a misconfigured environment, not a normal one).
+///
+/// Note: this does *not* read `$XDG_CONFIG_HOME` or any app-specific
+/// override (`$AGENTUM_HOME`) — those are layered on by callers
+/// (`profiles::default_path`, the store's path resolver) *on top of* this
+/// base. This helper only answers "where is the user's home directory".
+pub fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
     #[error("invalid session status: {0}")]

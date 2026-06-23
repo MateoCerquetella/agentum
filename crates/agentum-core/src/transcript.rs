@@ -145,14 +145,19 @@ impl AgentTaskState {
 /// first launch, re-issued `--session-id`, and Claude crashed with
 /// `Error: Session ID <X> is already in use` on every worktree restart.
 ///
-/// Returns `None` if `$HOME` is unavailable.
+/// Returns `None` if the home dir is unavailable (`$HOME`, or
+/// `%USERPROFILE%` on Windows).
 pub fn project_dir_for(workdir: &Path) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let home = crate::home_dir()?;
     let abs = if workdir.is_absolute() {
         workdir.to_path_buf()
     } else {
         return None;
     };
+    // Claude encodes the abs path by mapping every non-alphanumeric char to
+    // `-`. On Windows that also folds the drive-letter colon and the `\`
+    // separators (`C:\proj\x` -> `C--proj-x`), so the encoding is already
+    // platform-robust — no separate `\`/drive handling needed.
     let s: String = abs
         .to_string_lossy()
         .chars()
@@ -165,8 +170,8 @@ pub fn project_dir_for(workdir: &Path) -> Option<PathBuf> {
 /// transcript files `<session-id>.jsonl`, and agentum launches every
 /// claude with `--session-id <agentum-session-uuid>` (see
 /// `ClaudeAdapter::launch`), so the agentum session id *is* the file
-/// stem. Returns `None` if `$HOME` is unavailable or `workdir` is not
-/// absolute.
+/// stem. Returns `None` if the home dir is unavailable (`$HOME`, or
+/// `%USERPROFILE%` on Windows) or `workdir` is not absolute.
 ///
 /// This replaced an earlier mtime heuristic that picked the
 /// most-recently-modified `*.jsonl` in the project dir. With multiple
@@ -586,25 +591,81 @@ pub fn parse_file(path: &Path) -> AgentTaskState {
 mod tests {
     use super::*;
 
-    #[test]
-    fn project_dir_encodes_workdir() {
-        // Save existing HOME so this test doesn't bleed across runs.
-        let saved = std::env::var_os("HOME");
-        // SAFETY: tests run single-threaded by default; we restore HOME
-        // before returning.
+    /// Point `home_dir()` at a fixed test home and restore the real
+    /// environment on drop. Platform-aware: on Windows it sets
+    /// `%USERPROFILE%` (and clears `HOME`, which a Git-Bash dev box might
+    /// otherwise have set, so resolution is deterministic); on Unix it sets
+    /// `HOME`. The test home is `C:\h` on Windows, `/tmp/h` on Unix.
+    ///
+    /// Tests run single-threaded by default, so mutating process env here
+    /// is safe — same convention the rest of this module relies on.
+    struct HomeEnvGuard {
+        prev_home: Option<std::ffi::OsString>,
+        #[cfg(windows)]
+        prev_userprofile: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for HomeEnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match self.prev_home.take() {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+                #[cfg(windows)]
+                match self.prev_userprofile.take() {
+                    Some(v) => std::env::set_var("USERPROFILE", v),
+                    None => std::env::remove_var("USERPROFILE"),
+                }
+            }
+        }
+    }
+
+    fn home_env_guard() -> HomeEnvGuard {
+        let prev_home = std::env::var_os("HOME");
+        #[cfg(windows)]
+        let prev_userprofile = std::env::var_os("USERPROFILE");
         unsafe {
+            #[cfg(windows)]
+            {
+                std::env::remove_var("HOME");
+                std::env::set_var("USERPROFILE", r"C:\h");
+            }
+            #[cfg(not(windows))]
             std::env::set_var("HOME", "/tmp/h");
         }
-        let dir = project_dir_for(Path::new("/home/me/proj/x")).unwrap();
-        assert_eq!(
-            dir,
-            PathBuf::from("/tmp/h/.claude/projects/-home-me-proj-x")
-        );
-        unsafe {
-            match saved {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
+        HomeEnvGuard {
+            prev_home,
+            #[cfg(windows)]
+            prev_userprofile,
+        }
+    }
+
+    #[test]
+    fn project_dir_encodes_workdir() {
+        // Inputs/expectations are platform-specific because `home_dir()`
+        // reads `%USERPROFILE%` on Windows (HOME is unset there) and
+        // `Path::is_absolute()` only accepts drive-rooted paths on Windows
+        // (`/...` is not absolute). On Unix we still drive `HOME` + a
+        // Unix-absolute workdir, matching the original assertion.
+        let _g = home_env_guard();
+        #[cfg(windows)]
+        {
+            let dir = project_dir_for(Path::new(r"C:\proj\x")).unwrap();
+            // `C:\proj\x` → drive colon and `\` are non-alphanumeric → `-`.
+            assert_eq!(
+                dir,
+                PathBuf::from(r"C:\h\.claude\projects\C--proj-x"),
+                "Windows drive colon + backslashes must each fold to `-`"
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            let dir = project_dir_for(Path::new("/home/me/proj/x")).unwrap();
+            assert_eq!(
+                dir,
+                PathBuf::from("/tmp/h/.claude/projects/-home-me-proj-x")
+            );
         }
     }
 
@@ -617,27 +678,36 @@ mod tests {
         // must become `--claude` (two dashes), or our transcript-existence
         // check looks in the wrong dir, falls through to `--session-id`,
         // and Claude rejects the already-claimed id on restart.
-        let saved = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", "/tmp/h");
+        let _g = home_env_guard();
+        #[cfg(windows)]
+        {
+            // Same invariant on Windows: every non-alphanumeric char folds
+            // to `-`. The `.` in `.claude-worktrees`, the `\` separators,
+            // and the drive colon all collapse together.
+            let dir = project_dir_for(Path::new(r"C:\proj\.claude-worktrees\feat-x")).unwrap();
+            assert_eq!(
+                dir,
+                PathBuf::from(r"C:\h\.claude\projects\C--proj--claude-worktrees-feat-x"),
+                "`.claude` (dot) + `\\` separators + drive colon must each fold to `-`"
+            );
+            // A space is also non-alphanumeric and must become `-`.
+            let spaced = project_dir_for(Path::new(r"C:\My Proj")).unwrap();
+            assert_eq!(spaced, PathBuf::from(r"C:\h\.claude\projects\C--My-Proj"));
         }
-        let dir = project_dir_for(Path::new("/home/me/proj/.claude-worktrees/feat-x")).unwrap();
-        assert_eq!(
-            dir,
-            PathBuf::from("/tmp/h/.claude/projects/-home-me-proj--claude-worktrees-feat-x"),
-            "`/.claude` must encode to `--claude` (dot -> dash), matching Claude"
-        );
-        // A space in the path is also non-alphanumeric and must become `-`.
-        let spaced = project_dir_for(Path::new("/home/me/My Proj")).unwrap();
-        assert_eq!(
-            spaced,
-            PathBuf::from("/tmp/h/.claude/projects/-home-me-My-Proj")
-        );
-        unsafe {
-            match saved {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
+        #[cfg(not(windows))]
+        {
+            let dir = project_dir_for(Path::new("/home/me/proj/.claude-worktrees/feat-x")).unwrap();
+            assert_eq!(
+                dir,
+                PathBuf::from("/tmp/h/.claude/projects/-home-me-proj--claude-worktrees-feat-x"),
+                "`/.claude` must encode to `--claude` (dot -> dash), matching Claude"
+            );
+            // A space in the path is also non-alphanumeric and must become `-`.
+            let spaced = project_dir_for(Path::new("/home/me/My Proj")).unwrap();
+            assert_eq!(
+                spaced,
+                PathBuf::from("/tmp/h/.claude/projects/-home-me-My-Proj")
+            );
         }
     }
 
@@ -646,28 +716,29 @@ mod tests {
         // Two sessions in the same workdir resolve to two different
         // files — that's the whole point of switching from mtime
         // heuristic to deterministic id-pinning.
-        let saved = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", "/tmp/h");
-        }
+        let _g = home_env_guard();
         let id_a = Uuid::parse_str("00000000-0000-0000-0000-00000000000a").unwrap();
         let id_b = Uuid::parse_str("00000000-0000-0000-0000-00000000000b").unwrap();
-        let workdir = Path::new("/home/me/proj");
+        // Use a platform-absolute workdir: `/...` isn't absolute on Windows,
+        // so `project_dir_for` would return None and `.unwrap()` would panic.
+        #[cfg(windows)]
+        let (workdir, expected) = (
+            Path::new(r"C:\proj"),
+            PathBuf::from(
+                r"C:\h\.claude\projects\C--proj\00000000-0000-0000-0000-00000000000a.jsonl",
+            ),
+        );
+        #[cfg(not(windows))]
+        let (workdir, expected) = (
+            Path::new("/home/me/proj"),
+            PathBuf::from(
+                "/tmp/h/.claude/projects/-home-me-proj/00000000-0000-0000-0000-00000000000a.jsonl",
+            ),
+        );
         let pa = transcript_path_for(workdir, id_a).unwrap();
         let pb = transcript_path_for(workdir, id_b).unwrap();
-        assert_eq!(
-            pa,
-            PathBuf::from(
-                "/tmp/h/.claude/projects/-home-me-proj/00000000-0000-0000-0000-00000000000a.jsonl"
-            )
-        );
+        assert_eq!(pa, expected);
         assert_ne!(pa, pb);
-        unsafe {
-            match saved {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
     }
 
     #[test]
