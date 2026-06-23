@@ -141,6 +141,16 @@ mod tests {
         unsafe {
             std::env::set_var("AGENTUM_HOME", dir.path());
         }
+        // Guard the isolation seam: if config_dir() ever stops honoring
+        // AGENTUM_HOME, fail loudly here instead of writing test fixtures into
+        // the user's real config dir (the leak that put `../etc/passwd` into a
+        // live planner.toml). Read-only assert — cheap, runs once per test.
+        let cfg = agentum_store::paths::config_dir().expect("config_dir resolves");
+        assert!(
+            cfg.starts_with(dir.path()),
+            "AGENTUM_HOME isolation broken: config_dir {cfg:?} escaped temp {:?}",
+            dir.path()
+        );
         TestEnv {
             _dir: dir,
             _guard: guard,

@@ -130,6 +130,30 @@ export function startCard(id: number): Promise<BoardItem> {
 }
 
 /**
+ * `DELETE /api/board/{id}` — remove a single board item. The server does NOT
+ * cascade to child cards (it deletes one row), so deleting a goal that still
+ * has children would orphan them; callers that want the whole chat gone must
+ * delete the children first (see `deleteGoalWithChildren`).
+ */
+export function deleteBoardItem(id: number): Promise<void> {
+  return request(`/api/board/${id}`, { method: 'DELETE' })
+}
+
+/**
+ * Delete a goal/chat and all the cards the planner drafted under it, children
+ * first so no card is left pointing at a missing parent. Used by Chat's
+ * "delete chat" action (and to clear orphaned "planning…" goals).
+ */
+export async function deleteGoalWithChildren(
+  goal: GoalWithChildren
+): Promise<void> {
+  for (const child of goal.children) {
+    await deleteBoardItem(child.id)
+  }
+  await deleteBoardItem(goal.goal.id)
+}
+
+/**
  * `POST /api/board/sync` — fold GitHub/Linear issues onto the board (#48).
  * Idempotently upserts each issue as a card keyed on `external_url`, so the
  * Tasks view becomes a sync source feeding the one board (re-syncing updates
