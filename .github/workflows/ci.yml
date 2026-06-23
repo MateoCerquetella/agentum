@@ -68,20 +68,22 @@ jobs:
       # `unable to find library -lonnxruntime / -lsherpa-onnx-c-api` until this
       # step ran cross-OS. (build.rs sets the rpath: @loader_path on macOS,
       # $ORIGIN on Linux.)
-      - name: Stage sherpa libs (download-binaries)
+      # Force sherpa-rs-sys's build script to re-run so it re-stages the sherpa-onnx +
+      # onnxruntime native libs (macOS frameworks reference them in target/release/;
+      # Windows links the .lib; Linux loads the .so). A warm rust-cache restores its
+      # .fingerprint, so `cargo build` (and even `cargo clean -p`) skips the script and
+      # the libs go missing: macOS tauri_build "Library not found", Windows link 1181,
+      # Linux runtime load failure. Dropping the fingerprint + build output forces it.
+      # The removal needs a bash glob, but keep it in its OWN bash step: the actual
+      # build (which compiles+links sherpa-rs-sys's build script) must run in the
+      # default shell. On Windows `shell: bash` puts Git's /usr/bin/link.exe ahead of
+      # MSVC's link.exe on PATH, so the build script fails to link; pwsh (default) uses
+      # the MSVC linker that msvc-dev-cmd put on PATH.
+      - name: Drop sherpa-rs-sys fingerprint (force build-script re-run)
         shell: bash
-        run: |
-          # sherpa-rs-sys's build script downloads the sherpa-onnx + onnxruntime native
-          # libs and stages them in target/release/ (macOS frameworks reference them
-          # there; Windows links the .lib; Linux loads the .so). It only runs when cargo
-          # rebuilds the crate — and a warm rust-cache restores its .fingerprint, so
-          # `cargo build` (and even `cargo clean -p`, since the fingerprint still reads
-          # "fresh") skips it and the libs go missing: macOS tauri_build "Library not
-          # found", Windows link.exe 1181, Linux runtime load failure. Drop the
-          # fingerprint + build output so the script is forced to re-run and re-stage
-          # the libs every time. Reproduced + verified locally.
-          rm -rf target/release/.fingerprint/sherpa-rs-sys-* target/release/build/sherpa-rs-sys-* 2>/dev/null || true
-          cargo build --release -p sherpa-rs
+        run: rm -rf target/release/.fingerprint/sherpa-rs-sys-* target/release/build/sherpa-rs-sys-* 2>/dev/null || true
+      - name: Stage sherpa libs (download-binaries)
+        run: cargo build --release -p sherpa-rs
       # `cargo test` links the desktop crate's onnxruntime/sherpa deps fine, but
       # the test binary's rpath ($ORIGIN = target/debug/deps/) doesn't hold the
       # .so files, so they fail to LOAD at runtime
