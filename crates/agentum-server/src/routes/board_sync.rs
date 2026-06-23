@@ -22,7 +22,14 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::AppState;
 use crate::error::ApiError;
+use crate::linear;
 use crate::routes::forge::{ForgeKind, classify_remote, forge_get, forge_send, token_for};
+
+/// Map a Linear client error (plain `String`) to an upstream 502, matching how
+/// `forge_get`/`forge_send` surface forge failures.
+fn linear_err(e: String) -> ApiError {
+    ApiError::Custom(StatusCode::BAD_GATEWAY, json!({ "error": e }))
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -37,13 +44,14 @@ pub fn router() -> Router<AppState> {
 /// A tracker issue normalized to the fields the board cares about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExternalIssue {
-    /// Provider-native id (GitHub issue number, as text).
+    /// Provider-native id (GitHub issue number / Linear identifier, as text).
     pub external_id: String,
     pub title: String,
     pub body: Option<String>,
     pub url: String,
-    /// `"open"` | `"closed"`.
-    pub state: String,
+    /// Board column the tracker's state maps to (`todo`/`doing`/`done`),
+    /// resolved per-provider before reconcile so the diff is provider-agnostic.
+    pub column: String,
 }
 
 /// What a sync should do with one incoming issue, relative to the board.
@@ -71,18 +79,20 @@ fn state_to_status(state: &str) -> &'static str {
 ///   `todo`→`doing` move; don't yank it back)
 ///
 /// Two-sided conflict detection (both changed since last sync) is 014b.
-fn reconcile_status(local: &str, state: &str) -> String {
-    if state.eq_ignore_ascii_case("closed") {
+fn reconcile_status(local: &str, column: &str) -> String {
+    if column == "done" {
         "done".to_string()
     } else if local == "done" {
-        "todo".to_string()
+        // reopened upstream → take the tracker's column back
+        column.to_string()
     } else {
         local.to_string()
     }
 }
 
 /// Diff incoming issues against the cards already mirroring this provider.
-/// `existing` is `(card_id, external_id, local_status)`.
+/// `existing` is `(card_id, external_id, local_status)`; each issue's `column`
+/// is already mapped from its provider state.
 pub(crate) fn reconcile(
     existing: &[(i64, String, String)],
     issues: &[ExternalIssue],
@@ -92,11 +102,11 @@ pub(crate) fn reconcile(
         .map(|issue| match existing.iter().find(|(_, ext, _)| ext == &issue.external_id) {
             Some((card_id, _, local_status)) => SyncAction::Update {
                 card_id: *card_id,
-                status: reconcile_status(local_status, &issue.state),
+                status: reconcile_status(local_status, &issue.column),
                 issue: issue.clone(),
             },
             None => SyncAction::Create {
-                status: state_to_status(&issue.state).to_string(),
+                status: issue.column.clone(),
                 issue: issue.clone(),
             },
         })
@@ -130,14 +140,13 @@ pub(crate) fn parse_github_issues(v: &Value) -> Vec<ExternalIssue> {
             let state = item
                 .get("state")
                 .and_then(|s| s.as_str())
-                .unwrap_or("open")
-                .to_string();
+                .unwrap_or("open");
             Some(ExternalIssue {
                 external_id: number.to_string(),
                 title,
                 body,
                 url,
-                state,
+                column: state_to_status(state).to_string(),
             })
         })
         .collect()
@@ -175,16 +184,22 @@ async fn create_binding(
     Json(body): Json<NewBindingBody>,
 ) -> Result<(StatusCode, Json<TrackerBinding>), ApiError> {
     let provider = body.provider.trim().to_ascii_lowercase();
-    if provider != "github" {
-        return Err(ApiError::BadRequest(format!(
-            "provider '{provider}' not yet supported — 014a is GitHub-only (Linear/GitLab land in 014c)"
-        )));
-    }
     let project = body.project.trim();
-    if project.is_empty() || !project.contains('/') {
-        return Err(ApiError::BadRequest(
-            "project must be 'owner/repo'".into(),
-        ));
+    match provider.as_str() {
+        "github" => {
+            if project.is_empty() || !project.contains('/') {
+                return Err(ApiError::BadRequest(
+                    "github project must be 'owner/repo'".into(),
+                ));
+            }
+        }
+        // Linear: project = a team key (e.g. ENG), or empty/"*" for the sole team.
+        "linear" => {}
+        other => {
+            return Err(ApiError::BadRequest(format!(
+                "provider '{other}' not supported (github | linear)"
+            )));
+        }
     }
     let binding = state.store.create_tracker_binding(&provider, project).await?;
     let _ = state.bus.send(Event::new("board.binding.created").with_payload(json!({
@@ -263,24 +278,46 @@ async fn sync(
 
 /// Pull one binding's issues and upsert them. GitHub only in 014a.
 async fn sync_one(state: &AppState, binding: &TrackerBinding) -> Result<SyncResult, ApiError> {
-    let remote = classify_remote("github.com", binding.project.clone()).ok_or_else(|| {
-        ApiError::BadRequest(format!("could not build a github remote for {}", binding.project))
-    })?;
-    let token = token_for(ForgeKind::Github)?;
-    // state=all so closed issues map to done. 100-cap; pagination is 014e.
-    let url = format!(
-        "{}/repos/{}/issues?state=all&per_page=100",
-        remote.api_base, remote.project
-    );
-    let value = forge_get(&remote, &token, &url).await?;
-    let issues = parse_github_issues(&value);
+    // Fetch the tracker's issues, normalized to ExternalIssue (column pre-mapped
+    // per provider so the reconcile below is provider-agnostic).
+    let issues: Vec<ExternalIssue> = match binding.provider.as_str() {
+        "github" => {
+            let remote = classify_remote("github.com", binding.project.clone()).ok_or_else(|| {
+                ApiError::BadRequest(format!(
+                    "could not build a github remote for {}",
+                    binding.project
+                ))
+            })?;
+            let token = token_for(ForgeKind::Github)?;
+            // state=all so closed issues map to done. 100-cap; pagination is 014e.
+            let url = format!(
+                "{}/repos/{}/issues?state=all&per_page=100",
+                remote.api_base, remote.project
+            );
+            parse_github_issues(&forge_get(&remote, &token, &url).await?)
+        }
+        "linear" => linear::pull_issues(&binding.project)
+            .await
+            .map_err(linear_err)?
+            .into_iter()
+            .map(|li| ExternalIssue {
+                external_id: li.identifier,
+                title: li.title,
+                body: li.body,
+                url: li.url,
+                column: li.column,
+            })
+            .collect(),
+        other => {
+            return Err(ApiError::BadRequest(format!(
+                "sync for provider '{other}' not supported"
+            )));
+        }
+    };
 
-    let existing = state.store.list_external_refs("github").await?;
+    let existing = state.store.list_external_refs(&binding.provider).await?;
     let actions = reconcile(&existing, &issues);
-
-    let synced_at = OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let synced_at = now_rfc3339()?;
 
     let (mut created, mut updated) = (0usize, 0usize);
     for action in actions {
@@ -291,7 +328,7 @@ async fn sync_one(state: &AppState, binding: &TrackerBinding) -> Result<SyncResu
         state
             .store
             .upsert_external_card(
-                "github",
+                &binding.provider,
                 &issue.external_id,
                 &issue.title,
                 issue.body.as_deref(),
@@ -308,7 +345,7 @@ async fn sync_one(state: &AppState, binding: &TrackerBinding) -> Result<SyncResu
     }
 
     Ok(SyncResult {
-        provider: "github".into(),
+        provider: binding.provider.clone(),
         project: binding.project.clone(),
         created,
         updated,
@@ -345,12 +382,12 @@ async fn push_card(
         .get_board_item(id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("card {id}")))?;
-    let token = token_for(ForgeKind::Github)?;
-    let target_state = status_to_state(&card.status);
 
     match (card.external_provider.as_deref(), card.external_id.as_deref()) {
-        // Linked GitHub card → update the existing issue.
+        // Linked GitHub card → PATCH the existing issue.
         (Some("github"), Some(number)) => {
+            let token = token_for(ForgeKind::Github)?;
+            let target_state = status_to_state(&card.status);
             let url = card.external_url.as_deref().unwrap_or_default();
             let project = parse_repo_from_issue_url(url).ok_or_else(|| {
                 ApiError::BadRequest(format!("cannot derive owner/repo from issue url: {url}"))
@@ -376,55 +413,115 @@ async fn push_card(
                 "external_id": number, "state": target_state,
             })))
         }
-        // Non-github external provider → not supported in 014b.
-        (Some(p), _) => Err(ApiError::BadRequest(format!(
-            "push for provider '{p}' not supported in 014b (github only)"
-        ))),
-        // Native card → create a new issue in the resolved target repo.
-        (None, _) => {
-            let project = resolve_push_target(&state, body).await?;
-            let remote = classify_remote("github.com", project.clone())
-                .ok_or_else(|| ApiError::BadRequest(format!("bad github project: {project}")))?;
-            let create_url = format!("{}/repos/{}/issues", remote.api_base, project);
-            let payload = json!({ "title": card.title, "body": card.body });
-            let created =
-                forge_send(&remote, &token, reqwest::Method::POST, &create_url, &payload).await?;
-
-            let number = created
-                .get("number")
-                .and_then(|n| n.as_i64())
-                .ok_or_else(|| ApiError::Internal("github create issue: no number".into()))?;
-            let html_url = created
-                .get("html_url")
-                .and_then(|u| u.as_str())
-                .unwrap_or_default()
-                .to_string();
+        // Linked Linear card → update title/body + transition workflow state.
+        (Some("linear"), Some(identifier)) => {
+            // The team key is the identifier prefix (ENG-42 → ENG).
+            let project = identifier.split('-').next().unwrap_or_default().to_string();
+            let body_str = card.body.as_deref().unwrap_or_default();
+            linear::update_issue(&project, identifier, &card.title, body_str, &card.status)
+                .await
+                .map_err(linear_err)?;
             let synced = now_rfc3339()?;
+            let url = card.external_url.as_deref().unwrap_or_default();
             state
                 .store
-                .set_card_external_ref(id, "github", &number.to_string(), &html_url, &synced)
+                .set_card_external_ref(id, "linear", identifier, url, &synced)
                 .await?;
-
-            // A done card's freshly-created issue opens open — close it to match.
-            if target_state == "closed" {
-                let close_url = format!("{}/repos/{}/issues/{}", remote.api_base, project, number);
-                forge_send(
-                    &remote,
-                    &token,
-                    reqwest::Method::PATCH,
-                    &close_url,
-                    &json!({ "state": "closed" }),
-                )
-                .await?;
+            let payload = json!({
+                "id": id, "action": "updated", "provider": "linear",
+                "project": project, "external_id": identifier, "column": card.status,
+            });
+            let _ = state
+                .bus
+                .send(Event::new("board.push.completed").with_payload(payload.clone()));
+            Ok(Json(payload))
+        }
+        // Any other external provider.
+        (Some(p), _) => Err(ApiError::BadRequest(format!(
+            "push for provider '{p}' not supported (github | linear)"
+        ))),
+        // Native card → create a new issue in the resolved target.
+        (None, _) => {
+            let (provider, project) = resolve_push_target(&state, body).await?;
+            match provider.as_str() {
+                "github" => {
+                    let token = token_for(ForgeKind::Github)?;
+                    let target_state = status_to_state(&card.status);
+                    let remote = classify_remote("github.com", project.clone()).ok_or_else(|| {
+                        ApiError::BadRequest(format!("bad github project: {project}"))
+                    })?;
+                    let create_url = format!("{}/repos/{}/issues", remote.api_base, project);
+                    let payload = json!({ "title": card.title, "body": card.body });
+                    let created =
+                        forge_send(&remote, &token, reqwest::Method::POST, &create_url, &payload)
+                            .await?;
+                    let number = created.get("number").and_then(|n| n.as_i64()).ok_or_else(|| {
+                        ApiError::Internal("github create issue: no number".into())
+                    })?;
+                    let html_url = created
+                        .get("html_url")
+                        .and_then(|u| u.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let synced = now_rfc3339()?;
+                    state
+                        .store
+                        .set_card_external_ref(id, "github", &number.to_string(), &html_url, &synced)
+                        .await?;
+                    // A done card's freshly-created issue opens open — close to match.
+                    if target_state == "closed" {
+                        let close_url =
+                            format!("{}/repos/{}/issues/{}", remote.api_base, project, number);
+                        forge_send(
+                            &remote,
+                            &token,
+                            reqwest::Method::PATCH,
+                            &close_url,
+                            &json!({ "state": "closed" }),
+                        )
+                        .await?;
+                    }
+                    let payload = json!({
+                        "id": id, "action": "created", "provider": "github",
+                        "project": project, "external_id": number.to_string(),
+                        "url": html_url, "state": target_state,
+                    });
+                    let _ = state
+                        .bus
+                        .send(Event::new("board.push.completed").with_payload(payload.clone()));
+                    Ok(Json(payload))
+                }
+                "linear" => {
+                    let body_str = card.body.as_deref().unwrap_or_default();
+                    let (identifier, url) = linear::create_issue(&project, &card.title, body_str)
+                        .await
+                        .map_err(linear_err)?;
+                    let synced = now_rfc3339()?;
+                    state
+                        .store
+                        .set_card_external_ref(id, "linear", &identifier, &url, &synced)
+                        .await?;
+                    // New Linear issues open in the team's default state; move a
+                    // non-todo card to match its column.
+                    if card.status != "todo" {
+                        linear::update_issue(&project, &identifier, &card.title, body_str, &card.status)
+                            .await
+                            .map_err(linear_err)?;
+                    }
+                    let payload = json!({
+                        "id": id, "action": "created", "provider": "linear",
+                        "project": project, "external_id": identifier,
+                        "url": url, "column": card.status,
+                    });
+                    let _ = state
+                        .bus
+                        .send(Event::new("board.push.completed").with_payload(payload.clone()));
+                    Ok(Json(payload))
+                }
+                other => Err(ApiError::BadRequest(format!(
+                    "push to provider '{other}' not supported"
+                ))),
             }
-            let _ = state.bus.send(Event::new("board.push.completed").with_payload(json!({
-                "id": id, "action": "created", "provider": "github",
-                "project": project, "external_id": number, "url": html_url,
-            })));
-            Ok(Json(json!({
-                "action": "created", "provider": "github", "project": project,
-                "external_id": number, "url": html_url, "state": target_state,
-            })))
         }
     }
 }
@@ -435,14 +532,8 @@ async fn push_card(
 async fn resolve_push_target(
     state: &AppState,
     body: Option<Json<PushBody>>,
-) -> Result<String, ApiError> {
+) -> Result<(String, String), ApiError> {
     if let Some(Json(b)) = &body {
-        if let Some(p) = b.project.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-            if !p.contains('/') {
-                return Err(ApiError::BadRequest("project must be 'owner/repo'".into()));
-            }
-            return Ok(p.to_string());
-        }
         if let Some(bid) = b.binding_id {
             return state
                 .store
@@ -450,24 +541,27 @@ async fn resolve_push_target(
                 .await?
                 .into_iter()
                 .find(|x| x.id == bid)
-                .map(|x| x.project)
+                .map(|x| (x.provider, x.project))
                 .ok_or_else(|| ApiError::NotFound(format!("tracker binding {bid}")));
         }
+        if let Some(p) = b.project.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+            // Infer provider from shape: owner/repo → github, else Linear team key.
+            let provider = if p.contains('/') { "github" } else { "linear" };
+            return Ok((provider.to_string(), p.to_string()));
+        }
     }
-    let gh: Vec<_> = state
-        .store
-        .list_tracker_bindings()
-        .await?
-        .into_iter()
-        .filter(|b| b.provider == "github")
-        .collect();
-    match gh.len() {
-        1 => Ok(gh.into_iter().next().unwrap().project),
+    let bindings = state.store.list_tracker_bindings().await?;
+    match bindings.len() {
+        1 => {
+            let b = bindings.into_iter().next().unwrap();
+            Ok((b.provider, b.project))
+        }
         0 => Err(ApiError::BadRequest(
-            "no github binding — specify project, or POST /api/board/bindings first".into(),
+            "no tracker binding — specify project/binding_id or POST /api/board/bindings first"
+                .into(),
         )),
         _ => Err(ApiError::BadRequest(
-            "multiple github bindings — specify binding_id or project".into(),
+            "multiple bindings — specify binding_id or project".into(),
         )),
     }
 }
@@ -482,13 +576,13 @@ fn now_rfc3339() -> Result<String, ApiError> {
 mod tests {
     use super::*;
 
-    fn issue(id: &str, title: &str, state: &str) -> ExternalIssue {
+    fn issue(id: &str, title: &str, column: &str) -> ExternalIssue {
         ExternalIssue {
             external_id: id.into(),
             title: title.into(),
             body: None,
             url: format!("https://github.com/o/r/issues/{id}"),
-            state: state.into(),
+            column: column.into(),
         }
     }
 
@@ -501,22 +595,23 @@ mod tests {
 
     #[test]
     fn reconcile_status_policy() {
-        // closed upstream → done regardless of local column.
-        assert_eq!(reconcile_status("doing", "closed"), "done");
-        // reopened upstream → pull a done card back to todo.
-        assert_eq!(reconcile_status("done", "open"), "todo");
-        // open upstream → preserve a local in-progress move.
-        assert_eq!(reconcile_status("doing", "open"), "doing");
-        assert_eq!(reconcile_status("todo", "open"), "todo");
+        // tracker column "done" → done regardless of the local column.
+        assert_eq!(reconcile_status("doing", "done"), "done");
+        // reopened (was done, tracker now non-terminal) → take the tracker column.
+        assert_eq!(reconcile_status("done", "todo"), "todo");
+        assert_eq!(reconcile_status("done", "doing"), "doing");
+        // tracker still non-terminal → preserve a local in-progress move.
+        assert_eq!(reconcile_status("doing", "todo"), "doing");
+        assert_eq!(reconcile_status("todo", "todo"), "todo");
     }
 
     #[test]
     fn reconcile_creates_unseen_issue() {
-        let actions = reconcile(&[], &[issue("12", "Add login", "open")]);
+        let actions = reconcile(&[], &[issue("12", "Add login", "todo")]);
         assert_eq!(
             actions,
             vec![SyncAction::Create {
-                issue: issue("12", "Add login", "open"),
+                issue: issue("12", "Add login", "todo"),
                 status: "todo".into(),
             }]
         );
@@ -525,7 +620,8 @@ mod tests {
     #[test]
     fn reconcile_updates_known_issue_and_keeps_card_id() {
         let existing = vec![(7i64, "12".to_string(), "doing".to_string())];
-        let actions = reconcile(&existing, &[issue("12", "Add login (edited)", "open")]);
+        // tracker column "todo" (open) must NOT yank a locally in-progress card.
+        let actions = reconcile(&existing, &[issue("12", "Add login (edited)", "todo")]);
         match &actions[0] {
             SyncAction::Update { card_id, status, issue } => {
                 assert_eq!(*card_id, 7);
@@ -539,7 +635,7 @@ mod tests {
     #[test]
     fn reconcile_closed_known_issue_moves_to_done() {
         let existing = vec![(7i64, "12".to_string(), "doing".to_string())];
-        let actions = reconcile(&existing, &[issue("12", "Add login", "closed")]);
+        let actions = reconcile(&existing, &[issue("12", "Add login", "done")]);
         match &actions[0] {
             SyncAction::Update { status, .. } => assert_eq!(status, "done"),
             other => panic!("expected Update→done, got {other:?}"),
@@ -559,9 +655,10 @@ mod tests {
         assert_eq!(issues.len(), 2, "PR + malformed row dropped");
         assert_eq!(issues[0].external_id, "1");
         assert_eq!(issues[0].body.as_deref(), Some("hi"));
+        assert_eq!(issues[0].column, "todo", "open → todo column");
         assert_eq!(issues[1].external_id, "3");
         assert_eq!(issues[1].body, None, "empty body normalizes to None");
-        assert_eq!(issues[1].state, "closed");
+        assert_eq!(issues[1].column, "done", "closed → done column");
     }
 
     #[test]

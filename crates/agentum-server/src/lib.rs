@@ -29,6 +29,7 @@ pub mod harness;
 mod headers;
 pub mod host_install_hints;
 pub mod host_runtime;
+pub mod linear;
 mod logging;
 pub mod mcp_provision;
 pub mod planner;
