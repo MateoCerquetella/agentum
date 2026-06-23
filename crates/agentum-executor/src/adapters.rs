@@ -564,7 +564,6 @@ mod tests {
         //
         // Filesystem-touching: lays down a sentinel transcript under a
         // tempdir-rooted HOME, runs the adapter, then restores HOME.
-        use std::path::PathBuf;
         let unique = format!(
             "agentum-executor-test-{}-{}",
             std::process::id(),
@@ -583,16 +582,25 @@ mod tests {
             std::env::set_var("HOME", &fake_home);
         }
 
-        let workdir = "/tmp/work";
+        // Absolute workdir, per platform: `transcript_path_for` returns None for a
+        // non-absolute path, and `/tmp/...` is not absolute on Windows.
+        let workdir = if cfg!(windows) {
+            r"C:\work"
+        } else {
+            "/tmp/work"
+        };
         let session = fixture("claude", None, &[]);
         let session = Session {
             workdir: workdir.into(),
             ..session
         };
-        let enc = workdir.replace('/', "-");
-        let project_dir: PathBuf = fake_home.join(".claude").join("projects").join(enc);
-        std::fs::create_dir_all(&project_dir).unwrap();
-        let transcript_path = project_dir.join(format!("{}.jsonl", session.id));
+        // Lay the sentinel transcript at the exact path the adapter probes, via the
+        // same helper — so the cwd encoding is correct on every platform (the old
+        // manual `/`→`-` replace only matched Unix).
+        let transcript_path =
+            transcript::transcript_path_for(std::path::Path::new(workdir), session.id)
+                .expect("transcript path resolves for an absolute workdir");
+        std::fs::create_dir_all(transcript_path.parent().unwrap()).unwrap();
         std::fs::write(&transcript_path, b"{}\n").unwrap();
 
         let argv = ClaudeAdapter.launch(&session).argv;
