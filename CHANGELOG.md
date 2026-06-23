@@ -4,6 +4,15 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.7] — 2026-06-23
+
+### Added
+- **Change a repository's default branch from the project menu.** Right-click a
+  project in the sidebar → **Change default branch** to pick from the repo's
+  branches (the current default is marked) and update the GitHub default — the
+  base new pull requests target and the branch fresh clones check out — via the
+  authenticated `gh` CLI.
+
 ## [0.20.6] — 2026-06-23
 
 ### Added
