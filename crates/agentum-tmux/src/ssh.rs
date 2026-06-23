@@ -94,7 +94,7 @@ fn control_path_template_for(prefix: &str) -> Option<String> {
 }
 
 /// The interactive master path — a named helper kept for the tests.
-#[cfg(test)]
+#[cfg(all(test, unix))] // control_socket_dir() is None on Windows; only the unix tests use this.
 fn control_path_template() -> Option<String> {
     control_path_template_for("cm")
 }
@@ -839,6 +839,7 @@ mod tests {
     /// ControlMaster pooling must be present on every connection so repeated
     /// remote ops reuse one authenticated socket. Shared assertion for both auth
     /// paths (key/agent and password).
+    #[cfg(unix)] // both callers are #[cfg(unix)] tests (ControlMaster is Unix-only).
     fn assert_control_master(args: &[String]) {
         assert!(
             args.contains(&"ControlMaster=auto".to_string()),
