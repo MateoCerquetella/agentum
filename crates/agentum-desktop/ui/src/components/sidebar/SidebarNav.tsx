@@ -1,9 +1,6 @@
 import React from 'react'
 import {
   Columns3,
-  Github,
-  Gitlab,
-  List,
   MessagesSquare,
   Radar,
   Search,
@@ -15,7 +12,6 @@ import { cn } from '@/lib/utils'
 import { isGitRepoKind } from '../../../../shared/repo-kind'
 import type { GlobalSettings } from '../../../../shared/types'
 import { getTaskPresetQuery, PER_REPO_FETCH_LIMIT } from '@/lib/new-workspace'
-import { LinearIcon } from '@/components/icons/LinearIcon'
 import {
   normalizeVisibleTaskProviders,
   restoreAvailableDefaultTaskProvider,
@@ -180,7 +176,6 @@ const SidebarNav = React.memo(function SidebarNav() {
   const tasksActive = activeView === 'tasks'
   const activityActive = activeView === 'activity'
   const harnessActive = activeView === 'harness'
-  const boardActive = activeView === 'board'
   // Why: Mission Control is now the always-on home, so its "needs you" badge is
   // always tracked (no longer gated behind the old experimental Agents button).
   const activityUnreadCount = useActivityUnreadCount(true, 'sidebar-badge')
@@ -228,64 +223,16 @@ const SidebarNav = React.memo(function SidebarNav() {
             !canBrowseTasks && 'cursor-not-allowed opacity-50 hover:bg-transparent'
           )}
         >
-          <List
-            className={cn('size-4 shrink-0', !tasksActive && 'text-sidebar-foreground/30')}
+          {/* "Board" = the Tasks view: your GitHub/Linear issues. Chat creates
+              issues that show up here. (Tasks renamed to Board, #48 redo.) */}
+          <Columns3
+            className={cn(
+              'size-4 shrink-0',
+              !(tasksActive) && 'text-sidebar-foreground/30'
+            )}
             strokeWidth={tasksActive ? 2.25 : 1.75}
           />
-          <span className="flex-1">Tasks</span>
-          <span className="flex items-center gap-1">
-            {visibleTaskProviders.includes('github') ? (
-              <span
-                role="button"
-                tabIndex={-1}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  if (!canBrowseTasks) {
-                    return
-                  }
-                  openTaskPage({ taskSource: 'github' })
-                }}
-                className="rounded p-0.5 text-muted-foreground/70 transition-colors hover:text-foreground"
-                aria-label="Open GitHub tasks"
-              >
-                <Github className="size-3.5" aria-hidden />
-              </span>
-            ) : null}
-            {visibleTaskProviders.includes('gitlab') ? (
-              <span
-                role="button"
-                tabIndex={-1}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  if (!canBrowseTasks) {
-                    return
-                  }
-                  openTaskPage({ taskSource: 'gitlab' })
-                }}
-                className="rounded p-0.5 text-muted-foreground/70 transition-colors hover:text-foreground"
-                aria-label="Open GitLab tasks"
-              >
-                <Gitlab className="size-3.5" aria-hidden />
-              </span>
-            ) : null}
-            {visibleTaskProviders.includes('linear') ? (
-              <span
-                role="button"
-                tabIndex={-1}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  if (!canBrowseTasks) {
-                    return
-                  }
-                  openTaskPage({ taskSource: 'linear' })
-                }}
-                className="rounded p-0.5 text-muted-foreground/70 transition-colors hover:text-foreground"
-                aria-label="Open Linear tasks"
-              >
-                <LinearIcon className="size-3.5" />
-              </span>
-            ) : null}
-          </span>
+          <span className="flex-1">Board</span>
         </button>
       ) : null}
       <button

@@ -436,12 +436,12 @@ export type UISlice = {
   acknowledgedAgentsByPaneKey: Record<string, number>
   acknowledgeAgents: (paneKeys: string[]) => void
   unacknowledgeAgents: (paneKeys: string[]) => void
-  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'board'
-  previousViewBeforeTasks: 'terminal' | 'settings' | 'activity' | 'skills' | 'harness' | 'board'
-  previousViewBeforeSettings: 'terminal' | 'tasks' | 'activity' | 'skills' | 'harness' | 'board'
-  previousViewBeforeActivity: 'terminal' | 'settings' | 'tasks' | 'skills' | 'harness' | 'board'
-  previousViewBeforeSkills: 'terminal' | 'settings' | 'tasks' | 'activity' | 'harness' | 'board'
-  previousViewBeforeHarness: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'board'
+  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness'
+  previousViewBeforeTasks: 'terminal' | 'settings' | 'activity' | 'skills' | 'harness'
+  previousViewBeforeSettings: 'terminal' | 'tasks' | 'activity' | 'skills' | 'harness'
+  previousViewBeforeActivity: 'terminal' | 'settings' | 'tasks' | 'skills' | 'harness'
+  previousViewBeforeSkills: 'terminal' | 'settings' | 'tasks' | 'activity' | 'harness'
+  previousViewBeforeHarness: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills'
   setActiveView: (view: UISlice['activeView']) => void
   taskPageData: {
     preselectedRepoId?: string

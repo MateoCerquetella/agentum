@@ -1,3 +1,4 @@
+#![cfg(unix)] // Drives the goal→card→tmux-session flow; tmux is Unix-only.
 //! End-to-end integration test for Phase 1 (goal-cards-planner-slice).
 //!
 //! Exercises the full happy path through the in-process axum router:

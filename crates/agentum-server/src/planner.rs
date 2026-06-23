@@ -163,11 +163,18 @@ mod tests {
         // No planner.toml in the tempdir.
         let cfg = load_planner_config().await.unwrap();
         assert_eq!(cfg.tool, "claude");
-        // The bundled prompt mentions the CLI surface so agents know how to
-        // emit cards — if this fails the include_str! grabbed the wrong file.
+        // The bundled prompt tells the agent to create GitHub issues via
+        // `gh issue create` — if this fails the include_str! grabbed the wrong
+        // file or the prompt regressed to the old phantom-CLI surface.
         assert!(
-            cfg.prompt.contains("agentum board add-card"),
-            "bundled prompt must reference the CLI surface"
+            cfg.prompt.contains("gh issue create"),
+            "bundled prompt must reference `gh issue create`"
+        );
+        // And it must inject the goal description so the planner has something
+        // to decompose (the old prompt only got the AG-key).
+        assert!(
+            cfg.prompt.contains("<GOAL>"),
+            "bundled prompt must contain the <GOAL> injection placeholder"
         );
     }
 
@@ -198,8 +205,10 @@ mod tests {
         let fixture_path = env._dir.path().join("custom_prompt.md");
         std::fs::write(&fixture_path, "file-prompt-content").unwrap();
 
+        // TOML literal string ('...') so a Windows fixture path's backslashes
+        // aren't parsed as escapes (a basic "..." string would fail to parse).
         let toml_content = format!(
-            "[planner]\nprompt_file = \"{}\"\nprompt = \"inline-content\"\n",
+            "[planner]\nprompt_file = '{}'\nprompt = \"inline-content\"\n",
             fixture_path.display()
         );
         std::fs::write(cfg_dir.join("planner.toml"), toml_content).unwrap();
@@ -254,9 +263,17 @@ mod tests {
         let _env = isolate_xdg();
         let cfg_dir = agentum_store::paths::config_dir().unwrap();
         std::fs::create_dir_all(&cfg_dir).unwrap();
+        // Absolute (so it clears the absolute-path check and reaches the
+        // existence check) but non-existent — `/tmp/...` is not absolute on
+        // Windows, where it would trip "must be an absolute path" instead.
+        let missing = if cfg!(windows) {
+            r"C:\definitely-not-a-real-path-XYZZY"
+        } else {
+            "/tmp/definitely-not-a-real-path-XYZZY"
+        };
         std::fs::write(
             cfg_dir.join("planner.toml"),
-            "[planner]\nprompt_file = \"/tmp/definitely-not-a-real-path-XYZZY\"\n",
+            format!("[planner]\nprompt_file = '{missing}'\n"),
         )
         .unwrap();
 

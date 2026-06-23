@@ -4,6 +4,39 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.7] — 2026-06-23
+
+### Changed
+- **One Board.** The sidebar "Board" entry is now the Tasks view — your real
+  GitHub/Linear issues. The standalone Kanban (Backlog/Building/Review/Done) was
+  removed; "Board" and "Tasks" are the same surface.
+- **Chat creates GitHub issues.** Describe a feature in Chat and the planner
+  decomposes it into **GitHub issues** (`gh issue create`) on your Board, instead
+  of the board cards that previously never drafted ("No cards drafted yet").
+
+## [0.20.6] — 2026-06-23
+
+### Added
+- **One unified Board.** The sidebar "Tasks" entry is now **Board** (Kanban
+  icon) and opens the Backlog → Building → Review → Done board directly. The old
+  flat issue list and per-provider shortcuts are gone — GitHub/Linear issues and
+  chat goals/cards all live on the one board.
+- **"Sync issues" on the Board** pulls your GitHub issues and assigned Linear
+  issues onto the board as cards (idempotent upsert via `/api/board/sync`).
+
+### Changed
+- **Cards advance automatically.** When a card's agent finishes a turn the card
+  moves Building → Review on its own; a goal stays in-progress while any child is
+  still in review.
+- **CDP browser prefers your system Chrome** when available (falls back to
+  Playwright Chromium), and the CDP-Chromium screencast is now the default
+  browser engine.
+
+### Fixed
+- macOS: force a WKWebView relayout so the browser pane paints reliably.
+- CI: cross-platform green (Ubuntu/macOS/Windows); sherpa/onnxruntime libraries
+  are staged on all OSes.
+
 ## [0.20.5] — 2026-06-23
 
 ### Fixed

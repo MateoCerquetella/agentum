@@ -62,7 +62,9 @@ function statusColor(status: string): { dot: string; text: string } {
 function goalRollup(children: BoardItem[]): { dot: string; subtitle: string } {
   if (children.length === 0) return { dot: 'bg-muted-foreground/40', subtitle: 'planning…' }
   const done = children.filter((c) => c.status === 'done').length
-  const building = children.some((c) => c.status === 'doing')
+  // `review` (an agent finished, awaiting verification) still counts as in
+  // progress for the rollup — the goal isn't drafted-only nor fully done.
+  const building = children.some((c) => c.status === 'doing' || c.status === 'review')
   if (done === children.length) return { dot: 'bg-emerald-500', subtitle: `${children.length} cards · done` }
   if (building) return { dot: 'bg-amber-500', subtitle: `${done}/${children.length} cards · building` }
   return { dot: 'bg-muted-foreground/40', subtitle: `${children.length} cards · drafted` }
@@ -290,7 +292,7 @@ export default function ChatPage() {
       <DrillInHeader
         icon={MessagesSquare}
         title="Chat"
-        description="Describe what you want — the planner drafts an ordered backlog of board cards"
+        description="Describe what you want — the planner creates GitHub issues on your Board"
       />
 
       <div className="flex min-h-0 flex-1">
@@ -362,12 +364,12 @@ export default function ChatPage() {
               {selected ? selected.goal.title : 'New feature'}
             </span>
             <span className="font-mono text-[11px] text-muted-foreground">
-              agentum · spec → board cards
+              agentum · spec → GitHub issues
             </span>
             {selected ? (
               <button
                 type="button"
-                onClick={() => setActiveView('board')}
+                onClick={() => setActiveView('tasks')}
                 className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-0.5 font-mono text-[11px] hover:border-foreground/30"
               >
                 <Columns3 className="size-3" /> Open in Board
@@ -383,7 +385,7 @@ export default function ChatPage() {
                   <MessagesSquare className="mx-auto mb-3 size-6 opacity-60" />
                   <div className="text-sm">Describe a feature to begin.</div>
                   <div className="mt-1 font-mono text-[11px]">
-                    The planner reads the repo, drafts a spec, and decomposes it into board cards.
+                    The planner reads the repo and creates GitHub issues on your Board.
                   </div>
                 </div>
               ) : (
@@ -393,10 +395,8 @@ export default function ChatPage() {
                     who="agentum · planner"
                     text={
                       drafting
-                        ? 'Reading the repo and drafting the backlog — cards will appear here as the planner decomposes the spec…'
-                        : cards.length
-                          ? `Drafted ${cards.length} ordered card${cards.length === 1 ? '' : 's'}. Review them below, then open the Board to start them behind the verify gate.`
-                          : 'No cards drafted yet. The planner may still be working, or you can refine the description and try again.'
+                        ? 'Reading the repo and creating GitHub issues from your description — they show up on your Board…'
+                        : 'Creating GitHub issues from your description — open the Board to review and start them.'
                     }
                   />
 
@@ -444,7 +444,7 @@ export default function ChatPage() {
                       <div className="mt-3.5 flex flex-wrap items-center gap-3">
                         <button
                           type="button"
-                          onClick={() => setActiveView('board')}
+                          onClick={() => setActiveView('tasks')}
                           className="inline-flex h-9 items-center gap-2 rounded-full bg-primary px-4.5 text-[13.5px] font-medium text-primary-foreground hover:opacity-85"
                         >
                           <Columns3 className="size-4" /> Review &amp; start on the Board

@@ -214,11 +214,13 @@ function WindowControls(): React.JSX.Element {
 // frame it takes the chunk to resolve.
 const Terminal = lazy(() => import('./components/Terminal'))
 const Landing = lazy(() => import('./components/Landing'))
+// The "Board" sidebar entry IS the Tasks view (the GitHub/Linear issue list) —
+// Tasks was renamed to Board (#48 redo). The standalone Kanban (BoardPage) was
+// removed; Chat creates GitHub issues that show up here.
 const TaskPage = lazy(() => import('./components/TaskPage'))
 const ActivityPrototypePage = lazy(() => import('./components/activity/ActivityPrototypePage'))
 const Settings = lazy(() => import('./components/settings/Settings'))
 const ChatPage = lazy(() => import('./components/harness/ChatPage'))
-const BoardPage = lazy(() => import('./components/board/BoardPage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
 const WorktreeJumpPalette = lazy(() => import('./components/WorktreeJumpPalette'))
 const CommandPalette = lazy(() => import('./components/CommandPalette'))
@@ -1736,10 +1738,12 @@ function App(): React.JSX.Element {
                           description="Retry the page or navigate to another agentum surface."
                         >
                           {activeView === 'settings' ? <Settings /> : null}
+                          {/* The "Board" sidebar entry renders the Tasks view (GitHub/Linear
+                              issues) — Tasks renamed to Board (#48 redo). The standalone
+                              Kanban 'board' view was removed. */}
                           {activeView === 'tasks' ? <TaskPage /> : null}
                           {activeView === 'activity' ? <ActivityPrototypePage /> : null}
                           {activeView === 'harness' ? <ChatPage /> : null}
-                          {activeView === 'board' ? <BoardPage /> : null}
                           {activeView === 'terminal' && !activeWorktreeId ? <Landing /> : null}
                         </RecoverableRenderErrorBoundary>
                       </Suspense>

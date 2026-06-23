@@ -2951,6 +2951,8 @@ mod tests {
         );
     }
 
+    // Drives the bash `verify.sh`/`qa.sh` gate — the Harness Engine is Unix-shell-based.
+    #[cfg(unix)]
     #[tokio::test]
     async fn green_gate_marks_done_and_writes_handoff() {
         let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
@@ -2976,6 +2978,8 @@ mod tests {
         std::fs::write(resolve_harness_dir(wd).join("qa.sh"), body).unwrap();
     }
 
+    // Drives the bash `verify.sh`/`qa.sh` gate — the Harness Engine is Unix-shell-based.
+    #[cfg(unix)]
     #[tokio::test]
     async fn qa_gate_passes_and_marks_ready_to_test() {
         let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
@@ -2990,6 +2994,8 @@ mod tests {
         assert_eq!(f.state, FeatureState::ReadyToTest);
     }
 
+    // Drives the bash `verify.sh`/`qa.sh` gate — the Harness Engine is Unix-shell-based.
+    #[cfg(unix)]
     #[tokio::test]
     async fn qa_gate_reports_failure() {
         let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
@@ -3077,6 +3083,8 @@ mod tests {
         assert_eq!(resolve_qa_mode(&cfg2), QaMode::Script);
     }
 
+    // Drives the bash `verify.sh`/`qa.sh` gate — the Harness Engine is Unix-shell-based.
+    #[cfg(unix)]
     #[tokio::test]
     async fn red_gate_retries_then_blocks() {
         // Always fails → after max_retries (2) the feature is Blocked.
@@ -3532,6 +3540,8 @@ mod surface_tests {
 
     // --- 010c slice 2: HITL-at-QA gate ---
 
+    // Drives the bash `verify.sh`/`qa.sh` gate — the Harness Engine is Unix-shell-based.
+    #[cfg(unix)]
     #[tokio::test]
     async fn hitl_at_qa_parks_then_confirm_finalizes() {
         let dir = TempDir::new().unwrap();
@@ -3567,6 +3577,8 @@ mod surface_tests {
         );
     }
 
+    // Drives the bash `verify.sh`/`qa.sh` gate — the Harness Engine is Unix-shell-based.
+    #[cfg(unix)]
     #[tokio::test]
     async fn no_hitl_marks_done_directly() {
         // Default (hitl_at_qa absent/false): green verify → Done immediately.

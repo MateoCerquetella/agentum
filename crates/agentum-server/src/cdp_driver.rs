@@ -39,7 +39,10 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 /// persistent Chromium (not the desktop webview). `open`/`tabs`/`grab`/`annotate`/
 /// `annotations` stay on the desktop bridge (tab lifecycle + annotation store).
 pub fn handles_op(op: &str) -> bool {
-    matches!(op, "navigate" | "snapshot" | "screenshot" | "click" | "fill")
+    matches!(
+        op,
+        "navigate" | "snapshot" | "screenshot" | "click" | "fill"
+    )
 }
 
 /// Entry point for `routes::mcp`: run one driver-owned `agentum_browser` op against
@@ -153,9 +156,8 @@ pub(crate) async fn cdp_fill(base: &str, args: &Value) -> Result<Value> {
 
 // --- CDP connection ----------------------------------------------------------
 
-type Ws = tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->;
+type Ws =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// A short-lived CDP connection to one page target. Commands carry monotonic ids;
 /// [`CdpConn::call`] awaits the response with the matching id, skipping the
@@ -471,7 +473,10 @@ mod tests {
             if s.get("title").and_then(Value::as_str) == Some("clicked:Ada") {
                 break; // fill + click verifiably mutated the DOM
             }
-            assert!(Instant::now() < deadline, "click/fill did not mutate the DOM: {s}");
+            assert!(
+                Instant::now() < deadline,
+                "click/fill did not mutate the DOM: {s}"
+            );
             sleep(Duration::from_millis(150)).await;
         }
 

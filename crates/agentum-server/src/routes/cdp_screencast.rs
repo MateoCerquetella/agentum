@@ -111,7 +111,9 @@ async fn run(socket: WebSocket, cdp_http_base: Result<String, String>, opts: Scr
         Err(message) => {
             let _ = ws_tx
                 .send(Message::Text(
-                    json!({ "type": "error", "message": message }).to_string().into(),
+                    json!({ "type": "error", "message": message })
+                        .to_string()
+                        .into(),
                 ))
                 .await;
             let _ = ws_tx

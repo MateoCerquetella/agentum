@@ -459,8 +459,9 @@ mod tests {
         // the no-download path (system Chrome) is reachable.
         assert!(!candidates.is_empty());
         #[cfg(target_os = "macos")]
-        assert!(candidates.iter().any(|p| p
-            == Path::new("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")));
+        assert!(candidates.iter().any(
+            |p| p == Path::new("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+        ));
         #[cfg(target_os = "linux")]
         assert!(
             candidates
@@ -468,8 +469,11 @@ mod tests {
                 .any(|p| p == Path::new("/usr/bin/google-chrome"))
         );
         #[cfg(target_os = "windows")]
-        assert!(candidates.iter().any(|p| p
-            == Path::new(r"C:\Program Files\Google\Chrome\Application\chrome.exe")));
+        assert!(
+            candidates
+                .iter()
+                .any(|p| p == Path::new(r"C:\Program Files\Google\Chrome\Application\chrome.exe"))
+        );
     }
 
     #[cfg(target_os = "macos")]

@@ -253,6 +253,8 @@ pub fn run() {
             hooks::hooks_write_issue_command,
             html_export::export_html_to_pdf,
             gh::gh_repo_slug,
+            gh::gh_repo_branches,
+            gh::gh_set_default_branch,
             gh::gh_enqueue_pr_refresh,
             gh::gh_update_issue,
             gh::gh_merge_pr,
