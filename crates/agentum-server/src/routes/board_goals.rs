@@ -328,14 +328,16 @@ async fn provision_card_worktree(
 /// Best-effort cleanup of a card's isolated worktree once the card reaches
 /// `done` (design 2026-06-18 "Open questions": per-card worktree, prune on
 /// done). Safe by construction — it only removes the worktree when:
-///   * the card has a bound session with a `worktree_path` (it was isolated),
-///   * that session is no longer `Running` (don't yank a worktree out from
-///     under a live agent), and
-///   * the worktree is clean (never silently discard uncommitted work — the
-///     same guard the manual `/worktree/prune` route enforces).
-/// Any unmet condition (or a git error) is a logged skip, never a caller
-/// error: marking a card done must not fail because cleanup couldn't run.
-/// Returns `true` only when a worktree was actually pruned.
+///
+/// - the card has a bound session with a `worktree_path` (it was isolated),
+/// - that session is no longer `Running` (don't yank a worktree out from under
+///   a live agent), and
+/// - the worktree is clean (never silently discard uncommitted work — the same
+///   guard the manual `/worktree/prune` route enforces).
+///
+/// Any unmet condition (or a git error) is a logged skip, never a caller error:
+/// marking a card done must not fail because cleanup couldn't run. Returns
+/// `true` only when a worktree was actually pruned.
 pub(crate) async fn prune_card_worktree_on_done(state: &AppState, card: &BoardItem) -> bool {
     let session_id = match card.session_id.as_deref().and_then(|s| s.parse().ok()) {
         Some(id) => id,
