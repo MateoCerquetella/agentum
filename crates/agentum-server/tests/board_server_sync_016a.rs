@@ -178,6 +178,12 @@ async fn post_board_sync_items_still_works_after_016a_merge() {
 /// A server pull against a no-token GitHub returns a non-success status, and
 /// the board's card count + contents are unchanged (the pre-existing card and
 /// no new external card). Deterministic & offline via an empty `AGENTUM_HOME`.
+// The env guard MUST span the awaits: `AGENTUM_HOME` is set for the whole body
+// (and restored at the end under the same guard), and the sync's `token_for`
+// path reads it mid-flight. `ENV_LOCK` is a `std::sync::Mutex` serialising the
+// env-touching tests, so an async mutex would break that serialization — holding
+// it across `.await` is correct here.
+#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn server_sync_with_no_token_fails_loud_and_writes_nothing() {
     let _guard: MutexGuard<'_, ()> = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());

@@ -302,7 +302,7 @@ impl TauriBridge {
         let wv = self
             .pick_webview(args)
             .ok_or_else(|| anyhow::anyhow!("no browser tab open"))?;
-        wv.eval(&grab_extractor_script(selector, &request_id))
+        wv.eval(grab_extractor_script(selector, &request_id))
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         match tokio::time::timeout(OPEN_TAB_TIMEOUT, rx).await {

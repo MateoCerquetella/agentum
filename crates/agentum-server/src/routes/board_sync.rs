@@ -884,6 +884,12 @@ mod tests {
     /// no-token GitHub returns a non-success status AND leaves the board card
     /// count + contents unchanged. We force the no-token path deterministically
     /// (and offline) by pointing the forge-token store at an empty `AGENTUM_HOME`.
+    // The env guard MUST span the awaits: `AGENTUM_HOME` is set for the whole
+    // body (and restored at the end under the same guard), and `sync_binding`'s
+    // `token_for(Github)` reads it mid-flight. `TEST_ENV_LOCK` is a crate-wide
+    // `std::sync::Mutex` shared with non-async env tests, so an async mutex would
+    // break that cross-test serialization — holding it across `.await` is correct.
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn sync_with_no_token_is_non_success_and_writes_nothing() {
         // Share the crate-wide env lock so this serialises against the other
