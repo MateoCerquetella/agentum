@@ -4,6 +4,28 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] — 2026-06-23
+
+### Added
+- **QA-drivable browser over CDP.** The `agentum_browser` MCP ops
+  `snapshot`/`screenshot`/`click`/`fill`/`navigate` now drive the persistent
+  CDP-Chromium **server-side** and return real page state (DOM text, screenshot
+  bytes, DOM mutations) — and work headless, even with the desktop GUI closed, so
+  a QA agent can drive the surviving browser. (Replaces the desktop-webview stubs.)
+
+### Changed
+- **Smoother in-app browser screencast** (less "remote VPS" feel). The pane now
+  paints frames to a `<canvas>` via `createImageBitmap` + `requestAnimationFrame`
+  (no per-frame object-URL/`setState` churn), mouse-move is coalesced to one send
+  per frame, and the server acks each frame immediately and forwards latest-wins
+  over a `watch` channel so a slow pane never stalls Chrome's compositor. Default
+  screencast JPEG quality 70 → 80.
+
+### Notes
+- The CDP-Chromium browser already persists across desktop-app close (detached
+  tmux session + stable profile, reconnect-on-probe). Localhost only; an SSH-host
+  (tunnel) seam is threaded but not yet implemented.
+
 ## [0.20.7] — 2026-06-23
 
 ### Changed
