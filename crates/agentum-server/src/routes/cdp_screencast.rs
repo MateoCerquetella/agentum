@@ -77,7 +77,21 @@ impl ScreencastQuery {
 
 async fn screencast(ws: WebSocketUpgrade, Query(q): Query<ScreencastQuery>) -> impl IntoResponse {
     let opts = q.options();
-    let base = q.cdp_http_base();
+    // Resolve the CDP endpoint to attach to. With no explicit `cdpPort` this is
+    // the shared LOCAL browser — launch it on demand so a plain user-opened tab
+    // (not just an agent-driven one) has a Chromium to attach to; the launch is
+    // idempotent, so concurrent tabs reuse the one browser. An explicit `cdpPort`
+    // is an external/tunneled browser (009a/SSH) we must never launch ourselves.
+    let base = if q.cdp_port.is_some() {
+        // Explicit/tunneled browser (009a/SSH) — attach as-is, never launch it.
+        Ok(q.cdp_http_base())
+    } else {
+        // Shared local browser — launch on demand (idempotent) so a plain
+        // user-opened tab has a Chromium to attach to.
+        cdp_browser::ensure_local_cdp_browser()
+            .await
+            .map_err(|e| format!("{e:#}"))
+    };
     ws.on_upgrade(move |socket| run(socket, base, opts))
 }
 
@@ -87,8 +101,25 @@ async fn screencast(ws: WebSocketUpgrade, Query(q): Query<ScreencastQuery>) -> i
 const FRAME_CHANNEL_DEPTH: usize = 4;
 const INPUT_CHANNEL_DEPTH: usize = 64;
 
-async fn run(socket: WebSocket, cdp_http_base: String, opts: ScreencastOptions) {
+async fn run(socket: WebSocket, cdp_http_base: Result<String, String>, opts: ScreencastOptions) {
     let (mut ws_tx, mut ws_rx) = socket.split();
+
+    // A failed on-demand launch (no system Chrome AND no Playwright build)
+    // surfaces to the pane as an actionable error frame instead of a silent blank.
+    let cdp_http_base = match cdp_http_base {
+        Ok(base) => base,
+        Err(message) => {
+            let _ = ws_tx
+                .send(Message::Text(
+                    json!({ "type": "error", "message": message }).to_string().into(),
+                ))
+                .await;
+            let _ = ws_tx
+                .send(Message::Text(json!({ "type": "end" }).to_string().into()))
+                .await;
+            return;
+        }
+    };
 
     // Tell the pane we're live (its `onResponse('ready')` flips the pane to the
     // screencast surface). Best-effort: if this send fails the client is already
