@@ -88,7 +88,17 @@ fn login_shell_path() -> Option<String> {
 /// process resolves binaries the same way the user's terminal does. Pure and
 /// deterministic — unit-tested without spawning a shell.
 fn merge_paths(login: &str, current: &str) -> String {
+    // Pick the platform separator, then delegate to the separator-agnostic
+    // core. Keeping `cfg!(windows)` out of the merge logic lets the tests
+    // exercise it with a fixed `:` and stay deterministic on every OS.
     let sep = if cfg!(windows) { ';' } else { ':' };
+    merge_paths_with(login, current, sep)
+}
+
+/// Separator-injected merge core: `login` segments first, deduplicated, empties
+/// dropped, order preserved. Pure and deterministic — unit-tested directly with
+/// a fixed `:` so the assertions hold identically on Unix and Windows.
+fn merge_paths_with(login: &str, current: &str, sep: char) -> String {
     let mut out: Vec<&str> = Vec::new();
     for seg in login.split(sep).chain(current.split(sep)) {
         if seg.is_empty() {
@@ -105,12 +115,17 @@ fn merge_paths(login: &str, current: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::merge_paths;
+    use super::merge_paths_with;
+
+    // Drive the pure core with a fixed `:` so the Unix-style literals below are
+    // the real separator on every platform (on Windows `merge_paths` would use
+    // `;`, but the *logic* under test is separator-agnostic).
+    const SEP: char = ':';
 
     #[test]
     fn login_segments_come_first() {
         assert_eq!(
-            merge_paths("/home/u/.local/bin", "/usr/bin:/bin"),
+            merge_paths_with("/home/u/.local/bin", "/usr/bin:/bin", SEP),
             "/home/u/.local/bin:/usr/bin:/bin"
         );
     }
@@ -118,21 +133,24 @@ mod tests {
     #[test]
     fn dedups_overlap_preserving_login_precedence() {
         // /b appears in both; it stays where login put it, not duplicated.
-        assert_eq!(merge_paths("/a:/b", "/b:/c"), "/a:/b:/c");
+        assert_eq!(merge_paths_with("/a:/b", "/b:/c", SEP), "/a:/b:/c");
     }
 
     #[test]
     fn empty_login_keeps_current() {
-        assert_eq!(merge_paths("", "/usr/bin:/bin"), "/usr/bin:/bin");
+        assert_eq!(merge_paths_with("", "/usr/bin:/bin", SEP), "/usr/bin:/bin");
     }
 
     #[test]
     fn empty_current_keeps_login() {
-        assert_eq!(merge_paths("/opt/homebrew/bin", ""), "/opt/homebrew/bin");
+        assert_eq!(
+            merge_paths_with("/opt/homebrew/bin", "", SEP),
+            "/opt/homebrew/bin"
+        );
     }
 
     #[test]
     fn skips_empty_segments_from_doubled_separators() {
-        assert_eq!(merge_paths("/a::/b", ""), "/a:/b");
+        assert_eq!(merge_paths_with("/a::/b", "", SEP), "/a:/b");
     }
 }
