@@ -65,12 +65,21 @@ async fn create_goal(
     super::board::enforce_transition(&state.store, &state.bus, None, target_status, &mut ctx)
         .await?;
 
-    // Step 2: create the goal BoardItem (lbl=goal, status=todo).
-    // `board.created` is emitted inside `create_board_item` → our handler emits
-    // `goal.created` separately for consumers that filter on goal-specific events.
+    // Step 2: load + validate the planner config BEFORE writing the goal row.
+    // D-12: reads from disk on every submit (no in-memory cache). Loading first
+    // means a bad planner.toml (e.g. a `prompt_file` that fails the path guard)
+    // returns 400 here WITHOUT orphaning a stuck "planning…" goal — the
+    // create_board_item write below only runs once the planner is known-good.
+    // The Chat intake's agent picker overrides which agent runs the planner.
+    let tool = body.tool.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let mut cfg = planner::load_planner_config().await?;
+    if let Some(t) = tool {
+        cfg.tool = t.to_string();
+    }
+
+    // Step 3: create the goal BoardItem (lbl=goal, status=todo).
     // The chosen agent rides on the goal card so the planner's child cards
     // inherit it (spawn_card_session resolves tool/model via parent_goal).
-    let tool = body.tool.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let new_item = NewBoardItem {
         title: body.title.clone(),
         body: body.body.clone(),
@@ -85,20 +94,12 @@ async fn create_goal(
     };
     let goal = state.store.create_board_item(new_item).await?;
 
-    // `board.created` was emitted by routes/board.rs::create; emit the
+    // `board.created` was emitted inside create_board_item → emit the
     // goal-specific event so plan 01-04's watchdog can filter cleanly.
     let _ = state.bus.send(
         Event::new("goal.created")
             .with_payload(json!({"id": goal.id, "key": goal.key, "title": goal.title})),
     );
-
-    // Step 3: load planner config (tool + prompt, with bundled defaults).
-    // D-12: reads from disk on every submit (no in-memory cache).
-    // The Chat intake's agent picker overrides which agent runs the planner.
-    let mut cfg = planner::load_planner_config().await?;
-    if let Some(t) = tool {
-        cfg.tool = t.to_string();
-    }
 
     // Step 4: derive workdir. Body wins; else daemon cwd.
     let workdir = body.workdir.clone().unwrap_or_else(|| {
@@ -662,6 +663,16 @@ mod tests {
         unsafe {
             std::env::set_var("AGENTUM_HOME", dir.path());
         }
+        // Guard the isolation seam: if config_dir() ever stops honoring
+        // AGENTUM_HOME, fail loudly here instead of writing test fixtures into
+        // the user's real config dir (the planner.toml/profiles.toml leak).
+        // Read-only assert — cheap, runs once per test.
+        let cfg = agentum_store::paths::config_dir().expect("config_dir resolves");
+        assert!(
+            cfg.starts_with(dir.path()),
+            "AGENTUM_HOME isolation broken: config_dir {cfg:?} escaped temp {:?}",
+            dir.path()
+        );
         TestEnv {
             _dir: dir,
             _guard: guard,
@@ -693,6 +704,51 @@ mod tests {
         assert_eq!(goal.status, "todo", "goal must land in todo");
         assert_eq!(goal.title, "build OAuth");
         assert!(goal.parent_goal_id.is_none(), "goals have no parent goal");
+    }
+
+    /// A planner-config error must reject the submit BEFORE any goal row is
+    /// written — otherwise a bad `planner.toml` orphans a stuck "planning…"
+    /// goal that the user can't get rid of. Regression for the leaked
+    /// `prompt_file = "../etc/passwd"` fixture that 400'd every submit.
+    #[tokio::test]
+    async fn invalid_planner_config_does_not_orphan_goal() {
+        let _env = isolate_xdg();
+        // A relative `prompt_file` is rejected by the path-traversal guard.
+        let cfg_dir = agentum_store::paths::config_dir().unwrap();
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(
+            cfg_dir.join("planner.toml"),
+            "[planner]\nprompt_file = \"../etc/passwd\"\n",
+        )
+        .unwrap();
+
+        let state = fresh_state().await;
+
+        let err = create_goal(
+            State(state.clone()),
+            Json(CreateGoalBody {
+                title: "should not orphan".into(),
+                body: None,
+                workdir: Some("/tmp".into()),
+                tool: None,
+                model: None,
+            }),
+        )
+        .await
+        .expect_err("invalid planner config must reject the submit");
+
+        assert!(
+            matches!(err, ApiError::BadRequest(_)),
+            "expected BadRequest from planner config, got {err:?}"
+        );
+
+        // The goal row must NOT exist — the config error fired before the write.
+        let items = state.store.list_board_items().await.unwrap();
+        assert!(
+            items.is_empty(),
+            "a planner-config error must not orphan a goal row; found {} item(s)",
+            items.len()
+        );
     }
 
     /// POST /api/board/goals emits a goal.created event on the bus.

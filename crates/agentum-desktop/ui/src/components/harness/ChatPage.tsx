@@ -7,20 +7,42 @@
 // Left: your goals ("chats"). Right: the conversation + the drafted cards +
 // the (un-gated) composer. Backed by board-client over the embedded server.
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Columns3, Loader2, MessagesSquare, Plus, Send, Sparkles } from 'lucide-react'
+import { Columns3, Loader2, MessagesSquare, Plus, Send, Sparkles, Trash2, TriangleAlert } from 'lucide-react'
 
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
+import { api } from '@/tauri'
 import { DrillInHeader } from '@/components/nav/DrillInHeader'
 import { type AgentInfo, listAgents } from '@/runtime/agentum-server-client'
 import {
   type BoardItem,
   type GoalWithChildren,
   createGoal,
+  deleteGoalWithChildren,
   listBoard,
   openBoardEventStream,
   selectGoalsWithChildren
 } from '@/runtime/board-client'
+
+// The planner runs as a *tool* (claude/codex/…); the agent picker choice is
+// remembered across app restarts so the user doesn't re-pick every time.
+const PLANNER_TOOL_KEY = 'agentum.chat.plannerTool'
+function readStoredTool(): string {
+  try {
+    return localStorage.getItem(PLANNER_TOOL_KEY) || 'claude'
+  } catch {
+    return 'claude'
+  }
+}
+
+// A managed account the planner can run as, for the account picker. Only Claude
+// and Codex have managed accounts; other tools fall back to their live login.
+type AccountOption = { id: string; email: string }
+function accountProviderFor(tool: string): 'claude' | 'codex' | null {
+  if (tool === 'claude') return 'claude'
+  if (tool === 'codex') return 'codex'
+  return null
+}
 
 // Card status → colour, matching the board's column language.
 function statusColor(status: string): { dot: string; text: string } {
@@ -62,25 +84,82 @@ export default function ChatPage() {
 
   // Which agent runs the planner (and the cards inherit). Populated from the
   // installed-agents probe so the picker only offers tools that are on PATH.
+  // The choice persists across restarts (PLANNER_TOOL_KEY).
   const [agents, setAgents] = useState<AgentInfo[]>([])
-  const [selectedTool, setSelectedTool] = useState('claude')
+  const [selectedTool, setSelectedTool] = useState<string>(readStoredTool)
+  useEffect(() => {
+    try {
+      localStorage.setItem(PLANNER_TOOL_KEY, selectedTool)
+    } catch {
+      // localStorage can be unavailable (private mode / non-browser host) — the
+      // picker still works this session, it just won't be remembered.
+    }
+  }, [selectedTool])
   useEffect(() => {
     let alive = true
     void listAgents()
       .then((list) => {
         if (!alive) return
         setAgents(list)
-        // Default to the first available agent (prefer claude when present).
+        // Keep the remembered tool if it's still installed; otherwise fall back
+        // (prefer claude) so we never sit on an uninstalled selection.
         const available = list.filter((a) => a.available)
-        if (available.length && !available.some((a) => a.name === 'claude')) {
-          setSelectedTool(available[0].name)
-        }
+        setSelectedTool((cur) => {
+          if (available.some((a) => a.name === cur)) return cur
+          if (available.some((a) => a.name === 'claude')) return 'claude'
+          return available[0]?.name ?? cur
+        })
       })
       .catch(() => {})
     return () => {
       alive = false
     }
   }, [])
+
+  // Which managed account the planner runs as. Default = the currently active
+  // account (a no-op at submit). Picking a *different* one swaps the global live
+  // login before spawn — on macOS Claude reads one global Keychain, so there is
+  // no per-process isolation; this is an explicit, warned, machine-wide switch.
+  const [accountOptions, setAccountOptions] = useState<AccountOption[]>([])
+  const [activeAccountId, setActiveAccountId] = useState<string | null>(null)
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    const provider = accountProviderFor(selectedTool)
+    if (!provider) {
+      setAccountOptions([])
+      setActiveAccountId(null)
+      setSelectedAccountId(null)
+      return
+    }
+    const load = provider === 'claude' ? api.claudeAccounts.list() : api.codexAccounts.list()
+    void Promise.resolve(load)
+      .then((st: unknown) => {
+        if (!alive) return
+        const s = (st ?? {}) as {
+          accounts?: { id: string; email: string }[]
+          activeAccountId?: string | null
+          activeAccountIdsByRuntime?: { host?: string | null }
+        }
+        const opts = (s.accounts ?? []).map((a) => ({ id: a.id, email: a.email }))
+        // Desktop is host-only — the host runtime selection is the live account.
+        const active = s.activeAccountIdsByRuntime?.host ?? s.activeAccountId ?? null
+        setAccountOptions(opts)
+        setActiveAccountId(active)
+        setSelectedAccountId(active)
+      })
+      .catch(() => {
+        if (!alive) return
+        setAccountOptions([])
+        setActiveAccountId(null)
+        setSelectedAccountId(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [selectedTool])
+
+  const accountSwapPending = !!selectedAccountId && selectedAccountId !== activeAccountId
 
   const refresh = useCallback(async () => {
     try {
@@ -138,6 +217,19 @@ export default function ChatPage() {
       setBusy(true)
       setError(null)
       try {
+        // Account swap (global, before spawn): the planner pane inherits the
+        // live login, so make the chosen account live first. macOS has no
+        // per-process credential isolation (one Keychain), so this switches the
+        // active account machine-wide — which is why the picker defaults to it.
+        const provider = accountProviderFor(selectedTool)
+        if (provider && selectedAccountId && selectedAccountId !== activeAccountId) {
+          const swap =
+            provider === 'claude'
+              ? api.claudeAccounts.select({ accountId: selectedAccountId, runtime: 'host', wslDistro: null })
+              : api.codexAccounts.select({ accountId: selectedAccountId, runtime: 'host', wslDistro: null })
+          await Promise.resolve(swap)
+          setActiveAccountId(selectedAccountId)
+        }
         const { goal } = await createGoal({ title: text, workdir, tool: selectedTool })
         setDraft('')
         setSelectedId(goal.id)
@@ -149,7 +241,31 @@ export default function ChatPage() {
         setBusy(false)
       }
     },
-    [draft, repos, refresh, selectedTool]
+    [draft, repos, refresh, selectedTool, selectedAccountId, activeAccountId]
+  )
+
+  // Delete a chat (goal) and its drafted cards. Children-first so nothing is
+  // orphaned; confirm because a goal with cards may have in-flight agent work.
+  const removeGoal = useCallback(
+    async (g: GoalWithChildren) => {
+      const n = g.children.length
+      const ok = window.confirm(
+        n > 0
+          ? `Delete "${g.goal.title}" and its ${n} card${n === 1 ? '' : 's'}? This can't be undone.`
+          : `Delete "${g.goal.title}"? This can't be undone.`
+      )
+      if (!ok) return
+      setError(null)
+      try {
+        await deleteGoalWithChildren(g)
+        setSelectedId((cur) => (cur === g.goal.id ? null : cur))
+        setPendingGoalId((cur) => (cur === g.goal.id ? null : cur))
+        await refresh()
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    },
+    [refresh]
   )
 
   const drafting = pendingGoalId === selected?.goal.id && cards.length === 0
@@ -184,27 +300,39 @@ export default function ChatPage() {
             {goals.length === 0 ? (
               <div className="px-3 py-2 text-[12px] text-muted-foreground">No chats yet.</div>
             ) : (
-              goals.map(({ goal, children }) => {
+              goals.map((g) => {
+                const { goal, children } = g
                 const roll = goalRollup(children)
                 const active = goal.id === selectedId
                 return (
-                  <button
-                    key={goal.id}
-                    type="button"
-                    onClick={() => setSelectedId(goal.id)}
-                    className={cn(
-                      'flex w-full flex-col gap-1 rounded-md px-2.5 py-2 text-left',
-                      active ? 'bg-accent' : 'hover:bg-foreground/5'
-                    )}
-                  >
-                    <div className="flex items-center gap-1.5">
-                      <span className={cn('size-1.5 flex-none rounded-full', roll.dot)} />
-                      <span className="flex-1 truncate text-[13px]">{goal.title}</span>
-                    </div>
-                    <span className="truncate pl-3 font-mono text-[10.5px] text-muted-foreground">
-                      {roll.subtitle}
-                    </span>
-                  </button>
+                  <div key={goal.id} className="group relative">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedId(goal.id)}
+                      className={cn(
+                        'flex w-full flex-col gap-1 rounded-md px-2.5 py-2 pr-8 text-left',
+                        active ? 'bg-accent' : 'hover:bg-foreground/5'
+                      )}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className={cn('size-1.5 flex-none rounded-full', roll.dot)} />
+                        <span className="flex-1 truncate text-[13px]">{goal.title}</span>
+                      </div>
+                      <span className="truncate pl-3 font-mono text-[10.5px] text-muted-foreground">
+                        {roll.subtitle}
+                      </span>
+                    </button>
+                    {/* Hover-trash: delete the chat + its drafted cards. */}
+                    <button
+                      type="button"
+                      onClick={() => void removeGoal(g)}
+                      aria-label={`Delete chat: ${goal.title}`}
+                      title="Delete chat"
+                      className="absolute right-1.5 top-1.5 hidden rounded p-1 text-muted-foreground hover:bg-foreground/10 hover:text-red-400 group-hover:block"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
                 )
               })
             )}
@@ -351,6 +479,25 @@ export default function ChatPage() {
                   </option>
                 ))}
               </select>
+              {/* Account picker — which managed account the planner runs as.
+                  Default = the active account (no swap). Only shown when the
+                  chosen tool has managed accounts (Claude/Codex). */}
+              {accountOptions.length > 0 ? (
+                <select
+                  value={selectedAccountId ?? ''}
+                  onChange={(e) => setSelectedAccountId(e.target.value || null)}
+                  aria-label="Account the planner runs as"
+                  title="Which account the planner runs as"
+                  className="max-w-[10rem] shrink-0 truncate rounded-md border border-border/60 bg-background px-2 py-1 text-[12px] text-foreground/80 outline-none focus:border-foreground/40"
+                >
+                  {accountOptions.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.email}
+                      {a.id === activeAccountId ? ' (active)' : ''}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
               <button
                 type="submit"
                 disabled={busy || !draft.trim()}
@@ -360,6 +507,14 @@ export default function ChatPage() {
                 {busy ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
               </button>
             </div>
+            {/* Honest about the macOS reality: picking a non-active account
+                swaps the global login for every session, not just the planner. */}
+            {accountSwapPending ? (
+              <div className="mx-auto mt-2 flex max-w-[720px] items-center gap-1.5 font-mono text-[10.5px] text-amber-500">
+                <TriangleAlert className="size-3 flex-none" />
+                Switches your active {accountProviderFor(selectedTool)} account for all sessions.
+              </div>
+            ) : null}
           </form>
         </div>
       </div>
