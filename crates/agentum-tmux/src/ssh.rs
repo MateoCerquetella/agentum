@@ -865,6 +865,8 @@ mod tests {
         assert!(dir.is_dir(), "control dir not created: {}", dir.display());
     }
 
+    // SSH ControlMaster sockets are Unix-only — control_socket_dir() is None on Windows.
+    #[cfg(unix)]
     #[test]
     fn ssh_command_key_enables_control_master_pooling() {
         let cmd = ssh_command(&ssh_host(SshAuth::Agent), "echo hi");
@@ -884,6 +886,8 @@ mod tests {
         assert!(!args.iter().any(|a| a.starts_with("ControlPath=")));
     }
 
+    // SSH ControlMaster sockets are Unix-only — control_socket_dir() is None on Windows.
+    #[cfg(unix)]
     #[test]
     fn streaming_and_interactive_masters_use_distinct_sockets() {
         // Tails (Streaming) must pool on a SEPARATE socket from interactive ops
@@ -1098,6 +1102,8 @@ mod tests {
         assert_eq!(askpass_script_path(), Some(path));
     }
 
+    // SSH ControlMaster sockets are Unix-only — control_socket_dir() is None on Windows.
+    #[cfg(unix)]
     #[test]
     fn control_path_template_creates_dir_idempotently() {
         // Calling twice must not panic even though the dir already exists.
@@ -1122,6 +1128,8 @@ mod tests {
         }
     }
 
+    // SSH ControlMaster sockets are Unix-only — control_socket_dir() is None on Windows.
+    #[cfg(unix)]
     #[test]
     fn local_forward_cmd_builds_dash_l_to_host_loopback() {
         // CDP lives on the host, so the Mac reaches it via a *local* (-L)
@@ -1171,6 +1179,8 @@ mod tests {
         );
     }
 
+    // SSH ControlMaster sockets are Unix-only — control_socket_dir() is None on Windows.
+    #[cfg(unix)]
     #[test]
     fn local_cancel_cmd_uses_full_local_forward_spec() {
         // OpenSSH rejects a listen-side-only `-O cancel -L` ("Bad local
