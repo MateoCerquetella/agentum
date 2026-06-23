@@ -292,7 +292,7 @@ export default function ChatPage() {
       <DrillInHeader
         icon={MessagesSquare}
         title="Chat"
-        description="Describe what you want — the planner drafts an ordered backlog of board cards"
+        description="Describe what you want — the planner creates GitHub issues on your Board"
       />
 
       <div className="flex min-h-0 flex-1">
@@ -364,7 +364,7 @@ export default function ChatPage() {
               {selected ? selected.goal.title : 'New feature'}
             </span>
             <span className="font-mono text-[11px] text-muted-foreground">
-              agentum · spec → board cards
+              agentum · spec → GitHub issues
             </span>
             {selected ? (
               <button
@@ -385,7 +385,7 @@ export default function ChatPage() {
                   <MessagesSquare className="mx-auto mb-3 size-6 opacity-60" />
                   <div className="text-sm">Describe a feature to begin.</div>
                   <div className="mt-1 font-mono text-[11px]">
-                    The planner reads the repo, drafts a spec, and decomposes it into board cards.
+                    The planner reads the repo and creates GitHub issues on your Board.
                   </div>
                 </div>
               ) : (
@@ -395,10 +395,8 @@ export default function ChatPage() {
                     who="agentum · planner"
                     text={
                       drafting
-                        ? 'Reading the repo and drafting the backlog — cards will appear here as the planner decomposes the spec…'
-                        : cards.length
-                          ? `Drafted ${cards.length} ordered card${cards.length === 1 ? '' : 's'}. Review them below, then open the Board to start them behind the verify gate.`
-                          : 'No cards drafted yet. The planner may still be working, or you can refine the description and try again.'
+                        ? 'Reading the repo and creating GitHub issues from your description — they show up on your Board…'
+                        : 'Creating GitHub issues from your description — open the Board to review and start them.'
                     }
                   />
 
