@@ -204,14 +204,6 @@ const SidebarNav = React.memo(function SidebarNav() {
         active={harnessActive}
         onClick={openHarnessPage}
       />
-      <PrimaryNavItem
-        icon={Columns3}
-        label="Board"
-        active={boardActive}
-        onClick={() => setActiveView('board')}
-        soon
-      />
-
       <div className="my-1 h-px bg-sidebar-foreground/8" aria-hidden />
 
       {/* Secondary utilities: external task trackers, the goals pipeline, and
