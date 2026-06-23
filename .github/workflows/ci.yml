@@ -79,10 +79,17 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
+          # Disable errexit/pipefail first: `find` can exit non-zero (e.g. a
+          # transient/permission hiccup) without that meaning failure, and under
+          # the default `bash -eo pipefail` that aborted the step. This is pure
+          # housekeeping — stage whatever dylibs exist, never fail the job here.
+          set +e +o pipefail
           dest="$PWD/target/release"
+          mkdir -p "$dest"
           find "$PWD/target" \( -name 'libsherpa*.dylib' -o -name 'libonnxruntime*.dylib' \) 2>/dev/null \
             | while IFS= read -r f; do [ "$(dirname "$f")" = "$dest" ] || cp -f "$f" "$dest/"; done
-          ls -1 "$dest"/libsherpa*.dylib "$dest"/libonnxruntime*.dylib 2>/dev/null || echo "WARN: sherpa dylibs not staged"
+          echo "Dylibs in $dest:"; ls -1 "$dest"/*.dylib 2>/dev/null || echo "(none found)"
+          exit 0
       # `cargo test` links the desktop crate's onnxruntime/sherpa deps fine, but
       # the test binary's rpath ($ORIGIN = target/debug/deps/) doesn't hold the
       # .so files, so they fail to LOAD at runtime

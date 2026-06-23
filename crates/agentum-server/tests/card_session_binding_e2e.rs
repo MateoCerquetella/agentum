@@ -1,3 +1,4 @@
+#![cfg(unix)] // Exercises tmux-based card↔session binding; tmux is Unix-only.
 //! End-to-end integration test for Phase 2 (card ↔ session binding).
 //!
 //! Exercises the full Phase 2 happy-path through the in-process axum router:
