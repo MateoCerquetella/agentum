@@ -597,9 +597,12 @@ mod tests {
     /// otherwise have set, so resolution is deterministic); on Unix it sets
     /// `HOME`. The test home is `C:\h` on Windows, `/tmp/h` on Unix.
     ///
-    /// Tests run single-threaded by default, so mutating process env here
-    /// is safe — same convention the rest of this module relies on.
+    /// Holds the crate-wide [`crate::TEST_ENV_LOCK`] for the whole test so
+    /// that mutating process-global env here can't race the `profiles` env
+    /// tests (cargo runs tests in parallel — env is process-global, not
+    /// per-test). The lock is released when this guard drops.
     struct HomeEnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
         prev_home: Option<std::ffi::OsString>,
         #[cfg(windows)]
         prev_userprofile: Option<std::ffi::OsString>,
@@ -622,6 +625,12 @@ mod tests {
     }
 
     fn home_env_guard() -> HomeEnvGuard {
+        // Take the shared lock BEFORE touching env, and hold it for the whole
+        // test (stored on the returned guard) so a parallel env test can't read
+        // a half-mutated environment.
+        let _lock = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let prev_home = std::env::var_os("HOME");
         #[cfg(windows)]
         let prev_userprofile = std::env::var_os("USERPROFILE");
@@ -635,6 +644,7 @@ mod tests {
             std::env::set_var("HOME", "/tmp/h");
         }
         HomeEnvGuard {
+            _lock,
             prev_home,
             #[cfg(windows)]
             prev_userprofile,

@@ -19,9 +19,19 @@
 //! ⌘W accelerator — so we replicate `tauri::menu::Menu::default` by hand and
 //! swap in a custom item instead.
 
+// `MenuItem` is only used by the cfg-gated `close_window` below, so on Linux/BSD
+// (where the File submenu — its sole consumer — doesn't exist) the import would
+// be unused and trip clippy's `-D warnings`. Gate it to the exact same platforms.
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+)))]
+use tauri::menu::MenuItem;
 use tauri::menu::{
-    AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID,
-    WINDOW_SUBMENU_ID,
+    AboutMetadata, Menu, MenuEvent, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID, WINDOW_SUBMENU_ID,
 };
 use tauri::{AppHandle, Manager, Runtime};
 

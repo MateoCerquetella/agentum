@@ -349,15 +349,17 @@ mod tests {
         assert!(p.default_name().is_none());
     }
 
-    // Serialise tests that mutate XDG_CONFIG_HOME so they don't
-    // collide when `cargo test` runs them concurrently. Same pattern
-    // as `agentum-server::routes::profiles::tests`.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // Tests that mutate XDG_CONFIG_HOME/USERPROFILE serialise on the
+    // crate-wide `crate::TEST_ENV_LOCK` (not a per-module lock) so they can't
+    // race the `transcript` env tests — env is process-global and cargo runs
+    // tests in parallel.
 
     #[test]
     #[cfg(not(target_os = "macos"))]
     fn profiles_load_reads_xdg_config_home() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
         let cfg_home = tmp.path().to_path_buf();
         let profiles_dir = cfg_home.join("agentum");
@@ -369,7 +371,7 @@ mod tests {
         )
         .unwrap();
 
-        // SAFETY: serialised by ENV_LOCK; no other test in this crate
+        // SAFETY: serialised by crate::TEST_ENV_LOCK; no other test in this crate
         // mutates XDG_CONFIG_HOME / USERPROFILE at the same time.
         let prev = std::env::var_os("XDG_CONFIG_HOME");
         // On Windows `default_path()` resolves the home dir (via
@@ -412,7 +414,9 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn profiles_load_reads_application_support_on_macos() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
         let fake_home = tmp.path().to_path_buf();
         let profiles_dir = fake_home
@@ -426,7 +430,7 @@ mod tests {
         )
         .unwrap();
 
-        // SAFETY: serialised by ENV_LOCK; no other test in this crate
+        // SAFETY: serialised by crate::TEST_ENV_LOCK; no other test in this crate
         // mutates HOME at the same time. We also clobber XDG_CONFIG_HOME
         // to prove macOS resolution ignores it.
         let prev_home = std::env::var_os("HOME");
@@ -462,7 +466,9 @@ mod tests {
     #[test]
     #[cfg(not(target_os = "macos"))]
     fn profiles_load_falls_back_when_xdg_is_empty() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
         let fake_home = tmp.path().to_path_buf();
         let profiles_dir = fake_home.join(".config").join("agentum");
@@ -470,7 +476,7 @@ mod tests {
         let path = profiles_dir.join("profiles.toml");
         std::fs::write(&path, "[profiles.vps]\nurl = \"https://my-vps:8822\"\n").unwrap();
 
-        // SAFETY: serialised by ENV_LOCK; no other test in this crate
+        // SAFETY: serialised by crate::TEST_ENV_LOCK; no other test in this crate
         // mutates HOME / XDG_CONFIG_HOME at the same time.
         let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
         let prev_home = std::env::var_os("HOME");
@@ -500,7 +506,9 @@ mod tests {
     #[test]
     #[cfg(not(target_os = "macos"))]
     fn profiles_load_falls_back_when_xdg_is_relative() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
         let fake_home = tmp.path().to_path_buf();
         let profiles_dir = fake_home.join(".config").join("agentum");

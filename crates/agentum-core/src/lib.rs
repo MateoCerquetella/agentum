@@ -13,6 +13,14 @@ pub mod board_schema;
 pub mod profiles;
 pub mod transcript;
 
+/// Crate-wide lock serializing every test that mutates process-global
+/// environment (`HOME`/`USERPROFILE`/`XDG_CONFIG_HOME`). cargo runs tests in
+/// parallel, so the `transcript` and `profiles` env tests would otherwise race
+/// on the same env vars — they must all take *this* one lock, not a per-module
+/// one, or they collide across modules.
+#[cfg(test)]
+pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub use board_schema::{
     RequiredField, TransitionCtx, required_fields_for, validate_against, validate_transition,
 };
