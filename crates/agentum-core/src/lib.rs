@@ -546,6 +546,35 @@ pub struct BoardItem {
     /// the card's source badge + open-in-tracker link. NULL when native.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_provider: Option<String>,
+    /// Stable provider-native id (GitHub issue *number* as text). The two-way
+    /// sync reconcile (spec 016a) matches a card by `(external_provider,
+    /// external_id)` rather than the mutable `external_url`, so a host/owner
+    /// rename can't ping-pong identity. NULL for native cards. Migration 0023.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    /// RFC3339 timestamp of the last sync that touched this card. Kept as a
+    /// string (not `OffsetDateTime`) since it round-trips straight from the
+    /// `external_synced_at` TEXT column and is only ever displayed/compared.
+    /// Migration 0023.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_synced_at: Option<String>,
+}
+
+/// A durable binding from the board to an external issue tracker (spec 016a).
+/// `project` is `owner/repo` for GitHub. The server-side sync engine reads
+/// these to know which tracker(s) to pull. Added in migration 0023.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackerBinding {
+    pub id: i64,
+    /// `github` (016a) | `linear` | `gitlab` (later slices). 016a only persists
+    /// `github` bindings (binding creation rejects other providers).
+    pub provider: String,
+    /// `owner/repo` for GitHub.
+    pub project: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

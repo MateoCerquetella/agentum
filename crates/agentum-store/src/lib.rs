@@ -8,7 +8,8 @@ use std::str::FromStr;
 use agentum_core::{
     BoardComment, BoardItem, BoardLink, BoardPatch, Channel, Event, Host, HostKind, LOCAL_HOST_ID,
     LinkKind, Message, NewBoardComment, NewBoardItem, NewChannel, NewHost, NewMessage, NewNote,
-    NewSession, Note, NotePatch, ReorderEntry, RequiredField, Session, SshAuth, Status, User,
+    NewSession, Note, NotePatch, ReorderEntry, RequiredField, Session, SshAuth, Status,
+    TrackerBinding, User,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{FromRow, SqlitePool};
@@ -667,10 +668,13 @@ impl Store {
             session_id: new.session_id,
             priority,
             parent_goal_id: new.parent_goal_id,
-            // Native cards carry no external link; the tracker-sync path
-            // (`upsert_board_item_by_external_url`) is the only writer of these.
+            // Native cards carry no external link; the tracker-sync paths
+            // (`upsert_board_item_by_external_url`, `upsert_external_card`) are
+            // the only writers of these.
             external_url: None,
             external_provider: None,
+            external_id: None,
+            external_synced_at: None,
         })
     }
 
@@ -779,6 +783,172 @@ impl Store {
             .fetch_optional(&self.pool)
             .await?;
         row.map(BoardItem::try_from).transpose()
+    }
+
+    // ---------- board ↔ external tracker sync (spec 016a) ----------
+
+    /// Create-or-update a card that mirrors an external issue, matched by
+    /// `(external_provider, external_id)`. Idempotent: re-syncing the same
+    /// issue refreshes the existing row in place (returns `created = false`)
+    /// instead of inserting a duplicate. Deliberately bypasses
+    /// `create_board_item` so the session dual-write path stays untouched.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upsert_external_card(
+        &self,
+        provider: &str,
+        external_id: &str,
+        title: &str,
+        body: Option<&str>,
+        url: &str,
+        status: &str,
+        synced_at: &str,
+    ) -> Result<(BoardItem, bool)> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let mut tx = self.pool.begin().await?;
+
+        let existing: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM board_items WHERE external_provider = ? AND external_id = ?",
+        )
+        .bind(provider)
+        .bind(external_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let (id, created) = match existing {
+            Some(id) => {
+                sqlx::query(
+                    r#"UPDATE board_items SET
+                        title = ?, body = ?, status = ?, external_url = ?,
+                        external_synced_at = ?, updated_at = ?
+                       WHERE id = ?"#,
+                )
+                .bind(title)
+                .bind(body)
+                .bind(status)
+                .bind(url)
+                .bind(synced_at)
+                .bind(&now_s)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+                (id, false)
+            }
+            None => {
+                let res = sqlx::query(
+                    r#"INSERT INTO board_items
+                        (key, title, body, status, lbl, priority, created_at, updated_at,
+                         external_provider, external_id, external_url, external_synced_at)
+                       VALUES ('', ?, ?, ?, 'feat', 0, ?, ?, ?, ?, ?, ?)"#,
+                )
+                .bind(title)
+                .bind(body)
+                .bind(status)
+                .bind(&now_s)
+                .bind(&now_s)
+                .bind(provider)
+                .bind(external_id)
+                .bind(url)
+                .bind(synced_at)
+                .execute(&mut *tx)
+                .await?;
+                let id = res.last_insert_rowid();
+                sqlx::query("UPDATE board_items SET key = ? WHERE id = ?")
+                    .bind(format!("AG-{id}"))
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+                (id, true)
+            }
+        };
+        tx.commit().await?;
+
+        let item = self
+            .get_board_item(id)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
+        Ok((item, created))
+    }
+
+    /// `(card id, external_id, status)` for every card mirroring `provider`.
+    /// The sync engine reconciles incoming issues against this.
+    pub async fn list_external_refs(&self, provider: &str) -> Result<Vec<(i64, String, String)>> {
+        let rows: Vec<(i64, String, String)> = sqlx::query_as(
+            "SELECT id, external_id, status FROM board_items \
+             WHERE external_provider = ? AND external_id IS NOT NULL",
+        )
+        .bind(provider)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Create the board↔tracker binding, or refresh `updated_at` if the same
+    /// `(provider, project)` is bound again (idempotent re-bind).
+    pub async fn create_tracker_binding(
+        &self,
+        provider: &str,
+        project: &str,
+    ) -> Result<TrackerBinding> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        sqlx::query(
+            r#"INSERT INTO board_tracker_bindings (provider, project, created_at, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(provider, project) DO UPDATE SET updated_at = excluded.updated_at"#,
+        )
+        .bind(provider)
+        .bind(project)
+        .bind(&now_s)
+        .bind(&now_s)
+        .execute(&self.pool)
+        .await?;
+
+        let row: (i64, String, String, String, String) = sqlx::query_as(
+            "SELECT id, provider, project, created_at, updated_at \
+             FROM board_tracker_bindings WHERE provider = ? AND project = ?",
+        )
+        .bind(provider)
+        .bind(project)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(TrackerBinding {
+            id: row.0,
+            provider: row.1,
+            project: row.2,
+            created_at: OffsetDateTime::parse(&row.3, &Rfc3339)?,
+            updated_at: OffsetDateTime::parse(&row.4, &Rfc3339)?,
+        })
+    }
+
+    pub async fn list_tracker_bindings(&self) -> Result<Vec<TrackerBinding>> {
+        let rows: Vec<(i64, String, String, String, String)> = sqlx::query_as(
+            "SELECT id, provider, project, created_at, updated_at \
+             FROM board_tracker_bindings ORDER BY id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok(TrackerBinding {
+                    id: r.0,
+                    provider: r.1,
+                    project: r.2,
+                    created_at: OffsetDateTime::parse(&r.3, &Rfc3339)?,
+                    updated_at: OffsetDateTime::parse(&r.4, &Rfc3339)?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn delete_tracker_binding(&self, id: i64) -> Result<()> {
+        let affected = sqlx::query("DELETE FROM board_tracker_bindings WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        if affected == 0 {
+            return Err(StoreError::NotFound(id.to_string()));
+        }
+        Ok(())
     }
 
     pub async fn patch_board_item(&self, id: i64, patch: BoardPatch) -> Result<BoardItem> {
@@ -2215,6 +2385,11 @@ struct BoardItemRow {
     external_url: Option<String>,
     #[sqlx(default)]
     external_provider: Option<String>,
+    /* ---- two-way sync identity + marker (migration 0023) ---- */
+    #[sqlx(default)]
+    external_id: Option<String>,
+    #[sqlx(default)]
+    external_synced_at: Option<String>,
 }
 
 impl TryFrom<BoardItemRow> for BoardItem {
@@ -2238,6 +2413,8 @@ impl TryFrom<BoardItemRow> for BoardItem {
             parent_goal_id: r.parent_goal_id,
             external_url: r.external_url,
             external_provider: r.external_provider,
+            external_id: r.external_id,
+            external_synced_at: r.external_synced_at,
         })
     }
 }
@@ -2411,6 +2588,77 @@ mod tests {
             .unwrap();
         assert_ne!(other.id, first.id);
         assert_eq!(s.list_board_items().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn upsert_external_card_is_idempotent_on_re_sync() {
+        let s = tmp_store().await;
+        // First sync creates the card.
+        let (a, created) = s
+            .upsert_external_card(
+                "github",
+                "42",
+                "Add login",
+                Some("body"),
+                "https://gh/o/r/issues/42",
+                "todo",
+                "2026-06-22T00:00:00Z",
+            )
+            .await
+            .unwrap();
+        assert!(created, "first upsert creates");
+        assert_eq!(a.external_provider.as_deref(), Some("github"));
+        assert_eq!(a.external_id.as_deref(), Some("42"));
+        assert_eq!(a.status, "todo");
+
+        // Re-syncing the same issue (edited, closed) updates in place.
+        let (b, created2) = s
+            .upsert_external_card(
+                "github",
+                "42",
+                "Add login (v2)",
+                Some("body2"),
+                "https://gh/o/r/issues/42",
+                "done",
+                "2026-06-22T01:00:00Z",
+            )
+            .await
+            .unwrap();
+        assert!(!created2, "second upsert updates, not creates");
+        assert_eq!(b.id, a.id, "same card id — no duplicate");
+        assert_eq!(b.title, "Add login (v2)");
+        assert_eq!(b.status, "done");
+        assert_eq!(b.external_synced_at.as_deref(), Some("2026-06-22T01:00:00Z"));
+
+        // Exactly one external card exists for the provider.
+        let refs = s.list_external_refs("github").await.unwrap();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], (a.id, "42".to_string(), "done".to_string()));
+    }
+
+    #[tokio::test]
+    async fn tracker_binding_roundtrip_and_rebind() {
+        let s = tmp_store().await;
+        let b = s.create_tracker_binding("github", "o/r").await.unwrap();
+        assert_eq!(b.provider, "github");
+        assert_eq!(b.project, "o/r");
+
+        // Re-binding the same repo refreshes the same row (no duplicate).
+        let b2 = s.create_tracker_binding("github", "o/r").await.unwrap();
+        assert_eq!(b2.id, b.id);
+        assert_eq!(s.list_tracker_bindings().await.unwrap().len(), 1);
+
+        // A different repo is a separate binding.
+        let _c = s.create_tracker_binding("github", "o/other").await.unwrap();
+        assert_eq!(s.list_tracker_bindings().await.unwrap().len(), 2);
+
+        // Delete is idempotent-aware: second delete is NotFound.
+        s.delete_tracker_binding(b.id).await.unwrap();
+        assert_eq!(s.list_tracker_bindings().await.unwrap().len(), 1);
+        assert!(
+            s.delete_tracker_binding(b.id).await.is_err(),
+            "second delete must be NotFound"
+        );
     }
 
     #[tokio::test]
