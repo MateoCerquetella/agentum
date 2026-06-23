@@ -4,6 +4,31 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.2] — 2026-06-22
+
+### Fixed
+- **Chat goal submit 400'd and left orphaned "planning…" chats.**
+  `POST /api/board/goals` created the goal row *before* loading the planner
+  config, so a bad `planner.toml` (e.g. a leaked `prompt_file = "../etc/passwd"`
+  test fixture) returned 400 yet still orphaned a stuck goal each submit.
+  `create_goal` now loads + validates the planner config first — a config error
+  returns 400 with no orphan.
+
+### Added
+- **Delete a chat from the Chat sidebar.** A hover-trash removes a goal/chat and
+  its drafted cards (children-first, with confirm) via the existing
+  `DELETE /api/board/{id}`.
+- **Per-goal account picker in Chat (#48).** The agent picker remembers the last
+  tool and adds a managed Claude/Codex account selector. It defaults to the
+  active account (no-op); choosing another swaps the global login before the
+  planner spawns, with a warning — on macOS Claude reads one global Keychain, so
+  there is no per-process credential isolation.
+
+### Internal
+- The `planner`/`board_goals`/`profiles` test harnesses now assert
+  `config_dir()` resolves under the temp dir, so a fixture can no longer leak
+  into the real config dir (the root cause of the `../etc/passwd` `planner.toml`).
+
 ## [0.20.1] — 2026-06-22
 
 ### Fixed
