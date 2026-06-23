@@ -4,6 +4,19 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.1] — 2026-06-22
+
+### Fixed
+- **Worktree Claude sessions crashed with `Error: Session ID <X> is already in
+  use`.** `transcript::project_dir_for` encoded the workdir by replacing only
+  `/` with `-`, but Claude Code replaces every non-alphanumeric char
+  (`[^a-zA-Z0-9]` → `-`). Worktrees live under `.claude-worktrees/`, so the `.`
+  made agentum look in the wrong (empty) transcript dir — every restart was
+  treated as a first launch, re-issued `--session-id` for an already-claimed
+  id, and Claude refused to start. The same mis-encoding left the
+  Plan/Todos/Tasks panel empty for worktree sessions. Now matches Claude's
+  encoding so a restart resolves the real transcript and resumes it (#67).
+
 ## [0.20.0] — 2026-06-22
 
 ### Added
