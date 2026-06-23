@@ -69,27 +69,18 @@ jobs:
       # step ran cross-OS. (build.rs sets the rpath: @loader_path on macOS,
       # $ORIGIN on Linux.)
       - name: Stage sherpa libs (download-binaries)
-        run: cargo build --release -p sherpa-rs
-      # tauri.conf.json's macOS frameworks reference target/release/lib{sherpa,onnx}*.dylib,
-      # copied there by sherpa-rs-sys's build script. On a warm rust-cache that
-      # build script is skipped, so the loose dylibs go missing and tauri_build
-      # fails with "Library not found". Copy them from wherever they were
-      # built/cached so target/release/ always has them.
-      - name: Ensure sherpa dylibs sit in target/release (macOS)
-        if: runner.os == 'macOS'
         shell: bash
         run: |
-          # Disable errexit/pipefail first: `find` can exit non-zero (e.g. a
-          # transient/permission hiccup) without that meaning failure, and under
-          # the default `bash -eo pipefail` that aborted the step. This is pure
-          # housekeeping — stage whatever dylibs exist, never fail the job here.
-          set +e +o pipefail
-          dest="$PWD/target/release"
-          mkdir -p "$dest"
-          find "$PWD/target" \( -name 'libsherpa*.dylib' -o -name 'libonnxruntime*.dylib' \) 2>/dev/null \
-            | while IFS= read -r f; do [ "$(dirname "$f")" = "$dest" ] || cp -f "$f" "$dest/"; done
-          echo "Dylibs in $dest:"; ls -1 "$dest"/*.dylib 2>/dev/null || echo "(none found)"
-          exit 0
+          # tauri.conf.json's macOS frameworks reference the sherpa-onnx + onnxruntime
+          # dylibs at target/release/, copied there by sherpa-rs-sys's build script —
+          # but ONLY when that script runs. A warm rust-cache skips it, leaving the C
+          # dylibs (libsherpa-onnx-c-api/cxx-api) absent and tauri_build failing with
+          # "Library not found" (a no-op `cargo build` can't recover them; they have to
+          # be re-downloaded). Force the build script to re-run on macOS so the dylibs
+          # are always re-staged. Linux/Windows resolve their libs differently (loader
+          # path / next-to-binary) and stay green on the cache, so skip the clean there.
+          if [ "$RUNNER_OS" = "macOS" ]; then cargo clean -p sherpa-rs-sys; fi
+          cargo build --release -p sherpa-rs
       # `cargo test` links the desktop crate's onnxruntime/sherpa deps fine, but
       # the test binary's rpath ($ORIGIN = target/debug/deps/) doesn't hold the
       # .so files, so they fail to LOAD at runtime
