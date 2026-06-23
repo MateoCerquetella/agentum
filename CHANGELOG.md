@@ -4,6 +4,25 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.5] — 2026-06-23
+
+### Fixed
+- **Chat sat at "Drafting cards…" forever.** The planner session was spawned by
+  a hand-rolled path that (1) delivered the multi-line prompt with a one-shot
+  send-keys whose Enter the REPL's bracketed-paste swallowed — so the prompt
+  never executed — and (2) bypassed the shared spawn helper, so the pane had no
+  `AGENTUM_API_URL` and `agentum board add-card` couldn't reach the embedded
+  server. The planner now goes through `spawn_agent_into_pane` and the robust
+  two-step `inject_prompt` (accepts the trust dialog, outlasts an MCP-slowed
+  boot). The card-start spawn got the same prompt-delivery fix.
+- **Sidebar divider between Chat and Tasks** removed (it had only ever been
+  removed in a lost worktree edit, so it kept reappearing).
+
+### Added
+- **MCP endpoint persistence.** The embedded server persists its MCP endpoint
+  port + token across restarts and re-provisions drifted endpoints, so agents
+  keep reaching the agentum MCP after a relaunch (R1–R4).
+
 ## [0.20.4] — 2026-06-23
 
 ### Added
