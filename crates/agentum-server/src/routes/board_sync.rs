@@ -27,7 +27,9 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::routes::forge::{ForgeKind, classify_remote, forge_get, token_for};
+use crate::linear;
+use crate::routes::forge::{ForgeKind, Remote, classify_remote, forge_get, forge_send, token_for};
+use crate::task_sink::TrackerPhase;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -35,6 +37,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/board/bindings/{id}", delete(delete_binding))
         // The server PULL trigger. Distinct from #58's `POST /api/board/sync`.
         .route("/api/board/bindings/{id}/sync", post(sync_binding))
+        // Board → tracker push-back (spec 016b), on top of 016a's bindings.
+        .route("/api/board/{id}/push", post(push_card))
 }
 
 // ── Pure sync core (unit-tested; no I/O) ─────────────────────────────────────
@@ -324,6 +328,277 @@ fn now_rfc3339() -> Result<String, ApiError> {
         .map_err(|e| ApiError::Internal(e.to_string()))
 }
 
+// ── Push (board → tracker, spec 016b) ────────────────────────────────────────
+// Layered on 016a's bindings: a linked card updates its issue; a native card
+// creates one in the resolved binding and gets its external link stamped.
+// Reuses `forge` (GitHub REST) + `crate::linear` (transition_issue/create_issue)
+// — no parallel tracker client, no second bindings route.
+
+/// Board column → Linear pipeline phase, reusing the 012
+/// `transition_issue`/`LinearStateMap` machinery instead of a new mapping.
+fn column_to_phase(column: &str) -> TrackerPhase {
+    match column {
+        "done" => TrackerPhase::Done,
+        "doing" => TrackerPhase::InProgress,
+        "review" => TrackerPhase::ReadyToTest,
+        _ => TrackerPhase::Todo,
+    }
+}
+
+/// GitHub issue state for a board column (only `done` closes).
+fn github_state(column: &str) -> &'static str {
+    if column == "done" { "closed" } else { "open" }
+}
+
+/// `owner/repo` + issue number from a GitHub issue URL.
+fn parse_github_issue(url: &str) -> Option<(String, i64)> {
+    let rest = url.split("github.com/").nth(1)?;
+    let mut parts = rest.split('/');
+    let owner = parts.next().filter(|s| !s.is_empty())?;
+    let repo = parts.next().filter(|s| !s.is_empty())?;
+    if parts.next()? != "issues" {
+        return None;
+    }
+    let num: i64 = parts.next()?.parse().ok()?;
+    Some((format!("{owner}/{repo}"), num))
+}
+
+/// Linear issue identifier (e.g. `ENG-42`) from a Linear issue URL.
+fn parse_linear_identifier(url: &str) -> Option<String> {
+    let rest = url.split("/issue/").nth(1)?;
+    rest.split('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Best-effort provider guess from a link, when `external_provider` is unset.
+fn infer_provider_from_url(url: &str) -> &'static str {
+    if url.contains("github.com") {
+        "github"
+    } else if url.contains("linear.app") {
+        "linear"
+    } else {
+        ""
+    }
+}
+
+fn github_remote(repo: &str) -> Result<Remote, ApiError> {
+    classify_remote("github.com", repo.to_string())
+        .ok_or_else(|| ApiError::BadRequest(format!("bad github project: {repo}")))
+}
+
+/// Map a Linear (`anyhow`) error to an upstream 502, like forge failures.
+fn linear_err(e: anyhow::Error) -> ApiError {
+    ApiError::Custom(StatusCode::BAD_GATEWAY, json!({ "error": e.to_string() }))
+}
+
+fn emit_push(state: &AppState, payload: Value) -> Json<Value> {
+    let _ = state
+        .bus
+        .send(Event::new("board.push.completed").with_payload(payload.clone()));
+    Json(payload)
+}
+
+#[derive(Deserialize, Default)]
+struct PushBody {
+    /// Target for a NATIVE card with no link yet.
+    #[serde(default)]
+    binding_id: Option<i64>,
+    #[serde(default)]
+    project: Option<String>,
+}
+
+/// `POST /api/board/{id}/push` — write a card to its tracker.
+/// Linked card → update the existing issue; native card → create one in the
+/// resolved binding and stamp its external link. Fail-loud on token/forge/linear.
+async fn push_card(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    body: Option<Json<PushBody>>,
+) -> Result<Json<Value>, ApiError> {
+    let card = state
+        .store
+        .get_board_item(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("card {id}")))?;
+    let column = card.status.clone();
+    let body_text = card.body.clone().unwrap_or_default();
+
+    match card.external_url.as_deref() {
+        // Linked card → update the existing issue.
+        Some(url) => {
+            let provider = match card.external_provider.as_deref() {
+                Some(p) if !p.trim().is_empty() => p.trim().to_ascii_lowercase(),
+                _ => infer_provider_from_url(url).to_string(),
+            };
+            match provider.as_str() {
+                "github" => {
+                    let (repo, num) = parse_github_issue(url).ok_or_else(|| {
+                        ApiError::BadRequest(format!("cannot parse github issue url: {url}"))
+                    })?;
+                    let token = token_for(ForgeKind::Github)?;
+                    let remote = github_remote(&repo)?;
+                    let api = format!("{}/repos/{}/issues/{}", remote.api_base, repo, num);
+                    forge_send(
+                        &remote,
+                        &token,
+                        reqwest::Method::PATCH,
+                        &api,
+                        &json!({ "title": card.title, "body": body_text, "state": github_state(&column) }),
+                    )
+                    .await?;
+                    Ok(emit_push(
+                        &state,
+                        json!({
+                            "id": id, "action": "updated", "provider": "github",
+                            "external_url": url, "state": github_state(&column),
+                        }),
+                    ))
+                }
+                "linear" => {
+                    let ident = parse_linear_identifier(url).ok_or_else(|| {
+                        ApiError::BadRequest(format!("cannot parse linear identifier: {url}"))
+                    })?;
+                    let outcome = linear::transition_issue(
+                        &ident,
+                        column_to_phase(&column),
+                        &linear::LinearStateMap::from_env(),
+                    )
+                    .await
+                    .map_err(linear_err)?;
+                    Ok(emit_push(
+                        &state,
+                        json!({
+                            "id": id, "action": "updated", "provider": "linear",
+                            "external_url": url, "identifier": ident,
+                            "outcome": format!("{outcome:?}"),
+                        }),
+                    ))
+                }
+                other => Err(ApiError::BadRequest(format!(
+                    "push for provider '{other}' not supported (github | linear)"
+                ))),
+            }
+        }
+        // Native card → create an issue in the resolved target, stamp the link.
+        None => {
+            let (provider, project) = resolve_target(&state, body).await?;
+            match provider.as_str() {
+                "github" => {
+                    let token = token_for(ForgeKind::Github)?;
+                    let remote = github_remote(&project)?;
+                    let created = forge_send(
+                        &remote,
+                        &token,
+                        reqwest::Method::POST,
+                        &format!("{}/repos/{}/issues", remote.api_base, project),
+                        &json!({ "title": card.title, "body": body_text }),
+                    )
+                    .await?;
+                    let html_url = created
+                        .get("html_url")
+                        .and_then(|u| u.as_str())
+                        .ok_or_else(|| {
+                            ApiError::Internal("github create issue: no html_url".into())
+                        })?
+                        .to_string();
+                    state
+                        .store
+                        .set_card_external_link(id, &html_url, "github")
+                        .await?;
+                    // A done card's freshly-created (open) issue → close to match.
+                    if github_state(&column) == "closed" {
+                        if let Some(n) = created.get("number").and_then(|n| n.as_i64()) {
+                            let api = format!("{}/repos/{}/issues/{}", remote.api_base, project, n);
+                            forge_send(
+                                &remote,
+                                &token,
+                                reqwest::Method::PATCH,
+                                &api,
+                                &json!({ "state": "closed" }),
+                            )
+                            .await?;
+                        }
+                    }
+                    Ok(emit_push(
+                        &state,
+                        json!({
+                            "id": id, "action": "created", "provider": "github",
+                            "project": project, "external_url": html_url,
+                        }),
+                    ))
+                }
+                "linear" => {
+                    let (ident, url_opt) = linear::create_issue(&card.title, &body_text)
+                        .await
+                        .map_err(linear_err)?;
+                    if let Some(url) = url_opt.as_deref() {
+                        state.store.set_card_external_link(id, url, "linear").await?;
+                    }
+                    if column != "todo" && !column.is_empty() {
+                        linear::transition_issue(
+                            &ident,
+                            column_to_phase(&column),
+                            &linear::LinearStateMap::from_env(),
+                        )
+                        .await
+                        .map_err(linear_err)?;
+                    }
+                    Ok(emit_push(
+                        &state,
+                        json!({
+                            "id": id, "action": "created", "provider": "linear",
+                            "project": project, "identifier": ident, "external_url": url_opt,
+                        }),
+                    ))
+                }
+                other => Err(ApiError::BadRequest(format!(
+                    "push to provider '{other}' not supported (github | linear)"
+                ))),
+            }
+        }
+    }
+}
+
+/// Resolve a native card's push target: explicit `binding_id`, then `project`
+/// (shape-inferred provider), then the sole binding. Ambiguity errors.
+async fn resolve_target(
+    state: &AppState,
+    body: Option<Json<PushBody>>,
+) -> Result<(String, String), ApiError> {
+    if let Some(Json(b)) = &body {
+        if let Some(bid) = b.binding_id {
+            return state
+                .store
+                .list_tracker_bindings()
+                .await?
+                .into_iter()
+                .find(|x| x.id == bid)
+                .map(|x| (x.provider, x.project))
+                .ok_or_else(|| ApiError::NotFound(format!("tracker binding {bid}")));
+        }
+        if let Some(p) = b.project.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+            let provider = if p.contains('/') { "github" } else { "linear" };
+            return Ok((provider.to_string(), p.to_string()));
+        }
+    }
+    let bindings = state.store.list_tracker_bindings().await?;
+    match bindings.len() {
+        1 => {
+            let b = bindings.into_iter().next().unwrap();
+            Ok((b.provider, b.project))
+        }
+        0 => Err(ApiError::BadRequest(
+            "no tracker binding — specify project/binding_id or POST /api/board/bindings first"
+                .into(),
+        )),
+        _ => Err(ApiError::BadRequest(
+            "multiple bindings — specify binding_id or project".into(),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,6 +614,59 @@ mod tests {
             url: format!("https://github.com/o/r/issues/{id}"),
             column: column.into(),
         }
+    }
+
+    // ── Push-back (016b) pure-function tests ─────────────────────────────────
+    #[test]
+    fn github_state_only_done_closes() {
+        assert_eq!(github_state("done"), "closed");
+        assert_eq!(github_state("todo"), "open");
+        assert_eq!(github_state("doing"), "open");
+    }
+
+    #[test]
+    fn column_to_phase_maps_board_columns() {
+        assert!(matches!(column_to_phase("done"), TrackerPhase::Done));
+        assert!(matches!(column_to_phase("doing"), TrackerPhase::InProgress));
+        assert!(matches!(column_to_phase("review"), TrackerPhase::ReadyToTest));
+        assert!(matches!(column_to_phase("todo"), TrackerPhase::Todo));
+        assert!(matches!(column_to_phase("anything"), TrackerPhase::Todo));
+    }
+
+    #[test]
+    fn parse_github_issue_extracts_repo_and_number() {
+        assert_eq!(
+            parse_github_issue("https://github.com/acme/api/issues/42"),
+            Some(("acme/api".to_string(), 42))
+        );
+        assert_eq!(parse_github_issue("https://github.com/acme/api/pull/42"), None);
+        assert_eq!(parse_github_issue("https://gitlab.com/o/r/issues/1"), None);
+        assert_eq!(parse_github_issue("nope"), None);
+    }
+
+    #[test]
+    fn parse_linear_identifier_extracts_ident() {
+        assert_eq!(
+            parse_linear_identifier("https://linear.app/acme/issue/ENG-42/add-login").as_deref(),
+            Some("ENG-42")
+        );
+        assert_eq!(
+            parse_linear_identifier("https://github.com/o/r/issues/1"),
+            None
+        );
+    }
+
+    #[test]
+    fn infer_provider_from_url_detects_host() {
+        assert_eq!(
+            infer_provider_from_url("https://github.com/o/r/issues/1"),
+            "github"
+        );
+        assert_eq!(
+            infer_provider_from_url("https://linear.app/x/issue/E-1"),
+            "linear"
+        );
+        assert_eq!(infer_provider_from_url("https://example.com/x"), "");
     }
 
     // ── Pure-function unit tests (ported verbatim from the reference) ─────────

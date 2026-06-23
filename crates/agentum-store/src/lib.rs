@@ -951,6 +951,28 @@ impl Store {
         Ok(())
     }
 
+    /// Stamp a card's external link by id (spec 016b push-back). Used when a
+    /// native card is pushed to a tracker and gets a freshly-created issue, so
+    /// the next pull reconciles it instead of re-creating.
+    pub async fn set_card_external_link(&self, id: i64, url: &str, provider: &str) -> Result<()> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let affected = sqlx::query(
+            "UPDATE board_items SET external_url = ?, external_provider = ?, updated_at = ? \
+             WHERE id = ?",
+        )
+        .bind(url)
+        .bind(provider)
+        .bind(&now_s)
+        .bind(id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if affected == 0 {
+            return Err(StoreError::NotFound(id.to_string()));
+        }
+        Ok(())
+    }
+
     pub async fn patch_board_item(&self, id: i64, patch: BoardPatch) -> Result<BoardItem> {
         let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
         let body_set = patch.body.is_some();
