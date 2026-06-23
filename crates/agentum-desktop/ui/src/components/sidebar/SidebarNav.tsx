@@ -204,7 +204,6 @@ const SidebarNav = React.memo(function SidebarNav() {
         active={harnessActive}
         onClick={openHarnessPage}
       />
-      <div className="my-1 h-px bg-sidebar-foreground/8" aria-hidden />
 
       {/* Secondary utilities: external task trackers, the goals pipeline, and
           fuzzy search. Tasks + Goals fold into Board in Phase 2/3. */}
