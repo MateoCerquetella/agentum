@@ -4,6 +4,21 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.3] — 2026-06-23
+
+### Fixed
+- **Chat sat at "Drafting cards…" forever.** The planner agent spawned without
+  the YOLO marker, so it hung at the first permission prompt / workspace-trust
+  dialog and never ran `agentum board add-card`. The planner session now spawns
+  with `YOLO_MARKER` (mirrors the card/harness launch path).
+- **Planner spawn failures were invisible.** When the planner can't start (e.g.
+  a disconnected SSH project — planning runs locally — or the agent isn't
+  installed), Chat now shows an actionable error instead of spinning forever.
+
+### Changed
+- **Removed the one-line descriptions** under the sidebar nav items
+  (Mission Control / Chat / Board).
+
 ## [0.20.2] — 2026-06-22
 
 ### Fixed
