@@ -128,7 +128,37 @@ pub fn browser_webview_open(
         let _ = tx.send(result);
     })
     .map_err(|e| e.to_string())?;
-    rx.recv().map_err(|e| e.to_string())?
+    rx.recv().map_err(|e| e.to_string())??;
+
+    // macOS WKWebView child webviews added via `add_child` can stay black until
+    // a relayout pass forces them to composite — on first paint the view exists,
+    // loads, and is scriptable, but the window shows only the dark pane beneath.
+    // Force one bounds nudge shortly after create (a brief off-thread delay so
+    // the view is in the hierarchy, then hop back to the main thread): bump the
+    // height by 1px and set it straight back. The React pane's bounds poll keeps
+    // it glued afterwards; this is purely the kick that makes the surface paint.
+    #[cfg(target_os = "macos")]
+    {
+        let app = app.clone();
+        let page_id = browser_page_id.clone();
+        let bounds = bounds;
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            let app_main = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Some(webview) = get_browser_webview(&app_main, &page_id) {
+                    let nudged = BrowserWebviewBounds {
+                        height: bounds.height + 1.0,
+                        ..bounds
+                    };
+                    let _ = webview.set_bounds(nudged.rect());
+                    let _ = webview.set_bounds(bounds.rect());
+                }
+            });
+        });
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
