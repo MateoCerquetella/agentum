@@ -176,7 +176,6 @@ const SidebarNav = React.memo(function SidebarNav() {
   const tasksActive = activeView === 'tasks'
   const activityActive = activeView === 'activity'
   const harnessActive = activeView === 'harness'
-  const boardActive = activeView === 'board'
   // Why: Mission Control is now the always-on home, so its "needs you" badge is
   // always tracked (no longer gated behind the old experimental Agents button).
   const activityUnreadCount = useActivityUnreadCount(true, 'sidebar-badge')
@@ -215,25 +214,23 @@ const SidebarNav = React.memo(function SidebarNav() {
           onPointerEnter={handlePrefetch}
           onFocus={handlePrefetch}
           disabled={!canBrowseTasks}
-          aria-current={tasksActive || boardActive ? 'page' : undefined}
+          aria-current={tasksActive ? 'page' : undefined}
           className={cn(
             'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight transition-colors',
-            tasksActive || boardActive
+            tasksActive
               ? 'bg-sidebar-accent text-sidebar-accent-foreground'
               : 'text-sidebar-foreground/60 hover:bg-sidebar-foreground/8',
             !canBrowseTasks && 'cursor-not-allowed opacity-50 hover:bg-transparent'
           )}
         >
-          {/* One unified Board (#48): GitHub/Linear issues + Chat goals/cards all
-              render as cards here, so the per-provider shortcuts are gone — the
-              board shows every source. Reached as 'tasks' (this button, keeping the
-              existing full-page nav plumbing) or 'board' (Chat's "Open in Board"). */}
+          {/* "Board" = the Tasks view: your GitHub/Linear issues. Chat creates
+              issues that show up here. (Tasks renamed to Board, #48 redo.) */}
           <Columns3
             className={cn(
               'size-4 shrink-0',
-              !(tasksActive || boardActive) && 'text-sidebar-foreground/30'
+              !(tasksActive) && 'text-sidebar-foreground/30'
             )}
-            strokeWidth={tasksActive || boardActive ? 2.25 : 1.75}
+            strokeWidth={tasksActive ? 2.25 : 1.75}
           />
           <span className="flex-1">Board</span>
         </button>

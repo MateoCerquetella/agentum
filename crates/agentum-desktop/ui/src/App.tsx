@@ -214,13 +214,13 @@ function WindowControls(): React.JSX.Element {
 // frame it takes the chunk to resolve.
 const Terminal = lazy(() => import('./components/Terminal'))
 const Landing = lazy(() => import('./components/Landing'))
-// TaskPage (the old flat GitHub/Linear issue list) is no longer routed — the
-// 'tasks' view renders the unified Board now (#48). The component file is kept
-// for its issue-importer logic, which still needs porting into the Board.
+// The "Board" sidebar entry IS the Tasks view (the GitHub/Linear issue list) —
+// Tasks was renamed to Board (#48 redo). The standalone Kanban (BoardPage) was
+// removed; Chat creates GitHub issues that show up here.
+const TaskPage = lazy(() => import('./components/TaskPage'))
 const ActivityPrototypePage = lazy(() => import('./components/activity/ActivityPrototypePage'))
 const Settings = lazy(() => import('./components/settings/Settings'))
 const ChatPage = lazy(() => import('./components/harness/ChatPage'))
-const BoardPage = lazy(() => import('./components/board/BoardPage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
 const WorktreeJumpPalette = lazy(() => import('./components/WorktreeJumpPalette'))
 const CommandPalette = lazy(() => import('./components/CommandPalette'))
@@ -1738,14 +1738,12 @@ function App(): React.JSX.Element {
                           description="Retry the page or navigate to another agentum surface."
                         >
                           {activeView === 'settings' ? <Settings /> : null}
-                          {/* Tasks folded into Board (#48): the 'tasks' view renders the
-                              unified Kanban now, so the old flat issue list is gone while
-                              the 'tasks' nav plumbing (titlebar history, right-sidebar
-                              suppression) keeps working unchanged. */}
-                          {activeView === 'tasks' ? <BoardPage /> : null}
+                          {/* The "Board" sidebar entry renders the Tasks view (GitHub/Linear
+                              issues) — Tasks renamed to Board (#48 redo). The standalone
+                              Kanban 'board' view was removed. */}
+                          {activeView === 'tasks' ? <TaskPage /> : null}
                           {activeView === 'activity' ? <ActivityPrototypePage /> : null}
                           {activeView === 'harness' ? <ChatPage /> : null}
-                          {activeView === 'board' ? <BoardPage /> : null}
                           {activeView === 'terminal' && !activeWorktreeId ? <Landing /> : null}
                         </RecoverableRenderErrorBoundary>
                       </Suspense>

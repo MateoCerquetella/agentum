@@ -78,15 +78,8 @@ export default function CommandPalette(): React.JSX.Element {
     {
       id: 'view-board',
       label: 'Board',
-      hint: 'Kanban of agent tickets (coming soon)',
-      icon: Columns3,
-      run: go(() => setActiveView('board'))
-    },
-    {
-      id: 'view-tasks',
-      label: 'Tasks',
       hint: 'GitHub / GitLab / Linear issues',
-      icon: List,
+      icon: Columns3,
       run: go(() => openTaskPage())
     },
     {

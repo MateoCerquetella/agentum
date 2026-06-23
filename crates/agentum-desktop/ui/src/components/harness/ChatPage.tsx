@@ -369,7 +369,7 @@ export default function ChatPage() {
             {selected ? (
               <button
                 type="button"
-                onClick={() => setActiveView('board')}
+                onClick={() => setActiveView('tasks')}
                 className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-0.5 font-mono text-[11px] hover:border-foreground/30"
               >
                 <Columns3 className="size-3" /> Open in Board
@@ -446,7 +446,7 @@ export default function ChatPage() {
                       <div className="mt-3.5 flex flex-wrap items-center gap-3">
                         <button
                           type="button"
-                          onClick={() => setActiveView('board')}
+                          onClick={() => setActiveView('tasks')}
                           className="inline-flex h-9 items-center gap-2 rounded-full bg-primary px-4.5 text-[13.5px] font-medium text-primary-foreground hover:opacity-85"
                         >
                           <Columns3 className="size-4" /> Review &amp; start on the Board

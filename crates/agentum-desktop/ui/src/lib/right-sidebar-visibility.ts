@@ -8,7 +8,6 @@ const RIGHT_SIDEBAR_SUPPRESSED_VIEWS = new Set<ActiveView>([
   'tasks',
   'activity',
   'skills',
-  'board',
   'mobile'
 ])
 
