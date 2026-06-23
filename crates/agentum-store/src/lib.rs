@@ -753,12 +753,11 @@ impl Store {
     /// Look up a board card by the external issue URL it mirrors (the sync
     /// dedupe key). `None` when no card mirrors that issue yet.
     pub async fn board_item_by_external_url(&self, url: &str) -> Result<Option<BoardItem>> {
-        let row = sqlx::query_as::<_, BoardItemRow>(
-            "SELECT * FROM board_items WHERE external_url = ?",
-        )
-        .bind(url)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row =
+            sqlx::query_as::<_, BoardItemRow>("SELECT * FROM board_items WHERE external_url = ?")
+                .bind(url)
+                .fetch_optional(&self.pool)
+                .await?;
         row.map(BoardItem::try_from).transpose()
     }
 
@@ -2364,7 +2363,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(first.external_url.as_deref(), Some("https://github.com/o/r/issues/7"));
+        assert_eq!(
+            first.external_url.as_deref(),
+            Some("https://github.com/o/r/issues/7")
+        );
         assert_eq!(first.external_provider.as_deref(), Some("github"));
         assert_eq!(first.title, "Add CSV export");
 
@@ -2381,7 +2383,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(second.id, first.id, "re-sync must hit the same card");
-        assert_eq!(second.title, "Add CSV export (renamed)", "tracker wins on re-sync");
+        assert_eq!(
+            second.title, "Add CSV export (renamed)",
+            "tracker wins on re-sync"
+        );
         assert_eq!(second.status, "doing");
 
         // Exactly one card exists for that issue.
@@ -2413,19 +2418,42 @@ mod tests {
         let s = tmp_store().await;
         // Unset key → None, and the bool reader returns the caller's default.
         assert_eq!(s.setting_get("orchestration.enabled").await.unwrap(), None);
-        assert!(!s.setting_get_bool("orchestration.enabled", false).await.unwrap());
-        assert!(s.setting_get_bool("orchestration.enabled", true).await.unwrap());
+        assert!(
+            !s.setting_get_bool("orchestration.enabled", false)
+                .await
+                .unwrap()
+        );
+        assert!(
+            s.setting_get_bool("orchestration.enabled", true)
+                .await
+                .unwrap()
+        );
 
         // Set true, then flip false — upsert overwrites in place.
-        s.setting_set_bool("orchestration.enabled", true).await.unwrap();
+        s.setting_set_bool("orchestration.enabled", true)
+            .await
+            .unwrap();
         assert_eq!(
-            s.setting_get("orchestration.enabled").await.unwrap().as_deref(),
+            s.setting_get("orchestration.enabled")
+                .await
+                .unwrap()
+                .as_deref(),
             Some("1")
         );
-        assert!(s.setting_get_bool("orchestration.enabled", false).await.unwrap());
+        assert!(
+            s.setting_get_bool("orchestration.enabled", false)
+                .await
+                .unwrap()
+        );
 
-        s.setting_set_bool("orchestration.enabled", false).await.unwrap();
-        assert!(!s.setting_get_bool("orchestration.enabled", true).await.unwrap());
+        s.setting_set_bool("orchestration.enabled", false)
+            .await
+            .unwrap();
+        assert!(
+            !s.setting_get_bool("orchestration.enabled", true)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

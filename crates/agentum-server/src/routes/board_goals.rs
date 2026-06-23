@@ -20,7 +20,10 @@ use crate::planner;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/board/goals", post(create_goal))
-        .route("/api/board/goals/{id}/harness-plan", post(plan_goal_harness))
+        .route(
+            "/api/board/goals/{id}/harness-plan",
+            post(plan_goal_harness),
+        )
 }
 
 #[derive(Deserialize)]
@@ -71,7 +74,11 @@ async fn create_goal(
     // returns 400 here WITHOUT orphaning a stuck "planning…" goal — the
     // create_board_item write below only runs once the planner is known-good.
     // The Chat intake's agent picker overrides which agent runs the planner.
-    let tool = body.tool.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let tool = body
+        .tool
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let mut cfg = planner::load_planner_config().await?;
     if let Some(t) = tool {
         cfg.tool = t.to_string();
@@ -217,9 +224,7 @@ async fn plan_goal_harness(
         // and provider; an external sink mirrors the card out and we carry its
         // provider + url so the harness can drive ticket-state transitions later.
         let (id, provider, url) = match sink {
-            crate::task_sink::TaskSink::Board => {
-                (c.key.clone(), Some("board".to_string()), None)
-            }
+            crate::task_sink::TaskSink::Board => (c.key.clone(), Some("board".to_string()), None),
             other => {
                 let fref = other
                     .create_feature(
@@ -254,7 +259,9 @@ async fn plan_goal_harness(
             .await
             {
                 Ok(_) => {}
-                Err(e) => tracing::warn!(provider = p, id = %id, error = %e, "initial Todo transition failed (non-fatal)"),
+                Err(e) => {
+                    tracing::warn!(provider = p, id = %id, error = %e, "initial Todo transition failed (non-fatal)")
+                }
             }
         }
         feats.push(crate::harness::BacklogFeature {
@@ -270,12 +277,14 @@ async fn plan_goal_harness(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    let _ = state.bus.send(Event::new("goal.harness.planned").with_payload(json!({
-        "goal_id": goal_id,
-        "workdir": wd.to_string_lossy(),
-        "provider": sink.provider(),
-        "feature_count": list.features.len(),
-    })));
+    let _ = state
+        .bus
+        .send(Event::new("goal.harness.planned").with_payload(json!({
+            "goal_id": goal_id,
+            "workdir": wd.to_string_lossy(),
+            "provider": sink.provider(),
+            "feature_count": list.features.len(),
+        })));
 
     Ok(Json(PlanGoalHarnessResponse {
         provider: sink.provider(),
@@ -541,7 +550,13 @@ async fn spawn_planner_session(
         workdir: workdir_resolved,
         tool: cfg.tool.clone(),
         model: goal.model.clone(),
-        flags: vec![],
+        // YOLO is mandatory for an autonomous planner: it must run
+        // `agentum board add-card` (a bash tool call) without stopping at a
+        // permission prompt — otherwise it hangs forever and never drafts
+        // (the chat sits at "Drafting cards…"). Mirrors spawn_card_session and
+        // the harness, which CLAUDE.md calls non-negotiable. The adapter
+        // translates the marker per-tool via translate_yolo_marker.
+        flags: vec![agentum_executor::YOLO_MARKER.to_string()],
         // card_id binds this session to the goal; the watchdog (plan 01-04)
         // uses this FK to decide which goal to recompute on session events.
         card_id: Some(goal.id),
@@ -1100,7 +1115,10 @@ mod tests {
             card_bound_to_worktree(&state, dir.path(), &resolved, "card-ag-3", Status::Idle).await;
 
         let pruned = prune_card_worktree_on_done(&state, &card).await;
-        assert!(pruned, "a clean, non-running worktree must be pruned on done");
+        assert!(
+            pruned,
+            "a clean, non-running worktree must be pruned on done"
+        );
         assert!(
             !resolved.path.exists(),
             "the worktree directory must be gone after prune"
@@ -1256,7 +1274,9 @@ mod tests {
         assert_eq!(resp.0.provider, "board");
 
         // feature_list.json is on disk, loadable, and every feature is Pending.
-        let cfg = crate::harness::HarnessConfig::load(dir.path()).await.unwrap();
+        let cfg = crate::harness::HarnessConfig::load(dir.path())
+            .await
+            .unwrap();
         assert_eq!(cfg.features.features.len(), 2);
         assert!(
             cfg.features

@@ -342,7 +342,11 @@ pub async fn resize_window_relative(target: &str, rows_delta: i16) -> Result<()>
     let flag = if rows_delta > 0 { "-U" } else { "-D" };
     let count = rows_delta.unsigned_abs().to_string();
     let mut c = Command::new("tmux");
-    c.arg("resize-window").arg("-t").arg(target).arg(flag).arg(count);
+    c.arg("resize-window")
+        .arg("-t")
+        .arg(target)
+        .arg(flag)
+        .arg(count);
     run_checked(&mut c).await
 }
 

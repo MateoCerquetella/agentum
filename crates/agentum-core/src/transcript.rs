@@ -621,13 +621,10 @@ mod tests {
         unsafe {
             std::env::set_var("HOME", "/tmp/h");
         }
-        let dir =
-            project_dir_for(Path::new("/home/me/proj/.claude-worktrees/feat-x")).unwrap();
+        let dir = project_dir_for(Path::new("/home/me/proj/.claude-worktrees/feat-x")).unwrap();
         assert_eq!(
             dir,
-            PathBuf::from(
-                "/tmp/h/.claude/projects/-home-me-proj--claude-worktrees-feat-x"
-            ),
+            PathBuf::from("/tmp/h/.claude/projects/-home-me-proj--claude-worktrees-feat-x"),
             "`/.claude` must encode to `--claude` (dot -> dash), matching Claude"
         );
         // A space in the path is also non-alphanumeric and must become `-`.

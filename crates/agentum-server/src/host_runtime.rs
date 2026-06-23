@@ -1745,9 +1745,13 @@ pub async fn install_host_chromium(host: &Host) -> Result<String> {
             }
         }
         HostKind::Ssh { .. } => {
-            let out = ssh_output(host, &format!("sh -lc {}", q(cmd)?), BROWSER_INSTALL_TIMEOUT)
-                .await
-                .map_err(map_ssh_io)?;
+            let out = ssh_output(
+                host,
+                &format!("sh -lc {}", q(cmd)?),
+                BROWSER_INSTALL_TIMEOUT,
+            )
+            .await
+            .map_err(map_ssh_io)?;
             if out.status.success() {
                 Ok(String::from_utf8_lossy(&out.stdout).into_owned())
             } else {

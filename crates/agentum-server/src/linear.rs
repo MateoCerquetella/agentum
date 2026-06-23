@@ -17,7 +17,8 @@ const ISSUE_CREATE_MUTATION: &str = "mutation($teamId: String!, $title: String!,
 /// Resolve an issue (by UUID *or* human identifier like `ENG-42` — Linear's
 /// `issue(id:)` accepts both) to its UUID and the workflow states of its team in
 /// one round-trip, so a transition is two calls (lookup + update) at most.
-const ISSUE_STATES_QUERY: &str = "query($id: String!) { issue(id: $id) { id team { states { nodes { id name } } } } }";
+const ISSUE_STATES_QUERY: &str =
+    "query($id: String!) { issue(id: $id) { id team { states { nodes { id name } } } } }";
 const ISSUE_UPDATE_STATE_MUTATION: &str = "mutation($id: String!, $stateId: String!) { issueUpdate(id: $id, input: { stateId: $stateId }) { success } }";
 
 #[derive(Debug, Deserialize)]
@@ -159,8 +160,9 @@ pub async fn create_issue(
     title: &str,
     description: &str,
 ) -> anyhow::Result<(String, Option<String>)> {
-    let token = pick_token(&read_creds())
-        .ok_or_else(|| anyhow::anyhow!("no Linear token configured (connect Linear in settings)"))?;
+    let token = pick_token(&read_creds()).ok_or_else(|| {
+        anyhow::anyhow!("no Linear token configured (connect Linear in settings)")
+    })?;
     let teams = graphql(&token, TEAMS_QUERY, json!({})).await?;
     let team_id = parse_team_id(&teams)?;
     let resp = graphql(
@@ -307,8 +309,8 @@ pub async fn transition_issue(
     phase: crate::task_sink::TrackerPhase,
     map: &LinearStateMap,
 ) -> anyhow::Result<TransitionOutcome> {
-    let token = pick_token(&read_creds())
-        .ok_or_else(|| anyhow::anyhow!("no Linear token configured"))?;
+    let token =
+        pick_token(&read_creds()).ok_or_else(|| anyhow::anyhow!("no Linear token configured"))?;
     let target_name = map.name_for(phase);
     let resp = graphql(&token, ISSUE_STATES_QUERY, json!({ "id": identifier })).await?;
     let (issue_uuid, states) = parse_issue_states(&resp)?;
@@ -442,8 +444,14 @@ mod tests {
             ("s1".to_string(), "Todo".to_string()),
             ("s2".to_string(), "In Progress".to_string()),
         ];
-        assert_eq!(match_state_by_name(&states, "in progress").as_deref(), Some("s2"));
-        assert_eq!(match_state_by_name(&states, "  TODO ").as_deref(), Some("s1"));
+        assert_eq!(
+            match_state_by_name(&states, "in progress").as_deref(),
+            Some("s2")
+        );
+        assert_eq!(
+            match_state_by_name(&states, "  TODO ").as_deref(),
+            Some("s1")
+        );
         assert_eq!(match_state_by_name(&states, "Ready to Test"), None);
     }
 }

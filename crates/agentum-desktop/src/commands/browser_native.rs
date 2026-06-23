@@ -233,10 +233,7 @@ pub fn browser_inpage_annotate(
     let webview = get_browser_webview(&app, &browser_page_id)
         .ok_or_else(|| "browser webview not found".to_string())?;
     let js = if enabled {
-        INPAGE_ANNOTATE_JS.replace(
-            "__PAGE_ID__",
-            &browser_page_id.replace(['\\', '\''], ""),
-        )
+        INPAGE_ANNOTATE_JS.replace("__PAGE_ID__", &browser_page_id.replace(['\\', '\''], ""))
     } else {
         "(function(){if(window.__agentumAnnotate){window.__agentumAnnotate.teardown();}})();"
             .to_string()
