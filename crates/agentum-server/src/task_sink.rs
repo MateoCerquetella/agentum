@@ -349,7 +349,9 @@ mod tests {
         let argv = gh_create_argv("My title", "My body");
         assert_eq!(
             argv,
-            ["issue", "create", "--title", "My title", "--body", "My body"]
+            [
+                "issue", "create", "--title", "My title", "--body", "My body"
+            ]
         );
     }
 
@@ -360,7 +362,10 @@ mod tests {
         let r = parse_gh_issue_url(out).unwrap();
         assert_eq!(r.provider, "github");
         assert_eq!(r.id, "42");
-        assert_eq!(r.url.as_deref(), Some("https://github.com/owner/repo/issues/42"));
+        assert_eq!(
+            r.url.as_deref(),
+            Some("https://github.com/owner/repo/issues/42")
+        );
     }
 
     #[test]

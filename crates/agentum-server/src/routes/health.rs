@@ -25,8 +25,13 @@ pub fn router() -> Router<AppState> {
 /// e.g. an OS `wall` broadcast written over it during system suspend — heals
 /// instead of being re-captured. Clients use it for self-heal on reconnect and
 /// a manual "force redraw"; old daemons drop the param and just don't heal.
-const CAPABILITIES: &[&str] =
-    &["resize", "resume", "refresh", "redraw", "browser.screencast.v1"];
+const CAPABILITIES: &[&str] = &[
+    "resize",
+    "resume",
+    "refresh",
+    "redraw",
+    "browser.screencast.v1",
+];
 
 #[derive(Serialize)]
 struct Health {

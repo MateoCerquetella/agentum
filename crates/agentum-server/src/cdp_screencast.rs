@@ -68,7 +68,12 @@ pub struct FrameMetadata {
 /// Encode one screencast frame into the `0x62` binary wire format the pane
 /// decodes. Layout (all u32 little-endian):
 /// `[kind, ver, opcode, format, seq:u32, mdlen:u32, reserved:u32(=0)] + md_json + image`.
-pub fn encode_frame(seq: u32, format: FrameFormat, metadata: &FrameMetadata, image: &[u8]) -> Vec<u8> {
+pub fn encode_frame(
+    seq: u32,
+    format: FrameFormat,
+    metadata: &FrameMetadata,
+    image: &[u8],
+) -> Vec<u8> {
     let md = serde_json::to_vec(metadata).unwrap_or_else(|_| b"{}".to_vec());
     let mut out = Vec::with_capacity(HEADER_BYTES + md.len() + image.len());
     out.push(KIND);
@@ -174,13 +179,27 @@ impl MouseButton {
 /// 009c-3 contract); the bridge maps each to one or more CDP commands.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InputCommand {
-    MouseMove { x: f64, y: f64 },
-    MouseDown { button: MouseButton },
-    MouseUp { button: MouseButton },
-    MouseWheel { dx: f64, dy: f64 },
+    MouseMove {
+        x: f64,
+        y: f64,
+    },
+    MouseDown {
+        button: MouseButton,
+    },
+    MouseUp {
+        button: MouseButton,
+    },
+    MouseWheel {
+        dx: f64,
+        dy: f64,
+    },
     /// A key press — either a printable char or a named key (Enter/Backspace/…).
-    KeyPress { key: String },
-    Goto { url: String },
+    KeyPress {
+        key: String,
+    },
+    Goto {
+        url: String,
+    },
     Back,
     Forward,
     Reload,
@@ -581,11 +600,16 @@ mod tests {
         );
         assert_eq!(
             parse_input_message(r#"{"method":"browser.mouseWheel","params":{"dx":0,"dy":-120}}"#),
-            Some(InputCommand::MouseWheel { dx: 0.0, dy: -120.0 })
+            Some(InputCommand::MouseWheel {
+                dx: 0.0,
+                dy: -120.0
+            })
         );
         assert_eq!(
             parse_input_message(r#"{"method":"browser.keypress","params":{"key":"Enter"}}"#),
-            Some(InputCommand::KeyPress { key: "Enter".into() })
+            Some(InputCommand::KeyPress {
+                key: "Enter".into()
+            })
         );
         assert_eq!(
             parse_input_message(r#"{"method":"browser.goto","params":{"url":"https://x.test"}}"#),
@@ -607,7 +631,11 @@ mod tests {
         let mut p = PointerState::default();
         let mut id = 0u64;
         // Move sets the remembered position…
-        input_command_to_cdp(&InputCommand::MouseMove { x: 50.0, y: 60.0 }, &mut p, &mut id);
+        input_command_to_cdp(
+            &InputCommand::MouseMove { x: 50.0, y: 60.0 },
+            &mut p,
+            &mut id,
+        );
         // …which a button press (carrying no coords) then targets.
         let cmds = input_command_to_cdp(
             &InputCommand::MouseDown {
@@ -636,7 +664,9 @@ mod tests {
         assert_eq!(ch[0]["params"]["text"], "a");
         // A named key → keyDown + keyUp with the VK code; Enter carries "\r".
         let enter = input_command_to_cdp(
-            &InputCommand::KeyPress { key: "Enter".into() },
+            &InputCommand::KeyPress {
+                key: "Enter".into(),
+            },
             &mut p,
             &mut id,
         );

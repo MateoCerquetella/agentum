@@ -232,12 +232,14 @@ async fn sync(
             .await
         {
             Ok(item) => {
-                let _ = state.bus.send(Event::new("board.updated").with_payload(json!({
-                    "id": item.id,
-                    "key": item.key,
-                    "status": item.status,
-                    "external_url": item.external_url,
-                })));
+                let _ = state
+                    .bus
+                    .send(Event::new("board.updated").with_payload(json!({
+                        "id": item.id,
+                        "key": item.key,
+                        "status": item.status,
+                        "external_url": item.external_url,
+                    })));
                 synced.push(item);
             }
             Err(e) => {
@@ -687,9 +689,14 @@ mod tests {
         };
 
         // First sync creates the card.
-        let r1 = sync(State(state.clone()), Json(SyncRequest { items: vec![issue()] }))
-            .await
-            .expect("sync ok");
+        let r1 = sync(
+            State(state.clone()),
+            Json(SyncRequest {
+                items: vec![issue()],
+            }),
+        )
+        .await
+        .expect("sync ok");
         assert_eq!(r1.0.synced.len(), 1);
         assert_eq!(
             r1.0.synced[0].external_url.as_deref(),
@@ -697,10 +704,18 @@ mod tests {
         );
 
         // Second sync of the same issue updates in place — board still has 1 card.
-        let r2 = sync(State(state.clone()), Json(SyncRequest { items: vec![issue()] }))
-            .await
-            .expect("re-sync ok");
-        assert_eq!(r2.0.synced[0].id, r1.0.synced[0].id, "re-sync hits the same card");
+        let r2 = sync(
+            State(state.clone()),
+            Json(SyncRequest {
+                items: vec![issue()],
+            }),
+        )
+        .await
+        .expect("re-sync ok");
+        assert_eq!(
+            r2.0.synced[0].id, r1.0.synced[0].id,
+            "re-sync hits the same card"
+        );
 
         let board = list(State(state.clone())).await.unwrap();
         let total: usize = board.0.columns.values().map(|v| v.len()).sum();

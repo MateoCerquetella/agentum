@@ -172,7 +172,11 @@ fn launch_lock() -> &'static Mutex<()> {
 /// that would otherwise block automation. An isolated `--user-data-dir` keeps
 /// this browser off the user's real profile. `about:blank` is a benign initial
 /// page (the agent navigates its own tab afterwards).
-fn build_chrome_argv(exe: &std::path::Path, port: u16, user_data_dir: &std::path::Path) -> Vec<String> {
+fn build_chrome_argv(
+    exe: &std::path::Path,
+    port: u16,
+    user_data_dir: &std::path::Path,
+) -> Vec<String> {
     vec![
         exe.to_string_lossy().into_owned(),
         "--headless=new".to_string(),
@@ -366,7 +370,10 @@ mod tests {
         assert!(argv.iter().any(|a| a == "--headless=new"));
         // CDP exposed on the exact port we probe, loopback-only.
         assert!(argv.iter().any(|a| a == "--remote-debugging-port=9300"));
-        assert!(argv.iter().any(|a| a == "--remote-debugging-address=127.0.0.1"));
+        assert!(
+            argv.iter()
+                .any(|a| a == "--remote-debugging-address=127.0.0.1")
+        );
         // A fixed viewport so screencast frames have a sane default size.
         assert!(argv.iter().any(|a| a == "--window-size=1280,800"));
         // Isolated profile + first-run nags suppressed.
