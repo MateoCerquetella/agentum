@@ -23,7 +23,7 @@ use axum::routing::get;
 use futures_util::{SinkExt as _, StreamExt as _};
 use serde::Deserialize;
 use serde_json::json;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::cdp_browser;
 use crate::cdp_screencast::{
@@ -95,10 +95,10 @@ async fn screencast(ws: WebSocketUpgrade, Query(q): Query<ScreencastQuery>) -> i
     ws.on_upgrade(move |socket| run(socket, base, opts))
 }
 
-/// Channel depths. Frames are large and time-sensitive — a shallow buffer keeps
-/// the pane near-live (a slow client drops behind by at most a couple frames
-/// rather than buffering a backlog). Input is tiny and bursty; 64 is ample.
-const FRAME_CHANNEL_DEPTH: usize = 4;
+/// Input channel depth. Input is tiny and bursty; 64 is ample. (Frames use a
+/// `watch` channel instead of a depth-bounded queue — latest-wins, so a slow pane
+/// drops stale frames rather than buffering a backlog and stalling Chrome; the
+/// bridge acks each frame immediately. See `run` and `cdp_screencast::run_screencast_bridge`.)
 const INPUT_CHANNEL_DEPTH: usize = 64;
 
 async fn run(socket: WebSocket, cdp_http_base: Result<String, String>, opts: ScreencastOptions) {
@@ -138,7 +138,11 @@ async fn run(socket: WebSocket, cdp_http_base: Result<String, String>, opts: Scr
         ))
         .await;
 
-    let (frame_tx, mut frame_rx) = mpsc::channel::<Vec<u8>>(FRAME_CHANNEL_DEPTH);
+    // Latest-wins frame sink: the bridge overwrites any undrained frame, so the
+    // pane always renders the freshest one and a slow pane never stalls Chrome.
+    // `None` is the pre-first-frame sentinel (never delivered — the initial value
+    // is "already seen", so `changed()` only fires on a real frame).
+    let (frame_tx, mut frame_rx) = watch::channel::<Option<Vec<u8>>>(None);
     let (input_tx, input_rx) = mpsc::channel::<InputCommand>(INPUT_CHANNEL_DEPTH);
 
     // The CDP client runs in its own task; it ends (dropping `frame_tx`) when the
@@ -149,13 +153,19 @@ async fn run(socket: WebSocket, cdp_http_base: Result<String, String>, opts: Scr
 
     loop {
         tokio::select! {
-            frame = frame_rx.recv() => match frame {
-                Some(bytes) => {
-                    if ws_tx.send(Message::Binary(bytes.into())).await.is_err() {
-                        break; // pane gone
+            changed = frame_rx.changed() => match changed {
+                Ok(()) => {
+                    // Take the freshest frame; intermediate frames the pane couldn't
+                    // keep up with were already overwritten (latest-wins). Clone out
+                    // before the await so we don't hold the watch borrow across it.
+                    let latest = frame_rx.borrow_and_update().clone();
+                    if let Some(bytes) = latest {
+                        if ws_tx.send(Message::Binary(bytes.into())).await.is_err() {
+                            break; // pane gone
+                        }
                     }
                 }
-                None => break, // bridge ended (clean close or error — reported below)
+                Err(_) => break, // bridge ended: sender dropped (clean close or error)
             },
             msg = ws_rx.next() => match msg {
                 Some(Ok(Message::Text(t))) => {

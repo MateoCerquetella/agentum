@@ -23,6 +23,7 @@ use tokio::sync::broadcast;
 pub mod auth;
 pub mod bridge;
 pub mod cdp_browser;
+pub mod cdp_driver;
 pub mod cdp_screencast;
 pub mod endpoint;
 mod error;
