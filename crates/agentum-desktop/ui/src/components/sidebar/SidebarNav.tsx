@@ -38,7 +38,6 @@ export function shouldShowAgentsButton(
 function PrimaryNavItem({
   icon: Icon,
   label,
-  description,
   active,
   onClick,
   badge,
@@ -46,7 +45,6 @@ function PrimaryNavItem({
 }: {
   icon: LucideIcon
   label: string
-  description: string
   active: boolean
   onClick: () => void
   badge?: number
@@ -81,9 +79,6 @@ function PrimaryNavItem({
               {badge}
             </span>
           ) : null}
-        </span>
-        <span className="truncate text-[11px] leading-tight text-sidebar-foreground/45">
-          {description}
         </span>
       </span>
     </button>
@@ -199,7 +194,6 @@ const SidebarNav = React.memo(function SidebarNav() {
       <PrimaryNavItem
         icon={Radar}
         label="Mission Control"
-        description="Every agent you're running"
         active={activityActive}
         onClick={openActivityPage}
         badge={activityUnreadCount}
@@ -207,14 +201,12 @@ const SidebarNav = React.memo(function SidebarNav() {
       <PrimaryNavItem
         icon={MessagesSquare}
         label="Chat"
-        description="Describe what you want → a spec"
         active={harnessActive}
         onClick={openHarnessPage}
       />
       <PrimaryNavItem
         icon={Columns3}
         label="Board"
-        description="Your Kanban of agent tickets"
         active={boardActive}
         onClick={() => setActiveView('board')}
         soon
