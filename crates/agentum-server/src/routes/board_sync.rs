@@ -33,7 +33,10 @@ use crate::task_sink::TrackerPhase;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/board/bindings", post(create_binding).get(list_bindings))
+        .route(
+            "/api/board/bindings",
+            post(create_binding).get(list_bindings),
+        )
         .route("/api/board/bindings/{id}", delete(delete_binding))
         // The server PULL trigger. Distinct from #58's `POST /api/board/sync`.
         .route("/api/board/bindings/{id}/sync", post(sync_binding))
@@ -59,8 +62,15 @@ pub(crate) struct ExternalIssue {
 /// What a sync should do with one incoming issue, relative to the board.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SyncAction {
-    Create { issue: ExternalIssue, status: String },
-    Update { card_id: i64, issue: ExternalIssue, status: String },
+    Create {
+        issue: ExternalIssue,
+        status: String,
+    },
+    Update {
+        card_id: i64,
+        issue: ExternalIssue,
+        status: String,
+    },
 }
 
 /// Initial board column for a brand-new card from an issue's state.
@@ -102,16 +112,21 @@ pub(crate) fn reconcile(
 ) -> Vec<SyncAction> {
     issues
         .iter()
-        .map(|issue| match existing.iter().find(|(_, ext, _)| ext == &issue.external_id) {
-            Some((card_id, _, local_status)) => SyncAction::Update {
-                card_id: *card_id,
-                status: reconcile_status(local_status, &issue.column),
-                issue: issue.clone(),
-            },
-            None => SyncAction::Create {
-                status: issue.column.clone(),
-                issue: issue.clone(),
-            },
+        .map(|issue| {
+            match existing
+                .iter()
+                .find(|(_, ext, _)| ext == &issue.external_id)
+            {
+                Some((card_id, _, local_status)) => SyncAction::Update {
+                    card_id: *card_id,
+                    status: reconcile_status(local_status, &issue.column),
+                    issue: issue.clone(),
+                },
+                None => SyncAction::Create {
+                    status: issue.column.clone(),
+                    issue: issue.clone(),
+                },
+            }
         })
         .collect()
 }
@@ -140,10 +155,7 @@ pub(crate) fn parse_github_issues(v: &Value) -> Vec<ExternalIssue> {
                 .and_then(|u| u.as_str())
                 .unwrap_or_default()
                 .to_string();
-            let state = item
-                .get("state")
-                .and_then(|s| s.as_str())
-                .unwrap_or("open");
+            let state = item.get("state").and_then(|s| s.as_str()).unwrap_or("open");
             Some(ExternalIssue {
                 external_id: number.to_string(),
                 title,
@@ -188,10 +200,15 @@ async fn create_binding(
             )));
         }
     }
-    let binding = state.store.create_tracker_binding(&provider, project).await?;
-    let _ = state.bus.send(Event::new("board.binding.created").with_payload(json!({
-        "id": binding.id, "provider": binding.provider, "project": binding.project,
-    })));
+    let binding = state
+        .store
+        .create_tracker_binding(&provider, project)
+        .await?;
+    let _ = state
+        .bus
+        .send(Event::new("board.binding.created").with_payload(json!({
+            "id": binding.id, "provider": binding.provider, "project": binding.project,
+        })));
     Ok((StatusCode::CREATED, Json(binding)))
 }
 
@@ -244,10 +261,12 @@ async fn sync_binding(
 
     let result = sync_one(&state, &binding).await?;
 
-    let _ = state.bus.send(Event::new("board.sync.completed").with_payload(json!({
-        "provider": result.provider, "project": result.project,
-        "created": result.created, "updated": result.updated,
-    })));
+    let _ = state
+        .bus
+        .send(Event::new("board.sync.completed").with_payload(json!({
+            "provider": result.provider, "project": result.project,
+            "created": result.created, "updated": result.updated,
+        })));
     Ok(Json(json!({
         "provider": result.provider, "project": result.project,
         "created": result.created, "updated": result.updated,
@@ -260,12 +279,13 @@ async fn sync_one(state: &AppState, binding: &TrackerBinding) -> Result<SyncResu
     // per provider so the reconcile below is provider-agnostic).
     let issues: Vec<ExternalIssue> = match binding.provider.as_str() {
         "github" => {
-            let remote = classify_remote("github.com", binding.project.clone()).ok_or_else(|| {
-                ApiError::BadRequest(format!(
-                    "could not build a github remote for {}",
-                    binding.project
-                ))
-            })?;
+            let remote =
+                classify_remote("github.com", binding.project.clone()).ok_or_else(|| {
+                    ApiError::BadRequest(format!(
+                        "could not build a github remote for {}",
+                        binding.project
+                    ))
+                })?;
             // Fail loud: a missing token aborts here (400) before any write.
             let token = token_for(ForgeKind::Github)?;
             // state=all so closed issues map to done. 100-cap; pagination deferred.
@@ -534,7 +554,10 @@ async fn push_card(
                         .await
                         .map_err(linear_err)?;
                     if let Some(url) = url_opt.as_deref() {
-                        state.store.set_card_external_link(id, url, "linear").await?;
+                        state
+                            .store
+                            .set_card_external_link(id, url, "linear")
+                            .await?;
                     }
                     if column != "todo" && !column.is_empty() {
                         linear::transition_issue(
@@ -578,7 +601,12 @@ async fn resolve_target(
                 .map(|x| (x.provider, x.project))
                 .ok_or_else(|| ApiError::NotFound(format!("tracker binding {bid}")));
         }
-        if let Some(p) = b.project.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        if let Some(p) = b
+            .project
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+        {
             let provider = if p.contains('/') { "github" } else { "linear" };
             return Ok((provider.to_string(), p.to_string()));
         }
@@ -628,7 +656,10 @@ mod tests {
     fn column_to_phase_maps_board_columns() {
         assert!(matches!(column_to_phase("done"), TrackerPhase::Done));
         assert!(matches!(column_to_phase("doing"), TrackerPhase::InProgress));
-        assert!(matches!(column_to_phase("review"), TrackerPhase::ReadyToTest));
+        assert!(matches!(
+            column_to_phase("review"),
+            TrackerPhase::ReadyToTest
+        ));
         assert!(matches!(column_to_phase("todo"), TrackerPhase::Todo));
         assert!(matches!(column_to_phase("anything"), TrackerPhase::Todo));
     }
@@ -639,7 +670,10 @@ mod tests {
             parse_github_issue("https://github.com/acme/api/issues/42"),
             Some(("acme/api".to_string(), 42))
         );
-        assert_eq!(parse_github_issue("https://github.com/acme/api/pull/42"), None);
+        assert_eq!(
+            parse_github_issue("https://github.com/acme/api/pull/42"),
+            None
+        );
         assert_eq!(parse_github_issue("https://gitlab.com/o/r/issues/1"), None);
         assert_eq!(parse_github_issue("nope"), None);
     }
@@ -708,7 +742,11 @@ mod tests {
         // tracker column "todo" (open) must NOT yank a locally in-progress card.
         let actions = reconcile(&existing, &[issue("12", "Add login (edited)", "todo")]);
         match &actions[0] {
-            SyncAction::Update { card_id, status, issue } => {
+            SyncAction::Update {
+                card_id,
+                status,
+                issue,
+            } => {
                 assert_eq!(*card_id, 7);
                 assert_eq!(status, "doing"); // open preserves the local column
                 assert_eq!(issue.title, "Add login (edited)");
@@ -852,7 +890,9 @@ mod tests {
         // AGENTUM_HOME-mutating tests (profiles / planner / board_goals) in the
         // same `--lib` binary — a per-module lock would not, and would race the
         // planner-config read in board_goals::tests.
-        let _guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let prev = std::env::var_os("AGENTUM_HOME");
         let empty_home = tempfile::tempdir().unwrap();
         // SAFETY: env access is serialized by ENV_LOCK for the env-touching tests.
@@ -910,7 +950,12 @@ mod tests {
         assert_eq!(after[0].status, "todo");
         // No external card was created.
         assert!(
-            state.store.list_external_refs("github").await.unwrap().is_empty(),
+            state
+                .store
+                .list_external_refs("github")
+                .await
+                .unwrap()
+                .is_empty(),
             "failed sync must not create an external card"
         );
 
