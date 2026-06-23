@@ -116,5 +116,21 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: cargo test
+      # Build the test binaries first (default shell — on Windows that's pwsh, so
+      # linking uses MSVC's link.exe, not Git Bash's), then copy the staged sherpa/
+      # onnxruntime libs next to them, then run. The test binaries load those libs
+      # from their own dir at startup (macOS @loader_path / Linux $ORIGIN / Windows
+      # DLL search all resolve target/debug/deps/), but staging puts them in
+      # target/release/ — so without this copy the binaries SIGABRT / fail to load
+      # at runtime even though they linked fine. Copying (vs a DYLD_*/LD_* env var)
+      # is the only approach that survives macOS SIP stripping those vars.
+      - name: cargo test (build)
+        run: cargo test --all --no-run
+      - name: Stage sherpa libs next to test binaries
+        shell: bash
+        run: |
+          for ext in dylib so dll; do
+            cp target/release/*sherpa*."$ext" target/release/*onnxruntime*."$ext" target/debug/deps/ 2>/dev/null || true
+          done
+      - name: cargo test (run)
         run: cargo test --all
