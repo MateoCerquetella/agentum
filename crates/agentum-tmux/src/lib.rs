@@ -350,6 +350,24 @@ pub async fn resize_window_relative(target: &str, rows_delta: i16) -> Result<()>
     run_checked(&mut c).await
 }
 
+/// Set a session-scoped environment variable on a tmux target via
+/// `tmux set-environment -t <target> KEY VAL`. Each argument is passed
+/// individually (no shell interpolation), so KEY/VAL with spaces or special
+/// chars are delivered literally.
+///
+/// IMPORTANT: tmux's session environment is read by *future* processes spawned
+/// in the pane (new windows/panes/`respawn`), NOT by the process already running
+/// there. The live agent does not pick this up — it only affects new children.
+pub async fn set_environment(target: &str, key: &str, value: &str) -> Result<()> {
+    let mut c = Command::new("tmux");
+    c.arg("set-environment")
+        .arg("-t")
+        .arg(target)
+        .arg(key)
+        .arg(value);
+    run_checked(&mut c).await
+}
+
 /// Pipe the pane's output to `out_path` (append). Uses `-o`: noop if a pipe
 /// is already active for this pane.
 ///

@@ -28,5 +28,8 @@ async fn embedded_endpoint_is_stable_across_restart() {
     let token2 = endpoint::load_or_create_mcp_token();
 
     assert_eq!(port1, port2, "restart must reuse the persisted port");
-    assert_eq!(token1, token2, "restart must reuse the persisted /mcp token");
+    assert_eq!(
+        token1, token2,
+        "restart must reuse the persisted /mcp token"
+    );
 }

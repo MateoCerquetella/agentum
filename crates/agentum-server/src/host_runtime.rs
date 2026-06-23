@@ -1076,6 +1076,28 @@ pub async fn pane_title(host: &Host, target: &str) -> Result<String> {
     }
 }
 
+/// Set a session-scoped tmux environment variable on `target`'s pane.
+/// Local → `agentum_tmux::set_environment`; SSH → `tmux set-environment` over
+/// the pooled connection with every component shell-quoted.
+///
+/// Best-effort by contract: callers log-and-continue on error. tmux's session
+/// environment is only read by *future* children of the pane — the already-running
+/// agent does not see the change, so this never repairs a live process.
+pub async fn set_pane_env(host: &Host, target: &str, key: &str, value: &str) -> Result<()> {
+    match &host.kind {
+        HostKind::Local => Ok(agentum_tmux::set_environment(target, key, value).await?),
+        HostKind::Ssh { .. } => {
+            let script = format!(
+                "tmux set-environment -t {} {} {}",
+                q(target)?,
+                q(key)?,
+                q(value)?
+            );
+            ssh_checked(host, &script).await
+        }
+    }
+}
+
 pub async fn send_keys(host: &Host, target: &str, keys: &str, append_enter: bool) -> Result<()> {
     match &host.kind {
         HostKind::Local => Ok(agentum_tmux::send_keys(target, keys, append_enter).await?),

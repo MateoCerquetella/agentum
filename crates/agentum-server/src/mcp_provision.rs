@@ -288,6 +288,17 @@ async fn provision_browser_mcp(engine: BrowserMcpEngine) -> Result<String> {
     }
 }
 
+/// Hex SHA-256 of the `/mcp` bearer token. We persist this (never the token
+/// itself) on a session row so the boot drift scan can compare "what the session
+/// was provisioned with" against the live token without storing the secret at
+/// rest. Shared by the spawn-time record and the boot scan so both hash the same
+/// way.
+pub fn token_hash(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(token.as_bytes());
+    format!("{digest:x}")
+}
+
 /// The agentum-MCP server entry for a session: the endpoint the agent should
 /// reach (loopback locally, tunnel port remotely) plus the bearer token.
 pub fn agentum_server(state: &AppState, agentum_mcp_url: &str) -> McpServer {
@@ -420,6 +431,99 @@ mod tests {
             serde_json::from_str(&merge_agent_config(None, &oc, &server)).unwrap();
         assert_eq!(m2["mcp"]["agentum"]["type"], "remote");
         assert_eq!(m2["mcp"]["agentum"]["url"], "http://127.0.0.1:5555/mcp");
+    }
+
+    #[test]
+    fn token_hash_is_stable_hex_sha256_and_hides_the_token() {
+        // Deterministic + 64 hex chars (SHA-256), and never echoes the token.
+        let h = token_hash("super-secret-token");
+        assert_eq!(h.len(), 64);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(h, token_hash("super-secret-token")); // stable
+        assert_ne!(h, token_hash("different-token")); // differs on input
+        assert!(!h.contains("super-secret-token"));
+        // Known vector: SHA-256("") — guards against an accidental algo swap.
+        assert_eq!(
+            token_hash(""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn reprovision_seam_rewrites_mcpjson_and_agent_config_to_new_endpoint() {
+        // The S1 config-rewrite seam: after an endpoint change, BOTH the launch-arg
+        // `<state_dir>/mcp.json` and a file-based agent's config (Cursor + OpenCode)
+        // must reflect the NEW url+token. Exercises the exact writers
+        // `reprovision_session` calls (`write_combined_config_in` / `merge_agent_config`)
+        // without standing up an AppState or a tmux mock.
+        let tmp = std::env::temp_dir().join(format!(
+            "agentum-reprov-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+
+        // --- provisioned state #1 (what the session was launched with) ---
+        let old = McpServer {
+            name: "agentum".to_string(),
+            url: "http://127.0.0.1:8822/mcp".to_string(),
+            auth_token: Some("old-token".to_string()),
+        };
+        write_combined_config_in(&tmp, std::slice::from_ref(&old)).unwrap();
+        let cursor_file = agent_mcp_file("cursor").unwrap();
+        let cursor_v1 = merge_agent_config(None, &cursor_file, &old);
+        // The user's own server must be preserved across the later rewrite.
+        let cursor_with_user = {
+            let mut root: serde_json::Value = serde_json::from_str(&cursor_v1).unwrap();
+            root["mcpServers"]["toolbox"] = serde_json::json!({ "command": "npx" });
+            serde_json::to_string(&root).unwrap()
+        };
+
+        // --- endpoint drifts: ephemeral rebind to a new port + rotated token ---
+        let new = McpServer {
+            name: "agentum".to_string(),
+            url: "http://127.0.0.1:60102/mcp".to_string(),
+            auth_token: Some("new-token".to_string()),
+        };
+
+        // 1) launch-arg mcp.json now points at the new endpoint+token.
+        let path = write_combined_config_in(&tmp, std::slice::from_ref(&new)).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            v["mcpServers"]["agentum"]["url"],
+            "http://127.0.0.1:60102/mcp"
+        );
+        assert_eq!(
+            v["mcpServers"]["agentum"]["headers"]["Authorization"],
+            "Bearer new-token"
+        );
+
+        // 2) Cursor file (.cursor/mcp.json) re-merged to the new endpoint, user's
+        //    server intact, no stale old token left behind.
+        let cursor_v2 = merge_agent_config(Some(&cursor_with_user), &cursor_file, &new);
+        let cv: serde_json::Value = serde_json::from_str(&cursor_v2).unwrap();
+        assert_eq!(
+            cv["mcpServers"]["agentum"]["url"],
+            "http://127.0.0.1:60102/mcp"
+        );
+        assert_eq!(
+            cv["mcpServers"]["agentum"]["headers"]["Authorization"],
+            "Bearer new-token"
+        );
+        assert_eq!(cv["mcpServers"]["toolbox"]["command"], "npx"); // preserved
+        assert!(!cursor_v2.contains("old-token"));
+        assert!(!cursor_v2.contains("8822"));
+
+        // 3) OpenCode quirk path (`mcp` key + type:"remote") also re-points.
+        let oc_file = agent_mcp_file("opencode").unwrap();
+        let oc_v1 = merge_agent_config(None, &oc_file, &old);
+        let oc_v2 = merge_agent_config(Some(&oc_v1), &oc_file, &new);
+        let ov: serde_json::Value = serde_json::from_str(&oc_v2).unwrap();
+        assert_eq!(ov["mcp"]["agentum"]["type"], "remote");
+        assert_eq!(ov["mcp"]["agentum"]["url"], "http://127.0.0.1:60102/mcp");
+        assert!(!oc_v2.contains("old-token"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

@@ -465,6 +465,18 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
             }
         });
     }
+
+    // R3: one-shot boot drift rescan. Re-syncs any running session whose
+    // provisioned endpoint drifted from the live one (the ephemeral-rebind case
+    // R1+R2 can't cover). Spawned here — after `mcp_token`/`api_base_url` are
+    // final — so it reads the authoritative live endpoint. Best-effort; a
+    // standalone daemon (no `api_base_url`) returns immediately.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            routes::sessions::boot_drift_rescan(state).await;
+        });
+    }
 }
 
 /// Boot the API server in-process on an ephemeral loopback port with auth
