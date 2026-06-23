@@ -194,12 +194,14 @@ export interface AgentumApi {
     rateLimit: ApiMethod
     refreshPRNow: ApiMethod
     removePRReviewers: ApiMethod
+    repoBranches: ApiMethod
     repoSlug: ApiMethod
     reportVisiblePRRefreshCandidates: ApiMethod
     requestPRReviewers: ApiMethod
     rerunPRChecks: ApiMethod
     resolveProjectRef: ApiMethod
     resolveReviewThread: ApiMethod
+    setDefaultBranch: ApiMethod
     setPRAutoMerge: ApiMethod
     setPRFileViewed: ApiMethod
     starAgentum: ApiMethod
