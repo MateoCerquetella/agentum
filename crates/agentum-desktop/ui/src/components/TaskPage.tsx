@@ -82,6 +82,9 @@ import { LinearScopeSelector } from '@/components/linear-scope-selector'
 import RepoBadgeLabel from '@/components/repo/RepoBadgeLabel'
 import IssueSourceIndicator, { sameGitHubOwnerRepo } from '@/components/github/IssueSourceIndicator'
 import IssueSourceSelector, { issueSourceChipClass } from '@/components/github/IssueSourceSelector'
+import { TaskKanbanBoard } from '@/components/tasks/TaskKanbanBoard'
+import { TWO_COLUMNS, githubColumn } from '@/components/tasks/task-kanban'
+import { transitionGithubIssue } from '@/components/tasks/task-kanban-github'
 import { reconcileLinearTeamSelection } from '@/components/task-page-linear-team-selection'
 import { useConfirmationDialog } from '@/components/confirmation-dialog'
 import {
@@ -2418,6 +2421,9 @@ export default function TaskPage(): React.JSX.Element {
   // gated on a non-null `activeProject` once they pick one.
   const projectModeVisible = taskSource === 'github'
   const [githubMode, setGithubMode] = useState<'items' | 'project'>('items')
+  // Tasks-as-Kanban (#2): the GitHub issues view can render as a board where
+  // dragging a card between Open/Done pushes the new state back to GitHub.
+  const [taskViewMode, setTaskViewMode] = useState<'list' | 'kanban'>('list')
 
   // ── GitLab task-source state ──────────────────────────────────────
   // Why: parallel to Linear's slim per-source state. Skips workItemsCache
@@ -5348,6 +5354,25 @@ export default function TaskPage(): React.JSX.Element {
                         })}
                       </div>
                     ) : null}
+                    {githubMode === 'items' && activeGithubTaskKind === 'issues' ? (
+                      <div className="flex items-center gap-1 text-xs">
+                        {(['list', 'kanban'] as const).map((m) => (
+                          <button
+                            key={m}
+                            type="button"
+                            onClick={() => setTaskViewMode(m)}
+                            className={cn(
+                              'rounded-md border px-2 py-1 text-xs transition',
+                              taskViewMode === m
+                                ? 'border-border/50 bg-foreground/90 text-background'
+                                : 'border-border/50 bg-transparent text-foreground hover:bg-muted/50'
+                            )}
+                          >
+                            {m === 'kanban' ? 'Board' : 'List'}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
                     {/* Why: the repo combobox filters Items mode by repo. In
                         Project mode the row set comes from the project's
                         view filter (server-side), so this control would be
@@ -6034,6 +6059,30 @@ export default function TaskPage(): React.JSX.Element {
           ) : taskSource === 'github' && githubMode === 'project' ? (
             <div className="mt-3 flex min-h-0 min-w-0 max-h-full flex-col overflow-hidden rounded-md border border-border/50 bg-muted/50 shadow-sm">
               <ProjectViewWrapper />
+            </div>
+          ) : taskSource === 'github' &&
+            taskViewMode === 'kanban' &&
+            activeGithubTaskKind === 'issues' ? (
+            <div className="flex min-h-0 min-w-0 max-h-full flex-col overflow-hidden rounded-md rounded-t-none border border-t-0 border-border/50 bg-muted/50 shadow-sm">
+              <TaskKanbanBoard
+                columns={TWO_COLUMNS}
+                items={filteredWorkItems}
+                idOf={(it) => `${it.repoId}:${it.id}`}
+                columnOf={(it) => githubColumn(it.state)}
+                onMove={(it, target) =>
+                  transitionGithubIssue(it, repoMap.get(it.repoId) ?? null, target)
+                }
+                renderCard={(it) => (
+                  <button
+                    type="button"
+                    onClick={() => setDialogWorkItem(it)}
+                    className="flex w-full flex-col gap-1 text-left"
+                  >
+                    <span className="font-mono text-[10.5px] text-muted-foreground">#{it.number}</span>
+                    <span className="line-clamp-2 text-[12.5px] leading-snug">{it.title}</span>
+                  </button>
+                )}
+              />
             </div>
           ) : taskSource === 'github' ? (
             <div className="flex min-h-0 min-w-0 max-h-full flex-col overflow-hidden rounded-md rounded-t-none border border-t-0 border-border/50 bg-muted/50 shadow-sm">

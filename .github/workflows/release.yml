@@ -4,11 +4,11 @@ on:
   push:
     tags:
       - 'v*.*.*'
-  # Allow manual desktop-only builds without a full release.
+  # Allow manual desktop builds (test the matrix) without cutting a release.
   workflow_dispatch:
     inputs:
       desktop-only:
-        description: 'Build desktop bundles only (skip CLI tarballs)'
+        description: 'Build desktop bundles only (this repo is desktop-only; the CLI/TUI lives in github.com/mateocerquetella/agentum-tui)'
         type: boolean
         default: false
 
@@ -18,7 +18,6 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  BIN_NAME: agentum
 
 jobs:
   build:
@@ -32,16 +31,14 @@ jobs:
           # runs on Debian 12, Ubuntu 22.04, and similarly aged
           # distros. ubuntu-latest is 24.04 (glibc 2.39), which made
           # older systems refuse to load the executable.
-          # `desktop` lists the Tauri bundle formats for that target (absent =
-          # CLI only). aarch64-linux is cross-compiled and can't carry the
-          # target's webkit libs, so it ships the CLI only.
+          # `desktop` lists the Tauri bundle formats for that target. This repo
+          # is desktop-only — the CLI/TUI moved to github.com/mateocerquetella/agentum-tui,
+          # so every target here builds a desktop bundle. (The CLI-only
+          # aarch64-linux cross target was removed with the CLI.)
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
             cross: false
             desktop: deb,rpm
-          - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-22.04
-            cross: true
           # macOS MUST build `app` alongside `dmg`: the Tauri auto-updater
           # artifact (the signed `*.app.tar.gz` + `.sig`) is emitted by the `app`
           # bundler, NOT `dmg`. With `dmg` alone the installer shipped but no
@@ -76,10 +73,12 @@ jobs:
       # Desktop targets build the Tauri UI (crates/agentum-desktop/ui), which is
       # embedded into the binary via generate_context!. The old standalone
       # dashboard/ was removed in the thin-shell refactor (v0.10.11), so the
-      # daemon/CLI no longer embeds web assets and CLI-only targets need no JS
-      # toolchain. cargo tauri build runs the UI's `bun run build` via
-      # beforeBuildCommand (cwd = the frontendDist parent, i.e. ui/), but the
-      # deps must be installed first — hence the explicit `bun install`.
+      # daemon no longer embeds web assets. (Every target in this repo is a
+      # desktop target now — the CLI/TUI moved to its own repo,
+      # github.com/mateocerquetella/agentum-tui.) cargo tauri build runs the
+      # UI's `bun run build` via beforeBuildCommand (cwd = the frontendDist
+      # parent, i.e. ui/), but the deps must be installed first — hence the
+      # explicit `bun install`.
       - uses: oven-sh/setup-bun@v2
         if: ${{ matrix.desktop != '' }}
         with:
@@ -110,7 +109,7 @@ jobs:
       # Windows build deps: MSVC (puts cl.exe on PATH) + nasm for ring/aws-lc
       # assembly, and override the repo .cargo/config CC=/usr/bin/gcc pin (a
       # unix-only local-dev workaround) so cc-rs uses MSVC. Must run BEFORE the
-      # cargo build steps below.
+      # `cargo tauri build` step below.
       - name: Set up MSVC (Windows)
         if: ${{ contains(matrix.target, 'windows') }}
         uses: ilammy/msvc-dev-cmd@v1
@@ -124,18 +123,6 @@ jobs:
         if: ${{ contains(matrix.target, 'windows') }}
         shell: bash
         run: echo "CC=cl" >> "$GITHUB_ENV"
-
-      - name: Install cross
-        if: matrix.cross
-        run: cargo install --locked cross
-
-      - name: Build (native)
-        if: ${{ !matrix.cross }}
-        run: cargo build --release --target ${{ matrix.target }} -p agentum-tui
-
-      - name: Build (cross)
-        if: matrix.cross
-        run: cross build --release --target ${{ matrix.target }} -p agentum-tui
 
       # --- Desktop installers (Tauri 2) -------------------------------------
       # cargo tauri build produces native installers (.dmg on macOS, .deb +
@@ -246,16 +233,9 @@ jobs:
           esac
           VER="${GITHUB_REF_NAME#v}"   # v0.14.4 -> 0.14.4 on a tag; the branch on dispatch
           STEM="agentum-${VER}-${OSARCH}"
-
-          # CLI tarball.
-          OUT="dist/${STEM}"
-          mkdir -p "$OUT"
-          # The CLI binary is `agentum` on unix, `agentum.exe` on Windows.
-          BIN="target/${{ matrix.target }}/release/${BIN_NAME}"
-          [ -f "$BIN" ] || BIN="${BIN}.exe"
-          cp "$BIN" "$OUT/"
-          cp LICENSE README.md CHANGELOG.md "$OUT/"
-          ( cd dist && tar -czf "${STEM}.tar.gz" "${STEM}" )
+          # Staging dir for all desktop assets (previously created by the CLI
+          # tarball step, which is gone now that the CLI lives in its own repo).
+          mkdir -p dist
 
           # Desktop installers → agentum-<ver>-<os>-<arch>.<ext> (the NSIS
           # installer keeps a -setup suffix). Clean + versioned, no triple.

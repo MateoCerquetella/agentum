@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/agentum-tui",
     "crates/agentum-desktop",
     "crates/agentum-server",
     "crates/agentum-tmux",
@@ -12,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.20.3"
+version = "0.20.4"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"

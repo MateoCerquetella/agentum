@@ -262,6 +262,10 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::board_goals::router())
         .merge(routes::board_links::router())
         .merge(routes::board_rules::router())
+        // 016a: server-side board←GitHub pull + durable tracker bindings. Adds
+        // `/api/board/bindings*` only; #58's `POST /api/board/sync` stays in
+        // `board::router()` above, untouched.
+        .merge(routes::board_sync::router())
         .merge(routes::notes::router())
         .merge(routes::preferences::router())
         .merge(routes::preflight::router())

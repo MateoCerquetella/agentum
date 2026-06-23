@@ -56,6 +56,8 @@ Two ways to run it — pick one or use both. On the same machine they boot `agen
 
 Native **Tauri 2** (no Electron), with in-app auto-update. arm64 + x86_64.
 
+> **The CLI/TUI (`agentum terminal`) now lives in a separate repo:** [`github.com/mateocerquetella/agentum-tui`](https://github.com/mateocerquetella/agentum-tui). This repo is the **desktop app** plus the shared backend crates. CLI install/run commands below point at that repo.
+
 ```sh
 # macOS — Homebrew (recommended; warning-free even though not yet notarized)
 brew install --cask mateocerquetella/tap/agentum
@@ -71,14 +73,11 @@ All native installers live on the [latest release](https://github.com/mateocerqu
 
 ### Terminal UI / CLI
 
-One static binary that boots its own server in-process — no daemon to start.
+The CLI/TUI now lives in its own repo, [`agentum-tui`](https://github.com/mateocerquetella/agentum-tui) — one static binary that boots its own server in-process (no daemon to start).
 
 ```sh
-# Install script (prompts for LAN exposure + autostart only)
-curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh | sh
-
-# …or from source
-cargo install --git https://github.com/mateocerquetella/agentum agentum-tui
+# from source (installs the `agentum` command) — from the CLI repo:
+cargo install --git https://github.com/mateocerquetella/agentum-tui agentum-tui
 ```
 
 Then:
@@ -127,15 +126,39 @@ The daemon is **API-only** — no web UI. Both clients connect over HTTP/WS; the
               tmux server + SQLite (WAL) on the host
 ```
 
-Deep dives live in [`docs/`](docs/): [Architecture](docs/ARCHITECTURE.md) · [HTTP API](docs/API.md) · [CLI](docs/CLI.md) · [Data model](docs/DATA-MODEL.md) · [Design system](docs/DESIGN-SYSTEM.md).
+Deep dives live in [`docs/`](docs/): [Architecture](docs/ARCHITECTURE.md) · [HTTP API](docs/API.md) · [CLI](docs/CLI.md) · [Data model](docs/DATA-MODEL.md) · [Design system](docs/DESIGN-SYSTEM.md). Desktop is fully native — no Electron bridge, no Node.js; the React UI calls Tauri `invoke`/`listen` directly via a typed client.
+
+## Repository layout
+
+```
+crates/
+  agentum-desktop/   # desktop app: Tauri 2 Rust shell in src/ (embeds agentum-server in-process)
+                      #   + React/Vite UI in ui/ (native, no Electron bridge)
+  agentum-server/    # axum HTTP(S) + WS API (API-only; no embedded web UI)
+  agentum-tmux/      # tokio process adapter for tmux
+  agentum-watchdog/  # per-session pane monitor + event emitter
+  agentum-executor/  # ToolAdapter trait + Claude/Codex/Gemini/Hermes/Opencode adapters
+  agentum-store/     # sqlx + SQLite (WAL) + XDG paths + migrations
+  agentum-core/      # shared domain types
+docs/                # architecture, data model, API, CLI reference
+
+# The CLI/TUI (binary `agentum`, package agentum-tui; the TUI in
+# commands/terminal/) moved to its own repo:
+#   github.com/mateocerquetella/agentum-tui
+```
 
 ## Development
 
 ```sh
-cargo run -p agentum-tui -- terminal              # TUI dev loop (embedded server)
-npm --prefix crates/agentum-desktop/ui run dev    # desktop UI (Vite HMR)
-cargo run -p agentum-desktop                      # desktop app (shell + embedded server)
+# Desktop UI dev loop (Vite HMR)
+npm --prefix crates/agentum-desktop/ui run dev
+# Desktop app (Tauri shell + embedded server)
+cargo run -p agentum-desktop
 
+# TUI dev loop (`cargo run -p agentum-tui -- terminal`) lives in the
+# separate CLI repo: github.com/mateocerquetella/agentum-tui
+
+# Lint + test
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --workspace --lib
