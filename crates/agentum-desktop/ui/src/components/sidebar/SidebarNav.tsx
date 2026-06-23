@@ -1,9 +1,6 @@
 import React from 'react'
 import {
   Columns3,
-  Github,
-  Gitlab,
-  List,
   MessagesSquare,
   Radar,
   Search,
@@ -15,7 +12,6 @@ import { cn } from '@/lib/utils'
 import { isGitRepoKind } from '../../../../shared/repo-kind'
 import type { GlobalSettings } from '../../../../shared/types'
 import { getTaskPresetQuery, PER_REPO_FETCH_LIMIT } from '@/lib/new-workspace'
-import { LinearIcon } from '@/components/icons/LinearIcon'
 import {
   normalizeVisibleTaskProviders,
   restoreAvailableDefaultTaskProvider,
@@ -219,73 +215,27 @@ const SidebarNav = React.memo(function SidebarNav() {
           onPointerEnter={handlePrefetch}
           onFocus={handlePrefetch}
           disabled={!canBrowseTasks}
-          aria-current={tasksActive ? 'page' : undefined}
+          aria-current={tasksActive || boardActive ? 'page' : undefined}
           className={cn(
             'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight transition-colors',
-            tasksActive
+            tasksActive || boardActive
               ? 'bg-sidebar-accent text-sidebar-accent-foreground'
               : 'text-sidebar-foreground/60 hover:bg-sidebar-foreground/8',
             !canBrowseTasks && 'cursor-not-allowed opacity-50 hover:bg-transparent'
           )}
         >
-          <List
-            className={cn('size-4 shrink-0', !tasksActive && 'text-sidebar-foreground/30')}
-            strokeWidth={tasksActive ? 2.25 : 1.75}
+          {/* One unified Board (#48): GitHub/Linear issues + Chat goals/cards all
+              render as cards here, so the per-provider shortcuts are gone — the
+              board shows every source. Reached as 'tasks' (this button, keeping the
+              existing full-page nav plumbing) or 'board' (Chat's "Open in Board"). */}
+          <Columns3
+            className={cn(
+              'size-4 shrink-0',
+              !(tasksActive || boardActive) && 'text-sidebar-foreground/30'
+            )}
+            strokeWidth={tasksActive || boardActive ? 2.25 : 1.75}
           />
-          <span className="flex-1">Tasks</span>
-          <span className="flex items-center gap-1">
-            {visibleTaskProviders.includes('github') ? (
-              <span
-                role="button"
-                tabIndex={-1}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  if (!canBrowseTasks) {
-                    return
-                  }
-                  openTaskPage({ taskSource: 'github' })
-                }}
-                className="rounded p-0.5 text-muted-foreground/70 transition-colors hover:text-foreground"
-                aria-label="Open GitHub tasks"
-              >
-                <Github className="size-3.5" aria-hidden />
-              </span>
-            ) : null}
-            {visibleTaskProviders.includes('gitlab') ? (
-              <span
-                role="button"
-                tabIndex={-1}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  if (!canBrowseTasks) {
-                    return
-                  }
-                  openTaskPage({ taskSource: 'gitlab' })
-                }}
-                className="rounded p-0.5 text-muted-foreground/70 transition-colors hover:text-foreground"
-                aria-label="Open GitLab tasks"
-              >
-                <Gitlab className="size-3.5" aria-hidden />
-              </span>
-            ) : null}
-            {visibleTaskProviders.includes('linear') ? (
-              <span
-                role="button"
-                tabIndex={-1}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  if (!canBrowseTasks) {
-                    return
-                  }
-                  openTaskPage({ taskSource: 'linear' })
-                }}
-                className="rounded p-0.5 text-muted-foreground/70 transition-colors hover:text-foreground"
-                aria-label="Open Linear tasks"
-              >
-                <LinearIcon className="size-3.5" />
-              </span>
-            ) : null}
-          </span>
+          <span className="flex-1">Board</span>
         </button>
       ) : null}
       <button

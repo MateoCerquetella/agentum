@@ -7,18 +7,23 @@
 // the planner's child cards both render here; GitHub/Linear issues flow in as
 // ordinary board items too. Starting/moving a card is wired in a later step.
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Columns3, ExternalLink, Loader2, Play, RefreshCw } from 'lucide-react'
+import { Columns3, DownloadCloud, ExternalLink, Loader2, Play, RefreshCw } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { api } from '@/tauri'
+import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
 import { DrillInHeader } from '@/components/nav/DrillInHeader'
 import {
   type BoardItem,
   type GroupedBoard,
+  type SyncIssueInput,
   listBoard,
   openBoardEventStream,
-  startCard
+  startCard,
+  syncExternalIssues
 } from '@/runtime/board-client'
+import { isGitRepoKind } from '../../../../shared/repo-kind'
 import CardWorkspace from './CardWorkspace'
 
 /**
@@ -139,6 +144,13 @@ export default function BoardPage() {
   const [startingId, setStartingId] = useState<number | null>(null)
   // The card whose live agent workspace is open in the drill-in.
   const [workspace, setWorkspace] = useState<BoardItem | null>(null)
+  const [syncingIssues, setSyncingIssues] = useState(false)
+  // Issue importer (folded in from the old Tasks page, #48): pull GitHub/Linear
+  // issues onto the board as cards via the SAME store fetch actions the Tasks
+  // list used + the existing `/api/board/sync` endpoint.
+  const repos = useAppStore((s) => s.repos)
+  const fetchWorkItemsAcrossRepos = useAppStore((s) => s.fetchWorkItemsAcrossRepos)
+  const listLinearIssues = useAppStore((s) => s.listLinearIssues)
 
   const refresh = useCallback(async () => {
     try {
@@ -176,6 +188,71 @@ export default function BoardPage() {
   const onOpen = useCallback((item: BoardItem) => {
     if (item.session_id) setWorkspace(item)
   }, [])
+
+  // Pull GitHub issues (across known git repos) and the viewer's assigned Linear
+  // issues onto the board, idempotently (server upserts on external_url). Each
+  // provider is best-effort: an unconfigured/failing provider is skipped so the
+  // other still syncs. Mirrors the old Tasks page's mapping exactly.
+  const syncIssues = useCallback(async () => {
+    setSyncingIssues(true)
+    setError(null)
+    try {
+      const inputs: SyncIssueInput[] = []
+      try {
+        const gitRepos = repos
+          .filter((r) => isGitRepoKind(r))
+          .map((r) => ({ repoId: r.id, path: r.path }))
+        if (gitRepos.length > 0) {
+          const { items } = await fetchWorkItemsAcrossRepos(gitRepos, 50, 200, '')
+          for (const it of items) {
+            if (it.type !== 'issue') continue // PRs aren't board tickets
+            inputs.push({
+              external_url: it.url,
+              external_provider: 'github',
+              title: it.title,
+              status: it.state === 'closed' ? 'done' : 'todo',
+              lbl: 'github'
+            })
+          }
+        }
+      } catch {
+        // GitHub not configured / fetch failed — skip and still try Linear.
+      }
+      try {
+        const issues = await listLinearIssues('assigned', 50)
+        for (const it of issues) {
+          inputs.push({
+            external_url: it.url,
+            external_provider: 'linear',
+            title: it.title,
+            body: it.description,
+            status:
+              it.state.type === 'completed' || it.state.type === 'canceled'
+                ? 'done'
+                : it.state.type === 'started'
+                  ? 'doing'
+                  : 'todo',
+            lbl: 'linear'
+          })
+        }
+      } catch {
+        // Linear not connected — skip.
+      }
+      if (inputs.length === 0) {
+        toast.info('No GitHub/Linear issues found to sync. Connect a provider in Settings.')
+        return
+      }
+      const { synced } = await syncExternalIssues(inputs)
+      toast.success(`Synced ${synced.length} issue${synced.length === 1 ? '' : 's'} to the board.`)
+      await refresh()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setError(msg)
+      toast.error(`Sync failed: ${msg}`)
+    } finally {
+      setSyncingIssues(false)
+    }
+  }, [repos, fetchWorkItemsAcrossRepos, listLinearIssues, refresh])
 
   if (workspace) {
     return (
@@ -239,15 +316,32 @@ export default function BoardPage() {
         title="Board"
         description="Your Kanban of agent tickets — Backlog → Building → Review → Done"
         actions={
-          <button
-            type="button"
-            onClick={() => void refresh()}
-            aria-label="Refresh"
-            className="flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-foreground/60 hover:bg-foreground/8"
-          >
-            <RefreshCw className="size-3.5" />
-            Refresh
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => void syncIssues()}
+              disabled={syncingIssues}
+              aria-label="Sync issues from GitHub and Linear"
+              title="Pull GitHub & Linear issues onto the board"
+              className="flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-foreground/60 hover:bg-foreground/8 disabled:opacity-50"
+            >
+              {syncingIssues ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <DownloadCloud className="size-3.5" />
+              )}
+              {syncingIssues ? 'Syncing…' : 'Sync issues'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void refresh()}
+              aria-label="Refresh"
+              className="flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-foreground/60 hover:bg-foreground/8"
+            >
+              <RefreshCw className="size-3.5" />
+              Refresh
+            </button>
+          </div>
         }
       />
 

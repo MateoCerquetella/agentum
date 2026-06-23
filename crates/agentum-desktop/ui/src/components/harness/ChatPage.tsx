@@ -62,7 +62,9 @@ function statusColor(status: string): { dot: string; text: string } {
 function goalRollup(children: BoardItem[]): { dot: string; subtitle: string } {
   if (children.length === 0) return { dot: 'bg-muted-foreground/40', subtitle: 'planning…' }
   const done = children.filter((c) => c.status === 'done').length
-  const building = children.some((c) => c.status === 'doing')
+  // `review` (an agent finished, awaiting verification) still counts as in
+  // progress for the rollup — the goal isn't drafted-only nor fully done.
+  const building = children.some((c) => c.status === 'doing' || c.status === 'review')
   if (done === children.length) return { dot: 'bg-emerald-500', subtitle: `${children.length} cards · done` }
   if (building) return { dot: 'bg-amber-500', subtitle: `${done}/${children.length} cards · building` }
   return { dot: 'bg-muted-foreground/40', subtitle: `${children.length} cards · drafted` }

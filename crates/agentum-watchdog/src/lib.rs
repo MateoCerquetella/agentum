@@ -836,6 +836,10 @@ pub(crate) fn status_rank(s: &str) -> i32 {
     match s {
         "todo" => 0,
         "doing" => 1,
+        // `review` ranks with `doing` for goal rollup — a child awaiting
+        // verification keeps the goal in-progress, not done (mirrors the
+        // `max_child_status_rank` SQL CASE).
+        "review" => 1,
         "done" => 2,
         _ => -1,
     }
@@ -896,7 +900,7 @@ pub async fn run_session_comment_bridge(
             _ => continue,
         };
 
-        if let Err(e) = handle_session_event(&store, &ev, kind, &mut last_kind).await {
+        if let Err(e) = handle_session_event(&store, &bus, &ev, kind, &mut last_kind).await {
             tracing::warn!(
                 error = ?e, kind = %ev.kind,
                 "session_comment_bridge: handle failed"
@@ -911,6 +915,7 @@ pub async fn run_session_comment_bridge(
 /// the `[system]` comment.
 async fn handle_session_event(
     store: &Store,
+    bus: &broadcast::Sender<Event>,
     ev: &Event,
     kind: &'static str,
     last_kind: &mut std::collections::HashMap<Uuid, &'static str>,
@@ -975,6 +980,33 @@ async fn handle_session_event(
         )
         .await?;
 
+    // Auto-advance the card's column to track the agent lifecycle — the user-
+    // facing "update each task as it progresses" behaviour. A card an agent is
+    // actively building sits in `doing`; when the agent finishes its turn the
+    // work is ready for a human/verify pass, so move it to `review`. We do NOT
+    // move on `awaiting_input` (the agent is mid-task, paused for input — still
+    // Building) or `crashed` (left in place, with the system comment above), and
+    // we only ever transition OUT of `doing`, so a manual move (straight to
+    // `done`, or back to `todo`) is never clobbered. Emitting `board.updated`
+    // with `parent_goal_id` both refreshes the board UI (it's a board-relevant
+    // kind) and lets the goal-status reconciler roll the change up to the goal.
+    if kind == "finished" && card.status == "doing" {
+        let updated = store
+            .patch_board_item(
+                card_id,
+                agentum_core::BoardPatch {
+                    status: Some("review".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let _ = bus.send(Event::new("board.updated").with_payload(serde_json::json!({
+            "id": updated.id,
+            "status": updated.status,
+            "parent_goal_id": updated.parent_goal_id,
+        })));
+    }
+
     Ok(())
 }
 
@@ -1012,6 +1044,9 @@ mod tests {
     fn status_rank_orders_todo_doing_done() {
         assert_eq!(status_rank("todo"), 0);
         assert_eq!(status_rank("doing"), 1);
+        // `review` ranks with `doing` so a goal stays in-progress (not done)
+        // while a child awaits verification.
+        assert_eq!(status_rank("review"), 1);
         assert_eq!(status_rank("done"), 2);
         assert_eq!(status_rank("unknown_future_status"), -1);
         assert_eq!(status_rank(""), -1);
@@ -1916,6 +1951,59 @@ mod tests {
             1,
             "back-to-back identical events must produce only one comment"
         );
+    }
+
+    #[tokio::test]
+    async fn bridge_advances_doing_card_to_review_on_finish() {
+        // The user-facing "update each task as it progresses" behaviour: a card
+        // an agent is actively building (`doing`) advances to `review` when the
+        // agent finishes its turn — but NOT on awaiting_input (still building),
+        // and only ever out of `doing`.
+        let store = tmp_store_for_reconciler().await;
+        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
+
+        // A started card sits in `doing`, bound to its agent session.
+        let card = make_non_goal_card(&store).await;
+        store
+            .patch_board_item(
+                card.id,
+                agentum_core::BoardPatch {
+                    status: Some("doing".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let sess = make_bound_session(&store, card.id).await;
+
+        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
+        tokio::task::yield_now().await;
+
+        // awaiting_input is mid-task → the card must stay in `doing`.
+        let _ = bus.send(
+            agentum_core::Event::new("agent.awaiting_input")
+                .with_session(sess.id, sess.name.clone()),
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        assert_eq!(
+            store.get_board_item(card.id).await.unwrap().unwrap().status,
+            "doing",
+            "awaiting_input must not advance the card out of Building"
+        );
+
+        // finished → the card advances `doing` → `review`.
+        let _ = bus.send(
+            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        loop {
+            let st = store.get_board_item(card.id).await.unwrap().unwrap().status;
+            if st == "review" || std::time::Instant::now() > deadline {
+                assert_eq!(st, "review", "agent.finished must advance doing → review");
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
     }
 
     #[tokio::test]

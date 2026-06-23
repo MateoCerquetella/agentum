@@ -1457,10 +1457,17 @@ impl Store {
         // Use Option<i64> in the tuple to distinguish "no children" (NULL)
         // from "all children are todo" (0).
         let row: (Option<i64>,) = sqlx::query_as(
+            // `review` ranks with `doing` (1): from the GOAL's perspective a child
+            // awaiting verification is still in-progress — the goal is only `done`
+            // once every child is `done` (2). Without this arm `review` hit ELSE→0
+            // and a goal whose children were all in review wrongly rolled back to
+            // `todo`. Ranking it 1 (not a new top rank) keeps `done`=2 and the
+            // reconciler's rank→status map unchanged.
             "SELECT MAX(CASE status
-                          WHEN 'todo'  THEN 0
-                          WHEN 'doing' THEN 1
-                          WHEN 'done'  THEN 2
+                          WHEN 'todo'   THEN 0
+                          WHEN 'doing'  THEN 1
+                          WHEN 'review' THEN 1
+                          WHEN 'done'   THEN 2
                           ELSE 0
                         END)
              FROM board_items WHERE parent_goal_id = ?",
