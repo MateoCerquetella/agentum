@@ -742,16 +742,14 @@ export default function BrowserPane({
     browserPages.find((page) => page.id === browserTab.activePageId) ?? browserPages[0] ?? null
   const updateBrowserPageState = useAppStore((s) => s.updateBrowserPageState)
   const setBrowserPageUrl = useAppStore((s) => s.setBrowserPageUrl)
-  // Why: when the in-pane CDP screencast is enabled (009c-3) AND this page is
-  // marked agent-driven (a remote handle was registered for it), render the live
-  // CDP screencast of the SAME browser the agent drives instead of a local
-  // WKWebView. Default-off + handle-gated, so ordinary browsing is unaffected
-  // and a regular page never gets hijacked into the screencast surface.
+  // Why: when the in-pane CDP screencast is enabled, render EVERY browser tab as
+  // a live Chromium screencast — one engine on macOS/Windows/Linux, painted into
+  // the DOM — instead of the per-OS native WKWebView/WebView2. The native pane
+  // renders BLACK on macOS (a child-webview compositing bug), which the DOM
+  // screencast sidesteps entirely. The pane attaches to the shared local CDP
+  // browser (launched on demand); an agent-driven page drives the SAME instance.
   const screencastEnabled = useAppStore((s) => s.settings?.agentBrowserScreencast ?? false)
-  const remoteHandle = useAppStore((s) =>
-    activeBrowserPage ? s.remoteBrowserPageHandlesByPageId[activeBrowserPage.id] : undefined
-  )
-  const renderScreencast = screencastEnabled && !!remoteHandle
+  const renderScreencast = screencastEnabled
 
   if (!activeBrowserPage) {
     return <div className="flex h-full min-h-0 flex-1 bg-background" />

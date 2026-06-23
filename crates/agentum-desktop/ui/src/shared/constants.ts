@@ -293,9 +293,11 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     // Why: off by default — opt-in cosmetic joke feature. Leaving the default
     // false keeps the overlay unmounted for users who never enable it.
     experimentalPet: false,
-    // Why: off by default — opt-in while the in-pane CDP screencast stabilises.
-    // Replaces the old AGENTUM_BROWSER_VERIFY env gate (009c-3).
-    agentBrowserScreencast: false,
+    // Why: ON by default — the CDP-Chromium screencast is now the primary browser
+    // engine (one engine on macOS/Windows/Linux, DOM-painted), replacing the
+    // native WKWebView/WebView2 pane that renders black on macOS. Launched on
+    // demand from system Chrome (no download) or the Playwright build.
+    agentBrowserScreencast: true,
     experimentalActivity: false,
     experimentalActivityDefaultedOffForAllUsers: true,
     experimentalTerminalAttention: false,

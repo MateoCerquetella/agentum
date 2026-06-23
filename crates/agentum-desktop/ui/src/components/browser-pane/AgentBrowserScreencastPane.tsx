@@ -72,6 +72,10 @@ export default function AgentBrowserScreencastPane({
   const [frameUrl, setFrameUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [addressBar, setAddressBar] = useState(toDisplayUrl(page.url))
+  // Latest tab URL, read inside the open effect without making it a dep — which
+  // would needlessly tear down and re-open the stream on every navigation.
+  const pageUrlRef = useRef(page.url)
+  pageUrlRef.current = page.url
 
   // Send one browser.* interaction; a no-op while the stream is down.
   const sendInput = useCallback((method: string, params?: Record<string, unknown>): void => {
@@ -127,6 +131,13 @@ export default function AgentBrowserScreencastPane({
           return
         }
         subRef.current = sub
+        // v1 single shared CDP page: drive it to THIS tab's URL on attach (the
+        // page may sit on about:blank or a previous tab's URL). Subsequent in-tab
+        // navigation flows through the address bar's browser.goto.
+        const target = normalizeBrowserNavigationUrl(pageUrlRef.current)
+        if (target) {
+          sub.sendInput('browser.goto', { url: target })
+        }
       })
       .catch((e: unknown) => {
         if (!disposed) {
