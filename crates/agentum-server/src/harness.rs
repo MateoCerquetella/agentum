@@ -2744,7 +2744,11 @@ async fn await_repl_ready(state: &AppState, session: &agentum_core::Session) {
 /// multi-line prompt — the text lands in the input box (often collapsed to a
 /// "[Pasted text]" block) but never executes. The separate, delayed Enter is
 /// what actually runs the agent's turn.
-async fn inject_prompt(
+///
+/// `pub(crate)` so the board-goals planner/card spawns reuse the exact same
+/// robust delivery (they previously used a one-shot `send_keys(prompt, true)`
+/// that the REPL swallowed — the chat then sat at "Drafting cards…" forever).
+pub(crate) async fn inject_prompt(
     state: &AppState,
     session: &agentum_core::Session,
     prompt: &str,
