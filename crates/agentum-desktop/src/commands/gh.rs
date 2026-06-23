@@ -143,6 +143,17 @@ fn classify_gh_error(stderr: &str) -> GhError {
     GhError { kind, message }
 }
 
+// gh emits one branch name per line (we pass `--jq '.[].name'`); trim and drop
+// blank lines so a trailing newline or a paginated gap doesn't yield empty entries.
+fn parse_branch_names(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 fn label_names(item: &Value) -> Vec<String> {
     item.get("labels")
         .and_then(Value::as_array)
@@ -307,6 +318,109 @@ pub async fn gh_repo_slug(repo_path: String, repo_id: Option<String>) -> Option<
     let remote = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let (owner, repo) = owner_repo_from_remote(&remote)?;
     Some(json!({ "owner": owner, "repo": repo }))
+}
+
+// List the repo's branches and current default branch via the authenticated `gh`
+// CLI, so the desktop can offer a "change default branch" picker. The default
+// branch is a GitHub-side concept (it governs the PR base and the clone HEAD), so
+// we read it from the API rather than from local refs — the picker must agree with
+// what GitHub will actually change. Returns { ok, branches, default } or, on any
+// failure (non-GitHub repo, gh missing/unauthed, network), { ok:false, error } so
+// the caller can surface one message. Assumes a local checkout (runs `git -C`
+// locally) — same limitation as the sibling gh_* commands; SSH-hosted repos fall
+// through to the not-a-GitHub-repo branch.
+#[tauri::command]
+pub async fn gh_repo_branches(repo_path: String) -> Value {
+    let Some((owner, repo)) = resolve_owner_repo(&repo_path).await else {
+        return json!({ "ok": false, "error": "Not a GitHub repository (no origin remote)." });
+    };
+    let slug = format!("{owner}/{repo}");
+
+    // Current default branch.
+    let default_out = tokio::process::Command::new("gh")
+        .args([
+            "repo",
+            "view",
+            &slug,
+            "--json",
+            "defaultBranchRef",
+            "--jq",
+            ".defaultBranchRef.name",
+        ])
+        .output()
+        .await;
+    let default_out = match default_out {
+        Ok(out) => out,
+        Err(e) => return json!({ "ok": false, "error": format!("Couldn't run gh: {e}") }),
+    };
+    if !default_out.status.success() {
+        return json!({
+            "ok": false,
+            "error": classify_gh_error(&String::from_utf8_lossy(&default_out.stderr)).message,
+        });
+    }
+    let default_branch = String::from_utf8_lossy(&default_out.stdout)
+        .trim()
+        .to_string();
+
+    // Full branch list (paginated; names only).
+    let list_out = tokio::process::Command::new("gh")
+        .args([
+            "api",
+            "--paginate",
+            &format!("repos/{slug}/branches"),
+            "--jq",
+            ".[].name",
+        ])
+        .output()
+        .await;
+    let list_out = match list_out {
+        Ok(out) => out,
+        Err(e) => return json!({ "ok": false, "error": format!("Couldn't run gh: {e}") }),
+    };
+    if !list_out.status.success() {
+        return json!({
+            "ok": false,
+            "error": classify_gh_error(&String::from_utf8_lossy(&list_out.stderr)).message,
+        });
+    }
+    let branches = parse_branch_names(&String::from_utf8_lossy(&list_out.stdout));
+
+    json!({ "ok": true, "branches": branches, "default": default_branch })
+}
+
+// Change the repo's GitHub default branch via the authenticated `gh` CLI. This is
+// an outward-facing change — it re-targets the base of every new PR and the branch
+// fresh clones check out — so the caller gates it behind an explicit confirm. `gh`
+// requires admin on the repo; a missing permission surfaces as a 403 that
+// classify_gh_error maps to a readable permission message. Returns { ok } or
+// { ok:false, error }.
+#[tauri::command]
+pub async fn gh_set_default_branch(repo_path: String, branch: String) -> Value {
+    let Some((owner, repo)) = resolve_owner_repo(&repo_path).await else {
+        return json!({ "ok": false, "error": "Not a GitHub repository (no origin remote)." });
+    };
+    let output = tokio::process::Command::new("gh")
+        .args([
+            "repo",
+            "edit",
+            &format!("{owner}/{repo}"),
+            "--default-branch",
+            &branch,
+        ])
+        .output()
+        .await;
+    let output = match output {
+        Ok(out) => out,
+        Err(e) => return json!({ "ok": false, "error": format!("Couldn't run gh: {e}") }),
+    };
+    if !output.status.success() {
+        return json!({
+            "ok": false,
+            "error": classify_gh_error(&String::from_utf8_lossy(&output.stderr)).message,
+        });
+    }
+    json!({ "ok": true })
 }
 
 #[tauri::command]
@@ -627,3 +741,68 @@ pub fn gh_resolve_review_thread() -> Value {
 
 #[tauri::command]
 pub fn gh_report_visible_pr_refresh_candidates() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_branch_names_trims_and_drops_blanks() {
+        // gh --jq '.[].name' yields one name per line + a trailing newline, and a
+        // paginated boundary can leave a blank line between pages.
+        let raw = "main\ndevelop\n\n  feature/x  \n";
+        assert_eq!(
+            parse_branch_names(raw),
+            vec![
+                "main".to_string(),
+                "develop".to_string(),
+                "feature/x".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_branch_names_empty_or_whitespace_is_empty() {
+        assert!(parse_branch_names("").is_empty());
+        assert!(parse_branch_names("\n\n  \n").is_empty());
+    }
+
+    #[test]
+    fn owner_repo_from_remote_handles_https_ssh_and_suffixes() {
+        assert_eq!(
+            owner_repo_from_remote("https://github.com/Owner/Repo.git"),
+            Some(("Owner".to_string(), "Repo".to_string()))
+        );
+        // scp-like ssh remote
+        assert_eq!(
+            owner_repo_from_remote("git@github.com:Owner/Repo.git"),
+            Some(("Owner".to_string(), "Repo".to_string()))
+        );
+        // no .git suffix, trailing slash
+        assert_eq!(
+            owner_repo_from_remote("https://github.com/Owner/Repo/"),
+            Some(("Owner".to_string(), "Repo".to_string()))
+        );
+    }
+
+    #[test]
+    fn owner_repo_from_remote_rejects_too_short() {
+        assert_eq!(owner_repo_from_remote("justone"), None);
+        assert_eq!(owner_repo_from_remote(""), None);
+    }
+
+    #[test]
+    fn classify_gh_error_maps_403_to_permission_denied() {
+        // `gh repo edit` without admin returns a 403 — the set-default-branch path
+        // depends on this mapping to tell the user to check their permissions.
+        let err = classify_gh_error("HTTP 403: Must have admin access (gh)");
+        assert_eq!(err.kind, "permission_denied");
+        assert!(!err.message.is_empty());
+    }
+
+    #[test]
+    fn classify_gh_error_maps_unresolved_repo_to_not_found() {
+        let err = classify_gh_error("Could not resolve to a Repository with the name 'x/y'.");
+        assert_eq!(err.kind, "not_found");
+    }
+}

@@ -12,6 +12,7 @@ import {
   CircleX,
   Ellipsis,
   Eye,
+  GitBranch,
   Plus,
   Shapes,
   SlidersHorizontal,
@@ -32,6 +33,7 @@ import WorktreeCardAgents, {
 } from './WorktreeCardAgents'
 import { SshDisconnectedDialog } from './SshDisconnectedDialog'
 import { HostReadinessDialog } from './HostReadinessDialog'
+import { ChangeDefaultBranchDialog } from './ChangeDefaultBranchDialog'
 import { WorktreeActivityStatusIndicator } from './WorktreeActivityStatusIndicator'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -846,6 +848,8 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   // the viewport (not per-row) so a virtualized list renders only one menu.
   const [projectContextMenu, setProjectContextMenu] =
     useState<ProjectContextMenuTarget | null>(null)
+  // Repo whose GitHub default branch is being changed via the project menu; null = closed.
+  const [changeDefaultBranchRepo, setChangeDefaultBranchRepo] = useState<Repo | null>(null)
   // Timestamp of the last right-click open, used to swallow the macOS ctrl-click
   // follow-up `click` so opening the menu does not also toggle the project row.
   const projectHeaderContextOpenedAtRef = useRef<number | null>(null)
@@ -2535,6 +2539,12 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
           {getWorktreeVisibilityMenuLabel(repo)}
         </DropdownMenuItem>
       ) : null}
+      {isGitRepoKind(repo) ? (
+        <DropdownMenuItem onSelect={() => setChangeDefaultBranchRepo(repo)}>
+          <GitBranch className="size-3.5" />
+          Change default branch…
+        </DropdownMenuItem>
+      ) : null}
       <DropdownMenuSeparator />
       <DropdownMenuItem variant="destructive" onSelect={() => handleRemoveProject(repo)}>
         <Trash2 className="size-3.5" />
@@ -2578,6 +2588,10 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
         <TmuxSessionsModal
           host={tmuxModalHost}
           onClose={() => setTmuxModalHost(null)}
+        />
+        <ChangeDefaultBranchDialog
+          repo={changeDefaultBranchRepo}
+          onClose={() => setChangeDefaultBranchRepo(null)}
         />
         {activeLineageChildConnectionId && activeLineageChildSshStatus ? (
           <SshDisconnectedDialog
