@@ -52,7 +52,7 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-enum ForgeKind {
+pub(crate) enum ForgeKind {
     Github,
     Gitlab,
 }
@@ -69,14 +69,14 @@ impl ForgeKind {
 /// A parsed `origin` remote: which forge, its REST base URL, the project
 /// identifier (`owner/repo`), and the host (for self-hosted instances).
 #[derive(Debug, Clone)]
-struct Remote {
+pub(crate) struct Remote {
     kind: ForgeKind,
     /// REST API base, no trailing slash. github.com → `https://api.github.com`;
     /// GHE → `https://HOST/api/v3`; GitLab (cloud or self-hosted) →
     /// `https://HOST/api/v4`.
-    api_base: String,
+    pub(crate) api_base: String,
     /// `owner/repo` (GitHub) or full project path incl. nested groups (GitLab).
-    project: String,
+    pub(crate) project: String,
 }
 
 /// Normalize a git remote URL to `(host, owner/repo)`.
@@ -116,7 +116,7 @@ fn parse_remote_url(url: &str) -> Option<(String, String)> {
     Some((host, project))
 }
 
-fn classify_remote(host: &str, project: String) -> Option<Remote> {
+pub(crate) fn classify_remote(host: &str, project: String) -> Option<Remote> {
     let h = host.to_ascii_lowercase();
     if h == "github.com" || h == "www.github.com" {
         Some(Remote {
@@ -221,7 +221,7 @@ fn write_tokens(tokens: &BTreeMap<String, String>) -> std::io::Result<()> {
     Ok(())
 }
 
-fn token_for(kind: ForgeKind) -> Result<String, ApiError> {
+pub(crate) fn token_for(kind: ForgeKind) -> Result<String, ApiError> {
     read_tokens()
         .get(kind.as_str())
         .filter(|t| !t.trim().is_empty())
@@ -233,7 +233,7 @@ fn token_for(kind: ForgeKind) -> Result<String, ApiError> {
 
 /// One reqwest GET to the forge, returning parsed JSON. Adds the right auth
 /// header per forge and a `User-Agent` (GitHub rejects requests without one).
-async fn forge_get(remote: &Remote, token: &str, url: &str) -> Result<Value, ApiError> {
+pub(crate) async fn forge_get(remote: &Remote, token: &str, url: &str) -> Result<Value, ApiError> {
     let client = reqwest::Client::new();
     let mut req = client.get(url).header("User-Agent", "agentum");
     req = match remote.kind {

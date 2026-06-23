@@ -1167,6 +1167,8 @@ mod tests {
             parent_goal_id: None,
             external_url: None,
             external_provider: None,
+            external_id: None,
+            external_synced_at: None,
         }
     }
 
