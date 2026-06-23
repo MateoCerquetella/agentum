@@ -4,6 +4,44 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.2] — 2026-06-22
+
+### Fixed
+- **Chat goal submit 400'd and left orphaned "planning…" chats.**
+  `POST /api/board/goals` created the goal row *before* loading the planner
+  config, so a bad `planner.toml` (e.g. a leaked `prompt_file = "../etc/passwd"`
+  test fixture) returned 400 yet still orphaned a stuck goal each submit.
+  `create_goal` now loads + validates the planner config first — a config error
+  returns 400 with no orphan.
+
+### Added
+- **Delete a chat from the Chat sidebar.** A hover-trash removes a goal/chat and
+  its drafted cards (children-first, with confirm) via the existing
+  `DELETE /api/board/{id}`.
+- **Per-goal account picker in Chat (#48).** The agent picker remembers the last
+  tool and adds a managed Claude/Codex account selector. It defaults to the
+  active account (no-op); choosing another swaps the global login before the
+  planner spawns, with a warning — on macOS Claude reads one global Keychain, so
+  there is no per-process credential isolation.
+
+### Internal
+- The `planner`/`board_goals`/`profiles` test harnesses now assert
+  `config_dir()` resolves under the temp dir, so a fixture can no longer leak
+  into the real config dir (the root cause of the `../etc/passwd` `planner.toml`).
+
+## [0.20.1] — 2026-06-22
+
+### Fixed
+- **Worktree Claude sessions crashed with `Error: Session ID <X> is already in
+  use`.** `transcript::project_dir_for` encoded the workdir by replacing only
+  `/` with `-`, but Claude Code replaces every non-alphanumeric char
+  (`[^a-zA-Z0-9]` → `-`). Worktrees live under `.claude-worktrees/`, so the `.`
+  made agentum look in the wrong (empty) transcript dir — every restart was
+  treated as a first launch, re-issued `--session-id` for an already-claimed
+  id, and Claude refused to start. The same mis-encoding left the
+  Plan/Todos/Tasks panel empty for worktree sessions. Now matches Claude's
+  encoding so a restart resolves the real transcript and resumes it (#67).
+
 ## [0.20.0] — 2026-06-22
 
 ### Added
