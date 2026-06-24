@@ -288,7 +288,9 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                 (trusted input; a stale ref returns error `stale_ref`); \
                 snapshot/screenshot take optional width+height (+ mobile, \
                 deviceScaleFactor) to render at a breakpoint for responsive \
-                testing, and screenshot takes full_page; \
+                testing, and screenshot takes full_page; get_console \
+                (min_level?, since_generation?) returns buffered console \
+                messages + network failures (JS errors, 404s) for debugging; \
                 annotations — read the design-feedback annotations the user marked on \
                 page elements (returns structured markdown the agent can act on); \
                 grab (selector) — extract an element's metadata (tag, text, selector, \
@@ -302,7 +304,7 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|screenshot|annotations|grab|annotate" },
+                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|screenshot|get_console|annotations|grab|annotate" },
                     "url": { "type": "string", "description": "Target URL for `open`/`navigate`" },
                     "tab": { "type": "string", "description": "Tab id to act on (default: the active tab)" },
                     "selector": { "type": "string", "description": "CSS selector for `click`/`fill`/`grab`/`annotate`" },
@@ -316,7 +318,9 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                     "height": { "type": "integer", "description": "Viewport height (CSS px) for `snapshot`/`screenshot` — pair with `width`" },
                     "mobile": { "type": "boolean", "description": "Emulate a mobile device for the viewport override (default false)" },
                     "deviceScaleFactor": { "type": "number", "description": "Device pixel ratio for the viewport override (default 1)" },
-                    "full_page": { "type": "boolean", "description": "`screenshot`: capture the full scrollable page, not just the viewport" }
+                    "full_page": { "type": "boolean", "description": "`screenshot`: capture the full scrollable page, not just the viewport" },
+                    "min_level": { "type": "string", "description": "`get_console`: minimum level to return — info|warning|error (default warning)" },
+                    "since_generation": { "type": "integer", "description": "`get_console`: only entries since this snapshot generation (default 0 = all)" }
                 },
                 "required": ["op"],
                 "additionalProperties": true,
