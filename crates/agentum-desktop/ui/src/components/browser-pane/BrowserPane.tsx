@@ -750,6 +750,11 @@ export default function BrowserPane({
   // browser (launched on demand); an agent-driven page drives the SAME instance.
   const screencastEnabled = useAppStore((s) => s.settings?.agentBrowserScreencast ?? false)
   const renderScreencast = screencastEnabled
+  // The annotate picker sends to agents in this browser tab's worktree; resolve its
+  // active group so the picker's "new agent" launch lands in the right place.
+  const screencastGroupId = useAppStore((s) =>
+    activeBrowserPage ? s.activeGroupIdByWorktree[activeBrowserPage.worktreeId] : undefined
+  )
 
   if (!activeBrowserPage) {
     return <div className="flex h-full min-h-0 flex-1 bg-background" />
@@ -760,6 +765,8 @@ export default function BrowserPane({
       key={`screencast-${activeBrowserPage.id}`}
       page={activeBrowserPage}
       isActive={isActive}
+      worktreeId={activeBrowserPage.worktreeId}
+      groupId={screencastGroupId}
     />
   ) : (
     <NativeBrowserPagePane

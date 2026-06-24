@@ -9,7 +9,7 @@
 // straight to the embedded server — one transport for local AND host (the only
 // difference is the `cdpPort`, which for a host is the 009a `ssh -L` tunnel port
 // on `127.0.0.1`).
-import { getServerEndpoint, wsUrl } from './server-endpoint'
+import { apiUrl, getServerEndpoint, wsUrl } from './server-endpoint'
 
 export type CdpScreencastFormat = 'jpeg' | 'png'
 
@@ -207,5 +207,57 @@ export async function openCdpScreencast(
       ws = null
       sock?.close()
     }
+  }
+}
+
+/** An element clip in CSS-viewport px, as the server's `node_at_point` returns it. */
+export type CdpNodeClip = { x: number; y: number; width: number; height: number; scale: number }
+
+/** Result of {@link cdpNodeAtPoint}: the resolved element (clip + label, and — when
+ *  `capture` was set — a sharp PNG path + base64), or a miss (`no_node`/`no_box`). */
+export type CdpNodeAtPointResult =
+  | {
+      ok: true
+      label: string
+      clip: CdpNodeClip
+      /** Present only when called with `capture`. */
+      path?: string
+      image_b64?: string
+      image_width?: number
+      image_height?: number
+      bytes?: number
+    }
+  | { ok: false; code: string }
+
+/**
+ * Hit-test the shared CDP page at a viewport pixel `(x, y)` (CSS px, from
+ * {@link pointToDevice}) for the in-pane annotate picker. `capture` also returns a
+ * sharp element PNG (path + base64) for the comment-card thumbnail. Routes to the
+ * SAME persistent Chromium the screencast renders, so coordinates line up. Never
+ * throws — a transport/HTTP failure resolves to `{ ok:false, code }`.
+ */
+export async function cdpNodeAtPoint(
+  x: number,
+  y: number,
+  capture: boolean,
+  cdpPort?: number
+): Promise<CdpNodeAtPointResult> {
+  try {
+    const { token } = await getServerEndpoint()
+    const url = await apiUrl('/api/cdp-browser/node-at-point')
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(token ? { authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({ x, y, capture, ...(cdpPort != null ? { cdpPort } : {}) })
+    })
+    if (!res.ok) {
+      return { ok: false, code: `http_${res.status}` }
+    }
+    return (await res.json()) as CdpNodeAtPointResult
+  } catch {
+    return { ok: false, code: 'transport' }
   }
 }

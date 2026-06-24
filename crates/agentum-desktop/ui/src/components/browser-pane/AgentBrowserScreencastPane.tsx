@@ -30,6 +30,7 @@ import {
   getRemoteBrowserKeyboardShortcut
 } from './remote-browser-keyboard'
 import { normalizeBrowserNavigationUrl } from '../../../../shared/browser-url'
+import AgentBrowserPickerOverlay from './AgentBrowserPickerOverlay'
 
 /** Strip the `about:blank` placeholder so the address bar starts empty. */
 function toDisplayUrl(url: string): string {
@@ -42,6 +43,10 @@ type AgentBrowserScreencastPaneProps = {
   /** CDP port to attach to. Omit for the shared local browser (server default
    *  9300); set to the tunneled port for an SSH-host browser (009a). */
   cdpPort?: number
+  /** Worktree + group the annotate picker's Send menu targets (which agents are
+   *  eligible). Omit to hide the picker (no agent to send to). */
+  worktreeId?: string
+  groupId?: string
 }
 
 /** Map a client point onto the CDP device coordinate space the page expects.
@@ -72,11 +77,15 @@ function toDevicePoint(
 export default function AgentBrowserScreencastPane({
   page,
   isActive,
-  cdpPort
+  cdpPort,
+  worktreeId,
+  groupId
 }: AgentBrowserScreencastPaneProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const subRef = useRef<CdpScreencastSubscription | null>(null)
   const metadataRef = useRef<BrowserScreencastFrameMetadata | null>(null)
+  // Stable getter so the picker overlay's memoized handlers don't churn each render.
+  const getScreencastMetadata = useCallback(() => metadataRef.current, [])
   // Newest decoded-but-not-yet-painted frame; the rAF tick draws and frees it.
   const pendingBitmapRef = useRef<ImageBitmap | null>(null)
   const drawRafRef = useRef<number | null>(null)
@@ -462,6 +471,15 @@ export default function AgentBrowserScreencastPane({
               <div className="pointer-events-none absolute right-2 top-2 rounded bg-primary/80 px-2 py-0.5 text-[10px] font-medium text-primary-foreground">
                 You're controlling
               </div>
+            ) : null}
+            {hasFrame && worktreeId ? (
+              <AgentBrowserPickerOverlay
+                canvasRef={canvasRef}
+                getMetadata={getScreencastMetadata}
+                worktreeId={worktreeId}
+                groupId={groupId ?? worktreeId}
+                pageUrl={page.url}
+              />
             ) : null}
           </>
         )}
