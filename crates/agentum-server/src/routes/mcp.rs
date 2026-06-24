@@ -295,7 +295,9 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                 messages + network failures (JS errors, 404s) for debugging; \
                 new_context → an isolated (cookies/storage) context + a page \
                 `target` you pass to ops for per-task isolation, close_context \
-                (browser_context_id) disposes it; \
+                (browser_context_id) disposes it; connect_host (host) launches a \
+                headless Chromium on an SSH host over an ssh -L tunnel and returns \
+                a `cdpPort` to pass to subsequent ops (same contract as local); \
                 annotations — read the design-feedback annotations the user marked on \
                 page elements (returns structured markdown the agent can act on); \
                 grab (selector) — extract an element's metadata (tag, text, selector, \
@@ -309,7 +311,7 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|screenshot|get_console|wait|eval|new_context|close_context|reap_contexts|annotations|grab|annotate" },
+                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|screenshot|get_console|wait|eval|new_context|close_context|reap_contexts|connect_host|annotations|grab|annotate" },
                     "url": { "type": "string", "description": "Target URL for `open`/`navigate`" },
                     "tab": { "type": "string", "description": "Tab id to act on (default: the active tab)" },
                     "selector": { "type": "string", "description": "CSS selector for `click`/`fill`/`grab`/`annotate`" },
@@ -332,7 +334,9 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                     "timeout_ms": { "type": "integer", "description": "`wait`: max wait before returning timed_out=true (default 5000)" },
                     "expression": { "type": "string", "description": "`eval`: JS to run in the page (returns its value). Off by default — set AGENTUM_BROWSER_ALLOW_EVAL=1; every expression is logged" },
                     "target": { "type": "string", "description": "Route the op to a specific per-task context page (the `target` from `new_context`); omit for the shared active page" },
-                    "browser_context_id": { "type": "string", "description": "`close_context`: the context id from `new_context` to dispose" }
+                    "browser_context_id": { "type": "string", "description": "`close_context`: the context id from `new_context` to dispose" },
+                    "host": { "type": "string", "description": "`connect_host`: SSH host name/id to launch a headless Chromium on (over `ssh -L`); returns a `cdpPort`" },
+                    "cdpPort": { "type": "integer", "description": "Drive a browser already reachable at 127.0.0.1:<port> (e.g. the `cdpPort` from `connect_host`) instead of the local one" }
                 },
                 "required": ["op"],
                 "additionalProperties": true,
@@ -698,6 +702,11 @@ async fn tool_list_tasks(state: &AppState, args: &Value) -> anyhow::Result<Strin
 /// desktop bridge, which owns the tab lifecycle + annotation store.
 async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
     let op = args.get("op").and_then(Value::as_str).unwrap_or_default();
+    // F11: launch + tunnel a headless Chromium on an SSH host, returning the local
+    // `cdpPort` the agent then passes to the normal ops (contract identical to local).
+    if op == "connect_host" {
+        return tool_browser_connect_host(state, args).await;
+    }
     if crate::cdp_driver::handles_op(op) {
         let result = crate::cdp_driver::run_browser_op(op, args).await?;
         // screenshot → an MCP image content block (PNG) the agent can SEE, plus a
@@ -730,6 +739,35 @@ async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
 /// Wrap a string as a plain MCP text result.
 fn text_result(text: String) -> Value {
     json!({ "content": [{ "type": "text", "text": text }], "isError": false })
+}
+
+/// `connect_host`: resolve an SSH host (by name or id), ensure a headless Chromium
+/// is running on it + reachable via an `ssh -L` tunnel, and return the local
+/// `cdpPort` to pass to subsequent browser ops (F11 / criterion #5).
+async fn tool_browser_connect_host(state: &AppState, args: &Value) -> anyhow::Result<Value> {
+    let host_ref = args
+        .get("host")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("connect_host requires `host` (an SSH host name or id)"))?;
+    let hosts = state
+        .store
+        .list_hosts()
+        .await
+        .map_err(|e| anyhow::anyhow!("list hosts: {e}"))?;
+    let host = hosts
+        .into_iter()
+        .find(|h| h.name == host_ref || h.id.to_string() == host_ref)
+        .ok_or_else(|| anyhow::anyhow!("no SSH host named `{host_ref}` (see `agentum hosts`)"))?;
+    let port = crate::cdp_browser::ensure_remote_cdp_browser(&host).await?;
+    Ok(text_result(
+        json!({
+            "ok": true,
+            "host": host.name,
+            "cdpPort": port,
+            "hint": "pass this cdpPort to subsequent navigate/snapshot/click/etc. to drive the remote browser",
+        })
+        .to_string(),
+    ))
 }
 
 /// Forward a `{op, …}` payload to the desktop bridge (`computer`/`browser`).

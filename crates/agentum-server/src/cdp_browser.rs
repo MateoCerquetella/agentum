@@ -158,6 +158,99 @@ fn launch_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+// --- remote (SSH host) browser — F11 / criterion #5 --------------------------
+//
+// Headless Chromium runs ON the SSH host; the Mac reaches its loopback CDP port
+// through an `ssh -L` forward (`ssh_control_local_forward_cmd`) and drives it via
+// the existing `cdpPort` seam — so the agent contract is byte-identical to local
+// (spec §7). Composes the proven SSH primitives; the SSH round-trip needs a real
+// host with a Chromium binary, so it's construction-unit-tested here and the
+// drive-half is covered by the explicit-port path the local live test exercises.
+
+/// CDP port headless Chromium binds on the REMOTE host (loopback only — the
+/// `ssh -L` tunnel is the only way in). Distinct from the local browser's :9300.
+const REMOTE_CDP_PORT: u16 = 9222;
+
+/// Remote shell that launches headless Chromium in a detached tmux on the host
+/// (idempotent on the session name), resolving whichever Chromium binary exists.
+/// Mirrors [`build_chrome_argv`]'s flags. Pure → unit-tested without an SSH host.
+/// `$B`/`$HOME` expand in the host's shell before tmux sees the command.
+fn remote_chrome_launch_script(host_port: u16) -> String {
+    let flags = format!(
+        "--headless=new --hide-scrollbars --window-size=1280,800 \
+         --remote-debugging-address=127.0.0.1 --remote-debugging-port={host_port} \
+         --user-data-dir=$HOME/.agentum/cdp-browser --no-first-run \
+         --no-default-browser-check about:blank"
+    );
+    format!(
+        "mkdir -p \"$HOME/.agentum/cdp-browser\"; \
+         B=$(command -v chromium || command -v chromium-browser || \
+         command -v google-chrome || command -v google-chrome-stable || echo chromium); \
+         tmux has-session -t {CDP_TMUX_TARGET} 2>/dev/null || \
+         tmux new-session -d -s {CDP_TMUX_TARGET} \"$B {flags}\""
+    )
+}
+
+/// A free loopback TCP port for the Mac end of the `ssh -L` tunnel.
+fn free_local_port() -> Result<u16> {
+    let l = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .context("bind a free local port for the SSH tunnel")?;
+    Ok(l.local_addr()?.port())
+}
+
+/// Ensure headless Chromium is running on the SSH `host` and reachable locally via
+/// an `ssh -L` forward; returns the LOCAL port to drive through the `cdpPort` seam.
+pub async fn ensure_remote_cdp_browser(host: &agentum_core::Host) -> Result<u16> {
+    use agentum_tmux::ssh::{
+        ssh_control_local_cancel_cmd, ssh_control_local_forward_cmd, ssh_output,
+    };
+    let ssh_timeout = Duration::from_secs(20);
+
+    // Launch Chromium on the host (idempotent). `ssh_output` rides the interactive
+    // ControlMaster, warming it — which the `-L` forward below then attaches to.
+    let out = ssh_output(host, &remote_chrome_launch_script(REMOTE_CDP_PORT), ssh_timeout)
+        .await
+        .context("launch headless Chromium on the SSH host")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "remote Chromium launch failed on host `{}`: {}",
+            host.name,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+
+    // Forward a fresh local loopback port → the host's loopback CDP port.
+    let mac_port = free_local_port()?;
+    if let Some(mut cancel) = ssh_control_local_cancel_cmd(host, mac_port, REMOTE_CDP_PORT) {
+        let _ = cancel.output().await; // best-effort: clear a stale forward
+    }
+    let mut fwd = ssh_control_local_forward_cmd(host, mac_port, REMOTE_CDP_PORT).ok_or_else(|| {
+        anyhow::anyhow!(
+            "host `{}` is not an SSH host or has no warm ControlMaster",
+            host.name
+        )
+    })?;
+    let fwd_out = fwd.output().await.context("establish the ssh -L forward")?;
+    if !fwd_out.status.success() {
+        anyhow::bail!(
+            "ssh -L forward failed for host `{}`: {}",
+            host.name,
+            String::from_utf8_lossy(&fwd_out.stderr).trim()
+        );
+    }
+
+    // The tunneled local port should now reach the host's CDP within boot time.
+    if wait_until_listening(mac_port, Duration::from_secs(20)).await {
+        Ok(mac_port)
+    } else {
+        anyhow::bail!(
+            "remote Chromium on `{}` not reachable via the ssh -L tunnel on \
+             127.0.0.1:{mac_port} within 20s (is Chromium installed on the host?)",
+            host.name
+        )
+    }
+}
+
 /// Build the headless-Chromium argv. Split out so the flag shape is unit-testable
 /// without launching a browser.
 ///
@@ -438,6 +531,23 @@ mod tests {
         assert!(argv.iter().any(|a| a == "--no-first-run"));
         // argv[0] is the resolved executable.
         assert_eq!(argv[0], "/x/Chromium");
+    }
+
+    #[test]
+    fn remote_launch_script_is_idempotent_headless_and_binary_agnostic() {
+        let s = remote_chrome_launch_script(9222);
+        // Idempotent on the session name (don't double-launch), detached tmux.
+        assert!(s.contains(&format!("tmux has-session -t {CDP_TMUX_TARGET}")));
+        assert!(s.contains(&format!("tmux new-session -d -s {CDP_TMUX_TARGET}")));
+        // Same headless/loopback flags as local, on the requested host port.
+        assert!(s.contains("--headless=new"));
+        assert!(s.contains("--remote-debugging-address=127.0.0.1"));
+        assert!(s.contains("--remote-debugging-port=9222"));
+        // Resolves whichever Chromium the host has (no hard-coded binary).
+        assert!(s.contains("command -v chromium"));
+        assert!(s.contains("google-chrome"));
+        // No nested single-quotes (which don't nest in POSIX sh) — uses "$B …".
+        assert!(!s.contains("'"));
     }
 
     #[test]
