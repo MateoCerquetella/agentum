@@ -103,7 +103,8 @@ use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::tungstenite::Message;
 
 /// Screencast knobs passed straight to `Page.startScreencast`. `format=jpeg,
-/// quality=80` match the pane's subscribe params.
+/// quality=90` match the pane's subscribe params (90 keeps text glyph edges
+/// crisp; the canvas already captures at device DPR so this is the last lever).
 #[derive(Debug, Clone, Copy)]
 pub struct ScreencastOptions {
     pub format: FrameFormat,
@@ -123,7 +124,7 @@ impl Default for ScreencastOptions {
     fn default() -> Self {
         Self {
             format: FrameFormat::Jpeg,
-            quality: 80,
+            quality: 90,
             max_width: 3840,
             max_height: 2160,
             every_nth_frame: 1,

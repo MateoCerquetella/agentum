@@ -178,7 +178,11 @@ export default function AgentBrowserScreencastPane({
     setError(null)
 
     void openCdpScreencast(
-      { cdpPort, format: 'jpeg', quality: 80, everyNthFrame: 1 },
+      // quality 90 (not 80): the canvas already backs at full device resolution
+      // and downscales 1:1 on a 2× display, so JPEG ringing on text was the last
+      // softness left. 90 sharpens glyph edges for a small bandwidth cost; PNG
+      // would be lossless but 3-5× larger and slower to encode — not worth it.
+      { cdpPort, format: 'jpeg', quality: 90, everyNthFrame: 1 },
       {
         onBinary: (bytes) => {
           if (disposed) {
