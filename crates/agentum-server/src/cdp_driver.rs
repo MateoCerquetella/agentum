@@ -18,7 +18,7 @@
 //! (the 009a `ssh -L` tunnel) can be threaded later — but remote is **not**
 //! implemented or verified here. That is a deliberate seam, not a feature.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -54,6 +54,7 @@ pub fn handles_op(op: &str) -> bool {
             | "eval"
             | "new_context"
             | "close_context"
+            | "reap_contexts"
     )
 }
 
@@ -82,6 +83,7 @@ pub async fn run_browser_op(op: &str, args: &Value) -> Result<Value> {
         "eval" => cdp_eval(&base, args).await,
         "new_context" => cdp_new_context(&base).await,
         "close_context" => cdp_close_context(&base, args).await,
+        "reap_contexts" => cdp_reap_contexts(&base).await,
         other => anyhow::bail!("cdp_driver does not handle op `{other}`"),
     }
 }
@@ -439,6 +441,45 @@ async fn connect_page(base: &str, args: &Value) -> Result<CdpConn> {
     }
 }
 
+/// Tracks open browser-context ids so abandoned ones (a task that crashed before
+/// `close_context`) can be reaped — the persistent browser stays up, so contexts
+/// would otherwise leak (lifecycle reconciliation #6).
+fn open_contexts() -> &'static Mutex<HashSet<String>> {
+    static S: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Count of contexts currently tracked as open (observability / tests).
+fn open_context_count() -> usize {
+    open_contexts().lock().expect("contexts poisoned").len()
+}
+
+/// `reap_contexts`: dispose every tracked open context (crash-safety sweep — the
+/// process is persistent, so this is how per-task contexts are reclaimed). Returns
+/// how many were reaped.
+pub(crate) async fn cdp_reap_contexts(base: &str) -> Result<Value> {
+    let ids: Vec<String> = open_contexts()
+        .lock()
+        .expect("contexts poisoned")
+        .drain()
+        .collect();
+    if ids.is_empty() {
+        return Ok(json!({ "ok": true, "reaped": 0 }));
+    }
+    let mut conn = connect_browser(base).await?;
+    let mut reaped = 0u64;
+    for id in &ids {
+        if conn
+            .call("Target.disposeBrowserContext", json!({ "browserContextId": id }))
+            .await
+            .is_ok()
+        {
+            reaped += 1;
+        }
+    }
+    Ok(json!({ "ok": true, "reaped": reaped }))
+}
+
 /// `new_context`: create an isolated browser context (separate cookies/storage) +
 /// a blank page in it. Returns the page `target` to pass to ops and the
 /// `browser_context_id` to dispose with `close_context`. Reconciles isolation
@@ -464,6 +505,10 @@ pub(crate) async fn cdp_new_context(base: &str) -> Result<Value> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("createTarget returned no targetId"))?
         .to_string();
+    open_contexts()
+        .lock()
+        .expect("contexts poisoned")
+        .insert(browser_context_id.clone());
     Ok(json!({ "ok": true, "target": target, "browser_context_id": browser_context_id }))
 }
 
@@ -479,6 +524,10 @@ pub(crate) async fn cdp_close_context(base: &str, args: &Value) -> Result<Value>
         json!({ "browserContextId": browser_context_id }),
     )
     .await?;
+    open_contexts()
+        .lock()
+        .expect("contexts poisoned")
+        .remove(browser_context_id);
     Ok(json!({ "ok": true, "browser_context_id": browser_context_id }))
 }
 
@@ -1982,6 +2031,18 @@ screencast = { enabled = true, fps_cap = 10, quality = 60 }
         assert_eq!(v["error"], "human_has_control");
     }
 
+    #[test]
+    fn open_context_tracking_counts_inserts_and_removes() {
+        open_contexts().lock().unwrap().clear();
+        assert_eq!(open_context_count(), 0);
+        open_contexts().lock().unwrap().insert("ctx-1".to_string());
+        open_contexts().lock().unwrap().insert("ctx-2".to_string());
+        assert_eq!(open_context_count(), 2);
+        open_contexts().lock().unwrap().remove("ctx-1");
+        assert_eq!(open_context_count(), 1);
+        open_contexts().lock().unwrap().clear();
+    }
+
     // --- real-Chromium gate (manual) ----------------------------------------
 
     async fn http_version(base: &str) -> Option<Value> {
@@ -2518,6 +2579,20 @@ screencast = { enabled = true, fps_cap = 10, quality = 60 }
             Some(true),
             "agent resumes after the human releases: {resumed}"
         );
+
+        // F13 — abandoned contexts are reaped (the persistent process stays up, so
+        // per-task contexts must be reclaimable). F8 closed its two, so we start at 0.
+        assert_eq!(open_context_count(), 0, "F8 closed its contexts");
+        cdp_new_context(&base).await.expect("reap ctx 1");
+        cdp_new_context(&base).await.expect("reap ctx 2");
+        assert_eq!(open_context_count(), 2, "two contexts tracked open");
+        let reap = cdp_reap_contexts(&base).await.expect("reap");
+        assert_eq!(
+            reap.get("reaped").and_then(Value::as_u64),
+            Some(2),
+            "both contexts reaped: {reap}"
+        );
+        assert_eq!(open_context_count(), 0, "no contexts leak after reap");
 
         // cleanup — kill the detached browser + drop its temp profile.
         #[cfg(unix)]
