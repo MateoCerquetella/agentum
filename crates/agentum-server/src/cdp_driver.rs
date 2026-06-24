@@ -44,7 +44,14 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 pub fn handles_op(op: &str) -> bool {
     matches!(
         op,
-        "navigate" | "snapshot" | "screenshot" | "click" | "fill" | "get_console" | "wait"
+        "navigate"
+            | "snapshot"
+            | "screenshot"
+            | "click"
+            | "fill"
+            | "get_console"
+            | "wait"
+            | "eval"
     )
 }
 
@@ -70,6 +77,7 @@ pub async fn run_browser_op(op: &str, args: &Value) -> Result<Value> {
         "fill" => cdp_fill(&base, args).await,
         "get_console" => cdp_get_console(args).await,
         "wait" => cdp_wait(&base, args).await,
+        "eval" => cdp_eval(&base, args).await,
         other => anyhow::bail!("cdp_driver does not handle op `{other}`"),
     }
 }
@@ -84,6 +92,10 @@ pub(crate) async fn cdp_navigate(base: &str, args: &Value) -> Result<Value> {
         .get("url")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("missing `url`"))?;
+    // Security (§9): block file:// and (when an allowlist is set) off-policy origins.
+    if let Some(reason) = navigation_block_reason(url, allowed_origins().as_deref()) {
+        return Ok(json!({ "ok": false, "url": url, "error": "blocked", "reason": reason }));
+    }
     let wait_until = args
         .get("wait_until")
         .and_then(Value::as_str)
@@ -660,6 +672,63 @@ fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     Some((w, h))
 }
 
+// --- navigation security (§9) ------------------------------------------------
+
+/// `scheme://host[:port]` origin of a url, lowercased, or `None` (e.g. `data:`).
+fn origin_of(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{}://{}",
+        scheme.to_ascii_lowercase(),
+        authority.to_ascii_lowercase()
+    ))
+}
+
+/// Block reason for a navigation target, or `None` if allowed. `file://` is always
+/// blocked. `allowed_origins`: `None` or `"*"`/empty = allow all (local-dev
+/// default); a comma list = allow only those origins (deny-by-default). Pure.
+fn navigation_block_reason(url: &str, allowed_origins: Option<&str>) -> Option<String> {
+    if url.trim().to_ascii_lowercase().starts_with("file:") {
+        return Some("file:// navigation is blocked".to_string());
+    }
+    match allowed_origins.map(str::trim) {
+        None | Some("") | Some("*") => None,
+        Some(list) => {
+            let origin = origin_of(url);
+            let allowed = list
+                .split(',')
+                .map(str::trim)
+                .any(|a| !a.is_empty() && origin.as_deref() == Some(a));
+            if allowed {
+                None
+            } else {
+                Some(format!(
+                    "origin not in allowed_origins: {}",
+                    origin.unwrap_or_else(|| url.to_string())
+                ))
+            }
+        }
+    }
+}
+
+/// Allowed-origins policy from the env (F10 will also surface it in `[browser]`
+/// config). Unset → allow all (local dev).
+fn allowed_origins() -> Option<String> {
+    std::env::var("AGENTUM_BROWSER_ALLOWED_ORIGINS").ok()
+}
+
+/// Whether `browser_eval` is enabled — OFF by default (§9); opt in with
+/// `AGENTUM_BROWSER_ALLOW_EVAL=1`.
+fn eval_allowed() -> bool {
+    std::env::var("AGENTUM_BROWSER_ALLOW_EVAL")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 // --- accessibility refs (snapshot → opaque refs the agent acts on) -----------
 
 /// Interactive AX roles surfaced as actionable refs.
@@ -1219,6 +1288,43 @@ pub(crate) async fn cdp_get_console(args: &Value) -> Result<Value> {
     Ok(json!({ "entries": entries, "network_failures": network_failures }))
 }
 
+/// `eval`: run arbitrary JS in the page and return its value. HIGH-RISK — gated
+/// off by default (§9); see [`eval_allowed`]. Every expression is audit-logged.
+pub(crate) async fn cdp_eval(base: &str, args: &Value) -> Result<Value> {
+    cdp_eval_gated(base, args, eval_allowed()).await
+}
+
+/// Eval with the gate decision injected (so the gate is unit-testable and the
+/// real eval path is live-testable without mutating process env).
+async fn cdp_eval_gated(base: &str, args: &Value, allowed: bool) -> Result<Value> {
+    let expr = args
+        .get("expression")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `expression`"))?;
+    if !allowed {
+        return Ok(json!({
+            "ok": false,
+            "error": "eval_disabled",
+            "hint": "browser_eval is off by default; set AGENTUM_BROWSER_ALLOW_EVAL=1 to enable",
+        }));
+    }
+    // Audit: every evaluated expression is logged (it can read/exfiltrate page state).
+    tracing::warn!(target: "agentum::browser::eval", expression = %expr, "browser_eval");
+    let mut conn = connect_active_page(base).await?;
+    let result = conn
+        .call(
+            "Runtime.evaluate",
+            json!({ "expression": expr, "returnByValue": true }),
+        )
+        .await?;
+    let value = result
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    Ok(json!({ "ok": true, "result": value }))
+}
+
 /// `querySelector(sel).click()` returning whether the element matched.
 fn click_expr(selector: &str) -> String {
     format!(
@@ -1580,6 +1686,46 @@ mod tests {
         // Not a PNG (jpeg magic / too short) → None, never a panic.
         assert_eq!(png_dimensions(&[0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0]), None);
         assert_eq!(png_dimensions(&[0u8; 10]), None);
+    }
+
+    #[test]
+    fn origin_of_parses_http_and_ignores_path() {
+        assert_eq!(
+            origin_of("https://Example.com/a/b?x=1"),
+            Some("https://example.com".to_string())
+        );
+        assert_eq!(
+            origin_of("http://127.0.0.1:5173/app"),
+            Some("http://127.0.0.1:5173".to_string())
+        );
+        // data:/about: have no authority.
+        assert_eq!(origin_of("data:text/html,hi"), None);
+    }
+
+    #[test]
+    fn navigation_block_reason_blocks_file_and_off_policy_origins() {
+        // file:// is always blocked, regardless of policy.
+        assert!(navigation_block_reason("file:///etc/hosts", None).is_some());
+        assert!(navigation_block_reason("FILE:///x", Some("*")).is_some());
+        // allow-all (None / "*" / empty) lets http through.
+        assert!(navigation_block_reason("https://x.com/", None).is_none());
+        assert!(navigation_block_reason("https://x.com/", Some("*")).is_none());
+        assert!(navigation_block_reason("https://x.com/", Some("")).is_none());
+        // an allowlist permits only its origins (deny-by-default).
+        let list = "https://a.com, http://localhost:3000";
+        assert!(navigation_block_reason("https://a.com/page", Some(list)).is_none());
+        assert!(navigation_block_reason("http://localhost:3000/x", Some(list)).is_none());
+        assert!(navigation_block_reason("https://evil.com/", Some(list)).is_some());
+    }
+
+    #[tokio::test]
+    async fn eval_disabled_by_default_returns_eval_disabled() {
+        // Gate check is before any CDP connect, so this needs no browser.
+        let r = cdp_eval_gated("http://127.0.0.1:0", &json!({ "expression": "1+1" }), false)
+            .await
+            .expect("eval gated call");
+        assert_eq!(r["ok"], false);
+        assert_eq!(r["error"], "eval_disabled");
     }
 
     // --- real-Chromium gate (manual) ----------------------------------------
@@ -1982,6 +2128,33 @@ mod tests {
         assert!(
             clip_w > 0 && clip_w <= full_w,
             "clip width {clip_w} should be >0 and ≤ full width {full_w}: {clip}"
+        );
+
+        // F9 — file:// navigation is blocked; eval is gated off by default but works
+        // when explicitly enabled.
+        let blocked = cdp_navigate(&base, &json!({ "url": "file:///etc/hosts" }))
+            .await
+            .expect("file nav call");
+        assert_eq!(
+            blocked.get("error").and_then(Value::as_str),
+            Some("blocked"),
+            "file:// navigation is blocked: {blocked}"
+        );
+        let off = cdp_eval(&base, &json!({ "expression": "6*7" }))
+            .await
+            .expect("eval default");
+        assert_eq!(
+            off.get("error").and_then(Value::as_str),
+            Some("eval_disabled"),
+            "eval is off by default: {off}"
+        );
+        let on = cdp_eval_gated(&base, &json!({ "expression": "6*7" }), true)
+            .await
+            .expect("eval enabled");
+        assert_eq!(
+            on.get("result").and_then(Value::as_i64),
+            Some(42),
+            "enabled eval returns the value: {on}"
         );
 
         // cleanup — kill the detached browser + drop its temp profile.
