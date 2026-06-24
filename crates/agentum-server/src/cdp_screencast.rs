@@ -203,6 +203,15 @@ pub enum InputCommand {
     Back,
     Forward,
     Reload,
+    /// Resize the page's LAYOUT viewport to match the pane. Without this the
+    /// headless page lays out at the launcher's fixed `--window-size=1280,800`, so
+    /// the screencast frame is clipped (top/bottom cut off) when the pane's aspect
+    /// ratio differs. Maps to `Emulation.setDeviceMetricsOverride`.
+    SetViewport {
+        width: u32,
+        height: u32,
+        device_scale_factor: f64,
+    },
 }
 
 /// Parse a pane→server WS text message (`{"method":"browser.*","params":{…}}`)
@@ -239,6 +248,12 @@ pub fn parse_input_message(raw: &str) -> Option<InputCommand> {
         "browser.back" => Some(InputCommand::Back),
         "browser.forward" => Some(InputCommand::Forward),
         "browser.reload" => Some(InputCommand::Reload),
+        "browser.setViewport" => Some(InputCommand::SetViewport {
+            width: num("width")? as u32,
+            height: num("height")? as u32,
+            // Default to 1.0; the pane normally sends the (clamped) devicePixelRatio.
+            device_scale_factor: num("deviceScaleFactor").unwrap_or(1.0),
+        }),
         _ => None,
     }
 }
@@ -304,6 +319,22 @@ pub fn input_command_to_cdp(
         InputCommand::Forward => vec![eval_js(id(), "history.forward()")],
         InputCommand::Reload => vec![json!({
             "id": id(), "method": "Page.reload", "params": {}
+        })],
+        // Override the LAYOUT viewport so the page lays out at the pane size, not
+        // the launcher's fixed `--window-size`. `mobile:false` keeps desktop
+        // layout; floor dimensions at 1 because Chrome rejects a 0-sized override.
+        InputCommand::SetViewport {
+            width,
+            height,
+            device_scale_factor,
+        } => vec![json!({
+            "id": id(), "method": "Emulation.setDeviceMetricsOverride",
+            "params": {
+                "width": (*width).max(1),
+                "height": (*height).max(1),
+                "deviceScaleFactor": if *device_scale_factor > 0.0 { *device_scale_factor } else { 1.0 },
+                "mobile": false
+            }
         })],
     }
 }
@@ -701,6 +732,65 @@ mod tests {
 
         let reload = input_command_to_cdp(&InputCommand::Reload, &mut p, &mut id);
         assert_eq!(reload[0]["method"], "Page.reload");
+    }
+
+    #[test]
+    fn set_viewport_parses_and_maps_to_device_metrics_override() {
+        let cmd = parse_input_message(
+            r#"{"method":"browser.setViewport","params":{"width":375,"height":812,"deviceScaleFactor":2}}"#,
+        )
+        .expect("parse browser.setViewport");
+        assert_eq!(
+            cmd,
+            InputCommand::SetViewport {
+                width: 375,
+                height: 812,
+                device_scale_factor: 2.0,
+            }
+        );
+
+        let mut p = PointerState::default();
+        let mut id = 0u64;
+        let out = input_command_to_cdp(&cmd, &mut p, &mut id);
+        assert_eq!(out[0]["method"], "Emulation.setDeviceMetricsOverride");
+        assert_eq!(out[0]["params"]["width"], 375);
+        assert_eq!(out[0]["params"]["height"], 812);
+        assert_eq!(out[0]["params"]["deviceScaleFactor"], 2.0);
+        // mobile stays false — this drives desktop responsive layout, not device emulation.
+        assert_eq!(out[0]["params"]["mobile"], false);
+    }
+
+    #[test]
+    fn set_viewport_defaults_dsf_and_floors_zero_dimensions() {
+        // deviceScaleFactor omitted → defaults to 1.0.
+        let cmd = parse_input_message(
+            r#"{"method":"browser.setViewport","params":{"width":1280,"height":720}}"#,
+        )
+        .expect("parse without deviceScaleFactor");
+        assert_eq!(
+            cmd,
+            InputCommand::SetViewport {
+                width: 1280,
+                height: 720,
+                device_scale_factor: 1.0,
+            }
+        );
+
+        // A 0 dimension (and 0 scale) would make Chrome reject the override; floor them.
+        let mut p = PointerState::default();
+        let mut id = 0u64;
+        let out = input_command_to_cdp(
+            &InputCommand::SetViewport {
+                width: 0,
+                height: 0,
+                device_scale_factor: 0.0,
+            },
+            &mut p,
+            &mut id,
+        );
+        assert_eq!(out[0]["params"]["width"], 1);
+        assert_eq!(out[0]["params"]["height"], 1);
+        assert_eq!(out[0]["params"]["deviceScaleFactor"], 1.0);
     }
 
     #[test]

@@ -102,6 +102,26 @@ export default function AgentBrowserScreencastPane({
     subRef.current?.sendInput(method, params)
   }, [])
 
+  // Match the headless page's LAYOUT viewport to the pane. Without this the page
+  // lays out at the launcher's fixed `--window-size=1280,800`, so the frame is
+  // `object-contain`-letterboxed (cut off top/bottom) in a differently-shaped
+  // pane. Clamp DPR to [1,2] (matches the legacy pane) so a hi-DPI display can't
+  // quadruple the frame size. No-op until a subscription exists.
+  const sendViewport = useCallback((): void => {
+    const canvas = canvasRef.current
+    if (!canvas) {
+      return
+    }
+    const rect = canvas.getBoundingClientRect()
+    const width = Math.round(rect.width)
+    const height = Math.round(rect.height)
+    if (width <= 0 || height <= 0) {
+      return
+    }
+    const deviceScaleFactor = Math.min(2, Math.max(1, window.devicePixelRatio || 1))
+    sendInput('browser.setViewport', { width, height, deviceScaleFactor })
+  }, [sendInput])
+
   // Paint the newest decoded frame on the next animation frame. Latest-wins: if
   // more frames decode before the tick fires, only the freshest is drawn.
   const scheduleDraw = useCallback((): void => {
@@ -198,6 +218,9 @@ export default function AgentBrowserScreencastPane({
         if (target) {
           sub.sendInput('browser.goto', { url: target })
         }
+        // Size the page to the pane immediately so the first frames already fill
+        // it (the ResizeObserver below keeps it in sync afterward).
+        sendViewport()
       })
       .catch((e: unknown) => {
         if (!disposed) {
@@ -221,7 +244,37 @@ export default function AgentBrowserScreencastPane({
       pendingBitmapRef.current = null
       pendingMoveRef.current = null
     }
-  }, [isActive, cdpPort, scheduleDraw])
+  }, [isActive, cdpPort, scheduleDraw, sendViewport])
+
+  // Keep the page's layout viewport in sync with the pane size. Reuses the input
+  // channel (no socket re-subscribe), rAF-coalesced so a drag-resize sends at most
+  // one update per frame.
+  useEffect(() => {
+    if (!isActive) {
+      return
+    }
+    const canvas = canvasRef.current
+    if (!canvas || typeof ResizeObserver === 'undefined') {
+      return
+    }
+    let raf: number | null = null
+    const observer = new ResizeObserver(() => {
+      if (raf != null) {
+        return
+      }
+      raf = requestAnimationFrame(() => {
+        raf = null
+        sendViewport()
+      })
+    })
+    observer.observe(canvas)
+    return () => {
+      observer.disconnect()
+      if (raf != null) {
+        cancelAnimationFrame(raf)
+      }
+    }
+  }, [isActive, sendViewport])
 
   // --- input handlers (forward to the same CDP instance the agent drives) -----
 

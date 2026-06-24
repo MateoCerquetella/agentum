@@ -58,8 +58,8 @@ pub async fn run_browser_op(op: &str, args: &Value) -> Result<Value> {
     };
     match op {
         "navigate" => cdp_navigate(&base, args).await,
-        "snapshot" => cdp_snapshot(&base).await,
-        "screenshot" => cdp_screenshot(&base).await,
+        "snapshot" => cdp_snapshot(&base, args).await,
+        "screenshot" => cdp_screenshot(&base, args).await,
         "click" => cdp_click(&base, args).await,
         "fill" => cdp_fill(&base, args).await,
         other => anyhow::bail!("cdp_driver does not handle op `{other}`"),
@@ -80,9 +80,12 @@ pub(crate) async fn cdp_navigate(base: &str, args: &Value) -> Result<Value> {
 }
 
 /// Real page snapshot: url + title + visible text, read out of the live DOM via
-/// `Runtime.evaluate` (returnByValue). Not the old stub.
-pub(crate) async fn cdp_snapshot(base: &str) -> Result<Value> {
+/// `Runtime.evaluate` (returnByValue). Not the old stub. Optional viewport args
+/// (`width`/`height`/`mobile`/`deviceScaleFactor`) snapshot the page at a chosen
+/// breakpoint for responsive testing.
+pub(crate) async fn cdp_snapshot(base: &str, args: &Value) -> Result<Value> {
     let mut conn = connect_active_page(base).await?;
+    apply_viewport(&mut conn, args).await?;
     let result = conn
         .call(
             "Runtime.evaluate",
@@ -100,14 +103,20 @@ pub(crate) async fn cdp_snapshot(base: &str) -> Result<Value> {
 /// Real screenshot via `Page.captureScreenshot`: decode the base64 JPEG, write it
 /// to the browser profile dir, and return the path + byte count. Empty bytes fail
 /// loudly rather than reporting a hollow success.
-pub(crate) async fn cdp_screenshot(base: &str) -> Result<Value> {
+pub(crate) async fn cdp_screenshot(base: &str, args: &Value) -> Result<Value> {
     let mut conn = connect_active_page(base).await?;
-    let result = conn
-        .call(
-            "Page.captureScreenshot",
-            json!({ "format": "jpeg", "quality": 80 }),
-        )
-        .await?;
+    // Optional viewport override for responsive capture (e.g. `width:375`). Set on
+    // THIS short-lived connection, so it auto-clears on disconnect and never
+    // disturbs the live screencast's own viewport.
+    apply_viewport(&mut conn, args).await?;
+    // `full_page:true` captures the whole scrollable page, not just the viewport.
+    let full_page = args.get("full_page").and_then(Value::as_bool).unwrap_or(false);
+    let params = if full_page {
+        json!({ "format": "jpeg", "quality": 80, "captureBeyondViewport": true })
+    } else {
+        json!({ "format": "jpeg", "quality": 80 })
+    };
+    let result = conn.call("Page.captureScreenshot", params).await?;
     let data_b64 = result
         .get("data")
         .and_then(Value::as_str)
@@ -237,6 +246,18 @@ async fn connect_active_page(cdp_http_base: &str) -> Result<CdpConn> {
     CdpConn::connect(&ws_url).await
 }
 
+/// Apply a viewport override on `conn` when the op carries viewport args, so the
+/// page lays out at the requested breakpoint before the snapshot/screenshot. A
+/// no-op when no viewport was requested. The override is scoped to this
+/// short-lived connection, so it clears on disconnect.
+async fn apply_viewport(conn: &mut CdpConn, args: &Value) -> Result<()> {
+    if let Some(metrics) = device_metrics_params(args) {
+        conn.call("Emulation.setDeviceMetricsOverride", metrics)
+            .await?;
+    }
+    Ok(())
+}
+
 // --- pure helpers (unit-tested without a browser) ----------------------------
 
 /// JS read for [`cdp_snapshot`] — returns a JSON string the driver parses. Text is
@@ -248,6 +269,28 @@ text:((document.body&&document.body.innerText)||'').slice(0,20000)})";
 /// desktop bridge's `js_string`.
 fn js_string(s: &str) -> String {
     Value::String(s.to_string()).to_string()
+}
+
+/// Build `Emulation.setDeviceMetricsOverride` params from optional viewport args,
+/// or `None` when the op requested no override. Both `width` and `height` are
+/// required to override; dimensions floor at 1 (Chrome rejects 0), `mobile`
+/// defaults false (desktop layout), `deviceScaleFactor` defaults 1.0. Pure so the
+/// responsive-capture mapping is unit-tested without a browser.
+fn device_metrics_params(args: &Value) -> Option<Value> {
+    let width = args.get("width").and_then(Value::as_u64)?;
+    let height = args.get("height").and_then(Value::as_u64)?;
+    let dsf = args
+        .get("deviceScaleFactor")
+        .and_then(Value::as_f64)
+        .filter(|d| *d > 0.0)
+        .unwrap_or(1.0);
+    let mobile = args.get("mobile").and_then(Value::as_bool).unwrap_or(false);
+    Some(json!({
+        "width": width.max(1),
+        "height": height.max(1),
+        "deviceScaleFactor": dsf,
+        "mobile": mobile,
+    }))
 }
 
 /// `querySelector(sel).click()` returning whether the element matched.
@@ -323,6 +366,37 @@ mod tests {
         assert!(SNAPSHOT_EXPR.contains("location.href"));
         assert!(SNAPSHOT_EXPR.contains("document.title"));
         assert!(SNAPSHOT_EXPR.contains("innerText"));
+    }
+
+    #[test]
+    fn device_metrics_none_without_both_dimensions() {
+        // No viewport args → no override (the common case).
+        assert!(device_metrics_params(&json!({})).is_none());
+        // width without height (and vice-versa) is not enough to override.
+        assert!(device_metrics_params(&json!({ "width": 375 })).is_none());
+        assert!(device_metrics_params(&json!({ "height": 812 })).is_none());
+    }
+
+    #[test]
+    fn device_metrics_builds_override_with_defaults_and_floors() {
+        // Full args flow through; mobile honored.
+        let m = device_metrics_params(&json!({
+            "width": 375, "height": 812, "deviceScaleFactor": 2, "mobile": true
+        }))
+        .expect("override");
+        assert_eq!(m["width"], 375);
+        assert_eq!(m["height"], 812);
+        assert_eq!(m["deviceScaleFactor"], 2.0);
+        assert_eq!(m["mobile"], true);
+
+        // Defaults: deviceScaleFactor→1.0, mobile→false. 0 dims floor to 1, and a
+        // non-positive scale falls back to 1.0 (Chrome rejects 0).
+        let d = device_metrics_params(&json!({ "width": 0, "height": 0, "deviceScaleFactor": 0 }))
+            .expect("override");
+        assert_eq!(d["width"], 1);
+        assert_eq!(d["height"], 1);
+        assert_eq!(d["deviceScaleFactor"], 1.0);
+        assert_eq!(d["mobile"], false);
     }
 
     // --- real-Chromium gate (manual) ----------------------------------------
@@ -442,7 +516,7 @@ mod tests {
         // Wait for load, then assert REAL snapshot text (not a stub).
         let deadline = Instant::now() + Duration::from_secs(5);
         let snap = loop {
-            let s = cdp_snapshot(&base).await.expect("snapshot");
+            let s = cdp_snapshot(&base, &json!({})).await.expect("snapshot");
             if s.get("title").and_then(Value::as_str) == Some("qa-start") {
                 break s;
             }
@@ -469,7 +543,7 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let s = cdp_snapshot(&base).await.expect("snapshot after click");
+            let s = cdp_snapshot(&base, &json!({})).await.expect("snapshot after click");
             if s.get("title").and_then(Value::as_str) == Some("clicked:Ada") {
                 break; // fill + click verifiably mutated the DOM
             }
@@ -481,10 +555,25 @@ mod tests {
         }
 
         // screenshot returns non-empty bytes.
-        let shot = cdp_screenshot(&base).await.expect("screenshot");
+        let shot = cdp_screenshot(&base, &json!({}))
+            .await
+            .expect("screenshot");
         assert!(
             shot.get("bytes").and_then(Value::as_u64).unwrap_or(0) > 0,
             "screenshot must be non-empty: {shot}"
+        );
+
+        // F1 — a viewport-overridden capture (responsive testing) drives
+        // `Emulation.setDeviceMetricsOverride` then captures, still non-empty.
+        let mobile_shot = cdp_screenshot(
+            &base,
+            &json!({ "width": 375, "height": 812, "deviceScaleFactor": 2 }),
+        )
+        .await
+        .expect("viewport screenshot");
+        assert!(
+            mobile_shot.get("bytes").and_then(Value::as_u64).unwrap_or(0) > 0,
+            "viewport screenshot must be non-empty: {mobile_shot}"
         );
 
         // cleanup — kill the detached browser + drop its temp profile.

@@ -283,6 +283,9 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                 navigated to url and returns its `tab` id; tabs — lists open tabs; \
                 navigate (url) | snapshot | click (selector) | fill (selector, text) | \
                 screenshot — act on a tab (optional `tab` id, else the active one); \
+                snapshot/screenshot take optional width+height (+ mobile, \
+                deviceScaleFactor) to render at a breakpoint for responsive \
+                testing, and screenshot takes full_page; \
                 annotations — read the design-feedback annotations the user marked on \
                 page elements (returns structured markdown the agent can act on); \
                 grab (selector) — extract an element's metadata (tag, text, selector, \
@@ -302,7 +305,12 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                     "selector": { "type": "string", "description": "CSS selector for `click`/`fill`/`grab`/`annotate`" },
                     "text": { "type": "string", "description": "Text to type for `fill`" },
                     "comment": { "type": "string", "description": "Annotation feedback text for `annotate`" },
-                    "intent": { "type": "string", "description": "Annotation intent for `annotate`: change|fix|question|approve" }
+                    "intent": { "type": "string", "description": "Annotation intent for `annotate`: change|fix|question|approve" },
+                    "width": { "type": "integer", "description": "Viewport width (CSS px) for `snapshot`/`screenshot` — responsive testing; pair with `height`" },
+                    "height": { "type": "integer", "description": "Viewport height (CSS px) for `snapshot`/`screenshot` — pair with `width`" },
+                    "mobile": { "type": "boolean", "description": "Emulate a mobile device for the viewport override (default false)" },
+                    "deviceScaleFactor": { "type": "number", "description": "Device pixel ratio for the viewport override (default 1)" },
+                    "full_page": { "type": "boolean", "description": "`screenshot`: capture the full scrollable page, not just the viewport" }
                 },
                 "required": ["op"],
                 "additionalProperties": true,
