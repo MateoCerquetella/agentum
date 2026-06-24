@@ -108,7 +108,7 @@ pub(crate) async fn cdp_navigate(base: &str, args: &Value) -> Result<Value> {
             return Ok(json!({ "ok": false, "url": url, "error": err }));
         }
     }
-    wait_for_load(&mut conn, wait_until, 15_000).await;
+    wait_for_load(&mut conn, wait_until, nav_timeout_ms()).await;
     let info = conn
         .call(
             "Runtime.evaluate",
@@ -715,18 +715,80 @@ fn navigation_block_reason(url: &str, allowed_origins: Option<&str>) -> Option<S
     }
 }
 
-/// Allowed-origins policy from the env (F10 will also surface it in `[browser]`
-/// config). Unset → allow all (local dev).
-fn allowed_origins() -> Option<String> {
-    std::env::var("AGENTUM_BROWSER_ALLOWED_ORIGINS").ok()
+// --- [browser] config (§10) --------------------------------------------------
+
+/// Wire shape for `<config_dir>/browser.toml`'s `[browser]` section. Only the
+/// behaviorally-wired knobs are typed; serde ignores the rest (driver, render_mode,
+/// viewport, screencast) so a full §10 file still parses (forward-compat) without
+/// dead fields here — those are consumed by cdp_browser/cdp_screencast via env.
+#[derive(serde::Deserialize, Default, Debug, Clone)]
+#[serde(default)]
+struct BrowserConfigFile {
+    browser: BrowserSection,
 }
 
-/// Whether `browser_eval` is enabled — OFF by default (§9); opt in with
-/// `AGENTUM_BROWSER_ALLOW_EVAL=1`.
+#[derive(serde::Deserialize, Default, Debug, Clone)]
+#[serde(default)]
+struct BrowserSection {
+    allow_eval: bool,
+    allowed_origins: Vec<String>,
+    nav_timeout_ms: Option<u64>,
+}
+
+/// Cached `[browser]` config (read once; changing it needs a restart, matching the
+/// other agentum singletons). Missing/invalid file → defaults.
+fn browser_config() -> &'static BrowserSection {
+    static CFG: OnceLock<BrowserSection> = OnceLock::new();
+    CFG.get_or_init(load_browser_config)
+}
+
+fn load_browser_config() -> BrowserSection {
+    let Ok(dir) = agentum_store::paths::config_dir() else {
+        return BrowserSection::default();
+    };
+    let Ok(raw) = std::fs::read_to_string(dir.join("browser.toml")) else {
+        return BrowserSection::default();
+    };
+    toml::from_str::<BrowserConfigFile>(&raw)
+        .map(|f| f.browser)
+        .unwrap_or_default()
+}
+
+/// Map a configured origin list to the policy string used by
+/// [`navigation_block_reason`]: empty or containing `*` → allow all (`None`).
+fn origins_to_policy(list: &[String]) -> Option<String> {
+    if list.is_empty() || list.iter().any(|o| o == "*") {
+        None
+    } else {
+        Some(list.join(","))
+    }
+}
+
+/// Allowed-origins policy: env override, else `[browser].allowed_origins`, else
+/// allow-all (local dev).
+fn allowed_origins() -> Option<String> {
+    if let Ok(v) = std::env::var("AGENTUM_BROWSER_ALLOWED_ORIGINS") {
+        return if v.trim() == "*" || v.trim().is_empty() {
+            None
+        } else {
+            Some(v)
+        };
+    }
+    origins_to_policy(&browser_config().allowed_origins)
+}
+
+/// Whether `browser_eval` is enabled — OFF by default (§9). env override, else
+/// `[browser].allow_eval`.
 fn eval_allowed() -> bool {
-    std::env::var("AGENTUM_BROWSER_ALLOW_EVAL")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    if let Ok(v) = std::env::var("AGENTUM_BROWSER_ALLOW_EVAL") {
+        return v == "1" || v.eq_ignore_ascii_case("true");
+    }
+    browser_config().allow_eval
+}
+
+/// Navigation load-wait timeout: `[browser].nav_timeout_ms`, default 15s.
+fn nav_timeout_ms() -> u64 {
+    browser_config().nav_timeout_ms.unwrap_or(15_000)
 }
 
 // --- accessibility refs (snapshot → opaque refs the agent acts on) -----------
@@ -1726,6 +1788,42 @@ mod tests {
             .expect("eval gated call");
         assert_eq!(r["ok"], false);
         assert_eq!(r["error"], "eval_disabled");
+    }
+
+    #[test]
+    fn origins_to_policy_treats_empty_and_star_as_allow_all() {
+        assert_eq!(origins_to_policy(&[]), None);
+        assert_eq!(origins_to_policy(&["*".to_string()]), None);
+        assert_eq!(
+            origins_to_policy(&["https://a.com".to_string(), "http://b.com".to_string()]),
+            Some("https://a.com,http://b.com".to_string())
+        );
+    }
+
+    #[test]
+    fn browser_config_parses_browser_section_and_ignores_extra_keys() {
+        // A full §10 file: the typed knobs parse; the rest (render_mode, viewport,
+        // screencast, driver) are ignored without error (forward-compat).
+        let src = r#"
+[browser]
+driver = "chromiumoxide"
+render_mode = "auto"
+allow_eval = true
+allowed_origins = ["https://a.com", "http://localhost:3000"]
+nav_timeout_ms = 8000
+viewport = { width = 1280, height = 800 }
+screencast = { enabled = true, fps_cap = 10, quality = 60 }
+"#;
+        let f: BrowserConfigFile = toml::from_str(src).expect("parse browser.toml");
+        assert!(f.browser.allow_eval);
+        assert_eq!(
+            f.browser.allowed_origins,
+            vec![
+                "https://a.com".to_string(),
+                "http://localhost:3000".to_string()
+            ]
+        );
+        assert_eq!(f.browser.nav_timeout_ms, Some(8000));
     }
 
     // --- real-Chromium gate (manual) ----------------------------------------
