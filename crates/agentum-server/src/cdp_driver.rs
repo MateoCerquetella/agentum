@@ -18,7 +18,9 @@
 //! (the 009a `ssh -L` tunnel) can be threaded later — but remote is **not**
 //! implemented or verified here. That is a deliberate seam, not a feature.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -84,8 +86,13 @@ pub(crate) async fn cdp_navigate(base: &str, args: &Value) -> Result<Value> {
 /// (`width`/`height`/`mobile`/`deviceScaleFactor`) snapshot the page at a chosen
 /// breakpoint for responsive testing.
 pub(crate) async fn cdp_snapshot(base: &str, args: &Value) -> Result<Value> {
+    let interactive_only = args
+        .get("interactive_only")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
     let mut conn = connect_active_page(base).await?;
     apply_viewport(&mut conn, args).await?;
+    // url + title + visible text.
     let result = conn
         .call(
             "Runtime.evaluate",
@@ -97,7 +104,23 @@ pub(crate) async fn cdp_snapshot(base: &str, args: &Value) -> Result<Value> {
         .and_then(|r| r.get("value"))
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("snapshot: unexpected Runtime.evaluate result: {result}"))?;
-    serde_json::from_str(value).context("snapshot: parse page JSON")
+    let mut out: Value = serde_json::from_str(value).context("snapshot: parse page JSON")?;
+    // Accessibility refs the agent can act on — opaque, generation-stamped so a
+    // stale ref (acted on after a re-snapshot or navigation) is rejected.
+    let _ = conn.call("Accessibility.enable", json!({})).await;
+    let tree = conn
+        .call("Accessibility.getFullAXTree", json!({}))
+        .await
+        .context("snapshot: Accessibility.getFullAXTree")?;
+    let generation = next_generation();
+    let (refs, truncated) = parse_ax_refs(&tree, generation, interactive_only);
+    store_refs(generation, &refs);
+    out["generation"] = json!(generation);
+    out["refs"] = Value::Array(refs.iter().map(ax_ref_public).collect());
+    if truncated {
+        out["truncated"] = json!(true);
+    }
+    Ok(out)
 }
 
 /// Real screenshot via `Page.captureScreenshot`: decode the base64 JPEG, write it
@@ -141,24 +164,34 @@ pub(crate) async fn cdp_screenshot(base: &str, args: &Value) -> Result<Value> {
 /// Click the element matching `selector` (scroll into view first). Returns whether
 /// the selector matched, so the agent can tell a no-op from a real click.
 pub(crate) async fn cdp_click(base: &str, args: &Value) -> Result<Value> {
+    let mut conn = connect_active_page(base).await?;
+    // Prefer a snapshot `ref` (trusted input at the element's center); fall back to
+    // a CSS `selector` (JS `.click()`) for back-compat.
+    if let Some(ref_id) = args.get("ref").and_then(Value::as_str) {
+        return click_ref(&mut conn, ref_id).await;
+    }
     let sel = args
         .get("selector")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing `selector`"))?;
-    let mut conn = connect_active_page(base).await?;
+        .ok_or_else(|| anyhow::anyhow!("missing `selector` or `ref`"))?;
     let found = conn.eval_bool(&click_expr(sel)).await?;
     Ok(json!({ "ok": true, "selector": sel, "found": found }))
 }
 
-/// Set the value of `selector` and fire `input`+`change` so framework listeners
-/// react. Returns whether the selector matched.
+/// Type into an element. With a snapshot `ref`, uses TRUSTED key input
+/// (`Input.insertText`, optional `submit`=Enter). With a CSS `selector`, sets the
+/// value and fires `input`+`change` so framework listeners react.
 pub(crate) async fn cdp_fill(base: &str, args: &Value) -> Result<Value> {
+    let text = args.get("text").and_then(Value::as_str).unwrap_or("");
+    let submit = args.get("submit").and_then(Value::as_bool).unwrap_or(false);
+    let mut conn = connect_active_page(base).await?;
+    if let Some(ref_id) = args.get("ref").and_then(Value::as_str) {
+        return type_ref(&mut conn, ref_id, text, submit).await;
+    }
     let sel = args
         .get("selector")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing `selector`"))?;
-    let text = args.get("text").and_then(Value::as_str).unwrap_or("");
-    let mut conn = connect_active_page(base).await?;
+        .ok_or_else(|| anyhow::anyhow!("missing `selector` or `ref`"))?;
     let found = conn.eval_bool(&fill_expr(sel, text)).await?;
     Ok(json!({ "ok": true, "selector": sel, "found": found }))
 }
@@ -258,6 +291,127 @@ async fn apply_viewport(conn: &mut CdpConn, args: &Value) -> Result<()> {
     Ok(())
 }
 
+/// Resolve a `backendDOMNodeId` to a JS RemoteObject `objectId` so we can call
+/// element methods on it. Enables the DOM domain first (idempotent). `None` means
+/// the node is gone (the page navigated) — the caller treats that as a stale ref.
+async fn resolve_node_object(conn: &mut CdpConn, backend_node_id: i64) -> Result<Option<String>> {
+    let _ = conn.call("DOM.enable", json!({})).await;
+    let Ok(resolved) = conn
+        .call("DOM.resolveNode", json!({ "backendNodeId": backend_node_id }))
+        .await
+    else {
+        return Ok(None);
+    };
+    Ok(resolved
+        .get("object")
+        .and_then(|o| o.get("objectId"))
+        .and_then(Value::as_str)
+        .map(str::to_string))
+}
+
+/// Scroll the resolved element into view and return its viewport-center (CSS px),
+/// or `None` when it has no layout box (display:none / zero size). Coordinates are
+/// in the same CSS-px space `Input.dispatchMouseEvent` expects.
+async fn node_center(conn: &mut CdpConn, object_id: &str) -> Result<Option<(f64, f64)>> {
+    let func = "function(){this.scrollIntoView({block:'center',inline:'center'});\
+        var r=this.getBoundingClientRect();\
+        return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2,w:r.width,h:r.height});}";
+    let res = conn
+        .call(
+            "Runtime.callFunctionOn",
+            json!({ "objectId": object_id, "functionDeclaration": func, "returnByValue": true }),
+        )
+        .await?;
+    let Some(raw) = res
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    let rect: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
+    let w = rect.get("w").and_then(Value::as_f64).unwrap_or(0.0);
+    let h = rect.get("h").and_then(Value::as_f64).unwrap_or(0.0);
+    if w <= 0.0 || h <= 0.0 {
+        return Ok(None);
+    }
+    Ok(Some((
+        rect.get("x").and_then(Value::as_f64).unwrap_or(0.0),
+        rect.get("y").and_then(Value::as_f64).unwrap_or(0.0),
+    )))
+}
+
+/// Click an element by snapshot ref with a TRUSTED mouse event at its center
+/// (falls back to a synthetic `.click()` when it has no layout box). A stale ref
+/// returns `stale_ref` so the agent re-snapshots.
+async fn click_ref(conn: &mut CdpConn, ref_id: &str) -> Result<Value> {
+    let Some(backend) = resolve_ref(ref_id) else {
+        return Ok(stale_ref(ref_id));
+    };
+    let Some(object_id) = resolve_node_object(conn, backend).await? else {
+        return Ok(stale_ref(ref_id));
+    };
+    match node_center(conn, &object_id).await? {
+        Some((x, y)) => {
+            for (kind, buttons) in [("mousePressed", 1), ("mouseReleased", 0)] {
+                conn.call(
+                    "Input.dispatchMouseEvent",
+                    json!({ "type": kind, "x": x, "y": y, "button": "left",
+                            "buttons": buttons, "clickCount": 1 }),
+                )
+                .await?;
+            }
+            Ok(json!({ "ok": true, "ref": ref_id }))
+        }
+        None => {
+            // No layout box (off-screen/hidden) — synthetic click is the best effort.
+            conn.call(
+                "Runtime.callFunctionOn",
+                json!({ "objectId": object_id, "functionDeclaration": "function(){this.click();}" }),
+            )
+            .await?;
+            Ok(json!({ "ok": true, "ref": ref_id, "synthetic": true }))
+        }
+    }
+}
+
+/// Type into an element by snapshot ref using TRUSTED key input: focus, then
+/// `Input.insertText` (fires the input/change events frameworks listen for — unlike
+/// a raw `el.value=`). `submit` presses Enter after. Stale ref → `stale_ref`.
+async fn type_ref(conn: &mut CdpConn, ref_id: &str, text: &str, submit: bool) -> Result<Value> {
+    let Some(backend) = resolve_ref(ref_id) else {
+        return Ok(stale_ref(ref_id));
+    };
+    let Some(object_id) = resolve_node_object(conn, backend).await? else {
+        return Ok(stale_ref(ref_id));
+    };
+    conn.call(
+        "Runtime.callFunctionOn",
+        json!({ "objectId": object_id, "functionDeclaration": "function(){this.focus();}" }),
+    )
+    .await?;
+    if !text.is_empty() {
+        conn.call("Input.insertText", json!({ "text": text })).await?;
+    }
+    if submit {
+        for kind in ["keyDown", "keyUp"] {
+            conn.call(
+                "Input.dispatchKeyEvent",
+                json!({ "type": kind, "key": "Enter", "code": "Enter",
+                        "windowsVirtualKeyCode": 13, "text": "\r" }),
+            )
+            .await?;
+        }
+    }
+    Ok(json!({ "ok": true, "ref": ref_id, "submitted": submit }))
+}
+
+/// The standard stale-ref response — the ref's generation is gone, so the agent
+/// must call `snapshot` again to get fresh refs.
+fn stale_ref(ref_id: &str) -> Value {
+    json!({ "ok": false, "error": "stale_ref", "ref": ref_id })
+}
+
 // --- pure helpers (unit-tested without a browser) ----------------------------
 
 /// JS read for [`cdp_snapshot`] — returns a JSON string the driver parses. Text is
@@ -291,6 +445,191 @@ fn device_metrics_params(args: &Value) -> Option<Value> {
         "deviceScaleFactor": dsf,
         "mobile": mobile,
     }))
+}
+
+// --- accessibility refs (snapshot → opaque refs the agent acts on) -----------
+
+/// Interactive AX roles surfaced as actionable refs.
+const INTERACTIVE_ROLES: &[&str] = &[
+    "button",
+    "link",
+    "textbox",
+    "searchbox",
+    "combobox",
+    "listbox",
+    "checkbox",
+    "radio",
+    "switch",
+    "slider",
+    "spinbutton",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "tab",
+    "option",
+    "textarea",
+];
+
+/// Roles useful even without an accessible name (a bare input an agent types into).
+const NAMELESS_OK_ROLES: &[&str] = &["textbox", "searchbox", "textarea", "combobox"];
+
+/// Cap on refs returned by one snapshot, so a huge page can't blow up the response.
+const MAX_REFS: usize = 250;
+
+/// One interactive element from a snapshot. `ref_id` is opaque
+/// (`e{generation}_{idx}`) and resolves to a `backendDOMNodeId` via [`ref_registry`].
+#[derive(Debug, Clone, PartialEq)]
+struct AxRef {
+    ref_id: String,
+    role: String,
+    name: String,
+    value: Option<String>,
+    disabled: Option<bool>,
+    checked: Option<String>,
+    backend_node_id: i64,
+}
+
+/// Server-side ref→backendNodeId map for the latest snapshot. The CDP browser is a
+/// per-machine singleton, so one global registry mirrors it. A new snapshot bumps
+/// `generation` and replaces `map`; a ref carrying a stale generation isn't in the
+/// current map, so it resolves to `None` → the action returns `stale_ref`.
+#[derive(Default)]
+struct RefRegistry {
+    generation: u64,
+    map: HashMap<String, i64>,
+}
+
+impl RefRegistry {
+    /// Store the ref→backendNodeId map for `generation`, unless a newer snapshot
+    /// has already superseded it (then its map wins and these refs read as stale).
+    fn store(&mut self, generation: u64, refs: &[AxRef]) {
+        if self.generation == generation {
+            self.map = refs
+                .iter()
+                .map(|r| (r.ref_id.clone(), r.backend_node_id))
+                .collect();
+        }
+    }
+
+    /// Resolve a ref to its backendNodeId, or `None` when stale (wrong generation,
+    /// or the page moved on so the ref isn't in the current map).
+    fn resolve(&self, ref_id: &str) -> Option<i64> {
+        self.map.get(ref_id).copied()
+    }
+}
+
+fn ref_registry() -> &'static Mutex<RefRegistry> {
+    static REG: OnceLock<Mutex<RefRegistry>> = OnceLock::new();
+    REG.get_or_init(|| Mutex::new(RefRegistry::default()))
+}
+
+/// Allocate the next snapshot generation.
+fn next_generation() -> u64 {
+    let mut reg = ref_registry().lock().expect("ref registry poisoned");
+    reg.generation += 1;
+    reg.generation
+}
+
+fn store_refs(generation: u64, refs: &[AxRef]) {
+    ref_registry()
+        .lock()
+        .expect("ref registry poisoned")
+        .store(generation, refs);
+}
+
+fn resolve_ref(ref_id: &str) -> Option<i64> {
+    ref_registry()
+        .lock()
+        .expect("ref registry poisoned")
+        .resolve(ref_id)
+}
+
+/// Read an AX node `properties[].value.value` for `key`.
+fn ax_property(node: &Value, key: &str) -> Option<Value> {
+    node.get("properties")?
+        .as_array()?
+        .iter()
+        .find(|p| p.get("name").and_then(Value::as_str) == Some(key))?
+        .get("value")?
+        .get("value")
+        .cloned()
+}
+
+/// Parse a CDP `Accessibility.getFullAXTree` result into ref entries for
+/// `generation`. `interactive_only` keeps only actionable roles (the default).
+/// Capped at [`MAX_REFS`]; the returned `bool` is `true` when truncated.
+fn parse_ax_refs(tree: &Value, generation: u64, interactive_only: bool) -> (Vec<AxRef>, bool) {
+    let mut out = Vec::new();
+    let Some(nodes) = tree.get("nodes").and_then(Value::as_array) else {
+        return (out, false);
+    };
+    for node in nodes {
+        if node.get("ignored").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let Some(backend_node_id) = node.get("backendDOMNodeId").and_then(Value::as_i64) else {
+            continue;
+        };
+        let role = node
+            .get("role")
+            .and_then(|r| r.get("value"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if interactive_only && !INTERACTIVE_ROLES.contains(&role.as_str()) {
+            continue;
+        }
+        let name = node
+            .get("name")
+            .and_then(|n| n.get("value"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        // A nameless element is rarely actionable — except bare inputs, which an
+        // agent still needs to type into.
+        if interactive_only && name.is_empty() && !NAMELESS_OK_ROLES.contains(&role.as_str()) {
+            continue;
+        }
+        if out.len() >= MAX_REFS {
+            return (out, true);
+        }
+        let value = node
+            .get("value")
+            .and_then(|v| v.get("value"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let disabled = ax_property(node, "disabled").and_then(|v| v.as_bool());
+        let checked = ax_property(node, "checked").map(|v| match v {
+            Value::Bool(b) => b.to_string(),
+            Value::String(s) => s,
+            other => other.to_string(),
+        });
+        out.push(AxRef {
+            ref_id: format!("e{generation}_{}", out.len() + 1),
+            role,
+            name,
+            value,
+            disabled,
+            checked,
+            backend_node_id,
+        });
+    }
+    (out, false)
+}
+
+/// Public JSON for a ref (drops the internal backendNodeId).
+fn ax_ref_public(r: &AxRef) -> Value {
+    let mut o = json!({ "ref": r.ref_id, "role": r.role, "name": r.name });
+    if let Some(v) = &r.value {
+        o["value"] = json!(v);
+    }
+    if let Some(d) = r.disabled {
+        o["disabled"] = json!(d);
+    }
+    if let Some(c) = &r.checked {
+        o["checked"] = json!(c);
+    }
+    o
 }
 
 /// `querySelector(sel).click()` returning whether the element matched.
@@ -397,6 +736,121 @@ mod tests {
         assert_eq!(d["height"], 1);
         assert_eq!(d["deviceScaleFactor"], 1.0);
         assert_eq!(d["mobile"], false);
+    }
+
+    fn sample_ax_tree() -> Value {
+        json!({ "nodes": [
+            { "ignored": false, "role": {"value":"button"}, "name": {"value":"Submit"},
+              "backendDOMNodeId": 10, "properties": [{"name":"disabled","value":{"value":false}}] },
+            { "ignored": false, "role": {"value":"textbox"}, "name": {"value":""},
+              "value": {"value":"hi"}, "backendDOMNodeId": 11 },
+            { "ignored": false, "role": {"value":"checkbox"}, "name": {"value":"Agree"},
+              "backendDOMNodeId": 12, "properties": [{"name":"checked","value":{"value":"true"}}] },
+            { "ignored": true, "role": {"value":"button"}, "name": {"value":"Hidden"},
+              "backendDOMNodeId": 13 },
+            { "ignored": false, "role": {"value":"StaticText"}, "name": {"value":"label"},
+              "backendDOMNodeId": 14 },
+            { "ignored": false, "role": {"value":"generic"}, "name": {"value":""},
+              "backendDOMNodeId": 15 }
+        ]})
+    }
+
+    #[test]
+    fn parse_ax_refs_filters_to_interactive_and_extracts_fields() {
+        let (refs, truncated) = parse_ax_refs(&sample_ax_tree(), 7, true);
+        assert!(!truncated);
+        // button + nameless textbox (kept) + checkbox; ignored/StaticText/generic dropped.
+        assert_eq!(refs.len(), 3);
+
+        assert_eq!(refs[0].ref_id, "e7_1");
+        assert_eq!(refs[0].role, "button");
+        assert_eq!(refs[0].name, "Submit");
+        assert_eq!(refs[0].disabled, Some(false));
+        assert_eq!(refs[0].backend_node_id, 10);
+
+        assert_eq!(refs[1].ref_id, "e7_2");
+        assert_eq!(refs[1].role, "textbox");
+        assert_eq!(refs[1].value.as_deref(), Some("hi"));
+
+        assert_eq!(refs[2].ref_id, "e7_3");
+        assert_eq!(refs[2].role, "checkbox");
+        assert_eq!(refs[2].checked.as_deref(), Some("true"));
+    }
+
+    #[test]
+    fn parse_ax_refs_full_mode_includes_noninteractive() {
+        let (interactive, _) = parse_ax_refs(&sample_ax_tree(), 1, true);
+        let (full, _) = parse_ax_refs(&sample_ax_tree(), 1, false);
+        assert!(full.len() > interactive.len(), "full mode surfaces more nodes");
+    }
+
+    #[test]
+    fn ax_ref_public_omits_backend_id_and_absent_optionals() {
+        let r = AxRef {
+            ref_id: "e1_1".into(),
+            role: "link".into(),
+            name: "Home".into(),
+            value: None,
+            disabled: None,
+            checked: None,
+            backend_node_id: 99,
+        };
+        let v = ax_ref_public(&r);
+        assert_eq!(v["ref"], "e1_1");
+        assert_eq!(v["role"], "link");
+        assert_eq!(v["name"], "Home");
+        assert!(v.get("value").is_none());
+        assert!(v.get("disabled").is_none());
+        // The internal backendNodeId is never exposed to the agent.
+        assert!(v.get("backend_node_id").is_none());
+        assert!(v.get("backendNodeId").is_none());
+    }
+
+    #[test]
+    fn ref_registry_resolves_current_generation_and_rejects_stale() {
+        let refs = vec![AxRef {
+            ref_id: "e5_1".into(),
+            role: "button".into(),
+            name: "Go".into(),
+            value: None,
+            disabled: None,
+            checked: None,
+            backend_node_id: 42,
+        }];
+        let mut reg = RefRegistry {
+            generation: 5,
+            map: HashMap::new(),
+        };
+        reg.store(5, &refs);
+        assert_eq!(reg.resolve("e5_1"), Some(42));
+        // A ref from another generation isn't in the map → stale.
+        assert_eq!(reg.resolve("e4_1"), None);
+
+        // A store for a superseded generation is ignored (newer snapshot wins).
+        reg.generation = 6;
+        let other = vec![AxRef {
+            ref_id: "e5_1".into(),
+            role: "button".into(),
+            name: "Go".into(),
+            value: None,
+            disabled: None,
+            checked: None,
+            backend_node_id: 999,
+        }];
+        reg.store(5, &other);
+        assert_eq!(
+            reg.resolve("e5_1"),
+            Some(42),
+            "a stale-generation store must not overwrite the current map"
+        );
+    }
+
+    #[test]
+    fn stale_ref_response_shape() {
+        let v = stale_ref("e3_2");
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"], "stale_ref");
+        assert_eq!(v["ref"], "e3_2");
     }
 
     // --- real-Chromium gate (manual) ----------------------------------------
@@ -574,6 +1028,82 @@ mod tests {
         assert!(
             mobile_shot.get("bytes").and_then(Value::as_u64).unwrap_or(0) > 0,
             "viewport screenshot must be non-empty: {mobile_shot}"
+        );
+
+        // F3/F4 — snapshot returns interactive refs; act by ref with TRUSTED input;
+        // a ref from a superseded snapshot is rejected as stale.
+        cdp_navigate(&base, &json!({ "url": data_url }))
+            .await
+            .expect("re-navigate for refs");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let snap = loop {
+            let s = cdp_snapshot(&base, &json!({})).await.expect("ref snapshot");
+            let has_refs = s
+                .get("refs")
+                .and_then(Value::as_array)
+                .map(|a| !a.is_empty())
+                .unwrap_or(false);
+            if s.get("title").and_then(Value::as_str) == Some("qa-start") && has_refs {
+                break s;
+            }
+            assert!(Instant::now() < deadline, "snapshot never returned refs: {s}");
+            sleep(Duration::from_millis(150)).await;
+        };
+        let refs = snap.get("refs").and_then(Value::as_array).expect("refs array");
+        let ref_by = |role: Option<&str>, name: Option<&str>| -> Option<String> {
+            refs.iter()
+                .find(|r| {
+                    role.map_or(true, |x| r.get("role").and_then(Value::as_str) == Some(x))
+                        && name.map_or(true, |x| r.get("name").and_then(Value::as_str) == Some(x))
+                })
+                .and_then(|r| r.get("ref"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        };
+        let input_ref = ref_by(Some("textbox"), None).expect("a textbox ref");
+        let go_ref = ref_by(None, Some("GO")).expect("the GO button ref");
+
+        // type by ref (trusted insertText) + click by ref (trusted mouse).
+        let typed = cdp_fill(&base, &json!({ "ref": input_ref, "text": "Grace" }))
+            .await
+            .expect("type by ref");
+        assert_eq!(
+            typed.get("ok").and_then(Value::as_bool),
+            Some(true),
+            "type by ref ok: {typed}"
+        );
+        let clicked = cdp_click(&base, &json!({ "ref": go_ref }))
+            .await
+            .expect("click by ref");
+        assert_eq!(
+            clicked.get("ok").and_then(Value::as_bool),
+            Some(true),
+            "click by ref ok: {clicked}"
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let s = cdp_snapshot(&base, &json!({}))
+                .await
+                .expect("snapshot after ref click");
+            if s.get("title").and_then(Value::as_str) == Some("clicked:Grace") {
+                break; // trusted ref type+click verifiably mutated the DOM
+            }
+            assert!(
+                Instant::now() < deadline,
+                "ref type/click did not mutate the DOM: {s}"
+            );
+            sleep(Duration::from_millis(150)).await;
+        }
+
+        // The snapshots above bumped the generation, so the original `go_ref` is
+        // now stale and must be rejected (not silently acted on).
+        let stale = cdp_click(&base, &json!({ "ref": go_ref }))
+            .await
+            .expect("stale ref click call");
+        assert_eq!(
+            stale.get("error").and_then(Value::as_str),
+            Some("stale_ref"),
+            "a superseded ref must be rejected: {stale}"
         );
 
         // cleanup — kill the detached browser + drop its temp profile.

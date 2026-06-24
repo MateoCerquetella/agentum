@@ -281,8 +281,11 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
             "description": "Drive agentum's built-in browser webview — the agentum-cli \
                 browser skill. Pass `op` and its params: open (url) — opens a NEW tab \
                 navigated to url and returns its `tab` id; tabs — lists open tabs; \
-                navigate (url) | snapshot | click (selector) | fill (selector, text) | \
-                screenshot — act on a tab (optional `tab` id, else the active one); \
+                navigate (url) | snapshot (returns interactive element refs + a \
+                generation) | click (ref or selector) | fill (ref or selector, \
+                text, submit?) | screenshot — act on a tab (optional `tab` id, \
+                else the active one); prefer acting by `ref` from a fresh snapshot \
+                (trusted input; a stale ref returns error `stale_ref`); \
                 snapshot/screenshot take optional width+height (+ mobile, \
                 deviceScaleFactor) to render at a breakpoint for responsive \
                 testing, and screenshot takes full_page; \
@@ -303,6 +306,9 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                     "url": { "type": "string", "description": "Target URL for `open`/`navigate`" },
                     "tab": { "type": "string", "description": "Tab id to act on (default: the active tab)" },
                     "selector": { "type": "string", "description": "CSS selector for `click`/`fill`/`grab`/`annotate`" },
+                    "ref": { "type": "string", "description": "Snapshot element ref (from `snapshot`.refs) for `click`/`fill` — trusted input; a stale ref returns error `stale_ref`" },
+                    "interactive_only": { "type": "boolean", "description": "`snapshot`: return only actionable elements as refs (default true)" },
+                    "submit": { "type": "boolean", "description": "`fill` by `ref`: press Enter after typing (default false)" },
                     "text": { "type": "string", "description": "Text to type for `fill`" },
                     "comment": { "type": "string", "description": "Annotation feedback text for `annotate`" },
                     "intent": { "type": "string", "description": "Annotation intent for `annotate`: change|fix|question|approve" },
