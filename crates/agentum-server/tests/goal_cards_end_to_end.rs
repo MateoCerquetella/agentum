@@ -1,31 +1,25 @@
-#![cfg(unix)] // Drives the goal→card→tmux-session flow; tmux is Unix-only.
-//! End-to-end integration test for Phase 1 (goal-cards-planner-slice).
+#![cfg(unix)] // Drives the goal→card flow end to end; tmux is Unix-only.
+//! End-to-end integration test for the goal-cards slice.
 //!
 //! Exercises the full happy path through the in-process axum router:
 //!   goal submit → simulated children → dependency link → watchdog
 //!   goal-status reconciler → bus events fan out.
 //!
-//! No tmux fixture: the planner-spawn branch fails because there is no
-//! tmux server in CI. The route handler emits `goal.planner.spawn_failed`
-//! and retains the goal row (CONTEXT D-07). The test asserts this
-//! error-resilience branch works as designed.
+//! Spec 018 removed the autonomous planner: `POST /api/board/goals` now
+//! creates the feature SYNCHRONOUSLY in the configured task sink and returns
+//! a `FeatureRef`. The test forces `AGENTUM_TASK_SINK=board` so create is
+//! hermetic — a `feat` board card, no `gh`/network — and returns 201 with
+//! `feature.provider == "board"`. It then drives child cards through the
+//! goal-status reconciler to assert the rollup (todo→doing→done→doing→todo).
 //!
-//! After the spawn failure the session row exists in the DB at `Idle`
-//! status. The test manually promotes it to `Running` so that when the
-//! first child card arrives the reconciler can fire
-//! `goal.planner.first_child` and call `graceful_stop` (which harmlessly
-//! fails against the non-existent tmux pane). This is the correct way to
-//! exercise the reconciler's planner-auto-stop path without a real tmux
-//! server.
-//!
-//! Thread-safety: `load_planner_config` reads `XDG_CONFIG_HOME`. All tests
-//! in this file serialise through ENV_LOCK (same pattern as
-//! routes::board_goals::tests) to prevent races under parallel `cargo test`.
+//! Thread-safety: env mutation (XDG_* + AGENTUM_TASK_SINK) serialises through
+//! ENV_LOCK (same pattern as routes::board_goals::tests) to prevent races
+//! under parallel `cargo test`.
 
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-use agentum_core::{Event, NewSession, Status};
+use agentum_core::{Event, NewSession};
 use agentum_server::AppState;
 use agentum_store::Store;
 use axum::Router;
@@ -174,28 +168,31 @@ async fn expect_event(rx: &mut broadcast::Receiver<Event>, target_kind: &str, ms
     }
 }
 
-/// Full Phase 1 happy-path integration test.
+/// Full goal-cards happy-path integration test.
 ///
 /// Sequence:
-/// 1. POST /api/board/goals — creates the goal card + attempts planner spawn.
-/// 2. Bus: `goal.created` → `goal.planner.spawn_failed` (no tmux in CI).
-/// 3. Manually promote the orphaned planner session to Running so the
-///    reconciler can fire `goal.planner.first_child` when the first child
-///    arrives (the D-07 auto-stop branch).
-/// 4. POST /api/board ×3 — simulate planner output (3 child cards).
-/// 5. POST /api/board/links — add a `blocks` edge (b blocks a).
-/// 6. Bus: `board.created` ×3, `goal.planner.first_child`, `board.link.created`.
-/// 7. PATCH child_a → doing: bus emits `goal.status.changed {todo→doing}`.
-/// 8. PATCH all children → done (step-by-step): bus emits
+/// 1. POST /api/board/goals — creates the goal card + the board-sink feature
+///    (Spec 018, hermetic via AGENTUM_TASK_SINK=board); returns 201.
+/// 2. Bus: `goal.created` → `goal.feature.created` (provider=board).
+/// 3. POST /api/board ×3 — simulate child cards under the goal.
+/// 4. POST /api/board/links — add a `blocks` edge (b blocks a).
+/// 5. Bus: `board.created` ×3 + `board.link.created`.
+/// 6. PATCH child_a → doing: bus emits `goal.status.changed {todo→doing}`.
+/// 7. PATCH all children → done (step-by-step): bus emits
 ///    `goal.status.changed {doing→done}` when child_a (the first to reach
 ///    done) tips the max rank above doing.
-/// 9. Reverse: PATCH child_b + child_c → doing, then child_a → doing:
+/// 8. Reverse: PATCH child_b + child_c → doing, then child_a → doing:
 ///    bus emits `goal.status.changed {done→doing}` when the last done
 ///    child drops below done.
-/// 10. DELETE all children: goal drops back to todo (max-of-empty per D-03).
+/// 9. DELETE all children: goal drops back to todo (max-of-empty per D-03).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn goal_cards_full_happy_path() {
     let _env = isolate_xdg();
+    // Spec 018: force the board task-sink so create-goal is hermetic — it
+    // creates a `feat` board card (no `gh`/network) and returns 201 with a
+    // `FeatureRef{provider:"board"}`, independent of whether `gh` is on PATH.
+    // SAFETY: ENV_LOCK (held by `_env`) serialises all env mutation here.
+    unsafe { std::env::set_var("AGENTUM_TASK_SINK", "board") };
     let dir = TempDir::new().unwrap();
     let state = make_state(dir.path()).await;
 
@@ -227,18 +224,16 @@ async fn goal_cards_full_happy_path() {
 
     // ── Step 1: POST /api/board/goals ────────────────────────────────────
     //
-    // The planner spawn will fail because there is no tmux server in CI.
-    // Per D-07 (CONTEXT), the goal card is retained and a 201 is returned
-    // with `planner_session_id: ""`.  The route emits `goal.planner.spawn_failed`.
+    // Spec 018: create-goal makes the goal card, then SYNCHRONOUSLY creates
+    // the feature in the task sink (forced to `board` above) and returns 201
+    // with the `FeatureRef`. "/tmp" always exists, so the local-workdir
+    // existence check passes.
     let resp = app
         .clone()
         .oneshot(post_json(
             "/api/board/goals",
             json!({
                 "title": "deliver feature",
-                // workdir must point to a path that exists on the test
-                // machine so the spawn path reaches the tmux call before
-                // bailing on a missing directory. "/tmp" is always present.
                 "workdir": "/tmp"
             }),
         ))
@@ -262,92 +257,33 @@ async fn goal_cards_full_happy_path() {
         goal_body["goal"]["status"], "todo",
         "goal must start in todo"
     );
+    // The board sink returns a board-backed FeatureRef (AC-4), not a planner.
+    assert_eq!(
+        goal_body["feature"]["provider"], "board",
+        "forced board sink must back the feature"
+    );
 
-    // ── Step 2: observe goal.created + planner outcome ────────────────────
+    // ── Step 2: observe goal.created + goal.feature.created ───────────────
     //
-    // Two paths:
-    //  a) tmux NOT available (CI): `goal.planner.spawn_failed` fires.
-    //     The goal card is retained per D-07.
-    //  b) tmux available (local dev): `goal.planner.spawned` fires.
-    //     The planner pane is running and will be auto-stopped on first child.
-    //
-    // The test handles both by consuming events until we see one of the two
-    // outcomes. Either way the goal.created event fires first.
+    // Spec 018 emits `goal.created` then `goal.feature.created` (no planner
+    // spawn). `expect_event` skips the interleaved `board.created` events (the
+    // goal card itself + the board-sink `feat` card).
     let goal_created = expect_event(&mut bus_rx, "goal.created", 2000).await;
     assert_eq!(
         goal_created.payload["id"], goal_id,
         "goal.created must carry the new goal id"
     );
+    let feature_created = expect_event(&mut bus_rx, "goal.feature.created", 2000).await;
+    assert_eq!(
+        feature_created.payload["goal_id"], goal_id,
+        "goal.feature.created must reference the goal"
+    );
+    assert_eq!(
+        feature_created.payload["provider"], "board",
+        "feature must be backed by the forced board sink"
+    );
 
-    // Drain until we see either the spawn success or failure event.
-    let spawn_succeeded = {
-        let deadline = tokio::time::sleep(Duration::from_millis(2000));
-        tokio::pin!(deadline);
-        loop {
-            tokio::select! {
-                result = bus_rx.recv() => {
-                    match result {
-                        Ok(ev) => match ev.kind.as_str() {
-                            "goal.planner.spawned" => break true,
-                            "goal.planner.spawn_failed" => {
-                                assert_eq!(
-                                    ev.payload["goal_id"], goal_id,
-                                    "spawn_failed must reference the goal"
-                                );
-                                break false;
-                            }
-                            _ => continue,
-                        },
-                        Err(broadcast::error::RecvError::Lagged(n)) => {
-                            eprintln!("lagged {n} waiting for planner outcome");
-                            continue;
-                        }
-                        Err(broadcast::error::RecvError::Closed) => {
-                            panic!("bus closed waiting for planner outcome");
-                        }
-                    }
-                }
-                _ = &mut deadline => {
-                    panic!("timed out waiting for goal.planner.spawned or goal.planner.spawn_failed");
-                }
-            }
-        }
-    };
-
-    // ── Step 3: ensure planner session is in Running state ───────────────
-    //
-    // The reconciler only fires `goal.planner.first_child` when the
-    // planner session is in Running status. We need to:
-    //  - If spawn failed (no tmux): session is at Idle; promote to Running.
-    //    The reconciler will call graceful_stop on a non-existent pane, which
-    //    returns immediately (`has_session` → false → Ok immediately).
-    //  - If spawn succeeded (tmux available): the real pane is running.
-    //    Kill the tmux pane directly and then mark the session as Running in
-    //    the DB. The reconciler will call graceful_stop on the now-dead pane,
-    //    which also returns immediately (`has_session` → false → Ok).
-    //    This prevents the 5-second SIGTERM wait from blocking the reconciler
-    //    task and causing timeouts in subsequent steps.
-    let planner_session = state
-        .store
-        .get_session_by_card_id(goal_id)
-        .await
-        .expect("DB lookup must succeed")
-        .expect("planner session row must exist after spawn attempt");
-
-    if spawn_succeeded {
-        // Kill the real tmux pane so graceful_stop returns immediately later.
-        let target = agentum_tmux::target_for(&planner_session.name);
-        let _ = agentum_tmux::kill_session(&target).await;
-    }
-
-    // Ensure the DB row shows Running so the reconciler emits first_child.
-    state
-        .store
-        .update_status_and_target(planner_session.id, Status::Running, None)
-        .await
-        .expect("setting planner session to Running must succeed");
-
-    // ── Step 4: simulate planner output — POST 3 child cards ─────────────
+    // ── Step 3: simulate child cards — POST 3 child cards ────────────────
     //
     // Bodies follow the `key: <key>\n\n<rest>` convention (plan 01-05) so
     // that the symbolic-key resolution in POST /api/board/links works.
@@ -422,7 +358,7 @@ async fn goal_cards_full_happy_path() {
         child_ids.push(child_id);
     }
 
-    // ── Step 5: add a blocks link  b → a (b blocks a) ────────────────────
+    // ── Step 4: add a blocks link  b → a (b blocks a) ────────────────────
     let resp = app
         .clone()
         .oneshot(post_json(
@@ -442,21 +378,21 @@ async fn goal_cards_full_happy_path() {
         "POST /api/board/links must return 201"
     );
 
-    // ── Step 6: observe bus events for children + first-child ────────────
+    // ── Step 5: observe bus events for children + link ───────────────────
     //
     // Drain the bus in any order until all expected events have arrived.
     // The reconciler runs on its own task; event ordering relative to the
     // HTTP responses is non-deterministic at fine granularity but all
-    // events must appear within 2 s.
+    // events must appear within 2 s. (Spec 018 fires no planner first-child
+    // event — create-goal binds no planner session to the goal card.)
     let mut saw_board_created: u8 = 0;
-    let mut saw_first_child = false;
     let mut saw_link_created = false;
 
-    // We need 3 × board.created + 1 × goal.planner.first_child + 1 × board.link.created = 5 events.
+    // We need 3 × board.created (the child cards) + 1 × board.link.created.
     let deadline = tokio::time::sleep(Duration::from_millis(2000));
     tokio::pin!(deadline);
     loop {
-        if saw_board_created >= 3 && saw_first_child && saw_link_created {
+        if saw_board_created >= 3 && saw_link_created {
             break;
         }
         tokio::select! {
@@ -468,38 +404,31 @@ async fn goal_cards_full_happy_path() {
                         {
                             saw_board_created += 1;
                         }
-                        "goal.planner.first_child" => {
-                            assert_eq!(
-                                ev.payload["goal_id"], goal_id,
-                                "first_child event must reference the correct goal"
-                            );
-                            saw_first_child = true;
-                        }
                         "board.link.created" => {
                             saw_link_created = true;
                         }
                         _ => {}
                     },
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        eprintln!("bus lagged {n} in step 6; some events may be missed");
+                        eprintln!("bus lagged {n} in step 5; some events may be missed");
                     }
-                    Err(broadcast::error::RecvError::Closed) => panic!("bus closed in step 6"),
+                    Err(broadcast::error::RecvError::Closed) => panic!("bus closed in step 5"),
                 }
             }
             _ = &mut deadline => {
                 panic!(
-                    "timed out in step 6; saw_board_created={saw_board_created} \
-                     saw_first_child={saw_first_child} saw_link_created={saw_link_created}"
+                    "timed out in step 5; saw_board_created={saw_board_created} \
+                     saw_link_created={saw_link_created}"
                 );
             }
         }
     }
 
-    // ── Step 7: PATCH child_a → doing; goal flips to doing ───────────────
+    // ── Step 6: PATCH child_a → doing; goal flips to doing ───────────────
     //
-    // Subscribe a fresh receiver AFTER the step-6 drain loop so that we
+    // Subscribe a fresh receiver AFTER the step-5 drain loop so that we
     // have a clean view of everything emitted from this point forward. The
-    // step-6 loop uses `bus_rx` and may have consumed events that arrived
+    // step-5 loop uses `bus_rx` and may have consumed events that arrived
     // concurrently; `bus_rx2` is unaffected because it starts here.
     let mut bus_rx2 = state.bus.subscribe();
 
@@ -541,7 +470,7 @@ async fn goal_cards_full_happy_path() {
         "goal status must be doing after first child moves to doing"
     );
 
-    // ── Step 8: escalate goal to done ────────────────────────────────────
+    // ── Step 7: escalate goal to done ────────────────────────────────────
     //
     // Move child_b and child_c to doing first. max(doing, doing, doing) = doing
     // → goal is already doing, no event.
@@ -588,7 +517,7 @@ async fn goal_cards_full_happy_path() {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    // ── Step 9: reverse — move child_a back to doing; goal drops to doing ─
+    // ── Step 8: reverse — move child_a back to doing; goal drops to doing ─
     //
     // With child_b and child_c still at done, moving child_a → doing makes
     // max(doing, done, done) = done → goal stays done.  We need ALL children
@@ -629,7 +558,7 @@ async fn goal_cards_full_happy_path() {
     assert_eq!(ev.payload["from"], "done");
     assert_eq!(ev.payload["to"], "doing");
 
-    // ── Step 10: DELETE all children; goal drops to todo ──────────────────
+    // ── Step 9: DELETE all children; goal drops to todo ──────────────────
     //
     // The routes/board::delete handler emits `board.deleted` with
     // `parent_goal_id` in the payload (added in plan 01-03). The reconciler
