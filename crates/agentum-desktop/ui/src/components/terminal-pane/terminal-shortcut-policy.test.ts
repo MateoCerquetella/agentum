@@ -89,9 +89,12 @@ describe('resolveTerminalShortcutAction', () => {
       type: 'sendInput',
       data: '\x0b'
     })
+    // Option/Alt+Backspace → Ctrl-W (backward-kill-word): bound everywhere
+    // (readline shells AND agent input libs), unlike M-DEL which only readline
+    // honors — so word-erase works inside agent panes too.
     expect(resolveTerminalShortcutAction(event({ key: 'Backspace', altKey: true }), true)).toEqual({
       type: 'sendInput',
-      data: '\x1b\x7f'
+      data: '\x17'
     })
   })
 

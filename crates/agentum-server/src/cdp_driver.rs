@@ -107,7 +107,21 @@ pub(crate) async fn cdp_navigate(base: &str, args: &Value) -> Result<Value> {
         .and_then(Value::as_str)
         .unwrap_or("load");
     let mut conn = connect_page(base, args).await?;
-    let nav = conn.call("Page.navigate", json!({ "url": url })).await?;
+    // F6 fix: clear the prior main-document status so `http_status` reflects THIS
+    // navigation, not a stale one leaked from an earlier nav (the listener records
+    // the new Document response during the load below).
+    clear_last_doc_status();
+    // Robustness fix: a wedged navigation (e.g. a bare error-status page whose
+    // response never settles) must not surface as a raw CDP timeout — return a
+    // clean `{ok:false}` the agent can branch on instead.
+    let nav = match conn.call("Page.navigate", json!({ "url": url })).await {
+        Ok(v) => v,
+        Err(e) => {
+            return Ok(
+                json!({ "ok": false, "url": url, "error": format!("navigate failed: {e}") }),
+            );
+        }
+    };
     // A hard navigation error (bad scheme, DNS) comes back inline.
     if let Some(err) = nav.get("errorText").and_then(Value::as_str) {
         if !err.is_empty() {
@@ -223,23 +237,37 @@ pub(crate) async fn cdp_screenshot(base: &str, args: &Value) -> Result<Value> {
     // THIS short-lived connection, so it auto-clears on disconnect and never
     // disturbs the live screencast's own viewport.
     apply_viewport(&mut conn, args).await?;
-    let mut params = json!({ "format": "png" });
-    // `full_page:true` captures the whole scrollable page, not just the viewport.
-    if args
+    let full_page = args
         .get("full_page")
         .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
+        .unwrap_or(false);
+    let mut params = json!({ "format": "png" });
+    // `full_page:true` captures the whole scrollable page (at the emulated width
+    // when a viewport was requested), not just the viewport.
+    if full_page {
         params["captureBeyondViewport"] = json!(true);
     }
-    // Optional element clip by snapshot `ref` (capture just that element).
     if let Some(ref_id) = args.get("ref").and_then(Value::as_str) {
+        // Optional element clip by snapshot `ref` (capture just that element).
         let Some(backend) = resolve_ref(ref_id) else {
             return Ok(stale_ref(ref_id));
         };
         if let Some(object_id) = resolve_node_object(&mut conn, backend).await? {
             if let Some(clip) = node_clip(&mut conn, &object_id).await? {
                 params["clip"] = clip;
+            }
+        }
+    } else if !full_page {
+        // F1 fix: when a viewport is requested, PIN the capture to it with an
+        // explicit clip. Without this the live screencast holds its own
+        // `setDeviceMetricsOverride` (at the pane size) on the shared page, which
+        // shadows the per-op viewport — so the screenshot came back at the pane
+        // size, ignoring width/height. The clip forces the requested dimensions.
+        if let Some(metrics) = device_metrics_params(args) {
+            let w = metrics.get("width").and_then(Value::as_u64).unwrap_or(0);
+            let h = metrics.get("height").and_then(Value::as_u64).unwrap_or(0);
+            if w > 0 && h > 0 {
+                params["clip"] = json!({ "x": 0, "y": 0, "width": w, "height": h, "scale": 1 });
             }
         }
     }
@@ -1492,6 +1520,15 @@ fn last_document_status() -> Option<i64> {
         .last_doc_status
 }
 
+/// Reset the tracked main-document status — called at the start of a navigation so
+/// its `http_status` can't report a stale value from an earlier page (F6 fix).
+fn clear_last_doc_status() {
+    console_state()
+        .lock()
+        .expect("console state poisoned")
+        .last_doc_status = None;
+}
+
 /// Start the diagnostics listener for the local browser once (idempotent). Runs
 /// for the process lifetime, reconnecting if the CDP socket drops, so console /
 /// network events are captured continuously rather than only during an op.
@@ -2251,12 +2288,11 @@ screencast = { enabled = true, fps_cap = 10, quality = 60 }
 
         // F1 — a viewport-overridden capture (responsive testing) drives
         // `Emulation.setDeviceMetricsOverride` then captures, still non-empty.
-        let mobile_shot = cdp_screenshot(
-            &base,
-            &json!({ "width": 375, "height": 812, "deviceScaleFactor": 2 }),
-        )
-        .await
-        .expect("viewport screenshot");
+        // deviceScaleFactor defaults to 1 so the PNG's device-pixel dimensions
+        // equal the requested CSS px exactly (with dsf:2 they'd be doubled).
+        let mobile_shot = cdp_screenshot(&base, &json!({ "width": 375, "height": 812 }))
+            .await
+            .expect("viewport screenshot");
         assert!(
             mobile_shot
                 .get("bytes")
@@ -2264,6 +2300,19 @@ screencast = { enabled = true, fps_cap = 10, quality = 60 }
                 .unwrap_or(0)
                 > 0,
             "viewport screenshot must be non-empty: {mobile_shot}"
+        );
+        // F1 regression guard: the capture must HONOR the requested viewport (the
+        // clip pins it), not fall back to the launch/pane size. width/height are
+        // the requested CSS px (clip scale:1).
+        assert_eq!(
+            mobile_shot.get("width").and_then(Value::as_u64),
+            Some(375),
+            "viewport screenshot width must equal the requested 375: {mobile_shot}"
+        );
+        assert_eq!(
+            mobile_shot.get("height").and_then(Value::as_u64),
+            Some(812),
+            "viewport screenshot height must equal the requested 812: {mobile_shot}"
         );
 
         // F3/F4 — snapshot returns interactive refs; act by ref with TRUSTED input;

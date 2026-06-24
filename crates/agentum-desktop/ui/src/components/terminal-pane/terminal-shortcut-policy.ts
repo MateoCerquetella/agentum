@@ -154,7 +154,13 @@ export function resolveTerminalShortcutAction(
     !event.shiftKey &&
     event.key === 'Backspace'
   ) {
-    return { type: 'sendInput', data: '\x1b\x7f' }
+    // Why \x17 (Ctrl-W) not \x1b\x7f (Alt+Backspace / M-DEL): Ctrl-W is bound to
+    // backward-kill-word EVERYWHERE — bash/zsh readline AND the input libs agent
+    // CLIs use (Claude Code, Codex, …) — whereas M-DEL is only honored by readline,
+    // so Option+Backspace silently failed to erase a word inside an agent pane. The
+    // boundary is whitespace-delimited (a touch more aggressive than readline's
+    // word), which is what users expect from "erase the last word".
+    return { type: 'sendInput', data: '\x17' }
   }
 
   if (
