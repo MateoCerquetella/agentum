@@ -205,13 +205,22 @@ pub(crate) async fn cdp_screenshot(base: &str, args: &Value) -> Result<Value> {
     // THIS short-lived connection, so it auto-clears on disconnect and never
     // disturbs the live screencast's own viewport.
     apply_viewport(&mut conn, args).await?;
+    let mut params = json!({ "format": "png" });
     // `full_page:true` captures the whole scrollable page, not just the viewport.
-    let full_page = args.get("full_page").and_then(Value::as_bool).unwrap_or(false);
-    let params = if full_page {
-        json!({ "format": "jpeg", "quality": 80, "captureBeyondViewport": true })
-    } else {
-        json!({ "format": "jpeg", "quality": 80 })
-    };
+    if args.get("full_page").and_then(Value::as_bool).unwrap_or(false) {
+        params["captureBeyondViewport"] = json!(true);
+    }
+    // Optional element clip by snapshot `ref` (capture just that element).
+    if let Some(ref_id) = args.get("ref").and_then(Value::as_str) {
+        let Some(backend) = resolve_ref(ref_id) else {
+            return Ok(stale_ref(ref_id));
+        };
+        if let Some(object_id) = resolve_node_object(&mut conn, backend).await? {
+            if let Some(clip) = node_clip(&mut conn, &object_id).await? {
+                params["clip"] = clip;
+            }
+        }
+    }
     let result = conn.call("Page.captureScreenshot", params).await?;
     let data_b64 = result
         .get("data")
@@ -226,11 +235,17 @@ pub(crate) async fn cdp_screenshot(base: &str, args: &Value) -> Result<Value> {
     let path = screenshot_path()?;
     std::fs::write(&path, &bytes)
         .with_context(|| format!("screenshot: write {}", path.display()))?;
+    let (width, height) = png_dimensions(&bytes).unwrap_or((0, 0));
+    // `image_b64` is lifted into an MCP image content block by routes::mcp so the
+    // agent can SEE the render; the path is kept for reference.
     Ok(json!({
         "ok": true,
-        "format": "jpeg",
+        "format": "png",
         "bytes": bytes.len(),
+        "width": width,
+        "height": height,
         "path": path.to_string_lossy(),
+        "image_b64": data_b64,
     }))
 }
 
@@ -456,6 +471,40 @@ async fn node_center(conn: &mut CdpConn, object_id: &str) -> Result<Option<(f64,
     )))
 }
 
+/// A `Page.captureScreenshot` `clip` for the resolved element (its viewport rect),
+/// or `None` when it has no layout box. Scrolls it into view first.
+async fn node_clip(conn: &mut CdpConn, object_id: &str) -> Result<Option<Value>> {
+    let func = "function(){this.scrollIntoView({block:'center',inline:'center'});\
+        var r=this.getBoundingClientRect();\
+        return JSON.stringify({x:r.left,y:r.top,w:r.width,h:r.height});}";
+    let res = conn
+        .call(
+            "Runtime.callFunctionOn",
+            json!({ "objectId": object_id, "functionDeclaration": func, "returnByValue": true }),
+        )
+        .await?;
+    let Some(raw) = res
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    let rect: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
+    let w = rect.get("w").and_then(Value::as_f64).unwrap_or(0.0);
+    let h = rect.get("h").and_then(Value::as_f64).unwrap_or(0.0);
+    if w <= 0.0 || h <= 0.0 {
+        return Ok(None);
+    }
+    Ok(Some(json!({
+        "x": rect.get("x").and_then(Value::as_f64).unwrap_or(0.0),
+        "y": rect.get("y").and_then(Value::as_f64).unwrap_or(0.0),
+        "width": w,
+        "height": h,
+        "scale": 1,
+    })))
+}
+
 /// Click an element by snapshot ref with a TRUSTED mouse event at its center
 /// (falls back to a synthetic `.click()` when it has no layout box). A stale ref
 /// returns `stale_ref` so the agent re-snapshots.
@@ -597,6 +646,18 @@ fn parse_url_title(eval_result: &Value) -> (String, String) {
             .unwrap_or("")
             .to_string(),
     )
+}
+
+/// Read (width, height) from a PNG's IHDR header (big-endian u32s at byte 16/20),
+/// or `None` if it isn't a PNG. Avoids pulling in an image-decode dependency.
+fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    const SIG: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    if bytes.len() < 24 || &bytes[0..8] != SIG {
+        return None;
+    }
+    let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    Some((w, h))
 }
 
 // --- accessibility refs (snapshot → opaque refs the agent acts on) -----------
@@ -1185,7 +1246,7 @@ fn screenshot_path() -> Result<PathBuf> {
         .join("cdp-browser");
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("create screenshot dir {}", dir.display()))?;
-    Ok(dir.join("last-screenshot.jpg"))
+    Ok(dir.join("last-screenshot.png"))
 }
 
 #[cfg(test)]
@@ -1506,6 +1567,19 @@ mod tests {
             net_failure_from_response(&json!({ "response": { "url":"u", "status":200 } }), 1)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn png_dimensions_reads_ihdr_and_rejects_non_png() {
+        let mut b = vec![0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+        b.extend_from_slice(&[0, 0, 0, 13]); // IHDR chunk length
+        b.extend_from_slice(b"IHDR");
+        b.extend_from_slice(&640u32.to_be_bytes());
+        b.extend_from_slice(&480u32.to_be_bytes());
+        assert_eq!(png_dimensions(&b), Some((640, 480)));
+        // Not a PNG (jpeg magic / too short) → None, never a panic.
+        assert_eq!(png_dimensions(&[0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0]), None);
+        assert_eq!(png_dimensions(&[0u8; 10]), None);
     }
 
     // --- real-Chromium gate (manual) ----------------------------------------
@@ -1875,6 +1949,39 @@ mod tests {
             miss.get("timed_out").and_then(Value::as_bool),
             Some(true),
             "a missing selector times out: {miss}"
+        );
+
+        // F7 — screenshot is PNG with real dimensions; an element-clip by ref is no
+        // wider than the full page.
+        let full = cdp_screenshot(&base, &json!({}))
+            .await
+            .expect("full screenshot");
+        assert_eq!(full.get("format").and_then(Value::as_str), Some("png"));
+        let full_w = full.get("width").and_then(Value::as_u64).unwrap_or(0);
+        assert!(full_w > 0, "screenshot reports a width: {full}");
+        let snap2 = cdp_snapshot(&base, &json!({}))
+            .await
+            .expect("snapshot for clip");
+        let clip_ref = snap2
+            .get("refs")
+            .and_then(Value::as_array)
+            .and_then(|a| a.first())
+            .and_then(|r| r.get("ref"))
+            .and_then(Value::as_str)
+            .expect("a ref to clip")
+            .to_string();
+        let clip = cdp_screenshot(&base, &json!({ "ref": clip_ref }))
+            .await
+            .expect("clip screenshot");
+        assert_eq!(
+            clip.get("ok").and_then(Value::as_bool),
+            Some(true),
+            "element-clip screenshot ok: {clip}"
+        );
+        let clip_w = clip.get("width").and_then(Value::as_u64).unwrap_or(0);
+        assert!(
+            clip_w > 0 && clip_w <= full_w,
+            "clip width {clip_w} should be >0 and ≤ full width {full_w}: {clip}"
         );
 
         // cleanup — kill the detached browser + drop its temp profile.

@@ -310,7 +310,7 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                     "url": { "type": "string", "description": "Target URL for `open`/`navigate`" },
                     "tab": { "type": "string", "description": "Tab id to act on (default: the active tab)" },
                     "selector": { "type": "string", "description": "CSS selector for `click`/`fill`/`grab`/`annotate`" },
-                    "ref": { "type": "string", "description": "Snapshot element ref (from `snapshot`.refs) for `click`/`fill` — trusted input; a stale ref returns error `stale_ref`" },
+                    "ref": { "type": "string", "description": "Snapshot element ref (from `snapshot`.refs) for `click`/`fill` (trusted input) or `screenshot` (clip to that element); a stale ref returns error `stale_ref`" },
                     "interactive_only": { "type": "boolean", "description": "`snapshot`: return only actionable elements as refs (default true)" },
                     "submit": { "type": "boolean", "description": "`fill` by `ref`: press Enter after typing (default false)" },
                     "text": { "type": "string", "description": "Text to type for `fill`" },
@@ -470,6 +470,19 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
+
+    // `agentum_browser` returns full MCP content (screenshot carries an image
+    // block), so it bypasses the text-only `outcome` path below.
+    if name == "agentum_browser" {
+        return Ok(match tool_browser(state, &args).await {
+            Ok(result) => result,
+            Err(e) => json!({
+                "content": [{ "type": "text", "text": format!("tool error: {e:#}") }],
+                "isError": true,
+            }),
+        });
+    }
+
     let outcome: anyhow::Result<String> = match name {
         "agentum_list_sessions" => tool_list_sessions(state).await,
         "agentum_spawn_session" => tool_spawn_session(state, &args).await,
@@ -479,7 +492,6 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         "agentum_create_task" => tool_create_task(state, &args).await,
         "agentum_list_tasks" => tool_list_tasks(state, &args).await,
         "agentum_computer" => tool_bridge(state, "computer", &args).await,
-        "agentum_browser" => tool_browser(state, &args).await,
         "agentum_harness_scaffold" => tool_harness_scaffold(&args).await,
         "agentum_harness_migrate" => tool_harness_migrate(&args).await,
         "agentum_harness_board" => tool_harness_board(&args).await,
@@ -678,13 +690,40 @@ async fn tool_list_tasks(state: &AppState, args: &Value) -> anyhow::Result<Strin
 /// page state and work headless (no desktop app / GUI webview needed), which is
 /// the QA-agent case. The rest (open/tabs/grab/annotate/annotations) stay on the
 /// desktop bridge, which owns the tab lifecycle + annotation store.
-async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<String> {
+async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
     let op = args.get("op").and_then(Value::as_str).unwrap_or_default();
     if crate::cdp_driver::handles_op(op) {
         let result = crate::cdp_driver::run_browser_op(op, args).await?;
-        return Ok(serde_json::to_string_pretty(&result)?);
+        // screenshot → an MCP image content block (PNG) the agent can SEE, plus a
+        // compact text meta line (NOT the giant base64) for width/height/path.
+        if op == "screenshot" {
+            if let Some(b64) = result.get("image_b64").and_then(Value::as_str) {
+                let meta = json!({
+                    "ok": result.get("ok"),
+                    "format": result.get("format"),
+                    "bytes": result.get("bytes"),
+                    "width": result.get("width"),
+                    "height": result.get("height"),
+                    "path": result.get("path"),
+                });
+                return Ok(json!({
+                    "content": [
+                        { "type": "image", "data": b64, "mimeType": "image/png" },
+                        { "type": "text", "text": meta.to_string() }
+                    ],
+                    "isError": false,
+                }));
+            }
+            // a stale_ref / error result has no image — fall through to text.
+        }
+        return Ok(text_result(serde_json::to_string_pretty(&result)?));
     }
-    tool_bridge(state, "browser", args).await
+    Ok(text_result(tool_bridge(state, "browser", args).await?))
+}
+
+/// Wrap a string as a plain MCP text result.
+fn text_result(text: String) -> Value {
+    json!({ "content": [{ "type": "text", "text": text }], "isError": false })
 }
 
 /// Forward a `{op, …}` payload to the desktop bridge (`computer`/`browser`).
