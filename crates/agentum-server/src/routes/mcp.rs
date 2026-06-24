@@ -281,9 +281,11 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
             "description": "Drive agentum's built-in browser webview — the agentum-cli \
                 browser skill. Pass `op` and its params: open (url) — opens a NEW tab \
                 navigated to url and returns its `tab` id; tabs — lists open tabs; \
-                navigate (url) | snapshot (returns interactive element refs + a \
-                generation) | click (ref or selector) | fill (ref or selector, \
-                text, submit?) | screenshot — act on a tab (optional `tab` id, \
+                navigate (url, wait_until?) → {http_status, final_url, title} | \
+                snapshot (returns interactive element refs + a generation) | click \
+                (ref or selector) | fill (ref or selector, text, submit?) | \
+                screenshot | wait (condition selector|text|url|network_idle, arg, \
+                timeout_ms?) — act on a tab (optional `tab` id, \
                 else the active one); prefer acting by `ref` from a fresh snapshot \
                 (trusted input; a stale ref returns error `stale_ref`); \
                 snapshot/screenshot take optional width+height (+ mobile, \
@@ -304,7 +306,7 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|screenshot|get_console|annotations|grab|annotate" },
+                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|screenshot|get_console|wait|annotations|grab|annotate" },
                     "url": { "type": "string", "description": "Target URL for `open`/`navigate`" },
                     "tab": { "type": "string", "description": "Tab id to act on (default: the active tab)" },
                     "selector": { "type": "string", "description": "CSS selector for `click`/`fill`/`grab`/`annotate`" },
@@ -320,7 +322,11 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                     "deviceScaleFactor": { "type": "number", "description": "Device pixel ratio for the viewport override (default 1)" },
                     "full_page": { "type": "boolean", "description": "`screenshot`: capture the full scrollable page, not just the viewport" },
                     "min_level": { "type": "string", "description": "`get_console`: minimum level to return — info|warning|error (default warning)" },
-                    "since_generation": { "type": "integer", "description": "`get_console`: only entries since this snapshot generation (default 0 = all)" }
+                    "since_generation": { "type": "integer", "description": "`get_console`: only entries since this snapshot generation (default 0 = all)" },
+                    "wait_until": { "type": "string", "description": "`navigate`: load|domcontentloaded|network_idle (default load)" },
+                    "condition": { "type": "string", "description": "`wait`: selector|text|url|network_idle" },
+                    "arg": { "type": "string", "description": "`wait`: the css selector / text / url substring for the condition" },
+                    "timeout_ms": { "type": "integer", "description": "`wait`: max wait before returning timed_out=true (default 5000)" }
                 },
                 "required": ["op"],
                 "additionalProperties": true,

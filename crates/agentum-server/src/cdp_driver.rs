@@ -44,7 +44,7 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 pub fn handles_op(op: &str) -> bool {
     matches!(
         op,
-        "navigate" | "snapshot" | "screenshot" | "click" | "fill" | "get_console"
+        "navigate" | "snapshot" | "screenshot" | "click" | "fill" | "get_console" | "wait"
     )
 }
 
@@ -69,21 +69,89 @@ pub async fn run_browser_op(op: &str, args: &Value) -> Result<Value> {
         "click" => cdp_click(&base, args).await,
         "fill" => cdp_fill(&base, args).await,
         "get_console" => cdp_get_console(args).await,
+        "wait" => cdp_wait(&base, args).await,
         other => anyhow::bail!("cdp_driver does not handle op `{other}`"),
     }
 }
 
 // --- ops --------------------------------------------------------------------
 
-/// Navigate the active page. `Page.navigate` needs no `Page.enable`.
+/// Navigate the active page, wait per `wait_until` (load|domcontentloaded|
+/// network_idle, default load), and return the final url + title (+ http_status
+/// of the main document when known).
 pub(crate) async fn cdp_navigate(base: &str, args: &Value) -> Result<Value> {
     let url = args
         .get("url")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("missing `url`"))?;
+    let wait_until = args
+        .get("wait_until")
+        .and_then(Value::as_str)
+        .unwrap_or("load");
     let mut conn = connect_active_page(base).await?;
-    conn.call("Page.navigate", json!({ "url": url })).await?;
-    Ok(json!({ "ok": true, "url": url }))
+    let nav = conn.call("Page.navigate", json!({ "url": url })).await?;
+    // A hard navigation error (bad scheme, DNS) comes back inline.
+    if let Some(err) = nav.get("errorText").and_then(Value::as_str) {
+        if !err.is_empty() {
+            return Ok(json!({ "ok": false, "url": url, "error": err }));
+        }
+    }
+    wait_for_load(&mut conn, wait_until, 15_000).await;
+    let info = conn
+        .call(
+            "Runtime.evaluate",
+            json!({
+                "expression": "JSON.stringify({u:location.href,t:document.title})",
+                "returnByValue": true
+            }),
+        )
+        .await?;
+    let (final_url, title) = parse_url_title(&info);
+    let mut out = json!({ "ok": true, "url": url, "final_url": final_url, "title": title });
+    if let Some(st) = last_document_status() {
+        out["http_status"] = json!(st);
+    }
+    Ok(out)
+}
+
+/// `wait`: block until a condition holds or `timeout_ms` (default 5000) elapses.
+/// `condition` ∈ selector | text | url | network_idle; `arg` is the css/text/url
+/// substring. Always returns `ok:true` with `timed_out` telling the agent which.
+pub(crate) async fn cdp_wait(base: &str, args: &Value) -> Result<Value> {
+    let condition = args.get("condition").and_then(Value::as_str).unwrap_or("");
+    let arg = args.get("arg").and_then(Value::as_str).unwrap_or("");
+    let timeout_ms = args
+        .get("timeout_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(5000);
+    let mut conn = connect_active_page(base).await?;
+    let pred = wait_predicate_expr(condition, arg);
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    let mut idle_polls = 0u32;
+    loop {
+        let satisfied = if condition == "network_idle" {
+            // ~2 in-flight sustained over 3 polls (≈500ms) — the Playwright heuristic.
+            if in_flight_requests() <= 2 {
+                idle_polls += 1;
+                idle_polls >= 3
+            } else {
+                idle_polls = 0;
+                false
+            }
+        } else {
+            match &pred {
+                Some(expr) => conn.eval_bool(expr).await.unwrap_or(false),
+                None => true, // unknown condition → don't hang the agent
+            }
+        };
+        if satisfied {
+            return Ok(json!({ "ok": true, "timed_out": false }));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(json!({ "ok": true, "timed_out": true }));
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
 }
 
 /// Real page snapshot: url + title + visible text, read out of the live DOM via
@@ -296,6 +364,48 @@ async fn apply_viewport(conn: &mut CdpConn, args: &Value) -> Result<()> {
     Ok(())
 }
 
+/// Poll the page until it reaches `wait_until` (load|domcontentloaded|
+/// network_idle) or `timeout_ms` elapses. Best-effort: a timeout doesn't fail the
+/// navigation, it just means the page was still busy.
+async fn wait_for_load(conn: &mut CdpConn, wait_until: &str, timeout_ms: u64) {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    let mut idle_polls = 0u32;
+    loop {
+        let ready = conn
+            .call(
+                "Runtime.evaluate",
+                json!({ "expression": "document.readyState", "returnByValue": true }),
+            )
+            .await
+            .ok()
+            .and_then(|r| {
+                r.get("result")
+                    .and_then(|x| x.get("value"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .unwrap_or_default();
+        let interactive = ready == "interactive" || ready == "complete";
+        let done = match wait_until {
+            "domcontentloaded" => interactive,
+            "network_idle" => {
+                if interactive && in_flight_requests() <= 2 {
+                    idle_polls += 1;
+                    idle_polls >= 3
+                } else {
+                    idle_polls = 0;
+                    false
+                }
+            }
+            _ => ready == "complete",
+        };
+        if done || tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// Resolve a `backendDOMNodeId` to a JS RemoteObject `objectId` so we can call
 /// element methods on it. Enables the DOM domain first (idempotent). `None` means
 /// the node is gone (the page navigated) — the caller treats that as a stale ref.
@@ -450,6 +560,43 @@ fn device_metrics_params(args: &Value) -> Option<Value> {
         "deviceScaleFactor": dsf,
         "mobile": mobile,
     }))
+}
+
+/// The JS predicate (returns bool) for a `wait` condition, or `None` for
+/// `network_idle`/unknown (handled out of band). Pure so it's unit-tested.
+fn wait_predicate_expr(condition: &str, arg: &str) -> Option<String> {
+    match condition {
+        "selector" => Some(format!("!!document.querySelector({})", js_string(arg))),
+        "text" => Some(format!(
+            "!!(document.body&&document.body.innerText.indexOf({})>=0)",
+            js_string(arg)
+        )),
+        "url" => Some(format!("location.href.indexOf({})>=0", js_string(arg))),
+        _ => None,
+    }
+}
+
+/// Parse the `{u,t}` JSON string a navigate's `Runtime.evaluate` returns into
+/// (final_url, title). Tolerant of a missing/garbled result.
+fn parse_url_title(eval_result: &Value) -> (String, String) {
+    let raw = eval_result
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let parsed: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
+    (
+        parsed
+            .get("u")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        parsed
+            .get("t")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+    )
 }
 
 // --- accessibility refs (snapshot → opaque refs the agent acts on) -----------
@@ -676,6 +823,10 @@ struct ConsoleState {
     network: VecDeque<NetFailure>,
     /// requestId → url, so `Network.loadingFailed` (which lacks a url) can report one.
     request_urls: HashMap<String, String>,
+    /// In-flight request count (req sent − finished/failed) for `network_idle` waits.
+    in_flight: i64,
+    /// Status of the most recent main-document response, for `navigate`'s http_status.
+    last_doc_status: Option<i64>,
 }
 
 const MAX_CONSOLE: usize = 1000;
@@ -842,6 +993,8 @@ fn ingest_event(method: &str, params: &Value) -> bool {
     }
     match method {
         "Network.requestWillBeSent" => {
+            let mut s = console_state().lock().expect("console state poisoned");
+            s.in_flight += 1;
             if let (Some(id), Some(url)) = (
                 params.get("requestId").and_then(Value::as_str),
                 params
@@ -849,7 +1002,6 @@ fn ingest_event(method: &str, params: &Value) -> bool {
                     .and_then(|r| r.get("url"))
                     .and_then(Value::as_str),
             ) {
-                let mut s = console_state().lock().expect("console state poisoned");
                 if s.request_urls.len() > MAX_REQ_MAP {
                     s.request_urls.clear();
                 }
@@ -858,12 +1010,27 @@ fn ingest_event(method: &str, params: &Value) -> bool {
             true
         }
         "Network.responseReceived" => {
+            // Capture the main-document status for `navigate`'s http_status.
+            if params.get("type").and_then(Value::as_str) == Some("Document") {
+                if let Some(st) = params
+                    .get("response")
+                    .and_then(|r| r.get("status"))
+                    .and_then(Value::as_i64)
+                {
+                    console_state().lock().expect("console state poisoned").last_doc_status = Some(st);
+                }
+            }
             if let Some(f) = net_failure_from_response(params, generation) {
                 push_netfailure(f);
             }
             true
         }
+        "Network.loadingFinished" => {
+            decrement_in_flight();
+            true
+        }
         "Network.loadingFailed" => {
+            decrement_in_flight();
             let url = params
                 .get("requestId")
                 .and_then(Value::as_str)
@@ -890,6 +1057,26 @@ fn ingest_event(method: &str, params: &Value) -> bool {
         }
         _ => false,
     }
+}
+
+fn decrement_in_flight() {
+    let mut s = console_state().lock().expect("console state poisoned");
+    if s.in_flight > 0 {
+        s.in_flight -= 1;
+    }
+}
+
+/// Current in-flight request count (for `network_idle` waits).
+fn in_flight_requests() -> i64 {
+    console_state().lock().expect("console state poisoned").in_flight
+}
+
+/// Status of the most recent main-document response (for `navigate` http_status).
+fn last_document_status() -> Option<i64> {
+    console_state()
+        .lock()
+        .expect("console state poisoned")
+        .last_doc_status
 }
 
 /// Start the diagnostics listener for the local browser once (idempotent). Runs
@@ -1265,6 +1452,46 @@ mod tests {
     }
 
     #[test]
+    fn wait_predicate_expr_builds_safe_js() {
+        assert!(
+            wait_predicate_expr("selector", "#go")
+                .unwrap()
+                .contains("querySelector(\"#go\")")
+        );
+        assert!(
+            wait_predicate_expr("text", "Done")
+                .unwrap()
+                .contains("innerText.indexOf(\"Done\")")
+        );
+        assert!(
+            wait_predicate_expr("url", "/dash")
+                .unwrap()
+                .contains("location.href.indexOf(\"/dash\")")
+        );
+        // network_idle / unknown are handled out of band.
+        assert!(wait_predicate_expr("network_idle", "").is_none());
+        assert!(wait_predicate_expr("bogus", "x").is_none());
+        // a quote in the arg can't break out of the expression.
+        assert!(
+            wait_predicate_expr("selector", "a\"]")
+                .unwrap()
+                .contains("\\\"")
+        );
+    }
+
+    #[test]
+    fn parse_url_title_reads_eval_json() {
+        let r = json!({ "result": { "value": "{\"u\":\"http://x/\",\"t\":\"Hi\"}" } });
+        let (u, t) = parse_url_title(&r);
+        assert_eq!(u, "http://x/");
+        assert_eq!(t, "Hi");
+        // garbled input → empty strings, never a panic.
+        let (u2, t2) = parse_url_title(&json!({}));
+        assert_eq!(u2, "");
+        assert_eq!(t2, "");
+    }
+
+    #[test]
     fn net_failure_only_for_4xx_5xx() {
         let f = net_failure_from_response(
             &json!({ "response": { "url":"http://x/missing.js", "status":404, "statusText":"Not Found" } }),
@@ -1608,6 +1835,47 @@ mod tests {
             );
             sleep(Duration::from_millis(200)).await;
         }
+
+        // F6 — navigate returns final_url + title; `wait` resolves an existing
+        // selector and times out on a missing one.
+        let nav = cdp_navigate(&base, &json!({ "url": data_url, "wait_until": "load" }))
+            .await
+            .expect("navigate enriched");
+        assert_eq!(nav.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            nav.get("title").and_then(Value::as_str),
+            Some("qa-start"),
+            "navigate returns the page title: {nav}"
+        );
+        assert!(
+            nav.get("final_url")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .starts_with("data:"),
+            "navigate returns the final url: {nav}"
+        );
+        let hit = cdp_wait(
+            &base,
+            &json!({ "condition": "selector", "arg": "#go", "timeout_ms": 3000 }),
+        )
+        .await
+        .expect("wait selector");
+        assert_eq!(
+            hit.get("timed_out").and_then(Value::as_bool),
+            Some(false),
+            "an existing selector resolves: {hit}"
+        );
+        let miss = cdp_wait(
+            &base,
+            &json!({ "condition": "selector", "arg": "#nope-xyz", "timeout_ms": 600 }),
+        )
+        .await
+        .expect("wait missing");
+        assert_eq!(
+            miss.get("timed_out").and_then(Value::as_bool),
+            Some(true),
+            "a missing selector times out: {miss}"
+        );
 
         // cleanup — kill the detached browser + drop its temp profile.
         #[cfg(unix)]
