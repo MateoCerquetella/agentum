@@ -208,9 +208,13 @@ pub async fn ensure_remote_cdp_browser(host: &agentum_core::Host) -> Result<u16>
 
     // Launch Chromium on the host (idempotent). `ssh_output` rides the interactive
     // ControlMaster, warming it — which the `-L` forward below then attaches to.
-    let out = ssh_output(host, &remote_chrome_launch_script(REMOTE_CDP_PORT), ssh_timeout)
-        .await
-        .context("launch headless Chromium on the SSH host")?;
+    let out = ssh_output(
+        host,
+        &remote_chrome_launch_script(REMOTE_CDP_PORT),
+        ssh_timeout,
+    )
+    .await
+    .context("launch headless Chromium on the SSH host")?;
     if !out.status.success() {
         anyhow::bail!(
             "remote Chromium launch failed on host `{}`: {}",
@@ -224,12 +228,13 @@ pub async fn ensure_remote_cdp_browser(host: &agentum_core::Host) -> Result<u16>
     if let Some(mut cancel) = ssh_control_local_cancel_cmd(host, mac_port, REMOTE_CDP_PORT) {
         let _ = cancel.output().await; // best-effort: clear a stale forward
     }
-    let mut fwd = ssh_control_local_forward_cmd(host, mac_port, REMOTE_CDP_PORT).ok_or_else(|| {
-        anyhow::anyhow!(
-            "host `{}` is not an SSH host or has no warm ControlMaster",
-            host.name
-        )
-    })?;
+    let mut fwd =
+        ssh_control_local_forward_cmd(host, mac_port, REMOTE_CDP_PORT).ok_or_else(|| {
+            anyhow::anyhow!(
+                "host `{}` is not an SSH host or has no warm ControlMaster",
+                host.name
+            )
+        })?;
     let fwd_out = fwd.output().await.context("establish the ssh -L forward")?;
     if !fwd_out.status.success() {
         anyhow::bail!(
