@@ -268,6 +268,10 @@ pub(crate) async fn cdp_screenshot(base: &str, args: &Value) -> Result<Value> {
 /// Click the element matching `selector` (scroll into view first). Returns whether
 /// the selector matched, so the agent can tell a no-op from a real click.
 pub(crate) async fn cdp_click(base: &str, args: &Value) -> Result<Value> {
+    // Yield to a human who's actively driving the same page (F12).
+    if human_has_control() {
+        return Ok(human_has_control_response());
+    }
     let mut conn = connect_page(base, args).await?;
     // Prefer a snapshot `ref` (trusted input at the element's center); fall back to
     // a CSS `selector` (JS `.click()`) for back-compat.
@@ -286,6 +290,10 @@ pub(crate) async fn cdp_click(base: &str, args: &Value) -> Result<Value> {
 /// (`Input.insertText`, optional `submit`=Enter). With a CSS `selector`, sets the
 /// value and fires `input`+`change` so framework listeners react.
 pub(crate) async fn cdp_fill(base: &str, args: &Value) -> Result<Value> {
+    // Yield to a human who's actively driving the same page (F12).
+    if human_has_control() {
+        return Ok(human_has_control_response());
+    }
     let text = args.get("text").and_then(Value::as_str).unwrap_or("");
     let submit = args.get("submit").and_then(Value::as_bool).unwrap_or(false);
     let mut conn = connect_page(base, args).await?;
@@ -884,6 +892,42 @@ fn eval_allowed() -> bool {
 /// Navigation load-wait timeout: `[browser].nav_timeout_ms`, default 15s.
 fn nav_timeout_ms() -> u64 {
     browser_config().nav_timeout_ms.unwrap_or(15_000)
+}
+
+// --- co-browse control arbitration (F12) -------------------------------------
+
+/// How long a human keeps the wheel after their last screencast input. Agent input
+/// ops (click/fill) yield during this window so the two don't fight the same page.
+const HUMAN_CONTROL_TTL: Duration = Duration::from_secs(5);
+
+fn human_control_until() -> &'static Mutex<Option<std::time::Instant>> {
+    static S: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(None))
+}
+
+/// Record human input (from the screencast pane): the human holds the wheel for
+/// [`HUMAN_CONTROL_TTL`]. Called by the screencast route on real human actions.
+pub fn note_human_input() {
+    *human_control_until().lock().expect("control state poisoned") =
+        Some(std::time::Instant::now() + HUMAN_CONTROL_TTL);
+}
+
+/// Whether a human currently holds the wheel (recent pane input, not expired).
+pub fn human_has_control() -> bool {
+    match *human_control_until().lock().expect("control state poisoned") {
+        Some(until) => std::time::Instant::now() < until,
+        None => false,
+    }
+}
+
+/// The response when the agent tries to drive while the human holds the wheel.
+fn human_has_control_response() -> Value {
+    json!({ "ok": false, "error": "human_has_control" })
+}
+
+#[cfg(test)]
+fn clear_human_control() {
+    *human_control_until().lock().expect("control state poisoned") = None;
 }
 
 // --- accessibility refs (snapshot → opaque refs the agent acts on) -----------
@@ -1921,6 +1965,23 @@ screencast = { enabled = true, fps_cap = 10, quality = 60 }
         assert_eq!(f.browser.nav_timeout_ms, Some(8000));
     }
 
+    #[test]
+    fn human_control_lock_grabs_and_releases() {
+        clear_human_control();
+        assert!(!human_has_control(), "no control by default");
+        note_human_input();
+        assert!(human_has_control(), "human holds the wheel after input");
+        clear_human_control();
+        assert!(!human_has_control(), "released after clear");
+    }
+
+    #[test]
+    fn human_has_control_response_shape() {
+        let v = human_has_control_response();
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"], "human_has_control");
+    }
+
     // --- real-Chromium gate (manual) ----------------------------------------
 
     async fn http_version(base: &str) -> Option<Value> {
@@ -2436,6 +2497,27 @@ screencast = { enabled = true, fps_cap = 10, quality = 60 }
         cdp_close_context(&base, &json!({ "browser_context_id": bctx_b }))
             .await
             .expect("close B");
+
+        // F12 — while a human holds the wheel, the agent's input ops yield; after
+        // release they resume. (The active page is still the qa-start data: page.)
+        note_human_input();
+        let yielded = cdp_click(&base, &json!({ "selector": "#go" }))
+            .await
+            .expect("click during human control");
+        assert_eq!(
+            yielded.get("error").and_then(Value::as_str),
+            Some("human_has_control"),
+            "agent input yields to an active human: {yielded}"
+        );
+        clear_human_control();
+        let resumed = cdp_click(&base, &json!({ "selector": "body" }))
+            .await
+            .expect("click after release");
+        assert_eq!(
+            resumed.get("ok").and_then(Value::as_bool),
+            Some(true),
+            "agent resumes after the human releases: {resumed}"
+        );
 
         // cleanup — kill the detached browser + drop its temp profile.
         #[cfg(unix)]

@@ -122,6 +122,19 @@ export default function AgentBrowserScreencastPane({
     sendInput('browser.setViewport', { width, height, deviceScaleFactor })
   }, [sendInput])
 
+  // Co-browse banner (F12): flips on briefly after the human interacts. The same
+  // human input also gives the human the wheel server-side, so the agent's input
+  // ops yield for a few seconds — this badge tells the user they're in control.
+  const [driving, setDriving] = useState(false)
+  const drivingTimerRef = useRef<number | null>(null)
+  const markDriving = useCallback((): void => {
+    setDriving(true)
+    if (drivingTimerRef.current != null) {
+      clearTimeout(drivingTimerRef.current)
+    }
+    drivingTimerRef.current = window.setTimeout(() => setDriving(false), 2500)
+  }, [])
+
   // Paint the newest decoded frame on the next animation frame. Latest-wins: if
   // more frames decode before the tick fires, only the freshest is drawn.
   const scheduleDraw = useCallback((): void => {
@@ -318,6 +331,7 @@ export default function AgentBrowserScreencastPane({
 
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
+      markDriving()
       const p = toDevicePoint(e, canvasRef.current, metadataRef.current)
       if (p) {
         // Move first so the press lands at the cursor (the server tracks the last
@@ -326,7 +340,7 @@ export default function AgentBrowserScreencastPane({
         sendInput('browser.mouseDown', { button: buttonName(e) })
       }
     },
-    [sendInput, sendMoveNow]
+    [sendInput, sendMoveNow, markDriving]
   )
 
   const onMouseUp = useCallback(
@@ -338,17 +352,19 @@ export default function AgentBrowserScreencastPane({
 
   const onWheel = useCallback(
     (e: React.WheelEvent) => {
+      markDriving()
       const p = toDevicePoint(e, canvasRef.current, metadataRef.current)
       if (p) {
         sendMoveNow(p)
         sendInput('browser.mouseWheel', { dx: e.deltaX, dy: e.deltaY })
       }
     },
-    [sendInput, sendMoveNow]
+    [sendInput, sendMoveNow, markDriving]
   )
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      markDriving()
       const shortcut = getRemoteBrowserKeyboardShortcut(e)
       if (shortcut === 'Meta+r' || shortcut === 'Control+r') {
         e.preventDefault()
@@ -364,7 +380,7 @@ export default function AgentBrowserScreencastPane({
       // literal character for printable input.
       sendInput('browser.keypress', { key: key === 'Space' ? ' ' : key })
     },
-    [sendInput]
+    [sendInput, markDriving]
   )
 
   const navigate = useCallback(() => {
@@ -436,6 +452,11 @@ export default function AgentBrowserScreencastPane({
             {!hasFrame ? (
               <div className="absolute text-xs text-muted-foreground">
                 Connecting to the agent browser…
+              </div>
+            ) : null}
+            {driving ? (
+              <div className="pointer-events-none absolute right-2 top-2 rounded bg-primary/80 px-2 py-0.5 text-[10px] font-medium text-primary-foreground">
+                You're controlling
               </div>
             ) : null}
           </>

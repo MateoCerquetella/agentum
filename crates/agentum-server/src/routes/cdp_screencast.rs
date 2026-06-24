@@ -170,6 +170,11 @@ async fn run(socket: WebSocket, cdp_http_base: Result<String, String>, opts: Scr
             msg = ws_rx.next() => match msg {
                 Some(Ok(Message::Text(t))) => {
                     if let Some(cmd) = parse_input_message(&t) {
+                        // A real human action gives the human the co-browse wheel,
+                        // so the agent's input ops yield for a short window (F12).
+                        if cmd.is_human_action() {
+                            crate::cdp_driver::note_human_input();
+                        }
                         // Best-effort: a full input queue (pane spamming faster than
                         // CDP drains) drops the event rather than blocking frames.
                         let _ = input_tx.try_send(cmd);

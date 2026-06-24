@@ -214,6 +214,25 @@ pub enum InputCommand {
     },
 }
 
+impl InputCommand {
+    /// Whether this is an active human action that should grab the co-browse wheel
+    /// (F12). Excludes passive `MouseMove` (hover) and automatic `SetViewport`
+    /// (pane resize) so merely watching/resizing doesn't lock the agent out.
+    pub fn is_human_action(&self) -> bool {
+        matches!(
+            self,
+            InputCommand::MouseDown { .. }
+                | InputCommand::MouseUp { .. }
+                | InputCommand::MouseWheel { .. }
+                | InputCommand::KeyPress { .. }
+                | InputCommand::Goto { .. }
+                | InputCommand::Back
+                | InputCommand::Forward
+                | InputCommand::Reload
+        )
+    }
+}
+
 /// Parse a pane→server WS text message (`{"method":"browser.*","params":{…}}`)
 /// into an [`InputCommand`]. Returns `None` for unknown/malformed methods so a
 /// stray message never tears the bridge down. Kept pure for unit testing.
@@ -801,6 +820,28 @@ mod tests {
         let b = input_command_to_cdp(&InputCommand::Reload, &mut p, &mut id);
         assert_eq!(a[0]["id"], 1);
         assert_eq!(b[0]["id"], 2);
+    }
+
+    #[test]
+    fn is_human_action_excludes_passive_events() {
+        assert!(
+            InputCommand::MouseDown {
+                button: MouseButton::Left
+            }
+            .is_human_action()
+        );
+        assert!(InputCommand::KeyPress { key: "a".into() }.is_human_action());
+        assert!(InputCommand::Reload.is_human_action());
+        // passive / automatic — must NOT grab the co-browse wheel.
+        assert!(!InputCommand::MouseMove { x: 1.0, y: 2.0 }.is_human_action());
+        assert!(
+            !InputCommand::SetViewport {
+                width: 800,
+                height: 600,
+                device_scale_factor: 1.0
+            }
+            .is_human_action()
+        );
     }
 
     #[test]
