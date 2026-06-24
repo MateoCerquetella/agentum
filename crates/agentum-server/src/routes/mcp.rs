@@ -293,6 +293,9 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                 testing, and screenshot takes full_page; get_console \
                 (min_level?, since_generation?) returns buffered console \
                 messages + network failures (JS errors, 404s) for debugging; \
+                new_context → an isolated (cookies/storage) context + a page \
+                `target` you pass to ops for per-task isolation, close_context \
+                (browser_context_id) disposes it; \
                 annotations — read the design-feedback annotations the user marked on \
                 page elements (returns structured markdown the agent can act on); \
                 grab (selector) — extract an element's metadata (tag, text, selector, \
@@ -306,7 +309,7 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|screenshot|get_console|wait|eval|annotations|grab|annotate" },
+                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|screenshot|get_console|wait|eval|new_context|close_context|annotations|grab|annotate" },
                     "url": { "type": "string", "description": "Target URL for `open`/`navigate`" },
                     "tab": { "type": "string", "description": "Tab id to act on (default: the active tab)" },
                     "selector": { "type": "string", "description": "CSS selector for `click`/`fill`/`grab`/`annotate`" },
@@ -327,7 +330,9 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                     "condition": { "type": "string", "description": "`wait`: selector|text|url|network_idle" },
                     "arg": { "type": "string", "description": "`wait`: the css selector / text / url substring for the condition" },
                     "timeout_ms": { "type": "integer", "description": "`wait`: max wait before returning timed_out=true (default 5000)" },
-                    "expression": { "type": "string", "description": "`eval`: JS to run in the page (returns its value). Off by default — set AGENTUM_BROWSER_ALLOW_EVAL=1; every expression is logged" }
+                    "expression": { "type": "string", "description": "`eval`: JS to run in the page (returns its value). Off by default — set AGENTUM_BROWSER_ALLOW_EVAL=1; every expression is logged" },
+                    "target": { "type": "string", "description": "Route the op to a specific per-task context page (the `target` from `new_context`); omit for the shared active page" },
+                    "browser_context_id": { "type": "string", "description": "`close_context`: the context id from `new_context` to dispose" }
                 },
                 "required": ["op"],
                 "additionalProperties": true,

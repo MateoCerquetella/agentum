@@ -4,6 +4,10 @@
 //! (excluding `/api/health` + `/api/cert`). A plain-HTTP cert-server runs
 //! on a side port for trust-on-first-use bootstrap.
 
+// The `agentum_browser` tool schema in `routes::mcp::tool_specs` is one large
+// `json!` literal; its recursive macro expansion exceeds the default limit of 128.
+#![recursion_limit = "512"]
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

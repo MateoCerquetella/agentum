@@ -52,6 +52,8 @@ pub fn handles_op(op: &str) -> bool {
             | "get_console"
             | "wait"
             | "eval"
+            | "new_context"
+            | "close_context"
     )
 }
 
@@ -78,6 +80,8 @@ pub async fn run_browser_op(op: &str, args: &Value) -> Result<Value> {
         "get_console" => cdp_get_console(args).await,
         "wait" => cdp_wait(&base, args).await,
         "eval" => cdp_eval(&base, args).await,
+        "new_context" => cdp_new_context(&base).await,
+        "close_context" => cdp_close_context(&base, args).await,
         other => anyhow::bail!("cdp_driver does not handle op `{other}`"),
     }
 }
@@ -100,7 +104,7 @@ pub(crate) async fn cdp_navigate(base: &str, args: &Value) -> Result<Value> {
         .get("wait_until")
         .and_then(Value::as_str)
         .unwrap_or("load");
-    let mut conn = connect_active_page(base).await?;
+    let mut conn = connect_page(base, args).await?;
     let nav = conn.call("Page.navigate", json!({ "url": url })).await?;
     // A hard navigation error (bad scheme, DNS) comes back inline.
     if let Some(err) = nav.get("errorText").and_then(Value::as_str) {
@@ -136,7 +140,7 @@ pub(crate) async fn cdp_wait(base: &str, args: &Value) -> Result<Value> {
         .get("timeout_ms")
         .and_then(Value::as_u64)
         .unwrap_or(5000);
-    let mut conn = connect_active_page(base).await?;
+    let mut conn = connect_page(base, args).await?;
     let pred = wait_predicate_expr(condition, arg);
     let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
     let mut idle_polls = 0u32;
@@ -175,7 +179,7 @@ pub(crate) async fn cdp_snapshot(base: &str, args: &Value) -> Result<Value> {
         .get("interactive_only")
         .and_then(Value::as_bool)
         .unwrap_or(true);
-    let mut conn = connect_active_page(base).await?;
+    let mut conn = connect_page(base, args).await?;
     apply_viewport(&mut conn, args).await?;
     // url + title + visible text.
     let result = conn
@@ -212,7 +216,7 @@ pub(crate) async fn cdp_snapshot(base: &str, args: &Value) -> Result<Value> {
 /// to the browser profile dir, and return the path + byte count. Empty bytes fail
 /// loudly rather than reporting a hollow success.
 pub(crate) async fn cdp_screenshot(base: &str, args: &Value) -> Result<Value> {
-    let mut conn = connect_active_page(base).await?;
+    let mut conn = connect_page(base, args).await?;
     // Optional viewport override for responsive capture (e.g. `width:375`). Set on
     // THIS short-lived connection, so it auto-clears on disconnect and never
     // disturbs the live screencast's own viewport.
@@ -264,7 +268,7 @@ pub(crate) async fn cdp_screenshot(base: &str, args: &Value) -> Result<Value> {
 /// Click the element matching `selector` (scroll into view first). Returns whether
 /// the selector matched, so the agent can tell a no-op from a real click.
 pub(crate) async fn cdp_click(base: &str, args: &Value) -> Result<Value> {
-    let mut conn = connect_active_page(base).await?;
+    let mut conn = connect_page(base, args).await?;
     // Prefer a snapshot `ref` (trusted input at the element's center); fall back to
     // a CSS `selector` (JS `.click()`) for back-compat.
     if let Some(ref_id) = args.get("ref").and_then(Value::as_str) {
@@ -284,7 +288,7 @@ pub(crate) async fn cdp_click(base: &str, args: &Value) -> Result<Value> {
 pub(crate) async fn cdp_fill(base: &str, args: &Value) -> Result<Value> {
     let text = args.get("text").and_then(Value::as_str).unwrap_or("");
     let submit = args.get("submit").and_then(Value::as_bool).unwrap_or(false);
-    let mut conn = connect_active_page(base).await?;
+    let mut conn = connect_page(base, args).await?;
     if let Some(ref_id) = args.get("ref").and_then(Value::as_str) {
         return type_ref(&mut conn, ref_id, text, submit).await;
     }
@@ -377,6 +381,97 @@ impl CdpConn {
 async fn connect_active_page(cdp_http_base: &str) -> Result<CdpConn> {
     let ws_url = discover_page_ws_url(cdp_http_base).await?;
     CdpConn::connect(&ws_url).await
+}
+
+// --- per-task browser contexts (F8 — isolation #6/#7) ------------------------
+
+/// Fetch + parse a CDP HTTP endpoint (`/json`, `/json/version`, `/json/list`).
+async fn cdp_http_json(url: &str) -> Result<Value> {
+    reqwest::Client::new()
+        .get(url)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?
+        .json()
+        .await
+        .with_context(|| format!("parse JSON from {url}"))
+}
+
+/// Connect to the BROWSER-level CDP target (for `Target.*` context lifecycle).
+async fn connect_browser(base: &str) -> Result<CdpConn> {
+    let v = cdp_http_json(&format!("{}/json/version", base.trim_end_matches('/'))).await?;
+    let ws = v
+        .get("webSocketDebuggerUrl")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("no browser webSocketDebuggerUrl at {base}"))?;
+    CdpConn::connect(ws).await
+}
+
+/// WS URL for a specific page target id (a per-context page from `new_context`).
+async fn target_ws_url(base: &str, target_id: &str) -> Result<String> {
+    let list = cdp_http_json(&format!("{}/json/list", base.trim_end_matches('/'))).await?;
+    list.as_array()
+        .and_then(|arr| {
+            arr.iter()
+                .find(|t| t.get("id").and_then(Value::as_str) == Some(target_id))
+        })
+        .and_then(|t| t.get("webSocketDebuggerUrl"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("target `{target_id}` not found at {base}"))
+}
+
+/// Connect to the page this op should drive: an explicit `target` (a per-task
+/// context's page), else the shared active page.
+async fn connect_page(base: &str, args: &Value) -> Result<CdpConn> {
+    match args.get("target").and_then(Value::as_str) {
+        Some(target_id) => CdpConn::connect(&target_ws_url(base, target_id).await?).await,
+        None => connect_active_page(base).await,
+    }
+}
+
+/// `new_context`: create an isolated browser context (separate cookies/storage) +
+/// a blank page in it. Returns the page `target` to pass to ops and the
+/// `browser_context_id` to dispose with `close_context`. Reconciles isolation
+/// (#7) without spawning a second Chromium process.
+pub(crate) async fn cdp_new_context(base: &str) -> Result<Value> {
+    let mut conn = connect_browser(base).await?;
+    let ctx = conn
+        .call("Target.createBrowserContext", json!({ "disposeOnDetach": false }))
+        .await?;
+    let browser_context_id = ctx
+        .get("browserContextId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("createBrowserContext returned no browserContextId"))?
+        .to_string();
+    let tgt = conn
+        .call(
+            "Target.createTarget",
+            json!({ "url": "about:blank", "browserContextId": browser_context_id }),
+        )
+        .await?;
+    let target = tgt
+        .get("targetId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("createTarget returned no targetId"))?
+        .to_string();
+    Ok(json!({ "ok": true, "target": target, "browser_context_id": browser_context_id }))
+}
+
+/// `close_context`: dispose an isolated context (and its pages) from `new_context`.
+pub(crate) async fn cdp_close_context(base: &str, args: &Value) -> Result<Value> {
+    let browser_context_id = args
+        .get("browser_context_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `browser_context_id`"))?;
+    let mut conn = connect_browser(base).await?;
+    conn.call(
+        "Target.disposeBrowserContext",
+        json!({ "browserContextId": browser_context_id }),
+    )
+    .await?;
+    Ok(json!({ "ok": true, "browser_context_id": browser_context_id }))
 }
 
 /// Apply a viewport override on `conn` when the op carries viewport args, so the
@@ -1372,7 +1467,7 @@ async fn cdp_eval_gated(base: &str, args: &Value, allowed: bool) -> Result<Value
     }
     // Audit: every evaluated expression is logged (it can read/exfiltrate page state).
     tracing::warn!(target: "agentum::browser::eval", expression = %expr, "browser_eval");
-    let mut conn = connect_active_page(base).await?;
+    let mut conn = connect_page(base, args).await?;
     let result = conn
         .call(
             "Runtime.evaluate",
@@ -2254,6 +2349,93 @@ screencast = { enabled = true, fps_cap = 10, quality = 60 }
             Some(42),
             "enabled eval returns the value: {on}"
         );
+
+        // F8 — two isolated browser contexts don't share storage. (localStorage
+        // needs a real origin, so serve a 200 page from a loopback HTTP server.)
+        let srv = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ctx server");
+        let srv_port = srv.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+            while let Ok((mut sock, _)) = srv.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    let _ = sock.read(&mut buf).await;
+                    let body = "<!doctype html><title>ctx</title><body>ok</body>";
+                    let _ = sock
+                        .write_all(
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                body.len(),
+                                body
+                            )
+                            .as_bytes(),
+                        )
+                        .await;
+                });
+            }
+        });
+        let ctx_url = format!("http://127.0.0.1:{srv_port}/");
+
+        let ctx_a = cdp_new_context(&base).await.expect("new context A");
+        let ctx_b = cdp_new_context(&base).await.expect("new context B");
+        let ta = ctx_a.get("target").and_then(Value::as_str).unwrap().to_string();
+        let tb = ctx_b.get("target").and_then(Value::as_str).unwrap().to_string();
+        let bctx_a = ctx_a
+            .get("browser_context_id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
+        let bctx_b = ctx_b
+            .get("browser_context_id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
+        assert_ne!(bctx_a, bctx_b, "contexts must be distinct");
+
+        cdp_navigate(&base, &json!({ "target": ta, "url": ctx_url }))
+            .await
+            .expect("nav A");
+        cdp_navigate(&base, &json!({ "target": tb, "url": ctx_url }))
+            .await
+            .expect("nav B");
+        cdp_eval_gated(
+            &base,
+            &json!({ "target": ta, "expression": "localStorage.setItem('iso','A'),'ok'" }),
+            true,
+        )
+        .await
+        .expect("set storage in A");
+        let read_a = cdp_eval_gated(
+            &base,
+            &json!({ "target": ta, "expression": "localStorage.getItem('iso')" }),
+            true,
+        )
+        .await
+        .expect("read A");
+        let read_b = cdp_eval_gated(
+            &base,
+            &json!({ "target": tb, "expression": "localStorage.getItem('iso')" }),
+            true,
+        )
+        .await
+        .expect("read B");
+        assert_eq!(
+            read_a.get("result").and_then(Value::as_str),
+            Some("A"),
+            "context A keeps its own storage: {read_a}"
+        );
+        assert!(
+            read_b.get("result").map(Value::is_null).unwrap_or(false),
+            "context B is isolated — must not see A's storage: {read_b}"
+        );
+        cdp_close_context(&base, &json!({ "browser_context_id": bctx_a }))
+            .await
+            .expect("close A");
+        cdp_close_context(&base, &json!({ "browser_context_id": bctx_b }))
+            .await
+            .expect("close B");
 
         // cleanup — kill the detached browser + drop its temp profile.
         #[cfg(unix)]
