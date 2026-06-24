@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use agentum_server::cdp_browser;
 use agentum_server::cdp_screencast::{InputCommand, ScreencastOptions, run_screencast_bridge};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::time::timeout;
 
 /// Validate that `bytes` is a well-formed `0x62` screencast frame and return its
@@ -59,7 +59,9 @@ async fn headless_browser_screencasts_into_the_bridge_and_takes_input() {
     };
     eprintln!("CDP endpoint: {endpoint}");
 
-    let (frame_tx, mut frame_rx) = mpsc::channel::<Vec<u8>>(8);
+    // Frames use the same latest-wins `watch` sink the WS route uses (a slow
+    // consumer never stalls Chrome); `None` is the pre-first-frame sentinel.
+    let (frame_tx, mut frame_rx) = watch::channel::<Option<Vec<u8>>>(None);
     let (input_tx, input_rx) = mpsc::channel::<InputCommand>(8);
 
     // Run the bridge exactly as the WS route does.
@@ -68,10 +70,16 @@ async fn headless_browser_screencasts_into_the_bridge_and_takes_input() {
     });
 
     // The first frame must arrive promptly (CDP emits one on screencast start).
-    let first = timeout(Duration::from_secs(15), frame_rx.recv())
+    // `changed()` fires on the first real frame (the `None` initial value is
+    // pre-seen); take the freshest frame, mirroring the WS route's consumer.
+    timeout(Duration::from_secs(15), frame_rx.changed())
         .await
         .expect("a screencast frame within 15s")
         .expect("bridge produced a frame, not a closed channel");
+    let first = frame_rx
+        .borrow_and_update()
+        .clone()
+        .expect("first change carries frame bytes");
     let n = assert_valid_frame(&first);
     eprintln!("first frame OK: {n} image bytes");
 
@@ -84,10 +92,14 @@ async fn headless_browser_screencasts_into_the_bridge_and_takes_input() {
         .await
         .expect("send nav command");
 
-    let after_nav = timeout(Duration::from_secs(15), frame_rx.recv())
+    timeout(Duration::from_secs(15), frame_rx.changed())
         .await
         .expect("a frame after navigation within 15s")
         .expect("bridge still streaming after input");
+    let after_nav = frame_rx
+        .borrow_and_update()
+        .clone()
+        .expect("post-nav change carries frame bytes");
     assert_valid_frame(&after_nav);
     eprintln!("post-navigation frame OK");
 

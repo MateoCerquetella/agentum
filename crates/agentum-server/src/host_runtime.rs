@@ -1658,7 +1658,11 @@ pub async fn git_in_dir(host: &Host, cwd: &str, args: &[&str]) -> Result<HostCom
 pub async fn gh_in_dir(host: &Host, cwd: &str, args: &[&str]) -> Result<HostCommandOutput> {
     match &host.kind {
         HostKind::Local => {
-            let out = Command::new("gh").current_dir(cwd).args(args).output().await?;
+            let out = Command::new("gh")
+                .current_dir(cwd)
+                .args(args)
+                .output()
+                .await?;
             Ok(HostCommandOutput {
                 success: out.status.success(),
                 code: out.status.code(),

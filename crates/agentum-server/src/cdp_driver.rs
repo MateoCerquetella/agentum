@@ -225,7 +225,11 @@ pub(crate) async fn cdp_screenshot(base: &str, args: &Value) -> Result<Value> {
     apply_viewport(&mut conn, args).await?;
     let mut params = json!({ "format": "png" });
     // `full_page:true` captures the whole scrollable page, not just the viewport.
-    if args.get("full_page").and_then(Value::as_bool).unwrap_or(false) {
+    if args
+        .get("full_page")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
         params["captureBeyondViewport"] = json!(true);
     }
     // Optional element clip by snapshot `ref` (capture just that element).
@@ -449,7 +453,8 @@ fn open_contexts() -> &'static Mutex<HashSet<String>> {
     S.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-/// Count of contexts currently tracked as open (observability / tests).
+/// Count of contexts currently tracked as open (test-only assertion helper).
+#[cfg(test)]
 fn open_context_count() -> usize {
     open_contexts().lock().expect("contexts poisoned").len()
 }
@@ -470,7 +475,10 @@ pub(crate) async fn cdp_reap_contexts(base: &str) -> Result<Value> {
     let mut reaped = 0u64;
     for id in &ids {
         if conn
-            .call("Target.disposeBrowserContext", json!({ "browserContextId": id }))
+            .call(
+                "Target.disposeBrowserContext",
+                json!({ "browserContextId": id }),
+            )
             .await
             .is_ok()
         {
@@ -487,7 +495,10 @@ pub(crate) async fn cdp_reap_contexts(base: &str) -> Result<Value> {
 pub(crate) async fn cdp_new_context(base: &str) -> Result<Value> {
     let mut conn = connect_browser(base).await?;
     let ctx = conn
-        .call("Target.createBrowserContext", json!({ "disposeOnDetach": false }))
+        .call(
+            "Target.createBrowserContext",
+            json!({ "disposeOnDetach": false }),
+        )
         .await?;
     let browser_context_id = ctx
         .get("browserContextId")
@@ -591,7 +602,10 @@ async fn wait_for_load(conn: &mut CdpConn, wait_until: &str, timeout_ms: u64) {
 async fn resolve_node_object(conn: &mut CdpConn, backend_node_id: i64) -> Result<Option<String>> {
     let _ = conn.call("DOM.enable", json!({})).await;
     let Ok(resolved) = conn
-        .call("DOM.resolveNode", json!({ "backendNodeId": backend_node_id }))
+        .call(
+            "DOM.resolveNode",
+            json!({ "backendNodeId": backend_node_id }),
+        )
         .await
     else {
         return Ok(None);
@@ -719,7 +733,8 @@ async fn type_ref(conn: &mut CdpConn, ref_id: &str, text: &str, submit: bool) ->
     )
     .await?;
     if !text.is_empty() {
-        conn.call("Input.insertText", json!({ "text": text })).await?;
+        conn.call("Input.insertText", json!({ "text": text }))
+            .await?;
     }
     if submit {
         for kind in ["keyDown", "keyUp"] {
@@ -957,13 +972,17 @@ fn human_control_until() -> &'static Mutex<Option<std::time::Instant>> {
 /// Record human input (from the screencast pane): the human holds the wheel for
 /// [`HUMAN_CONTROL_TTL`]. Called by the screencast route on real human actions.
 pub fn note_human_input() {
-    *human_control_until().lock().expect("control state poisoned") =
-        Some(std::time::Instant::now() + HUMAN_CONTROL_TTL);
+    *human_control_until()
+        .lock()
+        .expect("control state poisoned") = Some(std::time::Instant::now() + HUMAN_CONTROL_TTL);
 }
 
 /// Whether a human currently holds the wheel (recent pane input, not expired).
 pub fn human_has_control() -> bool {
-    match *human_control_until().lock().expect("control state poisoned") {
+    match *human_control_until()
+        .lock()
+        .expect("control state poisoned")
+    {
         Some(until) => std::time::Instant::now() < until,
         None => false,
     }
@@ -976,7 +995,9 @@ fn human_has_control_response() -> Value {
 
 #[cfg(test)]
 fn clear_human_control() {
-    *human_control_until().lock().expect("control state poisoned") = None;
+    *human_control_until()
+        .lock()
+        .expect("control state poisoned") = None;
 }
 
 // --- accessibility refs (snapshot → opaque refs the agent acts on) -----------
@@ -1282,7 +1303,9 @@ fn console_entry_from_event(method: &str, params: &Value, generation: u64) -> Op
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty())
                     .map(str::to_string),
-                line: frame.and_then(|f| f.get("lineNumber")).and_then(Value::as_i64),
+                line: frame
+                    .and_then(|f| f.get("lineNumber"))
+                    .and_then(Value::as_i64),
                 generation,
             })
         }
@@ -1309,7 +1332,11 @@ fn console_entry_from_event(method: &str, params: &Value, generation: u64) -> Op
             Some(ConsoleEntry {
                 level: normalize_level(e.get("level").and_then(Value::as_str).unwrap_or("info"))
                     .to_string(),
-                text: e.get("text").and_then(Value::as_str).unwrap_or("").to_string(),
+                text: e
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
                 source: e
                     .get("source")
                     .and_then(Value::as_str)
@@ -1397,7 +1424,10 @@ fn ingest_event(method: &str, params: &Value) -> bool {
                     .and_then(|r| r.get("status"))
                     .and_then(Value::as_i64)
                 {
-                    console_state().lock().expect("console state poisoned").last_doc_status = Some(st);
+                    console_state()
+                        .lock()
+                        .expect("console state poisoned")
+                        .last_doc_status = Some(st);
                 }
             }
             if let Some(f) = net_failure_from_response(params, generation) {
@@ -1448,7 +1478,10 @@ fn decrement_in_flight() {
 
 /// Current in-flight request count (for `network_idle` waits).
 fn in_flight_requests() -> i64 {
-    console_state().lock().expect("console state poisoned").in_flight
+    console_state()
+        .lock()
+        .expect("console state poisoned")
+        .in_flight
 }
 
 /// Status of the most recent main-document response (for `navigate` http_status).
@@ -1483,9 +1516,15 @@ async fn run_console_listener(base: &str) -> Result<()> {
     let ws_url = discover_page_ws_url(base).await?;
     let (ws, _) = tokio_tungstenite::connect_async(&ws_url).await?;
     let (mut write, mut read) = ws.split();
-    for (id, method) in [(1, "Runtime.enable"), (2, "Log.enable"), (3, "Network.enable")] {
+    for (id, method) in [
+        (1, "Runtime.enable"),
+        (2, "Log.enable"),
+        (3, "Network.enable"),
+    ] {
         write
-            .send(Message::Text(json!({ "id": id, "method": method }).to_string()))
+            .send(Message::Text(
+                json!({ "id": id, "method": method }).to_string(),
+            ))
             .await?;
     }
     while let Some(frame) = read.next().await {
@@ -1724,7 +1763,10 @@ mod tests {
     fn parse_ax_refs_full_mode_includes_noninteractive() {
         let (interactive, _) = parse_ax_refs(&sample_ax_tree(), 1, true);
         let (full, _) = parse_ax_refs(&sample_ax_tree(), 1, false);
-        assert!(full.len() > interactive.len(), "full mode surfaces more nodes");
+        assert!(
+            full.len() > interactive.len(),
+            "full mode surfaces more nodes"
+        );
     }
 
     #[test]
@@ -2187,7 +2229,9 @@ screencast = { enabled = true, fps_cap = 10, quality = 60 }
 
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let s = cdp_snapshot(&base, &json!({})).await.expect("snapshot after click");
+            let s = cdp_snapshot(&base, &json!({}))
+                .await
+                .expect("snapshot after click");
             if s.get("title").and_then(Value::as_str) == Some("clicked:Ada") {
                 break; // fill + click verifiably mutated the DOM
             }
@@ -2199,9 +2243,7 @@ screencast = { enabled = true, fps_cap = 10, quality = 60 }
         }
 
         // screenshot returns non-empty bytes.
-        let shot = cdp_screenshot(&base, &json!({}))
-            .await
-            .expect("screenshot");
+        let shot = cdp_screenshot(&base, &json!({})).await.expect("screenshot");
         assert!(
             shot.get("bytes").and_then(Value::as_u64).unwrap_or(0) > 0,
             "screenshot must be non-empty: {shot}"
@@ -2216,7 +2258,11 @@ screencast = { enabled = true, fps_cap = 10, quality = 60 }
         .await
         .expect("viewport screenshot");
         assert!(
-            mobile_shot.get("bytes").and_then(Value::as_u64).unwrap_or(0) > 0,
+            mobile_shot
+                .get("bytes")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                > 0,
             "viewport screenshot must be non-empty: {mobile_shot}"
         );
 
@@ -2236,15 +2282,21 @@ screencast = { enabled = true, fps_cap = 10, quality = 60 }
             if s.get("title").and_then(Value::as_str) == Some("qa-start") && has_refs {
                 break s;
             }
-            assert!(Instant::now() < deadline, "snapshot never returned refs: {s}");
+            assert!(
+                Instant::now() < deadline,
+                "snapshot never returned refs: {s}"
+            );
             sleep(Duration::from_millis(150)).await;
         };
-        let refs = snap.get("refs").and_then(Value::as_array).expect("refs array");
+        let refs = snap
+            .get("refs")
+            .and_then(Value::as_array)
+            .expect("refs array");
         let ref_by = |role: Option<&str>, name: Option<&str>| -> Option<String> {
             refs.iter()
                 .find(|r| {
-                    role.map_or(true, |x| r.get("role").and_then(Value::as_str) == Some(x))
-                        && name.map_or(true, |x| r.get("name").and_then(Value::as_str) == Some(x))
+                    role.is_none_or(|x| r.get("role").and_then(Value::as_str) == Some(x))
+                        && name.is_none_or(|x| r.get("name").and_then(Value::as_str) == Some(x))
                 })
                 .and_then(|r| r.get("ref"))
                 .and_then(Value::as_str)
@@ -2334,9 +2386,12 @@ screencast = { enabled = true, fps_cap = 10, quality = 60 }
         // fires the console error + 404 fetch on load) is navigated to.
         ensure_console_listener(&base);
         sleep(Duration::from_millis(700)).await;
-        cdp_navigate(&base, &json!({ "url": format!("http://127.0.0.1:{http_port}/") }))
-            .await
-            .expect("navigate to diag page");
+        cdp_navigate(
+            &base,
+            &json!({ "url": format!("http://127.0.0.1:{http_port}/") }),
+        )
+        .await
+        .expect("navigate to diag page");
         let deadline = Instant::now() + Duration::from_secs(6);
         loop {
             let diag = cdp_get_console(&json!({ "min_level": "error" }))
@@ -2502,8 +2557,16 @@ screencast = { enabled = true, fps_cap = 10, quality = 60 }
 
         let ctx_a = cdp_new_context(&base).await.expect("new context A");
         let ctx_b = cdp_new_context(&base).await.expect("new context B");
-        let ta = ctx_a.get("target").and_then(Value::as_str).unwrap().to_string();
-        let tb = ctx_b.get("target").and_then(Value::as_str).unwrap().to_string();
+        let ta = ctx_a
+            .get("target")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
+        let tb = ctx_b
+            .get("target")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
         let bctx_a = ctx_a
             .get("browser_context_id")
             .and_then(Value::as_str)

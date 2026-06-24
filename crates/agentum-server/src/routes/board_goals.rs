@@ -179,22 +179,32 @@ async fn create_goal(
 
     match feature {
         Ok(fref) => {
-            let _ = state.bus.send(Event::new("goal.feature.created").with_payload(json!({
-                "goal_id": goal.id,
-                "provider": fref.provider,
-                "id": fref.id,
-                "url": fref.url,
-            })));
-            Ok((StatusCode::CREATED, Json(CreateGoalResponse { goal, feature: fref })))
+            let _ = state
+                .bus
+                .send(Event::new("goal.feature.created").with_payload(json!({
+                    "goal_id": goal.id,
+                    "provider": fref.provider,
+                    "id": fref.id,
+                    "url": fref.url,
+                })));
+            Ok((
+                StatusCode::CREATED,
+                Json(CreateGoalResponse {
+                    goal,
+                    feature: fref,
+                }),
+            ))
         }
         Err(e) => {
             // The goal row stays (the Chat-side record); the error is loud and
             // specific so the UI never sits at an indefinite "planning…".
             tracing::warn!(error = %e, goal_id = goal.id, "feature create failed; goal retained");
-            let _ = state.bus.send(Event::new("goal.feature.failed").with_payload(json!({
-                "goal_id": goal.id,
-                "error": e.to_string(),
-            })));
+            let _ = state
+                .bus
+                .send(Event::new("goal.feature.failed").with_payload(json!({
+                    "goal_id": goal.id,
+                    "error": e.to_string(),
+                })));
             Err(e)
         }
     }
@@ -203,12 +213,7 @@ async fn create_goal(
 /// Build the typed AC-3 error envelope: `{ "error": { code, message, provider } }`.
 /// Nested under `error` (an object) — distinct from the default
 /// `{"error": string}` envelope — so the UI can branch on `code`.
-fn create_error(
-    status: StatusCode,
-    code: &str,
-    message: &str,
-    provider: Option<&str>,
-) -> ApiError {
+fn create_error(status: StatusCode, code: &str, message: &str, provider: Option<&str>) -> ApiError {
     ApiError::Custom(
         status,
         json!({ "error": { "code": code, "message": message, "provider": provider } }),
@@ -271,7 +276,14 @@ async fn create_github_issue_remote(
     feature: &NewFeature,
 ) -> Result<FeatureRef, ApiError> {
     let body = feature.body.clone().unwrap_or_default();
-    let args = ["issue", "create", "--title", feature.title.as_str(), "--body", body.as_str()];
+    let args = [
+        "issue",
+        "create",
+        "--title",
+        feature.title.as_str(),
+        "--body",
+        body.as_str(),
+    ];
     let out = crate::host_runtime::gh_in_dir(host, workdir, &args)
         .await
         .map_err(|e| {
@@ -318,7 +330,10 @@ fn map_sink_error(sink: TaskSink, err: &anyhow::Error) -> ApiError {
             // "gh issue create failed: <stderr>" (non-zero). Classify the
             // stderr so "no default remote repository" reads as not_github_repo.
             if msg.contains("failed to run `gh`") {
-                ("no_gh", "GitHub CLI (`gh`) is not installed or not on PATH.".to_string())
+                (
+                    "no_gh",
+                    "GitHub CLI (`gh`) is not installed or not on PATH.".to_string(),
+                )
             } else {
                 (classify_gh_stderr(&msg), msg.clone())
             }
@@ -970,7 +985,10 @@ mod tests {
         // Spec 018: the response carries the created tracker item, not a
         // planner_session_id. With the board sink forced it's a board card.
         assert_eq!(body.0.feature.provider, "board");
-        assert!(body.0.feature.url.is_none(), "board cards have no external url");
+        assert!(
+            body.0.feature.url.is_none(),
+            "board cards have no external url"
+        );
     }
 
     /// Spec 018 AC-1/AC-5: create-goal returns a `FeatureRef` for the created
@@ -1189,7 +1207,9 @@ mod tests {
     #[test]
     fn classify_gh_stderr_distinguishes_repo_from_other_failures() {
         assert_eq!(
-            classify_gh_stderr("none of the git remotes configured for this repository point to a known GitHub host"),
+            classify_gh_stderr(
+                "none of the git remotes configured for this repository point to a known GitHub host"
+            ),
             "not_github_repo"
         );
         assert_eq!(
@@ -1197,10 +1217,7 @@ mod tests {
             "not_github_repo"
         );
         // Auth / rate-limit / validation → gh_failed (the generic GitHub error).
-        assert_eq!(
-            classify_gh_stderr("HTTP 401: Bad credentials"),
-            "gh_failed"
-        );
+        assert_eq!(classify_gh_stderr("HTTP 401: Bad credentials"), "gh_failed");
     }
 
     /// Auth middleware is verified at the lib.rs::router() merge site via the
