@@ -19,9 +19,8 @@ import { keyboardEventBelongsToScope } from './terminal-keyboard-scope'
 import { normalizeSelectedTextForFileSearch } from '@/lib/file-search-selection'
 import { splitWebRuntimeTerminal } from '@/runtime/web-runtime-session'
 import { useAppStore } from '@/store'
-import { isExplicitAgentStatusFresh } from '@/lib/agent-status'
 import { makePaneKey } from '../../../../shared/stable-pane-id'
-import { AGENT_STATUS_STALE_AFTER_MS } from '../../../../shared/agent-status-types'
+import { paneRunsAgentForWordNav } from './word-nav-agent-detection'
 
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
@@ -228,16 +227,20 @@ export function useTerminalKeyboardShortcuts({
       }
 
       // Why: only Option/Ctrl+Arrow word-nav cares whether an agent owns the
-      // pane (it changes the cursor-key encoding), so resolve the live agent
-      // status just for that chord instead of on every keystroke.
+      // pane (it changes the cursor-key encoding), so resolve it just for that
+      // chord instead of on every keystroke. Uses both the explicit hook status
+      // and the live OSC title because hooks are opt-in — see
+      // paneRunsAgentForWordNav.
       let paneRunsAgent = false
       if ((e.altKey || e.ctrlKey) && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
         const activePane = manager.getActivePane() ?? manager.getPanes()[0]
         if (activePane) {
-          const entry =
-            useAppStore.getState().agentStatusByPaneKey[makePaneKey(tabId, activePane.leafId)]
-          paneRunsAgent =
-            entry != null && isExplicitAgentStatusFresh(entry, Date.now(), AGENT_STATUS_STALE_AFTER_MS)
+          const state = useAppStore.getState()
+          paneRunsAgent = paneRunsAgentForWordNav(
+            state.agentStatusByPaneKey[makePaneKey(tabId, activePane.leafId)],
+            state.runtimePaneTitlesByTabId[tabId]?.[activePane.id],
+            Date.now()
+          )
         }
       }
 
