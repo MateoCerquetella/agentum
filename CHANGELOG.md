@@ -4,6 +4,29 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] — 2026-06-24
+
+### Fixed
+- **Reliable Chat → GitHub issues.** Describing a feature in **Chat** now
+  deterministically creates the GitHub issue **server-side** (via `TaskSink`) in
+  one round trip, instead of handing off to a non-deterministic planner agent
+  that hung at "planning…" forever. `POST /api/board/goals` returns the created
+  issue (`{provider, id, url}`) or a typed, actionable error
+  (`{error:{code,message,provider}}`) — no more silent indefinite spinner. (Spec 018)
+
+### Added
+- Chat renders the created issue as a card with a direct "Open GitHub issue"
+  link, and surfaces specific errors ("Connect GitHub / not a GitHub repo",
+  empty title, etc.) inline instead of spinning.
+- Remote SSH repos: the GitHub issue is created **on the host** via `gh`
+  (`host_runtime::gh_in_dir`), or returns a clear error — never a silent local `gh`.
+
+### Notes
+- The internal Board is a *surfaced* fallback when GitHub isn't available
+  (`provider:"board"` + a "Connect GitHub" hint), not a silent failure.
+- The autonomous planner stays in the tree but is off the issue-creation critical
+  path; LLM decomposition of one description into multiple issues is a follow-up.
+
 ## [0.21.0] — 2026-06-23
 
 ### Added
