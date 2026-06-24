@@ -284,7 +284,10 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                 navigate (url, wait_until?) → {http_status, final_url, title} | \
                 snapshot (returns interactive element refs + a generation) | click \
                 (ref or selector) | fill (ref or selector, text, submit?) | \
-                screenshot | wait (condition selector|text|url|network_idle, arg, \
+                screenshot | node_at_point (x, y, capture?) — resolve the DOM element \
+                at a viewport pixel, returning its clip + label (+ a sharp element PNG \
+                when capture:true); used by the in-pane annotate picker | \
+                wait (condition selector|text|url|network_idle, arg, \
                 timeout_ms?) — act on a tab (optional `tab` id, \
                 else the active one); prefer acting by `ref` from a fresh snapshot \
                 (trusted input; a stale ref returns error `stale_ref`); \
@@ -311,7 +314,7 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|screenshot|get_console|wait|eval|new_context|close_context|reap_contexts|connect_host|annotations|grab|annotate" },
+                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|screenshot|node_at_point|get_console|wait|eval|new_context|close_context|reap_contexts|connect_host|annotations|grab|annotate" },
                     "url": { "type": "string", "description": "Target URL for `open`/`navigate`" },
                     "tab": { "type": "string", "description": "Tab id to act on (default: the active tab)" },
                     "selector": { "type": "string", "description": "CSS selector for `click`/`fill`/`grab`/`annotate`" },
@@ -326,6 +329,9 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                     "mobile": { "type": "boolean", "description": "Emulate a mobile device for the viewport override (default false)" },
                     "deviceScaleFactor": { "type": "number", "description": "Device pixel ratio for the viewport override (default 1)" },
                     "full_page": { "type": "boolean", "description": "`screenshot`: capture the full scrollable page, not just the viewport" },
+                    "x": { "type": "number", "description": "`node_at_point`: viewport X (CSS px) to hit-test" },
+                    "y": { "type": "number", "description": "`node_at_point`: viewport Y (CSS px) to hit-test" },
+                    "capture": { "type": "boolean", "description": "`node_at_point`: also capture a sharp PNG of the resolved element (default false)" },
                     "min_level": { "type": "string", "description": "`get_console`: minimum level to return — info|warning|error (default warning)" },
                     "since_generation": { "type": "integer", "description": "`get_console`: only entries since this snapshot generation (default 0 = all)" },
                     "wait_until": { "type": "string", "description": "`navigate`: load|domcontentloaded|network_idle (default load)" },

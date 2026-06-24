@@ -47,6 +47,7 @@ pub fn handles_op(op: &str) -> bool {
         "navigate"
             | "snapshot"
             | "screenshot"
+            | "node_at_point"
             | "click"
             | "fill"
             | "get_console"
@@ -76,6 +77,7 @@ pub async fn run_browser_op(op: &str, args: &Value) -> Result<Value> {
         "navigate" => cdp_navigate(&base, args).await,
         "snapshot" => cdp_snapshot(&base, args).await,
         "screenshot" => cdp_screenshot(&base, args).await,
+        "node_at_point" => cdp_node_at_point(&base, args).await,
         "click" => cdp_click(&base, args).await,
         "fill" => cdp_fill(&base, args).await,
         "get_console" => cdp_get_console(args).await,
@@ -297,6 +299,113 @@ pub(crate) async fn cdp_screenshot(base: &str, args: &Value) -> Result<Value> {
         "path": path.to_string_lossy(),
         "image_b64": data_b64,
     }))
+}
+
+/// Hit-test: resolve the DOM element under a viewport point `(x, y)` — CSS px, the
+/// same space `Input.dispatchMouseEvent` uses — and return its bounding-box `clip`
+/// plus a short `label` (`tag#id.class`). With `capture:true` it ALSO captures a
+/// sharp PNG of just that element (written to disk + returned as `image_b64`) in the
+/// one round-trip, so the picker hovers cheaply (clip only) and captures on click.
+///
+/// Unlike `screenshot`/`click` by `ref`, this does NOT scroll the element into view:
+/// the user clicked a *visible* pixel on the live screencast, and scrolling the
+/// shared page would make that screencast jump under them. The clip is the element's
+/// current viewport rect, so the capture (`captureBeyondViewport:false`, a
+/// viewport-relative clip — matching the `screenshot{ref}` path) lines up exactly.
+pub(crate) async fn cdp_node_at_point(base: &str, args: &Value) -> Result<Value> {
+    let (Some(x), Some(y)) = (
+        args.get("x").and_then(Value::as_f64),
+        args.get("y").and_then(Value::as_f64),
+    ) else {
+        anyhow::bail!("node_at_point: missing `x`/`y`");
+    };
+    let mut conn = connect_page(base, args).await?;
+    let _ = conn.call("DOM.enable", json!({})).await;
+    // Hit-test the point → backendNodeId. A click on empty space (or coords outside
+    // the document) yields no node / a CDP error — report `no_node`, don't fail the op.
+    let Ok(hit) = conn
+        .call(
+            "DOM.getNodeForLocation",
+            json!({ "x": x, "y": y, "includeUserAgentShadowDOM": false }),
+        )
+        .await
+    else {
+        return Ok(json!({ "ok": false, "code": "no_node" }));
+    };
+    let Some(backend) = hit.get("backendNodeId").and_then(Value::as_i64) else {
+        return Ok(json!({ "ok": false, "code": "no_node" }));
+    };
+    let Some(object_id) = resolve_node_object(&mut conn, backend).await? else {
+        return Ok(json!({ "ok": false, "code": "no_node" }));
+    };
+    // Clip + label in ONE call, WITHOUT scrollIntoView (the element is already on
+    // screen — the user clicked it). The label is a human hint for the annotation.
+    let func = "function(){var r=this.getBoundingClientRect();\
+        var tag=this.tagName?this.tagName.toLowerCase():'';\
+        var id=this.id?('#'+this.id):'';\
+        var cls=(this.classList&&this.classList.length)?('.'+this.classList[0]):'';\
+        return JSON.stringify({x:r.left,y:r.top,w:r.width,h:r.height,label:tag+id+cls});}";
+    let res = conn
+        .call(
+            "Runtime.callFunctionOn",
+            json!({ "objectId": object_id, "functionDeclaration": func, "returnByValue": true }),
+        )
+        .await?;
+    let rect: Value = res
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .and_then(Value::as_str)
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(Value::Null);
+    let w = rect.get("w").and_then(Value::as_f64).unwrap_or(0.0);
+    let h = rect.get("h").and_then(Value::as_f64).unwrap_or(0.0);
+    if w <= 0.0 || h <= 0.0 {
+        return Ok(json!({ "ok": false, "code": "no_box" }));
+    }
+    let clip = json!({
+        "x": rect.get("x").and_then(Value::as_f64).unwrap_or(0.0),
+        "y": rect.get("y").and_then(Value::as_f64).unwrap_or(0.0),
+        "width": w,
+        "height": h,
+        "scale": 1,
+    });
+    let label = rect
+        .get("label")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let mut out = json!({ "ok": true, "label": label, "clip": clip });
+
+    // Optional: capture a sharp PNG of just this element in the same round-trip.
+    if args
+        .get("capture")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        let result = conn
+            .call(
+                "Page.captureScreenshot",
+                json!({ "format": "png", "clip": clip }),
+            )
+            .await?;
+        if let Some(data_b64) = result.get("data").and_then(Value::as_str) {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(data_b64)
+                .context("node_at_point: decode screenshot base64")?;
+            if !bytes.is_empty() {
+                let path = screenshot_path()?;
+                std::fs::write(&path, &bytes)
+                    .with_context(|| format!("node_at_point: write {}", path.display()))?;
+                let (iw, ih) = png_dimensions(&bytes).unwrap_or((0, 0));
+                out["path"] = json!(path.to_string_lossy());
+                out["bytes"] = json!(bytes.len());
+                out["image_width"] = json!(iw);
+                out["image_height"] = json!(ih);
+                out["image_b64"] = json!(data_b64);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Click the element matching `selector` (scroll into view first). Returns whether
@@ -1873,6 +1982,15 @@ mod tests {
         assert_eq!(v["ok"], false);
         assert_eq!(v["error"], "stale_ref");
         assert_eq!(v["ref"], "e3_2");
+    }
+
+    #[test]
+    fn node_at_point_is_registered_as_a_driver_op() {
+        // The picker's hit-test must route through the CDP driver (it needs the
+        // persistent Chromium's live DOM), not the desktop bridge.
+        assert!(handles_op("node_at_point"));
+        // sanity: a bridge-only op is NOT claimed by the driver.
+        assert!(!handles_op("annotate"));
     }
 
     #[test]

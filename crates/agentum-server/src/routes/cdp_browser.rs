@@ -17,6 +17,7 @@ use axum::Json;
 use axum::Router;
 use axum::routing::{get, post};
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::AppState;
 use crate::cdp_browser;
@@ -27,6 +28,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/cdp-browser", get(status).post(launch).delete(stop))
         // A bare DELETE alias is handy for clients that prefer it explicit.
         .route("/api/cdp-browser/stop", post(stop))
+        // The in-pane annotate picker hit-tests the shared CDP page here.
+        .route("/api/cdp-browser/node-at-point", post(node_at_point))
 }
 
 #[derive(Serialize)]
@@ -70,4 +73,17 @@ async fn stop() -> Result<Json<CdpBrowserStatus>, ApiError> {
         .await
         .map_err(|e| ApiError::Internal(format!("{e:#}")))?;
     Ok(Json(snapshot(false)))
+}
+
+/// `POST /api/cdp-browser/node-at-point` — hit-test the shared CDP page at a
+/// viewport pixel for the in-pane annotate picker. Body `{x, y, capture?, cdpPort?}`
+/// is forwarded verbatim as the `node_at_point` op's args, so the picker reaches the
+/// SAME persistent Chromium the screencast renders. Returns the driver JSON
+/// (`{ok, clip, label, [path, image_b64, …]}`): hover calls it clip-only, click with
+/// `capture:true`. A launch-on-demand happens inside `run_browser_op` (idempotent).
+async fn node_at_point(Json(body): Json<Value>) -> Result<Json<Value>, ApiError> {
+    let result = crate::cdp_driver::run_browser_op("node_at_point", &body)
+        .await
+        .map_err(|e| ApiError::Internal(format!("{e:#}")))?;
+    Ok(Json(result))
 }
