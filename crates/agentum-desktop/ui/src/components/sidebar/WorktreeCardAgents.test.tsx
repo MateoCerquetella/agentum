@@ -55,6 +55,9 @@ function mockAgent({
 let mockAgents: unknown[] = [mockAgent()]
 let mockFocusedAgentPaneKey: string | null = null
 let mockAgentActivityDisplayMode: 'compact' | 'full' | undefined
+let mockTabsByWorktree: Record<string, unknown[]> = {}
+let mockPtyIdsByTabId: Record<string, string[]> = {}
+let mockActiveTabId: string | null = null
 
 vi.mock('@/store', () => ({
   useAppStore: (selector: (state: unknown) => unknown) =>
@@ -66,8 +69,11 @@ vi.mock('@/store', () => ({
       acknowledgeAgents: vi.fn(),
       agentSendPopoverTargetMode: null,
       agentStatusByPaneKey: {},
-      tabsByWorktree: {},
+      tabsByWorktree: mockTabsByWorktree,
+      ptyIdsByTabId: mockPtyIdsByTabId,
       terminalLayoutsByTabId: {},
+      tmuxByPaneKey: {},
+      activeTabId: mockActiveTabId,
       sendPromptToSidebarAgentTarget: vi.fn()
     })
 }))
@@ -141,6 +147,9 @@ describe('WorktreeCardAgents', () => {
     mockAgents = [mockAgent()]
     mockFocusedAgentPaneKey = null
     mockAgentActivityDisplayMode = undefined
+    mockTabsByWorktree = {}
+    mockPtyIdsByTabId = {}
+    mockActiveTabId = null
   })
 
   it('renders ordinary rows in full mode without a child disclosure', async () => {
@@ -468,5 +477,56 @@ describe('WorktreeCardAgents', () => {
     expect(markup).toContain('3 parents: 1 waiting, 1 working, 1 done')
     expect(markup).not.toContain('Parent A')
     expect(markup).not.toContain('Child A')
+  })
+
+  it('lists a plain terminal that has no agent row', async () => {
+    mockAgentActivityDisplayMode = 'full'
+    mockAgents = []
+    mockTabsByWorktree = {
+      'wt-1': [
+        {
+          id: 'term-1',
+          worktreeId: 'wt-1',
+          ptyId: null,
+          title: 'Terminal 2',
+          customTitle: null,
+          color: null,
+          sortOrder: 0,
+          createdAt: 0
+        }
+      ]
+    }
+    const { default: WorktreeCardAgents } = await import('./WorktreeCardAgents')
+
+    const markup = renderToStaticMarkup(<WorktreeCardAgents worktreeId="wt-1" />)
+
+    expect(markup).toContain('data-terminal-tab-id="term-1"')
+    expect(markup).toContain('Terminal 2')
+    expect(markup).not.toContain('data-testid="agent-row"')
+  })
+
+  it('does not list a terminal that is already shown as an agent row', async () => {
+    mockAgentActivityDisplayMode = 'full'
+    mockAgents = [mockAgent({ paneKey: 'term-agent:1', tabId: 'term-agent' })]
+    mockTabsByWorktree = {
+      'wt-1': [
+        {
+          id: 'term-agent',
+          worktreeId: 'wt-1',
+          ptyId: null,
+          title: 'claude',
+          customTitle: null,
+          color: null,
+          sortOrder: 0,
+          createdAt: 0
+        }
+      ]
+    }
+    const { default: WorktreeCardAgents } = await import('./WorktreeCardAgents')
+
+    const markup = renderToStaticMarkup(<WorktreeCardAgents worktreeId="wt-1" />)
+
+    expect(markup).toContain('data-testid="agent-row"')
+    expect(markup).not.toContain('data-terminal-tab-id')
   })
 })
