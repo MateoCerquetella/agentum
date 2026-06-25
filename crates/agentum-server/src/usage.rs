@@ -1460,6 +1460,399 @@ pub fn claude_usage_recent_sessions(
     )
 }
 
+// ===========================================================================
+// Task 3: Codex stats aggregation — contracts + pure cores + wrappers
+//
+// Codex pricing is subscription-based with no public per-model billing API,
+// so estimated_cost_usd is always None and has_inferred_pricing is always true.
+// Model is extracted from the first `turn_context` record (payload.model);
+// falls back to None if absent — breakdown groups under the model key "codex".
+// ===========================================================================
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexUsageSummary {
+    pub scope: String,
+    pub range: String,
+    pub sessions: u64,
+    pub events: u64,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
+    pub total_tokens: u64,
+    /// Always None — no per-model Codex billing source.
+    pub estimated_cost_usd: Option<f64>,
+    pub top_model: Option<String>,
+    pub top_project: Option<String>,
+    pub has_any_codex_data: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexUsageDailyPoint {
+    pub day: String,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
+    pub total_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexUsageBreakdownRow {
+    pub key: String,
+    pub label: String,
+    pub sessions: u64,
+    pub events: u64,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
+    pub total_tokens: u64,
+    /// Always None — subscription pricing can't be decomposed per-call.
+    pub estimated_cost_usd: Option<f64>,
+    pub has_inferred_pricing: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexUsageSessionRow {
+    pub session_id: String,
+    pub last_active_at: String,
+    pub duration_minutes: u64,
+    pub project_label: String,
+    pub model: Option<String>,
+    pub events: u64,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
+    pub total_tokens: u64,
+    pub has_inferred_pricing: bool,
+}
+
+fn codex_in_range(
+    records: Vec<ParsedCodexRecord>,
+    range: UsageRange,
+    now_ms: i64,
+) -> Vec<ParsedCodexRecord> {
+    match range.floor_ms(now_ms) {
+        Some(floor) => records.into_iter().filter(|r| r.ts_ms >= floor).collect(),
+        None => records,
+    }
+}
+
+pub(crate) fn codex_usage_summary_from_records(
+    records: Vec<ParsedCodexRecord>,
+    scope: &str,
+    range: UsageRange,
+    now_ms: i64,
+) -> CodexUsageSummary {
+    let range_str = range_label(&range);
+    let records = codex_in_range(records, range, now_ms);
+    let mut sessions = std::collections::BTreeSet::new();
+    let (mut i, mut ci, mut o, mut ro, mut tot) = (0u64, 0u64, 0u64, 0u64, 0u64);
+    let mut by_model: std::collections::BTreeMap<String, u64> = Default::default();
+    for r in &records {
+        sessions.insert(r.session_id.clone());
+        i += r.input;
+        ci += r.cached_input;
+        o += r.output;
+        ro += r.reasoning_output;
+        tot += r.total;
+        if let Some(m) = &r.model {
+            *by_model.entry(m.clone()).or_default() += r.total;
+        }
+    }
+    CodexUsageSummary {
+        scope: scope.to_string(),
+        range: range_str,
+        sessions: sessions.len() as u64,
+        events: records.len() as u64,
+        input_tokens: i,
+        cached_input_tokens: ci,
+        output_tokens: o,
+        reasoning_output_tokens: ro,
+        total_tokens: tot,
+        estimated_cost_usd: None,
+        top_model: by_model
+            .iter()
+            .max_by_key(|(_, v)| **v)
+            .map(|(k, _)| k.clone()),
+        top_project: None, // Codex JSONL carries no per-record project path in v1.
+        has_any_codex_data: !records.is_empty(),
+    }
+}
+
+pub(crate) fn codex_usage_daily_from_records(
+    records: Vec<ParsedCodexRecord>,
+) -> Vec<CodexUsageDailyPoint> {
+    let mut by_day: std::collections::BTreeMap<String, CodexUsageDailyPoint> = Default::default();
+    for r in records {
+        let e = by_day.entry(r.day.clone()).or_insert(CodexUsageDailyPoint {
+            day: r.day.clone(),
+            input_tokens: 0,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            total_tokens: 0,
+        });
+        e.input_tokens += r.input;
+        e.cached_input_tokens += r.cached_input;
+        e.output_tokens += r.output;
+        e.reasoning_output_tokens += r.reasoning_output;
+        e.total_tokens += r.total;
+    }
+    // BTreeMap iterates ascending → ascending by day.
+    by_day.into_values().collect()
+}
+
+pub(crate) fn codex_usage_breakdown_from_records(
+    records: Vec<ParsedCodexRecord>,
+    kind: &str,
+) -> Vec<CodexUsageBreakdownRow> {
+    struct Acc {
+        label: String,
+        sessions: std::collections::BTreeSet<String>,
+        events: u64,
+        i: u64,
+        ci: u64,
+        o: u64,
+        ro: u64,
+        tot: u64,
+    }
+    let mut groups: std::collections::BTreeMap<String, Acc> = Default::default();
+    for r in records {
+        // Codex JSONL has no per-record project — project breakdown gets a single
+        // "codex" bucket. Model breakdown keys by model name or "codex" when absent.
+        let (key, label) = if kind == "project" {
+            ("codex".to_string(), "codex".to_string())
+        } else {
+            let m = r.model.clone().unwrap_or_else(|| "codex".to_string());
+            (m.clone(), m)
+        };
+        let a = groups.entry(key).or_insert(Acc {
+            label,
+            sessions: Default::default(),
+            events: 0,
+            i: 0,
+            ci: 0,
+            o: 0,
+            ro: 0,
+            tot: 0,
+        });
+        a.sessions.insert(r.session_id.clone());
+        a.events += 1;
+        a.i += r.input;
+        a.ci += r.cached_input;
+        a.o += r.output;
+        a.ro += r.reasoning_output;
+        a.tot += r.total;
+    }
+    let mut rows: Vec<CodexUsageBreakdownRow> = groups
+        .into_iter()
+        .map(|(key, a)| CodexUsageBreakdownRow {
+            key,
+            label: a.label,
+            sessions: a.sessions.len() as u64,
+            events: a.events,
+            input_tokens: a.i,
+            cached_input_tokens: a.ci,
+            output_tokens: a.o,
+            reasoning_output_tokens: a.ro,
+            total_tokens: a.tot,
+            estimated_cost_usd: None,
+            has_inferred_pricing: true,
+        })
+        .collect();
+    rows.sort_by(|x, y| y.total_tokens.cmp(&x.total_tokens));
+    rows
+}
+
+pub(crate) fn codex_usage_recent_sessions_from_records(
+    records: Vec<ParsedCodexRecord>,
+    limit: usize,
+) -> Vec<CodexUsageSessionRow> {
+    struct Acc {
+        first_ms: i64,
+        last_ms: i64,
+        last_day: String,
+        model: Option<String>,
+        events: u64,
+        i: u64,
+        ci: u64,
+        o: u64,
+        ro: u64,
+        tot: u64,
+    }
+    let mut by_session: std::collections::BTreeMap<String, Acc> = Default::default();
+    for r in records {
+        let a = by_session.entry(r.session_id.clone()).or_insert(Acc {
+            first_ms: r.ts_ms,
+            last_ms: r.ts_ms,
+            last_day: r.day.clone(),
+            model: r.model.clone(),
+            events: 0,
+            i: 0,
+            ci: 0,
+            o: 0,
+            ro: 0,
+            tot: 0,
+        });
+        a.first_ms = a.first_ms.min(r.ts_ms);
+        if r.ts_ms >= a.last_ms {
+            a.last_ms = r.ts_ms;
+            a.last_day = r.day.clone();
+            // Use the model from the latest record (most representative).
+            a.model = r.model.clone();
+        }
+        a.events += 1;
+        a.i += r.input;
+        a.ci += r.cached_input;
+        a.o += r.output;
+        a.ro += r.reasoning_output;
+        a.tot += r.total;
+    }
+    let mut rows: Vec<(i64, CodexUsageSessionRow)> = by_session
+        .into_iter()
+        .map(|(session_id, a)| {
+            (
+                a.last_ms,
+                CodexUsageSessionRow {
+                    session_id,
+                    last_active_at: a.last_day,
+                    duration_minutes: ((a.last_ms - a.first_ms).max(0) / 60_000) as u64,
+                    project_label: "codex".to_string(),
+                    model: a.model,
+                    events: a.events,
+                    input_tokens: a.i,
+                    cached_input_tokens: a.ci,
+                    output_tokens: a.o,
+                    reasoning_output_tokens: a.ro,
+                    total_tokens: a.tot,
+                    has_inferred_pricing: true,
+                },
+            )
+        })
+        .collect();
+    // Most-recently-active sessions first.
+    rows.sort_by(|x, y| y.0.cmp(&x.0));
+    rows.into_iter().take(limit).map(|(_, row)| row).collect()
+}
+
+// ---- path-resolving public wrappers (desktop commands call these) ----------
+
+fn codex_session_files() -> Vec<PathBuf> {
+    home_dir()
+        .map(|h| {
+            let d = h.join(".codex/sessions");
+            if d.exists() {
+                walk_jsonl(&d)
+            } else {
+                Vec::new()
+            }
+        })
+        .unwrap_or_default()
+}
+
+/// Extract the model from the first `turn_context` line in a Codex JSONL file.
+///
+/// Recon (Task 3 Step 1) confirmed: model lives at `payload.model` on lines
+/// where `type == "turn_context"`. `session_meta` has only `model_provider`,
+/// not the model name. Falls back to `None` — breakdown groups under "codex".
+fn codex_model_for(path: &Path) -> Option<String> {
+    let file = File::open(path).ok()?;
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
+            if let Some(m) = v
+                .get("payload")
+                .and_then(|p| p.get("model"))
+                .and_then(|m| m.as_str())
+            {
+                return Some(m.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn collect_codex_records() -> Vec<ParsedCodexRecord> {
+    let mut out = Vec::new();
+    for path in codex_session_files() {
+        let session_id = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        let model = codex_model_for(&path);
+        let file = match File::open(&path) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        for line in BufReader::new(file).lines().map_while(Result::ok) {
+            if let Some(r) = parse_codex_usage_record(&line, &session_id, model.as_deref()) {
+                out.push(r);
+            }
+        }
+    }
+    out
+}
+
+/// Returns true when the user has any Codex history on this machine.
+pub fn codex_has_any_data() -> bool {
+    home_dir()
+        .map(|h| h.join(".codex/sessions").exists())
+        .unwrap_or(false)
+}
+
+pub fn codex_usage_summary(scope: &str, range: &str) -> CodexUsageSummary {
+    codex_usage_summary_from_records(
+        collect_codex_records(),
+        scope,
+        UsageRange::from_str(range),
+        now_ms(),
+    )
+}
+
+pub fn codex_usage_daily(_scope: &str, range: &str) -> Vec<CodexUsageDailyPoint> {
+    // TODO: scope=="agentum" treated as "all" in v1 — no path filter yet.
+    codex_usage_daily_from_records(codex_in_range(
+        collect_codex_records(),
+        UsageRange::from_str(range),
+        now_ms(),
+    ))
+}
+
+pub fn codex_usage_breakdown(_scope: &str, range: &str, kind: &str) -> Vec<CodexUsageBreakdownRow> {
+    // TODO: scope=="agentum" treated as "all" in v1 — no path filter yet.
+    codex_usage_breakdown_from_records(
+        codex_in_range(
+            collect_codex_records(),
+            UsageRange::from_str(range),
+            now_ms(),
+        ),
+        kind,
+    )
+}
+
+pub fn codex_usage_recent_sessions(
+    _scope: &str,
+    range: &str,
+    limit: usize,
+) -> Vec<CodexUsageSessionRow> {
+    // TODO: scope=="agentum" treated as "all" in v1 — no path filter yet.
+    codex_usage_recent_sessions_from_records(
+        codex_in_range(
+            collect_codex_records(),
+            UsageRange::from_str(range),
+            now_ms(),
+        ),
+        limit,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1863,5 +2256,72 @@ mod tests {
         assert_eq!(rs.len(), 1);
         assert_eq!(rs[0].session_id, "s2"); // most-recent lastActiveAt
         assert_eq!(rs[0].project_label, "beta");
+    }
+
+    // ---- Task 3: Codex aggregation cores ----------------------------------
+
+    fn codex_fixture() -> Vec<ParsedCodexRecord> {
+        let mk = |ts: &str, day: &str, sess: &str, i: u64, ci: u64, o: u64, ro: u64, tot: u64| {
+            ParsedCodexRecord {
+                ts_ms: parse_iso8601_ms(ts).unwrap(),
+                day: day.to_string(),
+                session_id: sess.to_string(),
+                model: Some("gpt-5-codex".to_string()),
+                input: i,
+                cached_input: ci,
+                output: o,
+                reasoning_output: ro,
+                total: tot,
+            }
+        };
+        vec![
+            mk(
+                "2026-04-11T01:00:00Z",
+                "2026-04-11",
+                "c1",
+                100,
+                20,
+                30,
+                5,
+                155,
+            ),
+            mk(
+                "2026-04-11T02:00:00Z",
+                "2026-04-11",
+                "c1",
+                200,
+                0,
+                40,
+                0,
+                240,
+            ),
+            mk("2026-04-12T01:00:00Z", "2026-04-12", "c2", 9, 0, 1, 0, 10),
+        ]
+    }
+
+    #[test]
+    fn codex_summary_totals() {
+        let s = codex_usage_summary_from_records(
+            codex_fixture(),
+            "all",
+            UsageRange::All,
+            1_780_000_000_000,
+        );
+        assert_eq!(s.sessions, 2);
+        assert_eq!(s.events, 3);
+        assert_eq!(s.input_tokens, 309);
+        assert_eq!(s.total_tokens, 405);
+        assert!(s.has_any_codex_data);
+    }
+
+    #[test]
+    fn codex_daily_and_sessions() {
+        let d = codex_usage_daily_from_records(codex_fixture());
+        assert_eq!(d.len(), 2);
+        assert_eq!(d[0].day, "2026-04-11");
+        assert_eq!(d[0].total_tokens, 395);
+        let rs = codex_usage_recent_sessions_from_records(codex_fixture(), 5);
+        assert_eq!(rs[0].session_id, "c2"); // newest
+        assert!(rs[0].has_inferred_pricing);
     }
 }
