@@ -4,6 +4,11 @@
 use std::path::PathBuf;
 
 pub fn prefs_path() -> Option<PathBuf> {
+    // AGENTUM_HOME is the project-wide test-isolation env var; when set it
+    // already points at the .agentum root directly. Fall back to $HOME/.agentum.
+    if let Some(base) = std::env::var_os("AGENTUM_HOME").map(PathBuf::from) {
+        return Some(base.join("usage-prefs.json"));
+    }
     let home = std::env::var_os("HOME").map(PathBuf::from)?;
     Some(home.join(".agentum").join("usage-prefs.json"))
 }
@@ -40,9 +45,10 @@ mod tests {
     use super::*;
     #[test]
     fn defaults_when_absent_then_roundtrips() {
-        // Isolate HOME to a temp dir so the real prefs file is never touched.
+        // Isolate via AGENTUM_HOME (project-wide test-isolation var) so the real
+        // prefs file is never touched and we don't mutate process-global $HOME.
         let tmp = tempfile::tempdir().unwrap();
-        std::env::set_var("HOME", tmp.path());
+        std::env::set_var("AGENTUM_HOME", tmp.path());
         assert!(provider_enabled("claude", true)); // default = true
         assert!(!provider_enabled("claude", false)); // default = false honored when no file
         set_provider_enabled("claude", false);
