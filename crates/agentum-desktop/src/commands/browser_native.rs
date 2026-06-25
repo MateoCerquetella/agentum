@@ -39,6 +39,20 @@ fn webview_label(browser_page_id: &str) -> String {
     format!("{LABEL_PREFIX}{safe}")
 }
 
+/// Stable 16-byte WKWebView data-store id for a worktree, so each worktree's
+/// native browser keeps its OWN cookies / logins / storage instead of sharing
+/// one global session (the root cause of "worktree B shows worktree A's
+/// browser"). Derived from the worktree id via SHA-256 (first 16 bytes) so it's
+/// deterministic across launches. All browser tabs in the same worktree share
+/// this store; a different worktree gets a different one.
+fn worktree_data_store_id(worktree_id: &str) -> [u8; 16] {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(worktree_id.as_bytes());
+    let mut id = [0u8; 16];
+    id.copy_from_slice(&digest[..16]);
+    id
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub struct BrowserWebviewBounds {
     pub x: f64,
@@ -78,6 +92,7 @@ fn get_browser_webview(app: &AppHandle, browser_page_id: &str) -> Option<tauri::
 pub fn browser_webview_open(
     app: AppHandle,
     browser_page_id: String,
+    worktree_id: String,
     url: String,
     bounds: BrowserWebviewBounds,
 ) -> Result<(), String> {
@@ -95,6 +110,9 @@ pub fn browser_webview_open(
         .ok_or_else(|| "main window not found".to_string())?;
     let label = webview_label(&browser_page_id);
     let event_page_id = browser_page_id.clone();
+    // Per-worktree session: this worktree's own WKWebView data store, so its
+    // browser doesn't share cookies / logins / storage with other worktrees.
+    let data_store_id = worktree_data_store_id(&worktree_id);
 
     // Webview creation must run on the main thread on macOS; commands execute
     // on the async runtime, so hop over and relay the result back.
@@ -102,6 +120,9 @@ pub fn browser_webview_open(
     app.run_on_main_thread(move || {
         let builder = tauri::webview::WebviewBuilder::new(&label, WebviewUrl::External(parsed))
             .user_agent(BROWSER_USER_AGENT)
+            // Each worktree gets its OWN data store (macOS/iOS >= 14/17; a no-op
+            // on other OSes) so two worktrees never share one browser session.
+            .data_store_identifier(data_store_id)
             .on_page_load(move |webview, payload| {
                 let event = match payload.event() {
                     PageLoadEvent::Started => "started",

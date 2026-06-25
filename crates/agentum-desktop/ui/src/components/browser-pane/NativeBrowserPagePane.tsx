@@ -32,6 +32,7 @@ type BrowserTabPageState = Partial<
 type NativeBrowserApi = {
   webviewOpen: (args: {
     browserPageId: string
+    worktreeId: string
     url: string
     bounds: { x: number; y: number; width: number; height: number }
   }) => Promise<void>
@@ -138,7 +139,12 @@ export default function NativeBrowserPagePane({
         if (!bounds) {
           return
         }
-        await nativeBrowser.webviewOpen({ browserPageId: browserTab.id, url, bounds })
+        await nativeBrowser.webviewOpen({
+          browserPageId: browserTab.id,
+          worktreeId: browserTab.worktreeId,
+          url,
+          bounds
+        })
         createdRef.current = true
         lastBoundsRef.current = bounds
       }
@@ -248,6 +254,7 @@ export default function NativeBrowserPagePane({
       }
       await nativeBrowser.webviewOpen({
         browserPageId: browserTab.id,
+        worktreeId: browserTab.worktreeId,
         url: browserTabUrlRef.current,
         bounds
       })
