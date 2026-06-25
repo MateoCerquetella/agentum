@@ -500,7 +500,7 @@ struct OAuthCred {
 /// EXPIRED file token (→ 401 → "Sign in to Claude to see usage") while a valid
 /// token sat in the Keychain. Choosing by latest expiry is platform-agnostic
 /// (Linux: file only) and durable against rotation.
-fn read_claude_oauth_token() -> Option<String> {
+pub(crate) fn read_claude_oauth_token() -> Option<String> {
     if let Ok(tok) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
         let tok = tok.trim();
         if !tok.is_empty() {

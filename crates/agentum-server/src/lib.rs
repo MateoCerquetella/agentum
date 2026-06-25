@@ -277,6 +277,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::preflight::router())
         .merge(routes::profiles::router())
         .merge(routes::channels::router())
+        .merge(routes::chat::router())
         .merge(routes::orchestration::router())
         .merge(routes::browser::router())
         .merge(routes::cdp_browser::router())
