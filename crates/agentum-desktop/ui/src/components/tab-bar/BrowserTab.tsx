@@ -10,7 +10,6 @@ import {
   Copy,
   Pin,
   PinOff,
-  GripVertical,
   FolderInput
 } from 'lucide-react'
 import {
@@ -26,7 +25,6 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useAppStore } from '@/store'
 import { useAllWorktrees } from '@/store/selectors'
-import { writeBrowserTabDragData } from '../sidebar/workspace-status'
 import { AGENTUM_BROWSER_BLANK_URL } from '../../../../shared/constants'
 import { redactKagiSessionToken } from '../../../../shared/browser-url'
 import type { BrowserTab as BrowserTabState } from '../../../../shared/types'
@@ -234,28 +232,6 @@ export default function BrowserTab({
       {tab.loading && !tab.loadError && !isBlankBrowserTab(tab) && (
         <span className="mr-1 size-1.5 rounded-full bg-sky-500/80 shrink-0" />
       )}
-      {/* Native drag handle — drag onto a sidebar worktree card to MOVE this tab
-          there. Isolated from the dnd-kit reorder drag by stopping pointerdown
-          propagation (the same trick the close button below uses). */}
-      <span
-        role="button"
-        aria-label="Drag to move this tab to another worktree"
-        title="Drag onto a worktree in the sidebar to move this tab there"
-        draggable
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => e.stopPropagation()}
-        onDragStart={(e) => {
-          e.stopPropagation()
-          writeBrowserTabDragData(e.dataTransfer, tab.id)
-        }}
-        className={`flex items-center justify-center w-3.5 h-4 rounded-sm shrink-0 cursor-grab active:cursor-grabbing ${
-          isActive
-            ? 'text-muted-foreground/60 hover:text-foreground'
-            : 'text-transparent group-hover:text-muted-foreground/60 hover:!text-foreground'
-        }`}
-      >
-        <GripVertical className="size-3" />
-      </span>
       {!isPinned && (
         <button
           className={`flex items-center justify-center w-4 h-4 rounded-sm shrink-0 ${
