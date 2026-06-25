@@ -615,6 +615,42 @@ describe('createUISlice hydratePersistedUI', () => {
     expect(store.getState().hideDefaultBranchWorkspace).toBe(true)
   })
 
+  it('hides the default-branch workspace by default and migrates legacy profiles once', () => {
+    // New baseline: brand-new profiles (no persisted value) start hidden.
+    expect(getDefaultUIState().hideDefaultBranchWorkspace).toBe(true)
+
+    // The one-time migration only fires in the browser; the default vitest env
+    // is node, so stub a minimal localStorage to exercise the force path.
+    const backing = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => backing.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        backing.set(k, v)
+      },
+      removeItem: (k: string) => {
+        backing.delete(k)
+      },
+      clear: () => backing.clear(),
+      key: () => null,
+      get length() {
+        return backing.size
+      }
+    } as Storage)
+
+    // Legacy profile carries the OLD default (false); the one-shot flips it to
+    // the new hidden baseline on first rehydrate.
+    const legacy = createUIStore()
+    legacy.getState().hydratePersistedUI(makePersistedUI({ hideDefaultBranchWorkspace: false }))
+    expect(legacy.getState().hideDefaultBranchWorkspace).toBe(true)
+
+    // Once the one-shot has fired, an explicit "show the primary" choice sticks.
+    const afterChoice = createUIStore()
+    afterChoice
+      .getState()
+      .hydratePersistedUI(makePersistedUI({ hideDefaultBranchWorkspace: false }))
+    expect(afterChoice.getState().hideDefaultBranchWorkspace).toBe(false)
+  })
+
   it('restores fixed card properties during hydration', () => {
     const store = createUIStore()
 

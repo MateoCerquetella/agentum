@@ -42,6 +42,7 @@ import {
 } from '../../../../shared/task-providers'
 import {
   DEFAULT_HIDE_SLEEPING_WORKSPACES,
+  DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE,
   DEFAULT_AGENT_ACTIVITY_DISPLAY_MODE,
   DEFAULT_SHOW_SLEEPING_WORKSPACES,
   DEFAULT_STATUS_BAR_ITEMS,
@@ -223,6 +224,29 @@ function migrateGroupByToHostOnce(
     if (typeof localStorage !== 'undefined' && !localStorage.getItem(GROUPBY_HOST_MIGRATION_KEY)) {
       localStorage.setItem(GROUPBY_HOST_MIGRATION_KEY, '1')
       return 'host'
+    }
+  } catch {
+    // localStorage unavailable (SSR/headless) — fall through to the resolved value.
+  }
+  return resolved
+}
+
+// One-time migration so existing users land on the new "primary hidden by
+// default" sidebar. Older profiles carry an explicit persisted `false` (the OLD
+// default), which would otherwise keep showing the main-branch row. On the first
+// rehydrate after this ships we force the new default once and set a localStorage
+// flag; afterwards the user's explicit choice (incl. turning the primary back on
+// via "Show default branches") is respected.
+const HIDE_DEFAULT_BRANCH_MIGRATION_KEY = 'agentum-hide-default-branch-migrated'
+function migrateHideDefaultBranchOnce(persisted: boolean | undefined): boolean {
+  const resolved = persisted ?? DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE
+  try {
+    if (
+      typeof localStorage !== 'undefined' &&
+      !localStorage.getItem(HIDE_DEFAULT_BRANCH_MIGRATION_KEY)
+    ) {
+      localStorage.setItem(HIDE_DEFAULT_BRANCH_MIGRATION_KEY, '1')
+      return DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE
     }
   } catch {
     // localStorage unavailable (SSR/headless) — fall through to the resolved value.
@@ -1179,7 +1203,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   showSleepingWorkspaces: DEFAULT_SHOW_SLEEPING_WORKSPACES,
   setShowSleepingWorkspaces: (v) => set({ showSleepingWorkspaces: v }),
 
-  hideDefaultBranchWorkspace: false,
+  hideDefaultBranchWorkspace: DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE,
   setHideDefaultBranchWorkspace: (v) => set({ hideDefaultBranchWorkspace: v }),
 
   showDotfilesByWorktree: {},
@@ -1456,7 +1480,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         // Older positive-form keys are intentionally ignored so old profiles
         // start from the new default: sleeping workspaces visible.
         showSleepingWorkspaces: !(ui.hideSleepingWorkspaces ?? DEFAULT_HIDE_SLEEPING_WORKSPACES),
-        hideDefaultBranchWorkspace: ui.hideDefaultBranchWorkspace ?? false,
+        hideDefaultBranchWorkspace: migrateHideDefaultBranchOnce(ui.hideDefaultBranchWorkspace),
         showDotfilesByWorktree: sanitizeShowDotfilesByWorktree(ui.showDotfilesByWorktree),
         filterRepoIds: (ui.filterRepoIds ?? []).filter((repoId) => validRepoIds.has(repoId)),
         collapsedGroups: new Set(ui.collapsedGroups ?? []),
