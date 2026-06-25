@@ -5,10 +5,11 @@
 //! multi-turn conversation: the model interviews the user to flesh out a feature
 //! and, once it's clear, proposes a GitHub task breakdown the user can confirm.
 //!
-//! **Auth (user-authorized):** the chat reuses the user's Claude Code OAuth token
-//! — the same `sk-ant-oat-…` credential `usage.rs` already reads for plan stats —
-//! to call the Anthropic Messages API. The user explicitly opted into reusing
-//! their `claude` login to power this chat.
+//! **Auth:** prefers an explicit `ANTHROPIC_API_KEY` (a real `sk-ant-api…` key —
+//! clean, terms-safe, pay-per-token); otherwise falls back to the user's Claude
+//! Code OAuth token (the `sk-ant-oat…` credential `usage.rs` already reads for
+//! plan stats) — the user explicitly opted into reusing their `claude` login.
+//! The API-key path is the robust default; the OAuth path is zero-setup.
 //!
 //! **OAuth gotcha (load-bearing):** an OAuth (subscription) token is only
 //! accepted by `/v1/messages` when the request presents the Claude Code identity.
@@ -46,6 +47,27 @@ const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CL
 /// Default interview model — a fast, capable Sonnet for back-and-forth.
 const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How the chat authenticates to Anthropic.
+enum Auth {
+    /// A real `sk-ant-api…` key (env `ANTHROPIC_API_KEY`) — clean API billing.
+    ApiKey(String),
+    /// The Claude Code subscription OAuth token (`sk-ant-oat…`).
+    Oauth(String),
+}
+
+/// Resolve chat credentials: prefer an explicit `ANTHROPIC_API_KEY` (terms-safe,
+/// pay-per-token); else fall back to the Claude Code OAuth token the user is
+/// already signed in with. `None` when neither is available.
+fn resolve_auth() -> Option<Auth> {
+    if let Ok(k) = std::env::var("ANTHROPIC_API_KEY") {
+        let k = k.trim();
+        if !k.is_empty() {
+            return Some(Auth::ApiKey(k.to_string()));
+        }
+    }
+    crate::usage::read_claude_oauth_token().map(Auth::Oauth)
+}
 
 #[derive(Deserialize)]
 struct ChatMessage {
@@ -113,10 +135,13 @@ async fn chat(
         return Err(ApiError::BadRequest("chat: messages cannot be empty".into()));
     }
 
-    // Reuse the Claude Code OAuth token (user-authorized). Absent → actionable error.
-    let token = crate::usage::read_claude_oauth_token().ok_or_else(|| {
+    // Auth: prefer an explicit ANTHROPIC_API_KEY (clean API billing, terms-safe);
+    // else reuse the Claude Code OAuth token (user-authorized). Absent → loud,
+    // actionable error naming BOTH paths.
+    let auth = resolve_auth().ok_or_else(|| {
         ApiError::BadRequest(
-            "Sign in to Claude (run `claude` once) so the chat can use your login.".into(),
+            "No LLM credentials for chat: set ANTHROPIC_API_KEY, or sign in to Claude (run `claude` once) so the chat can use your login."
+                .into(),
         )
     })?;
 
@@ -133,15 +158,20 @@ async fn chat(
         .map(|m| json!({ "role": m.role, "content": m.content }))
         .collect();
 
-    // The `system` array MUST lead with the Claude Code identity for the OAuth
-    // token to be accepted (see module docs).
+    let instructions = interviewer_instructions(body.workdir.as_deref(), body.repo_slug.as_deref());
+    // An OAuth (subscription) token requires the Claude Code identity to lead the
+    // `system` (see module docs); a real API key does NOT (and must not spoof it).
+    let system = match &auth {
+        Auth::Oauth(_) => json!([
+            { "type": "text", "text": CLAUDE_CODE_IDENTITY },
+            { "type": "text", "text": instructions },
+        ]),
+        Auth::ApiKey(_) => json!(instructions),
+    };
     let payload = json!({
         "model": model,
         "max_tokens": 1024,
-        "system": [
-            { "type": "text", "text": CLAUDE_CODE_IDENTITY },
-            { "type": "text", "text": interviewer_instructions(body.workdir.as_deref(), body.repo_slug.as_deref()) },
-        ],
+        "system": system,
         "messages": messages,
     });
 
@@ -150,29 +180,47 @@ async fn chat(
         .build()
         .map_err(|e| ApiError::Internal(format!("build http client: {e}")))?;
 
-    let resp = client
+    // Common headers; auth-specific headers differ for an API key vs an OAuth token.
+    let mut req = client
         .post(MESSAGES_URL)
-        .bearer_auth(&token)
         .header("anthropic-version", ANTHROPIC_VERSION)
-        .header("anthropic-beta", OAUTH_BETA_HEADER)
-        .header(reqwest::header::USER_AGENT, CLAUDE_CODE_USER_AGENT)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .json(&payload)
+        .json(&payload);
+    let secret = match &auth {
+        Auth::ApiKey(k) => {
+            req = req.header("x-api-key", k);
+            k.clone()
+        }
+        Auth::Oauth(t) => {
+            // OAuth (subscription) token: bearer + the oauth beta + Claude Code UA.
+            req = req
+                .bearer_auth(t)
+                .header("anthropic-beta", OAUTH_BETA_HEADER)
+                .header(reqwest::header::USER_AGENT, CLAUDE_CODE_USER_AGENT);
+            t.clone()
+        }
+    };
+    let resp = req
         .send()
         .await
-        .map_err(|e| ApiError::Internal(format!("anthropic request failed: {}", redact(&e.to_string(), &token))))?;
+        .map_err(|e| ApiError::Internal(format!("anthropic request failed: {}", redact(&e.to_string(), &secret))))?;
 
     let status = resp.status();
     let raw = resp.text().await.unwrap_or_default();
 
     if !status.is_success() {
-        // 401/403 here is almost always the OAuth-token-not-authorized case.
+        // 401/403: the credential was rejected. Name both recovery paths.
         let hint = if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-            " (your Claude login may have expired — run `claude` to refresh it)"
+            match &auth {
+                Auth::ApiKey(_) => " (check ANTHROPIC_API_KEY)",
+                Auth::Oauth(_) => {
+                    " (your Claude login may have expired — run `claude` to refresh it, or set ANTHROPIC_API_KEY)"
+                }
+            }
         } else {
             ""
         };
-        let detail = redact(raw.trim(), &token);
+        let detail = redact(raw.trim(), &secret);
         let detail = detail.chars().take(300).collect::<String>();
         return Err(ApiError::Custom(
             StatusCode::BAD_GATEWAY,
