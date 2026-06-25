@@ -4,6 +4,27 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.0] — 2026-06-25
+
+### Added
+- **Move a browser tab to another worktree.** Right-click a browser tab and pick
+  "Move to Worktree", or drag the tab's grip handle onto a worktree card in the
+  sidebar — the tab and its pages relocate to that worktree.
+  (`store/slices/browser.ts`, `BrowserTab.tsx`, `WorktreeCard.tsx`)
+
+### Fixed
+- **The in-app browser is now isolated per git worktree.** Opening a browser in
+  one worktree no longer shows another worktree's tabs: each worktree gets its
+  own headless Chromium, and that worktree's agent drives the same instance the
+  pane shows. On by default (opt out with `AGENTUM_BROWSER_PER_WORKTREE=0`), and a
+  deleted worktree tears its browser down. (`cdp_browser.rs`, `routes/sessions.rs`,
+  `routes/worktrees.rs`)
+- **⌘/Ctrl-click a URL in an agent terminal now opens it.** URL detection now
+  works inside agent and tmux terminal panes, not just plain shells.
+- **The sidebar worktree card lists plain terminals, not just agents** — a
+  freshly created terminal shows up immediately instead of being hidden until a
+  live PTY/agent attaches. (#107)
+
 ## [0.27.0] — 2026-06-25
 
 ### Fixed
