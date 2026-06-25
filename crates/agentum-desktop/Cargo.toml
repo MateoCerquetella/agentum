@@ -87,3 +87,8 @@ futures-util = "0.3"
 # specific target app by pid rather than only the frontmost window.
 core-graphics = { version = "0.25", features = ["link", "elcapitan"] }
 core-foundation = "0.10"
+# Raw Objective-C messaging for the WKWebView `_setOverrideDeviceScaleFactor:`
+# SPI used by browser_native.rs to keep the in-app browser sharp on Retina when
+# the shipped (custom-scheme) WKWebView reports devicePixelRatio=1. Already in the
+# tree via wry; pinned here so we can `use objc2` directly.
+objc2 = "0.6"

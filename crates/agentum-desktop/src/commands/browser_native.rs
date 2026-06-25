@@ -86,6 +86,55 @@ fn get_browser_webview(app: &AppHandle, browser_page_id: &str) -> Option<tauri::
     app.get_webview(&webview_label(browser_page_id))
 }
 
+/// Pin the native browser webview to the display's true backing scale so it
+/// renders at device resolution (sharp) on Retina. A WKWebView whose
+/// configuration carries a custom URL-scheme handler — which ours do (the
+/// app-wide `agentumgrab` scheme, alongside the shipped `tauri://` main webview)
+/// — can report `deviceScaleFactor = 1` on a HiDPI display, so WebKit rasterizes
+/// the WHOLE page (text + graphics) at 1× and macOS upscales it 2× → blurry. The
+/// stable `_setOverrideDeviceScaleFactor:` SPI (used by Electron, Playwright, and
+/// WebKit's own test harness since macOS 10.11) sets WebKit's internal device
+/// scale — the authoritative source of `window.devicePixelRatio` — which the
+/// public `layer.contentsScale` cannot. A no-op when the scale is already
+/// correct, so it is safe to apply unconditionally.
+pub(crate) fn force_device_scale(webview: &tauri::Webview, scale: f64) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::{msg_send, sel};
+        if scale <= 0.0 {
+            return;
+        }
+        // `with_webview` runs on the main thread with the live WKWebView pointer.
+        let _ = webview.with_webview(move |platform| {
+            let wk = platform.inner() as *mut objc2::runtime::AnyObject;
+            if wk.is_null() {
+                return;
+            }
+            // SAFETY: `wk` is this child webview's live WKWebView; we're on the
+            // main thread. `respondsToSelector:` guards the SPI so a future macOS
+            // that drops it degrades gracefully instead of crashing.
+            let responds: bool =
+                unsafe { msg_send![wk, respondsToSelector: sel!(_setOverrideDeviceScaleFactor:)] };
+            if responds {
+                let _: () = unsafe { msg_send![wk, _setOverrideDeviceScaleFactor: scale] };
+            }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (webview, scale);
+    }
+}
+
+/// The main window's backing scale factor (2.0 on Retina; 1.0 on a standard
+/// display), or 2.0 if it can't be read — the scale we pin the browser webview to.
+fn main_window_scale(app: &AppHandle) -> f64 {
+    app.get_window("main")
+        .and_then(|w| w.scale_factor().ok())
+        .filter(|s| *s > 0.0)
+        .unwrap_or(2.0)
+}
+
 /// Create (or reveal) the native webview for a browser page at the given
 /// window-relative logical bounds, navigated to `url`.
 #[tauri::command]
@@ -102,6 +151,9 @@ pub fn browser_webview_open(
             .set_bounds(bounds.rect())
             .map_err(|e| e.to_string())?;
         let _ = webview.show();
+        // Re-pin device scale on reveal (e.g. the window moved to a display with
+        // a different backing scale while this tab was hidden).
+        force_device_scale(&webview, main_window_scale(&app));
         return Ok(());
     }
 
@@ -151,6 +203,12 @@ pub fn browser_webview_open(
     .map_err(|e| e.to_string())?;
     rx.recv().map_err(|e| e.to_string())??;
 
+    // Pin the freshly-created webview to the display's true backing scale so it
+    // renders sharp on Retina (see `force_device_scale`).
+    if let Some(child) = get_browser_webview(&app, &browser_page_id) {
+        force_device_scale(&child, main_window_scale(&app));
+    }
+
     // macOS WKWebView child webviews added via `add_child` can stay black until
     // a relayout pass forces them to composite — on first paint the view exists,
     // loads, and is scriptable, but the window shows only the dark pane beneath.
@@ -173,6 +231,10 @@ pub fn browser_webview_open(
                     };
                     let _ = webview.set_bounds(nudged.rect());
                     let _ = webview.set_bounds(bounds.rect());
+                    // Re-pin device scale after the relayout settles — covers the
+                    // case where the webview was created before the window's
+                    // backing scale was established.
+                    force_device_scale(&webview, main_window_scale(&app_main));
                 }
             });
         });
