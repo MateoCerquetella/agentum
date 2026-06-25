@@ -835,6 +835,173 @@ impl<'de> Deserialize<'de> for CodexUsageWindow {
     }
 }
 
+// ===========================================================================
+// Stats aggregation (Mission Control). Separate from the 5h-window chip above:
+// the chip lumps `billable = input+output+cache_create` and drops cache_read;
+// the stats surface needs all four token classes kept apart, plus project /
+// session / model attribution. Pure parsers + pure aggregators (testable
+// without the filesystem) sit under thin path-resolving wrappers.
+// ===========================================================================
+
+/// One Claude usage-bearing assistant record, fully attributed.
+pub(crate) struct ParsedClaudeRecord {
+    pub ts_ms: i64,
+    pub day: String,
+    pub project: String,
+    pub project_label: String,
+    pub branch: Option<String>,
+    pub session_id: String,
+    pub model: Option<String>,
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+}
+
+/// Day key = the UTC calendar day, sliced straight off the ISO-8601 prefix
+/// (`YYYY-MM-DD`). Cheaper and timezone-stable vs. recomputing from epoch ms.
+fn iso_day(ts: &str) -> Option<String> {
+    if ts.len() >= 10 && ts.as_bytes()[4] == b'-' && ts.as_bytes()[7] == b'-' {
+        Some(ts[0..10].to_string())
+    } else {
+        None
+    }
+}
+
+/// Human label for a project path = its final path segment.
+fn project_label_from_path(cwd: &str) -> String {
+    cwd.rsplit('/')
+        .find(|s| !s.is_empty())
+        .unwrap_or(cwd)
+        .to_string()
+}
+
+pub fn parse_claude_usage_record(line: &str) -> Option<ParsedClaudeRecord> {
+    if !line.contains("\"usage\"") {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    let msg = v.get("message")?;
+    let usage = msg.get("usage")?;
+    let g = |k: &str| usage.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+    let input = g("input_tokens");
+    let output = g("output_tokens");
+    let cache_write = g("cache_creation_input_tokens");
+    let cache_read = g("cache_read_input_tokens");
+    if input + output + cache_write + cache_read == 0 {
+        return None;
+    }
+    let ts = v.get("timestamp").and_then(|t| t.as_str())?;
+    let ts_ms = parse_iso8601_ms(ts)?;
+    let day = iso_day(ts)?;
+    let cwd = v
+        .get("cwd")
+        .and_then(|c| c.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some(ParsedClaudeRecord {
+        ts_ms,
+        day,
+        project_label: project_label_from_path(&cwd),
+        project: cwd,
+        branch: v
+            .get("gitBranch")
+            .and_then(|b| b.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from),
+        session_id: v
+            .get("sessionId")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+        model: msg.get("model").and_then(|m| m.as_str()).map(String::from),
+        input,
+        output,
+        cache_read,
+        cache_write,
+    })
+}
+
+/// One Codex `token_count` record's per-turn delta (`last_token_usage`).
+pub(crate) struct ParsedCodexRecord {
+    pub ts_ms: i64,
+    pub day: String,
+    pub session_id: String,
+    pub model: Option<String>,
+    pub input: u64,
+    pub cached_input: u64,
+    pub output: u64,
+    pub reasoning_output: u64,
+    pub total: u64,
+}
+
+pub fn parse_codex_usage_record(
+    line: &str,
+    session_id: &str,
+    model: Option<&str>,
+) -> Option<ParsedCodexRecord> {
+    if !line.contains("token_count") {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    let payload = v.get("payload")?;
+    if payload.get("type").and_then(|t| t.as_str()) != Some("token_count") {
+        return None;
+    }
+    let last = payload.get("info")?.get("last_token_usage")?;
+    let g = |k: &str| last.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+    let input = g("input_tokens");
+    let cached_input = g("cached_input_tokens");
+    let output = g("output_tokens");
+    let reasoning_output = g("reasoning_output_tokens");
+    let total = g("total_tokens");
+    if total == 0 && input + output == 0 {
+        return None;
+    }
+    let ts = v.get("timestamp").and_then(|t| t.as_str())?;
+    Some(ParsedCodexRecord {
+        ts_ms: parse_iso8601_ms(ts)?,
+        day: iso_day(ts)?,
+        session_id: session_id.to_string(),
+        model: model.map(String::from),
+        input,
+        cached_input,
+        output,
+        reasoning_output,
+        total,
+    })
+}
+
+/// Reporting window the UI requests.
+pub enum UsageRange {
+    D7,
+    D30,
+    D90,
+    All,
+}
+
+impl UsageRange {
+    pub fn from_str(s: &str) -> UsageRange {
+        match s {
+            "7d" => UsageRange::D7,
+            "30d" => UsageRange::D30,
+            "90d" => UsageRange::D90,
+            _ => UsageRange::All,
+        }
+    }
+
+    /// Inclusive lower bound in epoch-ms, or `None` for `All`.
+    pub fn floor_ms(&self, now_ms: i64) -> Option<i64> {
+        let days = match self {
+            UsageRange::D7 => 7,
+            UsageRange::D30 => 30,
+            UsageRange::D90 => 90,
+            UsageRange::All => return None,
+        };
+        Some(now_ms - days * 86_400_000)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1061,5 +1228,62 @@ mod tests {
         let scrubbed = redact_token(msg, "sk-ant-oat-xyz");
         assert!(!scrubbed.contains("sk-ant-oat-xyz"));
         assert!(scrubbed.contains("<redacted>"));
+    }
+
+    // ---- Task 1: per-record parsers + UsageRange --------------------------
+
+    #[test]
+    fn parse_claude_record_extracts_all_four_token_fields() {
+        let line = r#"{"cwd":"/Users/me/Developer/projects/agentum-tui-fresh","gitBranch":"main","sessionId":"88acb90d-1c09-41f4-9a3e-0b44fbe9aae5","timestamp":"2026-06-19T15:21:41.300Z","type":"assistant","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":6,"output_tokens":275,"cache_creation_input_tokens":11477,"cache_read_input_tokens":26242}}}"#;
+        let r = parse_claude_usage_record(line).expect("parses");
+        assert_eq!(r.input, 6);
+        assert_eq!(r.output, 275);
+        assert_eq!(r.cache_write, 11477);
+        assert_eq!(r.cache_read, 26242);
+        assert_eq!(r.day, "2026-06-19");
+        assert_eq!(r.project, "/Users/me/Developer/projects/agentum-tui-fresh");
+        assert_eq!(r.project_label, "agentum-tui-fresh");
+        assert_eq!(r.branch.as_deref(), Some("main"));
+        assert_eq!(r.session_id, "88acb90d-1c09-41f4-9a3e-0b44fbe9aae5");
+        assert_eq!(r.model.as_deref(), Some("claude-opus-4-7"));
+    }
+
+    #[test]
+    fn parse_claude_record_rejects_non_usage_lines() {
+        assert!(
+            parse_claude_usage_record(r#"{"type":"user","message":{"role":"user"}}"#).is_none()
+        );
+        assert!(parse_claude_usage_record("not json").is_none());
+    }
+
+    #[test]
+    fn parse_codex_record_reads_last_token_usage() {
+        let line = r#"{"timestamp":"2026-04-11T01:24:44.000Z","type":"response_item","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":29422,"cached_input_tokens":5504,"output_tokens":344,"reasoning_output_tokens":124,"total_tokens":29766}}}}"#;
+        let r = parse_codex_usage_record(line, "sess-1", Some("gpt-5-codex")).expect("parses");
+        assert_eq!(r.input, 29422);
+        assert_eq!(r.cached_input, 5504);
+        assert_eq!(r.output, 344);
+        assert_eq!(r.reasoning_output, 124);
+        assert_eq!(r.total, 29766);
+        assert_eq!(r.day, "2026-04-11");
+        assert_eq!(r.session_id, "sess-1");
+        assert_eq!(r.model.as_deref(), Some("gpt-5-codex"));
+    }
+
+    #[test]
+    fn parse_codex_record_skips_null_info() {
+        let line = r#"{"timestamp":"2026-03-31T11:08:19.000Z","payload":{"type":"token_count","info":null,"rate_limits":{}}}"#;
+        assert!(parse_codex_usage_record(line, "sess-1", None).is_none());
+    }
+
+    #[test]
+    fn usage_range_floor() {
+        let now = 10_000_000_000i64;
+        assert_eq!(
+            UsageRange::from_str("7d").floor_ms(now),
+            Some(now - 7 * 86_400_000)
+        );
+        assert_eq!(UsageRange::from_str("all").floor_ms(now), None);
+        assert!(matches!(UsageRange::from_str("nonsense"), UsageRange::All));
     }
 }
