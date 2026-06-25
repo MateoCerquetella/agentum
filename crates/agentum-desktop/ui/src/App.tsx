@@ -213,12 +213,11 @@ function WindowControls(): React.JSX.Element {
 // at the render site keeps the (CSS-hidden) workbench area blank for the one
 // frame it takes the chunk to resolve.
 const Terminal = lazy(() => import('./components/Terminal'))
-const Landing = lazy(() => import('./components/Landing'))
 // The "Board" sidebar entry IS the Tasks view (the GitHub/Linear issue list) —
 // Tasks was renamed to Board (#48 redo). The standalone Kanban (BoardPage) was
 // removed; Chat creates GitHub issues that show up here.
 const TaskPage = lazy(() => import('./components/TaskPage'))
-const ActivityPrototypePage = lazy(() => import('./components/activity/ActivityPrototypePage'))
+const MissionControlPage = lazy(() => import('./components/mission-control/MissionControlPage'))
 const Settings = lazy(() => import('./components/settings/Settings'))
 const ChatPage = lazy(() => import('./components/harness/ChatPage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
@@ -1742,9 +1741,12 @@ function App(): React.JSX.Element {
                               issues) — Tasks renamed to Board (#48 redo). The standalone
                               Kanban 'board' view was removed. */}
                           {activeView === 'tasks' ? <TaskPage /> : null}
-                          {activeView === 'activity' ? <ActivityPrototypePage /> : null}
+                          {activeView === 'activity' ? <MissionControlPage /> : null}
                           {activeView === 'harness' ? <ChatPage /> : null}
-                          {activeView === 'terminal' && !activeWorktreeId ? <Landing /> : null}
+                          {/* No workspace selected on the terminal view → fall back to
+                              Mission Control (Landing.tsx removed; the dashboard needs no
+                              workspace) so the user is never stranded on a blank pane. */}
+                          {activeView === 'terminal' && !activeWorktreeId ? <MissionControlPage /> : null}
                         </RecoverableRenderErrorBoundary>
                       </Suspense>
                     </div>
