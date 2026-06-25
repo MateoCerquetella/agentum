@@ -31,6 +31,7 @@ import {
 } from './remote-browser-keyboard'
 import { normalizeBrowserNavigationUrl } from '../../../../shared/browser-url'
 import AgentBrowserPickerOverlay from './AgentBrowserPickerOverlay'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 
 /** Strip the `about:blank` placeholder so the address bar starts empty. */
 function toDisplayUrl(url: string): string {
@@ -86,6 +87,16 @@ export default function AgentBrowserScreencastPane({
   const metadataRef = useRef<BrowserScreencastFrameMetadata | null>(null)
   // Stable getter so the picker overlay's memoized handlers don't churn each render.
   const getScreencastMetadata = useCallback(() => metadataRef.current, [])
+  // The shipped WKWebView reports window.devicePixelRatio=1 over the custom
+  // `tauri://` scheme (a WebKit defect), which captures the page at 1× and upscales
+  // it 2× on a Retina display → blurry. Seed from devicePixelRatio (reliable in the
+  // http dev server) and correct to the TRUE backing scale via Tauri's native
+  // scaleFactor() below.
+  const scaleFactorRef = useRef<number>(Math.min(2, Math.max(1, window.devicePixelRatio || 1)))
+  // Bumped on every navigation so the annotate overlay drops markers whose clips
+  // belong to the previous page (else they stay stuck over every later page).
+  const [navToken, setNavToken] = useState(0)
+  const bumpNav = useCallback((): void => setNavToken((n) => n + 1), [])
   // Newest decoded-but-not-yet-painted frame; the rAF tick draws and frees it.
   const pendingBitmapRef = useRef<ImageBitmap | null>(null)
   const drawRafRef = useRef<number | null>(null)
@@ -127,9 +138,31 @@ export default function AgentBrowserScreencastPane({
     if (width <= 0 || height <= 0) {
       return
     }
-    const deviceScaleFactor = Math.min(2, Math.max(1, window.devicePixelRatio || 1))
+    const deviceScaleFactor = Math.min(2, Math.max(1, scaleFactorRef.current || 1))
     sendInput('browser.setViewport', { width, height, deviceScaleFactor })
   }, [sendInput])
+
+  // Resolve the TRUE display backing scale from the native shell — window.
+  // devicePixelRatio lies (=1) in the shipped WKWebView — and re-send the viewport
+  // so the headless page is captured at device-pixel resolution (sharp on Retina).
+  useEffect(() => {
+    let cancelled = false
+    void getCurrentWindow()
+      .scaleFactor()
+      .then((sf) => {
+        if (cancelled) {
+          return
+        }
+        const clamped = Math.min(2, Math.max(1, sf || 1))
+        if (clamped !== scaleFactorRef.current) {
+          scaleFactorRef.current = clamped
+          sendViewport()
+        }
+      })
+      .catch(() => {
+        // Not inside a Tauri window (dev/web) — keep the devicePixelRatio seed.
+      })
+  }, [sendViewport])
 
   // Co-browse banner (F12): flips on briefly after the human interacts. The same
   // human input also gives the human the wheel server-side, so the agent's input
@@ -191,7 +224,10 @@ export default function AgentBrowserScreencastPane({
       // and downscales 1:1 on a 2× display, so JPEG ringing on text was the last
       // softness left. 90 sharpens glyph edges for a small bandwidth cost; PNG
       // would be lossless but 3-5× larger and slower to encode — not worth it.
-      { cdpPort, format: 'jpeg', quality: 90, everyNthFrame: 1 },
+      // worktreeId attaches to THIS worktree's own browser (per-worktree
+      // isolation) — the same instance its agent drives. cdpPort (SSH host) wins
+      // over it when set.
+      { cdpPort, worktreeId, format: 'jpeg', quality: 90, everyNthFrame: 1 },
       {
         onBinary: (bytes) => {
           if (disposed) {
@@ -270,7 +306,7 @@ export default function AgentBrowserScreencastPane({
       pendingBitmapRef.current = null
       pendingMoveRef.current = null
     }
-  }, [isActive, cdpPort, scheduleDraw, sendViewport])
+  }, [isActive, cdpPort, worktreeId, scheduleDraw, sendViewport])
 
   // Keep the page's layout viewport in sync with the pane size. Reuses the input
   // channel (no socket re-subscribe), rAF-coalesced so a drag-resize sends at most
@@ -399,9 +435,10 @@ export default function AgentBrowserScreencastPane({
   const navigate = useCallback(() => {
     const url = normalizeBrowserNavigationUrl(addressBar)
     if (url) {
+      bumpNav()
       sendInput('browser.goto', { url })
     }
-  }, [addressBar, sendInput])
+  }, [addressBar, sendInput, bumpNav])
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col bg-background">
@@ -409,7 +446,10 @@ export default function AgentBrowserScreencastPane({
         <button
           type="button"
           className="rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted"
-          onClick={() => sendInput('browser.back', {})}
+          onClick={() => {
+            bumpNav()
+            sendInput('browser.back', {})
+          }}
           aria-label="Back"
         >
           ←
@@ -417,7 +457,10 @@ export default function AgentBrowserScreencastPane({
         <button
           type="button"
           className="rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted"
-          onClick={() => sendInput('browser.forward', {})}
+          onClick={() => {
+            bumpNav()
+            sendInput('browser.forward', {})
+          }}
           aria-label="Forward"
         >
           →
@@ -479,6 +522,7 @@ export default function AgentBrowserScreencastPane({
                 worktreeId={worktreeId}
                 groupId={groupId ?? worktreeId}
                 pageUrl={page.url}
+                navToken={navToken}
               />
             ) : null}
           </>

@@ -66,8 +66,9 @@ fn ct_eq(a: &str, b: &str) -> bool {
 /// acknowledged with `202 Accepted` and no body, per the streamable-HTTP spec.
 async fn handle(
     State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
     headers: axum::http::HeaderMap,
-    Json(msg): Json<Value>,
+    Json(mut msg): Json<Value>,
 ) -> Response {
     // Token gate FIRST — before parsing the message, and required on EVERY
     // request (including the no-auth embedded server). /mcp may be reached over a
@@ -75,6 +76,28 @@ async fn handle(
     // without the bearer token they get 401.
     if !mcp_authorized(&state, &headers) {
         return (StatusCode::UNAUTHORIZED, "missing or invalid MCP token").into_response();
+    }
+    // Per-worktree browser: an agent's MCP URL carries `?worktree=<id>` (appended at
+    // spawn). Thread it into `agentum_browser` calls as `worktreeId` so the agent's
+    // CDP ops hit ITS worktree browser — the same instance the user's pane watches.
+    // Resolution is gated server-side (off → shared browser), so this is a harmless
+    // tag when isolation is disabled or no worktree is present.
+    if let Some(wt) = query
+        .get("worktree")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        if msg.get("method").and_then(Value::as_str) == Some("tools/call") {
+            if let Some(params) = msg.get_mut("params") {
+                if params.get("name").and_then(Value::as_str) == Some("agentum_browser") {
+                    if let Some(a) = params.get_mut("arguments").and_then(Value::as_object_mut) {
+                        if !a.contains_key("worktreeId") && !a.contains_key("cdpPort") {
+                            a.insert("worktreeId".to_string(), Value::from(wt.to_string()));
+                        }
+                    }
+                }
+            }
+        }
     }
     let Some(id) = msg.get("id").cloned() else {
         // notifications/initialized, notifications/cancelled, … — just ack.
@@ -714,7 +737,29 @@ async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
         return tool_browser_connect_host(state, args).await;
     }
     if crate::cdp_driver::handles_op(op) {
-        let result = crate::cdp_driver::run_browser_op(op, args).await?;
+        // Per-worktree isolation: when the agent's MCP carried a `worktreeId` (set
+        // at spawn, injected in `handle`), drive THIS worktree's browser — the same
+        // instance the user's pane watches — by resolving it to a `cdpPort`. Gated
+        // inside ensure_local_cdp_browser_for: off → the shared default port, so
+        // this is a no-op unless isolation is enabled. Resolution failure also
+        // falls back to the default (never breaks the op).
+        let mut call_args = args.clone();
+        if call_args.get("cdpPort").is_none() {
+            if let Some(wt) = call_args
+                .get("worktreeId")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+            {
+                if let Ok((_, port)) = crate::cdp_browser::ensure_local_cdp_browser_for(&wt).await {
+                    if let Some(obj) = call_args.as_object_mut() {
+                        obj.insert("cdpPort".to_string(), Value::from(port));
+                    }
+                }
+            }
+        }
+        let result = crate::cdp_driver::run_browser_op(op, &call_args).await?;
         // screenshot → an MCP image content block (PNG) the agent can SEE, plus a
         // compact text meta line (NOT the giant base64) for width/height/path.
         if op == "screenshot" {

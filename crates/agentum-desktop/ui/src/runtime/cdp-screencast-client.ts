@@ -25,6 +25,10 @@ export type CdpScreencastOptions = {
   /** CDP frame throttle. Default 1 (every frame) — `2` drops the only frame a
    *  static page emits, leaving the pane blank until a repaint. */
   everyNthFrame?: number
+  /** Per-worktree isolation: attach to (and launch on demand) THIS worktree's own
+   *  browser instead of the shared one, so worktrees don't share tabs. Ignored if
+   *  `cdpPort` is set (explicit/tunneled browser). */
+  worktreeId?: string
 }
 
 /** Stream callbacks. Names mirror the legacy `subscribe()` callbacks so the pane
@@ -80,6 +84,9 @@ function buildQuery(opts: CdpScreencastOptions, token: string | null): string {
   }
   if (opts.everyNthFrame != null) {
     p.set('everyNthFrame', String(opts.everyNthFrame))
+  }
+  if (opts.worktreeId) {
+    p.set('worktreeId', opts.worktreeId)
   }
   const qs = p.toString()
   return qs ? `?${qs}` : ''
@@ -240,7 +247,7 @@ export async function cdpNodeAtPoint(
   x: number,
   y: number,
   capture: boolean,
-  cdpPort?: number
+  opts?: { worktreeId?: string; cdpPort?: number }
 ): Promise<CdpNodeAtPointResult> {
   try {
     const { token } = await getServerEndpoint()
@@ -251,7 +258,15 @@ export async function cdpNodeAtPoint(
         'content-type': 'application/json',
         ...(token ? { authorization: `Bearer ${token}` } : {})
       },
-      body: JSON.stringify({ x, y, capture, ...(cdpPort != null ? { cdpPort } : {}) })
+      body: JSON.stringify({
+        x,
+        y,
+        capture,
+        // worktreeId routes the hit-test to the SAME per-worktree browser the
+        // screencast renders (server resolves it to that worktree's cdpPort).
+        ...(opts?.worktreeId ? { worktreeId: opts.worktreeId } : {}),
+        ...(opts?.cdpPort != null ? { cdpPort: opts.cdpPort } : {})
+      })
     })
     if (!res.ok) {
       return { ok: false, code: `http_${res.status}` }

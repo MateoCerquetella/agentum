@@ -23,8 +23,9 @@
 //! than guessing a system Chrome. Fails **loud** (descriptive error) when the
 //! browser isn't installed or never opens its CDP port — never a silent hang.
 
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -156,6 +157,168 @@ pub async fn stop_local_cdp_browser() -> Result<()> {
 fn launch_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+// --- per-worktree browsers (isolation) ---------------------------------------
+//
+// Each worktree gets its OWN Chromium (own port + tmux session + profile) so
+// opening a browser in worktree B no longer shows worktree A's tabs. Both the
+// user's screencast pane AND the worktree's agent resolve the SAME per-worktree
+// browser by `worktree_id` (the agent side via the MCP `worktree` hint), so they
+// still watch/drive one instance — just one PER worktree. An empty `worktree_id`
+// falls back to the shared default browser, so callers without worktree context
+// (and the existing tests) behave exactly as before.
+
+/// A launched per-worktree browser. The port is allocated once (via the OS) and
+/// reused for that worktree's lifetime; tmux + profile are derived from its id.
+struct WorktreeBrowser {
+    port: u16,
+    tmux: String,
+    profile: PathBuf,
+}
+
+/// `worktree_id → WorktreeBrowser`. A `std` mutex (never held across `.await`):
+/// every access reads/writes a field and drops the guard before any I/O.
+fn worktree_registry() -> &'static std::sync::Mutex<HashMap<String, WorktreeBrowser>> {
+    static REG: OnceLock<std::sync::Mutex<HashMap<String, WorktreeBrowser>>> = OnceLock::new();
+    REG.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Make a worktree id safe for a tmux session name and a directory component.
+fn sanitize_worktree_token(worktree_id: &str) -> String {
+    let token: String = worktree_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    // Bound the length so the tmux name stays sane; keep the tail (often the
+    // distinctive part of a worktree path/id).
+    let trimmed = token.trim_matches('-');
+    let tail = if trimmed.len() > 48 {
+        &trimmed[trimmed.len() - 48..]
+    } else {
+        trimmed
+    };
+    if tail.is_empty() {
+        "wt".to_string()
+    } else {
+        tail.to_string()
+    }
+}
+
+/// Per-worktree profile dir: `…/cdp-browser/<token>` (sibling of the shared one).
+fn worktree_profile_dir(token: &str) -> Result<PathBuf> {
+    let dir = agentum_store::paths::state_dir()
+        .context("resolve agentum state dir")?
+        .join("cdp-browser")
+        .join(token);
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("create per-worktree CDP profile dir {}", dir.display()))?;
+    Ok(dir)
+}
+
+/// The registered port for a worktree, if its browser is still serving.
+async fn registered_listening_port(worktree_id: &str) -> Option<u16> {
+    let port = worktree_registry()
+        .lock()
+        .ok()?
+        .get(worktree_id)
+        .map(|b| b.port)?;
+    port_listening(port).await.then_some(port)
+}
+
+/// Ensure a per-WORKTREE CDP browser and return `(endpoint, port)`. Idempotent per
+/// worktree (reuses the registered, still-serving port). An empty `worktree_id`
+/// falls back to the shared default browser so contextless callers don't regress.
+pub async fn ensure_local_cdp_browser_for(worktree_id: &str) -> Result<(String, u16)> {
+    let wt = worktree_id.trim();
+    // Opt-in gate. Per-worktree isolation needs BOTH the user's pane AND the
+    // worktree's agent to resolve the same worktree key; that agent side can't be
+    // auto-verified, and a key mismatch would break agent-watches-browser. Until
+    // verified, default to the shared browser (v0.25.0 behavior — no regression);
+    // set `AGENTUM_BROWSER_PER_WORKTREE=1` to enable + test the isolation.
+    let enabled = std::env::var_os("AGENTUM_BROWSER_PER_WORKTREE").is_some_and(|v| v != "0");
+    if wt.is_empty() || !enabled {
+        let endpoint = ensure_local_cdp_browser().await?;
+        return Ok((endpoint, cdp_port()));
+    }
+
+    if let Some(port) = registered_listening_port(wt).await {
+        return Ok((cdp_endpoint_for(port), port));
+    }
+
+    let _guard = launch_lock().lock().await;
+    if let Some(port) = registered_listening_port(wt).await {
+        return Ok((cdp_endpoint_for(port), port));
+    }
+
+    let exe = chromium_executable()?;
+    let token = sanitize_worktree_token(wt);
+    let tmux = format!("{CDP_TMUX_TARGET}-{token}");
+    let profile = worktree_profile_dir(&token)?;
+    // Reuse this worktree's previously-allocated port (re-launch on the same port
+    // after a crash) or take a fresh one from the OS.
+    let port = worktree_registry()
+        .lock()
+        .ok()
+        .and_then(|reg| reg.get(wt).map(|b| b.port))
+        .map_or_else(free_local_port, Ok)?;
+
+    // A leftover-but-not-listening session is either booting or dead.
+    if agentum_tmux::has_session(&tmux).await.unwrap_or(false) {
+        if wait_until_listening(port, Duration::from_secs(2)).await {
+            register_worktree_browser(wt, port, &tmux, &profile);
+            return Ok((cdp_endpoint_for(port), port));
+        }
+        let _ = agentum_tmux::kill_session(&tmux).await;
+    }
+
+    let argv = build_chrome_argv(&exe, port, &profile);
+    agentum_tmux::new_session(&tmux, &home_dir(), &argv, &[])
+        .await
+        .with_context(|| format!("start CDP-Chromium for worktree `{wt}`"))?;
+
+    if wait_until_listening(port, Duration::from_secs(20)).await {
+        register_worktree_browser(wt, port, &tmux, &profile);
+        Ok((cdp_endpoint_for(port), port))
+    } else {
+        anyhow::bail!(
+            "Chromium for worktree `{wt}` did not expose CDP on 127.0.0.1:{port} within 20s \
+             (tmux `{tmux}`)."
+        )
+    }
+}
+
+fn register_worktree_browser(worktree_id: &str, port: u16, tmux: &str, profile: &Path) {
+    if let Ok(mut reg) = worktree_registry().lock() {
+        reg.insert(
+            worktree_id.to_string(),
+            WorktreeBrowser {
+                port,
+                tmux: tmux.to_string(),
+                profile: profile.to_path_buf(),
+            },
+        );
+    }
+}
+
+/// Tear down a worktree's browser (kill its session, drop its profile + registry
+/// entry). Idempotent; a no-op for an unknown worktree. Wire into worktree close.
+pub async fn stop_local_cdp_browser_for(worktree_id: &str) -> Result<()> {
+    let entry = worktree_registry()
+        .lock()
+        .ok()
+        .and_then(|mut reg| reg.remove(worktree_id.trim()));
+    if let Some(b) = entry {
+        let _ = agentum_tmux::kill_session(&b.tmux).await;
+        let _ = std::fs::remove_dir_all(&b.profile);
+    }
+    Ok(())
 }
 
 // --- remote (SSH host) browser — F11 / criterion #5 --------------------------

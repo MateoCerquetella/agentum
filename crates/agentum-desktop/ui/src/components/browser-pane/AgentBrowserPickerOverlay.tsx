@@ -8,7 +8,7 @@
 // that sends them — comment + element context + screenshot path — to a chosen agent
 // in the worktree (the same active-agent/new-agent menu diff-notes uses).
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { MessageSquarePlus, Send, Trash2, X } from 'lucide-react'
+import { MessageSquarePlus, Send, SquareTerminal, Trash2, X } from 'lucide-react'
 import type { BrowserScreencastFrameMetadata } from '../../../../shared/browser-screencast-protocol'
 import { cdpNodeAtPoint, type CdpNodeClip } from '../../runtime/cdp-screencast-client'
 import { clipToOverlayRect, pointToDevice, type ElementClip } from './agent-browser-picker'
@@ -17,10 +17,16 @@ import {
   type AgentBrowserAnnotation,
   type AgentBrowserAnnotationIntent
 } from './agent-browser-annotation-output'
-import { ReviewNotesSendMenuContent } from '../editor/ReviewNotesSendMenuContent'
+import { useAppStore } from '@/store'
+import {
+  deriveRunningAgentSendTargets,
+  type RunningAgentSendTarget
+} from '@/lib/running-agent-targets'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 
@@ -46,23 +52,43 @@ type AgentBrowserPickerOverlayProps = {
   groupId: string
   /** Current page URL, for the annotation brief heading. */
   pageUrl: string
+  /** Bumped by the pane on every navigation (address bar / back / forward / reload
+   *  / attach). Markers are positioned in the OLD page's viewport coords, so the
+   *  overlay drops them when this changes — otherwise they stay stuck over every
+   *  later page. */
+  navToken: number
 }
 
 // Monotonic id source for annotation keys/markers (no Date.now/Math.random needed).
 let annotationSeq = 0
 
+/** Readable label for a running-agent send target (capitalized agent kind). */
+function agentTargetLabel(target: RunningAgentSendTarget): string {
+  const kind = target.entry.agentType == null ? '' : String(target.entry.agentType)
+  return kind.length > 0 ? kind.charAt(0).toUpperCase() + kind.slice(1) : 'Agent'
+}
+
 export default function AgentBrowserPickerOverlay({
   canvasRef,
   getMetadata,
   worktreeId,
-  groupId,
-  pageUrl
+  pageUrl,
+  navToken
 }: AgentBrowserPickerOverlayProps): React.JSX.Element {
   const [armed, setArmed] = useState(false)
   const [hover, setHover] = useState<{ clip: CdpNodeClip; label: string } | null>(null)
   const [draft, setDraft] = useState<DraftAnnotation | null>(null)
   const [annotations, setAnnotations] = useState<AgentBrowserAnnotation[]>([])
   const [sendOpen, setSendOpen] = useState(false)
+  // Send-to-agent uses the store's running-agent picker, which delivers via the
+  // working native PTY write (api.pty.write) — NOT the stubbed runtime RPC the old
+  // ReviewNotesSendMenuContent "active agent" path used (that always failed on the
+  // desktop). Targets are captured when the menu opens so the list is stable.
+  const openAgentSendMode = useAppStore((s) => s.openAgentSendPopoverTargetMode)
+  const sendPromptToTarget = useAppStore((s) => s.sendPromptToSidebarAgentTarget)
+  const closeAgentSendMode = useAppStore((s) => s.closeAgentSendPopoverTargetMode)
+  const [sendTargets, setSendTargets] = useState<RunningAgentSendTarget[]>([])
+  const sendModeId = `browser-annotations:${worktreeId}`
   const hoverTimerRef = useRef<number | null>(null)
   // One hit-test in flight at a time: hover fires often; don't pile up requests.
   const busyRef = useRef(false)
@@ -116,7 +142,7 @@ export default function AgentBrowserPickerOverlay({
           return
         }
         busyRef.current = true
-        void cdpNodeAtPoint(p.x, p.y, false)
+        void cdpNodeAtPoint(p.x, p.y, false, { worktreeId })
           .then((r) => {
             setHover(r.ok ? { clip: r.clip, label: r.label } : null)
           })
@@ -125,7 +151,7 @@ export default function AgentBrowserPickerOverlay({
           })
       }, HOVER_DEBOUNCE_MS)
     },
-    [armed, draft, frameDims]
+    [armed, draft, frameDims, worktreeId]
   )
 
   const onClick = useCallback(
@@ -146,7 +172,7 @@ export default function AgentBrowserPickerOverlay({
       }
       setHover(null)
       // capture:true → a sharp element PNG in the same round-trip for the thumbnail.
-      void cdpNodeAtPoint(p.x, p.y, true).then((r) => {
+      void cdpNodeAtPoint(p.x, p.y, true, { worktreeId }).then((r) => {
         if (r.ok) {
           setDraft({
             clip: r.clip,
@@ -159,7 +185,7 @@ export default function AgentBrowserPickerOverlay({
         }
       })
     },
-    [armed, draft, frameDims]
+    [armed, draft, frameDims, worktreeId]
   )
 
   const commitDraft = useCallback((): void => {
@@ -181,9 +207,12 @@ export default function AgentBrowserPickerOverlay({
     })
   }, [])
 
-  // Esc cancels the draft, or disarms the picker.
+  // Esc: cancel the in-progress draft → else clear any pending markers + disarm.
+  // Active whenever there's ANYTHING to clear (not just while armed) so a stuck
+  // marker is always dismissable with one keypress. Gated so we don't capture Esc
+  // app-wide when the picker is idle.
   useEffect(() => {
-    if (!armed) {
+    if (!armed && !draft && annotations.length === 0) {
       return
     }
     const onKey = (e: KeyboardEvent): void => {
@@ -192,13 +221,24 @@ export default function AgentBrowserPickerOverlay({
       }
       if (draft) {
         setDraft(null)
-      } else {
-        disarm()
+        return
       }
+      setAnnotations([])
+      setHover(null)
+      disarm()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [armed, draft, disarm])
+  }, [armed, draft, annotations.length, disarm])
+
+  // Drop markers/draft/hover when the page navigates: their clips are in the OLD
+  // page's viewport coordinate space, so without this they float, stuck, over every
+  // subsequent page. Keeps annotations bound to the page they were made on.
+  useEffect(() => {
+    setAnnotations([])
+    setDraft(null)
+    setHover(null)
+  }, [navToken, pageUrl])
 
   const f = frameDims()
   const overlayRectFor = (clip: ElementClip): ReturnType<typeof clipToOverlayRect> => {
@@ -344,7 +384,28 @@ export default function AgentBrowserPickerOverlay({
           <span className="text-[11px] text-muted-foreground">
             {annotations.length} annotation{annotations.length === 1 ? '' : 's'} ready
           </span>
-          <DropdownMenu open={sendOpen} onOpenChange={setSendOpen}>
+          <DropdownMenu
+            open={sendOpen}
+            onOpenChange={(open) => {
+              setSendOpen(open)
+              if (open) {
+                // Capture the worktree's running agents + stage the prompt for the
+                // store's (working) PTY-paste send.
+                setSendTargets(deriveRunningAgentSendTargets(useAppStore.getState(), worktreeId))
+                openAgentSendMode({
+                  id: sendModeId,
+                  worktreeId,
+                  source: 'browser-annotations',
+                  prompt,
+                  label: 'Browser annotations',
+                  launchSource: 'notes_send',
+                  onPromptDelivered: () => setAnnotations([])
+                })
+              } else {
+                closeAgentSendMode(sendModeId)
+              }
+            }}
+          >
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
@@ -354,18 +415,33 @@ export default function AgentBrowserPickerOverlay({
                 Send
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-[200px]">
-              <ReviewNotesSendMenuContent
-                worktreeId={worktreeId}
-                groupId={groupId}
-                prompt={prompt}
-                promptDelivery="submit-after-ready"
-                launchSource="notes_send"
-                onPromptDelivered={() => {
-                  setAnnotations([])
-                  setSendOpen(false)
-                }}
-              />
+            <DropdownMenuContent align="end" className="min-w-[220px]">
+              <DropdownMenuLabel>Send to an agent in this worktree</DropdownMenuLabel>
+              {sendTargets.length === 0 ? (
+                <DropdownMenuItem disabled className="text-[11px] text-muted-foreground">
+                  No running agents here — open an agent in this worktree.
+                </DropdownMenuItem>
+              ) : (
+                sendTargets.map((target) => (
+                  <DropdownMenuItem
+                    key={target.paneKey}
+                    disabled={target.status !== 'eligible'}
+                    data-agent-send-target={target.status}
+                    onSelect={() => {
+                      void sendPromptToTarget(target.paneKey)
+                    }}
+                    className="gap-2 text-[12px]"
+                  >
+                    <SquareTerminal className="size-3.5 shrink-0" />
+                    <span className="truncate">
+                      {agentTargetLabel(target)}
+                      {target.status !== 'eligible' && target.disabledReason
+                        ? ` — ${target.disabledReason}`
+                        : ''}
+                    </span>
+                  </DropdownMenuItem>
+                ))
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
           <button

@@ -50,6 +50,11 @@ struct ScreencastQuery {
     max_height: Option<u32>,
     #[serde(rename = "everyNthFrame")]
     every_nth_frame: Option<u32>,
+    /// Per-worktree isolation: with no explicit `cdpPort`, attach to (and launch
+    /// on demand) THIS worktree's own Chromium instead of the shared one, so each
+    /// worktree's browser is independent. Empty/absent → the shared default.
+    #[serde(rename = "worktreeId")]
+    worktree_id: Option<String>,
 }
 
 impl ScreencastQuery {
@@ -82,12 +87,25 @@ async fn screencast(ws: WebSocketUpgrade, Query(q): Query<ScreencastQuery>) -> i
     // (not just an agent-driven one) has a Chromium to attach to; the launch is
     // idempotent, so concurrent tabs reuse the one browser. An explicit `cdpPort`
     // is an external/tunneled browser (009a/SSH) we must never launch ourselves.
+    let worktree = q
+        .worktree_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let base = if q.cdp_port.is_some() {
         // Explicit/tunneled browser (009a/SSH) — attach as-is, never launch it.
         Ok(q.cdp_http_base())
+    } else if let Some(wt) = worktree {
+        // Per-worktree isolation: launch/reuse THIS worktree's own Chromium so it
+        // doesn't share tabs with other worktrees. The worktree's agent resolves
+        // the same browser, so they still watch/drive one instance per worktree.
+        cdp_browser::ensure_local_cdp_browser_for(wt)
+            .await
+            .map(|(endpoint, _)| endpoint)
+            .map_err(|e| format!("{e:#}"))
     } else {
         // Shared local browser — launch on demand (idempotent) so a plain
-        // user-opened tab has a Chromium to attach to.
+        // user-opened tab (no worktree context) has a Chromium to attach to.
         cdp_browser::ensure_local_cdp_browser()
             .await
             .map_err(|e| format!("{e:#}"))
@@ -228,6 +246,7 @@ mod tests {
             max_width: Some(1280),
             max_height: Some(720),
             every_nth_frame: Some(1),
+            worktree_id: None,
         };
         let o = q.options();
         assert_eq!(o.format, FrameFormat::Png);

@@ -75,13 +75,30 @@ async fn stop() -> Result<Json<CdpBrowserStatus>, ApiError> {
     Ok(Json(snapshot(false)))
 }
 
-/// `POST /api/cdp-browser/node-at-point` — hit-test the shared CDP page at a
-/// viewport pixel for the in-pane annotate picker. Body `{x, y, capture?, cdpPort?}`
-/// is forwarded verbatim as the `node_at_point` op's args, so the picker reaches the
-/// SAME persistent Chromium the screencast renders. Returns the driver JSON
+/// `POST /api/cdp-browser/node-at-point` — hit-test the CDP page at a viewport
+/// pixel for the in-pane annotate picker. Body `{x, y, capture?, cdpPort?, worktreeId?}`.
+/// With a `worktreeId` (and no explicit `cdpPort`), resolves THIS worktree's own
+/// browser and injects its `cdpPort` — so the picker hit-tests the SAME instance the
+/// worktree's screencast renders (per-worktree isolation). Returns the driver JSON
 /// (`{ok, clip, label, [path, image_b64, …]}`): hover calls it clip-only, click with
-/// `capture:true`. A launch-on-demand happens inside `run_browser_op` (idempotent).
-async fn node_at_point(Json(body): Json<Value>) -> Result<Json<Value>, ApiError> {
+/// `capture:true`. Launch-on-demand is idempotent.
+async fn node_at_point(Json(mut body): Json<Value>) -> Result<Json<Value>, ApiError> {
+    if body.get("cdpPort").is_none() {
+        let worktree = body
+            .get("worktreeId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        if let Some(wt) = worktree {
+            let (_, port) = cdp_browser::ensure_local_cdp_browser_for(&wt)
+                .await
+                .map_err(|e| ApiError::Internal(format!("{e:#}")))?;
+            if let Some(obj) = body.as_object_mut() {
+                obj.insert("cdpPort".to_string(), Value::from(port));
+            }
+        }
+    }
     let result = crate::cdp_driver::run_browser_op("node_at_point", &body)
         .await
         .map_err(|e| ApiError::Internal(format!("{e:#}")))?;
