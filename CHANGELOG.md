@@ -4,6 +4,25 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.0] — 2026-06-25
+
+### Added
+- **Chat can file tickets to Linear, not just GitHub.** The "Create issues" step
+  in Chat now has a GitHub/Linear toggle (shown when Linear is connected), so a
+  converged conversation can become Linear issues — each rendered with its
+  identifier (e.g. `ENG-42`) and URL. (`ChatPage.tsx`, `chat-client.ts`)
+
+### Changed
+- **`POST /api/chat/issues` takes a `provider`** (`github` default · `linear`)
+  and routes Linear creates through the existing `TaskSink::Linear`; the GitHub
+  path is unchanged. A chosen-but-unconnected tracker fails loudly with a typed
+  `no_linear` / `no_github_repo` 422 and an unknown provider is a 400 — never a
+  silent internal-board fallback. The Socratic interviewer prompt is now
+  tracker-neutral. (`routes/chat.rs`)
+
+> The board Kanban already rendered both GitHub and Linear, so no board change
+> was needed — this completes the Chat→ticket half for both trackers. (#112)
+
 ## [0.30.0] — 2026-06-25
 
 ### Fixed
