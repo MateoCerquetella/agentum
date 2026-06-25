@@ -21,13 +21,14 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use base64::Engine as _;
 use futures_util::{SinkExt as _, StreamExt as _};
 use serde_json::{Value, json};
+use tokio::sync::Mutex as AsyncMutex;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::cdp_browser;
@@ -39,12 +40,17 @@ use crate::cdp_screencast::discover_page_ws_url;
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Ops the CDP driver owns — the ones that DRIVE the page and must hit the
-/// persistent Chromium (not the desktop webview). `open`/`tabs`/`grab`/`annotate`/
-/// `annotations` stay on the desktop bridge (tab lifecycle + annotation store).
+/// persistent Chromium (not the desktop webview). `open`/`tabs` are here too so
+/// the WHOLE tool drives one browser: they used to go to the desktop bridge (a
+/// different surface), which is why `tabs` was always empty and a second `open`
+/// returned a tab id that navigate/screenshot ignored. `grab`/`annotate`/
+/// `annotations` stay on the desktop bridge — it owns the visual annotation store.
 pub fn handles_op(op: &str) -> bool {
     matches!(
         op,
-        "navigate"
+        "open"
+            | "tabs"
+            | "navigate"
             | "snapshot"
             | "screenshot"
             | "node_at_point"
@@ -70,10 +76,22 @@ pub async fn run_browser_op(op: &str, args: &Value) -> Result<Value> {
         Some(port) => cdp_browser::cdp_endpoint_for(port as u16),
         None => cdp_browser::ensure_local_cdp_browser().await?,
     };
+    // Serialize ops against THIS browser. Every op opens a short-lived CDP
+    // connection and touches shared global state — the last-document status read
+    // back for `http_status`, the open-context set, the ref registry. Two ops run
+    // concurrently against one browser raced that state: a `navigate` issued
+    // alongside a `close_context` (or another nav) could drive the wrong page
+    // target and drop its `http_status`, returning a success-shaped result that
+    // never moved the page. Per-base locking makes concurrent MCP calls queue;
+    // distinct browsers (different `cdpPort`) still run in parallel.
+    let op_lock = op_lock_for(&base);
+    let _op_guard = op_lock.lock().await;
     // Start the console/network listener (idempotent) so diagnostics are captured
     // continuously from the first browser op, not only when `get_console` is called.
     ensure_console_listener(&base);
     match op {
+        "open" => cdp_open(&base, args).await,
+        "tabs" => cdp_tabs(&base).await,
         "navigate" => cdp_navigate(&base, args).await,
         "snapshot" => cdp_snapshot(&base, args).await,
         "screenshot" => cdp_screenshot(&base, args).await,
@@ -91,6 +109,59 @@ pub async fn run_browser_op(op: &str, args: &Value) -> Result<Value> {
 }
 
 // --- ops --------------------------------------------------------------------
+
+/// `open`: create a NEW page target navigated to `url`, returning its `tab` (the
+/// CDP target id) to pass to later ops. Unlike the old desktop-bridge `open`, this
+/// drives the SAME persistent Chromium as navigate/snapshot/click/fill, so the
+/// returned tab is real and addressable (fixes a second `open` being a no-op tab).
+pub(crate) async fn cdp_open(base: &str, args: &Value) -> Result<Value> {
+    let url = args
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or("about:blank");
+    // Same navigation policy as `navigate`: block file:// and off-allowlist origins.
+    if let Some(reason) = navigation_block_reason(url, allowed_origins().as_deref()) {
+        return Ok(json!({ "ok": false, "url": url, "error": "blocked", "reason": reason }));
+    }
+    let mut conn = connect_browser(base).await?;
+    let tgt = conn
+        .call("Target.createTarget", json!({ "url": url }))
+        .await?;
+    let target = tgt
+        .get("targetId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("createTarget returned no targetId"))?
+        .to_string();
+    Ok(json!({ "ok": true, "tab": target, "url": url }))
+}
+
+/// `tabs`: list the browser's open page targets (the agent's tabs). Each entry's
+/// `tab` is the CDP target id to pass as `tab` (or `target`) to subsequent ops.
+/// Previously this hit the desktop bridge and always returned `[]`.
+pub(crate) async fn cdp_tabs(base: &str) -> Result<Value> {
+    let list = cdp_http_json(&format!("{}/json/list", base.trim_end_matches('/'))).await?;
+    Ok(json!({ "ok": true, "tabs": page_targets_from_listing(&list) }))
+}
+
+/// Map a CDP `/json/list` listing to the `tabs` shape: one `{tab,url,title}` per
+/// `type:"page"` target. Pure (no I/O) so it's unit-testable.
+fn page_targets_from_listing(listing: &Value) -> Vec<Value> {
+    listing
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter(|t| t.get("type").and_then(Value::as_str) == Some("page"))
+                .map(|t| {
+                    json!({
+                        "tab": t.get("id").and_then(Value::as_str).unwrap_or_default(),
+                        "url": t.get("url").and_then(Value::as_str).unwrap_or_default(),
+                        "title": t.get("title").and_then(Value::as_str).unwrap_or_default(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 /// Navigate the active page, wait per `wait_until` (load|domcontentloaded|
 /// network_idle, default load), and return the final url + title (+ http_status
@@ -573,13 +644,40 @@ async fn target_ws_url(base: &str, target_id: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("target `{target_id}` not found at {base}"))
 }
 
-/// Connect to the page this op should drive: an explicit `target` (a per-task
-/// context's page), else the shared active page.
+/// Connect to the page this op should drive: an explicit page target — `target`
+/// (from `new_context`) or `tab` (from `open`/`tabs`), which are the same CDP
+/// target id — else the shared active page. Honoring `tab` here is what makes
+/// multi-tab work: before, `tab` was ignored and every op hit the active page.
 async fn connect_page(base: &str, args: &Value) -> Result<CdpConn> {
-    match args.get("target").and_then(Value::as_str) {
+    match requested_target(args) {
         Some(target_id) => CdpConn::connect(&target_ws_url(base, target_id).await?).await,
         None => connect_active_page(base).await,
     }
+}
+
+/// The explicit page target an op asked for, if any: `target` (a per-task context
+/// page) or its alias `tab` (from `open`/`tabs`). Trimmed; empty → None (the active
+/// page). Pure, so the precedence is unit-testable.
+fn requested_target(args: &Value) -> Option<&str> {
+    args.get("target")
+        .or_else(|| args.get("tab"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+/// Per-browser op serialization lock, keyed by CDP base URL. See `run_browser_op`
+/// for why: short-lived connections + global state must not be driven concurrently
+/// against one browser. Distinct browsers (different `cdpPort`) get distinct locks.
+fn op_lock_for(base: &str) -> Arc<AsyncMutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>> = OnceLock::new();
+    LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("cdp op locks poisoned")
+        .entry(base.to_string())
+        .or_default()
+        .clone()
 }
 
 /// Tracks open browser-context ids so abandoned ones (a task that crashed before
@@ -1796,13 +1894,58 @@ mod tests {
 
     #[test]
     fn handles_only_the_page_driving_ops() {
-        for op in ["navigate", "snapshot", "screenshot", "click", "fill"] {
+        // `open`/`tabs` are CDP-driven now too, so the whole tool drives one browser.
+        for op in [
+            "open", "tabs", "navigate", "snapshot", "screenshot", "click", "fill",
+        ] {
             assert!(handles_op(op), "{op} should be CDP-driven");
         }
-        // These stay on the desktop bridge.
-        for op in ["open", "tabs", "grab", "annotate", "annotations", "bogus"] {
+        // The annotation surface stays on the desktop bridge (visual overlay/store).
+        for op in ["grab", "annotate", "annotations", "bogus"] {
             assert!(!handles_op(op), "{op} should NOT be CDP-driven");
         }
+    }
+
+    #[test]
+    fn requested_target_prefers_target_then_tab_then_active() {
+        // `target` wins when both are present.
+        assert_eq!(
+            requested_target(&json!({ "target": "T1", "tab": "T2" })),
+            Some("T1")
+        );
+        // `tab` (from open/tabs) is honored as an alias for target.
+        assert_eq!(requested_target(&json!({ "tab": "T2" })), Some("T2"));
+        // Neither / blank → None → drive the active page.
+        assert_eq!(requested_target(&json!({})), None);
+        assert_eq!(requested_target(&json!({ "tab": "   " })), None);
+        assert_eq!(requested_target(&json!({ "target": "" })), None);
+    }
+
+    #[test]
+    fn page_targets_from_listing_keeps_only_pages() {
+        let listing = json!([
+            { "type": "page", "id": "A", "url": "https://a.test/", "title": "A" },
+            { "type": "background_page", "id": "B", "url": "chrome://b", "title": "B" },
+            { "type": "page", "id": "C", "url": "https://c.test/", "title": "C" },
+        ]);
+        let tabs = page_targets_from_listing(&listing);
+        assert_eq!(tabs.len(), 2, "only `type:page` targets are tabs");
+        assert_eq!(tabs[0]["tab"], "A");
+        assert_eq!(tabs[0]["title"], "A");
+        assert_eq!(tabs[1]["tab"], "C");
+    }
+
+    #[test]
+    fn op_lock_is_per_base() {
+        // Same base → same lock (serialized); different base → different lock.
+        assert!(Arc::ptr_eq(
+            &op_lock_for("http://127.0.0.1:9300"),
+            &op_lock_for("http://127.0.0.1:9300")
+        ));
+        assert!(!Arc::ptr_eq(
+            &op_lock_for("http://127.0.0.1:9300"),
+            &op_lock_for("http://127.0.0.1:9999")
+        ));
     }
 
     #[test]

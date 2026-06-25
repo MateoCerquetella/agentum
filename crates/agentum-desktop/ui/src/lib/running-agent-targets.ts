@@ -50,10 +50,15 @@ export function deriveRunningAgentSendTargets(
       state.terminalLayoutsByTabId[parsed.tabId]?.ptyIdsByLeafId?.[parsed.leafId] ?? null
     let disabledReason: string | undefined
 
+    // Why: a fresh, idle agent whose terminal tab simply isn't open yet (no live
+    // pty) is still reachable — the send path activates its tab, waits for the pty
+    // to spawn, then pastes. So it stays ELIGIBLE with a null ptyId instead of the
+    // old, misleading "Terminal is no longer available" disable that made running
+    // agents look unsendable. Only genuinely un-sendable states disable the row: a
+    // stale status (can't trust the agent is alive) or an agent mid-turn (don't
+    // interrupt its work).
     if (!isExplicitAgentStatusFresh(entry, now, AGENT_STATUS_STALE_AFTER_MS)) {
       disabledReason = 'Agent status is stale'
-    } else if (!ptyId) {
-      disabledReason = 'Terminal is no longer available'
     } else if (entry.state === 'working') {
       disabledReason = 'Agent is working'
     }
