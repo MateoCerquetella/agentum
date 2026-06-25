@@ -84,9 +84,10 @@ struct CreateGoalResponse {
 /// `422 { "error": { code, message, provider } }` via [`ApiError::Custom`]
 /// (chosen over the default `{"error": string}` so the UI can branch on `code`).
 /// `code` ∈ `empty_title` | `no_gh` | `not_github_repo` | `gh_failed`
-/// | `linear_failed` | `remote_unsupported`. A `Board` fallback (no GitHub/Linear
-/// configured) is a **surfaced success** with `provider:"board"`, not an error
-/// (AC-4) — the UI labels it ("created on the internal board").
+/// | `linear_failed` | `no_tracker`. **Spec 019:** the Chat path targets GitHub
+/// or Linear ONLY — there is no internal-Board fallback. When neither a GitHub
+/// repo nor Linear resolves, the response is `no_tracker` (a loud error, never a
+/// `provider:"board"` success) — this reverses the spec-018 Board-as-Ok contract.
 async fn create_goal(
     State(state): State<AppState>,
     Json(body): Json<CreateGoalBody>,
