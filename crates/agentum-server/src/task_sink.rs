@@ -48,6 +48,13 @@ pub struct SinkCtx<'a> {
     pub workdir: &'a Path,
     /// Parent goal id for hierarchy-aware providers (the board nests under it).
     pub parent_goal_id: Option<i64>,
+    /// Explicit GitHub `owner/repo` target (spec 019). When `Some`, the GitHub
+    /// arm files via `gh issue create --repo <slug>` run from `$HOME` — so a
+    /// non-existent project `workdir` is never used as cwd (the Chat-from-
+    /// anywhere fix). When `None`, the legacy cwd-relative argv runs inside
+    /// `workdir` (harness/`plan_goal_harness` compatibility — byte-for-byte
+    /// unchanged).
+    pub slug: Option<&'a str>,
 }
 
 /// The configured task destination. The internal board is also the agnostic
@@ -145,9 +152,25 @@ impl TaskSink {
                 // Non-interactive create: with both --title and --body present,
                 // `gh` skips its editor and prints the new issue URL to stdout.
                 let body = feature.body.clone().unwrap_or_default();
-                let output = tokio::process::Command::new("gh")
-                    .args(gh_create_argv(&feature.title, &body))
-                    .current_dir(ctx.workdir)
+                let mut cmd = tokio::process::Command::new("gh");
+                match ctx.slug {
+                    // Spec 019: an explicit `--repo owner/repo` target makes `gh`
+                    // ignore the cwd's git remote, so we run from a neutral,
+                    // always-present dir ($HOME) — a missing/remote project
+                    // workdir is never used as cwd.
+                    Some(slug) => {
+                        cmd.args(gh_create_argv_with_repo(slug, &feature.title, &body))
+                            .current_dir(neutral_cwd());
+                    }
+                    // Legacy harness path: resolve the repo from `workdir`'s
+                    // origin (cwd-relative). Unchanged behavior for callers
+                    // (e.g. `plan_goal_harness`) that pass no slug.
+                    None => {
+                        cmd.args(gh_create_argv(&feature.title, &body))
+                            .current_dir(ctx.workdir);
+                    }
+                }
+                let output = cmd
                     .output()
                     .await
                     .map_err(|e| anyhow::anyhow!("failed to run `gh`: {e}"))?;
@@ -269,6 +292,25 @@ fn gh_create_argv<'a>(title: &'a str, body: &'a str) -> [&'a str; 6] {
     ["issue", "create", "--title", title, "--body", body]
 }
 
+/// `gh issue create --repo <slug>` argv (spec 019). The explicit `--repo` makes
+/// `gh` file against `owner/repo` regardless of the cwd's git remote, so this is
+/// runnable from any readable dir. Pure helper so the shape is unit-tested
+/// without spawning a process. The slug is an argv token (never interpolated
+/// into a shell), so a malformed slug fails at `gh`, not via injection.
+fn gh_create_argv_with_repo<'a>(slug: &'a str, title: &'a str, body: &'a str) -> [&'a str; 8] {
+    [
+        "issue", "create", "--repo", slug, "--title", title, "--body", body,
+    ]
+}
+
+/// A neutral, always-present cwd for an explicit-`--repo` `gh` call: `$HOME`,
+/// falling back to the system temp dir. Avoids using a project `workdir` that
+/// may not exist locally (the spec 019 bug) and keeps a stray `.git`/`GH_REPO`
+/// in some other dir from interfering with the explicit `--repo` target.
+fn neutral_cwd() -> std::path::PathBuf {
+    dirs::home_dir().unwrap_or_else(std::env::temp_dir)
+}
+
 /// Parse the issue URL `gh issue create` prints to stdout into a [`FeatureRef`].
 /// The number (after `/issues/`) becomes the harness feature id; the full URL is
 /// surfaced to the user. `pub(crate)` so the remote (SSH) GitHub path in
@@ -329,6 +371,8 @@ mod tests {
             store,
             workdir,
             parent_goal_id: parent,
+            // Legacy cwd-relative GitHub path; the Chat path sets slug explicitly.
+            slug: None,
         }
     }
 
@@ -356,6 +400,27 @@ mod tests {
             argv,
             [
                 "issue", "create", "--title", "My title", "--body", "My body"
+            ]
+        );
+    }
+
+    /// Spec 019: the explicit-`--repo` argv carries `--repo <slug>` so `gh`
+    /// files against `owner/repo` regardless of cwd. The slug is a single argv
+    /// token (never shell-interpolated).
+    #[test]
+    fn gh_create_argv_with_repo_targets_the_slug() {
+        let argv = gh_create_argv_with_repo("owner/repo", "My title", "My body");
+        assert_eq!(
+            argv,
+            [
+                "issue",
+                "create",
+                "--repo",
+                "owner/repo",
+                "--title",
+                "My title",
+                "--body",
+                "My body"
             ]
         );
     }

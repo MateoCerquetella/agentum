@@ -79,13 +79,22 @@ pub(crate) struct Remote {
     pub(crate) project: String,
 }
 
+impl Remote {
+    /// True when this remote points at GitHub (github.com or GHE). The `kind`
+    /// field is private; Chat's slug resolver (spec 019) only needs "is this a
+    /// GitHub target?", so expose that question rather than the whole enum.
+    pub(crate) fn is_github(&self) -> bool {
+        matches!(self.kind, ForgeKind::Github)
+    }
+}
+
 /// Normalize a git remote URL to `(host, owner/repo)`.
 ///
 /// Handles `git@host:owner/repo(.git)`, `ssh://git@host/owner/repo(.git)`,
 /// and `https://host/owner/repo(.git)`. GitLab nested groups keep their full
 /// path (`group/sub/repo`); the `.git` suffix and a trailing slash are
 /// stripped.
-fn parse_remote_url(url: &str) -> Option<(String, String)> {
+pub(crate) fn parse_remote_url(url: &str) -> Option<(String, String)> {
     let url = url.trim();
     let (host, path) = if let Some(rest) = url.strip_prefix("git@") {
         // scp-like: git@host:owner/repo

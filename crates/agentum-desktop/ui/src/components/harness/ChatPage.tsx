@@ -207,23 +207,41 @@ export default function ChatPage() {
       e?.preventDefault()
       const text = draft.trim()
       if (!text) return
+      // Spec 019: Chat files an issue against the project's GitHub/Linear tracker
+      // — it no longer requires the project's local path to EXIST (remote/SSH
+      // projects never have a local path). The only precondition is a selected
+      // project; the server resolves the tracker target (slug) on its own.
       const repo = repos[0]
-      const workdir = repo?.path
-      if (!workdir) {
-        setError('Open a repo first — Chat creates issues grounded in your project.')
+      if (!repo) {
+        setError('Select a project — Chat files issues against its GitHub/Linear tracker.')
         return
       }
       setBusy(true)
       setError(null)
       try {
-        // Spec 018: create the issue deterministically server-side and render
+        // Optional fast-path hint: resolve the project's `owner/repo` slug so the
+        // server can skip its host-aware `origin` read. Best-effort — a failure
+        // (no GitHub remote, SSH lookup error, gh missing) leaves it undefined and
+        // the server resolves the slug authoritatively. Never blocks submit.
+        let repoSlug: string | undefined
+        try {
+          const r = await api.gh.repoSlug({ repoPath: repo.path, repoId: repo.id })
+          if (r && typeof r.owner === 'string' && typeof r.repo === 'string') {
+            repoSlug = `${r.owner}/${r.repo}`
+          }
+        } catch {
+          // Slug hint is optional — fall through with repoSlug undefined.
+        }
+        // Spec 018/019: create the issue deterministically server-side and render
         // the result. Chat ALWAYS runs `gh` on the local daemon — it must never
         // route over SSH, even when the active repo is remote. Forwarding the
         // repo's hostId here was the cause of the "Chat tried to SSH" crash, so
-        // host_id is pinned local (null → LOCAL_HOST_ID server-side).
+        // host_id is pinned local (null → LOCAL_HOST_ID server-side). `workdir` is
+        // sent as the slug-read cwd only — the server never existence-checks it.
         const { goal, feature } = await createGoal({
           title: text,
-          workdir,
+          workdir: repo.path,
+          repo_slug: repoSlug,
           tool: selectedTool,
           host_id: null
         })
@@ -553,7 +571,14 @@ function describeGoalError(err: CreateGoalError): string {
     case 'no_gh':
       return 'GitHub CLI (`gh`) isn’t installed or on PATH. Install gh (and `gh auth login`) to create issues.'
     case 'not_github_repo':
-      return 'This folder isn’t a GitHub repo `gh` can use. Connect GitHub / add a GitHub remote, or it’ll fall back to the internal board.'
+      // Spec 019: Chat targets GitHub + Linear only — there is no internal-board
+      // fallback anymore, so the copy must not promise one.
+      return 'This project isn’t a GitHub repo `gh` can use. Connect GitHub / add a GitHub remote, or connect Linear in Settings.'
+    case 'no_tracker':
+      // Spec 019 AC-4: no GitHub repo AND no Linear resolved. The server's
+      // message already distinguishes "host unreachable" from "no remote" —
+      // surface it verbatim so the user sees the actionable reason.
+      return err.message
     case 'gh_failed':
       return `GitHub rejected the issue: ${err.message}`
     case 'linear_failed':

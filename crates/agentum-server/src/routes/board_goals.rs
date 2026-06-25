@@ -12,9 +12,7 @@
 //! issue-creation critical path (dormant), so the decomposition vision can
 //! return later (spec 018 §5 Non-goals).
 
-use agentum_core::{
-    BoardItem, Event, Host, HostKind, NewBoardItem, NewSession, Status, TransitionCtx,
-};
+use agentum_core::{BoardItem, Event, Host, NewBoardItem, NewSession, Status, TransitionCtx};
 use axum::Json;
 use axum::Router;
 use axum::extract::{Path, State};
@@ -60,6 +58,12 @@ struct CreateGoalBody {
     /// mapping, so the client states it.
     #[serde(default)]
     host_id: Option<Uuid>,
+    /// Optional `owner/repo` hint for the GitHub issue target (spec 019). When
+    /// present and well-formed it short-circuits the host-aware `origin` read
+    /// (the UI fills it from its slug index when known). Absent/malformed → the
+    /// server resolves the slug authoritatively from the project's `origin`.
+    #[serde(default)]
+    repo_slug: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -170,6 +174,7 @@ async fn create_goal(
         &state,
         &host,
         &workdir,
+        body.repo_slug.as_deref(),
         &NewFeature {
             title: title.to_string(),
             body: body.body.clone(),
@@ -210,6 +215,81 @@ async fn create_goal(
     }
 }
 
+/// Why a GitHub slug could NOT be resolved — threaded so the `no_tracker`
+/// message can distinguish "couldn't reach the project's host to read its
+/// remote" (an SSH read errored) from "no GitHub remote" (the read succeeded but
+/// the origin isn't GitHub / there's no origin). See architecture.md Risk #2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SlugReason {
+    /// The git read (`remote get-url origin`) succeeded but the origin is not a
+    /// GitHub remote (GitLab/unknown host), or there is no origin at all.
+    NoGithubRemote,
+    /// The host-aware git read could not run — the SSH host was unreachable or
+    /// the remote command transport failed. The slug is unknown, not absent.
+    HostUnreachable,
+}
+
+/// Resolve the `owner/repo` slug for a project's GitHub remote, host-aware
+/// (spec 019). Precedence:
+///   1. a well-formed client `hint` (`owner/repo`) short-circuits with no IO;
+///   2. else read `git remote get-url origin` via `host_runtime::git_in_dir`
+///      (local for a local host, one bounded SSH hop for a remote host),
+///      parse it, and keep it only when it classifies as GitHub.
+///
+/// Returns `Ok(slug)` on success, or `Err(SlugReason)` explaining the miss so
+/// the caller can craft an actionable `no_tracker` message. A malformed hint is
+/// ignored (falls through to the authoritative read), never an error — the read
+/// is the source of truth; the hint is only a no-IO fast path.
+async fn resolve_github_slug(
+    host: &Host,
+    workdir: &str,
+    hint: Option<&str>,
+) -> Result<String, SlugReason> {
+    // 1. Client fast-path: a well-formed `owner/repo` hint is trusted to skip the
+    //    read (gh itself is the final arbiter — a bogus slug yields gh_failed).
+    if let Some(h) = hint {
+        let h = h.trim();
+        if is_valid_slug(h) {
+            return Ok(h.to_string());
+        }
+        // A malformed hint is NOT an error — fall through to the read below.
+    }
+
+    // 2. Authoritative read: ask git (on the project's host) for origin.
+    let out = crate::host_runtime::git_in_dir(host, workdir, &["remote", "get-url", "origin"])
+        .await
+        // A transport/timeout error (e.g. SSH host down) — slug unknown.
+        .map_err(|_| SlugReason::HostUnreachable)?;
+    if !out.success {
+        // git ran but exited non-zero: not a repo / no `origin` remote.
+        return Err(SlugReason::NoGithubRemote);
+    }
+    let url = out.stdout_string();
+    let url = url.trim();
+    let (h, project) = super::forge::parse_remote_url(url).ok_or(SlugReason::NoGithubRemote)?;
+    match super::forge::classify_remote(&h, project) {
+        Some(remote) if remote.is_github() => Ok(remote.project),
+        // Parsed, but GitLab/unknown host — not a GitHub target.
+        _ => Err(SlugReason::NoGithubRemote),
+    }
+}
+
+/// A client `repo_slug` hint must look like `owner/repo`: exactly one `/`, no
+/// whitespace, both halves non-empty. Kept strict so a malformed hint can never
+/// reach `gh` as an argv token; a failing hint falls through to the origin read.
+fn is_valid_slug(s: &str) -> bool {
+    let mut parts = s.split('/');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(owner), Some(repo), None) => {
+            !owner.is_empty()
+                && !repo.is_empty()
+                && !owner.chars().any(char::is_whitespace)
+                && !repo.chars().any(char::is_whitespace)
+        }
+        _ => false,
+    }
+}
+
 /// Build the typed AC-3 error envelope: `{ "error": { code, message, provider } }`.
 /// Nested under `error` (an object) — distinct from the default
 /// `{"error": string}` envelope — so the UI can branch on `code`.
@@ -220,48 +300,82 @@ fn create_error(status: StatusCode, code: &str, message: &str, provider: Option<
     )
 }
 
-/// Create one feature for a goal in the configured [`TaskSink`], dispatching the
-/// GitHub path local-vs-remote (S3 / AC-6). Maps `create_feature`'s
-/// `anyhow::Error` onto the typed AC-3 envelope.
+/// Create one feature for a goal, decoupled from the local filesystem (spec 019).
 ///
-/// A `Board` fallback is returned as a normal `Ok(FeatureRef{provider:"board"})`
-/// (AC-4 — surfaced, not silent). Only real failures (`gh` missing/non-zero,
-/// Linear transport, an unsupported remote) become `Err`.
+/// **No `wd.exists()` gate** — filing an issue is a GitHub/Linear API action, not
+/// a filesystem action; a remote/SSH project's path never exists locally and must
+/// not block creation (the bug this spec fixes). Precedence:
+///
+///   1. resolve a GitHub `owner/repo` slug (client hint → host-aware `origin`
+///      read); if found, file via `gh issue create --repo <slug>` from `$HOME`;
+///   2. else, if Linear is configured, create the ticket there (path-free);
+///   3. else, fail loudly with a typed `422 no_tracker` — **never** the internal
+///      Board (AC-4: Chat targets GitHub + Linear only).
+///
+/// The `host` is used only to *read the slug* (local for a local host, one SSH
+/// hop for a remote one). Filing always runs the **local** `gh` — Chat pins
+/// `host_id=null` so `host.kind` here is `Local`, and even a non-local host never
+/// routes the `gh` create over SSH (AC-6: "never SSH from Chat" holds
+/// structurally — only the read-only slug lookup may touch SSH).
 async fn create_feature_for_goal(
     state: &AppState,
     host: &Host,
     workdir: &str,
+    slug_hint: Option<&str>,
     feature: &NewFeature,
 ) -> Result<FeatureRef, ApiError> {
-    let wd = super::util::expand_workdir(workdir)?;
-
-    match &host.kind {
-        HostKind::Local => {
-            // Local workdir must exist on disk before we probe/select a sink.
-            if !wd.exists() {
-                return Err(ApiError::BadRequest(format!(
-                    "workdir does not exist: {}",
-                    wd.display()
-                )));
-            }
-            // AC-4: GitHub preferred when available; Linear next; board fallback.
-            let sink = TaskSink::select(&wd).await;
-            sink.create_feature(
-                &SinkCtx {
-                    store: &state.store,
-                    workdir: &wd,
-                    parent_goal_id: None,
-                },
-                feature,
-            )
-            .await
-            .map_err(|e| map_sink_error(sink, &e))
+    // Step 1: resolve a GitHub slug (client hint, else host-aware origin read).
+    match resolve_github_slug(host, workdir, slug_hint).await {
+        Ok(slug) => {
+            // A GitHub target resolved → file via the explicit-`--repo` path, run
+            // from $HOME (never the project workdir). Reuses the shared GitHub
+            // arm in `TaskSink` so YOLO/argv/parse stay in one place.
+            return TaskSink::Github
+                .create_feature(
+                    &SinkCtx {
+                        store: &state.store,
+                        // workdir is unused by the explicit-slug GitHub arm (it
+                        // runs from $HOME); pass it for shape only.
+                        workdir: std::path::Path::new(workdir),
+                        parent_goal_id: None,
+                        slug: Some(&slug),
+                    },
+                    feature,
+                )
+                .await
+                .map_err(|e| map_sink_error(TaskSink::Github, &e));
         }
-        HostKind::Ssh { .. } => {
-            // S3 / AC-6: the repo lives on an SSH host. Run `gh issue create`
-            // ON that host via host_runtime (never a silent local `gh` against
-            // a path that doesn't exist locally).
-            create_github_issue_remote(host, workdir, feature).await
+        // Step 2/3: no GitHub target — fall through to Linear, else `no_tracker`.
+        Err(reason) => {
+            if crate::linear::available() {
+                return TaskSink::Linear
+                    .create_feature(
+                        &SinkCtx {
+                            store: &state.store,
+                            workdir: std::path::Path::new(workdir),
+                            parent_goal_id: None,
+                            slug: None,
+                        },
+                        feature,
+                    )
+                    .await
+                    .map_err(|e| map_sink_error(TaskSink::Linear, &e));
+            }
+            // No GitHub repo AND no Linear → loud, typed error. NEVER the Board.
+            let message = match reason {
+                SlugReason::HostUnreachable => {
+                    "Couldn't reach the project's host to read its GitHub remote, and no Linear workspace is connected. Check the host, or connect GitHub/Linear."
+                }
+                SlugReason::NoGithubRemote => {
+                    "This project has no GitHub remote and no Linear workspace is connected. Add a GitHub `origin` remote, or connect Linear in Settings."
+                }
+            };
+            Err(create_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "no_tracker",
+                message,
+                None,
+            ))
         }
     }
 }
@@ -270,6 +384,13 @@ async fn create_feature_for_goal(
 /// the remote analogue of `TaskSink::Github` (S3 / AC-6). Goes through
 /// `host_runtime::gh_in_dir` (mirrors `git_in_dir`), so quoting + the bounded
 /// SSH timeout are shared with every other host-aware exec.
+///
+/// Spec 019: **no longer reached from the Chat path** — Chat now files locally
+/// via `gh issue create --repo <slug>` (it reads the slug host-aware but never
+/// SSHes to *file*). Kept in-tree (with tests) as the documented remote-file
+/// path for any non-Chat caller; `#[allow(dead_code)]` because nothing invokes
+/// it today.
+#[allow(dead_code)]
 async fn create_github_issue_remote(
     host: &Host,
     workdir: &str,
@@ -454,6 +575,9 @@ async fn plan_goal_harness(
                             // deref Arc<Store> → &Store
                             workdir: &wd,
                             parent_goal_id: Some(goal_id),
+                            // Harness path: keep cwd-relative GitHub resolution
+                            // (spec 019 scopes the explicit-`--repo` slug to Chat).
+                            slug: None,
                         },
                         &crate::task_sink::NewFeature {
                             title: c.title.clone(),
@@ -925,6 +1049,14 @@ mod tests {
         // (XDG_CONFIG_HOME is a no-op on macOS).
         unsafe {
             std::env::set_var("AGENTUM_HOME", dir.path());
+            // Spec 019: the Chat create path now consults `linear::available()`
+            // directly (no `AGENTUM_TASK_SINK` short-circuit). `linear` resolves
+            // its creds via `dirs::data_local_dir()` (NOT AGENTUM_HOME), so on a
+            // dev machine with a real `linear.json` every test would see Linear
+            // as available. Point its override at a guaranteed-missing file so
+            // create-goal tests are hermetic. A test that wants Linear available
+            // overrides this var itself.
+            std::env::set_var("AGENTUM_LINEAR_CREDS", dir.path().join("no-linear.json"));
         }
         // Guard the isolation seam: if config_dir() ever stops honoring
         // AGENTUM_HOME, fail loudly here instead of writing test fixtures into
@@ -952,115 +1084,89 @@ mod tests {
             tool: None,
             model: None,
             host_id: None,
+            repo_slug: None,
         }
     }
 
-    /// Force the agnostic board sink under the env lock so create-goal tests are
-    /// hermetic — they never probe the dev machine's connected GitHub/Linear and
-    /// never shell out to `gh` (spec 018 AC-5: "no live gh needed").
-    fn force_board_sink() {
-        // SAFETY: serialised by `isolate_xdg`'s crate-wide TEST_ENV_LOCK, which
-        // every create-goal test holds for the duration of the call.
-        unsafe { std::env::set_var("AGENTUM_TASK_SINK", "board") };
+    /// Spec 019: a hermetic, non-tracking workdir for create-goal tests — a temp
+    /// dir that is NOT a git repo (so no GitHub origin resolves) under
+    /// `isolate_xdg` (so no Linear). The Chat path therefore deterministically
+    /// hits `no_tracker` without touching the network or the dev machine's real
+    /// trackers. Replaces the old `force_board_sink()` (the Board is no longer a
+    /// Chat outcome — AC-4). Returns the dir (keep it alive) + its path string.
+    fn untracked_workdir() -> (TempDir, String) {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path().to_string_lossy().into_owned();
+        (dir, wd)
     }
 
-    /// POST /api/board/goals creates a BoardItem with lbl=goal, status=todo and
-    /// returns the created feature (board fallback → provider "board").
+    /// Spec 019 AC-4: Chat no longer falls back to the internal Board. POST
+    /// /api/board/goals still creates the goal BoardItem (lbl=goal, status=todo),
+    /// but when no GitHub/Linear target resolves the feature-create fails loudly
+    /// with `no_tracker` — and NO `feat` board card is created.
     #[tokio::test]
-    async fn create_goal_inserts_board_item_with_lbl_goal() {
+    async fn create_goal_inserts_board_item_but_never_a_board_feature() {
         let _env = isolate_xdg();
-        force_board_sink();
+        let (_dir, wd) = untracked_workdir();
         let state = fresh_state().await;
 
-        let (code, body) = create_goal(State(state.clone()), Json(goal_body("build OAuth", None)))
-            .await
-            .expect("create_goal must succeed");
-
-        assert_eq!(code, StatusCode::CREATED);
-        let goal = &body.0.goal;
-        assert_eq!(goal.lbl.as_deref(), Some("goal"), "lbl must be 'goal'");
-        assert_eq!(goal.status, "todo", "goal must land in todo");
-        assert_eq!(goal.title, "build OAuth");
-        assert!(goal.parent_goal_id.is_none(), "goals have no parent goal");
-        // Spec 018: the response carries the created tracker item, not a
-        // planner_session_id. With the board sink forced it's a board card.
-        assert_eq!(body.0.feature.provider, "board");
-        assert!(
-            body.0.feature.url.is_none(),
-            "board cards have no external url"
-        );
-    }
-
-    /// Spec 018 AC-1/AC-5: create-goal returns a `FeatureRef` for the created
-    /// issue/card — deterministically, no agent spawned. With the board sink
-    /// forced the FeatureRef's id is the new feat card's board key and that card
-    /// actually exists in the store.
-    #[tokio::test]
-    async fn create_goal_returns_feature_ref_for_created_card() {
-        let _env = isolate_xdg();
-        force_board_sink();
-        let state = fresh_state().await;
-
-        let (code, body) = create_goal(
+        let err = create_goal(
             State(state.clone()),
-            Json(goal_body("Add CSV export to the board", None)),
+            Json(goal_body("build OAuth", Some(&wd))),
         )
         .await
-        .expect("create_goal must succeed with the board sink");
+        .expect_err("no tracker resolves → loud error, never a board card");
 
-        assert_eq!(code, StatusCode::CREATED);
-        let fref = &body.0.feature;
-        assert_eq!(fref.provider, "board");
-        assert!(
-            fref.id.starts_with("AG-"),
-            "board FeatureRef id must be the card key, got {}",
-            fref.id
-        );
+        // AC-4: the failure is typed `no_tracker`, never a board provider.
+        match err {
+            ApiError::Custom(status, ref v) => {
+                assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+                assert_eq!(v["error"]["code"], "no_tracker", "got {v}");
+                assert_ne!(v["error"]["provider"], "board");
+            }
+            other => panic!("expected Custom 422 no_tracker, got {other:?}"),
+        }
 
-        // The feature card the FeatureRef points at must be a real `feat` card
-        // in `todo` — proof the create happened synchronously, no agent needed.
+        // The goal row is still created and retained (the Chat-side record) — only
+        // the feature-create errored.
         let items = state.store.list_board_items().await.unwrap();
-        let card = items
+        let goal = items
             .iter()
-            .find(|c| c.key == fref.id)
-            .expect("the created feature card must be listable");
-        assert_eq!(card.lbl.as_deref(), Some("feat"));
-        assert_eq!(card.status, "todo");
-        assert_eq!(card.title, "Add CSV export to the board");
+            .find(|i| i.lbl.as_deref() == Some("goal"))
+            .expect("the goal row must be created and retained");
+        assert_eq!(goal.status, "todo", "goal lands in todo");
+        assert_eq!(goal.title, "build OAuth");
+        assert!(goal.parent_goal_id.is_none(), "goals have no parent goal");
+        // The crux: NO board feature card was silently created.
+        assert!(
+            items.iter().all(|i| i.lbl.as_deref() != Some("feat")),
+            "Chat must NEVER create an internal board feature card (AC-4)"
+        );
     }
 
-    /// Spec 018 AC-3: a GitHub repo that `gh` can't create against (here: a temp
-    /// dir that is not a GitHub repo, with the GitHub sink forced) returns a
-    /// LOUD, TYPED `422 { error: { code, message, provider } }` envelope — never
-    /// a silent fallback and never a generic 500. Hermetic: it asserts the error
-    /// is typed regardless of whether `gh` is installed (a missing `gh` yields
-    /// `no_gh`, a present `gh` in a non-repo yields `not_github_repo`/`gh_failed`
-    /// — all three are acceptable typed GitHub failures).
+    /// Spec 019 AC-4 (was 018 AC-3): a project that resolves to NO GitHub repo
+    /// (a temp dir with no git origin) and no Linear returns a LOUD, TYPED
+    /// `422 { error: { code, message, provider } }` envelope — never a silent
+    /// fallback and never a generic 500. With the local-workdir gate removed, the
+    /// loud failure is `no_tracker` (the new replacement for the silent Board).
     #[tokio::test]
     async fn create_goal_not_a_github_repo_returns_typed_error() {
         let _env = isolate_xdg();
-        // Force GitHub so we exercise the gh path against a non-repo temp dir.
-        // SAFETY: serialised by isolate_xdg's TEST_ENV_LOCK.
-        unsafe { std::env::set_var("AGENTUM_TASK_SINK", "github") };
         let state = fresh_state().await;
-        let dir = TempDir::new().unwrap();
-        let wd = dir.path().to_string_lossy().into_owned();
+        let (_dir, wd) = untracked_workdir();
 
         let err = create_goal(State(state.clone()), Json(goal_body("ship it", Some(&wd))))
             .await
-            .expect_err("a non-GitHub repo with the github sink forced must error");
+            .expect_err("a non-GitHub repo with no Linear must error loudly");
 
-        // Must be the typed AC-3 envelope: Custom(422, {error:{code,message,provider}}).
+        // Must be the typed envelope: Custom(422, {error:{code,message,provider}}).
         match err {
             ApiError::Custom(status, ref v) => {
-                assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "AC-3 uses 422");
+                assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "uses 422");
                 let e = &v["error"];
-                let code = e["code"].as_str().unwrap_or_default();
-                assert!(
-                    matches!(code, "no_gh" | "not_github_repo" | "gh_failed"),
-                    "expected a typed github failure code, got {code:?} in {v}"
-                );
-                assert_eq!(e["provider"], "github", "provider must be surfaced");
+                assert_eq!(e["code"], "no_tracker", "got {v}");
+                // AC-4: never the internal board.
+                assert_ne!(e["provider"], "board");
                 assert!(
                     e["message"].as_str().is_some_and(|m| !m.is_empty()),
                     "message must be a non-empty, human-readable reason"
@@ -1076,8 +1182,6 @@ mod tests {
             items.iter().any(|i| i.lbl.as_deref() == Some("goal")),
             "the goal row must be retained on a feature-create failure"
         );
-
-        unsafe { std::env::remove_var("AGENTUM_TASK_SINK") };
     }
 
     /// Spec 018 AC-3: an empty/whitespace title is rejected up front with a
@@ -1086,7 +1190,6 @@ mod tests {
     #[tokio::test]
     async fn create_goal_empty_title_is_rejected() {
         let _env = isolate_xdg();
-        force_board_sink();
         let state = fresh_state().await;
 
         let err = create_goal(State(state.clone()), Json(goal_body("   ", None)))
@@ -1106,26 +1209,31 @@ mod tests {
         assert!(items.is_empty(), "empty-title reject must not write a goal");
     }
 
-    /// POST /api/board/goals emits a goal.created event on the bus.
+    /// POST /api/board/goals emits a goal.created event on the bus. The goal row
+    /// + event fire BEFORE the feature-create, so this holds even when the
+    /// feature-create later fails `no_tracker` (untracked workdir, spec 019).
     #[tokio::test]
     async fn create_goal_emits_goal_created_event() {
         let _env = isolate_xdg();
-        force_board_sink();
+        let (_dir, wd) = untracked_workdir();
         let state = fresh_state().await;
         let mut rx = state.bus.subscribe();
 
-        let (_, body) = create_goal(State(state.clone()), Json(goal_body("event test", None)))
-            .await
-            .expect("create_goal must succeed");
+        // The feature-create fails (no tracker) but the goal row + goal.created
+        // event are already on the bus — that's what this test asserts.
+        let _ = create_goal(
+            State(state.clone()),
+            Json(goal_body("event test", Some(&wd))),
+        )
+        .await;
 
         // Two events should be on the bus: board.created (from create_board_item path
         // handled inside the handler) then goal.created.  Drain until we see goal.created.
-        let goal_id = body.0.goal.id;
         let mut saw_goal_created = false;
         loop {
             match rx.try_recv() {
                 Ok(ev) if ev.kind == "goal.created" => {
-                    assert_eq!(ev.payload["id"], goal_id);
+                    assert_eq!(ev.payload["title"], "event test");
                     saw_goal_created = true;
                     break;
                 }
@@ -1141,7 +1249,6 @@ mod tests {
     #[tokio::test]
     async fn create_goal_respects_column_rule_gate() {
         let _env = isolate_xdg();
-        force_board_sink();
         let state = fresh_state().await;
 
         // Raise the bar: require body for the todo column.
@@ -1306,6 +1413,195 @@ mod tests {
         std::fs::write(dir.join("README.md"), "seed").unwrap();
         run(&["add", "-A"]);
         run(&["commit", "-q", "-m", "seed"]);
+    }
+
+    /// Set the `origin` remote of an already-initialised repo to `url`.
+    fn set_origin(dir: &std::path::Path, url: &str) {
+        use std::process::Command;
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["remote", "add", "origin", url])
+            .output()
+            .expect("git available in test env")
+            .status
+            .success();
+        assert!(ok, "git remote add origin {url} failed");
+    }
+
+    /// A local [`Host`] for the slug-read tests (the Chat path always files local).
+    fn local_host() -> Host {
+        Host {
+            id: agentum_core::LOCAL_HOST_ID,
+            name: "local".into(),
+            kind: agentum_core::HostKind::Local,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+            last_seen_at: None,
+        }
+    }
+
+    // --- spec 019: slug resolution + Chat-from-anywhere ---
+
+    /// `is_valid_slug` accepts exactly `owner/repo` and rejects anything with the
+    /// wrong shape — the guard that keeps a malformed hint off the `gh` argv.
+    #[test]
+    fn is_valid_slug_accepts_owner_repo_only() {
+        assert!(is_valid_slug("owner/repo"));
+        assert!(is_valid_slug("octo-cat/My_Repo.git-ish"));
+        assert!(!is_valid_slug("owner"), "no slash");
+        assert!(!is_valid_slug("owner/repo/extra"), "two slashes");
+        assert!(!is_valid_slug("owner /repo"), "whitespace");
+        assert!(!is_valid_slug("/repo"), "empty owner");
+        assert!(!is_valid_slug("owner/"), "empty repo");
+        assert!(!is_valid_slug(""), "empty");
+    }
+
+    /// A valid client hint short-circuits resolution with NO git IO — even when
+    /// the workdir doesn't exist and the host is local (proves the fast path).
+    #[tokio::test]
+    async fn resolve_github_slug_trusts_valid_hint_without_io() {
+        let host = local_host();
+        let slug = resolve_github_slug(&host, "/path/does/not/exist", Some("acme/widgets"))
+            .await
+            .expect("a valid hint must resolve");
+        assert_eq!(slug, "acme/widgets");
+    }
+
+    /// A real local repo with a GitHub `origin` → `Some("owner/repo")` from the
+    /// host-aware read (no hint).
+    #[tokio::test]
+    async fn resolve_github_slug_reads_github_origin() {
+        let dir = TempDir::new().unwrap();
+        init_git_repo(dir.path());
+        set_origin(dir.path(), "git@github.com:owner/repo.git");
+        let host = local_host();
+
+        let slug = resolve_github_slug(&host, &dir.path().to_string_lossy(), None)
+            .await
+            .expect("a github origin must resolve to its slug");
+        assert_eq!(slug, "owner/repo");
+    }
+
+    /// A GitLab origin is NOT a GitHub target → `Err(NoGithubRemote)`.
+    #[tokio::test]
+    async fn resolve_github_slug_rejects_gitlab_origin() {
+        let dir = TempDir::new().unwrap();
+        init_git_repo(dir.path());
+        set_origin(dir.path(), "git@gitlab.com:group/proj.git");
+        let host = local_host();
+
+        let reason = resolve_github_slug(&host, &dir.path().to_string_lossy(), None)
+            .await
+            .expect_err("a gitlab origin is not a github target");
+        assert_eq!(reason, SlugReason::NoGithubRemote);
+    }
+
+    /// A non-git directory (no `origin`) → `Err(NoGithubRemote)` (git ran but
+    /// exited non-zero — that's "no remote", not "host unreachable").
+    #[tokio::test]
+    async fn resolve_github_slug_non_git_dir_is_no_remote() {
+        let dir = TempDir::new().unwrap();
+        let host = local_host();
+
+        let reason = resolve_github_slug(&host, &dir.path().to_string_lossy(), None)
+            .await
+            .expect_err("a non-git dir has no github remote");
+        assert_eq!(reason, SlugReason::NoGithubRemote);
+    }
+
+    /// AC-1: a workdir that does NOT exist locally + a valid GitHub slug hint
+    /// must NOT return "workdir does not exist". The Chat path resolves the slug
+    /// from the hint (no IO, no existence check) and drives `gh issue create
+    /// --repo <slug>` from `$HOME`. The create itself may fail at `gh`
+    /// (auth/repo-not-found — a typed `gh_failed`, never the old filesystem
+    /// gate, never the Board). The point this asserts: the existence precondition
+    /// is gone. Hermetic: the slug points at a repo that doesn't exist, so a live
+    /// `gh` 404s without creating anything; a missing `gh` yields `no_gh`.
+    #[tokio::test]
+    async fn create_goal_missing_workdir_with_slug_skips_existence_gate() {
+        let _env = isolate_xdg();
+        let state = fresh_state().await;
+
+        // A path that cannot exist on this machine (the remote-project bug), plus
+        // a well-formed but non-existent slug so a live `gh` 404s (no side effect).
+        let body = CreateGoalBody {
+            title: "file from anywhere".into(),
+            body: None,
+            workdir: Some("/definitely/not/here/spec019".into()),
+            tool: None,
+            model: None,
+            host_id: None,
+            repo_slug: Some("agentum-nonexistent-org-xyz/no-such-repo".into()),
+        };
+
+        let result = create_goal(State(state.clone()), Json(body)).await;
+
+        // Whatever the outcome, it must NEVER be the old filesystem error.
+        if let Err(ref e) = result {
+            let msg = match e {
+                ApiError::Custom(_, v) => v["error"]["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                other => other.to_string(),
+            };
+            assert!(
+                !msg.contains("workdir does not exist"),
+                "AC-1 regression: the local-workdir gate is back — got {msg:?}"
+            );
+            // A failure here must be a typed GitHub error (gh missing/auth/repo),
+            // never the Board.
+            if let ApiError::Custom(status, v) = e {
+                assert_eq!(*status, StatusCode::UNPROCESSABLE_ENTITY);
+                assert_eq!(
+                    v["error"]["provider"], "github",
+                    "a slug-resolved failure is a github error"
+                );
+                assert_ne!(v["error"]["provider"], "board", "Chat never lands on board");
+            }
+        }
+    }
+
+    /// AC-4: no resolvable GitHub slug AND no Linear → `422 no_tracker`, and the
+    /// response is NEVER `provider:"board"`. Uses a non-git temp workdir (no
+    /// origin) with the default sink selection (no AGENTUM_TASK_SINK), and no
+    /// Linear token on disk (AGENTUM_HOME is an isolated temp dir).
+    #[tokio::test]
+    async fn create_goal_no_github_no_linear_is_no_tracker_never_board() {
+        let _env = isolate_xdg();
+        // No AGENTUM_TASK_SINK: the real precedence runs. With no github origin
+        // and no Linear token (isolated AGENTUM_HOME), the Chat path must error
+        // with no_tracker — NOT silently create a board card.
+        // SAFETY: serialised by isolate_xdg's TEST_ENV_LOCK.
+        unsafe { std::env::remove_var("AGENTUM_TASK_SINK") };
+        let state = fresh_state().await;
+        let dir = TempDir::new().unwrap(); // not a git repo → no origin
+        let wd = dir.path().to_string_lossy().into_owned();
+
+        let err = create_goal(
+            State(state.clone()),
+            Json(goal_body("untracked work", Some(&wd))),
+        )
+        .await
+        .expect_err("no github + no linear must be a loud error, not a board card");
+
+        match err {
+            ApiError::Custom(status, ref v) => {
+                assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "AC-4 uses 422");
+                assert_eq!(v["error"]["code"], "no_tracker", "got {v}");
+                // The crux of AC-4: Chat NEVER lands on the internal board.
+                assert_ne!(v["error"]["provider"], "board");
+            }
+            other => panic!("expected Custom 422 no_tracker, got {other:?}"),
+        }
+
+        // No board feature card was silently created (only the goal row remains).
+        let items = state.store.list_board_items().await.unwrap();
+        assert!(
+            items.iter().all(|i| i.lbl.as_deref() != Some("feat")),
+            "no_tracker must NOT create a feat card on the board"
+        );
     }
 
     /// card-start MUST provision an isolated worktree when the project is a
