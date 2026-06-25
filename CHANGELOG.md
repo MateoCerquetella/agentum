@@ -4,6 +4,24 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.1] — 2026-06-25
+
+### Fixed
+- **Chat never routes over SSH.** Creating an issue from **Chat** no longer
+  forwards the active repo's remote `hostId`, which made the server attempt
+  `gh issue create` over SSH (`HostKind::Ssh`) and crash when the first repo
+  happened to be a remote/SSH project. Chat now always runs `gh` on the local
+  daemon (`host_id` pinned local). GitHub-issue creation is unchanged; it just
+  never hops to SSH. (`ChatPage.tsx`)
+- **Word navigation/deletion works inside agent (and tmux) sessions.**
+  Option+←/→ (move by word), Option+⌫ (delete previous word) and Cmd+←/→
+  (line nav) now work in server-backed terminal panes — the default for every
+  terminal. These intercepted chords were `preventDefault`'d and then dropped
+  because session panes have no `paneTransport`; the keystrokes are now routed
+  through the session's input stream (the same channel as normal typing), so
+  they reach Claude Code / Codex / a tmux shell like in any other terminal.
+  (`keyboard-handlers.ts`, `server-session-terminal.ts`, `server-pane-connection.ts`)
+
 ## [0.22.0] — 2026-06-24
 
 ### Fixed
