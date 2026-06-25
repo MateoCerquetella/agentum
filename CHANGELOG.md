@@ -4,6 +4,25 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.0] — 2026-06-25
+
+### Fixed
+- **The in-app browser is now isolated per worktree for the DEFAULT (native)
+  engine too.** v0.28.0 only isolated the CDP/screencast browser; the default
+  native WKWebView still shared one session across worktrees, so opening a
+  browser in one worktree showed another's tabs/logins. Each worktree now gets
+  its own WKWebView data store (macOS/iOS ≥ 14/17), keyed by the worktree — so
+  cookies, logins, and storage no longer cross worktrees. (`browser_native.rs`,
+  `NativeBrowserPagePane.tsx`)
+
+### Added
+- **Browsers are listed in the sidebar** under each worktree card, beside the
+  agent and terminal rows — click a row to open that browser tab.
+  (`WorktreeCardBrowserRow.tsx`, `WorktreeCardAgents.tsx`)
+- **Drag a sidebar browser row onto another worktree card to move the browser
+  there.** Replaces the (non-working) tab-bar drag handle; the right-click
+  "Move to Worktree" menu stays. (`BrowserTab.tsx`)
+
 ## [0.28.0] — 2026-06-25
 
 ### Added
