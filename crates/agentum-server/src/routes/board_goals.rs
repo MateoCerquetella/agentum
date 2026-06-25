@@ -221,7 +221,7 @@ async fn create_goal(
 /// remote" (an SSH read errored) from "no GitHub remote" (the read succeeded but
 /// the origin isn't GitHub / there's no origin). See architecture.md Risk #2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SlugReason {
+pub(crate) enum SlugReason {
     /// The git read (`remote get-url origin`) succeeded but the origin is not a
     /// GitHub remote (GitLab/unknown host), or there is no origin at all.
     NoGithubRemote,
@@ -241,7 +241,10 @@ enum SlugReason {
 /// the caller can craft an actionable `no_tracker` message. A malformed hint is
 /// ignored (falls through to the authoritative read), never an error — the read
 /// is the source of truth; the hint is only a no-IO fast path.
-async fn resolve_github_slug(
+///
+/// `pub(crate)` so the Chat-issues route (`routes::chat`) can reuse the exact
+/// same host-aware origin read when no client `repo_slug` is supplied.
+pub(crate) async fn resolve_github_slug(
     host: &Host,
     workdir: &str,
     hint: Option<&str>,

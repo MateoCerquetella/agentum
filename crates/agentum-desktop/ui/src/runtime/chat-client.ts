@@ -61,3 +61,58 @@ export async function sendChat(
   }
   throw new Error(message)
 }
+
+/** Result of `POST /api/chat/issues` — what landed on GitHub, and what didn't. */
+export type CreatedIssues = {
+  repo: string
+  created: { title: string; url: string }[]
+  failed: { title: string; error: string }[]
+}
+
+/**
+ * `POST /api/chat/issues` — distil the agreed task breakdown from the transcript
+ * and file one GitHub issue per task. Partial success is a 200 (`created` +
+ * `failed` per-task). Mirrors `sendChat`'s fetch/error handling: a non-ok
+ * response throws `Error(<server message>)`, decoding BOTH the `{ error: string }`
+ * (400/422 string envelopes) and `{ error: { message } }` (502 `llm_failed`,
+ * 422 `no_tasks`/`no_github_repo`) shapes.
+ */
+export async function createIssuesFromChat(
+  messages: ChatTurn[],
+  opts?: { workdir?: string; repoSlug?: string }
+): Promise<CreatedIssues> {
+  const url = await apiUrl('/api/chat/issues')
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(await authHeaders())
+    },
+    body: JSON.stringify({
+      messages,
+      workdir: opts?.workdir,
+      repo_slug: opts?.repoSlug
+    })
+  })
+  const text = await res.text()
+  if (res.ok) {
+    const parsed = (text ? JSON.parse(text) : {}) as Partial<CreatedIssues>
+    return {
+      repo: parsed.repo ?? '',
+      created: parsed.created ?? [],
+      failed: parsed.failed ?? []
+    }
+  }
+  let message = `chat issues ${res.status}`
+  try {
+    const parsed = JSON.parse(text) as { error?: { message?: string } | string }
+    if (parsed.error && typeof parsed.error === 'object') {
+      message = parsed.error.message ?? message
+    } else if (typeof parsed.error === 'string') {
+      message = parsed.error
+    }
+  } catch {
+    if (text) message = text
+  }
+  throw new Error(message)
+}

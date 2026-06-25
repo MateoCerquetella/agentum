@@ -5,13 +5,13 @@
 // embedded server via chat-client; it does not create tasks or spawn agents.
 // (Task creation is a separate flow; review/start happens on the Board.)
 import { type FormEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
-import { Columns3, Loader2, MessagesSquare, Send, Sparkles } from 'lucide-react'
+import { Columns3, Github, Loader2, MessagesSquare, Send, Sparkles } from 'lucide-react'
 
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
 import { DrillInHeader } from '@/components/nav/DrillInHeader'
 import CommentMarkdown from '@/components/sidebar/CommentMarkdown'
-import { type ChatTurn, sendChat } from '@/runtime/chat-client'
+import { type ChatTurn, createIssuesFromChat, sendChat } from '@/runtime/chat-client'
 
 export default function ChatPage() {
   const repos = useAppStore((s) => s.repos)
@@ -20,7 +20,12 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<ChatTurn[]>([])
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
+  const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // The "Create GitHub issues" affordance only appears once the interviewer has
+  // proposed something — i.e. there's at least one assistant turn to mine.
+  const hasAssistantReply = messages.some((m) => m.role === 'assistant')
 
   // Auto-scroll to the newest message (or the thinking indicator) whenever the
   // transcript grows or the busy state flips.
@@ -70,6 +75,35 @@ export default function ChatPage() {
     },
     [submit]
   )
+
+  // Close the loop: mine the agreed task breakdown out of the transcript and
+  // file each task as a GitHub issue, then append a summary turn linking them.
+  const createIssues = useCallback(async () => {
+    if (busy || creating || messages.length === 0) return
+    setCreating(true)
+    setError(null)
+    try {
+      const result = await createIssuesFromChat(messages, { workdir: repos[0]?.path })
+      const lines: string[] = []
+      if (result.created.length > 0) {
+        const n = result.created.length
+        lines.push(`Created ${n} issue${n === 1 ? '' : 's'} in \`${result.repo}\`:`)
+        for (const c of result.created) lines.push(`- [${c.title}](${c.url})`)
+      } else {
+        lines.push(`No issues were created${result.repo ? ` in \`${result.repo}\`` : ''}.`)
+      }
+      if (result.failed.length > 0) {
+        lines.push('')
+        lines.push(`${result.failed.length} could not be created:`)
+        for (const f of result.failed) lines.push(`- ${f.title} — ${f.error}`)
+      }
+      setMessages((prev) => [...prev, { role: 'assistant', content: lines.join('\n') }])
+    } catch (e2) {
+      setError(e2 instanceof Error ? e2.message : String(e2))
+    } finally {
+      setCreating(false)
+    }
+  }, [busy, creating, messages, repos])
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -127,6 +161,23 @@ export default function ChatPage() {
 
       {/* composer */}
       <form onSubmit={submit} className="flex-none border-t border-border px-5 pb-4.5 pt-3">
+        {hasAssistantReply ? (
+          <div className="mx-auto mb-2.5 flex max-w-[720px] justify-end">
+            <button
+              type="button"
+              onClick={() => void createIssues()}
+              disabled={busy || creating || messages.length === 0}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] font-medium hover:border-foreground/30 hover:bg-accent disabled:opacity-40"
+            >
+              {creating ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Github className="size-3.5" />
+              )}
+              {creating ? 'Creating issues…' : 'Create GitHub issues'}
+            </button>
+          </div>
+        ) : null}
         <div className="mx-auto flex max-w-[720px] items-end gap-2.5 rounded-lg border border-border bg-card px-3 py-2.5">
           <textarea
             value={draft}
