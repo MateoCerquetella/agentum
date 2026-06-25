@@ -15,7 +15,10 @@ import {
 import { TERMINAL_PATH_EXISTS_CACHE_MAX_ENTRIES } from './terminal-path-exists-cache'
 import { handleOscLink } from './terminal-osc-link-routing'
 import { installHttpLinkClickFallback } from './terminal-url-link-hit-testing'
-import { registerHttpLinkStoreAccessor } from '@/lib/http-link-routing'
+import {
+  registerHttpLinkStoreAccessor,
+  resetRecentHttpLinkOpensForTests
+} from '@/lib/http-link-routing'
 import { getConnectionId } from '@/lib/connection-context'
 import {
   createCompatibleRuntimeStatusResponseIfNeeded,
@@ -99,6 +102,7 @@ beforeEach(() => {
   vi.mocked(getConnectionId).mockReturnValue(null)
   openFilePathMock.mockResolvedValue(true)
   storeState.settings = undefined
+  resetRecentHttpLinkOpensForTests()
   registerHttpLinkStoreAccessor(() => storeState)
   vi.stubGlobal('window', {
     dispatchEvent: vi.fn(),
@@ -1365,7 +1369,7 @@ describe('createFilePathLinkProvider range bounds', () => {
     expect(element.removeEventListener).toHaveBeenCalledWith('mouseup', mouseUp)
   })
 
-  it('does not double-open URLs when xterm already handled the mouseup', () => {
+  it('opens URLs even when xterm reported the mouseup (agent mouse-tracking)', () => {
     setPlatform('Macintosh')
     storeState.settings = { openLinksInApp: false }
     const rows = [makeBufferLine('Open https://github.com/mateocerquetella/agentum/pull/2914')]
@@ -1373,6 +1377,11 @@ describe('createFilePathLinkProvider range bounds', () => {
     const disposable = installHttpLinkClickFallback(terminal, { worktreeId: 'wt-1' })
     const mouseUp = getRegisteredBubbleMouseUpHandler(element)
 
+    // Why: an agent terminal with mouse tracking on consumes the click for its
+    // mouse report and preventDefaults the mouseup. The fallback must still open
+    // the URL on a modifier-click — bailing on defaultPrevented was the bug that
+    // made ⌘+click do nothing. (Double-opening is prevented by openHttpLink's
+    // coalescing, covered in http-link-routing.test.ts.)
     mouseUp({
       button: 0,
       metaKey: true,
@@ -1383,8 +1392,10 @@ describe('createFilePathLinkProvider range bounds', () => {
       preventDefault: vi.fn()
     } as unknown as MouseEvent)
 
-    expect(openUrlMock).not.toHaveBeenCalled()
-    expect(terminal.clearSelection).not.toHaveBeenCalled()
+    expect(openUrlMock).toHaveBeenCalledWith(
+      'https://github.com/mateocerquetella/agentum/pull/2914'
+    )
+    expect(terminal.clearSelection).toHaveBeenCalled()
 
     disposable.dispose()
   })
