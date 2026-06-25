@@ -4,6 +4,33 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0] — 2026-06-25
+
+### Fixed
+- **Send browser annotations to a running agent even when its terminal isn't
+  open.** The annotation tray's "Send to an agent in this worktree" only offered
+  agents whose terminal tab was already open with a live PTY, so a running agent
+  in the worktree showed as unsendable ("no agent active" / "Terminal is no
+  longer available"). A fresh, idle agent now stays **eligible**; selecting it
+  activates its terminal tab, waits for the PTY to spawn, then submits the
+  annotations. Genuinely un-sendable states still disable the row with a real
+  reason ("Agent is working", "Agent status is stale").
+  (`running-agent-targets.ts`, `ui.ts`)
+- **`agentum_browser` no longer silently drops a concurrent `navigate`.** Two
+  CDP browser ops issued at once (e.g. `navigate` alongside `close_context`)
+  raced the driver's shared per-op connection and global state, so a navigation
+  could no-op while still returning a success-shaped result *without*
+  `http_status`. Browser ops are now serialized per browser, so concurrent MCP
+  calls queue instead of corrupt. (`cdp_driver.rs`)
+
+### Changed
+- **`agentum_browser` `open`/`tabs` drive the same CDP browser as every other
+  op.** They previously went to the desktop webview bridge, so `tabs` always
+  returned `[]` and a second `open` handed back a tab id that `navigate`/
+  `screenshot` ignored. `open` now creates a real CDP page target and `tabs`
+  lists them; the `tab` argument is honored by every page op (an alias of
+  `target`), so multi-tab automation works headless. (`cdp_driver.rs`)
+
 ## [0.25.1] — 2026-06-25
 
 ### Fixed
