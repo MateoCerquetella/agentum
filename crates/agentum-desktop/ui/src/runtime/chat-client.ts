@@ -2,8 +2,8 @@
 // (`POST /api/chat`). Mirrors `board-client.ts`: same loopback endpoint + bearer
 // auth (`getServerEndpoint` → `apiUrl`), wire shapes faithful to the server's
 // `/api/chat` contract. The endpoint is a Socratic interviewer — it asks
-// clarifying questions, then proposes a GitHub task breakdown. This client is
-// conversation-only; it never creates tasks.
+// clarifying questions, then proposes a task breakdown the user can file into
+// GitHub or Linear. This client is conversation-only; it never creates tasks.
 import { apiUrl, getServerEndpoint } from './server-endpoint'
 
 /** One conversation turn — matches the server's `{role, content}` message shape. */
@@ -62,24 +62,35 @@ export async function sendChat(
   throw new Error(message)
 }
 
-/** Result of `POST /api/chat/issues` — what landed on GitHub, and what didn't. */
+/** Which tracker the Chat files into. GitHub/Linear only (never the board). */
+export type IssueProvider = 'github' | 'linear'
+
+/** One created issue. `url` is the issue link; `id` is the tracker's stable
+ *  handle (a GitHub issue number is implicit in the url; Linear sends its
+ *  human identifier like `ENG-42`). */
+export type CreatedIssue = { title: string; url: string; id?: string }
+
+/** Result of `POST /api/chat/issues` — what landed on the tracker, and what
+ *  didn't. `repo` is set on the GitHub path only. */
 export type CreatedIssues = {
-  repo: string
-  created: { title: string; url: string }[]
+  provider: IssueProvider
+  repo?: string
+  created: CreatedIssue[]
   failed: { title: string; error: string }[]
 }
 
 /**
  * `POST /api/chat/issues` — distil the agreed task breakdown from the transcript
- * and file one GitHub issue per task. Partial success is a 200 (`created` +
- * `failed` per-task). Mirrors `sendChat`'s fetch/error handling: a non-ok
- * response throws `Error(<server message>)`, decoding BOTH the `{ error: string }`
- * (400/422 string envelopes) and `{ error: { message } }` (502 `llm_failed`,
- * 422 `no_tasks`/`no_github_repo`) shapes.
+ * and file one issue per task into the chosen tracker (`provider`, default
+ * `github`). Partial success is a 200 (`created` + `failed` per-task). Mirrors
+ * `sendChat`'s fetch/error handling: a non-ok response throws
+ * `Error(<server message>)`, decoding BOTH the `{ error: string }` (400/422
+ * string envelopes — e.g. an unknown provider) and `{ error: { message } }`
+ * (502 `llm_failed`, 422 `no_tasks`/`no_github_repo`/`no_linear`) shapes.
  */
 export async function createIssuesFromChat(
   messages: ChatTurn[],
-  opts?: { workdir?: string; repoSlug?: string }
+  opts?: { workdir?: string; repoSlug?: string; provider?: IssueProvider }
 ): Promise<CreatedIssues> {
   const url = await apiUrl('/api/chat/issues')
   const res = await fetch(url, {
@@ -91,14 +102,16 @@ export async function createIssuesFromChat(
     body: JSON.stringify({
       messages,
       workdir: opts?.workdir,
-      repo_slug: opts?.repoSlug
+      repo_slug: opts?.repoSlug,
+      provider: opts?.provider
     })
   })
   const text = await res.text()
   if (res.ok) {
     const parsed = (text ? JSON.parse(text) : {}) as Partial<CreatedIssues>
     return {
-      repo: parsed.repo ?? '',
+      provider: parsed.provider ?? opts?.provider ?? 'github',
+      repo: parsed.repo,
       created: parsed.created ?? [],
       failed: parsed.failed ?? []
     }

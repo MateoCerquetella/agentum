@@ -1,31 +1,51 @@
 // Chat — a real conversational front door to the Spec→tickets pipeline (#48).
 // Describe a feature in plain words and the server-side Socratic interviewer
-// (`POST /api/chat`) asks a few clarifying questions, then proposes a GitHub
-// task breakdown. This page is CONVERSATION ONLY — it streams turns to/from the
-// embedded server via chat-client; it does not create tasks or spawn agents.
-// (Task creation is a separate flow; review/start happens on the Board.)
+// (`POST /api/chat`) asks a few clarifying questions, then proposes a task
+// breakdown the user can file into GitHub or Linear (toggle, when Linear is
+// connected). The conversation streams turns to/from the embedded server via
+// chat-client; the "Create issues" button is the only mutation here — review and
+// start-task happen on the Board.
 import { type FormEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { Columns3, Github, Loader2, MessagesSquare, Send, Sparkles } from 'lucide-react'
 
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
 import { DrillInHeader } from '@/components/nav/DrillInHeader'
+import { LinearIcon } from '@/components/icons/LinearIcon'
 import CommentMarkdown from '@/components/sidebar/CommentMarkdown'
-import { type ChatTurn, createIssuesFromChat, sendChat } from '@/runtime/chat-client'
+import { type ChatTurn, createIssuesFromChat, type IssueProvider, sendChat } from '@/runtime/chat-client'
 
 export default function ChatPage() {
   const repos = useAppStore((s) => s.repos)
   const setActiveView = useAppStore((s) => s.setActiveView)
+  const linearStatus = useAppStore((s) => s.linearStatus)
+  const linearStatusChecked = useAppStore((s) => s.linearStatusChecked)
+  const checkLinearConnection = useAppStore((s) => s.checkLinearConnection)
 
   const [messages, setMessages] = useState<ChatTurn[]>([])
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Which tracker the "Create issues" button files into. Only meaningful when
+  // Linear is connected; GitHub is the default and the sole option otherwise.
+  const [provider, setProvider] = useState<IssueProvider>('github')
 
-  // The "Create GitHub issues" affordance only appears once the interviewer has
+  // The "Create issues" affordance only appears once the interviewer has
   // proposed something — i.e. there's at least one assistant turn to mine.
   const hasAssistantReply = messages.some((m) => m.role === 'assistant')
+
+  // Lazily discover whether Linear is connected (same check the sidebar +
+  // integrations panes use) so we can offer it as a target. GitHub stays the
+  // default; the toggle only appears when Linear is actually connected.
+  useEffect(() => {
+    if (!linearStatusChecked) void checkLinearConnection()
+  }, [linearStatusChecked, checkLinearConnection])
+
+  const linearConnected = linearStatus.connected === true
+  // When Linear isn't connected, GitHub is the only valid target regardless of
+  // any stale `provider` state.
+  const effectiveProvider: IssueProvider = linearConnected ? provider : 'github'
 
   // Auto-scroll to the newest message (or the thinking indicator) whenever the
   // transcript grows or the busy state flips.
@@ -77,20 +97,31 @@ export default function ChatPage() {
   )
 
   // Close the loop: mine the agreed task breakdown out of the transcript and
-  // file each task as a GitHub issue, then append a summary turn linking them.
+  // file each task into the chosen tracker (GitHub or Linear), then append a
+  // summary turn linking them.
   const createIssues = useCallback(async () => {
     if (busy || creating || messages.length === 0) return
     setCreating(true)
     setError(null)
     try {
-      const result = await createIssuesFromChat(messages, { workdir: repos[0]?.path })
+      const result = await createIssuesFromChat(messages, {
+        workdir: repos[0]?.path,
+        provider: effectiveProvider
+      })
+      // "where" reads naturally for either tracker: a GitHub repo slug, or "Linear".
+      const where =
+        result.provider === 'linear' ? 'Linear' : result.repo ? `\`${result.repo}\`` : 'GitHub'
       const lines: string[] = []
       if (result.created.length > 0) {
         const n = result.created.length
-        lines.push(`Created ${n} issue${n === 1 ? '' : 's'} in \`${result.repo}\`:`)
-        for (const c of result.created) lines.push(`- [${c.title}](${c.url})`)
+        lines.push(`Created ${n} issue${n === 1 ? '' : 's'} in ${where}:`)
+        for (const c of result.created) {
+          // Linear sends a human identifier (ENG-42) worth showing; GitHub omits it.
+          const label = c.id ? `${c.id} — ${c.title}` : c.title
+          lines.push(c.url ? `- [${label}](${c.url})` : `- ${label}`)
+        }
       } else {
-        lines.push(`No issues were created${result.repo ? ` in \`${result.repo}\`` : ''}.`)
+        lines.push(`No issues were created in ${where}.`)
       }
       if (result.failed.length > 0) {
         lines.push('')
@@ -103,14 +134,14 @@ export default function ChatPage() {
     } finally {
       setCreating(false)
     }
-  }, [busy, creating, messages, repos])
+  }, [busy, creating, messages, repos, effectiveProvider])
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <DrillInHeader
         icon={MessagesSquare}
         title="Chat"
-        description="Describe a feature — I'll ask a few questions, then propose the GitHub tasks"
+        description="Describe a feature — I'll ask a few questions, then propose the tasks to create"
         actions={
           <button
             type="button"
@@ -129,7 +160,7 @@ export default function ChatPage() {
             <div className="rounded-lg border border-dashed border-border p-8 text-center text-muted-foreground">
               <MessagesSquare className="mx-auto mb-3 size-6 opacity-60" />
               <div className="text-sm">
-                Describe a feature — I'll ask a few questions, then propose the GitHub tasks to create.
+                Describe a feature — I'll ask a few questions, then propose the tasks to create.
               </div>
             </div>
           ) : null}
@@ -162,7 +193,43 @@ export default function ChatPage() {
       {/* composer */}
       <form onSubmit={submit} className="flex-none border-t border-border px-5 pb-4.5 pt-3">
         {hasAssistantReply ? (
-          <div className="mx-auto mb-2.5 flex max-w-[720px] justify-end">
+          <div className="mx-auto mb-2.5 flex max-w-[720px] items-center justify-end gap-2">
+            {/* Tracker toggle — only when Linear is connected; GitHub-only users
+                keep the unchanged single-button experience. */}
+            {linearConnected ? (
+              <div
+                role="group"
+                aria-label="Issue tracker"
+                className="inline-flex overflow-hidden rounded-md border border-border"
+              >
+                <button
+                  type="button"
+                  onClick={() => setProvider('github')}
+                  disabled={creating}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 px-2.5 py-1 text-[12.5px] font-medium hover:bg-accent disabled:opacity-40',
+                    effectiveProvider === 'github'
+                      ? 'bg-accent text-foreground'
+                      : 'text-muted-foreground'
+                  )}
+                >
+                  <Github className="size-3.5" /> GitHub
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProvider('linear')}
+                  disabled={creating}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 border-l border-border px-2.5 py-1 text-[12.5px] font-medium hover:bg-accent disabled:opacity-40',
+                    effectiveProvider === 'linear'
+                      ? 'bg-accent text-foreground'
+                      : 'text-muted-foreground'
+                  )}
+                >
+                  <LinearIcon className="size-3.5" /> Linear
+                </button>
+              </div>
+            ) : null}
             <button
               type="button"
               onClick={() => void createIssues()}
@@ -171,10 +238,14 @@ export default function ChatPage() {
             >
               {creating ? (
                 <Loader2 className="size-3.5 animate-spin" />
+              ) : effectiveProvider === 'linear' ? (
+                <LinearIcon className="size-3.5" />
               ) : (
                 <Github className="size-3.5" />
               )}
-              {creating ? 'Creating issues…' : 'Create GitHub issues'}
+              {creating
+                ? 'Creating issues…'
+                : `Create ${effectiveProvider === 'linear' ? 'Linear' : 'GitHub'} issues`}
             </button>
           </div>
         ) : null}

@@ -3,7 +3,8 @@
 //!
 //! This replaces the old one-shot "describe → create an issue" form with a real
 //! multi-turn conversation: the model interviews the user to flesh out a feature
-//! and, once it's clear, proposes a GitHub task breakdown the user can confirm.
+//! and, once it's clear, proposes a task breakdown the user can confirm and file
+//! into their tracker (GitHub Issues or Linear).
 //!
 //! **Auth:** prefers an explicit `ANTHROPIC_API_KEY` (a real `sk-ant-api…` key —
 //! clean, terms-safe, pay-per-token); otherwise falls back to the user's Claude
@@ -115,7 +116,7 @@ fn interviewer_instructions(workdir: Option<&str>, repo_slug: Option<&str>) -> S
         "You are running inside agentum (a control plane for AI coding agents) as the \
 feature-intake interviewer on the Chat screen.{ctx}\n\n\
 Your job: through a short Socratic conversation, help the user turn a rough idea into a \
-clear, buildable feature, then propose a concrete task breakdown for their GitHub tracker.\n\n\
+clear, buildable feature, then propose a concrete task breakdown for their issue tracker.\n\n\
 Rules:\n\
 - Ask ONE focused clarifying question at a time (two only if tightly related). Keep each \
 turn short and concrete, like a sharp staff engineer — no filler, no \"great question!\".\n\
@@ -123,8 +124,9 @@ turn short and concrete, like a sharp staff engineer — no filler, no \"great q
 scope boundaries (in/out), hard constraints, and acceptance criteria. Never re-ask what \
 the user already answered.\n\
 - When the feature is defined well enough to build, STOP asking questions and propose a \
-breakdown: a one-line feature title, then 3–7 concrete tasks (each a GitHub-issue-style \
-title plus one sentence of detail). Then ask the user to confirm creating them on GitHub.\n\
+breakdown: a one-line feature title, then 3–7 concrete tasks (each an issue-style \
+title plus one sentence of detail). Then ask the user to confirm creating them in their \
+tracker (GitHub or Linear).\n\
 - You only interview and propose. Do NOT write code or create anything — task creation \
 happens after the user confirms, in a later step."
     )
@@ -290,20 +292,23 @@ async fn call_anthropic(
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/chat/issues — turn the agreed task breakdown into GitHub issues.
+// POST /api/chat/issues — turn the agreed task breakdown into tracker issues.
 //
 // Closes the loop on the Chat interviewer: once the conversation has converged
 // on a feature + task list, this endpoint asks the model to distil that into a
-// strict JSON array, resolves the project's GitHub repo, and files one issue per
-// task via the shared `TaskSink::Github` arm (so YOLO/argv/parse stay in one
-// place). Partial success is a 200 — created and failed are reported per-task so
-// the UI can show exactly which issues landed.
+// strict JSON array, then files one issue per task into the chosen tracker via
+// the shared `TaskSink` arm (GitHub `gh` or Linear GraphQL — so YOLO/argv/parse
+// stay in one place). `provider` selects the destination ("github" default, or
+// "linear"); an unknown provider is a 400 and an unconnected one a typed 422 —
+// the Chat rule is GitHub/Linear only, never the internal board. Partial success
+// is a 200 — created and failed are reported per-task so the UI can show exactly
+// which issues landed.
 // ---------------------------------------------------------------------------
 
 /// The system prompt that turns a conversation into a strict task array. Kept
 /// byte-exact; the lenient parser ([`extract_task_drafts`]) tolerates a model
 /// that still wraps it in prose or fences despite the instruction not to.
-const EXTRACT_INSTRUCTIONS: &str = "From this conversation, extract the agreed feature task breakdown as a JSON array of objects, each exactly {\"title\": string, \"body\": string} — title = a concise GitHub issue title, body = 1–3 sentences. Output ONLY the raw JSON array, no prose, no markdown code fences.";
+const EXTRACT_INSTRUCTIONS: &str = "From this conversation, extract the agreed feature task breakdown as a JSON array of objects, each exactly {\"title\": string, \"body\": string} — title = a concise issue title, body = 1–3 sentences. Output ONLY the raw JSON array, no prose, no markdown code fences.";
 
 #[derive(Deserialize)]
 struct ChatIssuesRequest {
@@ -317,6 +322,12 @@ struct ChatIssuesRequest {
     /// given. The created-issue path itself runs `gh` from `$HOME`.
     #[serde(default)]
     workdir: Option<String>,
+    /// Which tracker to file into: `"github"` (default, back-compat) or
+    /// `"linear"`. The Chat-only rule (GitHub/Linear, never the internal board)
+    /// is enforced here: an unknown provider is a hard 400, and a chosen-but-
+    /// unconnected provider is a loud typed 422 — never a silent board fallback.
+    #[serde(default)]
+    provider: Option<String>,
 }
 
 /// One extracted task — the minimal shape the model must emit.
@@ -326,10 +337,12 @@ struct TaskDraft {
     body: String,
 }
 
-/// Distil the agreed task breakdown from a chat transcript and file each task as
-/// a GitHub issue. Returns `{ repo, created[], failed[] }` (200 even on a partial
-/// or total per-task failure — the LLM/auth/no-repo failures are the only hard
-/// errors, surfaced as typed envelopes).
+/// Distil the agreed task breakdown from a chat transcript, then file each task
+/// into the chosen tracker (`provider`: GitHub default, or Linear). Returns
+/// `{ provider, repo?, created[], failed[] }` (200 even on a partial or total
+/// per-task failure). The hard errors are LLM/auth (502/400), no extractable
+/// tasks (`no_tasks` 422), an unknown provider (400), and a chosen-but-
+/// unconnected tracker (`no_github_repo`/`no_linear` 422) — all typed envelopes.
 async fn chat_issues(
     State(state): State<AppState>,
     Json(body): Json<ChatIssuesRequest>,
@@ -372,6 +385,52 @@ async fn chat_issues(
         )
     })?;
 
+    // Dispatch to the chosen tracker. Default GitHub preserves the v0.29.0 wire
+    // contract; Linear is the new path. Anything else is a hard 400 — the Chat
+    // rule is GitHub/Linear only, never the internal board.
+    match resolve_provider(body.provider.as_deref()) {
+        Ok(IssueProvider::Github) => create_github_issues(&state, &body, &drafts, &secret).await,
+        Ok(IssueProvider::Linear) => create_linear_issues(&state, &drafts, &secret).await,
+        Err(other) => Err(ApiError::BadRequest(format!(
+            "chat issues: unknown provider {other:?} (expected \"github\" or \"linear\")"
+        ))),
+    }
+}
+
+/// The tracker a `chat_issues` request targets. Closed set — the Chat rule is
+/// GitHub/Linear only (never the internal board).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IssueProvider {
+    Github,
+    Linear,
+}
+
+/// Resolve the request's optional `provider` to an [`IssueProvider`]. Absent or
+/// blank defaults to GitHub (back-compat with v0.29.0); an unrecognized value is
+/// returned as `Err(value)` so the handler can 400 with the offending string.
+/// Pure so the defaulting + validation is unit-tested without a live request.
+fn resolve_provider(raw: Option<&str>) -> Result<IssueProvider, String> {
+    match raw
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("github")
+    {
+        "github" => Ok(IssueProvider::Github),
+        "linear" => Ok(IssueProvider::Linear),
+        other => Err(other.to_string()),
+    }
+}
+
+/// File the extracted task drafts as GitHub issues. Resolves the repo slug (a
+/// well-formed client hint wins with no IO; else the LOCAL project's `origin` —
+/// Chat never files over SSH) and files one issue per task via the shared
+/// `TaskSink::Github` arm. Partial success is a 200 (`created`/`failed` per task).
+async fn create_github_issues(
+    state: &AppState,
+    body: &ChatIssuesRequest,
+    drafts: &[TaskDraft],
+    secret: &str,
+) -> Result<Json<serde_json::Value>, ApiError> {
     // Resolve the GitHub slug: a well-formed client hint wins (no IO); else read
     // the LOCAL project's `origin` (Chat never files over SSH). No slug → 422.
     let slug = match body.repo_slug.as_deref().map(str::trim) {
@@ -422,7 +481,7 @@ async fn chat_issues(
     // single bad task never sinks the rest (partial success is a 200).
     let mut created: Vec<serde_json::Value> = Vec::new();
     let mut failed: Vec<serde_json::Value> = Vec::new();
-    for t in &drafts {
+    for t in drafts {
         let feature = NewFeature {
             title: t.title.clone(),
             body: Some(t.body.clone()),
@@ -444,7 +503,7 @@ async fn chat_issues(
                 "url": fref.url.unwrap_or_default(),
             })),
             Err(e) => {
-                let detail = redact(&e.to_string(), &secret);
+                let detail = redact(&e.to_string(), secret);
                 let detail = detail.chars().take(300).collect::<String>();
                 failed.push(json!({ "title": t.title, "error": detail }));
             }
@@ -452,7 +511,68 @@ async fn chat_issues(
     }
 
     Ok(Json(json!({
+        "provider": "github",
         "repo": slug,
+        "created": created,
+        "failed": failed,
+    })))
+}
+
+/// File the extracted task drafts as Linear issues via the shared
+/// `TaskSink::Linear` arm (single-team resolution lives in `crate::linear`). A
+/// missing Linear connection is a loud typed 422 — never a silent board fallback.
+/// Partial success is a 200; each created issue reports its identifier + URL.
+async fn create_linear_issues(
+    state: &AppState,
+    drafts: &[TaskDraft],
+    secret: &str,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Loud, actionable failure when Linear isn't connected — the Chat rule
+    // forbids a silent internal-board fallback.
+    if !crate::linear::available() {
+        return Err(ApiError::Custom(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({ "error": { "code": "no_linear", "message": "no Linear workspace connected (connect Linear in Settings)" } }),
+        ));
+    }
+
+    // Linear's create arm ignores `workdir`/`slug`/`parent_goal_id`; pass a
+    // neutral ctx for shape only.
+    let tmp = std::env::temp_dir();
+    let mut created: Vec<serde_json::Value> = Vec::new();
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+    for t in drafts {
+        let feature = NewFeature {
+            title: t.title.clone(),
+            body: Some(t.body.clone()),
+        };
+        let res = TaskSink::Linear
+            .create_feature(
+                &SinkCtx {
+                    store: &state.store,
+                    workdir: &tmp,
+                    parent_goal_id: None,
+                    slug: None,
+                },
+                &feature,
+            )
+            .await;
+        match res {
+            Ok(fref) => created.push(json!({
+                "title": t.title,
+                "id": fref.id,
+                "url": fref.url.unwrap_or_default(),
+            })),
+            Err(e) => {
+                let detail = redact(&e.to_string(), secret);
+                let detail = detail.chars().take(300).collect::<String>();
+                failed.push(json!({ "title": t.title, "error": detail }));
+            }
+        }
+    }
+
+    Ok(Json(json!({
+        "provider": "linear",
         "created": created,
         "failed": failed,
     })))
@@ -501,5 +621,72 @@ fn redact(msg: &str, token: &str) -> String {
         msg.to_string()
     } else {
         msg.replace(token, "<redacted>")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_provider_defaults_to_github() {
+        // Absent, empty, and whitespace-only all mean "github" (back-compat with
+        // the v0.29.0 GitHub-only contract).
+        assert_eq!(resolve_provider(None), Ok(IssueProvider::Github));
+        assert_eq!(resolve_provider(Some("")), Ok(IssueProvider::Github));
+        assert_eq!(resolve_provider(Some("   ")), Ok(IssueProvider::Github));
+    }
+
+    #[test]
+    fn resolve_provider_accepts_github_and_linear_trimmed() {
+        assert_eq!(resolve_provider(Some("github")), Ok(IssueProvider::Github));
+        assert_eq!(resolve_provider(Some("linear")), Ok(IssueProvider::Linear));
+        assert_eq!(
+            resolve_provider(Some("  linear ")),
+            Ok(IssueProvider::Linear)
+        );
+    }
+
+    #[test]
+    fn resolve_provider_rejects_unknown_and_board() {
+        // "board" must NOT resolve — the Chat rule forbids the internal board.
+        assert_eq!(resolve_provider(Some("board")), Err("board".to_string()));
+        assert_eq!(resolve_provider(Some("gitlab")), Err("gitlab".to_string()));
+    }
+
+    #[test]
+    fn extract_task_drafts_parses_a_bare_array() {
+        let raw = r#"[{"title":"A","body":"first"},{"title":"B","body":"second"}]"#;
+        let drafts = extract_task_drafts(raw).expect("must parse");
+        assert_eq!(drafts.len(), 2);
+        assert_eq!(drafts[0].title, "A");
+        assert_eq!(drafts[1].body, "second");
+    }
+
+    #[test]
+    fn extract_task_drafts_tolerates_fences_and_prose() {
+        // The model sometimes wraps the array despite the instruction; the lenient
+        // slice-between-brackets parse must still recover it.
+        let raw = "Sure! Here you go:\n```json\n[{\"title\":\"X\",\"body\":\"y\"}]\n```\n";
+        let drafts = extract_task_drafts(raw).expect("must recover from fences/prose");
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].title, "X");
+    }
+
+    #[test]
+    fn extract_task_drafts_rejects_empty_or_missing() {
+        assert!(extract_task_drafts("no array here").is_none());
+        assert!(extract_task_drafts("[]").is_none(), "empty list = no tasks");
+        assert!(extract_task_drafts("] [").is_none(), "reversed brackets");
+    }
+
+    #[test]
+    fn slug_matches_accepts_owner_repo_only() {
+        assert!(slug_matches("owner/repo"));
+        assert!(!slug_matches("owner"));
+        assert!(!slug_matches("owner/repo/extra"));
+        assert!(!slug_matches("owner /repo"));
+        assert!(!slug_matches("/repo"));
+        assert!(!slug_matches("owner/"));
     }
 }
