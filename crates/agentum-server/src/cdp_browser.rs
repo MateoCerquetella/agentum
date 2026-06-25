@@ -184,6 +184,25 @@ fn worktree_registry() -> &'static std::sync::Mutex<HashMap<String, WorktreeBrow
     REG.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
+/// Reduce a browser worktree key to the bare filesystem path that BOTH the
+/// user's pane and the worktree's agent agree on. The desktop sends the full UI
+/// worktree id `<repoId>::<path>` (folder projects append a `::workspace:<uuid>`
+/// instance suffix); the agent sends the bare `worktree_path`. Both MUST map to
+/// one registry key, or the agent drives a different Chromium than the user
+/// watches. Mirrors the desktop's `splitWorktreeIdForFilesystem`: drop the
+/// `<repoId>::` prefix, then any `::workspace:<uuid>` suffix.
+///
+/// Assumes a worktree path contains no `::` (true for agentum-managed worktrees,
+/// which live under a sanitized root) — the same assumption the desktop makes by
+/// splitting the worktree id on its first `::`.
+fn canonical_worktree_key(raw: &str) -> &str {
+    // `<repoId>::<path>` → `<path>` (split on the FIRST `::`, as the desktop does).
+    let path = raw.split_once("::").map_or(raw, |(_, rest)| rest);
+    // Folder-project instance suffix `<path>::workspace:<uuid>` → `<path>`.
+    path.split_once("::workspace:")
+        .map_or(path, |(head, _)| head)
+}
+
 /// Make a worktree id safe for a tmux session name and a directory component.
 fn sanitize_worktree_token(worktree_id: &str) -> String {
     let token: String = worktree_id
@@ -233,32 +252,37 @@ async fn registered_listening_port(worktree_id: &str) -> Option<u16> {
 }
 
 /// Ensure a per-WORKTREE CDP browser and return `(endpoint, port)`. Idempotent per
-/// worktree (reuses the registered, still-serving port). An empty `worktree_id`
-/// falls back to the shared default browser so contextless callers don't regress.
+/// worktree (reuses the registered, still-serving port). A `worktree_id` with no
+/// worktree path falls back to the shared default browser so contextless callers
+/// don't regress.
 pub async fn ensure_local_cdp_browser_for(worktree_id: &str) -> Result<(String, u16)> {
-    let wt = worktree_id.trim();
-    // Opt-in gate. Per-worktree isolation needs BOTH the user's pane AND the
-    // worktree's agent to resolve the same worktree key; that agent side can't be
-    // auto-verified, and a key mismatch would break agent-watches-browser. Until
-    // verified, default to the shared browser (v0.25.0 behavior — no regression);
-    // set `AGENTUM_BROWSER_PER_WORKTREE=1` to enable + test the isolation.
-    let enabled = std::env::var_os("AGENTUM_BROWSER_PER_WORKTREE").is_some_and(|v| v != "0");
-    if wt.is_empty() || !enabled {
+    // Canonical key: the user's pane sends the full UI worktree id
+    // `<repoId>::<path>` (folder projects append `::workspace:<uuid>`), while the
+    // worktree's agent sends the bare `worktree_path`. Reduce BOTH to the same
+    // filesystem path so they resolve to ONE browser — otherwise the agent would
+    // drive a different Chromium than the user watches (see `canonical_worktree_key`).
+    let key = canonical_worktree_key(worktree_id.trim());
+    // Per-worktree isolation is ON by default; set `AGENTUM_BROWSER_PER_WORKTREE=0`
+    // to opt out (every worktree shares one browser, the pre-v0.27 behavior).
+    let enabled = std::env::var("AGENTUM_BROWSER_PER_WORKTREE")
+        .map(|v| v.trim() != "0")
+        .unwrap_or(true);
+    if key.is_empty() || !enabled {
         let endpoint = ensure_local_cdp_browser().await?;
         return Ok((endpoint, cdp_port()));
     }
 
-    if let Some(port) = registered_listening_port(wt).await {
+    if let Some(port) = registered_listening_port(key).await {
         return Ok((cdp_endpoint_for(port), port));
     }
 
     let _guard = launch_lock().lock().await;
-    if let Some(port) = registered_listening_port(wt).await {
+    if let Some(port) = registered_listening_port(key).await {
         return Ok((cdp_endpoint_for(port), port));
     }
 
     let exe = chromium_executable()?;
-    let token = sanitize_worktree_token(wt);
+    let token = sanitize_worktree_token(key);
     let tmux = format!("{CDP_TMUX_TARGET}-{token}");
     let profile = worktree_profile_dir(&token)?;
     // Reuse this worktree's previously-allocated port (re-launch on the same port
@@ -266,13 +290,13 @@ pub async fn ensure_local_cdp_browser_for(worktree_id: &str) -> Result<(String, 
     let port = worktree_registry()
         .lock()
         .ok()
-        .and_then(|reg| reg.get(wt).map(|b| b.port))
+        .and_then(|reg| reg.get(key).map(|b| b.port))
         .map_or_else(free_local_port, Ok)?;
 
     // A leftover-but-not-listening session is either booting or dead.
     if agentum_tmux::has_session(&tmux).await.unwrap_or(false) {
         if wait_until_listening(port, Duration::from_secs(2)).await {
-            register_worktree_browser(wt, port, &tmux, &profile);
+            register_worktree_browser(key, port, &tmux, &profile);
             return Ok((cdp_endpoint_for(port), port));
         }
         let _ = agentum_tmux::kill_session(&tmux).await;
@@ -281,14 +305,14 @@ pub async fn ensure_local_cdp_browser_for(worktree_id: &str) -> Result<(String, 
     let argv = build_chrome_argv(&exe, port, &profile);
     agentum_tmux::new_session(&tmux, &home_dir(), &argv, &[])
         .await
-        .with_context(|| format!("start CDP-Chromium for worktree `{wt}`"))?;
+        .with_context(|| format!("start CDP-Chromium for worktree `{key}`"))?;
 
     if wait_until_listening(port, Duration::from_secs(20)).await {
-        register_worktree_browser(wt, port, &tmux, &profile);
+        register_worktree_browser(key, port, &tmux, &profile);
         Ok((cdp_endpoint_for(port), port))
     } else {
         anyhow::bail!(
-            "Chromium for worktree `{wt}` did not expose CDP on 127.0.0.1:{port} within 20s \
+            "Chromium for worktree `{key}` did not expose CDP on 127.0.0.1:{port} within 20s \
              (tmux `{tmux}`)."
         )
     }
@@ -313,7 +337,7 @@ pub async fn stop_local_cdp_browser_for(worktree_id: &str) -> Result<()> {
     let entry = worktree_registry()
         .lock()
         .ok()
-        .and_then(|mut reg| reg.remove(worktree_id.trim()));
+        .and_then(|mut reg| reg.remove(canonical_worktree_key(worktree_id.trim())));
     if let Some(b) = entry {
         let _ = agentum_tmux::kill_session(&b.tmux).await;
         let _ = std::fs::remove_dir_all(&b.profile);
@@ -677,6 +701,32 @@ mod tests {
     fn endpoint_is_ipv4_loopback() {
         assert_eq!(cdp_endpoint_for(9300), "http://127.0.0.1:9300");
         assert_eq!(cdp_endpoint_for(9999), "http://127.0.0.1:9999");
+    }
+
+    #[test]
+    fn canonical_worktree_key_unifies_pane_id_and_agent_path() {
+        // The whole per-worktree contract: the user's pane (full UI id) and the
+        // worktree's agent (bare path) MUST collapse to the SAME registry key, or
+        // the agent drives a different browser than the user is watching.
+        let path = "/Users/x/.agentum/worktrees/feat";
+        assert_eq!(
+            canonical_worktree_key(&format!("repo-abc::{path}")),
+            canonical_worktree_key(path),
+        );
+        assert_eq!(canonical_worktree_key("repo::/a/b"), "/a/b");
+        assert_eq!(canonical_worktree_key("/a/b"), "/a/b");
+        // Folder-project instance suffix is stripped so both sides still match.
+        assert_eq!(
+            canonical_worktree_key("repo::/folder::workspace:0123abcd-0000-0000-0000-000000000000"),
+            "/folder",
+        );
+        // No worktree context → empty → caller falls back to the shared browser.
+        assert_eq!(canonical_worktree_key(""), "");
+        // A github-pr pseudo-worktree (single colons) keeps its own isolated key.
+        assert_eq!(
+            canonical_worktree_key("github-pr:repo:42"),
+            "github-pr:repo:42"
+        );
     }
 
     #[test]
