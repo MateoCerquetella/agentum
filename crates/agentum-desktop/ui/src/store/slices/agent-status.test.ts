@@ -721,3 +721,30 @@ describe('agent status retention + prefix sweep', () => {
     expect(retained['tab-b:0']).toBeUndefined()
   })
 })
+
+describe('awaiting-input overlay', () => {
+  it('marks and clears awaiting-input, bumping status + sort epochs in lockstep', () => {
+    const store = createTestStore()
+    const epoch0 = store.getState().agentStatusEpoch
+    const sort0 = store.getState().sortEpoch
+
+    store.getState().markAwaitingInput('tab-1:1')
+    expect(store.getState().awaitingInputByPaneKey['tab-1:1']).toBe(true)
+    expect(store.getState().agentStatusEpoch).toBe(epoch0 + 1)
+    expect(store.getState().sortEpoch).toBe(sort0 + 1)
+
+    // Idempotent: re-marking an already-awaiting pane must not churn epochs.
+    store.getState().markAwaitingInput('tab-1:1')
+    expect(store.getState().agentStatusEpoch).toBe(epoch0 + 1)
+    expect(store.getState().sortEpoch).toBe(sort0 + 1)
+
+    store.getState().clearAwaitingInput('tab-1:1')
+    expect('tab-1:1' in store.getState().awaitingInputByPaneKey).toBe(false)
+    expect(store.getState().agentStatusEpoch).toBe(epoch0 + 2)
+    expect(store.getState().sortEpoch).toBe(sort0 + 2)
+
+    // Clearing an absent pane is a no-op (no epoch churn).
+    store.getState().clearAwaitingInput('tab-1:1')
+    expect(store.getState().agentStatusEpoch).toBe(epoch0 + 2)
+  })
+})

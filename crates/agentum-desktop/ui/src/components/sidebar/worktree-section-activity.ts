@@ -27,6 +27,7 @@ export type WorktreeSectionActivityState = Pick<
   | 'agentStatusByPaneKey'
   | 'migrationUnsupportedByPtyId'
   | 'retainedAgentsByPaneKey'
+  | 'awaitingInputByPaneKey'
 >
 
 export type WorktreeSectionActivitySummary = {

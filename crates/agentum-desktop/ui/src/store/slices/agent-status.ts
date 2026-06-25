@@ -70,6 +70,19 @@ export type AgentStatusSlice = {
   /** Clear the done marker (agent resumed work, or the pane was torn down). */
   clearServerAgentDone: (paneKey: string) => void
 
+  /** Pane keys whose agent is blocked on the user (a permission prompt or a
+   *  multi-choice menu). Sourced from the server watchdog's `agent.awaiting_input`
+   *  event — the authoritative "needs you" signal the renderer can't derive from
+   *  the OSC title alone (Claude's title just goes idle when it pauses to ask).
+   *  Read by the worktree activity summary so the sidebar dot turns amber
+   *  ("needs attention") instead of green ✓. Cleared on `agent.input_resolved`/
+   *  `agent.working`/`agent.finished` or pane teardown. */
+  awaitingInputByPaneKey: Record<string, true>
+  /** Mark a pane as blocked on the user (amber "needs attention" dot). */
+  markAwaitingInput: (paneKey: string) => void
+  /** Clear the awaiting-input marker (user answered, agent resumed, or torn down). */
+  clearAwaitingInput: (paneKey: string) => void
+
   /** Pane keys that are bound to a REAL tmux session (`tmux_target` non-null on
    *  the server). Recorded ONLY on the server-session connection path when the
    *  session is genuinely tmux-backed — never for a local PTY. This is the
@@ -226,6 +239,7 @@ export const createAgentStatusSlice: StateCreator<AppState, [], [], AgentStatusS
     retainedAgentsByPaneKey: {},
     retentionSuppressedPaneKeys: {},
     serverAgentDoneByPaneKey: {},
+    awaitingInputByPaneKey: {},
     tmuxByPaneKey: {},
 
     markPaneTmux: (paneKey) =>
@@ -263,6 +277,33 @@ export const createAgentStatusSlice: StateCreator<AppState, [], [], AgentStatusS
         const next = { ...s.serverAgentDoneByPaneKey }
         delete next[paneKey]
         return { serverAgentDoneByPaneKey: next }
+      }),
+
+    // Why: bump agentStatusEpoch + sortEpoch so the freshness-keyed activity
+    // summary recomputes (turning the dot amber) AND the smart-sort re-ranks the
+    // worktree into the "needs you" class — mirrors setAgentStatus's lockstep.
+    markAwaitingInput: (paneKey) =>
+      set((s) =>
+        s.awaitingInputByPaneKey[paneKey] === true
+          ? s
+          : {
+              awaitingInputByPaneKey: { ...s.awaitingInputByPaneKey, [paneKey]: true },
+              agentStatusEpoch: s.agentStatusEpoch + 1,
+              sortEpoch: s.sortEpoch + 1
+            }
+      ),
+    clearAwaitingInput: (paneKey) =>
+      set((s) => {
+        if (!(paneKey in s.awaitingInputByPaneKey)) {
+          return s
+        }
+        const next = { ...s.awaitingInputByPaneKey }
+        delete next[paneKey]
+        return {
+          awaitingInputByPaneKey: next,
+          agentStatusEpoch: s.agentStatusEpoch + 1,
+          sortEpoch: s.sortEpoch + 1
+        }
       }),
 
     setAgentStatus: (paneKey, payload, terminalTitle, timing) => {
