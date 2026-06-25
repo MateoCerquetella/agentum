@@ -41,7 +41,11 @@ import {
   type WorktreeCardIssueDisplay
 } from './WorktreeCardMeta'
 import { WorktreeCardPortsDetails, WorktreeCardPortsTrigger } from './WorktreeCardPorts'
-import { writeWorkspaceDragData } from './workspace-status'
+import {
+  hasBrowserTabDragData,
+  readBrowserTabDragData,
+  writeWorkspaceDragData
+} from './workspace-status'
 import { getWorkspacePortsByWorktreeId } from '@/lib/workspace-port-groups'
 import { RepoBadgeMark } from '@/components/repo/RepoBadgeLabel'
 import { installWindowVisibilityInterval, isWindowVisible } from '@/lib/window-visibility-interval'
@@ -158,6 +162,9 @@ const WorktreeCard = React.memo(function WorktreeCard({
   const deleteState = useAppStore((s) => s.deleteStateByWorktreeId[worktree.id])
   const conflictOperation = useAppStore((s) => s.gitConflictOperationByWorktree[worktree.id])
   const remoteBranchConflict = useAppStore((s) => s.remoteBranchConflictByWorktreeId[worktree.id])
+  const moveBrowserTabToWorktree = useAppStore((s) => s.moveBrowserTabToWorktree)
+  // True while a browser tab is dragged over this card — drives the drop ring.
+  const [isBrowserTabDropTarget, setIsBrowserTabDropTarget] = useState(false)
   const workspacePorts = useAppStore(
     (s) =>
       getWorkspacePortsByWorktreeId(s.workspacePortScan?.result).get(worktree.id) ??
@@ -636,13 +643,40 @@ const WorktreeCard = React.memo(function WorktreeCard({
         ],
         titleRenaming && '!border-transparent !bg-transparent !shadow-none !ring-0',
         isDeleting && 'opacity-50 grayscale cursor-not-allowed',
-        isSshDisconnected && !isDeleting && 'opacity-60'
+        isSshDisconnected && !isDeleting && 'opacity-60',
+        // Drop affordance while a browser tab is dragged over this worktree.
+        isBrowserTabDropTarget && 'ring-2 ring-sky-500/70 border-sky-500/40'
       )}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       draggable={nativeDragEnabled && !isDeleting && !titleRenaming}
       onDragStart={nativeDragEnabled ? handleDragStart : undefined}
       onDragEnd={nativeDragEnabled ? onCardDragEnd : undefined}
+      onDragOver={(event) => {
+        // Accept a browser tab dragged from the tab bar; ignore other drags
+        // (worktree reorder, status pills) so they keep their own handling.
+        if (hasBrowserTabDragData(event.dataTransfer)) {
+          event.preventDefault()
+          event.dataTransfer.dropEffect = 'move'
+          if (!isBrowserTabDropTarget) {
+            setIsBrowserTabDropTarget(true)
+          }
+        }
+      }}
+      onDragLeave={() => {
+        if (isBrowserTabDropTarget) {
+          setIsBrowserTabDropTarget(false)
+        }
+      }}
+      onDrop={(event) => {
+        const workspaceId = readBrowserTabDragData(event.dataTransfer)
+        if (workspaceId) {
+          event.preventDefault()
+          event.stopPropagation()
+          setIsBrowserTabDropTarget(false)
+          moveBrowserTabToWorktree(workspaceId, worktree.id)
+        }
+      }}
       aria-busy={isDeleting}
       style={cardStyle}
     >

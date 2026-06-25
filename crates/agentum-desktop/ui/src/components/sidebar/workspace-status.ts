@@ -46,6 +46,11 @@ export {
 export const WORKSPACE_STATUS_DRAG_TYPE = 'application/x-agentum-worktree-id'
 export const WORKSPACE_STATUS_DRAG_IDS_TYPE = 'application/x-agentum-worktree-ids'
 
+/** Drag type for a browser tab dragged (by its workspace id) onto a worktree
+ *  card to MOVE it there. Distinct from the worktree-reorder types above so a
+ *  card can tell "move this tab here" apart from "reorder this worktree". */
+export const BROWSER_TAB_DRAG_TYPE = 'application/x-agentum-browser-tab'
+
 type WorkspaceStatusColorOption = {
   id: string
   label: string
@@ -292,4 +297,25 @@ export function hasWorkspaceDragData(dataTransfer: DataTransfer): boolean {
     types.includes(WORKSPACE_STATUS_DRAG_TYPE) ||
     types.includes('text/plain')
   )
+}
+
+/** Tag a native drag with a browser tab's workspace id so a worktree card can
+ *  accept it as a "move this tab here" drop. */
+export function writeBrowserTabDragData(dataTransfer: DataTransfer, workspaceId: string): void {
+  dataTransfer.effectAllowed = 'move'
+  dataTransfer.setData(BROWSER_TAB_DRAG_TYPE, workspaceId)
+  // text/plain fallback so the drag has a label and never looks empty.
+  dataTransfer.setData('text/plain', workspaceId)
+}
+
+/** The browser-tab workspace id off a drop, or null if this drag isn't one.
+ *  (getData only returns a value on `drop` — use `hasBrowserTabDragData` in
+ *  `dragover`, where the browser hides values but exposes `types`.) */
+export function readBrowserTabDragData(dataTransfer: DataTransfer): string | null {
+  return dataTransfer.getData(BROWSER_TAB_DRAG_TYPE) || null
+}
+
+/** Whether a drag in progress is a browser tab (safe to call in `dragover`). */
+export function hasBrowserTabDragData(dataTransfer: DataTransfer): boolean {
+  return Array.from(dataTransfer.types).includes(BROWSER_TAB_DRAG_TYPE)
 }

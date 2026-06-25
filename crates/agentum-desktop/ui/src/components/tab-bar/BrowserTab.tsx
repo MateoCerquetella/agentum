@@ -1,15 +1,32 @@
 import { api } from '@/tauri'
 import { useEffect, useState } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
-import { Globe, X, ExternalLink, Columns2, Rows2, Copy, Pin, PinOff } from 'lucide-react'
+import {
+  Globe,
+  X,
+  ExternalLink,
+  Columns2,
+  Rows2,
+  Copy,
+  Pin,
+  PinOff,
+  GripVertical,
+  FolderInput
+} from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { useAppStore } from '@/store'
+import { useAllWorktrees } from '@/store/selectors'
+import { writeBrowserTabDragData } from '../sidebar/workspace-status'
 import { AGENTUM_BROWSER_BLANK_URL } from '../../../../shared/constants'
 import { redactKagiSessionToken } from '../../../../shared/browser-url'
 import type { BrowserTab as BrowserTabState } from '../../../../shared/types'
@@ -131,6 +148,11 @@ export default function BrowserTab({
   })
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuPoint, setMenuPoint] = useState({ x: 0, y: 0 })
+  // Worktrees this tab can move TO (every one but its current home). Selecting
+  // its own worktree would be a no-op anyway, but filtering keeps the menu clean.
+  const otherWorktrees = useAllWorktrees().filter(
+    (worktree) => worktree.id !== dragData.worktreeId
+  )
 
   // Why: about:blank and other non-http URLs should not be sent to the
   // system browser. Disable the context menu item instead of silently
@@ -212,6 +234,28 @@ export default function BrowserTab({
       {tab.loading && !tab.loadError && !isBlankBrowserTab(tab) && (
         <span className="mr-1 size-1.5 rounded-full bg-sky-500/80 shrink-0" />
       )}
+      {/* Native drag handle — drag onto a sidebar worktree card to MOVE this tab
+          there. Isolated from the dnd-kit reorder drag by stopping pointerdown
+          propagation (the same trick the close button below uses). */}
+      <span
+        role="button"
+        aria-label="Drag to move this tab to another worktree"
+        title="Drag onto a worktree in the sidebar to move this tab there"
+        draggable
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        onDragStart={(e) => {
+          e.stopPropagation()
+          writeBrowserTabDragData(e.dataTransfer, tab.id)
+        }}
+        className={`flex items-center justify-center w-3.5 h-4 rounded-sm shrink-0 cursor-grab active:cursor-grabbing ${
+          isActive
+            ? 'text-muted-foreground/60 hover:text-foreground'
+            : 'text-transparent group-hover:text-muted-foreground/60 hover:!text-foreground'
+        }`}
+      >
+        <GripVertical className="size-3" />
+      </span>
       {!isPinned && (
         <button
           className={`flex items-center justify-center w-4 h-4 rounded-sm shrink-0 ${
@@ -292,6 +336,26 @@ export default function BrowserTab({
             <Copy className="mr-1.5 size-3.5" />
             Duplicate Tab
           </DropdownMenuItem>
+          {otherWorktrees.length > 0 && (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <FolderInput className="mr-1.5 size-3.5" />
+                Move to Worktree
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="max-h-72 overflow-y-auto">
+                {otherWorktrees.map((worktree) => (
+                  <DropdownMenuItem
+                    key={worktree.id}
+                    onSelect={() => {
+                      useAppStore.getState().moveBrowserTabToWorktree(tab.id, worktree.id)
+                    }}
+                  >
+                    {worktree.displayName}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={onTogglePin}>
             {isPinned ? (

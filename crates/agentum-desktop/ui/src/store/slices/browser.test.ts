@@ -776,3 +776,63 @@ describe('createBrowserSlice runtime guard', () => {
     })
   })
 })
+
+describe('moveBrowserTabToWorktree', () => {
+  it('relocates a browser tab, its pages, order and selection to the target', () => {
+    const store = createTestStore()
+    const tab = store.getState().createBrowserTab('wt-1', 'https://example.com')
+    // createUnifiedTab is mocked in this harness, so seed the unified entry the
+    // move must detach from the source group.
+    store.setState({
+      unifiedTabsByWorktree: {
+        'wt-1': [
+          {
+            id: 'unified-1',
+            entityId: tab.id,
+            groupId: 'group-1',
+            worktreeId: 'wt-1',
+            contentType: 'browser',
+            label: 'Example',
+            customLabel: null,
+            color: null,
+            sortOrder: 0,
+            createdAt: 1
+          }
+        ]
+      }
+    })
+    ;(store.getState().createUnifiedTab as ReturnType<typeof vi.fn>).mockClear()
+
+    expect(store.getState().moveBrowserTabToWorktree(tab.id, 'wt-2')).toBe(true)
+
+    const s = store.getState()
+    // Workspace left wt-1 and arrived in wt-2 carrying the new worktreeId.
+    expect(s.browserTabsByWorktree['wt-1']).toBeUndefined()
+    expect(s.browserTabsByWorktree['wt-2']?.map((t) => t.id)).toEqual([tab.id])
+    expect(s.browserTabsByWorktree['wt-2']?.[0]?.worktreeId).toBe('wt-2')
+    // Pages followed and were re-homed to wt-2.
+    expect(s.browserPagesByWorkspace[tab.id]?.every((p) => p.worktreeId === 'wt-2')).toBe(true)
+    // Flat tab-bar order moved across.
+    expect(s.tabBarOrderByWorktree['wt-1'] ?? []).not.toContain(tab.id)
+    expect(s.tabBarOrderByWorktree['wt-2']).toContain(tab.id)
+    // Source selection cleared (no tabs left); target points at the moved tab.
+    expect(s.activeBrowserTabIdByWorktree['wt-1']).toBeNull()
+    expect(s.activeBrowserTabIdByWorktree['wt-2']).toBe(tab.id)
+    expect(s.activeTabTypeByWorktree['wt-2']).toBe('browser')
+    // Unified tab detached from source, re-created in the target's active group.
+    expect(s.closeUnifiedTab).toHaveBeenCalledWith('unified-1')
+    expect(s.createUnifiedTab).toHaveBeenCalledWith(
+      'wt-2',
+      'browser',
+      expect.objectContaining({ entityId: tab.id, activate: true })
+    )
+  })
+
+  it('is a no-op for an unknown tab or a same-worktree move', () => {
+    const store = createTestStore()
+    const tab = store.getState().createBrowserTab('wt-1', 'https://example.com')
+    expect(store.getState().moveBrowserTabToWorktree('nope', 'wt-2')).toBe(false)
+    expect(store.getState().moveBrowserTabToWorktree(tab.id, 'wt-1')).toBe(false)
+    expect(store.getState().browserTabsByWorktree['wt-1']?.map((t) => t.id)).toEqual([tab.id])
+  })
+})
