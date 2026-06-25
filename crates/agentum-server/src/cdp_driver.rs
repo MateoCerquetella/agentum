@@ -1896,7 +1896,13 @@ mod tests {
     fn handles_only_the_page_driving_ops() {
         // `open`/`tabs` are CDP-driven now too, so the whole tool drives one browser.
         for op in [
-            "open", "tabs", "navigate", "snapshot", "screenshot", "click", "fill",
+            "open",
+            "tabs",
+            "navigate",
+            "snapshot",
+            "screenshot",
+            "click",
+            "fill",
         ] {
             assert!(handles_op(op), "{op} should be CDP-driven");
         }
