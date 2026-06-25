@@ -423,6 +423,12 @@ export function connectPaneServerSession(
     // fresh snapshot) to heal a corrupted grid. When we fell back to a local
     // PTY there's no server pane to nudge — delegate if that path ever grows
     // the capability, else it's a no-op.
-    forceRedraw: () => (binding ? binding.forceRedraw() : localFallback?.forceRedraw?.())
+    forceRedraw: () => (binding ? binding.forceRedraw() : localFallback?.forceRedraw?.()),
+    // Route intercepted keyboard chords (word-nav/erase, line-nav) into the
+    // session's input stream. The local-fallback pane sends chords via its
+    // registered paneTransport, so keyboard-handlers reaches it there and never
+    // calls this — but delegate anyway for symmetry.
+    sendChordInput: (data: string) =>
+      binding ? binding.sendInput(data) : localFallback?.sendChordInput?.(data)
   }
 }

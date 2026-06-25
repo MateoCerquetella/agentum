@@ -1,6 +1,10 @@
 // src/renderer/src/components/terminal-pane/keyboard-handlers.test.ts
 import { describe, it, expect } from 'vitest'
-import { matchFileSearchShortcut, matchSearchNavigate } from './keyboard-handlers'
+import {
+  dispatchPaneChordInput,
+  matchFileSearchShortcut,
+  matchSearchNavigate
+} from './keyboard-handlers'
 
 function makeKeyEvent(
   overrides: Partial<{
@@ -72,6 +76,36 @@ describe('matchSearchNavigate', () => {
   it('returns null for Ctrl+G on macOS (wrong modifier)', () => {
     const e = makeKeyEvent({ ctrlKey: true })
     expect(matchSearchNavigate(e, true, true, searchState)).toBeNull()
+  })
+})
+
+describe('dispatchPaneChordInput', () => {
+  it('sends through the paneTransport for a local PTY pane', () => {
+    const sent: string[] = []
+    const transports = new Map([
+      [1, { sendInput: (d: string) => { sent.push(d); return true } }]
+    ])
+    const bindings = new Map<number, { sendChordInput?: (d: string) => void }>()
+    expect(dispatchPaneChordInput(1, '\x1b[1;3D', transports, bindings)).toBe('transport')
+    expect(sent).toEqual(['\x1b[1;3D'])
+  })
+
+  // Regression: server-session panes (the default — tmux over WS) have NO entry
+  // in paneTransportsRef, so the chord must fall through to the binding instead
+  // of being dropped. This is the exact bug that killed word-nav/erase in agent
+  // sessions.
+  it('routes through the binding for a server-session pane with no transport', () => {
+    const chord: string[] = []
+    const transports = new Map<number, { sendInput: (d: string) => unknown }>()
+    const bindings = new Map([[1, { sendChordInput: (d: string) => chord.push(d) }]])
+    expect(dispatchPaneChordInput(1, '\x17', transports, bindings)).toBe('session')
+    expect(chord).toEqual(['\x17'])
+  })
+
+  it('reports dropped when neither a transport nor a chord-capable binding exists', () => {
+    const transports = new Map<number, { sendInput: (d: string) => unknown }>()
+    const bindings = new Map<number, { sendChordInput?: (d: string) => void }>()
+    expect(dispatchPaneChordInput(1, '\x17', transports, bindings)).toBe('dropped')
   })
 })
 

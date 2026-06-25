@@ -44,6 +44,37 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return editableAncestor !== null
 }
 
+/**
+ * Deliver an intercepted terminal chord (word-nav/erase, line-nav — keys we
+ * preventDefault so xterm's own handling doesn't fire) to the focused pane's
+ * input. Local PTY panes carry a `paneTransport`; server-session panes (the
+ * DEFAULT for every terminal — tmux over WS) do NOT, and their input rides the
+ * session stream reached via the pane binding's `sendChordInput`. Before the
+ * binding fallback existed, these chords were preventDefault'd and then silently
+ * dropped for every session pane, so Option+←/→ / Option+⌫ / Cmd+←/→ didn't
+ * work inside agent or tmux shells. Returns the channel used so this is unit
+ * testable. Param types are structural (`{ get }`) to accept both the
+ * `PtyTransport` map and the `IDisposable` binding map without casts.
+ */
+export function dispatchPaneChordInput(
+  paneId: number,
+  data: string,
+  transports: { get(id: number): { sendInput: (data: string) => unknown } | undefined },
+  bindings: { get(id: number): { sendChordInput?: (data: string) => void } | undefined }
+): 'transport' | 'session' | 'dropped' {
+  const transport = transports.get(paneId)
+  if (transport) {
+    transport.sendInput(data)
+    return 'transport'
+  }
+  const binding = bindings.get(paneId)
+  if (binding?.sendChordInput) {
+    binding.sendChordInput(data)
+    return 'session'
+  }
+  return 'dropped'
+}
+
 export type SearchState = {
   query: string
   caseSensitive: boolean
@@ -264,7 +295,12 @@ export function useTerminalKeyboardShortcuts({
         if (!pane) {
           return
         }
-        paneTransportsRef.current.get(pane.id)?.sendInput(action.data)
+        dispatchPaneChordInput(
+          pane.id,
+          action.data,
+          paneTransportsRef.current,
+          panePtyBindingsRef.current
+        )
         return
       }
 

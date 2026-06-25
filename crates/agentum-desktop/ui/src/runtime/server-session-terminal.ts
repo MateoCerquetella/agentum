@@ -18,6 +18,11 @@ export type ServerSessionTerminalBinding = {
    *  snapshot). Backs the manual "force redraw" shortcut; the binding also
    *  fires this automatically on reconnect. */
   forceRedraw: () => void
+  /** Send raw bytes into the session's input stream — the SAME channel
+   *  `term.onData` uses. Backs intercepted keyboard chords (word-nav/erase,
+   *  line-nav) that bypass xterm's own key handling and therefore never reach
+   *  `onData`; without this they were silently dropped for server sessions. */
+  sendInput: (data: string) => void
 }
 
 export type BindServerSessionTerminalOptions = {
@@ -218,6 +223,11 @@ export async function bindServerSessionTerminal(
     forceRedraw: () => {
       if (!disposed) {
         stream.requestRedraw()
+      }
+    },
+    sendInput: (data: string) => {
+      if (!disposed) {
+        stream.send(data)
       }
     }
   }

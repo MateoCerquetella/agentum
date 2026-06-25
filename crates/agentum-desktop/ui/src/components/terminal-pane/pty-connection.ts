@@ -140,6 +140,12 @@ export type PanePtyBinding = IDisposable & {
    *  grid corrupted by bytes the agent never drew (an OS suspend `wall`
    *  broadcast). Absent / no-op on the local PTY path. */
   forceRedraw?: () => void
+  /** Send raw bytes for an intercepted keyboard chord (word-nav/erase,
+   *  line-nav) on the SERVER session path, whose pane has no entry in
+   *  `paneTransportsRef`. The local PTY path sends chords through that transport
+   *  and leaves this undefined. Without it, word-motion/erase chords were
+   *  swallowed in every tmux-backed (default) terminal — see keyboard-handlers. */
+  sendChordInput?: (data: string) => void
 }
 
 function isAgentTaskCompleteNotificationEnabled(): boolean {
