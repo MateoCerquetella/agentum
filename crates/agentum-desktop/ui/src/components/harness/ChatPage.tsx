@@ -217,13 +217,15 @@ export default function ChatPage() {
       setError(null)
       try {
         // Spec 018: create the issue deterministically server-side and render
-        // the result. `host_id` routes `gh` to the repo's SSH host when it's a
-        // remote repo (S3 / AC-6); local repos pass none.
+        // the result. Chat ALWAYS runs `gh` on the local daemon — it must never
+        // route over SSH, even when the active repo is remote. Forwarding the
+        // repo's hostId here was the cause of the "Chat tried to SSH" crash, so
+        // host_id is pinned local (null → LOCAL_HOST_ID server-side).
         const { goal, feature } = await createGoal({
           title: text,
           workdir,
           tool: selectedTool,
-          host_id: repo?.hostId ?? null
+          host_id: null
         })
         setDraft('')
         setSelectedId(goal.id)
