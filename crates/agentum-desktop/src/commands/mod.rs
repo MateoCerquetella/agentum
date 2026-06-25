@@ -44,6 +44,7 @@ pub mod ssh;
 pub mod star_nag;
 pub mod ui;
 pub mod updater;
+pub mod usage_prefs;
 pub mod window;
 pub mod workspace_cleanup;
 pub mod workspace_ports;
