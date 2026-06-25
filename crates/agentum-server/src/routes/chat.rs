@@ -135,7 +135,9 @@ async fn chat(
     Json(body): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, ApiError> {
     if body.messages.is_empty() {
-        return Err(ApiError::BadRequest("chat: messages cannot be empty".into()));
+        return Err(ApiError::BadRequest(
+            "chat: messages cannot be empty".into(),
+        ));
     }
 
     // Auth: prefer an explicit ANTHROPIC_API_KEY (clean API billing, terms-safe);
@@ -231,10 +233,12 @@ async fn call_anthropic(
             t.clone()
         }
     };
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| ApiError::Internal(format!("anthropic request failed: {}", redact(&e.to_string(), &secret))))?;
+    let resp = req.send().await.map_err(|e| {
+        ApiError::Internal(format!(
+            "anthropic request failed: {}",
+            redact(&e.to_string(), &secret)
+        ))
+    })?;
 
     let status = resp.status();
     let raw = resp.text().await.unwrap_or_default();
@@ -277,7 +281,9 @@ async fn call_anthropic(
         .unwrap_or_default();
 
     if text.trim().is_empty() {
-        return Err(ApiError::Internal("chat model returned an empty reply".into()));
+        return Err(ApiError::Internal(
+            "chat model returned an empty reply".into(),
+        ));
     }
 
     Ok(text)
@@ -376,13 +382,21 @@ async fn chat_issues(
                 .get_host(agentum_core::LOCAL_HOST_ID)
                 .await?
                 .ok_or_else(|| ApiError::Internal("local host record missing".into()))?;
-            let workdir = body.workdir.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| {
-                std::env::current_dir()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|_| "/".to_string())
-            });
-            match super::board_goals::resolve_github_slug(&host, &workdir, body.repo_slug.as_deref())
-                .await
+            let workdir = body
+                .workdir
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| {
+                    std::env::current_dir()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| "/".to_string())
+                });
+            match super::board_goals::resolve_github_slug(
+                &host,
+                &workdir,
+                body.repo_slug.as_deref(),
+            )
+            .await
             {
                 Ok(slug) => slug,
                 Err(_) => {
@@ -458,7 +472,11 @@ fn extract_task_drafts(raw: &str) -> Option<Vec<TaskDraft>> {
     // `[` and `]` are ASCII, so these byte offsets are valid char boundaries.
     let slice = &cleaned[start..=end];
     let drafts: Vec<TaskDraft> = serde_json::from_str(slice).ok()?;
-    if drafts.is_empty() { None } else { Some(drafts) }
+    if drafts.is_empty() {
+        None
+    } else {
+        Some(drafts)
+    }
 }
 
 /// A client `repo_slug` must look like `owner/repo` — exactly one `/`, both
