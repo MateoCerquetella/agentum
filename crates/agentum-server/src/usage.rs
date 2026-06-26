@@ -20,6 +20,7 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -844,6 +845,7 @@ impl<'de> Deserialize<'de> for CodexUsageWindow {
 // ===========================================================================
 
 /// One Claude usage-bearing assistant record, fully attributed.
+#[derive(Clone)]
 pub(crate) struct ParsedClaudeRecord {
     pub ts_ms: i64,
     pub day: String,
@@ -924,6 +926,7 @@ pub(crate) fn parse_claude_usage_record(line: &str) -> Option<ParsedClaudeRecord
 }
 
 /// One Codex `token_count` record's per-turn delta (`last_token_usage`).
+#[derive(Clone)]
 pub(crate) struct ParsedCodexRecord {
     pub ts_ms: i64,
     pub day: String,
@@ -1388,7 +1391,34 @@ fn claude_log_files() -> Vec<PathBuf> {
     files
 }
 
-fn collect_claude_records() -> Vec<ParsedClaudeRecord> {
+// ---------------------------------------------------------------------------
+// Parsed-record cache
+//
+// The scan+parse of ~/.claude and ~/.codex logs is the expensive part;
+// summary/daily/breakdown/recent all derive from the same parsed records,
+// so we scan once and reuse until an explicit refresh invalidates.
+// Arc<Vec<…>> so a cache hit is a cheap pointer clone, not a deep Vec copy.
+// ---------------------------------------------------------------------------
+
+static CLAUDE_RECORD_CACHE: LazyLock<RwLock<Option<Arc<Vec<ParsedClaudeRecord>>>>> =
+    LazyLock::new(|| RwLock::new(None));
+static CODEX_RECORD_CACHE: LazyLock<RwLock<Option<Arc<Vec<ParsedCodexRecord>>>>> =
+    LazyLock::new(|| RwLock::new(None));
+
+/// Invalidate both provider caches so the next call re-scans from disk.
+pub fn invalidate_usage_cache() {
+    *CLAUDE_RECORD_CACHE.write().unwrap() = None;
+    *CODEX_RECORD_CACHE.write().unwrap() = None;
+}
+
+/// Test-only helper: reports whether the Claude record cache is currently
+/// populated (i.e. a scan result is stored).
+#[cfg(test)]
+pub(crate) fn claude_cache_is_populated() -> bool {
+    CLAUDE_RECORD_CACHE.read().unwrap().is_some()
+}
+
+fn claude_scan_records() -> Vec<ParsedClaudeRecord> {
     let mut out = Vec::new();
     for path in claude_log_files() {
         let file = match File::open(&path) {
@@ -1402,6 +1432,16 @@ fn collect_claude_records() -> Vec<ParsedClaudeRecord> {
         }
     }
     out
+}
+
+fn collect_claude_records() -> Vec<ParsedClaudeRecord> {
+    // Check cache under a short-lived read lock; don't hold it across the scan.
+    if let Some(cached) = CLAUDE_RECORD_CACHE.read().unwrap().as_ref() {
+        return (**cached).clone();
+    }
+    let records = Arc::new(claude_scan_records());
+    *CLAUDE_RECORD_CACHE.write().unwrap() = Some(Arc::clone(&records));
+    (*records).clone()
 }
 
 /// Returns true when the user has any Claude Code history on this machine.
@@ -1779,7 +1819,7 @@ fn codex_model_for(path: &Path) -> Option<String> {
     None
 }
 
-fn collect_codex_records() -> Vec<ParsedCodexRecord> {
+fn codex_scan_records() -> Vec<ParsedCodexRecord> {
     let mut out = Vec::new();
     for path in codex_session_files() {
         let session_id = path
@@ -1799,6 +1839,16 @@ fn collect_codex_records() -> Vec<ParsedCodexRecord> {
         }
     }
     out
+}
+
+fn collect_codex_records() -> Vec<ParsedCodexRecord> {
+    // Check cache under a short-lived read lock; don't hold it across the scan.
+    if let Some(cached) = CODEX_RECORD_CACHE.read().unwrap().as_ref() {
+        return (**cached).clone();
+    }
+    let records = Arc::new(codex_scan_records());
+    *CODEX_RECORD_CACHE.write().unwrap() = Some(Arc::clone(&records));
+    (*records).clone()
 }
 
 /// Returns true when the user has any Codex history on this machine.
@@ -2324,5 +2374,41 @@ mod tests {
         let rs = codex_usage_recent_sessions_from_records(codex_fixture(), 5);
         assert_eq!(rs[0].session_id, "c2"); // newest
         assert!(rs[0].has_inferred_pricing);
+    }
+
+    // ---- cache mechanics --------------------------------------------------
+
+    #[test]
+    fn cache_populates_on_first_collect_and_clears_on_invalidate() {
+        // Start clean so the test is independent of execution order.
+        invalidate_usage_cache();
+        assert!(
+            !claude_cache_is_populated(),
+            "cache must be None after invalidate"
+        );
+
+        // First call — triggers a scan (may return empty on machines
+        // with no ~/.claude data, but that's fine; an empty Vec is still
+        // cached as Some).
+        let first = collect_claude_records();
+        assert!(
+            claude_cache_is_populated(),
+            "cache must be Some after first collect"
+        );
+
+        // Second call — must return same length from cache, not re-scan.
+        let second = collect_claude_records();
+        assert_eq!(
+            first.len(),
+            second.len(),
+            "cache hit must return equal-length result"
+        );
+
+        // Invalidate wipes the cache.
+        invalidate_usage_cache();
+        assert!(
+            !claude_cache_is_populated(),
+            "cache must be None after second invalidate"
+        );
     }
 }
