@@ -2,6 +2,7 @@
 drop, auto-expand, and undo/redo coordination in one hook because splitting the
 DnD state machine across files makes those interactions harder to reason about. */
 import type { RefObject } from 'react'
+import { extractIpcErrorMessage } from '@/lib/ipc-error'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useAppStore } from '@/store'
@@ -12,14 +13,6 @@ import { remapOpenEditorTabsForPathChange } from '@/lib/remap-open-editor-tabs-f
 import { requestEditorSaveQuiesce } from '@/components/editor/editor-autosave'
 import { commitFileExplorerOp } from './fileExplorerUndoRedo'
 import { renameRuntimePath } from '@/runtime/runtime-file-client'
-
-function extractIpcErrorMessage(err: unknown, fallback: string): string {
-  if (!(err instanceof Error)) {
-    return fallback
-  }
-  const match = err.message.match(/Error invoking remote method '[^']*': (?:Error: )?(.+)/)
-  return match ? match[1] : err.message
-}
 
 type UseFileExplorerDragDropParams = {
   worktreePath: string | null
