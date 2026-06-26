@@ -31,7 +31,11 @@ import {
 } from './remote-browser-keyboard'
 import { normalizeBrowserNavigationUrl } from '../../../../shared/browser-url'
 import AgentBrowserPickerOverlay from './AgentBrowserPickerOverlay'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+
+/** Fixed device scale for the in-app screencast capture (see `sendViewport`). 2× =
+ *  Retina; window.devicePixelRatio and getCurrentWindow().scaleFactor() both proved
+ *  unreliable in the packaged app, and 2× is never worse than the true scale. */
+const SCREENCAST_DEVICE_SCALE = 2
 
 /** Strip the `about:blank` placeholder so the address bar starts empty. */
 function toDisplayUrl(url: string): string {
@@ -87,12 +91,6 @@ export default function AgentBrowserScreencastPane({
   const metadataRef = useRef<BrowserScreencastFrameMetadata | null>(null)
   // Stable getter so the picker overlay's memoized handlers don't churn each render.
   const getScreencastMetadata = useCallback(() => metadataRef.current, [])
-  // The shipped WKWebView reports window.devicePixelRatio=1 over the custom
-  // `tauri://` scheme (a WebKit defect), which captures the page at 1× and upscales
-  // it 2× on a Retina display → blurry. Seed from devicePixelRatio (reliable in the
-  // http dev server) and correct to the TRUE backing scale via Tauri's native
-  // scaleFactor() below.
-  const scaleFactorRef = useRef<number>(Math.min(2, Math.max(1, window.devicePixelRatio || 1)))
   // Bumped on every navigation so the annotate overlay drops markers whose clips
   // belong to the previous page (else they stay stuck over every later page).
   const [navToken, setNavToken] = useState(0)
@@ -124,9 +122,16 @@ export default function AgentBrowserScreencastPane({
 
   // Match the headless page's LAYOUT viewport to the pane. Without this the page
   // lays out at the launcher's fixed `--window-size=1280,800`, so the frame is
-  // `object-contain`-letterboxed (cut off top/bottom) in a differently-shaped
-  // pane. Clamp DPR to [1,2] (matches the legacy pane) so a hi-DPI display can't
-  // quadruple the frame size. No-op until a subscription exists.
+  // `object-contain`-letterboxed (cut off top/bottom) in a differently-shaped pane.
+  //
+  // Capture at a FIXED 2× device resolution. We can't trust any in-app signal for the
+  // display scale: window.devicePixelRatio lies (=1) over the shipped `tauri://`
+  // scheme, and getCurrentWindow().scaleFactor() proved unreliable in the packaged app
+  // too — verified live, the headless page was rendering at devicePixelRatio=1, so the
+  // 1× capture upscaled 2× on a Retina display → blurry. A fixed 2× downscales 1:1 on a
+  // Retina pane (sharp) and supersamples cleanly on a 1× display (also sharp), so it is
+  // never worse than the true scale, and the in-app live-view is local so the extra
+  // pixels cost nothing over loopback. No-op until a subscription exists.
   const sendViewport = useCallback((): void => {
     const canvas = canvasRef.current
     if (!canvas) {
@@ -138,31 +143,8 @@ export default function AgentBrowserScreencastPane({
     if (width <= 0 || height <= 0) {
       return
     }
-    const deviceScaleFactor = Math.min(2, Math.max(1, scaleFactorRef.current || 1))
-    sendInput('browser.setViewport', { width, height, deviceScaleFactor })
+    sendInput('browser.setViewport', { width, height, deviceScaleFactor: SCREENCAST_DEVICE_SCALE })
   }, [sendInput])
-
-  // Resolve the TRUE display backing scale from the native shell — window.
-  // devicePixelRatio lies (=1) in the shipped WKWebView — and re-send the viewport
-  // so the headless page is captured at device-pixel resolution (sharp on Retina).
-  useEffect(() => {
-    let cancelled = false
-    void getCurrentWindow()
-      .scaleFactor()
-      .then((sf) => {
-        if (cancelled) {
-          return
-        }
-        const clamped = Math.min(2, Math.max(1, sf || 1))
-        if (clamped !== scaleFactorRef.current) {
-          scaleFactorRef.current = clamped
-          sendViewport()
-        }
-      })
-      .catch(() => {
-        // Not inside a Tauri window (dev/web) — keep the devicePixelRatio seed.
-      })
-  }, [sendViewport])
 
   // Co-browse banner (F12): flips on briefly after the human interacts. The same
   // human input also gives the human the wheel server-side, so the agent's input
@@ -497,7 +479,11 @@ export default function AgentBrowserScreencastPane({
             <canvas
               ref={canvasRef}
               tabIndex={0}
-              className="h-full w-full object-contain outline-none"
+              // object-fill (not contain): the page is laid out to the pane's exact
+              // size via `sendViewport`, so the frame already matches the pane aspect
+              // — fill edge-to-edge like a normal browser (no letterbox bars) and stay
+              // consistent with `toDevicePoint`, which maps against the full canvas rect.
+              className="h-full w-full object-fill outline-none"
               onMouseMove={onMouseMove}
               onMouseDown={onMouseDown}
               onMouseUp={onMouseUp}
