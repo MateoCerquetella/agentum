@@ -42,6 +42,7 @@ import {
 } from '../../../../shared/task-providers'
 import {
   DEFAULT_HIDE_SLEEPING_WORKSPACES,
+  DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE,
   DEFAULT_AGENT_ACTIVITY_DISPLAY_MODE,
   DEFAULT_SHOW_SLEEPING_WORKSPACES,
   DEFAULT_STATUS_BAR_ITEMS,
@@ -1198,7 +1199,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   showSleepingWorkspaces: DEFAULT_SHOW_SLEEPING_WORKSPACES,
   setShowSleepingWorkspaces: (v) => set({ showSleepingWorkspaces: v }),
 
-  hideDefaultBranchWorkspace: false,
+  hideDefaultBranchWorkspace: DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE,
   setHideDefaultBranchWorkspace: (v) => set({ hideDefaultBranchWorkspace: v }),
 
   showDotfilesByWorktree: {},
@@ -1475,7 +1476,8 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         // Older positive-form keys are intentionally ignored so old profiles
         // start from the new default: sleeping workspaces visible.
         showSleepingWorkspaces: !(ui.hideSleepingWorkspaces ?? DEFAULT_HIDE_SLEEPING_WORKSPACES),
-        hideDefaultBranchWorkspace: ui.hideDefaultBranchWorkspace ?? false,
+        hideDefaultBranchWorkspace:
+          ui.hideDefaultBranchWorkspace ?? DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE,
         showDotfilesByWorktree: sanitizeShowDotfilesByWorktree(ui.showDotfilesByWorktree),
         filterRepoIds: (ui.filterRepoIds ?? []).filter((repoId) => validRepoIds.has(repoId)),
         collapsedGroups: new Set(ui.collapsedGroups ?? []),
