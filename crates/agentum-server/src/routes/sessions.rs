@@ -921,19 +921,10 @@ const SETTLE_POLL_INTERVAL: Duration = Duration::from_millis(40);
 const POST_RESIZE_NO_ACTIVITY_BAIL: Duration = Duration::from_millis(180);
 
 /// Upper bound on a single coalesced WS frame. Caps the work of merging a large
-/// backlog and keeps any one `term.write` on the client bounded.
+/// backlog and keeps any one `term.write` on the client bounded. Consumed by
+/// `coalesce_queued` in the [`streaming`] submodule (via `use super::*`).
 const COALESCE_MAX: usize = 256 * 1024;
 
-/// Merge any pane chunks *already queued* in `rx` into `first`, producing one WS
-/// frame instead of many. This adds **no latency** — it only drains what's
-/// instantly available via `try_recv` — so a client keeping up still sees one
-/// frame per chunk, while a client falling behind (a weak laptop, a slow link)
-/// gets fewer, larger frames. That directly cuts the per-frame cost the new
-/// push stream would otherwise pile on a slow client: each frame is an
-/// `onmessage` dispatch + `Uint8Array` alloc + `term.write` + OSC-title scan, so
-/// collapsing a burst of tiny tmux writes into one frame is a large win exactly
-/// when the client is the bottleneck. The single-chunk path returns `first`
-/// untouched (no copy).
 // ---------- GET /api/sessions/{id}/pane ----------
 
 /// Returns a plain-text snapshot of the last N lines of the session's tmux

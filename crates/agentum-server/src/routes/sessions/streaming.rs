@@ -6,6 +6,16 @@
 
 use super::*;
 
+/// Merge any pane chunks *already queued* in `rx` into `first`, producing one WS
+/// frame instead of many. This adds **no latency** — it only drains what's
+/// instantly available via `try_recv` — so a client keeping up still sees one
+/// frame per chunk, while a client falling behind (a weak laptop, a slow link)
+/// gets fewer, larger frames. That directly cuts the per-frame cost the new
+/// push stream would otherwise pile on a slow client: each frame is an
+/// `onmessage` dispatch + `Uint8Array` alloc + `term.write` + OSC-title scan, so
+/// collapsing a burst of tiny tmux writes into one frame is a large win exactly
+/// when the client is the bottleneck. The single-chunk path returns `first`
+/// untouched (no copy).
 fn coalesce_queued(first: Bytes, rx: &mut tokio::sync::mpsc::Receiver<Bytes>) -> Bytes {
     use tokio::sync::mpsc::error::TryRecvError;
     match rx.try_recv() {
