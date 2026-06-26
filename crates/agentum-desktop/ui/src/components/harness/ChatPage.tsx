@@ -30,6 +30,10 @@ export default function ChatPage() {
   // Which tracker the "Create issues" button files into. Only meaningful when
   // Linear is connected; GitHub is the default and the sole option otherwise.
   const [provider, setProvider] = useState<IssueProvider>('github')
+  // Target GitHub repo (`owner/repo`). This is what lets the Chat file issues
+  // with NO local project connected — the old "no GitHub repo resolved for this
+  // project" dead-end. Blank falls back to the open project's origin.
+  const [repoTarget, setRepoTarget] = useState('')
 
   // The "Create issues" affordance only appears once the interviewer has
   // proposed something — i.e. there's at least one assistant turn to mine.
@@ -106,7 +110,9 @@ export default function ChatPage() {
     try {
       const result = await createIssuesFromChat(messages, {
         workdir: repos[0]?.path,
-        provider: effectiveProvider
+        provider: effectiveProvider,
+        // Only GitHub takes an explicit repo; Linear resolves its own team.
+        repoSlug: effectiveProvider === 'github' ? repoTarget : undefined
       })
       // "where" reads naturally for either tracker: a GitHub repo slug, or "Linear".
       const where =
@@ -134,7 +140,7 @@ export default function ChatPage() {
     } finally {
       setCreating(false)
     }
-  }, [busy, creating, messages, repos, effectiveProvider])
+  }, [busy, creating, messages, repos, effectiveProvider, repoTarget])
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -193,60 +199,95 @@ export default function ChatPage() {
       {/* composer */}
       <form onSubmit={submit} className="flex-none border-t border-border px-5 pb-4.5 pt-3">
         {hasAssistantReply ? (
-          <div className="mx-auto mb-2.5 flex max-w-[720px] items-center justify-end gap-2">
-            {/* Tracker toggle — only when Linear is connected; GitHub-only users
-                keep the unchanged single-button experience. */}
-            {linearConnected ? (
-              <div
-                role="group"
-                aria-label="Issue tracker"
-                className="inline-flex overflow-hidden rounded-md border border-border"
+          <div className="mx-auto mb-2.5 flex max-w-[720px] flex-col gap-1.5">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {/* Tracker toggle — only when Linear is connected; GitHub-only users
+                  keep the unchanged single-button experience. */}
+              {linearConnected ? (
+                <div
+                  role="group"
+                  aria-label="Issue tracker"
+                  className="inline-flex overflow-hidden rounded-md border border-border"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setProvider('github')}
+                    disabled={creating}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 px-2.5 py-1 text-[12.5px] font-medium hover:bg-accent disabled:opacity-40',
+                      effectiveProvider === 'github'
+                        ? 'bg-accent text-foreground'
+                        : 'text-muted-foreground'
+                    )}
+                  >
+                    <Github className="size-3.5" /> GitHub
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setProvider('linear')}
+                    disabled={creating}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 border-l border-border px-2.5 py-1 text-[12.5px] font-medium hover:bg-accent disabled:opacity-40',
+                      effectiveProvider === 'linear'
+                        ? 'bg-accent text-foreground'
+                        : 'text-muted-foreground'
+                    )}
+                  >
+                    <LinearIcon className="size-3.5" /> Linear
+                  </button>
+                </div>
+              ) : null}
+              {/* Target repo — only GitHub needs one. Typing it here is what lets
+                  the Chat file issues with NO project connected; blank falls back
+                  to the open project's origin. */}
+              {effectiveProvider === 'github' ? (
+                <input
+                  type="text"
+                  value={repoTarget}
+                  onChange={(e) => setRepoTarget(e.target.value)}
+                  disabled={creating}
+                  placeholder="owner/repo"
+                  spellCheck={false}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  aria-label="Target GitHub repository (owner/repo)"
+                  className="w-44 rounded-md border border-border bg-background px-2.5 py-1 font-mono text-[12.5px] text-foreground placeholder:text-muted-foreground focus:border-foreground/30 focus:outline-none disabled:opacity-40"
+                />
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void createIssues()}
+                disabled={
+                  busy ||
+                  creating ||
+                  messages.length === 0 ||
+                  // GitHub with neither a typed repo nor an open project has
+                  // nowhere to file — keep the button inert + show the hint
+                  // instead of round-tripping to a "no repo resolved" error.
+                  (effectiveProvider === 'github' && repos.length === 0 && !repoTarget.trim())
+                }
+                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] font-medium hover:border-foreground/30 hover:bg-accent disabled:opacity-40"
               >
-                <button
-                  type="button"
-                  onClick={() => setProvider('github')}
-                  disabled={creating}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 px-2.5 py-1 text-[12.5px] font-medium hover:bg-accent disabled:opacity-40',
-                    effectiveProvider === 'github'
-                      ? 'bg-accent text-foreground'
-                      : 'text-muted-foreground'
-                  )}
-                >
-                  <Github className="size-3.5" /> GitHub
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setProvider('linear')}
-                  disabled={creating}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 border-l border-border px-2.5 py-1 text-[12.5px] font-medium hover:bg-accent disabled:opacity-40',
-                    effectiveProvider === 'linear'
-                      ? 'bg-accent text-foreground'
-                      : 'text-muted-foreground'
-                  )}
-                >
-                  <LinearIcon className="size-3.5" /> Linear
-                </button>
+                {creating ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : effectiveProvider === 'linear' ? (
+                  <LinearIcon className="size-3.5" />
+                ) : (
+                  <Github className="size-3.5" />
+                )}
+                {creating
+                  ? 'Creating issues…'
+                  : `Create ${effectiveProvider === 'linear' ? 'Linear' : 'GitHub'} issues`}
+              </button>
+            </div>
+            {/* One-line hint so a user with nothing connected knows what to type. */}
+            {effectiveProvider === 'github' ? (
+              <div className="text-right text-[11px] text-muted-foreground">
+                {repos.length === 0
+                  ? 'Enter the GitHub repo (owner/repo) to file these into.'
+                  : 'Blank files into your open project — or type owner/repo.'}
               </div>
             ) : null}
-            <button
-              type="button"
-              onClick={() => void createIssues()}
-              disabled={busy || creating || messages.length === 0}
-              className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] font-medium hover:border-foreground/30 hover:bg-accent disabled:opacity-40"
-            >
-              {creating ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : effectiveProvider === 'linear' ? (
-                <LinearIcon className="size-3.5" />
-              ) : (
-                <Github className="size-3.5" />
-              )}
-              {creating
-                ? 'Creating issues…'
-                : `Create ${effectiveProvider === 'linear' ? 'Linear' : 'GitHub'} issues`}
-            </button>
           </div>
         ) : null}
         <div className="mx-auto flex max-w-[720px] items-end gap-2.5 rounded-lg border border-border bg-card px-3 py-2.5">

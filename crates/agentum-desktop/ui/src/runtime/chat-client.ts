@@ -80,6 +80,24 @@ export type CreatedIssues = {
 }
 
 /**
+ * Coerce user-typed repo input into the `owner/repo` slug the server expects.
+ * Accepts a bare `owner/repo`, a full GitHub URL (`https://github.com/owner/repo`,
+ * optionally `.git`), or an SSH remote (`git@github.com:owner/repo.git`). Returns
+ * '' when nothing usable is found — the caller treats '' as "omit `repo_slug` and
+ * fall back to the open project's origin". This is what lets the Chat file issues
+ * with no local project connected: type the repo, and it goes straight through.
+ */
+export function normalizeRepoSlug(raw: string | null | undefined): string {
+  const s = (raw ?? '').trim()
+  if (!s) return ''
+  // owner/repo embedded in an https or ssh GitHub remote.
+  const m = s.match(/github\.com[/:]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i)
+  if (m) return `${m[1]}/${m[2]}`
+  // Bare `owner/repo` (tolerate a trailing .git or slash).
+  return s.replace(/\/+$/, '').replace(/\.git$/i, '')
+}
+
+/**
  * `POST /api/chat/issues` — distil the agreed task breakdown from the transcript
  * and file one issue per task into the chosen tracker (`provider`, default
  * `github`). Partial success is a 200 (`created` + `failed` per-task). Mirrors
@@ -102,7 +120,9 @@ export async function createIssuesFromChat(
     body: JSON.stringify({
       messages,
       workdir: opts?.workdir,
-      repo_slug: opts?.repoSlug,
+      // Normalize a typed repo (URL/SSH/bare) to `owner/repo`; '' → omit so the
+      // server falls back to the open project's origin.
+      repo_slug: normalizeRepoSlug(opts?.repoSlug) || undefined,
       provider: opts?.provider
     })
   })
