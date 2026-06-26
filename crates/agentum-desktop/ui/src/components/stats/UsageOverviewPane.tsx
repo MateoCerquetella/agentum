@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- Why: the overview keeps its small display components beside the
    provider fetch wiring so the combined usage surface stays easy to audit. */
 import { useEffect, useMemo } from 'react'
+import { formatUpdatedAt } from '@/lib/stats-format'
 import {
   Activity,
   AlertCircle,
@@ -40,13 +41,6 @@ function formatPercent(value: number | null): string {
     return 'n/a'
   }
   return `${Math.round(value * 100)}%`
-}
-
-function formatUpdatedAt(timestamp: number | null): string {
-  if (!timestamp) {
-    return 'Not scanned yet'
-  }
-  return `Updated ${new Date(timestamp).toLocaleString()}`
 }
 
 function formatDayLabel(day: string): string {

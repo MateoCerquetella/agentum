@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { formatSessionTime } from '@/lib/stats-format'
+import { formatCost, formatSessionTime, formatTokens, formatUpdatedAt } from '@/lib/stats-format'
 import {
   Activity,
   Brain,
@@ -38,30 +38,6 @@ const RANGE_LABELS: Record<CodexUsageRange, string> = {
   '30d': 'Last 30 days',
   '90d': 'Last 90 days',
   all: 'All time'
-}
-
-function formatTokens(value: number): string {
-  if (value >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(1)}M`
-  }
-  if (value >= 1_000) {
-    return `${(value / 1_000).toFixed(1)}k`
-  }
-  return value.toLocaleString()
-}
-
-function formatCost(value: number | null): string {
-  if (value === null) {
-    return 'n/a'
-  }
-  return value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`
-}
-
-function formatUpdatedAt(timestamp: number | null): string {
-  if (!timestamp) {
-    return 'Not scanned yet'
-  }
-  return `Updated ${new Date(timestamp).toLocaleString()}`
 }
 
 export function CodexUsagePane(): React.JSX.Element {
