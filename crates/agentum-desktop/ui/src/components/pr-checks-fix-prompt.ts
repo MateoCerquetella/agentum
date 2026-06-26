@@ -1,37 +1,5 @@
 import type { PRCheckDetail } from '../../../shared/types'
-
-function getCheckConclusion(check: PRCheckDetail): NonNullable<PRCheckDetail['conclusion']> {
-  return check.conclusion ?? 'pending'
-}
-
-function getCheckStatusLabel(check: PRCheckDetail): string {
-  const conclusion = getCheckConclusion(check)
-  if (conclusion === 'success') {
-    return 'Successful'
-  }
-  if (conclusion === 'failure') {
-    return 'Failed'
-  }
-  if (conclusion === 'cancelled') {
-    return 'Cancelled'
-  }
-  if (conclusion === 'timed_out') {
-    return 'Timed out'
-  }
-  if (conclusion === 'neutral') {
-    return 'Neutral'
-  }
-  if (conclusion === 'skipped') {
-    return 'Skipped'
-  }
-  if (check.status === 'queued') {
-    return 'Queued'
-  }
-  if (check.status === 'in_progress') {
-    return 'In progress'
-  }
-  return 'Pending'
-}
+import { getCheckConclusion, getCheckStatusLabel } from '@/lib/pr-check-format'
 
 export function getBrokenChecks(checks: PRCheckDetail[]): PRCheckDetail[] {
   return checks.filter((check) =>

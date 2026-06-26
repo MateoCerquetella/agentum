@@ -1,4 +1,5 @@
 import { api } from '@/tauri'
+import { formatCheckTimestamp, getCheckConclusion, getCheckStatusLabel } from '@/lib/pr-check-format'
 import { formatRelativeTime } from '@/lib/relative-time'
 /* eslint-disable max-lines -- Why: the GH item dialog keeps its header, conversation, files, and checks tabs co-located so the read-only PR/Issue surface stays in one place while this view evolves. */
 import React, {
@@ -3144,39 +3145,6 @@ const CHECK_SORT_ORDER: Record<string, number> = {
   success: 5
 }
 
-function getCheckConclusion(check: PRCheckDetail): NonNullable<PRCheckDetail['conclusion']> {
-  return check.conclusion ?? 'pending'
-}
-
-function getCheckStatusLabel(check: PRCheckDetail): string {
-  const conclusion = getCheckConclusion(check)
-  if (conclusion === 'success') {
-    return 'Successful'
-  }
-  if (conclusion === 'failure') {
-    return 'Failed'
-  }
-  if (conclusion === 'cancelled') {
-    return 'Cancelled'
-  }
-  if (conclusion === 'timed_out') {
-    return 'Timed out'
-  }
-  if (conclusion === 'neutral') {
-    return 'Neutral'
-  }
-  if (conclusion === 'skipped') {
-    return 'Skipped'
-  }
-  if (check.status === 'queued') {
-    return 'Queued'
-  }
-  if (check.status === 'in_progress') {
-    return 'In progress'
-  }
-  return 'Pending'
-}
-
 function getCheckCounts(checks: PRCheckDetail[]): {
   passing: number
   failing: number
@@ -3269,22 +3237,6 @@ function pickDefaultAgent(
 
 function getCheckDetailsKey(check: PRCheckDetail): string {
   return String(check.checkRunId ?? check.workflowRunId ?? check.url ?? check.name)
-}
-
-function formatCheckTimestamp(input: string | null | undefined): string | null {
-  if (!input) {
-    return null
-  }
-  const date = new Date(input)
-  if (Number.isNaN(date.getTime())) {
-    return null
-  }
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  })
 }
 
 function ChecksTab({
