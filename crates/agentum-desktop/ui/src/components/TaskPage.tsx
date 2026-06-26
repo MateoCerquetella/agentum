@@ -197,54 +197,25 @@ import {
   restoreAvailableDefaultTaskProvider,
   resolveVisibleTaskProvider
 } from '../../../shared/task-providers'
+import {
+  GITLAB_ISSUE_FILTERS,
+  GITLAB_MR_FILTERS,
+  isGitLabIssueFilter,
+  isGitLabMRFilter,
+  type GitLabIssueFilter,
+  type GitLabTaskFilter
+} from './task-page/gitlab-filters'
+import {
+  GITHUB_MODE_BUTTONS,
+  getDefaultPresetForGitHubTaskKind,
+  getGitHubTaskKind,
+  getGitHubTaskKindPresets,
+  normalizeGitHubTaskPreset,
+  scopeGitHubTaskSearch,
+  type GitHubTaskKind
+} from './task-page/github-task-view'
 
 type TaskSource = TaskProvider
-
-type GitLabTaskFilter = 'opened' | 'merged' | 'closed' | 'all'
-type GitLabIssueFilter = 'opened' | 'assigned-to-me'
-
-const GITLAB_MR_FILTERS: { id: GitLabTaskFilter; label: string }[] = [
-  { id: 'opened', label: 'Open' },
-  { id: 'merged', label: 'Merged' },
-  { id: 'closed', label: 'Closed' },
-  { id: 'all', label: 'All' }
-]
-
-const GITLAB_ISSUE_FILTERS: { id: GitLabIssueFilter; label: string }[] = [
-  { id: 'opened', label: 'Open' },
-  { id: 'assigned-to-me', label: 'Assigned to me' }
-]
-
-function isGitLabMRFilter(value: GitLabTaskFilter | GitLabIssueFilter): value is GitLabTaskFilter {
-  return value === 'opened' || value === 'merged' || value === 'closed' || value === 'all'
-}
-
-function isGitLabIssueFilter(
-  value: GitLabTaskFilter | GitLabIssueFilter
-): value is GitLabIssueFilter {
-  return value === 'opened' || value === 'assigned-to-me'
-}
-type TaskQueryPreset = {
-  id: TaskViewPresetId
-  label: string
-  query: string
-}
-type GitHubTaskKind = 'issues' | 'prs'
-
-const ISSUE_TASK_QUERY_PRESETS: TaskQueryPreset[] = [
-  { id: 'issues', label: 'Open', query: getTaskPresetQuery('issues') },
-  { id: 'my-issues', label: 'Assigned to me', query: getTaskPresetQuery('my-issues') }
-]
-
-const PR_TASK_QUERY_PRESETS: TaskQueryPreset[] = [
-  { id: 'prs', label: 'Open', query: getTaskPresetQuery('prs') },
-  { id: 'my-prs', label: 'Mine', query: getTaskPresetQuery('my-prs') },
-  { id: 'review', label: 'Needs review', query: getTaskPresetQuery('review') }
-]
-
-function getGitHubTaskKindPresets(kind: GitHubTaskKind): TaskQueryPreset[] {
-  return kind === 'prs' ? PR_TASK_QUERY_PRESETS : ISSUE_TASK_QUERY_PRESETS
-}
 
 type SourceOption = {
   id: TaskSource
@@ -322,55 +293,6 @@ const GITHUB_TASK_STICKY_TITLE_CELL_CLASS = cn(
   GITHUB_TASK_ROW_SURFACE_CLASS,
   GITHUB_TASK_ROW_HOVER_SURFACE_CLASS
 )
-
-type GitHubModeButton = { id: GitHubTaskKind | 'project'; label: string }
-
-const GITHUB_MODE_BUTTONS: GitHubModeButton[] = [
-  { id: 'issues', label: 'Issues' },
-  { id: 'prs', label: 'PRs' },
-  { id: 'project', label: 'Projects' }
-]
-
-function isPRFocusedTaskView(preset: TaskViewPresetId | null, query: string): boolean {
-  if (preset === 'prs' || preset === 'my-prs' || preset === 'review') {
-    return true
-  }
-  const parsed = parseTaskQuery(query)
-  return (
-    parsed.scope === 'pr' ||
-    parsed.state === 'merged' ||
-    parsed.draft ||
-    parsed.reviewRequested !== null ||
-    parsed.reviewedBy !== null
-  )
-}
-
-function normalizeGitHubTaskPreset(preset: TaskViewPresetId | null | undefined): TaskViewPresetId {
-  // Why: the split Issues/PRs tabs no longer have a mixed "All" view, so
-  // legacy saved defaults should land on the first tab instead of mixing rows.
-  return !preset || preset === 'all' ? 'issues' : preset
-}
-
-function getGitHubTaskKind(preset: TaskViewPresetId | null, query: string): GitHubTaskKind {
-  return isPRFocusedTaskView(preset, query) ? 'prs' : 'issues'
-}
-
-function getDefaultPresetForGitHubTaskKind(kind: GitHubTaskKind): TaskViewPresetId {
-  return kind === 'prs' ? 'prs' : 'issues'
-}
-
-function scopeGitHubTaskSearch(query: string, kind: GitHubTaskKind): string {
-  const trimmed = query.trim()
-  if (!trimmed) {
-    return getTaskPresetQuery(getDefaultPresetForGitHubTaskKind(kind))
-  }
-  if (/\bis:(?:issue|pr|pull-request)\b/i.test(trimmed)) {
-    return trimmed
-  }
-  const parsed = parseTaskQuery(trimmed)
-  const inferredKind = parsed.scope === 'pr' ? 'prs' : parsed.scope === 'issue' ? 'issues' : kind
-  return `${inferredKind === 'prs' ? 'is:pr' : 'is:issue'} ${trimmed}`
-}
 
 // Why: Intl.RelativeTimeFormat allocation is non-trivial, and previously we
 // built a new formatter per work-item row render. Hoisting to module scope
