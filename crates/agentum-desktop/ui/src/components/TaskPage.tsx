@@ -171,7 +171,6 @@ import type {
   LinearProjectSummary,
   LinearTeam,
   LinearWorkspaceSelection,
-  LinearWorkflowState,
   Repo,
   TaskProvider,
   TaskViewPresetId
