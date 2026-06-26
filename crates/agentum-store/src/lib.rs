@@ -6,10 +6,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use agentum_core::{
-    BoardComment, BoardItem, BoardLink, BoardPatch, Channel, Event, Host, HostKind, LOCAL_HOST_ID,
-    LinkKind, Message, NewBoardComment, NewBoardItem, NewChannel, NewHost, NewMessage, NewNote,
-    NewSession, Note, NotePatch, ReorderEntry, RequiredField, Session, SshAuth, Status,
-    TrackerBinding, User,
+    BoardComment, BoardItem, BoardLink, BoardPatch, Host, HostKind, LOCAL_HOST_ID, LinkKind,
+    NewBoardComment, NewBoardItem, NewHost, NewSession, ReorderEntry, RequiredField, Session,
+    SshAuth, Status, TrackerBinding, User,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{FromRow, SqlitePool};
@@ -19,6 +18,15 @@ use uuid::Uuid;
 
 pub mod orchestration;
 pub mod paths;
+
+// Domain method blocks split out of this file for cohesion. Each adds an
+// `impl Store` block (and its private row types) for one table/concern; Rust
+// lets inherent impls span modules within the crate, and child modules can
+// reach the crate-root `Store`'s private `pool` field.
+mod channels;
+mod events;
+mod messages;
+mod notes;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -1670,248 +1678,6 @@ impl Store {
             .ok_or_else(|| StoreError::NotFound(format!("board item {card_id}")))
     }
 
-    // ---------- notes ----------
-
-    pub async fn create_note(&self, new: NewNote) -> Result<Note> {
-        let now = OffsetDateTime::now_utc();
-        let now_s = now.format(&Rfc3339)?;
-        let tags_json = serde_json::to_string(&new.tags)?;
-        let result = sqlx::query(
-            "INSERT INTO notes (title, body, tags, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?)",
-        )
-        .bind(&new.title)
-        .bind(&new.body)
-        .bind(&tags_json)
-        .bind(&now_s)
-        .bind(&now_s)
-        .execute(&self.pool)
-        .await?;
-        Ok(Note {
-            id: result.last_insert_rowid(),
-            title: new.title,
-            body: new.body,
-            tags: new.tags,
-            created_at: now,
-            updated_at: now,
-        })
-    }
-
-    pub async fn list_notes(&self) -> Result<Vec<Note>> {
-        let rows: Vec<NoteRow> =
-            sqlx::query_as::<_, NoteRow>("SELECT * FROM notes ORDER BY updated_at DESC")
-                .fetch_all(&self.pool)
-                .await?;
-        rows.into_iter().map(Note::try_from).collect()
-    }
-
-    pub async fn get_note(&self, id: i64) -> Result<Option<Note>> {
-        let row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await?;
-        row.map(Note::try_from).transpose()
-    }
-
-    pub async fn patch_note(&self, id: i64, patch: NotePatch) -> Result<Note> {
-        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
-        let tags_json = match &patch.tags {
-            Some(t) => Some(serde_json::to_string(t)?),
-            None => None,
-        };
-        let affected = sqlx::query(
-            "UPDATE notes SET
-                title = COALESCE(?, title),
-                body  = COALESCE(?, body),
-                tags  = COALESCE(?, tags),
-                updated_at = ?
-             WHERE id = ?",
-        )
-        .bind(&patch.title)
-        .bind(&patch.body)
-        .bind(&tags_json)
-        .bind(&now_s)
-        .bind(id)
-        .execute(&self.pool)
-        .await?
-        .rows_affected();
-        if affected == 0 {
-            return Err(StoreError::NotFound(id.to_string()));
-        }
-        self.get_note(id)
-            .await?
-            .ok_or_else(|| StoreError::NotFound(id.to_string()))
-    }
-
-    pub async fn delete_note(&self, id: i64) -> Result<()> {
-        let affected = sqlx::query("DELETE FROM notes WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
-            .await?
-            .rows_affected();
-        if affected == 0 {
-            return Err(StoreError::NotFound(id.to_string()));
-        }
-        Ok(())
-    }
-
-    // ---------- channels ----------
-
-    /// Create a 1:1 channel between two sessions. The pair is canonicalized
-    /// (`a_session < b_session`) so (A,B) and (B,A) collapse to one row.
-    pub async fn create_channel(&self, new: NewChannel) -> Result<Channel> {
-        if new.a_session == new.b_session {
-            return Err(StoreError::Core(agentum_core::CoreError::InvalidName(
-                "channel sessions must differ".into(),
-            )));
-        }
-        let (a, b) = if new.a_session < new.b_session {
-            (new.a_session, new.b_session)
-        } else {
-            (new.b_session, new.a_session)
-        };
-        let now = OffsetDateTime::now_utc();
-        let now_s = now.format(&Rfc3339)?;
-        let res =
-            sqlx::query("INSERT INTO channels (a_session, b_session, created_at) VALUES (?, ?, ?)")
-                .bind(a.to_string())
-                .bind(b.to_string())
-                .bind(&now_s)
-                .execute(&self.pool)
-                .await;
-        if let Err(sqlx::Error::Database(db)) = &res {
-            if db.is_unique_violation() {
-                return Err(StoreError::AlreadyExists(format!(
-                    "channel between {a} and {b}"
-                )));
-            }
-        }
-        let id = res?.last_insert_rowid();
-        Ok(Channel {
-            id,
-            a_session: a,
-            b_session: b,
-            created_at: now,
-        })
-    }
-
-    pub async fn list_channels(&self) -> Result<Vec<Channel>> {
-        let rows: Vec<ChannelRow> =
-            sqlx::query_as::<_, ChannelRow>("SELECT * FROM channels ORDER BY created_at ASC")
-                .fetch_all(&self.pool)
-                .await?;
-        rows.into_iter().map(Channel::try_from).collect()
-    }
-
-    pub async fn get_channel(&self, id: i64) -> Result<Option<Channel>> {
-        let row = sqlx::query_as::<_, ChannelRow>("SELECT * FROM channels WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await?;
-        row.map(Channel::try_from).transpose()
-    }
-
-    pub async fn delete_channel(&self, id: i64) -> Result<()> {
-        let affected = sqlx::query("DELETE FROM channels WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
-            .await?
-            .rows_affected();
-        if affected == 0 {
-            return Err(StoreError::NotFound(id.to_string()));
-        }
-        Ok(())
-    }
-
-    // ---------- messages ----------
-
-    pub async fn append_message(&self, channel_id: i64, msg: NewMessage) -> Result<Message> {
-        let now = OffsetDateTime::now_utc();
-        let now_s = now.format(&Rfc3339)?;
-        let res =
-            sqlx::query("INSERT INTO messages (channel_id, sender, body, ts) VALUES (?, ?, ?, ?)")
-                .bind(channel_id)
-                .bind(&msg.sender)
-                .bind(&msg.body)
-                .bind(&now_s)
-                .execute(&self.pool)
-                .await?;
-        Ok(Message {
-            id: res.last_insert_rowid(),
-            channel_id,
-            sender: msg.sender,
-            body: msg.body,
-            ts: now,
-        })
-    }
-
-    pub async fn list_messages(&self, channel_id: i64, limit: i64) -> Result<Vec<Message>> {
-        // Most recent `limit` messages, returned oldest-first for chat UI.
-        let rows: Vec<MessageRow> = sqlx::query_as::<_, MessageRow>(
-            "SELECT * FROM (
-                SELECT * FROM messages WHERE channel_id = ? ORDER BY ts DESC LIMIT ?
-             ) ORDER BY ts ASC",
-        )
-        .bind(channel_id)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter().map(Message::try_from).collect()
-    }
-
-    /// Newest-first list of recent watchdog-eligible events. Filters
-    /// for kinds the dashboard's watchdog feed renders (`watchdog.*`
-    /// and `session.crashed` / `session.started` etc.). `limit` caps
-    /// the result; pass 50 for the default cold-start payload.
-    pub async fn list_watchdog_events(&self, limit: i64) -> Result<Vec<Event>> {
-        let rows: Vec<EventRow> = sqlx::query_as::<_, EventRow>(
-            "SELECT session_id, kind, payload, ts FROM events
-             WHERE kind LIKE 'watchdog.%' OR kind LIKE 'session.%'
-             ORDER BY ts DESC LIMIT ?",
-        )
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter().map(Event::try_from).collect()
-    }
-
-    /// One row per session: the most-recent `agent.*` event for each.
-    /// Used by the `/api/events` WS handler to bootstrap a fresh client
-    /// with the current activity overlay (idle / awaiting input /
-    /// working) before live events start streaming. Without this a
-    /// dashboard tab opened mid-flight has no way to tell that a
-    /// `running` session's agent has already finished its turn —
-    /// `agent.finished` only fires once per transition and isn't
-    /// replayed on the bus.
-    pub async fn latest_agent_event_per_session(&self) -> Result<Vec<Event>> {
-        let rows: Vec<EventRow> = sqlx::query_as::<_, EventRow>(
-            "SELECT e.session_id, e.kind, e.payload, e.ts FROM events e
-             INNER JOIN (
-                 SELECT session_id, MAX(id) AS max_id FROM events
-                 WHERE session_id IS NOT NULL AND kind LIKE 'agent.%'
-                 GROUP BY session_id
-             ) latest ON latest.max_id = e.id
-             ORDER BY e.ts ASC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter().map(Event::try_from).collect()
-    }
-
-    /// Persist an event row. Best-effort (failures should not break callers).
-    pub async fn insert_event(&self, ev: &Event) -> Result<()> {
-        let payload = serde_json::to_string(&ev.payload)?;
-        let ts = ev.ts.format(&Rfc3339)?;
-        sqlx::query("INSERT INTO events (session_id, kind, payload, ts) VALUES (?, ?, ?, ?)")
-            .bind(ev.session_id.map(|u| u.to_string()))
-            .bind(&ev.kind)
-            .bind(payload)
-            .bind(ts)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
     pub async fn count_by_status(&self, status: Status) -> Result<i64> {
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE status = ?")
             .bind(status.as_str())
@@ -2360,96 +2126,6 @@ struct SessionRow {
 }
 
 #[derive(Debug, FromRow)]
-struct NoteRow {
-    id: i64,
-    title: String,
-    body: String,
-    tags: String,
-    created_at: String,
-    updated_at: String,
-}
-
-impl TryFrom<NoteRow> for Note {
-    type Error = StoreError;
-    fn try_from(r: NoteRow) -> Result<Self> {
-        Ok(Note {
-            id: r.id,
-            title: r.title,
-            body: r.body,
-            tags: serde_json::from_str(&r.tags)?,
-            created_at: OffsetDateTime::parse(&r.created_at, &Rfc3339)?,
-            updated_at: OffsetDateTime::parse(&r.updated_at, &Rfc3339)?,
-        })
-    }
-}
-
-#[derive(Debug, FromRow)]
-struct ChannelRow {
-    id: i64,
-    a_session: String,
-    b_session: String,
-    created_at: String,
-}
-
-impl TryFrom<ChannelRow> for Channel {
-    type Error = StoreError;
-    fn try_from(r: ChannelRow) -> Result<Self> {
-        Ok(Channel {
-            id: r.id,
-            a_session: Uuid::parse_str(&r.a_session)?,
-            b_session: Uuid::parse_str(&r.b_session)?,
-            created_at: OffsetDateTime::parse(&r.created_at, &Rfc3339)?,
-        })
-    }
-}
-
-#[derive(Debug, FromRow)]
-struct MessageRow {
-    id: i64,
-    channel_id: i64,
-    sender: String,
-    body: String,
-    ts: String,
-}
-
-impl TryFrom<MessageRow> for Message {
-    type Error = StoreError;
-    fn try_from(r: MessageRow) -> Result<Self> {
-        Ok(Message {
-            id: r.id,
-            channel_id: r.channel_id,
-            sender: r.sender,
-            body: r.body,
-            ts: OffsetDateTime::parse(&r.ts, &Rfc3339)?,
-        })
-    }
-}
-
-#[derive(Debug, FromRow)]
-struct EventRow {
-    session_id: Option<String>,
-    kind: String,
-    payload: String,
-    ts: String,
-}
-
-impl TryFrom<EventRow> for Event {
-    type Error = StoreError;
-    fn try_from(r: EventRow) -> Result<Self> {
-        Ok(Event {
-            kind: r.kind,
-            session_id: r.session_id.as_deref().map(Uuid::parse_str).transpose()?,
-            // session_name is not persisted in the events table; the SSE
-            // path passes it through directly. Cold-start GETs leave it
-            // None and the watchdog projection falls back to session_id.
-            session_name: None,
-            payload: serde_json::from_str(&r.payload).unwrap_or(serde_json::Value::Null),
-            ts: OffsetDateTime::parse(&r.ts, &Rfc3339)?,
-        })
-    }
-}
-
-#[derive(Debug, FromRow)]
 struct BoardItemRow {
     id: i64,
     key: String,
@@ -2609,6 +2285,11 @@ fn parse_rule_json(column: &str, json: &str) -> Result<Vec<RequiredField>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Domain constructors used by the notes/channels/messages tests that share
+    // this module's `tmp_store`/`make_session` helpers. The non-test `use
+    // agentum_core::{…}` no longer pulls these in (their methods moved to the
+    // `notes`/`channels`/`messages` submodules), so import them here directly.
+    use agentum_core::{NewChannel, NewMessage, NewNote, NotePatch};
 
     async fn tmp_store() -> Store {
         let dir = tempfile::tempdir().unwrap();
