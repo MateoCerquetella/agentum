@@ -1,4 +1,5 @@
 import type { PRCheckDetail, PRComment, PRInfo } from './types'
+import { unresolvedThreadCount } from './hosted-review-threads'
 import type { HostedReviewInfo, HostedReviewQueueSummary } from './hosted-review'
 
 export type HostedReviewFromGitHubPRInfoArgs = {
@@ -12,20 +13,6 @@ export type HostedReviewFromGitHubPRInfoArgs = {
   comments?: PRComment[]
   checks?: PRCheckDetail[]
   lastViewedAt?: number
-}
-
-function unresolvedThreadCount(comments?: PRComment[]): number | null {
-  if (comments === undefined) {
-    return null
-  }
-  const unresolved = new Set<string>()
-  for (const comment of comments) {
-    if (!comment.threadId || comment.isResolved !== false) {
-      continue
-    }
-    unresolved.add(comment.threadId)
-  }
-  return unresolved.size
 }
 
 function deriveChecksStatus(
