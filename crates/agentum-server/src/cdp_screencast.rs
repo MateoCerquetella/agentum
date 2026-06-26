@@ -125,8 +125,11 @@ impl Default for ScreencastOptions {
         Self {
             format: FrameFormat::Jpeg,
             quality: 90,
-            max_width: 3840,
-            max_height: 2160,
+            // 5K. We now capture at 2× (see cdp_browser `--force-device-scale-factor`),
+            // so a 2× frame of a 2560×1440-CSS pane lands here. The old 4K cap capped
+            // the pane at ~1920×1080 CSS before scaling the 2× frame back toward 1×.
+            max_width: 5120,
+            max_height: 2880,
             every_nth_frame: 1,
         }
     }
