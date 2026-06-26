@@ -97,33 +97,24 @@ fn get_browser_webview(app: &AppHandle, browser_page_id: &str) -> Option<tauri::
 /// scale — the authoritative source of `window.devicePixelRatio` — which the
 /// public `layer.contentsScale` cannot. A no-op when the scale is already
 /// correct, so it is safe to apply unconditionally.
-pub(crate) fn force_device_scale(webview: &tauri::Webview, scale: f64) {
-    #[cfg(target_os = "macos")]
-    {
-        use objc2::{msg_send, sel};
-        if scale <= 0.0 {
-            return;
-        }
-        // `with_webview` runs on the main thread with the live WKWebView pointer.
-        let _ = webview.with_webview(move |platform| {
-            let wk = platform.inner() as *mut objc2::runtime::AnyObject;
-            if wk.is_null() {
-                return;
-            }
-            // SAFETY: `wk` is this child webview's live WKWebView; we're on the
-            // main thread. `respondsToSelector:` guards the SPI so a future macOS
-            // that drops it degrades gracefully instead of crashing.
-            let responds: bool =
-                unsafe { msg_send![wk, respondsToSelector: sel!(_setOverrideDeviceScaleFactor:)] };
-            if responds {
-                let _: () = unsafe { msg_send![wk, _setOverrideDeviceScaleFactor: scale] };
-            }
-        });
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (webview, scale);
-    }
+///
+/// The scale is read from the webview's OWN `NSWindow.backingScaleFactor` (the
+/// authoritative, per-display value) rather than trusting the passed
+/// `fallback_scale` — which comes from Tauri's `window.scale_factor()` and can
+/// report 1 on the shipped build (the same unreliable source the screencast pane
+/// already had to abandon). `fallback_scale` is used only before the view is in a
+/// window (early create); the on-load re-pin then reads the real value.
+pub(crate) fn force_device_scale(webview: &tauri::Webview, fallback_scale: f64) {
+    // NO-OP (native rendering). WKWebView handles HiDPI natively: its layer's
+    // contentsScale follows the window's backing scale, so it rasterizes at device
+    // resolution AND lays out at the frame's point size — sharp and reflowing to the
+    // pane, "like any browser". The `_setOverrideDeviceScaleFactor:` override that
+    // v0.32.0 added (to chase a reported dpr=1) instead made the shipped child
+    // webview render compressed/chunky. Removing the override is the fix the user
+    // asked for ("resolución nativa, que se adapte al size"). The call sites are
+    // kept so the override can be reinstated behind a flag if a real dpr=1 case
+    // resurfaces, but by default we let WebKit do what it already does correctly.
+    let _ = (webview, fallback_scale);
 }
 
 /// The main window's backing scale factor (2.0 on Retina; 1.0 on a standard
@@ -180,6 +171,16 @@ pub fn browser_webview_open(
                     PageLoadEvent::Started => "started",
                     PageLoadEvent::Finished => "finished",
                 };
+                // Re-pin the device scale once the page has loaded. A WKWebView with
+                // a custom URL-scheme handler resets to deviceScaleFactor=1 on each
+                // navigation, so the create-time pin is undone by the time the page
+                // paints → blurry/chunky on Retina, every load, on every display.
+                // Re-applying on Finished (the view is in its window by now, so
+                // force_device_scale reads the real backing scale) is what actually
+                // makes the in-app browser render at device resolution.
+                if matches!(payload.event(), PageLoadEvent::Finished) {
+                    force_device_scale(&webview, 2.0);
+                }
                 let _ = webview.app_handle().emit_to(
                     "main",
                     "browser-page-load",
