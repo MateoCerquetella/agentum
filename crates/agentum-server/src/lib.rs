@@ -28,6 +28,7 @@ pub mod auth;
 pub mod bridge;
 pub mod cdp_browser;
 pub mod cdp_driver;
+pub(crate) mod cdp_http;
 pub mod cdp_screencast;
 pub mod endpoint;
 mod error;

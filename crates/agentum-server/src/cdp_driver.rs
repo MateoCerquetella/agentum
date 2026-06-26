@@ -31,7 +31,7 @@ use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::cdp_browser;
-use crate::cdp_screencast::discover_page_ws_url;
+use crate::cdp_http::{cdp_http_json, discover_page_ws_url};
 
 // Console + network diagnostics (the long-lived listener + its buffers) live in
 // the `console` child module; the ops below call these four entry points. As a
@@ -544,19 +544,6 @@ async fn connect_active_page(cdp_http_base: &str) -> Result<CdpConn> {
 }
 
 // --- per-task browser contexts (F8 — isolation #6/#7) ------------------------
-
-/// Fetch + parse a CDP HTTP endpoint (`/json`, `/json/version`, `/json/list`).
-async fn cdp_http_json(url: &str) -> Result<Value> {
-    reqwest::Client::new()
-        .get(url)
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await
-        .with_context(|| format!("GET {url}"))?
-        .json()
-        .await
-        .with_context(|| format!("parse JSON from {url}"))
-}
 
 /// Connect to the BROWSER-level CDP target (for `Target.*` context lifecycle).
 async fn connect_browser(base: &str) -> Result<CdpConn> {
