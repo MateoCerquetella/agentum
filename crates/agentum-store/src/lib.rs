@@ -4,12 +4,8 @@
 
 use std::path::{Path, PathBuf};
 
-use agentum_core::{BoardItem, NewSession, Session, Status, User};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
-use uuid::Uuid;
 
 pub mod orchestration;
 pub mod paths;
@@ -18,6 +14,7 @@ pub mod paths;
 // `impl Store` block (and its private row types) for one table/concern; Rust
 // lets inherent impls span modules within the crate, and child modules can
 // reach the crate-root `Store`'s private `pool` field.
+mod binding;
 mod board;
 mod channels;
 mod events;
@@ -26,6 +23,7 @@ mod messages;
 mod notes;
 mod sessions;
 mod settings;
+mod users;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -92,410 +90,6 @@ impl Store {
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
-
-    // ---------- card-session binding ----------
-
-    /// Atomically create a session and bind it to a board card in one transaction.
-    ///
-    /// This is the **atomic** card-claim primitive — invoked from the PATCH→doing
-    /// auto-spawn path (Phase 2 plan 03). The caller is responsible for resolving
-    /// `tool` and `workdir` BEFORE calling (the helper does not implement Phase 2
-    /// D-02's fall-through policy). This method is the symmetric inverse of
-    /// `transfer_card_binding(card_id, None)` — claim creates AND binds in one
-    /// transaction, whereas transfer rebinds-or-unbinds an existing session.
-    ///
-    /// Returns `(BoardItem, Session)` with both rows reflecting the committed state.
-    /// Errors:
-    /// - `NotFound` if the card does not exist.
-    /// - `AlreadyExists` if the card already has a `session_id` (HTTP 409 via
-    ///   existing `From<StoreError> for ApiError` impl).
-    /// - `AlreadyExists` if the session name collides with an existing session name.
-    pub async fn claim_card(
-        &self,
-        card_id: i64,
-        mut new: NewSession,
-    ) -> Result<(BoardItem, Session)> {
-        agentum_core::validate_name(&new.name)?;
-
-        let mut tx = self.pool.begin().await?;
-
-        // Step 1: Check the card exists and is unbound.
-        let row: Option<(i64, Option<String>)> =
-            sqlx::query_as("SELECT id, session_id FROM board_items WHERE id = ?")
-                .bind(card_id)
-                .fetch_optional(&mut *tx)
-                .await?;
-
-        let (_, existing_sid) = match row {
-            Some(r) => r,
-            None => return Err(StoreError::NotFound(format!("board item {card_id}"))),
-        };
-
-        if let Some(sid) = existing_sid {
-            return Err(StoreError::AlreadyExists(format!(
-                "card {card_id} already bound to session {sid}"
-            )));
-        }
-
-        // Step 2: Force the card binding on the new session.
-        new.card_id = Some(card_id);
-
-        let session_id = Uuid::new_v4();
-        let now = OffsetDateTime::now_utc();
-        let now_s = now.format(&Rfc3339)?;
-        let flags = serde_json::to_string(&new.flags)?;
-        let status = Status::Idle;
-
-        // Step 3: INSERT the new session row.
-        let res = sqlx::query(
-            r#"INSERT INTO sessions
-                (id, name, workdir, tool, model, flags, status, created_at, updated_at, card_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-        )
-        .bind(session_id.to_string())
-        .bind(&new.name)
-        .bind(&new.workdir)
-        .bind(&new.tool)
-        .bind(&new.model)
-        .bind(&flags)
-        .bind(status.as_str())
-        .bind(&now_s)
-        .bind(&now_s)
-        .bind(new.card_id)
-        .execute(&mut *tx)
-        .await;
-
-        if let Err(sqlx::Error::Database(ref db)) = res {
-            if db.is_unique_violation() {
-                return Err(StoreError::AlreadyExists(new.name));
-            }
-        }
-        res?;
-
-        // Step 4: UPDATE the card's session_id.
-        sqlx::query("UPDATE board_items SET session_id = ?, updated_at = ? WHERE id = ?")
-            .bind(session_id.to_string())
-            .bind(&now_s)
-            .bind(card_id)
-            .execute(&mut *tx)
-            .await?;
-
-        tx.commit().await?;
-
-        // Step 5: Reload both rows from the committed state.
-        let item = self
-            .get_board_item(card_id)
-            .await?
-            .ok_or_else(|| StoreError::NotFound(format!("board item {card_id}")))?;
-        let session = self
-            .get_session_by_id(session_id)
-            .await?
-            .ok_or_else(|| StoreError::NotFound(session_id.to_string()))?;
-
-        Ok((item, session))
-    }
-
-    /// Atomically rebind or unbind a card's session link in one transaction.
-    ///
-    /// Implements the **3-step atomic transfer** from CONTEXT D-11:
-    /// 1. Clear `card_id` on the old session (if any).
-    /// 2. Set `card_id` on the new session (if `new_session_id` is `Some`).
-    /// 3. Set `session_id` on the card to the new value (or NULL to unbind).
-    ///
-    /// The unbind branch (`new_session_id == None`) skips step 2.
-    ///
-    /// Returns `AlreadyExists` if `new_session_id` is already bound to a
-    /// *different* card — the route layer maps that to HTTP 409.
-    ///
-    /// Note: the previous session's tmux pane is NOT touched by design (D-12:
-    /// crash leaves binding intact; the user navigates to the dead pane).
-    pub async fn transfer_card_binding(
-        &self,
-        card_id: i64,
-        new_session_id: Option<Uuid>,
-    ) -> Result<BoardItem> {
-        let mut tx = self.pool.begin().await?;
-
-        // Step 1: Fetch the card; capture its current session_id.
-        let row: Option<(i64, Option<String>)> =
-            sqlx::query_as("SELECT id, session_id FROM board_items WHERE id = ?")
-                .bind(card_id)
-                .fetch_optional(&mut *tx)
-                .await?;
-
-        let (_, old_sid_str) = match row {
-            Some(r) => r,
-            None => return Err(StoreError::NotFound(format!("board item {card_id}"))),
-        };
-
-        // Step 2: If rebinding, verify the target session exists and is free.
-        if let Some(new) = new_session_id {
-            let sess_row: Option<(String, Option<i64>)> =
-                sqlx::query_as("SELECT id, card_id FROM sessions WHERE id = ?")
-                    .bind(new.to_string())
-                    .fetch_optional(&mut *tx)
-                    .await?;
-
-            match sess_row {
-                None => {
-                    return Err(StoreError::NotFound(format!("session {new}")));
-                }
-                Some((_, Some(existing_card))) if existing_card != card_id => {
-                    return Err(StoreError::AlreadyExists(format!(
-                        "session {new} already bound to card {existing_card}"
-                    )));
-                }
-                _ => {}
-            }
-        }
-
-        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
-
-        // Step 3: Clear the old session's card_id (if there was one).
-        if let Some(ref old_sid) = old_sid_str {
-            sqlx::query("UPDATE sessions SET card_id = NULL, updated_at = ? WHERE id = ?")
-                .bind(&now_s)
-                .bind(old_sid)
-                .execute(&mut *tx)
-                .await?;
-        }
-
-        // Step 4: Set the new session's card_id (if rebinding).
-        if let Some(new) = new_session_id {
-            sqlx::query("UPDATE sessions SET card_id = ?, updated_at = ? WHERE id = ?")
-                .bind(card_id)
-                .bind(&now_s)
-                .bind(new.to_string())
-                .execute(&mut *tx)
-                .await?;
-        }
-
-        // Step 5: Update the card's session_id.
-        sqlx::query("UPDATE board_items SET session_id = ?, updated_at = ? WHERE id = ?")
-            .bind(new_session_id.map(|u| u.to_string()))
-            .bind(&now_s)
-            .bind(card_id)
-            .execute(&mut *tx)
-            .await?;
-
-        tx.commit().await?;
-
-        self.get_board_item(card_id)
-            .await?
-            .ok_or_else(|| StoreError::NotFound(format!("board item {card_id}")))
-    }
-
-    // ------------- users + auth sessions -------------
-
-    pub async fn count_users(&self) -> Result<i64> {
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
-            .fetch_one(&self.pool)
-            .await?;
-        Ok(n)
-    }
-
-    pub async fn create_user(&self, username: &str, pw_hash: &str) -> Result<User> {
-        let now = OffsetDateTime::now_utc().format(&Rfc3339)?;
-        let id: i64 = sqlx::query_scalar(
-            "INSERT INTO users (username, pw_hash, created_at) VALUES (?, ?, ?) RETURNING id",
-        )
-        .bind(username)
-        .bind(pw_hash)
-        .bind(&now)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| match &e {
-            sqlx::Error::Database(db) if db.is_unique_violation() => {
-                StoreError::AlreadyExists(username.to_string())
-            }
-            _ => StoreError::Sqlx(e),
-        })?;
-        Ok(User {
-            id,
-            username: username.to_string(),
-            created_at: OffsetDateTime::parse(&now, &Rfc3339)?,
-        })
-    }
-
-    pub async fn get_user_by_username(&self, username: &str) -> Result<Option<(User, String)>> {
-        let row: Option<(i64, String, String, String)> = sqlx::query_as(
-            "SELECT id, username, pw_hash, created_at FROM users WHERE username = ?",
-        )
-        .bind(username)
-        .fetch_optional(&self.pool)
-        .await?;
-        match row {
-            Some((id, username, pw_hash, created_at)) => Ok(Some((
-                User {
-                    id,
-                    username,
-                    created_at: OffsetDateTime::parse(&created_at, &Rfc3339)?,
-                },
-                pw_hash,
-            ))),
-            None => Ok(None),
-        }
-    }
-
-    pub async fn get_user_by_id(&self, id: i64) -> Result<Option<User>> {
-        let row: Option<(i64, String, String)> =
-            sqlx::query_as("SELECT id, username, created_at FROM users WHERE id = ?")
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await?;
-        match row {
-            Some((id, username, created_at)) => Ok(Some(User {
-                id,
-                username,
-                created_at: OffsetDateTime::parse(&created_at, &Rfc3339)?,
-            })),
-            None => Ok(None),
-        }
-    }
-
-    pub async fn create_auth_session(
-        &self,
-        user_id: i64,
-        token: &str,
-        ttl: time::Duration,
-    ) -> Result<()> {
-        let now = OffsetDateTime::now_utc();
-        let expires = now + ttl;
-        let now_s = now.format(&Rfc3339)?;
-        let exp_s = expires.format(&Rfc3339)?;
-        sqlx::query(
-            "INSERT INTO auth_sessions (token, user_id, created_at, last_used_at, expires_at) VALUES (?, ?, ?, ?, ?)",
-        )
-        .bind(token)
-        .bind(user_id)
-        .bind(&now_s)
-        .bind(&now_s)
-        .bind(&exp_s)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    /// Look up the user behind a session token and bump `last_used_at`.
-    /// Returns `None` for unknown tokens AND for expired ones — expired
-    /// rows are deleted as a side effect so the table self-heals.
-    ///
-    /// `slide_ttl`, when `Some`, refreshes `expires_at` to `now + ttl` on
-    /// each touch (sliding expiration). Use `None` for absolute expiry.
-    pub async fn touch_auth_session(
-        &self,
-        token: &str,
-        slide_ttl: Option<time::Duration>,
-    ) -> Result<Option<User>> {
-        let row: Option<(i64, Option<String>)> =
-            sqlx::query_as("SELECT user_id, expires_at FROM auth_sessions WHERE token = ?")
-                .bind(token)
-                .fetch_optional(&self.pool)
-                .await?;
-        let Some((uid, expires_at)) = row else {
-            return Ok(None);
-        };
-
-        // Treat NULL expires_at as "infinite" for forward compat (the migration
-        // backfills, but a future cleanup might null it). The current default
-        // is "if missing, accept" rather than reject — flip if you'd rather be
-        // strict.
-        let now = OffsetDateTime::now_utc();
-        if let Some(exp_s) = expires_at.as_deref() {
-            match OffsetDateTime::parse(exp_s, &Rfc3339) {
-                Ok(exp) if exp <= now => {
-                    let _ = sqlx::query("DELETE FROM auth_sessions WHERE token = ?")
-                        .bind(token)
-                        .execute(&self.pool)
-                        .await;
-                    return Ok(None);
-                }
-                Ok(_) => {}
-                Err(_) => {
-                    // Malformed timestamp — treat as expired and clean up.
-                    let _ = sqlx::query("DELETE FROM auth_sessions WHERE token = ?")
-                        .bind(token)
-                        .execute(&self.pool)
-                        .await;
-                    return Ok(None);
-                }
-            }
-        }
-
-        let now_s = now.format(&Rfc3339)?;
-        if let Some(ttl) = slide_ttl {
-            let new_exp = (now + ttl).format(&Rfc3339)?;
-            let _ = sqlx::query(
-                "UPDATE auth_sessions SET last_used_at = ?, expires_at = ? WHERE token = ?",
-            )
-            .bind(&now_s)
-            .bind(&new_exp)
-            .bind(token)
-            .execute(&self.pool)
-            .await;
-        } else {
-            let _ = sqlx::query("UPDATE auth_sessions SET last_used_at = ? WHERE token = ?")
-                .bind(&now_s)
-                .bind(token)
-                .execute(&self.pool)
-                .await;
-        }
-        self.get_user_by_id(uid).await
-    }
-
-    pub async fn delete_auth_session(&self, token: &str) -> Result<()> {
-        sqlx::query("DELETE FROM auth_sessions WHERE token = ?")
-            .bind(token)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    /// Delete every auth_session row whose `expires_at` is in the past.
-    /// Returns the number of rows deleted. Cheap to call on a timer.
-    pub async fn sweep_expired_auth_sessions(&self) -> Result<u64> {
-        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
-        let res = sqlx::query(
-            "DELETE FROM auth_sessions WHERE expires_at IS NOT NULL AND expires_at <= ?",
-        )
-        .bind(&now_s)
-        .execute(&self.pool)
-        .await?;
-        Ok(res.rows_affected())
-    }
-
-    pub async fn list_users(&self) -> Result<Vec<User>> {
-        let rows: Vec<(i64, String, String)> =
-            sqlx::query_as("SELECT id, username, created_at FROM users ORDER BY id")
-                .fetch_all(&self.pool)
-                .await?;
-        rows.into_iter()
-            .map(|(id, username, created_at)| {
-                Ok(User {
-                    id,
-                    username,
-                    created_at: OffsetDateTime::parse(&created_at, &Rfc3339)?,
-                })
-            })
-            .collect()
-    }
-
-    pub async fn delete_user_by_username(&self, username: &str) -> Result<bool> {
-        let affected = sqlx::query("DELETE FROM users WHERE username = ?")
-            .bind(username)
-            .execute(&self.pool)
-            .await?
-            .rows_affected();
-        Ok(affected > 0)
-    }
-
-    pub async fn wipe_users(&self) -> Result<()> {
-        sqlx::query("DELETE FROM auth_sessions")
-            .execute(&self.pool)
-            .await?;
-        sqlx::query("DELETE FROM users").execute(&self.pool).await?;
-        Ok(())
-    }
 }
 
 /// Best-effort 0600 on the SQLite file and its WAL/SHM sidecars. Logs a
@@ -553,14 +147,18 @@ pub async fn open_default() -> Result<(Store, PathBuf)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // Domain constructors used by tests that share this module's
-    // `tmp_store`/`make_session` helpers. The non-test `use agentum_core::{…}`
-    // no longer pulls these in (their methods moved to the per-domain
-    // submodules: notes/channels/messages/hosts/…), so import them here.
+    // Domain types these tests construct. Every `Store` method now lives in a
+    // per-domain submodule (board/sessions/hosts/…), so `lib.rs` itself imports
+    // no domain types — this central test module (which keeps the shared
+    // `tmp_store`/`make_session` helpers) pulls in everything it needs directly.
     use agentum_core::{
-        BoardPatch, HostKind, LOCAL_HOST_ID, LinkKind, NewBoardComment, NewBoardItem, NewChannel,
-        NewHost, NewMessage, NewNote, NotePatch, ReorderEntry, RequiredField, SshAuth,
+        BoardItem, BoardPatch, HostKind, LOCAL_HOST_ID, LinkKind, NewBoardComment, NewBoardItem,
+        NewChannel, NewHost, NewMessage, NewNote, NewSession, NotePatch, ReorderEntry,
+        RequiredField, Session, SshAuth, Status,
     };
+    use time::OffsetDateTime;
+    use time::format_description::well_known::Rfc3339;
+    use uuid::Uuid;
 
     async fn tmp_store() -> Store {
         let dir = tempfile::tempdir().unwrap();
