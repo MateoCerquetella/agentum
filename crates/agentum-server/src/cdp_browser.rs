@@ -392,6 +392,7 @@ const REMOTE_CDP_PORT: u16 = 9222;
 fn remote_chrome_launch_script(host_port: u16) -> String {
     let flags = format!(
         "--headless=new --hide-scrollbars --window-size=1280,800 \
+         --force-device-scale-factor=2 \
          --remote-debugging-address=127.0.0.1 --remote-debugging-port={host_port} \
          --user-data-dir=$HOME/.agentum/cdp-browser --no-first-run \
          --no-default-browser-check about:blank"
@@ -494,6 +495,13 @@ fn build_chrome_argv(
         "--headless=new".to_string(),
         "--hide-scrollbars".to_string(),
         "--window-size=1280,800".to_string(),
+        // Capture the screencast at 2× device pixels (matches the pane's
+        // SCREENCAST_DEVICE_SCALE). MUST be a launch flag: `Page.startScreencast`
+        // fixes its compositor-surface scale at browser launch and IGNORES the
+        // per-frame `Emulation.setDeviceMetricsOverride.deviceScaleFactor` the pane
+        // sends (verified against `--headless=new` via a CDP probe). Without this
+        // the surface is 1× and the pane upscales it on a hi-DPI display → chunky.
+        "--force-device-scale-factor=2".to_string(),
         "--remote-debugging-address=127.0.0.1".to_string(),
         format!("--remote-debugging-port={port}"),
         format!("--user-data-dir={}", user_data_dir.to_string_lossy()),
