@@ -362,6 +362,7 @@ export function UsageOverviewPane(): React.JSX.Element {
                 <button
                   key={opt.value}
                   type="button"
+                  aria-pressed={claudeUsageRange === opt.value}
                   className={`rounded px-2 py-0.5 font-medium transition-colors ${
                     claudeUsageRange === opt.value
                       ? 'bg-background text-foreground shadow-sm'
