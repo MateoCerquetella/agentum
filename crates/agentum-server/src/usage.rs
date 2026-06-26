@@ -20,6 +20,7 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -1405,6 +1406,13 @@ static CLAUDE_RECORD_CACHE: LazyLock<RwLock<Option<Arc<Vec<ParsedClaudeRecord>>>
 static CODEX_RECORD_CACHE: LazyLock<RwLock<Option<Arc<Vec<ParsedCodexRecord>>>>> =
     LazyLock::new(|| RwLock::new(None));
 
+// Counts how many times the full disk scan has actually run per provider.
+// Used in tests to verify single-flight: under concurrent cold-cache callers
+// the count must increment by exactly 1, not N. Harmless in production
+// (a single atomic add per cold scan).
+static CLAUDE_SCAN_COUNT: AtomicUsize = AtomicUsize::new(0);
+static CODEX_SCAN_COUNT: AtomicUsize = AtomicUsize::new(0);
+
 /// Invalidate both provider caches so the next call re-scans from disk.
 pub fn invalidate_usage_cache() {
     *CLAUDE_RECORD_CACHE.write().unwrap() = None;
@@ -1418,7 +1426,15 @@ pub(crate) fn claude_cache_is_populated() -> bool {
     CLAUDE_RECORD_CACHE.read().unwrap().is_some()
 }
 
+/// Test-only helper: returns the running count of full Claude disk scans.
+/// Use with a baseline snapshot to verify single-flight behaviour.
+#[cfg(test)]
+pub(crate) fn claude_scan_count() -> usize {
+    CLAUDE_SCAN_COUNT.load(Ordering::Relaxed)
+}
+
 fn claude_scan_records() -> Vec<ParsedClaudeRecord> {
+    CLAUDE_SCAN_COUNT.fetch_add(1, Ordering::Relaxed);
     let mut out = Vec::new();
     for path in claude_log_files() {
         let file = match File::open(&path) {
@@ -1435,12 +1451,22 @@ fn claude_scan_records() -> Vec<ParsedClaudeRecord> {
 }
 
 fn collect_claude_records() -> Vec<ParsedClaudeRecord> {
-    // Check cache under a short-lived read lock; don't hold it across the scan.
+    // Fast path: a populated cache is a cheap read-lock + clone.
     if let Some(cached) = CLAUDE_RECORD_CACHE.read().unwrap().as_ref() {
         return (**cached).clone();
     }
+    // Slow path (single-flight): hold the WRITE lock and double-check. On a cold
+    // cache the Mission Control first load fires ~5 concurrent usage commands;
+    // without this they would ALL miss and each run a full disk scan, thrashing
+    // I/O+CPU. Serializing on the write lock means the first caller scans once
+    // and the rest reuse its result. Holding the lock across the single cold
+    // scan is deliberate; a concurrent refresh simply waits for it (rare).
+    let mut guard = CLAUDE_RECORD_CACHE.write().unwrap();
+    if let Some(cached) = guard.as_ref() {
+        return (**cached).clone();
+    }
     let records = Arc::new(claude_scan_records());
-    *CLAUDE_RECORD_CACHE.write().unwrap() = Some(Arc::clone(&records));
+    *guard = Some(Arc::clone(&records));
     (*records).clone()
 }
 
@@ -1820,6 +1846,7 @@ fn codex_model_for(path: &Path) -> Option<String> {
 }
 
 fn codex_scan_records() -> Vec<ParsedCodexRecord> {
+    CODEX_SCAN_COUNT.fetch_add(1, Ordering::Relaxed);
     let mut out = Vec::new();
     for path in codex_session_files() {
         let session_id = path
@@ -1842,12 +1869,18 @@ fn codex_scan_records() -> Vec<ParsedCodexRecord> {
 }
 
 fn collect_codex_records() -> Vec<ParsedCodexRecord> {
-    // Check cache under a short-lived read lock; don't hold it across the scan.
+    // Fast path: a populated cache is a cheap read-lock + clone.
     if let Some(cached) = CODEX_RECORD_CACHE.read().unwrap().as_ref() {
         return (**cached).clone();
     }
+    // Slow path (single-flight): same as collect_claude_records — hold the write
+    // lock + double-check so concurrent cold-cache callers scan once, not N times.
+    let mut guard = CODEX_RECORD_CACHE.write().unwrap();
+    if let Some(cached) = guard.as_ref() {
+        return (**cached).clone();
+    }
     let records = Arc::new(codex_scan_records());
-    *CODEX_RECORD_CACHE.write().unwrap() = Some(Arc::clone(&records));
+    *guard = Some(Arc::clone(&records));
     (*records).clone()
 }
 
@@ -2378,8 +2411,13 @@ mod tests {
 
     // ---- cache mechanics --------------------------------------------------
 
+    // Serializes the cache tests: they share the process-global record cache
+    // and scan counters, so they must not run concurrently with each other.
+    static CACHE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn cache_populates_on_first_collect_and_clears_on_invalidate() {
+        let _serial = CACHE_TEST_LOCK.lock().unwrap();
         // Start clean so the test is independent of execution order.
         invalidate_usage_cache();
         assert!(
@@ -2409,6 +2447,32 @@ mod tests {
         assert!(
             !claude_cache_is_populated(),
             "cache must be None after second invalidate"
+        );
+    }
+
+    #[test]
+    fn cold_cache_is_single_flight_under_concurrency() {
+        let _serial = CACHE_TEST_LOCK.lock().unwrap();
+        // Eight concurrent cold-cache callers (mirroring Mission Control's
+        // first-load command burst) must trigger EXACTLY ONE scan, not eight.
+        invalidate_usage_cache();
+        let baseline = claude_scan_count();
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| std::thread::spawn(collect_claude_records))
+            .collect();
+        for h in handles {
+            h.join().expect("collect thread panicked");
+        }
+
+        assert_eq!(
+            claude_scan_count() - baseline,
+            1,
+            "single-flight: 8 concurrent cold callers must scan once, not N times"
+        );
+        assert!(
+            claude_cache_is_populated(),
+            "cache populated after the concurrent collect burst"
         );
     }
 }
