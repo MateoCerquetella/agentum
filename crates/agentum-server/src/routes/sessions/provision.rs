@@ -281,7 +281,7 @@ pub(super) fn reprovision_env(
 ///
 /// SSH hosts are best-effort, Local-record-only in v1: if the reverse tunnel
 /// can't be resolved we return [`Reprovision::Skipped`] rather than erroring.
-pub(crate) async fn reprovision_session(
+pub(super) async fn reprovision_session(
     state: &AppState,
     session: &Session,
     host: &Host,

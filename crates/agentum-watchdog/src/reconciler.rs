@@ -57,7 +57,7 @@ pub async fn run_goal_reconciler(store: Arc<Store>, bus: tokio::sync::broadcast:
 /// Core dispatch for a single board event. Extracts the parent goal id,
 /// applies depth-1 guard, fires the planner auto-stop on first child, then
 /// patches the goal's status when the computed rank diverges.
-pub(super) async fn handle_board_event(
+async fn handle_board_event(
     store: &Store,
     bus: &tokio::sync::broadcast::Sender<Event>,
     ev: &Event,
@@ -182,7 +182,7 @@ pub(super) async fn handle_board_event(
 /// `board.updated` events whose payload lacks the field (defensive, shouldn't
 /// happen with plan 01-03 in place). For `board.deleted` without the field,
 /// there is no fallback — the row is gone — so returns `None`.
-pub(super) async fn extract_parent_goal_id(
+async fn extract_parent_goal_id(
     store: &Store,
     ev: &Event,
 ) -> Result<Option<i64>, WatchdogError> {
