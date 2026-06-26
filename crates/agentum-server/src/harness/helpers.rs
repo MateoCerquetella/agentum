@@ -138,7 +138,11 @@ pub(crate) fn parse_qa_verdict(json: &str) -> anyhow::Result<(bool, String)> {
 /// Build the prompt for the QA agent: run the browser-verification-loop for this
 /// one feature, then write the verdict file. The explicit "write this exact file"
 /// contract is what makes the gate deterministic.
-pub(crate) fn build_qa_prompt(instructions: &str, feature: &Feature, verdict_rel_path: &str) -> String {
+pub(crate) fn build_qa_prompt(
+    instructions: &str,
+    feature: &Feature,
+    verdict_rel_path: &str,
+) -> String {
     format!(
         "You are the QA agent in the Agentum Harness Engine. The implementation of \
          ONE feature just passed its unit-test gate; your job is to verify it in a \
