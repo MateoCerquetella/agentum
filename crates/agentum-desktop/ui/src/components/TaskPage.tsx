@@ -215,8 +215,10 @@ import {
   type GitHubTaskKind
 } from './task-page/github-task-view'
 import {
+  findLinearWorkflowStateForStatus,
   getLinearIssueGridTemplate,
   getLinearPriorityLabel,
+  getLinearStatusSectionState,
   groupLinearIssues,
   type LinearDisplayProperty,
   type LinearGroupBy,
@@ -373,23 +375,6 @@ const DEFAULT_LINEAR_DISPLAY_PROPERTIES: LinearDisplayProperty[] = [
   'labels',
   'updated'
 ]
-
-function getLinearStatusSectionState(section: LinearGroupSection): LinearIssue['state'] | null {
-  if (!section.key.startsWith('status:')) {
-    return null
-  }
-  return section.issues[0]?.state ?? null
-}
-
-function findLinearWorkflowStateForStatus(
-  states: LinearWorkflowState[],
-  targetState: LinearIssue['state']
-): LinearWorkflowState | undefined {
-  return (
-    states.find((state) => state.name === targetState.name && state.type === targetState.type) ??
-    states.find((state) => state.name === targetState.name)
-  )
-}
 
 function LinearStateCell({
   issue,

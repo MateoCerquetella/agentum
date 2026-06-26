@@ -1,4 +1,4 @@
-import type { LinearIssue } from '@/shared/types'
+import type { LinearIssue, LinearWorkflowState } from '@/shared/types'
 
 // Why: Linear encodes priority as an integer (0–4). Map to human-readable
 // labels so the table column is scannable without memorising the scale.
@@ -110,4 +110,21 @@ export function getLinearIssueGridTemplate(visibleProperties: ReadonlySet<Linear
   }
   columns.push('72px')
   return columns.join(' ')
+}
+
+export function getLinearStatusSectionState(section: LinearGroupSection): LinearIssue['state'] | null {
+  if (!section.key.startsWith('status:')) {
+    return null
+  }
+  return section.issues[0]?.state ?? null
+}
+
+export function findLinearWorkflowStateForStatus(
+  states: LinearWorkflowState[],
+  targetState: LinearIssue['state']
+): LinearWorkflowState | undefined {
+  return (
+    states.find((state) => state.name === targetState.name && state.type === targetState.type) ??
+    states.find((state) => state.name === targetState.name)
+  )
 }
