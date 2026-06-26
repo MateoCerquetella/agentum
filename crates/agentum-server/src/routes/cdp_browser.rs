@@ -16,8 +16,8 @@
 use axum::Json;
 use axum::Router;
 use axum::routing::{get, post};
-use serde::Serialize;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::AppState;
 use crate::cdp_browser;
@@ -30,6 +30,42 @@ pub fn router() -> Router<AppState> {
         .route("/api/cdp-browser/stop", post(stop))
         // The in-pane annotate picker hit-tests the shared CDP page here.
         .route("/api/cdp-browser/node-at-point", post(node_at_point))
+        // "Open Browser (persistent)": launch/stop a worktree's HEADED Chrome (a
+        // real window) the agent drives over CDP. See the headed-agent-browser spec.
+        .route(
+            "/api/cdp-browser/headed",
+            post(launch_headed).delete(stop_headed),
+        )
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HeadedBody {
+    #[serde(default)]
+    worktree_id: String,
+}
+
+/// `POST /api/cdp-browser/headed` — launch (or attach to) a worktree's **headed**
+/// Chrome (a real OS window) and return its CDP port. Body `{worktreeId}`. The
+/// agent drives THIS window via the MCP (which prefers the headed browser when one
+/// is registered). Native Chrome UX — no screencast stream.
+async fn launch_headed(Json(body): Json<HeadedBody>) -> Result<Json<Value>, ApiError> {
+    let (endpoint, port) = cdp_browser::ensure_headed_cdp_browser_for(&body.worktree_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("{e:#}")))?;
+    Ok(Json(json!({
+        "running": true,
+        "port": port,
+        "cdpEndpoint": endpoint,
+    })))
+}
+
+/// `DELETE /api/cdp-browser/headed` — stop a worktree's headed Chrome. Idempotent.
+async fn stop_headed(Json(body): Json<HeadedBody>) -> Result<Json<Value>, ApiError> {
+    cdp_browser::stop_headed_cdp_browser_for(&body.worktree_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("{e:#}")))?;
+    Ok(Json(json!({ "running": false })))
 }
 
 #[derive(Serialize)]
