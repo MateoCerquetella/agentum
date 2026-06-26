@@ -27,12 +27,13 @@ import {
 
 const RECENT_DAY_COUNT = 42
 
+// GitHub contribution-graph palette — exact light + dark hex per intensity 0-4.
 const INTENSITY_CLASS: Record<UsageOverviewDailyPoint['intensity'], string> = {
-  0: 'border-border/50 bg-muted/30',
-  1: 'border-emerald-500/40 bg-emerald-500/50',
-  2: 'border-amber-500/40 bg-amber-400/65',
-  3: 'border-orange-500/45 bg-orange-500/75',
-  4: 'border-rose-500/50 bg-rose-500/85'
+  0: 'border-black/[0.06] bg-[#ebedf0] dark:border-white/[0.06] dark:bg-[#161b22]',
+  1: 'border-black/[0.06] bg-[#9be9a8] dark:border-white/[0.06] dark:bg-[#0e4429]',
+  2: 'border-black/[0.06] bg-[#40c463] dark:border-white/[0.06] dark:bg-[#006d32]',
+  3: 'border-black/[0.06] bg-[#30a14e] dark:border-white/[0.06] dark:bg-[#26a641]',
+  4: 'border-black/[0.06] bg-[#216e39] dark:border-white/[0.06] dark:bg-[#39d353]'
 }
 
 function formatPercent(value: number | null): string {
