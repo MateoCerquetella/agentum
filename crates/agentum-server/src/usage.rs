@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// Tokens within this window count toward the rolling-window total.
@@ -1433,21 +1434,28 @@ pub(crate) fn claude_scan_count() -> usize {
     CLAUDE_SCAN_COUNT.load(Ordering::Relaxed)
 }
 
-fn claude_scan_records() -> Vec<ParsedClaudeRecord> {
-    CLAUDE_SCAN_COUNT.fetch_add(1, Ordering::Relaxed);
+fn parse_claude_file(path: &Path) -> Vec<ParsedClaudeRecord> {
     let mut out = Vec::new();
-    for path in claude_log_files() {
-        let file = match File::open(&path) {
-            Ok(f) => f,
-            Err(_) => continue,
-        };
-        for line in BufReader::new(file).lines().map_while(Result::ok) {
-            if let Some(r) = parse_claude_usage_record(&line) {
-                out.push(r);
-            }
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(_) => return out,
+    };
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        if let Some(r) = parse_claude_usage_record(&line) {
+            out.push(r);
         }
     }
     out
+}
+
+fn claude_scan_records() -> Vec<ParsedClaudeRecord> {
+    CLAUDE_SCAN_COUNT.fetch_add(1, Ordering::Relaxed);
+    // Parse files across cores. A heavy user's cold scan is dominated by serde
+    // parsing every usage line, so per-file parallelism is the main speedup.
+    claude_log_files()
+        .par_iter()
+        .flat_map_iter(|path| parse_claude_file(path))
+        .collect()
 }
 
 fn collect_claude_records() -> Vec<ParsedClaudeRecord> {
@@ -1845,27 +1853,32 @@ fn codex_model_for(path: &Path) -> Option<String> {
     None
 }
 
-fn codex_scan_records() -> Vec<ParsedCodexRecord> {
-    CODEX_SCAN_COUNT.fetch_add(1, Ordering::Relaxed);
+fn parse_codex_file(path: &Path) -> Vec<ParsedCodexRecord> {
     let mut out = Vec::new();
-    for path in codex_session_files() {
-        let session_id = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-        let model = codex_model_for(&path);
-        let file = match File::open(&path) {
-            Ok(f) => f,
-            Err(_) => continue,
-        };
-        for line in BufReader::new(file).lines().map_while(Result::ok) {
-            if let Some(r) = parse_codex_usage_record(&line, &session_id, model.as_deref()) {
-                out.push(r);
-            }
+    let session_id = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    let model = codex_model_for(path);
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(_) => return out,
+    };
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        if let Some(r) = parse_codex_usage_record(&line, &session_id, model.as_deref()) {
+            out.push(r);
         }
     }
     out
+}
+
+fn codex_scan_records() -> Vec<ParsedCodexRecord> {
+    CODEX_SCAN_COUNT.fetch_add(1, Ordering::Relaxed);
+    codex_session_files()
+        .par_iter()
+        .flat_map_iter(|path| parse_codex_file(path))
+        .collect()
 }
 
 fn collect_codex_records() -> Vec<ParsedCodexRecord> {
