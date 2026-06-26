@@ -106,7 +106,16 @@ The browser launcher (new-tab surface) offers two entries:
 sharpness for speed. (Already implemented.)
 
 ## 5. Phasing
-- **Phase 1 (this spec):** headed launch mode, CDP annotation channel, launcher option, `#3`.
+- **Phase 1a (shipped first):** headed launch mode (a real Chrome window with full UI —
+  the user navigates directly; **normal window, not `--app`**, so no agentum control pane
+  is needed), MCP prefers the headed browser, the `POST/DELETE /api/cdp-browser/headed`
+  route, the "Open Browser (persistent)" launcher entry, and `#3`. This alone removes the
+  laggy screencast for the local agent browser — the primary pain.
+- **Phase 1b (follow-up):** the CDP annotation channel (inject overlay via
+  `Page.addScriptToEvaluateOnNewDocument` + `Runtime.addBinding`, forward to the agent).
+  Tracked as its own issue/PR — the screencast annotation path (`AgentBrowserPickerOverlay`
+  + `node_at_point`) still works for the remaining remote/SSH screencast surface in the
+  meantime.
 - **Phase 2:** window-following so the Chrome window tracks the agentum pane bounds.
 - **Phase 3 (optional):** CEF for true in-pane Chromium embedding.
 

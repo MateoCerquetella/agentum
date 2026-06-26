@@ -24,6 +24,8 @@ import {
   isWebRuntimeSessionActive
 } from '../../runtime/web-runtime-session'
 import { openTabBarEntry, type TabCreateEntryArgs } from '../tab-bar/tab-create-entry-action'
+import { launchHeadedBrowser } from '../../runtime/headed-browser-client'
+import { toast } from 'sonner'
 
 export type GroupEditorItem = OpenFile & { tabId: string }
 export type GroupBrowserItem = BrowserTabState & { tabId: string }
@@ -551,6 +553,27 @@ export function useTabGroupWorkspaceModel({
       createSplitGroup,
       newBrowserTab: () => {
         void openNewBrowserTabInActiveWorkspace(groupId)
+      },
+      // "Open Browser (persistent)": launch a real headed Chrome WINDOW the agent
+      // drives over CDP (native UX, persistent, no screencast) — see the
+      // headed-agent-browser spec. It is a separate OS window, not an in-pane tab,
+      // so there's nothing to add to this group; we just kick the server launch and
+      // confirm. Idempotent on the server (a second call attaches to the running one).
+      newPersistentBrowser: () => {
+        void (async () => {
+          try {
+            const { port } = await launchHeadedBrowser(worktreeId)
+            toast.success(
+              port != null
+                ? `Persistent Chrome opened — the agent can drive it (CDP :${port}).`
+                : 'Persistent Chrome opened — the agent can drive it.'
+            )
+          } catch (err) {
+            toast.error(
+              err instanceof Error ? err.message : 'Could not launch the persistent browser.'
+            )
+          }
+        })()
       },
       openEntry: async (args: TabCreateEntryArgs) => {
         await openTabBarEntry(args)
