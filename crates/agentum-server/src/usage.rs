@@ -847,6 +847,7 @@ impl<'de> Deserialize<'de> for CodexUsageWindow {
 pub(crate) struct ParsedClaudeRecord {
     pub ts_ms: i64,
     pub day: String,
+    #[allow(dead_code)] // captured for attribution; not yet surfaced in the dashboard
     pub project: String,
     pub project_label: String,
     pub branch: Option<String>,
