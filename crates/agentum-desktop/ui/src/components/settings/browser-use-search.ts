@@ -2,22 +2,18 @@ import type { SettingsSearchEntry } from './settings-search'
 
 export const BROWSER_USE_PANE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   {
-    title: 'Enable Agentum CLI',
-    description: 'Register the Agentum CLI so agents can drive the browser.',
-    keywords: ['browser use', 'cli', 'agentum', 'path', 'command', 'shell', 'enable', 'setup']
-  },
-  {
-    title: 'Install Browser Use Skill',
-    description: "Install the Browser Use skill so agents can operate Agentum's browser.",
+    title: 'Agent Browser Use',
+    description:
+      "Built into agentum's MCP — agents drive the browser with the agentum_browser tool.",
     keywords: [
       'browser use',
-      'skill',
       'agent',
-      'install',
-      'agentum-cli',
-      'npx',
-      'agent-browser',
-      'automation'
+      'mcp',
+      'agentum_browser',
+      'navigate',
+      'automation',
+      'agentum',
+      'browser'
     ]
   },
   {

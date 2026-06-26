@@ -238,11 +238,6 @@ export function usePersistCurrentStep({
                 description: firstWarning.message
               })
             }
-            if (setupResult.skillCommandsCopied) {
-              toast.success('Feature setup ready', {
-                description: 'Skill command copied and inserted below for review.'
-              })
-            }
             if (setupResult.computerUsePermissionsOpened) {
               toast.message('Opened Computer Use permissions')
             }

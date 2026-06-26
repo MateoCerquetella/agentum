@@ -1019,13 +1019,18 @@ function App(): React.JSX.Element {
     activeWorktreeId !== null &&
     !hasTabBar &&
     effectiveActiveTabExpanded
-  // Why (Phase 1 nav shell, #48): the left rail must render on EVERY view so the
-  // app can never trap the user in a full-page takeover. This previously hid the
+  // Why (Phase 1 nav shell, #48): the left rail renders on most views so the
+  // app can never trap the user in a full-page takeover — it previously hid the
   // rail for settings/activity/skills/harness/goals, stranding the user with no
-  // visible navigation (the only escape was a secret Cmd+B). The rail (nav +
-  // worktree list) now stays put on every view — the same way the `tasks` view
-  // already rendered alongside the sidebar.
-  const showSidebar = true
+  // visible navigation (the only escape was a secret Cmd+B).
+  //
+  // Settings is the deliberate exception: it's a self-contained full-page view
+  // with its OWN navigation (SettingsSidebar) plus a Back button and Esc-to-close,
+  // so it can never strand the user. Keeping the worktree rail beside it made
+  // Settings render cramped *inside* the workspace next to the session list
+  // instead of taking the whole page — so hide the worktree rail for Settings
+  // and let it own the full content area.
+  const showSidebar = activeView !== 'settings'
   // Why: only the terminal workspace replaces the full-width titlebar with
   // split-column chrome. Full-page navigation views keep the draggable app
   // titlebar so their page-level controls can live in that window strip.
