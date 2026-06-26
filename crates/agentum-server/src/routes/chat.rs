@@ -125,10 +125,14 @@ scope boundaries (in/out), hard constraints, and acceptance criteria. Never re-a
 the user already answered.\n\
 - When the feature is defined well enough to build, STOP asking questions and propose a \
 breakdown: a one-line feature title, then 3–7 concrete tasks (each an issue-style \
-title plus one sentence of detail). Then ask the user to confirm creating them in their \
-tracker (GitHub or Linear).\n\
-- You only interview and propose. Do NOT write code or create anything — task creation \
-happens after the user confirms, in a later step."
+title plus one sentence of detail). Then tell the user to click the \"Create issues\" \
+button below the chat to file them into their tracker (GitHub or Linear).\n\
+- You have NO tools and NO repo access: you cannot read files, run commands, or inspect \
+the project. Never emit tool calls or claim to have looked at anything — you only \
+converse.\n\
+- You do not create the issues yourself, and no other agent will: the \"Create issues\" \
+button files them directly. When the user confirms, point them at that button — never \
+tell them to \"confirm with the system\" or that someone else will take it from there."
     )
 }
 
@@ -190,6 +194,61 @@ fn build_system(auth: &Auth, instructions: &str) -> serde_json::Value {
     }
 }
 
+/// Coerce a `{role, content}` history into a shape Anthropic's `/v1/messages`
+/// accepts: it must begin with a `user` turn, alternate user/assistant, and —
+/// because the default model has no prefill support — END on a `user` turn. A
+/// converged chat transcript ends on the assistant's breakdown proposal, which
+/// the API rejects with "does not support assistant message prefill". We drop
+/// leading non-user turns, merge consecutive same-role turns (joining their
+/// text), and drop any trailing assistant turn (every call in this module wants
+/// a fresh reply to the latest user input, never assistant prefill). An empty or
+/// all-assistant history collapses to an empty vec, which the caller rejects.
+fn sanitize_messages(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    let role_of = |m: &serde_json::Value| {
+        m.get("role")
+            .and_then(|r| r.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let content_of = |m: &serde_json::Value| {
+        m.get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+
+    let mut out: Vec<(String, String)> = Vec::new();
+    for m in messages {
+        let role = role_of(m);
+        let content = content_of(m);
+        // The array must open on a `user` turn — skip anything before the first.
+        if out.is_empty() && role != "user" {
+            continue;
+        }
+        match out.last_mut() {
+            // Consecutive same-role turns aren't allowed — fold the text in.
+            Some((last_role, last_content)) if *last_role == role => {
+                if !content.is_empty() {
+                    if !last_content.is_empty() {
+                        last_content.push_str("\n\n");
+                    }
+                    last_content.push_str(&content);
+                }
+            }
+            _ => out.push((role, content)),
+        }
+    }
+
+    // Never end on an assistant turn (the assistant prefill the model rejects).
+    while out.last().is_some_and(|(role, _)| role != "user") {
+        out.pop();
+    }
+
+    out.into_iter()
+        .map(|(role, content)| json!({ "role": role, "content": content }))
+        .collect()
+}
+
 /// POST `/v1/messages` and return the concatenated assistant text. Owns the
 /// auth-specific headers (x-api-key for an API key; bearer + the oauth beta +
 /// Claude Code UA for an OAuth token), the redacted/typed non-2xx handling, and
@@ -203,6 +262,16 @@ async fn call_anthropic(
     messages: &[serde_json::Value],
     max_tokens: u32,
 ) -> Result<String, ApiError> {
+    // Normalize the history at this single choke point so a malformed transcript
+    // (leading/trailing assistant turn, repeated roles) can never 400 the
+    // upstream call — most importantly the trailing-assistant "prefill" reject
+    // that the default model returns for a converged interview transcript.
+    let messages = sanitize_messages(messages);
+    if messages.is_empty() {
+        return Err(ApiError::BadRequest(
+            "chat: no user message to send to the model".into(),
+        ));
+    }
     let payload = json!({
         "model": model,
         "max_tokens": max_tokens,
@@ -310,6 +379,12 @@ async fn call_anthropic(
 /// that still wraps it in prose or fences despite the instruction not to.
 const EXTRACT_INSTRUCTIONS: &str = "From this conversation, extract the agreed feature task breakdown as a JSON array of objects, each exactly {\"title\": string, \"body\": string} — title = a concise issue title, body = 1–3 sentences. Output ONLY the raw JSON array, no prose, no markdown code fences.";
 
+/// The final user turn appended to the transcript for the extraction call. Ends
+/// the history on a `user` turn (Anthropic rejects a trailing-assistant array —
+/// the v0.33.0 "Create issues" 400) and gives the model a direct last-word
+/// instruction to emit the JSON now.
+const EXTRACT_USER_PROMPT: &str = "Output the agreed task breakdown now as the JSON array described above — only the raw JSON array, nothing else.";
+
 #[derive(Deserialize)]
 struct ChatIssuesRequest {
     /// The conversation to distil into issues (user/assistant turns only).
@@ -366,11 +441,18 @@ async fn chat_issues(
         Auth::Oauth(t) => t.clone(),
     };
 
-    let messages: Vec<serde_json::Value> = body
+    // Build the transcript, then append an explicit final USER turn asking for the
+    // JSON. Two reasons: (1) a converged transcript ends on the assistant's
+    // proposal, and Anthropic rejects a trailing-assistant array ("no prefill") —
+    // ending on a user turn fixes it at the source (sanitize_messages is the
+    // backstop); (2) a direct last-word instruction extracts more reliably than
+    // the system prompt alone.
+    let mut messages: Vec<serde_json::Value> = body
         .messages
         .iter()
         .map(|m| json!({ "role": m.role, "content": m.content }))
         .collect();
+    messages.push(json!({ "role": "user", "content": EXTRACT_USER_PROMPT }));
 
     // Extraction call: lead the system with the Claude Code identity for OAuth
     // (mirrors the interviewer), then the strict-JSON instruction.
@@ -627,6 +709,107 @@ fn redact(msg: &str, token: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pull the `(role, content)` pairs back out of a sanitized array.
+    fn pairs(v: &[serde_json::Value]) -> Vec<(String, String)> {
+        v.iter()
+            .map(|m| {
+                (
+                    m["role"].as_str().unwrap_or_default().to_string(),
+                    m["content"].as_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sanitize_drops_trailing_assistant_prefill() {
+        // The reported v0.33.0 bug: a converged transcript ends on the assistant's
+        // breakdown proposal. The default model rejects a trailing-assistant array
+        // ("does not support assistant message prefill"), so it must be dropped.
+        let msgs = vec![
+            json!({ "role": "user", "content": "add csv export" }),
+            json!({ "role": "assistant", "content": "here is the breakdown" }),
+        ];
+        let out = sanitize_messages(&msgs);
+        assert_eq!(pairs(&out), vec![("user".into(), "add csv export".into())]);
+    }
+
+    #[test]
+    fn sanitize_keeps_an_alternating_history_ending_on_user() {
+        let msgs = vec![
+            json!({ "role": "user", "content": "a" }),
+            json!({ "role": "assistant", "content": "b" }),
+            json!({ "role": "user", "content": "c" }),
+        ];
+        let out = sanitize_messages(&msgs);
+        assert_eq!(
+            pairs(&out),
+            vec![
+                ("user".into(), "a".into()),
+                ("assistant".into(), "b".into()),
+                ("user".into(), "c".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn sanitize_drops_leading_assistant() {
+        // The array must open on a user turn.
+        let msgs = vec![
+            json!({ "role": "assistant", "content": "hi, describe a feature" }),
+            json!({ "role": "user", "content": "ok" }),
+        ];
+        let out = sanitize_messages(&msgs);
+        assert_eq!(pairs(&out), vec![("user".into(), "ok".into())]);
+    }
+
+    #[test]
+    fn sanitize_merges_consecutive_same_role() {
+        // Anthropic requires alternating roles; consecutive same-role turns fold
+        // into one (text joined) rather than 400.
+        let msgs = vec![
+            json!({ "role": "user", "content": "one" }),
+            json!({ "role": "user", "content": "two" }),
+            json!({ "role": "assistant", "content": "ok" }),
+            json!({ "role": "user", "content": "three" }),
+        ];
+        let out = sanitize_messages(&msgs);
+        assert_eq!(
+            pairs(&out),
+            vec![
+                ("user".into(), "one\n\ntwo".into()),
+                ("assistant".into(), "ok".into()),
+                ("user".into(), "three".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn sanitize_collapses_all_assistant_to_empty() {
+        // No user turn at all → empty (the caller turns this into a 400).
+        let msgs = vec![
+            json!({ "role": "assistant", "content": "a" }),
+            json!({ "role": "assistant", "content": "b" }),
+        ];
+        assert!(sanitize_messages(&msgs).is_empty());
+    }
+
+    #[test]
+    fn sanitize_appended_extract_prompt_ends_on_user() {
+        // chat_issues appends EXTRACT_USER_PROMPT to a transcript ending on the
+        // assistant proposal; after sanitize the array is valid and ends on user.
+        let msgs = vec![
+            json!({ "role": "user", "content": "feature" }),
+            json!({ "role": "assistant", "content": "breakdown proposal" }),
+            json!({ "role": "user", "content": EXTRACT_USER_PROMPT }),
+        ];
+        let out = sanitize_messages(&msgs);
+        let p = pairs(&out);
+        assert_eq!(p.len(), 3);
+        assert_eq!(p.last().unwrap().0, "user");
+        assert_eq!(p.last().unwrap().1, EXTRACT_USER_PROMPT);
+    }
 
     #[test]
     fn resolve_provider_defaults_to_github() {
