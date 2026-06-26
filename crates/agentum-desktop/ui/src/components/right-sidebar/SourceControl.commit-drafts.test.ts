@@ -4,16 +4,18 @@ import { Button } from '@/components/ui/button'
 import {
   CompareSummary,
   CompareSummaryToolbarButton,
-  getNextSourceControlViewMode,
-  normalizeSourceControlViewMode,
   pickDefaultSourceControlAgent,
   readCommitDraftForWorktree,
   refreshSourceControlAfterRemoteAction,
-  requestSourceControlViewModePreferenceWrite,
   shouldRenderCommitArea,
-  type SourceControlViewModePreferenceWriteState,
   writeCommitDraftForWorktree
 } from './SourceControl'
+import {
+  getNextSourceControlViewMode,
+  normalizeSourceControlViewMode,
+  requestSourceControlViewModePreferenceWrite,
+  type SourceControlViewModePreferenceWriteState
+} from './source-control-view-mode'
 import { buildResolveConflictsPrompt } from './source-control-prompts'
 import type { GitBranchCompareSummary } from '../../../../shared/types'
 

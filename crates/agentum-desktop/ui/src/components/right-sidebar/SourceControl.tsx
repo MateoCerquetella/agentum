@@ -1,5 +1,6 @@
 import { api } from '@/tauri'
 import { appendCommitFailureCustomInstruction, buildFixCommitFailurePrompt, buildResolveConflictsPrompt } from './source-control-prompts'
+import { normalizeSourceControlViewMode, requestSourceControlViewModePreferenceWrite, type SourceControlViewModePreferenceWriteState } from './source-control-view-mode'
 /* eslint-disable max-lines */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -163,7 +164,6 @@ import type {
   GitConflictKind,
   GitConflictOperation,
   GitStatusEntry,
-  GlobalSettings,
   SourceControlViewMode,
   TuiAgent
 } from '../../../../shared/types'
@@ -370,60 +370,6 @@ export type PullRequestGenerationRecord = {
 
 type PullRequestGenerationRecords = Record<string, PullRequestGenerationRecord>
 
-export function normalizeSourceControlViewMode(value: unknown): SourceControlViewMode {
-  return value === 'tree' || value === 'list' ? value : 'list'
-}
-
-export function getNextSourceControlViewMode(mode: SourceControlViewMode): SourceControlViewMode {
-  return mode === 'tree' ? 'list' : 'tree'
-}
-
-export type SourceControlViewModePreferenceWriteState = {
-  writeChain: Promise<void>
-  writeSeq: number
-}
-
-export function requestSourceControlViewModePreferenceWrite({
-  hydrated,
-  currentMode,
-  writeState,
-  setOptimisticMode,
-  updateSettings
-}: {
-  hydrated: boolean
-  currentMode: SourceControlViewMode
-  writeState: SourceControlViewModePreferenceWriteState
-  setOptimisticMode: (mode: SourceControlViewMode | null) => void
-  updateSettings: (
-    updates: Pick<GlobalSettings, 'sourceControlViewMode'>
-  ) => Promise<GlobalSettings | void>
-}): SourceControlViewMode | null {
-  if (!hydrated) {
-    return null
-  }
-  const next = getNextSourceControlViewMode(currentMode)
-  const writeSeq = writeState.writeSeq + 1
-  writeState.writeSeq = writeSeq
-  setOptimisticMode(next)
-
-  // Why: settings writes cross IPC. Queue them so rapid toolbar clicks keep
-  // the user's final intent as the persisted value even if earlier writes
-  // would otherwise resolve after later clicks.
-  const write = writeState.writeChain
-    .catch(() => undefined)
-    .then(() => updateSettings({ sourceControlViewMode: next }))
-    .then(() => undefined)
-  writeState.writeChain = write
-  void write
-    .finally(() => {
-      if (writeState.writeSeq === writeSeq) {
-        setOptimisticMode(null)
-      }
-    })
-    .catch(() => undefined)
-
-  return next
-}
 
 type PendingDiscardConfirmation =
   | { kind: 'entry'; entry: GitStatusEntry }
