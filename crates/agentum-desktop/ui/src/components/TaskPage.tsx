@@ -223,6 +223,7 @@ import {
   type LinearGroupSection,
   type LinearOrderBy
 } from './task-page/linear-helpers'
+import { formatRelativeTime } from './task-page/format'
 
 type TaskSource = TaskProvider
 
@@ -302,33 +303,6 @@ const GITHUB_TASK_STICKY_TITLE_CELL_CLASS = cn(
   GITHUB_TASK_ROW_SURFACE_CLASS,
   GITHUB_TASK_ROW_HOVER_SURFACE_CLASS
 )
-
-// Why: Intl.RelativeTimeFormat allocation is non-trivial, and previously we
-// built a new formatter per work-item row render. Hoisting to module scope
-// means all rows share one instance — zero per-row allocation cost.
-const relativeTimeFormatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
-
-function formatRelativeTime(input: string): string {
-  const date = new Date(input)
-  if (Number.isNaN(date.getTime())) {
-    return 'recently'
-  }
-
-  const diffMs = date.getTime() - Date.now()
-  const diffMinutes = Math.round(diffMs / 60_000)
-
-  if (Math.abs(diffMinutes) < 60) {
-    return relativeTimeFormatter.format(diffMinutes, 'minute')
-  }
-
-  const diffHours = Math.round(diffMinutes / 60)
-  if (Math.abs(diffHours) < 24) {
-    return relativeTimeFormatter.format(diffHours, 'hour')
-  }
-
-  const diffDays = Math.round(diffHours / 24)
-  return relativeTimeFormatter.format(diffDays, 'day')
-}
 
 type LinearViewMode = 'list' | 'board'
 type LinearMode = 'issues' | 'projects' | 'views'
