@@ -33,6 +33,7 @@ import { VoicePane } from './VoicePane'
 import { SshPane } from './SshPane'
 import { ExperimentalPane } from './ExperimentalPane'
 import { AgentsPane } from './AgentsPane'
+import { McpPane } from './McpPane'
 import { OrchestrationPane } from './OrchestrationPane'
 import { BrowserVerificationLoopPane } from './BrowserVerificationLoopPane'
 import { AccountsPane } from './AccountsPane'
@@ -843,7 +844,11 @@ function Settings(): React.JSX.Element {
                 >
                   {isSectionMounted('agents-automation') ? (
                     <div className="space-y-10">
-                      <OrchestrationPane />
+                      <McpPane />
+
+                      <div className="border-t border-border/60 pt-8">
+                        <OrchestrationPane />
+                      </div>
 
                       <div className="border-t border-border/60 pt-8">
                         <BrowserVerificationLoopPane />

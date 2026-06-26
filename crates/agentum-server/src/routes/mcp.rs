@@ -19,18 +19,70 @@
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::AppState;
+use crate::error::ApiError;
 
 /// MCP protocol version we default to when a client doesn't pin one. We echo
 /// the client's requested version when present (below) for max compatibility.
 const DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
 
+/// Master switch (default ON) for whether agentum's own MCP server is wired into
+/// the agents agentum launches. Read at provision time in `mcp_provision::provision`;
+/// written by the desktop Settings → Agent MCP toggle via `/api/mcp/settings`.
+/// When off, NO agentum tools (sessions, worktrees, browser, computer,
+/// orchestration, harness) reach any agent. Absent = on, so existing setups are
+/// unchanged. (The orchestration gate still nests under this.)
+pub const MCP_ENABLED_SETTING: &str = "mcp.enabled";
+
 pub fn router() -> Router<AppState> {
-    Router::new().route("/mcp", post(handle).get(handle_get))
+    Router::new()
+        .route("/mcp", post(handle).get(handle_get))
+        .route(
+            "/api/mcp/settings",
+            get(get_mcp_settings).put(put_mcp_settings),
+        )
+}
+
+/// The agentum-MCP master-switch state — what the desktop toggle reflects and
+/// what `mcp_provision::provision` reads to decide whether to wire the server.
+#[derive(Serialize)]
+struct McpSettings {
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct McpSettingsReq {
+    enabled: bool,
+}
+
+/// `GET /api/mcp/settings` — is agentum's MCP wired into agents? (default on)
+async fn get_mcp_settings(State(state): State<AppState>) -> Result<Json<McpSettings>, ApiError> {
+    let enabled = state
+        .store
+        .setting_get_bool(MCP_ENABLED_SETTING, true)
+        .await?;
+    Ok(Json(McpSettings { enabled }))
+}
+
+/// `PUT /api/mcp/settings` — flip the master switch. Takes effect on the next
+/// agent launch (provisioning is launch-time, unlike the per-call orchestration
+/// gate), so already-running agents keep the tools they were launched with.
+async fn put_mcp_settings(
+    State(state): State<AppState>,
+    Json(req): Json<McpSettingsReq>,
+) -> Result<Json<McpSettings>, ApiError> {
+    state
+        .store
+        .setting_set_bool(MCP_ENABLED_SETTING, req.enabled)
+        .await?;
+    Ok(Json(McpSettings {
+        enabled: req.enabled,
+    }))
 }
 
 /// We don't push server-initiated messages, so there's no SSE channel to open.
@@ -932,6 +984,33 @@ async fn tool_harness_log_decision(args: &Value) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn mcp_master_switch_defaults_on_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = agentum_store::Store::open(&dir.path().join("t.db"))
+            .await
+            .unwrap();
+        // Default ON: a fresh install must wire agentum's MCP. Turning it off has
+        // to be an explicit opt-out, never the mere absence of the setting —
+        // otherwise every agent would silently lose agentum's tools.
+        assert!(
+            store
+                .setting_get_bool(MCP_ENABLED_SETTING, true)
+                .await
+                .unwrap()
+        );
+        store
+            .setting_set_bool(MCP_ENABLED_SETTING, false)
+            .await
+            .unwrap();
+        assert!(
+            !store
+                .setting_get_bool(MCP_ENABLED_SETTING, true)
+                .await
+                .unwrap()
+        );
+    }
 
     fn tool_names(orchestration_enabled: bool) -> Vec<String> {
         tool_specs(orchestration_enabled)
