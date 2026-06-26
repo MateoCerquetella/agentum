@@ -225,7 +225,7 @@ import {
   type LinearGroupSection,
   type LinearOrderBy
 } from './task-page/linear-helpers'
-import { formatRelativeTime } from './task-page/format'
+import { formatRelativeTime } from '@/lib/relative-time'
 import {
   buildRequestedReviewUsers,
   formatPRDelta,

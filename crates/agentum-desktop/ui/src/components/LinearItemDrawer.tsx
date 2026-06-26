@@ -1,4 +1,5 @@
 import { api } from '@/tauri'
+import { formatRelativeTime } from '@/lib/relative-time'
 /* eslint-disable max-lines -- Why: the Linear drawer co-locates read-only preview, edit controls, and comment input so the full issue surface stays in one file. */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -93,25 +94,6 @@ function LinearEditChipAdornment({
   }
 
   return <ChevronDown className="size-3 shrink-0 opacity-55" />
-}
-
-function formatRelativeTime(input: string): string {
-  const date = new Date(input)
-  if (Number.isNaN(date.getTime())) {
-    return 'recently'
-  }
-  const diffMs = date.getTime() - Date.now()
-  const diffMinutes = Math.round(diffMs / 60_000)
-  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
-  if (Math.abs(diffMinutes) < 60) {
-    return formatter.format(diffMinutes, 'minute')
-  }
-  const diffHours = Math.round(diffMinutes / 60)
-  if (Math.abs(diffHours) < 24) {
-    return formatter.format(diffHours, 'hour')
-  }
-  const diffDays = Math.round(diffHours / 24)
-  return formatter.format(diffDays, 'day')
 }
 
 type LinearItemDrawerProps = {

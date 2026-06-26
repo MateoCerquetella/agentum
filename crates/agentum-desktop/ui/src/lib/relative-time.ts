@@ -1,6 +1,6 @@
-// Why: Intl.RelativeTimeFormat allocation is non-trivial, and previously we
-// built a new formatter per work-item row render. Hoisting to module scope
-// means all rows share one instance — zero per-row allocation cost.
+// Why: Intl.RelativeTimeFormat allocation is non-trivial. Hoisting one shared
+// instance to module scope means every caller reuses it — zero per-call
+// allocation cost. (Previously several pages each built a formatter per render.)
 const relativeTimeFormatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
 
 export function formatRelativeTime(input: string): string {
