@@ -33,6 +33,11 @@ export const SCHEMA_VERSION = 1
 export const DEFAULT_APP_FONT_FAMILY = 'Geist'
 export const DEFAULT_SHOW_SLEEPING_WORKSPACES = true
 export const DEFAULT_HIDE_SLEEPING_WORKSPACES = false
+// Why: the repo's main-branch row is the base everyone branches off, so it's
+// noise in the day-to-day workspace list. Hidden by default; the "Show default
+// branches" toggle (and the empty-sidebar recovery hint) bring it back. Treated
+// as the baseline so the filter badge only lights up when a user deviates.
+export const DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE = true
 export const DEFAULT_AGENT_ACTIVITY_DISPLAY_MODE: AgentActivityDisplayMode = 'compact'
 
 export function normalizeAgentActivityDisplayMode(value: unknown): AgentActivityDisplayMode {
@@ -393,7 +398,7 @@ export function getDefaultUIState(): PersistedUIState {
     showActiveOnly: false,
     hideSleepingWorkspaces: DEFAULT_HIDE_SLEEPING_WORKSPACES,
     showSleepingWorkspaces: DEFAULT_SHOW_SLEEPING_WORKSPACES,
-    hideDefaultBranchWorkspace: false,
+    hideDefaultBranchWorkspace: DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE,
     showDotfilesByWorktree: {},
     filterRepoIds: [],
     collapsedGroups: [],

@@ -1,5 +1,6 @@
 import {
   DEFAULT_HIDE_SLEEPING_WORKSPACES,
+  DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE,
   DEFAULT_SHOW_SLEEPING_WORKSPACES,
   DEFAULT_STATUS_BAR_ITEMS,
   DEFAULT_WORKTREE_CARD_PROPERTIES
@@ -43,7 +44,7 @@ export function getStartupErrorFallbackUI(uiHydrated: boolean): PersistedUIState
     showActiveOnly: false,
     hideSleepingWorkspaces: DEFAULT_HIDE_SLEEPING_WORKSPACES,
     showSleepingWorkspaces: DEFAULT_SHOW_SLEEPING_WORKSPACES,
-    hideDefaultBranchWorkspace: false,
+    hideDefaultBranchWorkspace: DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE,
     filterRepoIds: [],
     collapsedGroups: [],
     uiZoomLevel: 0,

@@ -18,9 +18,9 @@ import {
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { AgentActivityDisplayMode, WorktreeCardProperty } from '../../../../shared/types'
-import { DEFAULT_SHOW_SLEEPING_WORKSPACES } from '../../../../shared/constants'
 import SidebarRepositoryFilterSection from './SidebarRepositoryFilterSection'
 import SidebarWorkspaceFilterSection from './SidebarWorkspaceFilterSection'
+import { deriveWorkspaceFilterSummary } from './workspace-filter-summary'
 
 type SidebarWorkspaceOptionsMenuProps = {
   preserveWorkspaceBoardOpen?: boolean
@@ -113,11 +113,11 @@ const SidebarWorkspaceOptionsMenu = React.memo(function SidebarWorkspaceOptionsM
     }
     return count
   }, [repos, filterRepoIds])
-  const hasRepoFilter = selectedCount > 0
-  const hasSleepingFilter = showSleepingWorkspaces !== DEFAULT_SHOW_SLEEPING_WORKSPACES
-  const hasAnyFilter = hasSleepingFilter || hideDefaultBranchWorkspace || hasRepoFilter
-  const activeFilterCount =
-    (hasSleepingFilter ? 1 : 0) + (hideDefaultBranchWorkspace ? 1 : 0) + selectedCount
+  const { hasAnyFilter, activeFilterCount } = deriveWorkspaceFilterSummary({
+    showSleepingWorkspaces,
+    hideDefaultBranchWorkspace,
+    selectedRepoCount: selectedCount
+  })
   const activeFilterLabel = `${activeFilterCount} ${activeFilterCount === 1 ? 'filter' : 'filters'}`
   const sortLabel = SORT_OPTIONS.find((opt) => opt.id === sortBy)?.label ?? 'Sort'
   const cardLayout = settings?.experimentalCompactWorktreeCards ? 'compact' : 'detailed'
