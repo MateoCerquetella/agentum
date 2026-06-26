@@ -28,6 +28,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/
 import { ClaudeUsageLoadingState } from './ClaudeUsageLoadingState'
 import { CodexUsageDailyChart } from './CodexUsageDailyChart'
 import { StatCard } from './StatCard'
+import { Badge } from '../ui/badge'
 
 const RANGE_OPTIONS: OpenCodeUsageRange[] = ['7d', '30d', '90d', 'all']
 const SCOPE_OPTIONS: { value: OpenCodeUsageScope; label: string }[] = [
@@ -78,7 +79,7 @@ function formatSessionTime(timestamp: string): string {
   })
 }
 
-export function OpenCodeUsagePane(): React.JSX.Element {
+export function OpenCodeUsagePaneImpl(): React.JSX.Element {
   const scanState = useAppStore((state) => state.openCodeUsageScanState)
   const summary = useAppStore((state) => state.openCodeUsageSummary)
   const daily = useAppStore((state) => state.openCodeUsageDaily)
@@ -372,6 +373,27 @@ export function OpenCodeUsagePane(): React.JSX.Element {
           </section>
         </>
       )}
+    </div>
+  )
+}
+
+// Why: OpenCode usage scanning isn't ported yet (Phase 1 shipped Claude + Codex).
+// Render a deliberate "Soon" state. OpenCodeUsagePaneImpl above keeps the full
+// pane intact (exported) so re-enabling is a one-line swap once the scanner lands.
+export function OpenCodeUsagePane(): React.JSX.Element {
+  return (
+    <div className="rounded-lg border border-border/60 bg-card/40 p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1.5">
+          <h3 className="text-sm font-semibold text-foreground">OpenCode Usage Tracking</h3>
+          <p className="text-sm text-muted-foreground">
+            OpenCode usage analytics are coming soon.
+          </p>
+        </div>
+        <Badge variant="outline" className="shrink-0">
+          Soon
+        </Badge>
+      </div>
     </div>
   )
 }

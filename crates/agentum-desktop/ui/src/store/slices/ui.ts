@@ -846,7 +846,9 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       return next ? { acknowledgedAgentsByPaneKey: next } : s
     }),
 
-  activeView: 'terminal',
+  // Why: Mission Control (the stats dashboard) is the home surface and opens on
+  // every cold start. activeView is NOT persisted, so this initializer governs.
+  activeView: 'activity',
   previousViewBeforeTasks: 'terminal',
   previousViewBeforeSettings: 'terminal',
   previousViewBeforeActivity: 'terminal',

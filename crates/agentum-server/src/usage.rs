@@ -835,6 +835,1024 @@ impl<'de> Deserialize<'de> for CodexUsageWindow {
     }
 }
 
+// ===========================================================================
+// Stats aggregation (Mission Control). Separate from the 5h-window chip above:
+// the chip lumps `billable = input+output+cache_create` and drops cache_read;
+// the stats surface needs all four token classes kept apart, plus project /
+// session / model attribution. Pure parsers + pure aggregators (testable
+// without the filesystem) sit under thin path-resolving wrappers.
+// ===========================================================================
+
+/// One Claude usage-bearing assistant record, fully attributed.
+pub(crate) struct ParsedClaudeRecord {
+    pub ts_ms: i64,
+    pub day: String,
+    pub project: String,
+    pub project_label: String,
+    pub branch: Option<String>,
+    pub session_id: String,
+    pub model: Option<String>,
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+}
+
+/// Day key = the UTC calendar day, sliced straight off the ISO-8601 prefix
+/// (`YYYY-MM-DD`). Cheaper and timezone-stable vs. recomputing from epoch ms.
+fn iso_day(ts: &str) -> Option<String> {
+    if ts.len() >= 10 && ts.as_bytes()[4] == b'-' && ts.as_bytes()[7] == b'-' {
+        Some(ts[0..10].to_string())
+    } else {
+        None
+    }
+}
+
+/// Human label for a project path = its final path segment.
+fn project_label_from_path(cwd: &str) -> String {
+    cwd.rsplit('/')
+        .find(|s| !s.is_empty())
+        .unwrap_or(cwd)
+        .to_string()
+}
+
+pub fn parse_claude_usage_record(line: &str) -> Option<ParsedClaudeRecord> {
+    if !line.contains("\"usage\"") {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    let msg = v.get("message")?;
+    let usage = msg.get("usage")?;
+    let g = |k: &str| usage.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+    let input = g("input_tokens");
+    let output = g("output_tokens");
+    let cache_write = g("cache_creation_input_tokens");
+    let cache_read = g("cache_read_input_tokens");
+    if input + output + cache_write + cache_read == 0 {
+        return None;
+    }
+    let ts = v.get("timestamp").and_then(|t| t.as_str())?;
+    let ts_ms = parse_iso8601_ms(ts)?;
+    let day = iso_day(ts)?;
+    let cwd = v
+        .get("cwd")
+        .and_then(|c| c.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some(ParsedClaudeRecord {
+        ts_ms,
+        day,
+        project_label: project_label_from_path(&cwd),
+        project: cwd,
+        branch: v
+            .get("gitBranch")
+            .and_then(|b| b.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from),
+        session_id: v
+            .get("sessionId")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+        model: msg.get("model").and_then(|m| m.as_str()).map(String::from),
+        input,
+        output,
+        cache_read,
+        cache_write,
+    })
+}
+
+/// One Codex `token_count` record's per-turn delta (`last_token_usage`).
+pub(crate) struct ParsedCodexRecord {
+    pub ts_ms: i64,
+    pub day: String,
+    pub session_id: String,
+    pub model: Option<String>,
+    pub input: u64,
+    pub cached_input: u64,
+    pub output: u64,
+    pub reasoning_output: u64,
+    pub total: u64,
+}
+
+pub fn parse_codex_usage_record(
+    line: &str,
+    session_id: &str,
+    model: Option<&str>,
+) -> Option<ParsedCodexRecord> {
+    if !line.contains("token_count") {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    let payload = v.get("payload")?;
+    if payload.get("type").and_then(|t| t.as_str()) != Some("token_count") {
+        return None;
+    }
+    let last = payload.get("info")?.get("last_token_usage")?;
+    let g = |k: &str| last.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+    let input = g("input_tokens");
+    let cached_input = g("cached_input_tokens");
+    let output = g("output_tokens");
+    let reasoning_output = g("reasoning_output_tokens");
+    let total = g("total_tokens");
+    if total == 0 && input + output == 0 {
+        return None;
+    }
+    let ts = v.get("timestamp").and_then(|t| t.as_str())?;
+    Some(ParsedCodexRecord {
+        ts_ms: parse_iso8601_ms(ts)?,
+        day: iso_day(ts)?,
+        session_id: session_id.to_string(),
+        model: model.map(String::from),
+        input,
+        cached_input,
+        output,
+        reasoning_output,
+        total,
+    })
+}
+
+/// Reporting window the UI requests.
+pub enum UsageRange {
+    D7,
+    D30,
+    D90,
+    All,
+}
+
+impl UsageRange {
+    pub fn from_str(s: &str) -> UsageRange {
+        match s {
+            "7d" => UsageRange::D7,
+            "30d" => UsageRange::D30,
+            "90d" => UsageRange::D90,
+            _ => UsageRange::All,
+        }
+    }
+
+    /// Inclusive lower bound in epoch-ms, or `None` for `All`.
+    pub fn floor_ms(&self, now_ms: i64) -> Option<i64> {
+        let days = match self {
+            UsageRange::D7 => 7,
+            UsageRange::D30 => 30,
+            UsageRange::D90 => 90,
+            UsageRange::All => return None,
+        };
+        Some(now_ms - days * 86_400_000)
+    }
+}
+
+// ===========================================================================
+// Task 2: Claude stats aggregation — contracts + pure cores + wrappers
+// ===========================================================================
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeUsageSummary {
+    pub scope: String,
+    pub range: String,
+    pub sessions: u64,
+    pub turns: u64,
+    pub zero_cache_read_turns: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub cache_reuse_rate: Option<f64>,
+    pub estimated_cost_usd: Option<f64>,
+    pub top_model: Option<String>,
+    pub top_project: Option<String>,
+    pub has_any_claude_data: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeUsageDailyPoint {
+    pub day: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeUsageBreakdownRow {
+    pub key: String,
+    pub label: String,
+    pub sessions: u64,
+    pub turns: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub estimated_cost_usd: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeUsageSessionRow {
+    pub session_id: String,
+    pub last_active_at: String,
+    pub duration_minutes: u64,
+    pub project_label: String,
+    pub branch: Option<String>,
+    pub model: Option<String>,
+    pub turns: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+}
+
+// Per-Mtok USD rates by model family. cache_read ≈ 0.1× input (Anthropic
+// standard). ESTIMATE only — unknown model ⇒ None (no contribution).
+struct ClaudeRates {
+    input: f64,
+    output: f64,
+    cache_write: f64,
+    cache_read: f64,
+}
+
+fn claude_rates(model: &str) -> Option<ClaudeRates> {
+    let m = model.to_ascii_lowercase();
+    if m.contains("opus") {
+        Some(ClaudeRates {
+            input: 15.0,
+            output: 75.0,
+            cache_write: 18.75,
+            cache_read: 1.50,
+        })
+    } else if m.contains("sonnet") {
+        Some(ClaudeRates {
+            input: 3.0,
+            output: 15.0,
+            cache_write: 3.75,
+            cache_read: 0.30,
+        })
+    } else if m.contains("haiku") {
+        Some(ClaudeRates {
+            input: 0.80,
+            output: 4.0,
+            cache_write: 1.0,
+            cache_read: 0.08,
+        })
+    } else {
+        None
+    }
+}
+
+fn claude_cost(model: Option<&str>, input: u64, output: u64, cw: u64, cr: u64) -> Option<f64> {
+    let r = claude_rates(model?)?;
+    let m = 1_000_000.0_f64;
+    Some(
+        input as f64 * r.input / m
+            + output as f64 * r.output / m
+            + cw as f64 * r.cache_write / m
+            + cr as f64 * r.cache_read / m,
+    )
+}
+
+fn claude_in_range(
+    records: Vec<ParsedClaudeRecord>,
+    range: UsageRange,
+    now_ms: i64,
+) -> Vec<ParsedClaudeRecord> {
+    match range.floor_ms(now_ms) {
+        Some(floor) => records.into_iter().filter(|r| r.ts_ms >= floor).collect(),
+        None => records,
+    }
+}
+
+fn range_label(r: &UsageRange) -> String {
+    match r {
+        UsageRange::D7 => "7d",
+        UsageRange::D30 => "30d",
+        UsageRange::D90 => "90d",
+        UsageRange::All => "all",
+    }
+    .to_string()
+}
+
+// ---- pure aggregation cores (no filesystem, fully testable) ---------------
+
+pub(crate) fn claude_usage_summary_from_records(
+    records: Vec<ParsedClaudeRecord>,
+    scope: &str,
+    range: UsageRange,
+    now_ms: i64,
+) -> ClaudeUsageSummary {
+    let range_str = range_label(&range);
+    let records = claude_in_range(records, range, now_ms);
+    let mut sessions = std::collections::BTreeSet::new();
+    let (mut input, mut output, mut cr, mut cw, mut zero_cr) = (0u64, 0u64, 0u64, 0u64, 0u64);
+    let mut cost = 0.0_f64;
+    let mut cost_any = false;
+    let mut by_model: std::collections::BTreeMap<String, u64> = Default::default();
+    let mut by_project: std::collections::BTreeMap<String, u64> = Default::default();
+    for r in &records {
+        sessions.insert(r.session_id.clone());
+        input += r.input;
+        output += r.output;
+        cr += r.cache_read;
+        cw += r.cache_write;
+        if r.cache_read == 0 {
+            zero_cr += 1;
+        }
+        if let Some(c) = claude_cost(
+            r.model.as_deref(),
+            r.input,
+            r.output,
+            r.cache_write,
+            r.cache_read,
+        ) {
+            cost += c;
+            cost_any = true;
+        }
+        let tot = r.input + r.output + r.cache_read + r.cache_write;
+        if let Some(m) = &r.model {
+            *by_model.entry(m.clone()).or_default() += tot;
+        }
+        *by_project.entry(r.project_label.clone()).or_default() += tot;
+    }
+    let top = |m: &std::collections::BTreeMap<String, u64>| -> Option<String> {
+        m.iter().max_by_key(|(_, v)| **v).map(|(k, _)| k.clone())
+    };
+    let denom = cr + input;
+    ClaudeUsageSummary {
+        scope: scope.to_string(),
+        range: range_str,
+        sessions: sessions.len() as u64,
+        turns: records.len() as u64,
+        zero_cache_read_turns: zero_cr,
+        input_tokens: input,
+        output_tokens: output,
+        cache_read_tokens: cr,
+        cache_write_tokens: cw,
+        cache_reuse_rate: if denom > 0 {
+            Some(cr as f64 / denom as f64)
+        } else {
+            None
+        },
+        estimated_cost_usd: cost_any.then_some(cost),
+        top_model: top(&by_model),
+        top_project: top(&by_project),
+        has_any_claude_data: !records.is_empty(),
+    }
+}
+
+pub(crate) fn claude_usage_daily_from_records(
+    records: Vec<ParsedClaudeRecord>,
+) -> Vec<ClaudeUsageDailyPoint> {
+    let mut by_day: std::collections::BTreeMap<String, ClaudeUsageDailyPoint> = Default::default();
+    for r in records {
+        let e = by_day
+            .entry(r.day.clone())
+            .or_insert(ClaudeUsageDailyPoint {
+                day: r.day.clone(),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+            });
+        e.input_tokens += r.input;
+        e.output_tokens += r.output;
+        e.cache_read_tokens += r.cache_read;
+        e.cache_write_tokens += r.cache_write;
+    }
+    // BTreeMap iterates in ascending key order → ascending by day.
+    by_day.into_values().collect()
+}
+
+pub(crate) fn claude_usage_breakdown_from_records(
+    records: Vec<ParsedClaudeRecord>,
+    kind: &str,
+) -> Vec<ClaudeUsageBreakdownRow> {
+    struct Acc {
+        label: String,
+        sessions: std::collections::BTreeSet<String>,
+        turns: u64,
+        input: u64,
+        output: u64,
+        cr: u64,
+        cw: u64,
+        cost: f64,
+        cost_any: bool,
+    }
+    let mut groups: std::collections::BTreeMap<String, Acc> = Default::default();
+    for r in records {
+        let (key, label) = if kind == "project" {
+            (r.project_label.clone(), r.project_label.clone())
+        } else {
+            // Default to "model" breakdown; unknown model ⇒ "unknown".
+            let m = r.model.clone().unwrap_or_else(|| "unknown".to_string());
+            (m.clone(), m)
+        };
+        let a = groups.entry(key.clone()).or_insert(Acc {
+            label,
+            sessions: Default::default(),
+            turns: 0,
+            input: 0,
+            output: 0,
+            cr: 0,
+            cw: 0,
+            cost: 0.0,
+            cost_any: false,
+        });
+        a.sessions.insert(r.session_id.clone());
+        a.turns += 1;
+        a.input += r.input;
+        a.output += r.output;
+        a.cr += r.cache_read;
+        a.cw += r.cache_write;
+        if let Some(c) = claude_cost(
+            r.model.as_deref(),
+            r.input,
+            r.output,
+            r.cache_write,
+            r.cache_read,
+        ) {
+            a.cost += c;
+            a.cost_any = true;
+        }
+    }
+    let mut rows: Vec<ClaudeUsageBreakdownRow> = groups
+        .into_iter()
+        .map(|(key, a)| ClaudeUsageBreakdownRow {
+            key,
+            label: a.label,
+            sessions: a.sessions.len() as u64,
+            turns: a.turns,
+            input_tokens: a.input,
+            output_tokens: a.output,
+            cache_read_tokens: a.cr,
+            cache_write_tokens: a.cw,
+            estimated_cost_usd: a.cost_any.then_some(a.cost),
+        })
+        .collect();
+    // Highest total-token rows first.
+    rows.sort_by(|x, y| {
+        (y.input_tokens + y.output_tokens + y.cache_read_tokens + y.cache_write_tokens)
+            .cmp(&(x.input_tokens + x.output_tokens + x.cache_read_tokens + x.cache_write_tokens))
+    });
+    rows
+}
+
+pub(crate) fn claude_usage_recent_sessions_from_records(
+    records: Vec<ParsedClaudeRecord>,
+    limit: usize,
+) -> Vec<ClaudeUsageSessionRow> {
+    struct Acc {
+        first_ms: i64,
+        last_ms: i64,
+        last_day: String,
+        project_label: String,
+        branch: Option<String>,
+        model: Option<String>,
+        turns: u64,
+        input: u64,
+        output: u64,
+        cr: u64,
+        cw: u64,
+    }
+    let mut by_session: std::collections::BTreeMap<String, Acc> = Default::default();
+    for r in records {
+        let a = by_session.entry(r.session_id.clone()).or_insert(Acc {
+            first_ms: r.ts_ms,
+            last_ms: r.ts_ms,
+            last_day: r.day.clone(),
+            project_label: r.project_label.clone(),
+            branch: r.branch.clone(),
+            model: r.model.clone(),
+            turns: 0,
+            input: 0,
+            output: 0,
+            cr: 0,
+            cw: 0,
+        });
+        a.first_ms = a.first_ms.min(r.ts_ms);
+        if r.ts_ms >= a.last_ms {
+            a.last_ms = r.ts_ms;
+            a.last_day = r.day.clone();
+            // Track model from the latest record (most representative).
+            a.model = r.model.clone();
+        }
+        a.turns += 1;
+        a.input += r.input;
+        a.output += r.output;
+        a.cr += r.cache_read;
+        a.cw += r.cache_write;
+    }
+    let mut rows: Vec<(i64, ClaudeUsageSessionRow)> = by_session
+        .into_iter()
+        .map(|(session_id, a)| {
+            (
+                a.last_ms,
+                ClaudeUsageSessionRow {
+                    session_id,
+                    // The record dropped the raw ISO string; the day string
+                    // (YYYY-MM-DD) is sufficient precision for the UI's
+                    // "last active" label.
+                    last_active_at: a.last_day,
+                    duration_minutes: ((a.last_ms - a.first_ms).max(0) / 60_000) as u64,
+                    project_label: a.project_label,
+                    branch: a.branch,
+                    model: a.model,
+                    turns: a.turns,
+                    input_tokens: a.input,
+                    output_tokens: a.output,
+                    cache_read_tokens: a.cr,
+                    cache_write_tokens: a.cw,
+                },
+            )
+        })
+        .collect();
+    // Most-recently-active sessions first.
+    rows.sort_by(|x, y| y.0.cmp(&x.0));
+    rows.into_iter().take(limit).map(|(_, row)| row).collect()
+}
+
+// ---- path-resolving public wrappers (desktop commands call these) ----------
+
+fn claude_log_files() -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if let Some(home) = home_dir() {
+        for sub in [".claude/projects", ".claude/transcripts"] {
+            let root = home.join(sub);
+            if root.exists() {
+                files.extend(walk_jsonl(&root));
+            }
+        }
+    }
+    files
+}
+
+fn collect_claude_records() -> Vec<ParsedClaudeRecord> {
+    let mut out = Vec::new();
+    for path in claude_log_files() {
+        let file = match File::open(&path) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        for line in BufReader::new(file).lines().map_while(Result::ok) {
+            if let Some(r) = parse_claude_usage_record(&line) {
+                out.push(r);
+            }
+        }
+    }
+    out
+}
+
+/// Returns true when the user has any Claude Code history on this machine.
+pub fn claude_has_any_data() -> bool {
+    home_dir()
+        .map(|h| h.join(".claude/projects").exists() || h.join(".claude/transcripts").exists())
+        .unwrap_or(false)
+}
+
+pub fn claude_usage_summary(scope: &str, range: &str) -> ClaudeUsageSummary {
+    claude_usage_summary_from_records(
+        collect_claude_records(),
+        scope,
+        UsageRange::from_str(range),
+        now_ms(),
+    )
+}
+
+pub fn claude_usage_daily(_scope: &str, range: &str) -> Vec<ClaudeUsageDailyPoint> {
+    // TODO: scope=="agentum" treated as "all" in v1 — no path filter yet.
+    claude_usage_daily_from_records(claude_in_range(
+        collect_claude_records(),
+        UsageRange::from_str(range),
+        now_ms(),
+    ))
+}
+
+pub fn claude_usage_breakdown(
+    _scope: &str,
+    range: &str,
+    kind: &str,
+) -> Vec<ClaudeUsageBreakdownRow> {
+    // TODO: scope=="agentum" treated as "all" in v1 — no path filter yet.
+    claude_usage_breakdown_from_records(
+        claude_in_range(
+            collect_claude_records(),
+            UsageRange::from_str(range),
+            now_ms(),
+        ),
+        kind,
+    )
+}
+
+pub fn claude_usage_recent_sessions(
+    _scope: &str,
+    range: &str,
+    limit: usize,
+) -> Vec<ClaudeUsageSessionRow> {
+    // TODO: scope=="agentum" treated as "all" in v1 — no path filter yet.
+    claude_usage_recent_sessions_from_records(
+        claude_in_range(
+            collect_claude_records(),
+            UsageRange::from_str(range),
+            now_ms(),
+        ),
+        limit,
+    )
+}
+
+// ===========================================================================
+// Task 3: Codex stats aggregation — contracts + pure cores + wrappers
+//
+// Codex pricing is subscription-based with no public per-model billing API,
+// so estimated_cost_usd is always None and has_inferred_pricing is always true.
+// Model is extracted from the first `turn_context` record (payload.model);
+// falls back to None if absent — breakdown groups under the model key "codex".
+// ===========================================================================
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexUsageSummary {
+    pub scope: String,
+    pub range: String,
+    pub sessions: u64,
+    pub events: u64,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
+    pub total_tokens: u64,
+    /// Always None — no per-model Codex billing source.
+    pub estimated_cost_usd: Option<f64>,
+    pub top_model: Option<String>,
+    pub top_project: Option<String>,
+    pub has_any_codex_data: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexUsageDailyPoint {
+    pub day: String,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
+    pub total_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexUsageBreakdownRow {
+    pub key: String,
+    pub label: String,
+    pub sessions: u64,
+    pub events: u64,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
+    pub total_tokens: u64,
+    /// Always None — subscription pricing can't be decomposed per-call.
+    pub estimated_cost_usd: Option<f64>,
+    pub has_inferred_pricing: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexUsageSessionRow {
+    pub session_id: String,
+    pub last_active_at: String,
+    pub duration_minutes: u64,
+    pub project_label: String,
+    pub model: Option<String>,
+    pub events: u64,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
+    pub total_tokens: u64,
+    pub has_inferred_pricing: bool,
+}
+
+fn codex_in_range(
+    records: Vec<ParsedCodexRecord>,
+    range: UsageRange,
+    now_ms: i64,
+) -> Vec<ParsedCodexRecord> {
+    match range.floor_ms(now_ms) {
+        Some(floor) => records.into_iter().filter(|r| r.ts_ms >= floor).collect(),
+        None => records,
+    }
+}
+
+pub(crate) fn codex_usage_summary_from_records(
+    records: Vec<ParsedCodexRecord>,
+    scope: &str,
+    range: UsageRange,
+    now_ms: i64,
+) -> CodexUsageSummary {
+    let range_str = range_label(&range);
+    let records = codex_in_range(records, range, now_ms);
+    let mut sessions = std::collections::BTreeSet::new();
+    let (mut i, mut ci, mut o, mut ro, mut tot) = (0u64, 0u64, 0u64, 0u64, 0u64);
+    let mut by_model: std::collections::BTreeMap<String, u64> = Default::default();
+    for r in &records {
+        sessions.insert(r.session_id.clone());
+        i += r.input;
+        ci += r.cached_input;
+        o += r.output;
+        ro += r.reasoning_output;
+        tot += r.total;
+        if let Some(m) = &r.model {
+            *by_model.entry(m.clone()).or_default() += r.total;
+        }
+    }
+    CodexUsageSummary {
+        scope: scope.to_string(),
+        range: range_str,
+        sessions: sessions.len() as u64,
+        events: records.len() as u64,
+        input_tokens: i,
+        cached_input_tokens: ci,
+        output_tokens: o,
+        reasoning_output_tokens: ro,
+        total_tokens: tot,
+        estimated_cost_usd: None,
+        top_model: by_model
+            .iter()
+            .max_by_key(|(_, v)| **v)
+            .map(|(k, _)| k.clone()),
+        top_project: None, // Codex JSONL carries no per-record project path in v1.
+        has_any_codex_data: !records.is_empty(),
+    }
+}
+
+pub(crate) fn codex_usage_daily_from_records(
+    records: Vec<ParsedCodexRecord>,
+) -> Vec<CodexUsageDailyPoint> {
+    let mut by_day: std::collections::BTreeMap<String, CodexUsageDailyPoint> = Default::default();
+    for r in records {
+        let e = by_day.entry(r.day.clone()).or_insert(CodexUsageDailyPoint {
+            day: r.day.clone(),
+            input_tokens: 0,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            total_tokens: 0,
+        });
+        e.input_tokens += r.input;
+        e.cached_input_tokens += r.cached_input;
+        e.output_tokens += r.output;
+        e.reasoning_output_tokens += r.reasoning_output;
+        e.total_tokens += r.total;
+    }
+    // BTreeMap iterates ascending → ascending by day.
+    by_day.into_values().collect()
+}
+
+pub(crate) fn codex_usage_breakdown_from_records(
+    records: Vec<ParsedCodexRecord>,
+    kind: &str,
+) -> Vec<CodexUsageBreakdownRow> {
+    struct Acc {
+        label: String,
+        sessions: std::collections::BTreeSet<String>,
+        events: u64,
+        i: u64,
+        ci: u64,
+        o: u64,
+        ro: u64,
+        tot: u64,
+    }
+    let mut groups: std::collections::BTreeMap<String, Acc> = Default::default();
+    for r in records {
+        // Codex JSONL has no per-record project — project breakdown gets a single
+        // "codex" bucket. Model breakdown keys by model name or "codex" when absent.
+        let (key, label) = if kind == "project" {
+            ("codex".to_string(), "codex".to_string())
+        } else {
+            let m = r.model.clone().unwrap_or_else(|| "codex".to_string());
+            (m.clone(), m)
+        };
+        let a = groups.entry(key).or_insert(Acc {
+            label,
+            sessions: Default::default(),
+            events: 0,
+            i: 0,
+            ci: 0,
+            o: 0,
+            ro: 0,
+            tot: 0,
+        });
+        a.sessions.insert(r.session_id.clone());
+        a.events += 1;
+        a.i += r.input;
+        a.ci += r.cached_input;
+        a.o += r.output;
+        a.ro += r.reasoning_output;
+        a.tot += r.total;
+    }
+    let mut rows: Vec<CodexUsageBreakdownRow> = groups
+        .into_iter()
+        .map(|(key, a)| CodexUsageBreakdownRow {
+            key,
+            label: a.label,
+            sessions: a.sessions.len() as u64,
+            events: a.events,
+            input_tokens: a.i,
+            cached_input_tokens: a.ci,
+            output_tokens: a.o,
+            reasoning_output_tokens: a.ro,
+            total_tokens: a.tot,
+            estimated_cost_usd: None,
+            has_inferred_pricing: true,
+        })
+        .collect();
+    rows.sort_by(|x, y| y.total_tokens.cmp(&x.total_tokens));
+    rows
+}
+
+pub(crate) fn codex_usage_recent_sessions_from_records(
+    records: Vec<ParsedCodexRecord>,
+    limit: usize,
+) -> Vec<CodexUsageSessionRow> {
+    struct Acc {
+        first_ms: i64,
+        last_ms: i64,
+        last_day: String,
+        model: Option<String>,
+        events: u64,
+        i: u64,
+        ci: u64,
+        o: u64,
+        ro: u64,
+        tot: u64,
+    }
+    let mut by_session: std::collections::BTreeMap<String, Acc> = Default::default();
+    for r in records {
+        let a = by_session.entry(r.session_id.clone()).or_insert(Acc {
+            first_ms: r.ts_ms,
+            last_ms: r.ts_ms,
+            last_day: r.day.clone(),
+            model: r.model.clone(),
+            events: 0,
+            i: 0,
+            ci: 0,
+            o: 0,
+            ro: 0,
+            tot: 0,
+        });
+        a.first_ms = a.first_ms.min(r.ts_ms);
+        if r.ts_ms >= a.last_ms {
+            a.last_ms = r.ts_ms;
+            a.last_day = r.day.clone();
+            // Use the model from the latest record (most representative).
+            a.model = r.model.clone();
+        }
+        a.events += 1;
+        a.i += r.input;
+        a.ci += r.cached_input;
+        a.o += r.output;
+        a.ro += r.reasoning_output;
+        a.tot += r.total;
+    }
+    let mut rows: Vec<(i64, CodexUsageSessionRow)> = by_session
+        .into_iter()
+        .map(|(session_id, a)| {
+            (
+                a.last_ms,
+                CodexUsageSessionRow {
+                    session_id,
+                    last_active_at: a.last_day,
+                    duration_minutes: ((a.last_ms - a.first_ms).max(0) / 60_000) as u64,
+                    project_label: "codex".to_string(),
+                    model: a.model,
+                    events: a.events,
+                    input_tokens: a.i,
+                    cached_input_tokens: a.ci,
+                    output_tokens: a.o,
+                    reasoning_output_tokens: a.ro,
+                    total_tokens: a.tot,
+                    has_inferred_pricing: true,
+                },
+            )
+        })
+        .collect();
+    // Most-recently-active sessions first.
+    rows.sort_by(|x, y| y.0.cmp(&x.0));
+    rows.into_iter().take(limit).map(|(_, row)| row).collect()
+}
+
+// ---- path-resolving public wrappers (desktop commands call these) ----------
+
+fn codex_session_files() -> Vec<PathBuf> {
+    home_dir()
+        .map(|h| {
+            let d = h.join(".codex/sessions");
+            if d.exists() {
+                walk_jsonl(&d)
+            } else {
+                Vec::new()
+            }
+        })
+        .unwrap_or_default()
+}
+
+/// Extract the model from the first `turn_context` line in a Codex JSONL file.
+///
+/// Recon (Task 3 Step 1) confirmed: model lives at `payload.model` on lines
+/// where `type == "turn_context"`. `session_meta` has only `model_provider`,
+/// not the model name. Falls back to `None` — breakdown groups under "codex".
+fn codex_model_for(path: &Path) -> Option<String> {
+    let file = File::open(path).ok()?;
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
+            if let Some(m) = v
+                .get("payload")
+                .and_then(|p| p.get("model"))
+                .and_then(|m| m.as_str())
+            {
+                return Some(m.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn collect_codex_records() -> Vec<ParsedCodexRecord> {
+    let mut out = Vec::new();
+    for path in codex_session_files() {
+        let session_id = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        let model = codex_model_for(&path);
+        let file = match File::open(&path) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        for line in BufReader::new(file).lines().map_while(Result::ok) {
+            if let Some(r) = parse_codex_usage_record(&line, &session_id, model.as_deref()) {
+                out.push(r);
+            }
+        }
+    }
+    out
+}
+
+/// Returns true when the user has any Codex history on this machine.
+pub fn codex_has_any_data() -> bool {
+    home_dir()
+        .map(|h| h.join(".codex/sessions").exists())
+        .unwrap_or(false)
+}
+
+pub fn codex_usage_summary(scope: &str, range: &str) -> CodexUsageSummary {
+    codex_usage_summary_from_records(
+        collect_codex_records(),
+        scope,
+        UsageRange::from_str(range),
+        now_ms(),
+    )
+}
+
+pub fn codex_usage_daily(_scope: &str, range: &str) -> Vec<CodexUsageDailyPoint> {
+    // TODO: scope=="agentum" treated as "all" in v1 — no path filter yet.
+    codex_usage_daily_from_records(codex_in_range(
+        collect_codex_records(),
+        UsageRange::from_str(range),
+        now_ms(),
+    ))
+}
+
+pub fn codex_usage_breakdown(_scope: &str, range: &str, kind: &str) -> Vec<CodexUsageBreakdownRow> {
+    // TODO: scope=="agentum" treated as "all" in v1 — no path filter yet.
+    codex_usage_breakdown_from_records(
+        codex_in_range(
+            collect_codex_records(),
+            UsageRange::from_str(range),
+            now_ms(),
+        ),
+        kind,
+    )
+}
+
+pub fn codex_usage_recent_sessions(
+    _scope: &str,
+    range: &str,
+    limit: usize,
+) -> Vec<CodexUsageSessionRow> {
+    // TODO: scope=="agentum" treated as "all" in v1 — no path filter yet.
+    codex_usage_recent_sessions_from_records(
+        codex_in_range(
+            collect_codex_records(),
+            UsageRange::from_str(range),
+            now_ms(),
+        ),
+        limit,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1061,5 +2079,249 @@ mod tests {
         let scrubbed = redact_token(msg, "sk-ant-oat-xyz");
         assert!(!scrubbed.contains("sk-ant-oat-xyz"));
         assert!(scrubbed.contains("<redacted>"));
+    }
+
+    // ---- Task 1: per-record parsers + UsageRange --------------------------
+
+    #[test]
+    fn parse_claude_record_extracts_all_four_token_fields() {
+        let line = r#"{"cwd":"/Users/me/Developer/projects/agentum-tui-fresh","gitBranch":"main","sessionId":"88acb90d-1c09-41f4-9a3e-0b44fbe9aae5","timestamp":"2026-06-19T15:21:41.300Z","type":"assistant","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":6,"output_tokens":275,"cache_creation_input_tokens":11477,"cache_read_input_tokens":26242}}}"#;
+        let r = parse_claude_usage_record(line).expect("parses");
+        assert_eq!(r.input, 6);
+        assert_eq!(r.output, 275);
+        assert_eq!(r.cache_write, 11477);
+        assert_eq!(r.cache_read, 26242);
+        assert_eq!(r.day, "2026-06-19");
+        assert_eq!(r.project, "/Users/me/Developer/projects/agentum-tui-fresh");
+        assert_eq!(r.project_label, "agentum-tui-fresh");
+        assert_eq!(r.branch.as_deref(), Some("main"));
+        assert_eq!(r.session_id, "88acb90d-1c09-41f4-9a3e-0b44fbe9aae5");
+        assert_eq!(r.model.as_deref(), Some("claude-opus-4-7"));
+    }
+
+    #[test]
+    fn parse_claude_record_rejects_non_usage_lines() {
+        assert!(
+            parse_claude_usage_record(r#"{"type":"user","message":{"role":"user"}}"#).is_none()
+        );
+        assert!(parse_claude_usage_record("not json").is_none());
+    }
+
+    #[test]
+    fn parse_codex_record_reads_last_token_usage() {
+        let line = r#"{"timestamp":"2026-04-11T01:24:44.000Z","type":"response_item","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":29422,"cached_input_tokens":5504,"output_tokens":344,"reasoning_output_tokens":124,"total_tokens":29766}}}}"#;
+        let r = parse_codex_usage_record(line, "sess-1", Some("gpt-5-codex")).expect("parses");
+        assert_eq!(r.input, 29422);
+        assert_eq!(r.cached_input, 5504);
+        assert_eq!(r.output, 344);
+        assert_eq!(r.reasoning_output, 124);
+        assert_eq!(r.total, 29766);
+        assert_eq!(r.day, "2026-04-11");
+        assert_eq!(r.session_id, "sess-1");
+        assert_eq!(r.model.as_deref(), Some("gpt-5-codex"));
+    }
+
+    #[test]
+    fn parse_codex_record_skips_null_info() {
+        let line = r#"{"timestamp":"2026-03-31T11:08:19.000Z","payload":{"type":"token_count","info":null,"rate_limits":{}}}"#;
+        assert!(parse_codex_usage_record(line, "sess-1", None).is_none());
+    }
+
+    #[test]
+    fn usage_range_floor() {
+        let now = 10_000_000_000i64;
+        assert_eq!(
+            UsageRange::from_str("7d").floor_ms(now),
+            Some(now - 7 * 86_400_000)
+        );
+        assert_eq!(UsageRange::from_str("all").floor_ms(now), None);
+        assert!(matches!(UsageRange::from_str("nonsense"), UsageRange::All));
+    }
+
+    // ---- Task 2: Claude aggregation cores ---------------------------------
+
+    fn claude_fixture() -> Vec<ParsedClaudeRecord> {
+        // Two sessions, two days, two models, two projects.
+        let mk = |ts: &str,
+                  day: &str,
+                  proj: &str,
+                  label: &str,
+                  sess: &str,
+                  model: &str,
+                  i: u64,
+                  o: u64,
+                  cr: u64,
+                  cw: u64| ParsedClaudeRecord {
+            ts_ms: parse_iso8601_ms(ts).unwrap(),
+            day: day.to_string(),
+            project: proj.to_string(),
+            project_label: label.to_string(),
+            branch: Some("main".to_string()),
+            session_id: sess.to_string(),
+            model: Some(model.to_string()),
+            input: i,
+            output: o,
+            cache_read: cr,
+            cache_write: cw,
+        };
+        vec![
+            mk(
+                "2026-06-18T10:00:00Z",
+                "2026-06-18",
+                "/p/alpha",
+                "alpha",
+                "s1",
+                "claude-opus-4-8",
+                100,
+                200,
+                50,
+                10,
+            ),
+            mk(
+                "2026-06-18T11:00:00Z",
+                "2026-06-18",
+                "/p/alpha",
+                "alpha",
+                "s1",
+                "claude-opus-4-8",
+                0,
+                5,
+                0,
+                0,
+            ),
+            mk(
+                "2026-06-19T09:00:00Z",
+                "2026-06-19",
+                "/p/beta",
+                "beta",
+                "s2",
+                "claude-sonnet-4-6",
+                1000,
+                50,
+                900,
+                100,
+            ),
+        ]
+    }
+
+    #[test]
+    fn claude_summary_totals_and_tops() {
+        let s = claude_usage_summary_from_records(
+            claude_fixture(),
+            "all",
+            UsageRange::All,
+            1_780_000_000_000,
+        );
+        assert_eq!(s.sessions, 2);
+        assert_eq!(s.turns, 3);
+        assert_eq!(s.input_tokens, 1100);
+        assert_eq!(s.output_tokens, 255);
+        assert_eq!(s.cache_read_tokens, 950);
+        assert_eq!(s.cache_write_tokens, 110);
+        assert_eq!(s.zero_cache_read_turns, 1); // only record 2 has cache_read == 0
+        assert!(s.has_any_claude_data);
+        // top_project = the one with the most total tokens (beta: 2050 vs alpha: 365).
+        assert_eq!(s.top_project.as_deref(), Some("beta"));
+        assert!(s.estimated_cost_usd.unwrap() > 0.0);
+    }
+
+    #[test]
+    fn claude_daily_buckets_by_day() {
+        let d = claude_usage_daily_from_records(claude_fixture());
+        assert_eq!(d.len(), 2);
+        assert_eq!(d[0].day, "2026-06-18"); // ascending
+        assert_eq!(d[0].input_tokens, 100);
+        assert_eq!(d[1].day, "2026-06-19");
+        assert_eq!(d[1].cache_read_tokens, 900);
+    }
+
+    #[test]
+    fn claude_breakdown_by_model_and_project() {
+        let bm = claude_usage_breakdown_from_records(claude_fixture(), "model");
+        assert_eq!(bm.len(), 2);
+        assert!(
+            bm.iter()
+                .any(|r| r.label == "claude-opus-4-8" && r.turns == 2)
+        );
+        let bp = claude_usage_breakdown_from_records(claude_fixture(), "project");
+        assert!(
+            bp.iter()
+                .any(|r| r.label == "beta" && r.input_tokens == 1000)
+        );
+    }
+
+    #[test]
+    fn claude_recent_sessions_sorted_desc_and_limited() {
+        let rs = claude_usage_recent_sessions_from_records(claude_fixture(), 1);
+        assert_eq!(rs.len(), 1);
+        assert_eq!(rs[0].session_id, "s2"); // most-recent lastActiveAt
+        assert_eq!(rs[0].project_label, "beta");
+    }
+
+    // ---- Task 3: Codex aggregation cores ----------------------------------
+
+    fn codex_fixture() -> Vec<ParsedCodexRecord> {
+        let mk = |ts: &str, day: &str, sess: &str, i: u64, ci: u64, o: u64, ro: u64, tot: u64| {
+            ParsedCodexRecord {
+                ts_ms: parse_iso8601_ms(ts).unwrap(),
+                day: day.to_string(),
+                session_id: sess.to_string(),
+                model: Some("gpt-5-codex".to_string()),
+                input: i,
+                cached_input: ci,
+                output: o,
+                reasoning_output: ro,
+                total: tot,
+            }
+        };
+        vec![
+            mk(
+                "2026-04-11T01:00:00Z",
+                "2026-04-11",
+                "c1",
+                100,
+                20,
+                30,
+                5,
+                155,
+            ),
+            mk(
+                "2026-04-11T02:00:00Z",
+                "2026-04-11",
+                "c1",
+                200,
+                0,
+                40,
+                0,
+                240,
+            ),
+            mk("2026-04-12T01:00:00Z", "2026-04-12", "c2", 9, 0, 1, 0, 10),
+        ]
+    }
+
+    #[test]
+    fn codex_summary_totals() {
+        let s = codex_usage_summary_from_records(
+            codex_fixture(),
+            "all",
+            UsageRange::All,
+            1_780_000_000_000,
+        );
+        assert_eq!(s.sessions, 2);
+        assert_eq!(s.events, 3);
+        assert_eq!(s.input_tokens, 309);
+        assert_eq!(s.total_tokens, 405);
+        assert!(s.has_any_codex_data);
+    }
+
+    #[test]
+    fn codex_daily_and_sessions() {
+        let d = codex_usage_daily_from_records(codex_fixture());
+        assert_eq!(d.len(), 2);
+        assert_eq!(d[0].day, "2026-04-11");
+        assert_eq!(d[0].total_tokens, 395);
+        let rs = codex_usage_recent_sessions_from_records(codex_fixture(), 5);
+        assert_eq!(rs[0].session_id, "c2"); // newest
+        assert!(rs[0].has_inferred_pricing);
     }
 }

@@ -82,6 +82,9 @@ futures-util = "0.3"
 # AXIsProcessTrustedWithOptions — the call that registers the app in the
 # Accessibility list and shows the system prompt. Pin to 0.10 to match the
 # core-foundation-sys that core-graphics 0.25 links against.
+[dev-dependencies]
+tempfile = "3"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # `elcapitan` exposes CGEvent::post_to_pid — computer-use types/keys into a
 # specific target app by pid rather than only the frontmost window.

@@ -196,7 +196,15 @@ function ProviderRow({
   onEnable: () => void
 }): React.JSX.Element {
   const share = totalTokens > 0 ? provider.totalTokens / totalTokens : 0
-  const status = provider.enabled ? (provider.isScanning ? 'Scanning' : 'Enabled') : 'Off'
+  // Why: comingSoon providers get a "Soon" badge and no enable action — consistent
+  // with their dedicated tab which also shows a static "Soon" card.
+  const status = provider.comingSoon
+    ? 'Soon'
+    : provider.enabled
+      ? provider.isScanning
+        ? 'Scanning'
+        : 'Enabled'
+      : 'Off'
   const statusVariant = provider.enabled ? 'secondary' : 'outline'
 
   return (
@@ -212,7 +220,7 @@ function ProviderRow({
             {provider.topProject ? ` - ${provider.topProject}` : ''}
           </p>
         </div>
-        {!provider.enabled ? (
+        {!provider.enabled && !provider.comingSoon ? (
           <Button variant="outline" size="xs" onClick={onEnable}>
             Enable
           </Button>
@@ -372,16 +380,6 @@ export function UsageOverviewPane(): React.JSX.Element {
                   }}
                 >
                   Enable Codex
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    recordFeatureInteraction('usage-tracking')
-                    void enableOpenCodeUsage()
-                  }}
-                >
-                  Enable OpenCode
                 </Button>
               </div>
             </div>
