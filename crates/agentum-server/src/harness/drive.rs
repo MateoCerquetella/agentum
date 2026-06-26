@@ -398,7 +398,7 @@ async fn spawn_feature_agent(
 /// Resolve the configured [`QaMode`] to a concrete gate for this run. `Auto`
 /// prefers an explicit `qa.sh`, else a QA agent when browser-verify is enabled,
 /// else the (skip-pass) script path. Pure-ish (only reads the env flag).
-pub(crate) fn resolve_qa_mode(config: &HarnessConfig) -> QaMode {
+pub(super) fn resolve_qa_mode(config: &HarnessConfig) -> QaMode {
     match config.features.qa_mode {
         QaMode::Script => QaMode::Script,
         QaMode::Agent => QaMode::Agent,
@@ -953,7 +953,7 @@ async fn teardown_session(state: &AppState, session: &agentum_core::Session) {
 /// Wait until the agent in `session_id` looks done with its turn — the first
 /// `agent.awaiting_input` / `agent.finished` event after `grace` — or until
 /// `timeout` elapses (then we run the gate anyway). A crash/stop also returns.
-pub(crate) async fn wait_for_settle(
+pub(super) async fn wait_for_settle(
     bus: &broadcast::Sender<Event>,
     session_id: Uuid,
     grace: Duration,

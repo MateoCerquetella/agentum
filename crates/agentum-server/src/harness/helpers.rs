@@ -55,7 +55,7 @@ pub(crate) fn build_feature_prompt(instructions: &str, feature: &Feature) -> Str
 /// deterministic-file shape as [`QaVerdict`]: the harness reads a file instead of
 /// parsing free-form chat. Written to `.agentum-harness/roles/<phase>.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RoleVerdict {
+pub(super) struct RoleVerdict {
     pub passed: bool,
     #[serde(default)]
     pub summary: Option<String>,
@@ -112,7 +112,7 @@ pub(crate) fn build_role_prompt(
 /// the browser-verification-loop, then writes this file so the harness has a
 /// deterministic pass/fail instead of trying to parse free-form chat.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QaVerdict {
+pub(super) struct QaVerdict {
     pub passed: bool,
     #[serde(default)]
     pub summary: Option<String>,

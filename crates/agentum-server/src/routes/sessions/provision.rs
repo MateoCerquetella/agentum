@@ -230,7 +230,7 @@ pub(crate) async fn spawn_agent_into_pane(
 
 /// Outcome of a [`reprovision_session`] pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Reprovision {
+pub(super) enum Reprovision {
     /// At least one config/env leg wrote new state for the current endpoint.
     Rewritten,
     /// Nothing was rewritten — endpoint couldn't be resolved (SSH tunnel down)
