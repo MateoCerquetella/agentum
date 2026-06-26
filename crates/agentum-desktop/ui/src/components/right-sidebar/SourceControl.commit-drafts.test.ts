@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { ListTree } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
-  buildResolveConflictsPrompt,
   CompareSummary,
   CompareSummaryToolbarButton,
   getNextSourceControlViewMode,
@@ -15,6 +14,7 @@ import {
   type SourceControlViewModePreferenceWriteState,
   writeCommitDraftForWorktree
 } from './SourceControl'
+import { buildResolveConflictsPrompt } from './source-control-prompts'
 import type { GitBranchCompareSummary } from '../../../../shared/types'
 
 type ReactElementLike = {
