@@ -28,6 +28,7 @@ import {
 } from '../../../shared/constants'
 import { legacyBaseRefSearchResult } from '../../../shared/base-ref-search-result'
 import { createE2EConfig } from '../../../shared/e2e-config'
+import { isRecord } from '../../../shared/type-guards'
 import { relativePathInsideRoot } from '../../../shared/cross-platform-path'
 import { normalizeDisabledTuiAgents } from '../../../shared/tui-agent-selection'
 import type { RateLimitState } from '../../../shared/rate-limit-types'
@@ -595,9 +596,6 @@ function getWebKeybindingPlatform(): KeybindingPlatform {
   return getKeybindingPlatform(getBrowserPlatform())
 }
 
-function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-}
 
 function normalizeStoredWebOverrides(
   value: unknown,
@@ -607,7 +605,7 @@ function normalizeStoredWebOverrides(
   if (value === undefined) {
     return {}
   }
-  if (!isJsonObject(value)) {
+  if (!isRecord(value)) {
     diagnostics.push({ severity: 'error', section, message: `${section} must be an object.` })
     return {}
   }
@@ -658,7 +656,7 @@ function normalizeWebPlatformOverrides(
   if (value === undefined) {
     return {}
   }
-  if (!isJsonObject(value)) {
+  if (!isRecord(value)) {
     diagnostics.push({
       severity: 'error',
       section: 'platforms',
@@ -722,10 +720,10 @@ function readWebKeybindingDocument(): WebKeybindingDocument {
   const document = readJson(KEYBINDINGS_STORAGE_KEY, createEmptyWebKeybindingDocument())
   return {
     version: 1,
-    keybindings: isJsonObject(document.keybindings)
+    keybindings: isRecord(document.keybindings)
       ? (document.keybindings as KeybindingOverrides)
       : {},
-    platforms: isJsonObject(document.platforms)
+    platforms: isRecord(document.platforms)
       ? (document.platforms as Partial<Record<KeybindingPlatform, KeybindingOverrides>>)
       : {}
   }
