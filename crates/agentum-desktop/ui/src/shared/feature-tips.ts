@@ -34,7 +34,8 @@ export const FEATURE_TIPS = [
     priority: 'new',
     eyebrow: 'Tip',
     title: 'Let agents drive Agentum with the Agentum CLI',
-    description: 'Enable agents to coordinate child worktrees and communicate between worktrees.',
+    description:
+      'Add scheduled automations and terminal control. Agent messaging and coordination are already built into the agentum MCP.',
     action: 'setup-cli',
     ctaLabel: 'Install CLI & Skills',
     completedByFeatureInteractions: []
