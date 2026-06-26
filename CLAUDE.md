@@ -93,7 +93,9 @@ crates/
   agentum-core/        # Shared types: Session, Status, Event, transcript types.
   agentum-store/       # SQLite repository (sqlx). Persists sessions, board, notes, channels, users, auth.
   agentum-tmux/        # Thin wrapper over tmux: new-session, send-keys, capture-pane, kill.
-  agentum-watchdog/    # Background loop. Tails panes, emits Event::AgentFinished/AwaitingInput/Crashed.
+  agentum-watchdog/    # Three bus-driven background workers: the per-session Watchdog (tails panes,
+                       #   emits Event::AgentFinished/AwaitingInput/Crashed; in lib.rs), the goal-status
+                       #   reconciler (reconciler.rs), and the watchdog→board-comment bridge (comment_bridge.rs).
   agentum-executor/    # ToolAdapter trait + per-agent argv builders. Owns YOLO marker translation.
   agentum-server/      # axum HTTP+WS API + TLS + auth + routes/. API-only (no embedded web UI).
   # agentum-tui/       # MOVED OUT (2026-06) → github.com/mateocerquetella/agentum-tui.
@@ -295,7 +297,7 @@ All HTTP/WS routes live in `crates/agentum-server/src/routes/`:
 | `health.rs`       | `/api/health`              | Public; no auth.               |
 | `auth.rs`         | `/api/auth/*`              | login/register/me/logout.      |
 | `cert.rs`         | `/api/cert/fingerprint`    | Public; for TOFU bootstrap.    |
-| `sessions.rs`     | `/api/sessions/*` + `/stream` WS | The fat one. CRUD + start/stop/kill + per-session WS. |
+| `sessions.rs`     | `/api/sessions/*` + `/stream` WS | CRUD + start/stop/kill + per-session WS. WS pane-streaming machinery is in `sessions/streaming.rs`; pane-env/MCP provisioning + the shared `spawn_agent_into_pane` launch path in `sessions/provision.rs`. |
 | `events.rs`       | `/api/events` WS           | Global broadcast bus.          |
 | `agents.rs`       | `/api/agents`              | Probes which tool binaries are on PATH. |
 | `agent_tasks.rs`  | `/api/sessions/{id}/agent-tasks` | Plan/todos/tasks tail. |
@@ -370,7 +372,11 @@ time, blocking advancement on a red gate.
     non-zero = red (block + retry). Falls back to `npm run verify`, then
     to a pass if neither exists.
   - `handoff.md` — overwritten after each green gate.
-- **Engine** (`harness.rs`): `HarnessEngine` holds in-memory runs + a
+- **Engine** (`harness.rs` is now a module dir: `harness.rs` keeps `HarnessEngine`
+  + the tests; the `.agentum-harness/` data types live in `harness/types.rs`,
+  prompt/verdict helpers in `harness/helpers.rs`, and the drive loop +
+  orchestration in `harness/drive.rs` — all re-exported so `harness::Foo` /
+  `harness::drive` are unchanged): `HarnessEngine` holds in-memory runs + a
   `broadcast` event bus; the state machine (load/verify/mark-done/block)
   is decoupled from spawning so it's unit-testable with stub `verify.sh`.
   [`harness::drive`] is the live loop: init → for each pending feature
@@ -385,7 +391,7 @@ time, blocking advancement on a red gate.
   fast feature would hang until `settle_timeout_secs`).
 - **Autonomy mechanics (hard-won, don't regress)**: an autonomous run can only
   work if the agent never blocks on a human. Three non-obvious pieces make that
-  true, all in `harness.rs`:
+  true, in `harness/drive.rs` (the spawn + REPL-interaction path):
   1. **YOLO is mandatory** — `spawn_feature_agent` pushes
      `agentum_executor::YOLO_MARKER` into the session flags (`agent_yolo`,
      default true). Without it the agent stops at the first permission prompt
