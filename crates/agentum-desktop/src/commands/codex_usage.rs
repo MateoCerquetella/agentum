@@ -77,12 +77,18 @@ pub fn codex_usage_get_summary(request: tauri::ipc::Request<'_>) -> Value {
 
 #[tauri::command]
 pub fn codex_usage_get_daily(request: tauri::ipc::Request<'_>) -> Value {
+    if !usage_prefs::provider_enabled(PROVIDER, true) {
+        return json!([]);
+    }
     let (scope, range) = scope_range(&request);
     json!(usage::codex_usage_daily(&scope, &range))
 }
 
 #[tauri::command]
 pub fn codex_usage_get_breakdown(request: tauri::ipc::Request<'_>) -> Value {
+    if !usage_prefs::provider_enabled(PROVIDER, true) {
+        return json!([]);
+    }
     let (scope, range) = scope_range(&request);
     let kind = if let tauri::ipc::InvokeBody::Json(v) = request.body() {
         v.get("kind")
@@ -97,6 +103,9 @@ pub fn codex_usage_get_breakdown(request: tauri::ipc::Request<'_>) -> Value {
 
 #[tauri::command]
 pub fn codex_usage_get_recent_sessions(request: tauri::ipc::Request<'_>) -> Value {
+    if !usage_prefs::provider_enabled(PROVIDER, true) {
+        return json!([]);
+    }
     let (scope, range) = scope_range(&request);
     let limit = if let tauri::ipc::InvokeBody::Json(v) = request.body() {
         v.get("limit").and_then(|l| l.as_u64()).unwrap_or(10) as usize
