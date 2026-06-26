@@ -876,7 +876,7 @@ fn project_label_from_path(cwd: &str) -> String {
         .to_string()
 }
 
-pub fn parse_claude_usage_record(line: &str) -> Option<ParsedClaudeRecord> {
+pub(crate) fn parse_claude_usage_record(line: &str) -> Option<ParsedClaudeRecord> {
     if !line.contains("\"usage\"") {
         return None;
     }
@@ -935,7 +935,7 @@ pub(crate) struct ParsedCodexRecord {
     pub total: u64,
 }
 
-pub fn parse_codex_usage_record(
+pub(crate) fn parse_codex_usage_record(
     line: &str,
     session_id: &str,
     model: Option<&str>,
@@ -981,7 +981,7 @@ pub enum UsageRange {
 }
 
 impl UsageRange {
-    pub fn from_str(s: &str) -> UsageRange {
+    pub(crate) fn from_str(s: &str) -> UsageRange {
         match s {
             "7d" => UsageRange::D7,
             "30d" => UsageRange::D30,
