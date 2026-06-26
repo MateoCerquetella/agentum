@@ -1,4 +1,5 @@
 import { api } from '@/tauri'
+import { parseOwnerRepoFromItemUrl } from '@/lib/github-item-url'
 import { buildRequestedReviewUsers, mergeReviewerSuggestions } from '@/lib/github-reviewers'
 import { formatCheckTimestamp, getCheckConclusion, getCheckStatusLabel } from '@/lib/pr-check-format'
 import { formatRelativeTime } from '@/lib/relative-time'
@@ -175,22 +176,6 @@ import type {
 // simplest reliable source — the URL is already present on every work item
 // and survives the main-process → IPC boundary. Non-GitHub hosts return null,
 // which matches the indicator's suppression rule.
-function parseOwnerRepoFromItemUrl(url: string): GitHubOwnerRepo | null {
-  try {
-    const parsed = new URL(url)
-    if (parsed.hostname !== 'github.com') {
-      return null
-    }
-    const segments = parsed.pathname.split('/').filter(Boolean)
-    if (segments.length < 2) {
-      return null
-    }
-    return { owner: segments[0], repo: segments[1] }
-  } catch {
-    return null
-  }
-}
-
 const MonacoCodeExcerpt = lazy(() => import('@/components/editor/MonacoCodeExcerpt'))
 
 export type ItemDialogTab = 'conversation' | 'checks' | 'files'
