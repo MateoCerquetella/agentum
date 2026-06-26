@@ -52,12 +52,14 @@ pub fn claude_usage_get_scan_state() -> Value {
 
 #[tauri::command]
 pub fn claude_usage_set_enabled(enabled: bool) -> Value {
+    usage::invalidate_usage_cache();
     usage_prefs::set_provider_enabled(PROVIDER, enabled);
     json!(scan_state(enabled))
 }
 
 #[tauri::command]
 pub fn claude_usage_refresh() -> Value {
+    usage::invalidate_usage_cache();
     json!(scan_state(usage_prefs::provider_enabled(PROVIDER, true)))
 }
 

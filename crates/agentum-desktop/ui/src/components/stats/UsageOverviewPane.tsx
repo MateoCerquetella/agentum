@@ -28,11 +28,11 @@ import {
 const RECENT_DAY_COUNT = 42
 
 const INTENSITY_CLASS: Record<UsageOverviewDailyPoint['intensity'], string> = {
-  0: 'border-border/60 bg-muted/40',
-  1: 'border-border/60 bg-muted-foreground/20',
-  2: 'border-border/60 bg-muted-foreground/35',
-  3: 'border-border/60 bg-muted-foreground/55',
-  4: 'border-border/60 bg-foreground/75'
+  0: 'border-border/50 bg-muted/30',
+  1: 'border-emerald-500/40 bg-emerald-500/50',
+  2: 'border-amber-500/40 bg-amber-400/65',
+  3: 'border-orange-500/45 bg-orange-500/75',
+  4: 'border-rose-500/50 bg-rose-500/85'
 }
 
 function formatPercent(value: number | null): string {
@@ -261,6 +261,9 @@ export function UsageOverviewPane(): React.JSX.Element {
   const openCodeScanState = useAppStore((state) => state.openCodeUsageScanState)
   const openCodeSummary = useAppStore((state) => state.openCodeUsageSummary)
   const openCodeDaily = useAppStore((state) => state.openCodeUsageDaily)
+  const claudeUsageRange = useAppStore((state) => state.claudeUsageRange)
+  const setClaudeUsageRange = useAppStore((state) => state.setClaudeUsageRange)
+  const setCodexUsageRange = useAppStore((state) => state.setCodexUsageRange)
   const fetchClaudeUsage = useAppStore((state) => state.fetchClaudeUsage)
   const fetchCodexUsage = useAppStore((state) => state.fetchCodexUsage)
   const fetchOpenCodeUsage = useAppStore((state) => state.fetchOpenCodeUsage)
@@ -271,6 +274,21 @@ export function UsageOverviewPane(): React.JSX.Element {
   const enableCodexUsage = useAppStore((state) => state.enableCodexUsage)
   const enableOpenCodeUsage = useAppStore((state) => state.enableOpenCodeUsage)
   const recordFeatureInteraction = useAppStore((state) => state.recordFeatureInteraction)
+
+  const RANGE_OPTIONS = [
+    { label: '7D', value: '7d' },
+    { label: '30D', value: '30d' },
+    { label: '90D', value: '90d' },
+    { label: 'All', value: 'all' }
+  ] as const
+
+  const handleRangeChange = (range: (typeof RANGE_OPTIONS)[number]['value']): void => {
+    void setClaudeUsageRange(range)
+    // Why: the Overview range control drives both providers at once so the
+    // combined stats (daily grid, token mix) stay coherent with one click.
+    // OpenCode is excluded — it has no range API yet ("Soon").
+    void setCodexUsageRange(range)
+  }
 
   useEffect(() => {
     void fetchClaudeUsage()
@@ -334,22 +352,45 @@ export function UsageOverviewPane(): React.JSX.Element {
               {overview.hasPartialCost ? ' - some model prices are unavailable' : ''}
             </p>
           </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                onClick={handleRefresh}
-                disabled={!overview.hasAnyEnabledProvider || isScanning}
-                aria-label="Refresh usage overview"
-              >
-                <RefreshCw className={`size-3.5 ${isScanning ? 'animate-spin' : ''}`} />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" sideOffset={6}>
-              Refresh
-            </TooltipContent>
-          </Tooltip>
+          <div className="flex shrink-0 items-center gap-2">
+            <div
+              className="flex items-center rounded-md border border-border/60 bg-muted/30 p-0.5 text-xs"
+              role="group"
+              aria-label="Usage date range"
+            >
+              {RANGE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  aria-pressed={claudeUsageRange === opt.value}
+                  className={`rounded px-2 py-0.5 font-medium transition-colors ${
+                    claudeUsageRange === opt.value
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  onClick={() => handleRangeChange(opt.value)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={handleRefresh}
+                  disabled={!overview.hasAnyEnabledProvider || isScanning}
+                  aria-label="Refresh usage overview"
+                >
+                  <RefreshCw className={`size-3.5 ${isScanning ? 'animate-spin' : ''}`} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={6}>
+                Refresh
+              </TooltipContent>
+            </Tooltip>
+          </div>
         </div>
 
         {!overview.hasAnyEnabledProvider ? (

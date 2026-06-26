@@ -145,7 +145,7 @@ export default function MissionControlPage(): React.JSX.Element {
       </header>
 
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-5xl space-y-6 p-6">
+        <div className="w-full space-y-6 p-6 md:px-8">
           {preflightIssues.length > 0 && <PreflightBanner issues={preflightIssues} />}
 
           <StatsPane />
