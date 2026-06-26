@@ -2,6 +2,7 @@
 in one module makes nbformat preservation easier to audit while the notebook
 editor model is still small. */
 import { createBrowserUuid } from '@/lib/browser-uuid'
+import { isRecord } from '@/shared/type-guards'
 
 export type IpynbCellKind = 'code' | 'markdown' | 'raw'
 
@@ -57,10 +58,6 @@ const JUPYTER_LANGUAGE_TO_MONACO_LANGUAGE: Record<string, string> = {
   'c++12': 'cpp',
   'c++14': 'cpp',
   'c++': 'cpp'
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 export function concatIpynbMultilineString(value: unknown): string {
