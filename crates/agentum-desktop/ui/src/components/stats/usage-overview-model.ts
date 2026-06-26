@@ -21,6 +21,9 @@ export type UsageProviderId = 'claude' | 'codex' | 'opencode'
 export type UsageProviderOverview = {
   id: UsageProviderId
   label: string
+  // Why: OpenCode tracking is not yet implemented; this flag lets the Overview
+  // present a consistent "Soon" badge without a working enable action.
+  comingSoon?: boolean
   enabled: boolean
   isScanning: boolean
   hasData: boolean
@@ -197,6 +200,7 @@ function createOpenCodeProvider(input: UsageOverviewInput['opencode']): UsagePro
   return {
     id: 'opencode',
     label: 'OpenCode',
+    comingSoon: true,
     enabled: input.scanState?.enabled ?? false,
     isScanning: input.scanState?.isScanning ?? false,
     hasData: summary?.hasAnyOpenCodeData ?? input.scanState?.hasAnyOpenCodeData ?? false,
