@@ -49,6 +49,29 @@ fn cdp_port() -> u16 {
         .unwrap_or(DEFAULT_CDP_PORT)
 }
 
+/// How long to wait for a freshly-launched Chromium to bind its CDP debug port.
+/// Default 45s (was a hard-coded 20s). A cold profile plus GPU/Metal init — and
+/// several per-worktree Chrome instances booting at once on a loaded machine —
+/// routinely needs more than 20s to bind the port, which surfaced as a spurious
+/// "did not expose CDP within 20s" failure while the browser was still coming up
+/// (and would have worked on a retry). Overridable via
+/// `AGENTUM_CDP_READY_TIMEOUT_SECS` for especially slow/contended machines.
+fn cdp_ready_timeout() -> Duration {
+    std::env::var("AGENTUM_CDP_READY_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(45))
+}
+
+/// Grace window for a leftover (not-yet-listening) tmux session before we treat it
+/// as dead and kill+relaunch. Bumped from 2s so a slow-booting Chromium left by a
+/// prior open isn't repeatedly killed and restarted (thrash) under load.
+fn cdp_leftover_grace() -> Duration {
+    Duration::from_secs(10)
+}
+
 /// The CDP base URL a Playwright MCP attaches to via `--cdp-endpoint`. Pinned to
 /// IPv4 `127.0.0.1` for the same reason as the MCP host (macOS resolves
 /// `localhost` to `::1`, which would miss our IPv4 launch + probe).
@@ -107,7 +130,7 @@ pub async fn ensure_local_cdp_browser() -> Result<String> {
         .await
         .unwrap_or(false)
     {
-        if wait_until_listening(port, Duration::from_secs(2)).await {
+        if wait_until_listening(port, cdp_leftover_grace()).await {
             return Ok(endpoint);
         }
         let _ = agentum_tmux::kill_session(CDP_TMUX_TARGET).await;
@@ -122,14 +145,16 @@ pub async fn ensure_local_cdp_browser() -> Result<String> {
         .context("start the shared local CDP-Chromium tmux session")?;
 
     // Headless Chromium boots then binds the debugging port; allow boot time
-    // (an MCP-cold machine populating the profile can take a few seconds).
-    if wait_until_listening(port, Duration::from_secs(20)).await {
+    // (a cold profile + GPU init on a loaded machine can take tens of seconds).
+    let ready = cdp_ready_timeout();
+    if wait_until_listening(port, ready).await {
         Ok(endpoint)
     } else {
         anyhow::bail!(
-            "Chromium launched but did not expose CDP on 127.0.0.1:{port} within 20s \
+            "Chromium launched but did not expose CDP on 127.0.0.1:{port} within {}s \
              (tmux session `{CDP_TMUX_TARGET}`). Check the pane; the browser may have \
-             failed to start."
+             failed to start. Set AGENTUM_CDP_READY_TIMEOUT_SECS to allow more time.",
+            ready.as_secs()
         )
     }
 }
@@ -295,7 +320,7 @@ pub async fn ensure_local_cdp_browser_for(worktree_id: &str) -> Result<(String, 
 
     // A leftover-but-not-listening session is either booting or dead.
     if agentum_tmux::has_session(&tmux).await.unwrap_or(false) {
-        if wait_until_listening(port, Duration::from_secs(2)).await {
+        if wait_until_listening(port, cdp_leftover_grace()).await {
             register_worktree_browser(key, port, &tmux, &profile);
             return Ok((cdp_endpoint_for(port), port));
         }
@@ -307,13 +332,15 @@ pub async fn ensure_local_cdp_browser_for(worktree_id: &str) -> Result<(String, 
         .await
         .with_context(|| format!("start CDP-Chromium for worktree `{key}`"))?;
 
-    if wait_until_listening(port, Duration::from_secs(20)).await {
+    let ready = cdp_ready_timeout();
+    if wait_until_listening(port, ready).await {
         register_worktree_browser(key, port, &tmux, &profile);
         Ok((cdp_endpoint_for(port), port))
     } else {
         anyhow::bail!(
-            "Chromium for worktree `{key}` did not expose CDP on 127.0.0.1:{port} within 20s \
-             (tmux `{tmux}`)."
+            "Chromium for worktree `{key}` did not expose CDP on 127.0.0.1:{port} within {}s \
+             (tmux `{tmux}`). Set AGENTUM_CDP_READY_TIMEOUT_SECS to allow more time.",
+            ready.as_secs()
         )
     }
 }
