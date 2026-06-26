@@ -226,14 +226,13 @@ import {
 } from './task-page/linear-helpers'
 import { formatRelativeTime } from '@/lib/relative-time'
 import {
-  buildRequestedReviewUsers,
   formatPRDelta,
   getChecksLabel,
   getChecksTone,
   getReviewTone,
-  mergeReviewerSuggestions,
   sameOptionalGitHubOwnerRepo
 } from './task-page/work-item-helpers'
+import { buildRequestedReviewUsers, mergeReviewerSuggestions } from '@/lib/github-reviewers'
 
 type TaskSource = TaskProvider
 

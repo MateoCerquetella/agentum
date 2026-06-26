@@ -1,4 +1,5 @@
 import { api } from '@/tauri'
+import { buildRequestedReviewUsers, mergeReviewerSuggestions } from '@/lib/github-reviewers'
 import { formatCheckTimestamp, getCheckConclusion, getCheckStatusLabel } from '@/lib/pr-check-format'
 import { formatRelativeTime } from '@/lib/relative-time'
 /* eslint-disable max-lines -- Why: the GH item dialog keeps its header, conversation, files, and checks tabs co-located so the read-only PR/Issue surface stays in one place while this view evolves. */
@@ -368,45 +369,6 @@ function ReviewerAvatar({
       {login.slice(0, 1).toUpperCase()}
     </span>
   )
-}
-
-function mergeReviewerSuggestions(
-  users: GitHubAssignableUser[],
-  seedUsers: GitHubAssignableUser[]
-): GitHubAssignableUser[] {
-  const byLogin = new Map<string, GitHubAssignableUser>()
-  for (const user of [...seedUsers, ...users]) {
-    const key = user.login.toLowerCase()
-    const existing = byLogin.get(key)
-    if (!existing) {
-      byLogin.set(key, user)
-      continue
-    }
-    if (!existing.avatarUrl && user.avatarUrl) {
-      byLogin.set(key, { ...existing, avatarUrl: user.avatarUrl })
-    }
-  }
-  return Array.from(byLogin.values()).sort((a, b) => a.login.localeCompare(b.login))
-}
-
-function buildRequestedReviewUsers(
-  logins: string[],
-  candidates: GitHubAssignableUser[],
-  existingRequests: GitHubAssignableUser[]
-): GitHubAssignableUser[] {
-  const byLogin = new Map<string, GitHubAssignableUser>()
-  for (const user of existingRequests) {
-    byLogin.set(user.login.toLowerCase(), user)
-  }
-  const candidatesByLogin = new Map(candidates.map((user) => [user.login.toLowerCase(), user]))
-  for (const login of logins) {
-    const key = login.toLowerCase()
-    if (byLogin.has(key)) {
-      continue
-    }
-    byLogin.set(key, candidatesByLogin.get(key) ?? { login, name: null, avatarUrl: '' })
-  }
-  return Array.from(byLogin.values())
 }
 
 function PRReviewersPanel({
