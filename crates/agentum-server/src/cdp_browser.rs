@@ -582,10 +582,11 @@ pub async fn ensure_remote_cdp_browser(host: &agentum_core::Host) -> Result<u16>
 /// - `Headless` — `--headless=new`, no OS window; agentum renders the frames in
 ///   its own pane via `Page.startScreencast` (009c-3). Used for the screencast and
 ///   for remote/SSH browsers (where streaming is unavoidable).
-/// - `Headed` — a real Chrome window (`--app`, chrome-less); the user gets native
-///   Chrome UX (sharp, zero stream lag) and the agent drives it over the SAME CDP.
-///   This is the "Open Browser (persistent)" surface — a return to the original
-///   009c-1 headed design. See the headed-agent-browser design spec.
+/// - `Headed` — a real Chrome window with its full UI (address bar, tabs); the user
+///   gets native Chrome UX (sharp, zero stream lag) and navigates directly, while the
+///   agent drives the SAME window over CDP. This is the "Open Browser (persistent)"
+///   surface — a return to the original 009c-1 headed design. See the
+///   headed-agent-browser design spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BrowserMode {
     Headless,
@@ -606,9 +607,9 @@ pub enum BrowserMode {
 /// launch flag because `Page.startScreencast` fixes its surface scale at launch and
 /// ignores the per-frame `setDeviceMetricsOverride.deviceScaleFactor` the pane sends.
 ///
-/// `Headed` drops `--headless` (so a real window appears) and uses `--app=about:blank`
-/// for a chrome-less window (agentum supplies the address bar / controls over CDP). No
-/// `--force-device-scale-factor`: a real window renders natively at the display scale.
+/// `Headed` drops `--headless` (so a real Chrome window appears with its full UI — the
+/// user navigates directly) and omits `--force-device-scale-factor`: a real window
+/// renders natively at the display scale (the force flag is only a screencast concern).
 fn build_chrome_argv(
     exe: &std::path::Path,
     port: u16,
@@ -623,21 +624,30 @@ fn build_chrome_argv(
             argv.push(format!("--force-device-scale-factor={}", cdp_device_scale()));
         }
         BrowserMode::Headed => {
-            // Chrome-less app window; native HiDPI (no force scale, no streaming).
-            argv.push("--app=about:blank".to_string());
+            // A real Chrome window with its full UI (address bar, tabs) so the user
+            // navigates directly — native UX, zero stream lag — while the agent
+            // drives it over the SAME CDP. NO --force-device-scale-factor: a real
+            // window renders natively at the display scale (the force flag is only a
+            // screencast-capture concern). NO --hide-scrollbars: this is a real
+            // browsing surface, not a captured frame.
             argv.push("--window-size=1280,900".to_string());
+            argv.push("--remote-debugging-address=127.0.0.1".to_string());
+            argv.push(format!("--remote-debugging-port={port}"));
+            argv.push(format!("--user-data-dir={}", user_data_dir.to_string_lossy()));
+            argv.push("--no-first-run".to_string());
+            argv.push("--no-default-browser-check".to_string());
+            argv.push("about:blank".to_string());
+            return argv;
         }
     }
+    // Headless (screencast) common flags.
     argv.push("--hide-scrollbars".to_string());
     argv.push("--remote-debugging-address=127.0.0.1".to_string());
     argv.push(format!("--remote-debugging-port={port}"));
     argv.push(format!("--user-data-dir={}", user_data_dir.to_string_lossy()));
     argv.push("--no-first-run".to_string());
     argv.push("--no-default-browser-check".to_string());
-    // Headed carries its initial page in `--app=…`; headless takes it positionally.
-    if mode == BrowserMode::Headless {
-        argv.push("about:blank".to_string());
-    }
+    argv.push("about:blank".to_string());
     argv
 }
 
@@ -936,7 +946,7 @@ mod tests {
             BrowserMode::Headed,
         );
         // A real window: NEVER headless, NO forced device scale (renders natively),
-        // and a chrome-less `--app` window the agent drives over CDP.
+        // a real browsing surface (no --hide-scrollbars), opening about:blank.
         assert!(
             !argv.iter().any(|a| a == "--headless=new"),
             "headed must NOT be headless: {argv:?}"
@@ -946,12 +956,21 @@ mod tests {
             "headed renders natively — no forced scale: {argv:?}"
         );
         assert!(
-            argv.iter().any(|a| a == "--app=about:blank"),
-            "headed uses a chrome-less app window: {argv:?}"
+            !argv.iter().any(|a| a == "--hide-scrollbars"),
+            "headed is a real browsing surface, not a captured frame: {argv:?}"
+        );
+        assert!(
+            argv.iter().any(|a| a == "about:blank"),
+            "headed opens about:blank initially: {argv:?}"
         );
         // Same CDP wiring + isolated profile as headless.
         assert!(argv.iter().any(|a| a == "--remote-debugging-port=9301"));
+        assert!(
+            argv.iter()
+                .any(|a| a == "--remote-debugging-address=127.0.0.1")
+        );
         assert!(argv.iter().any(|a| a == "--user-data-dir=/tmp/prof-h"));
+        assert!(argv.iter().any(|a| a == "--no-first-run"));
         assert_eq!(argv[0], "/x/Chromium");
     }
 
