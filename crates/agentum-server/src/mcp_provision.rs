@@ -184,14 +184,25 @@ pub async fn provision(
 
     let mut servers = Vec::new();
 
-    // agentum's own MCP — always wired. It's secured by the per-server bearer
-    // token (every agent presents it; the `/mcp` handler 401s without it), so it
-    // no longer matters whether the server is no-auth: the token is the gate.
-    servers.push(McpServer {
-        name: "agentum".to_string(),
-        url: agentum_mcp_url.to_string(),
-        auth_token: Some(state.mcp_token.as_str().to_string()),
-    });
+    // agentum's own MCP — wired by default, but the user can turn the whole
+    // agentum MCP off via the master switch (Settings → Agent MCP). When off, no
+    // agentum tools reach any agent. Default ON so existing setups are unchanged;
+    // this is a launch-time gate, so flipping it affects the next agent launch.
+    // It's secured by the per-server bearer token (every agent presents it; the
+    // `/mcp` handler 401s without it), so it no longer matters whether the server
+    // is no-auth: the token is the gate.
+    if state
+        .store
+        .setting_get_bool(crate::routes::mcp::MCP_ENABLED_SETTING, true)
+        .await
+        .unwrap_or(true)
+    {
+        servers.push(McpServer {
+            name: "agentum".to_string(),
+            url: agentum_mcp_url.to_string(),
+            auth_token: Some(state.mcp_token.as_str().to_string()),
+        });
+    }
 
     // Playwright browser MCP — opt-in, spawns npx, best-effort. No auth. The
     // engine seam (`browser_mcp_engine`) decides whether the MCP is BOUND to
