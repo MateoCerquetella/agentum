@@ -50,7 +50,7 @@ import {
   queueBrowserFocusRequest
 } from '@/components/browser-pane/browser-focus'
 import { RepoBadgeMark } from '@/components/repo/RepoBadgeLabel'
-import { useSettingsNavigationMetadata } from '@/hooks/useSettingsNavigationMetadata'
+import { getSettingsTargetFromSectionId, useSettingsNavigationMetadata } from '@/hooks/useSettingsNavigationMetadata'
 import { runWorktreeDelete } from '@/components/sidebar/delete-worktree-flow'
 import {
   buildCmdJActionResults,
@@ -199,17 +199,6 @@ function findBrowserSelection(
     return null
   }
   return { page, workspace, worktree }
-}
-
-function getSettingsTargetFromSectionId(sectionId: string): {
-  pane: SettingsNavTarget
-  repoId: string | null
-  sectionId?: string
-} {
-  if (sectionId.startsWith('repo-')) {
-    return { pane: 'repo', repoId: sectionId.slice('repo-'.length) }
-  }
-  return { pane: sectionId as SettingsNavTarget, repoId: null }
 }
 
 export default function WorktreeJumpPalette(): React.JSX.Element | null {
