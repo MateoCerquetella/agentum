@@ -1,4 +1,4 @@
-import type { GitHubWorkItem } from '@/shared/types'
+import type { GitHubWorkItem, ItemDialogTab } from '@/shared/types'
 
 export function getStateLabel(item: GitHubWorkItem): string {
   if (item.type === 'pr') {
@@ -33,4 +33,14 @@ export function getStateTone(item: GitHubWorkItem): string {
     return 'border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300'
   }
   return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
+}
+
+export function normalizeItemDialogTab(
+  item: GitHubWorkItem | null,
+  tab: ItemDialogTab | undefined
+): ItemDialogTab {
+  if (item?.type !== 'pr') {
+    return 'conversation'
+  }
+  return tab ?? 'conversation'
 }

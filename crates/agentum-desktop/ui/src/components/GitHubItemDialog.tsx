@@ -14,7 +14,9 @@ import {
   isPRFileViewed,
   mapPRFileStatus
 } from '@/lib/github-pr-detail-helpers'
-import { getStateLabel, getStateTone } from '@/lib/github-work-item-state'
+import { getStateLabel, getStateTone, normalizeItemDialogTab } from '@/lib/github-work-item-state'
+import type { ItemDialogTab } from '@/shared/types'
+export type { ItemDialogTab }
 import {
   addIssueCommentForRepo,
   addPRReviewCommentForRepo,
@@ -227,21 +229,9 @@ function getGitHubRepositoryLabelsUrl(itemUrl: string): string | null {
 
 const MonacoCodeExcerpt = lazy(() => import('@/components/editor/MonacoCodeExcerpt'))
 
-export type ItemDialogTab = 'conversation' | 'checks' | 'files'
-
 const CODE_CONTEXT_EXPAND_STEP = 5
 const CODE_CONTEXT_FALLBACK_LINES = 20
 const CODE_CONTEXT_MAX_BLOCK_LINES = CODE_CONTEXT_FALLBACK_LINES * 2 + 1
-
-function normalizeItemDialogTab(
-  item: GitHubWorkItem | null,
-  tab: ItemDialogTab | undefined
-): ItemDialogTab {
-  if (item?.type !== 'pr') {
-    return 'conversation'
-  }
-  return tab ?? 'conversation'
-}
 
 /** Why: Project-origin rows don't always belong to the active local repo.
  *  When set, GHEditSection routes label/assignee/state mutations through
