@@ -59,7 +59,6 @@ pub fn handles_op(op: &str) -> bool {
             | "get_console"
             | "wait"
             | "eval"
-            | "annotate"
             | "new_context"
             | "close_context"
             | "reap_contexts"
@@ -102,7 +101,6 @@ pub async fn run_browser_op(op: &str, args: &Value) -> Result<Value> {
         "get_console" => cdp_get_console(args).await,
         "wait" => cdp_wait(&base, args).await,
         "eval" => cdp_eval(&base, args).await,
-        "annotate" => cdp_annotate(&base, args).await,
         "new_context" => cdp_new_context(&base).await,
         "close_context" => cdp_close_context(&base, args).await,
         "reap_contexts" => cdp_reap_contexts(&base).await,
@@ -1860,113 +1858,6 @@ async fn cdp_eval_gated(base: &str, args: &Value, allowed: bool) -> Result<Value
     Ok(json!({ "ok": true, "result": value }))
 }
 
-/// The in-page annotate overlay for a HEADED Chrome window, injected over CDP.
-/// It is the WKWebView `INPAGE_ANNOTATE_JS` (`browser_native.rs`) with ONE change:
-/// the submit transport. The WKWebView posts to the Tauri `agentumgrab://` scheme
-/// (WebKit blocks `fetch` to custom schemes); a real Chrome window has no such
-/// scheme, so it `fetch`es the annotation to agentum's loopback server instead
-/// (`__AGENTUM_ANNOTATE_URL__`, with `mode:'no-cors'`/`keepalive` so the page never
-/// needs to read the reply). The payload shape is byte-identical to the WKWebView
-/// path, so the receiving end reuses the exact same model + agent-send logic.
-const ANNOTATE_OVERLAY_JS: &str = r#"(function(){
-  if (window.__agentumAnnotate) { window.__agentumAnnotate.on(); return; }
-  var PAGE_ID='__PAGE_ID__';
-  var ANNOTATE_URL='__AGENTUM_ANNOTATE_URL__';
-  var hl, box, current, intent='change', state={on:false};
-  function css(el){
-    if(!el||el.nodeType!==1) return '';
-    if(el.id) return '#'+CSS.escape(el.id);
-    var parts=[],node=el,depth=0;
-    while(node&&node.nodeType===1&&depth<5){
-      var sel=node.tagName.toLowerCase();
-      if(node.classList&&node.classList.length){sel+='.'+Array.from(node.classList).slice(0,2).map(function(c){return CSS.escape(c);}).join('.');}
-      var p=node.parentNode;
-      if(p){var sib=Array.from(p.children).filter(function(c){return c.tagName===node.tagName;});if(sib.length>1){sel+=':nth-of-type('+(sib.indexOf(node)+1)+')';}}
-      parts.unshift(sel); node=node.parentNode; depth++;
-      if(node&&node.id){parts.unshift('#'+CSS.escape(node.id));break;}
-    }
-    return parts.join(' > ');
-  }
-  function extract(el){
-    var r=el.getBoundingClientRect(), cs=getComputedStyle(el), attrs={};
-    for(var i=0;i<el.attributes.length;i++){attrs[el.attributes[i].name]=el.attributes[i].value;}
-    var pick=function(k){return cs.getPropertyValue(k)||'';};
-    return {page:{url:location.href,title:document.title,viewport:{width:innerWidth,height:innerHeight},scrollX:scrollX,scrollY:scrollY,devicePixelRatio:devicePixelRatio},
-      target:{tagName:el.tagName.toLowerCase(),selector:css(el),
-        textSnippet:(el.innerText||el.textContent||'').trim().slice(0,300),
-        htmlSnippet:el.outerHTML.slice(0,1200),
-        cssClasses:el.className&&el.className.toString?el.className.toString():'',attributes:attrs,
-        accessibility:{role:el.getAttribute('role')||'',accessibleName:el.getAttribute('aria-label')||el.getAttribute('alt')||el.title||(el.innerText||'').trim().slice(0,120)},
-        rectViewport:{x:r.x,y:r.y,width:r.width,height:r.height},rectPage:{x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height},
-        computedStyles:{display:pick('display'),position:pick('position'),color:pick('color'),backgroundColor:pick('background-color'),borderRadius:pick('border-radius'),fontFamily:pick('font-family'),fontSize:pick('font-size'),fontWeight:pick('font-weight'),lineHeight:pick('line-height'),textAlign:pick('text-align'),zIndex:pick('z-index')}},
-      nearbyText:[],ancestorPath:[],screenshot:null};
-  }
-  function isOurs(el){return el&&el.closest&&el.closest('#__agentum_annotate_root');}
-  function ensureHl(){ if(hl) return; hl=document.createElement('div'); hl.style.cssText='position:fixed;z-index:2147483646;pointer-events:none;border:2px solid #2563eb;background:rgba(37,99,235,.12);border-radius:3px;display:none;transition:all .03s;'; root.appendChild(hl); }
-  function onMove(e){ if(!state.on||box) return; var el=document.elementFromPoint(e.clientX,e.clientY); if(!el||isOurs(el)){hl.style.display='none';return;} current=el; var r=el.getBoundingClientRect(); ensureHl(); hl.style.display='block'; hl.style.left=r.left+'px'; hl.style.top=r.top+'px'; hl.style.width=r.width+'px'; hl.style.height=r.height+'px'; }
-  function onClick(e){ if(!state.on||box) return; var el=document.elementFromPoint(e.clientX,e.clientY); if(!el||isOurs(el)) return; e.preventDefault(); e.stopPropagation(); current=el; showBox(el); }
-  function showBox(el){
-    var r=el.getBoundingClientRect();
-    box=document.createElement('div');
-    box.style.cssText='position:fixed;z-index:2147483647;width:300px;background:#0b0b0d;color:#fff;border:1px solid rgba(255,255,255,.16);border-radius:12px;padding:12px;box-shadow:0 16px 40px rgba(0,0,0,.5);font:13px -apple-system,system-ui,sans-serif;';
-    var top=Math.min(r.bottom+8,innerHeight-200), left=Math.min(Math.max(8,r.left),innerWidth-312);
-    box.style.top=top+'px'; box.style.left=left+'px';
-    var label=(el.innerText||el.tagName).trim().slice(0,40);
-    box.innerHTML='<div style="font-weight:600;margin-bottom:2px">'+el.tagName.toLowerCase()+'</div><div style="opacity:.6;font-size:11px;margin-bottom:8px">'+label.replace(/</g,'&lt;')+'</div>'+
-      '<textarea id="__aa_t" placeholder="Describe what the agent should change here…" style="width:100%;height:70px;resize:none;background:#000;color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:8px;padding:8px;font:13px inherit;box-sizing:border-box"></textarea>'+
-      '<div style="display:flex;gap:6px;margin:8px 0"><button id="__aa_change" style="flex:1;padding:6px;border-radius:7px;border:1px solid rgba(255,255,255,.18);background:#1d4ed8;color:#fff;cursor:pointer">Change</button><button id="__aa_q" style="flex:1;padding:6px;border-radius:7px;border:1px solid rgba(255,255,255,.18);background:transparent;color:#fff;cursor:pointer">Question</button></div>'+
-      '<div style="display:flex;gap:6px;justify-content:flex-end"><button id="__aa_cancel" style="padding:6px 10px;border-radius:7px;border:none;background:transparent;color:#fff;cursor:pointer">Cancel</button><button id="__aa_add" style="padding:6px 12px;border-radius:7px;border:none;background:#2563eb;color:#fff;cursor:pointer">Add</button></div>';
-    root.appendChild(box); hl.style.display='none'; intent='change';
-    var ta=box.querySelector('#__aa_t'); ta.focus();
-    box.querySelector('#__aa_change').onclick=function(){intent='change';this.style.background='#1d4ed8';box.querySelector('#__aa_q').style.background='transparent';};
-    box.querySelector('#__aa_q').onclick=function(){intent='question';this.style.background='#1d4ed8';box.querySelector('#__aa_change').style.background='transparent';};
-    box.querySelector('#__aa_cancel').onclick=closeBox;
-    box.querySelector('#__aa_add').onclick=function(){ submit(el,ta.value); };
-    ta.addEventListener('keydown',function(ev){if((ev.metaKey||ev.ctrlKey)&&ev.key==='Enter'){submit(el,ta.value);}if(ev.key==='Escape'){closeBox();}});
-  }
-  function closeBox(){ if(box){box.remove();box=null;} }
-  function marker(el){ var r=el.getBoundingClientRect(),m=document.createElement('div'); m.className='__aa_marker'; m.style.cssText='position:fixed;z-index:2147483645;width:22px;height:22px;border-radius:11px;background:#2563eb;color:#fff;display:flex;align-items:center;justify-content:center;font:600 11px sans-serif;border:1px solid #fff;pointer-events:none;'; m.textContent=String(root.querySelectorAll('.__aa_marker').length+1); m.style.left=(r.left)+'px'; m.style.top=(r.top)+'px'; root.appendChild(m); }
-  function submit(el,comment){ comment=(comment||'').trim(); if(!comment){return;} var payload=extract(el); var body=JSON.stringify({pageId:PAGE_ID,comment:comment,intent:intent,payload:payload}); try{ fetch(ANNOTATE_URL,{method:'POST',body:body,keepalive:true,mode:'no-cors'}).catch(function(){}); }catch(e){} marker(el); closeBox(); }
-  function onKey(e){ if(e.key==='Escape'){ if(box){closeBox();} else {api_off();} } }
-  function api_off(){ state.on=false; if(hl)hl.style.display='none'; if(toolbar)toolbar.style.display='none'; }
-  var root=document.createElement('div'); root.id='__agentum_annotate_root'; document.documentElement.appendChild(root);
-  var toolbar=document.createElement('div'); toolbar.style.cssText='position:fixed;z-index:2147483647;top:10px;left:50%;transform:translateX(-50%);background:#0b0b0d;color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:9999px;padding:6px 14px;font:12px -apple-system,system-ui,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.4)'; toolbar.textContent='Annotate: click an element  ·  Esc to finish'; root.appendChild(toolbar);
-  ensureHl();
-  document.addEventListener('mousemove',onMove,true);
-  document.addEventListener('click',onClick,true);
-  document.addEventListener('keydown',onKey,true);
-  window.__agentumAnnotate={ on:function(){state.on=true;toolbar.style.display='block';}, teardown:function(){state.on=false;document.removeEventListener('mousemove',onMove,true);document.removeEventListener('click',onClick,true);document.removeEventListener('keydown',onKey,true);if(root)root.remove();window.__agentumAnnotate=null;} };
-  state.on=true;
-})();"#;
-
-/// `annotate`: arm the in-page annotate overlay in a HEADED Chrome window by
-/// injecting [`ANNOTATE_OVERLAY_JS`] over CDP. The user then clicks an element in
-/// the real Chrome window and the overlay `fetch`es the annotation to agentum's
-/// loopback `annotateUrl`. NOT gated by [`eval_allowed`]: this injects a FIXED,
-/// trusted script (no caller-supplied code), unlike `eval`. `annotateUrl` must be
-/// agentum's own loopback `/api/cdp-browser/annotation/add`; `pageId` attributes the
-/// submission. Both are substituted into single-quoted JS string literals, so they
-/// must not contain a single quote (loopback URLs / worktree ids never do).
-pub(crate) async fn cdp_annotate(base: &str, args: &Value) -> Result<Value> {
-    let annotate_url = args
-        .get("annotateUrl")
-        .and_then(Value::as_str)
-        .filter(|u| !u.contains('\'') && !u.contains('\n'))
-        .ok_or_else(|| anyhow::anyhow!("missing or unsafe `annotateUrl`"))?;
-    let page_id = args
-        .get("pageId")
-        .and_then(Value::as_str)
-        .filter(|p| !p.contains('\'') && !p.contains('\n'))
-        .unwrap_or("headed");
-    let script = ANNOTATE_OVERLAY_JS
-        .replace("__AGENTUM_ANNOTATE_URL__", annotate_url)
-        .replace("__PAGE_ID__", page_id);
-    let mut conn = connect_page(base, args).await?;
-    conn.call("Runtime.evaluate", json!({ "expression": script }))
-        .await?;
-    Ok(json!({ "ok": true, "armed": true }))
-}
-
 /// `querySelector(sel).click()` returning whether the element matched.
 fn click_expr(selector: &str) -> String {
     format!(
@@ -2012,34 +1903,14 @@ mod tests {
             "screenshot",
             "click",
             "fill",
-            // `annotate` injects the in-page overlay into a HEADED Chrome window over
-            // CDP (the headed analogue of the WKWebView `agentumgrab://` overlay).
-            "annotate",
         ] {
             assert!(handles_op(op), "{op} should be CDP-driven");
         }
         // The WKWebView annotation surface stays on the desktop bridge (renderer
         // round-trips, not CDP): element grab + the per-page annotation store.
-        for op in ["grab", "annotations", "bogus"] {
+        for op in ["grab", "annotate", "annotations", "bogus"] {
             assert!(!handles_op(op), "{op} should NOT be CDP-driven");
         }
-    }
-
-    #[test]
-    fn annotate_overlay_beacons_via_fetch_not_the_wkwebview_scheme() {
-        // The headed overlay must submit by fetching agentum's loopback endpoint —
-        // a real Chrome window has no `agentumgrab://` Tauri scheme handler.
-        assert!(
-            ANNOTATE_OVERLAY_JS.contains("fetch(ANNOTATE_URL"),
-            "headed overlay must beacon via fetch"
-        );
-        assert!(
-            !ANNOTATE_OVERLAY_JS.contains("agentumgrab://"),
-            "headed overlay must NOT use the WKWebView custom scheme"
-        );
-        // Both substitution placeholders must be present for `cdp_annotate` to fill.
-        assert!(ANNOTATE_OVERLAY_JS.contains("__AGENTUM_ANNOTATE_URL__"));
-        assert!(ANNOTATE_OVERLAY_JS.contains("__PAGE_ID__"));
     }
 
     #[test]
@@ -2268,12 +2139,8 @@ mod tests {
         // The picker's hit-test must route through the CDP driver (it needs the
         // persistent Chromium's live DOM), not the desktop bridge.
         assert!(handles_op("node_at_point"));
-        // `annotate` is now a driver op too: it injects the in-page overlay into a
-        // HEADED Chrome window over CDP (the headed analogue of the WKWebView
-        // `agentumgrab://` overlay). See `cdp_annotate`.
-        assert!(handles_op("annotate"));
         // sanity: a bridge-only op (renderer round-trip, not CDP) is NOT claimed.
-        assert!(!handles_op("grab"));
+        assert!(!handles_op("annotate"));
     }
 
     #[test]

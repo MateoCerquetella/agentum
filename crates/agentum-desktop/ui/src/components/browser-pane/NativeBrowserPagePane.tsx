@@ -73,7 +73,10 @@ function isNavigableUrl(url: string): boolean {
   return Boolean(url) && url !== AGENTUM_BROWSER_BLANK_URL && url !== 'about:blank'
 }
 
-const BOUNDS_POLL_MS = 250
+// Slow safety net only: the native webview now tracks its DOM placeholder
+// reactively (resize/scroll → one measure per frame), so this interval just
+// catches exotic position shifts the listeners miss — it is NOT the primary sync.
+const BOUNDS_SAFETY_POLL_MS = 1000
 
 export default function NativeBrowserPagePane({
   browserTab,
@@ -277,15 +280,41 @@ export default function NativeBrowserPagePane({
       }
     })
 
-    const interval = window.setInterval(syncBounds, BOUNDS_POLL_MS)
-    const observer = new ResizeObserver(syncBounds)
+    // Keep the native webview aligned with its DOM placeholder WITHOUT a 4x/sec
+    // forced-reflow poll. The old 250ms setInterval called getBoundingClientRect
+    // every tick — a forced synchronous layout that janks the whole app during
+    // agentum re-renders/animations even when nothing moved. Instead react to the
+    // events that actually move/resize the placeholder — container resize, ancestor
+    // scroll (capture phase sees ANY scrolling ancestor, which a ResizeObserver
+    // misses), window resize — coalesced into ONE measure per animation frame. A
+    // slow 1s safety net covers exotic shifts. webviewSetBounds still fires only on
+    // an actual bounds change (see syncBounds' diff guard).
+    let rafId: number | null = null
+    const scheduleSync = (): void => {
+      if (rafId != null) {
+        return
+      }
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null
+        syncBounds()
+      })
+    }
+    const observer = new ResizeObserver(scheduleSync)
     if (containerRef.current) {
       observer.observe(containerRef.current)
     }
+    window.addEventListener('scroll', scheduleSync, { capture: true, passive: true })
+    window.addEventListener('resize', scheduleSync)
+    const safetyInterval = window.setInterval(scheduleSync, BOUNDS_SAFETY_POLL_MS)
     return () => {
       cancelled = true
-      window.clearInterval(interval)
+      if (rafId != null) {
+        window.cancelAnimationFrame(rafId)
+      }
+      window.clearInterval(safetyInterval)
       observer.disconnect()
+      window.removeEventListener('scroll', scheduleSync, { capture: true })
+      window.removeEventListener('resize', scheduleSync)
       if (createdRef.current) {
         void nativeBrowser
           .webviewSetVisible({ browserPageId: browserTab.id, visible: false })

@@ -416,11 +416,14 @@ impl TauriBridge {
                     .ok_or_else(|| anyhow::anyhow!("no browser tab open"))?;
                 Ok(json!({
                     "url": wv.url().map(|u| u.to_string()).unwrap_or_default(),
-                    "note": "DOM snapshot not available in this build; navigate/click/fill by selector work",
+                    "note": "A full DOM snapshot of the VISIBLE in-app browser isn't available yet — \
+                             use grab(selector) to read a specific element, or pass headless:true for \
+                             a full CDP snapshot (a hidden browser the user won't see).",
                 }))
             }
             "screenshot" => Ok(json!({
-                "error": "browser screenshot not implemented in this build",
+                "error": "A screenshot of the VISIBLE in-app browser isn't available yet — pass \
+                          headless:true to screenshot a hidden CDP browser instead.",
             })),
             other => Ok(json!({ "error": format!("unsupported browser op: {other}") })),
         }

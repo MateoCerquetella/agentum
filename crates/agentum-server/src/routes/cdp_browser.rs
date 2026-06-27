@@ -13,12 +13,10 @@
 //! fail-loud message (with the `npx playwright install chromium` hint) in the
 //! response body, so the UI can show an actionable error instead of hanging.
 
-use agentum_core::Event;
 use axum::Json;
 use axum::Router;
-use axum::extract::State;
 use axum::routing::{get, post};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::AppState;
@@ -32,102 +30,6 @@ pub fn router() -> Router<AppState> {
         .route("/api/cdp-browser/stop", post(stop))
         // The in-pane annotate picker hit-tests the shared CDP page here.
         .route("/api/cdp-browser/node-at-point", post(node_at_point))
-        // "Open Browser (persistent)": launch/stop a worktree's HEADED Chrome (a
-        // real window) the agent drives over CDP. See the headed-agent-browser spec.
-        .route(
-            "/api/cdp-browser/headed",
-            post(launch_headed).delete(stop_headed),
-        )
-        // Phase 1b annotations for the headed window: `annotate` arms the in-page
-        // overlay (injected over CDP); `annotation/add` receives what the overlay
-        // beacons back and rebroadcasts it on /api/events for the desktop UI.
-        .route("/api/cdp-browser/annotate", post(arm_annotate))
-        .route("/api/cdp-browser/annotation/add", post(receive_annotation))
-}
-
-/// `POST /api/cdp-browser/annotate` — arm the in-page annotate overlay in a worktree's
-/// **headed** Chrome window (inject [`cdp_driver::cdp_annotate`] over CDP). Body
-/// `{worktreeId}`. The user then clicks an element in the real Chrome window and the
-/// overlay POSTs the annotation back to `annotation/add`. Requires a headed browser to
-/// be open for the worktree (open one via `/headed` first).
-async fn arm_annotate(
-    State(state): State<AppState>,
-    Json(body): Json<HeadedBody>,
-) -> Result<Json<Value>, ApiError> {
-    let port = cdp_browser::registered_headed_port(&body.worktree_id)
-        .await
-        .ok_or_else(|| {
-            ApiError::Internal(
-                "no persistent (headed) browser is open for this worktree — open one first".into(),
-            )
-        })?;
-    // The overlay beacons its submission back to THIS server's own loopback origin.
-    let base = state
-        .api_base_url
-        .clone()
-        .unwrap_or_else(|| "http://127.0.0.1:8822".to_string());
-    let annotate_url = format!(
-        "{}/api/cdp-browser/annotation/add",
-        base.trim_end_matches('/')
-    );
-    let args = json!({
-        "cdpPort": port,
-        "annotateUrl": annotate_url,
-        "pageId": body.worktree_id,
-    });
-    let result = crate::cdp_driver::run_browser_op("annotate", &args)
-        .await
-        .map_err(|e| ApiError::Internal(format!("{e:#}")))?;
-    Ok(Json(result))
-}
-
-/// `POST /api/cdp-browser/annotation/add` — receive an annotation the injected overlay
-/// beaconed from a headed Chrome window and rebroadcast it on `/api/events` as
-/// `browser.annotation` so the desktop UI surfaces it (same payload shape as the
-/// WKWebView `agentumgrab://` path). The page can't carry a bearer token and sends a
-/// raw (text/plain, `no-cors`) body — so this parses the body as a string itself rather
-/// than via the JSON extractor, and is reachable on the embedded loopback server
-/// (no_auth). Best-effort: a malformed body is a no-op, never an error to the page.
-async fn receive_annotation(State(state): State<AppState>, raw: String) -> Json<Value> {
-    match serde_json::from_str::<Value>(&raw) {
-        Ok(payload) => {
-            let _ = state
-                .bus
-                .send(Event::new("browser.annotation").with_payload(payload));
-            Json(json!({ "ok": true }))
-        }
-        Err(e) => Json(json!({ "ok": false, "error": format!("invalid annotation body: {e}") })),
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct HeadedBody {
-    #[serde(default)]
-    worktree_id: String,
-}
-
-/// `POST /api/cdp-browser/headed` — launch (or attach to) a worktree's **headed**
-/// Chrome (a real OS window) and return its CDP port. Body `{worktreeId}`. The
-/// agent drives THIS window via the MCP (which prefers the headed browser when one
-/// is registered). Native Chrome UX — no screencast stream.
-async fn launch_headed(Json(body): Json<HeadedBody>) -> Result<Json<Value>, ApiError> {
-    let (endpoint, port) = cdp_browser::ensure_headed_cdp_browser_for(&body.worktree_id)
-        .await
-        .map_err(|e| ApiError::Internal(format!("{e:#}")))?;
-    Ok(Json(json!({
-        "running": true,
-        "port": port,
-        "cdpEndpoint": endpoint,
-    })))
-}
-
-/// `DELETE /api/cdp-browser/headed` — stop a worktree's headed Chrome. Idempotent.
-async fn stop_headed(Json(body): Json<HeadedBody>) -> Result<Json<Value>, ApiError> {
-    cdp_browser::stop_headed_cdp_browser_for(&body.worktree_id)
-        .await
-        .map_err(|e| ApiError::Internal(format!("{e:#}")))?;
-    Ok(Json(json!({ "running": false })))
 }
 
 #[derive(Serialize)]
@@ -201,83 +103,4 @@ async fn node_at_point(Json(mut body): Json<Value>) -> Result<Json<Value>, ApiEr
         .await
         .map_err(|e| ApiError::Internal(format!("{e:#}")))?;
     Ok(Json(result))
-}
-
-#[cfg(test)]
-mod tests {
-    //! Handler-level tests for the headed-browser annotation receive path. Proves the
-    //! SERVER half of the Phase 1b delivery end-to-end — that a beacon POSTed by the
-    //! injected overlay is parsed and rebroadcast on `/api/events` — so the only part
-    //! left to GUI-verify is the in-Chrome overlay render + click. Mirrors the
-    //! in-process `AppState` harness used by `board_links.rs` tests (no real HTTP/tmux).
-    use super::*;
-    use agentum_store::Store;
-    use std::sync::Arc;
-    use tokio::sync::broadcast;
-
-    async fn fresh_state() -> AppState {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("test.sqlite");
-        std::mem::forget(dir);
-        let store = Store::open(&p).await.unwrap();
-        let (bus, _rx) = broadcast::channel(16);
-        AppState {
-            store: Arc::new(store),
-            bus,
-            started_at: std::time::Instant::now(),
-            version: "test",
-            auth_limiter: Arc::new(crate::ratelimit::RateLimiter::new(
-                8,
-                std::time::Duration::from_secs(60),
-            )),
-            cert_fingerprint: Arc::new(String::new()),
-            transcripts: crate::TranscriptStore::new(broadcast::channel(16).0),
-            stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-            hostname: "test".to_string(),
-            no_auth: true,
-            clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-            clipboard_request_bus: broadcast::channel(64).0,
-            hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-            mcp_token: Arc::new(String::from("test-mcp-token")),
-            api_base_url: None,
-            desktop_bridge: None,
-            harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
-        }
-    }
-
-    #[tokio::test]
-    async fn receive_annotation_rebroadcasts_the_payload_on_the_event_bus() {
-        let state = fresh_state().await;
-        let mut rx = state.bus.subscribe();
-        // The exact (sub)shape the injected overlay beacons.
-        let body = r#"{"pageId":"wt1","comment":"make it blue","intent":"change",
-                       "payload":{"target":{"selector":"button.cta"}}}"#
-            .to_string();
-
-        let resp = receive_annotation(State(state.clone()), body).await;
-        assert_eq!(resp.0["ok"], serde_json::json!(true));
-
-        let ev = rx
-            .try_recv()
-            .expect("an annotation must be broadcast on the bus");
-        assert_eq!(ev.kind, "browser.annotation");
-        assert_eq!(ev.payload["comment"], serde_json::json!("make it blue"));
-        assert_eq!(
-            ev.payload["payload"]["target"]["selector"],
-            serde_json::json!("button.cta")
-        );
-    }
-
-    #[tokio::test]
-    async fn receive_annotation_rejects_a_malformed_body_without_broadcasting() {
-        // A garbled beacon must be a no-op (ok:false), never a phantom broadcast.
-        let state = fresh_state().await;
-        let mut rx = state.bus.subscribe();
-        let resp = receive_annotation(State(state.clone()), "not json".to_string()).await;
-        assert_eq!(resp.0["ok"], serde_json::json!(false));
-        assert!(
-            rx.try_recv().is_err(),
-            "a malformed body must not broadcast an event"
-        );
-    }
 }

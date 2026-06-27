@@ -24,8 +24,6 @@ import {
   isWebRuntimeSessionActive
 } from '../../runtime/web-runtime-session'
 import { openTabBarEntry, type TabCreateEntryArgs } from '../tab-bar/tab-create-entry-action'
-import { armHeadedAnnotate, launchHeadedBrowser } from '../../runtime/headed-browser-client'
-import { toast } from 'sonner'
 
 export type GroupEditorItem = OpenFile & { tabId: string }
 export type GroupBrowserItem = BrowserTabState & { tabId: string }
@@ -553,44 +551,6 @@ export function useTabGroupWorkspaceModel({
       createSplitGroup,
       newBrowserTab: () => {
         void openNewBrowserTabInActiveWorkspace(groupId)
-      },
-      // "Open Browser (persistent)": launch a real headed Chrome WINDOW the agent
-      // drives over CDP (native UX, persistent, no screencast) — see the
-      // headed-agent-browser spec. It is a separate OS window, not an in-pane tab,
-      // so there's nothing to add to this group; we just kick the server launch and
-      // confirm. Idempotent on the server (a second call attaches to the running one).
-      newPersistentBrowser: () => {
-        void (async () => {
-          try {
-            const { port } = await launchHeadedBrowser(worktreeId)
-            toast.success(
-              port != null
-                ? `Persistent Chrome opened — the agent can drive it (CDP :${port}).`
-                : 'Persistent Chrome opened — the agent can drive it.'
-            )
-          } catch (err) {
-            toast.error(
-              err instanceof Error ? err.message : 'Could not launch the persistent browser.'
-            )
-          }
-        })()
-      },
-      // Arm the in-page annotate overlay in the (already-open) persistent Chrome
-      // window. The user clicks an element there; the overlay beacons the annotation
-      // back to the server, which broadcasts `browser.annotation` → surfaced by the
-      // events subscriber (see useServerBrowserAnnotations). Errors if no headed
-      // browser is open yet.
-      annotatePersistentBrowser: () => {
-        void (async () => {
-          try {
-            await armHeadedAnnotate(worktreeId)
-            toast.success('Annotate armed — click an element in the Chrome window.')
-          } catch (err) {
-            toast.error(
-              err instanceof Error ? err.message : 'Could not arm annotate (open a persistent browser first).'
-            )
-          }
-        })()
       },
       openEntry: async (args: TabCreateEntryArgs) => {
         await openTabBarEntry(args)
