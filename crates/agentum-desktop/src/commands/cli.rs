@@ -1,4 +1,5 @@
 use serde::Serialize;
+use super::platform::platform_label;
 use std::path::{Path, PathBuf};
 
 // Mirrors CliInstallStatus in agentum/src/shared/cli-install-types.ts. camelCase so
@@ -22,16 +23,6 @@ pub struct CliInstallStatus {
 
 /// The terminal command we register.
 const COMMAND_NAME: &str = "agentum";
-
-fn platform_label() -> String {
-    if cfg!(target_os = "macos") {
-        "darwin".to_string()
-    } else if cfg!(target_os = "windows") {
-        "win32".to_string()
-    } else {
-        "linux".to_string()
-    }
-}
 
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
