@@ -6,7 +6,6 @@ import type { DashboardAgentRow as DashboardAgentRowData } from '@/components/da
 import { AgentIcon } from '@/lib/agent-catalog'
 import { agentTypeToIconAgent, formatAgentTypeLabel } from '@/lib/agent-status'
 import { cn } from '@/lib/utils'
-import type { AgentStatusState } from '../../../../shared/agent-status-types'
 import CommentMarkdown from './CommentMarkdown'
 
 const MARKDOWN_IMAGE_PATTERN = /!\[[^\]\n]*\]\([^)]+\)/

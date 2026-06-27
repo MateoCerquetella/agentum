@@ -13,7 +13,6 @@ import {
   rankCmdJMiddleResults,
   type CmdJSettingsResult
 } from '@/components/cmd-j/palette-results'
-import type { SettingsNavTarget } from '@/lib/settings-navigation-types'
 
 // Why: mirror WorktreeJumpPalette's section-id → settings-target mapping so a
 // `repo-<id>` row opens that repo's pane while every other row maps 1:1. Kept
