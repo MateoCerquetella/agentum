@@ -804,16 +804,12 @@ async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned)
             {
-                // Prefer the worktree's HEADED (persistent) browser if the user has
-                // opened it — the agent then drives the SAME real Chrome window the
-                // user sees. Otherwise fall back to launching the headless one.
-                let port = match crate::cdp_browser::registered_headed_port(&wt).await {
-                    Some(p) => Some(p),
-                    None => crate::cdp_browser::ensure_local_cdp_browser_for(&wt)
-                        .await
-                        .ok()
-                        .map(|(_, p)| p),
-                };
+                // Resolve the worktree's own browser to a `cdpPort` so the agent
+                // drives the SAME instance the user's pane watches.
+                let port = crate::cdp_browser::ensure_local_cdp_browser_for(&wt)
+                    .await
+                    .ok()
+                    .map(|(_, p)| p);
                 if let Some(port) = port {
                     if let Some(obj) = call_args.as_object_mut() {
                         obj.insert("cdpPort".to_string(), Value::from(port));
