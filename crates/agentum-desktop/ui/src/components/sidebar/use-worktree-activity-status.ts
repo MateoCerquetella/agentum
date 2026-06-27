@@ -8,6 +8,7 @@ import {
   selectRuntimePaneTitlesForWorktree
 } from './worktree-card-status-inputs'
 import { selectWorktreeAgentActivitySummary } from './worktree-agent-activity-summary'
+import { selectServerWorktreeActivity } from '@/store/slices/server-worktree-activity'
 
 export function useWorktreeActivityStatus(worktreeId: string): WorktreeStatus {
   const tabs = useAppStore((s) => s.tabsByWorktree[worktreeId] ?? EMPTY_TABS)
@@ -20,6 +21,11 @@ export function useWorktreeActivityStatus(worktreeId: string): WorktreeStatus {
   )
   const { hasPermission, hasLiveWorking, hasLiveDone, hasRetainedDone } = useAppStore(
     useShallow((s) => selectWorktreeAgentActivitySummary(s, worktreeId))
+  )
+  // Server-authoritative liveness + activity (from /api/sessions + /api/events),
+  // so the dot reflects a running agent after relaunch even before its pane mounts.
+  const { isAlive, liveActivity } = useAppStore(
+    useShallow((s) => selectServerWorktreeActivity(s, worktreeId))
   )
 
   // Why: compact and detailed cards need the same status-dot semantics:
@@ -35,7 +41,9 @@ export function useWorktreeActivityStatus(worktreeId: string): WorktreeStatus {
         hasPermission,
         hasLiveWorking,
         hasLiveDone,
-        hasRetainedDone
+        hasRetainedDone,
+        isAlive,
+        liveActivity
       }),
     [
       tabs,
@@ -45,7 +53,9 @@ export function useWorktreeActivityStatus(worktreeId: string): WorktreeStatus {
       hasPermission,
       hasLiveWorking,
       hasLiveDone,
-      hasRetainedDone
+      hasRetainedDone,
+      isAlive,
+      liveActivity
     ]
   )
 }

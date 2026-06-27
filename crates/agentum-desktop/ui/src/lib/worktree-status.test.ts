@@ -253,3 +253,47 @@ describe('resolveWorktreeStatus', () => {
     expect(status).toBe('active')
   })
 })
+
+describe('resolveWorktreeStatus — server liveness + activity overlay', () => {
+  // A worktree with no mounted tabs / live PTYs — the renderer-local heuristic is
+  // 'inactive', which is the cold post-relaunch state these inputs fix.
+  const COLD = {
+    tabs: [] as { id: string; title: string }[],
+    browserTabs: [] as { id: string }[],
+    ptyIdsByTabId: {} as Record<string, string[]>,
+    hasPermission: false,
+    hasLiveWorking: false,
+    hasLiveDone: false,
+    hasRetainedDone: false
+  }
+
+  it('promotes inactive → active when a backing session is alive (no pane mounted)', () => {
+    expect(resolveWorktreeStatus({ ...COLD, isAlive: true })).toBe('active')
+  })
+
+  it('shows working when the watchdog reports the unmounted session working', () => {
+    expect(resolveWorktreeStatus({ ...COLD, isAlive: true, liveActivity: 'working' })).toBe(
+      'working'
+    )
+  })
+
+  it('shows permission when the watchdog reports the session awaiting input', () => {
+    expect(resolveWorktreeStatus({ ...COLD, isAlive: true, liveActivity: 'awaiting' })).toBe(
+      'permission'
+    )
+  })
+
+  it('an alive-but-idle session reads as active (running baseline), not inactive', () => {
+    expect(resolveWorktreeStatus({ ...COLD, isAlive: true, liveActivity: 'idle' })).toBe('active')
+  })
+
+  it('hook permission still outranks a watchdog working verdict', () => {
+    expect(
+      resolveWorktreeStatus({ ...COLD, hasPermission: true, isAlive: true, liveActivity: 'working' })
+    ).toBe('permission')
+  })
+
+  it('does not promote when not alive, even with a stale idle verdict (no regression)', () => {
+    expect(resolveWorktreeStatus({ ...COLD, isAlive: false, liveActivity: 'idle' })).toBe('inactive')
+  })
+})

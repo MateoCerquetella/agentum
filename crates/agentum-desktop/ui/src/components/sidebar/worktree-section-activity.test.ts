@@ -87,6 +87,7 @@ function makeState(
     agentStatusByPaneKey: {},
     migrationUnsupportedByPtyId: {},
     retainedAgentsByPaneKey: {},
+    serverWorktreeActivityByWorktreeId: {},
     ...overrides
   }
 }

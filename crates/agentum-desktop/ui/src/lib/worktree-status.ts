@@ -1,5 +1,6 @@
 import { detectAgentStatusFromTitle } from '@/lib/agent-status'
 import { tabHasLivePty } from '@/lib/tab-has-live-pty'
+import type { ServerWorktreeLiveActivity } from '@/lib/server-worktree-activity-map'
 import type { TerminalTab } from '../../../shared/types'
 
 export type WorktreeStatus = 'active' | 'working' | 'permission' | 'done' | 'inactive'
@@ -95,6 +96,11 @@ export function getWorktreeStatusLabel(status: WorktreeStatus): string {
  *   worktree.
  * - `hasLiveDone`: any fresh hook entry in {done} for a tab in this worktree.
  * - `hasRetainedDone`: any retained-agent snapshot scoped to this worktreeId.
+ * - `isAlive`: a backing tmux session for this worktree is alive on the host
+ *   (server status 'running'), even with no pane mounted. Server-authoritative,
+ *   so it survives an app relaunch where the renderer-local heuristic is cold.
+ * - `liveActivity`: the watchdog's live activity verdict for the backing
+ *   session ('working' | 'awaiting' | 'idle'), also pane-independent.
  */
 export function resolveWorktreeStatus(args: {
   tabs: Pick<TerminalTab, 'id' | 'title'>[]
@@ -105,6 +111,8 @@ export function resolveWorktreeStatus(args: {
   hasLiveWorking: boolean
   hasLiveDone: boolean
   hasRetainedDone: boolean
+  isAlive?: boolean
+  liveActivity?: ServerWorktreeLiveActivity
 }): WorktreeStatus {
   const heuristic = getWorktreeStatus(
     args.tabs,
@@ -112,7 +120,10 @@ export function resolveWorktreeStatus(args: {
     args.ptyIdsByTabId,
     args.runtimePaneTitlesByTabId ?? {}
   )
-  if (args.hasPermission) {
+  // Why: the watchdog's "blocked on the user" verdict is pane-independent and
+  // outranks everything else, mirroring args.hasPermission — after relaunch it's
+  // the only "needs you" signal for an unmounted worktree.
+  if (args.hasPermission || args.liveActivity === 'awaiting') {
     return 'permission'
   }
   // Why: heuristic 'permission' must outrank heuristic 'working' (a tab can
@@ -125,12 +136,20 @@ export function resolveWorktreeStatus(args: {
   }
   // Why: restored-but-unfocused cards may have the startup hook snapshot before
   // their terminal pane mounts and repopulates runtimePaneTitlesByTabId.
-  // Trust the fresh explicit working row so those cards stay yellow on restart.
-  if (args.hasLiveWorking || heuristic === 'working') {
+  // Trust the fresh explicit working row — or the watchdog's pane-independent
+  // 'working' verdict — so those cards stay yellow on restart.
+  if (args.hasLiveWorking || args.liveActivity === 'working' || heuristic === 'working') {
     return 'working'
   }
   if (args.hasLiveDone || args.hasRetainedDone) {
     return 'done'
+  }
+  // Why: a worktree whose backing tmux session is still alive on the host is
+  // "running" even when no pane is mounted and the renderer-local heuristic has
+  // gone cold after relaunch — promote it out of the misleading inactive dot.
+  // Lowest priority: a live working/permission signal above already won.
+  if (args.isAlive && heuristic === 'inactive') {
+    return 'active'
   }
   return heuristic
 }
