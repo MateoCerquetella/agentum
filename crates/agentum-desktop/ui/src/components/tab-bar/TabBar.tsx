@@ -5,7 +5,7 @@
  * more clarity than the ~5 lines of bloat is worth. */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { SortableContext } from '@dnd-kit/sortable'
-import { FilePlus, FileText, Globe, Plus, TerminalSquare } from 'lucide-react'
+import { AppWindow, FilePlus, FileText, Globe, Plus, TerminalSquare } from 'lucide-react'
 import { toast } from 'sonner'
 import type {
   BrowserTab as BrowserTabState,
@@ -80,6 +80,9 @@ type TabBarProps = {
   /** On Windows, opens a new terminal with a specific shell instead of the default. */
   onNewTerminalWithShell?: (shell: string) => void
   onNewBrowserTab: () => void
+  /** "Open Browser (persistent)": launch a real headed Chrome window the agent
+   *  drives over CDP. Optional so older render sites keep compiling. */
+  onNewPersistentBrowser?: () => void
   onOpenEntry?: (args: TabCreateEntryArgs) => Promise<void>
   terminalOnly?: boolean
   showAgentLaunchItems?: boolean
@@ -169,6 +172,7 @@ function TabBarInner({
   onNewTerminalTab,
   onNewTerminalWithShell,
   onNewBrowserTab,
+  onNewPersistentBrowser,
   onOpenEntry,
   terminalOnly = false,
   showAgentLaunchItems = true,
@@ -476,6 +480,20 @@ function TabBarInner({
       <DropdownMenuShortcut>{newBrowserShortcut}</DropdownMenuShortcut>
     </DropdownMenuItem>
   ) : null
+  // "Open Browser (persistent)": a real headed Chrome window the agent drives over
+  // CDP (native UX, persists across restarts). Distinct from the in-pane WKWebView
+  // tab above — it opens its own OS window, so no in-pane surface is created.
+  const newPersistentBrowserMenuItem =
+    !terminalOnly && onNewPersistentBrowser ? (
+      <DropdownMenuItem
+        onSelect={onNewPersistentBrowser}
+        className="gap-2 rounded-[7px] px-2 py-1.5 text-[12px] leading-5 font-medium"
+        title="Open a real Chrome window the agent can drive (persistent)"
+      >
+        <AppWindow className="size-4 text-muted-foreground" />
+        Open Browser (persistent)
+      </DropdownMenuItem>
+    ) : null
   const newMarkdownMenuItem =
     !terminalOnly && onNewFileTab ? (
       <DropdownMenuItem
@@ -504,11 +522,13 @@ function TabBarInner({
         {openMarkdownMenuItem}
         {defaultTerminalMenuItems}
         {newBrowserMenuItem}
+        {newPersistentBrowserMenuItem}
       </>
     ) : (
       <>
         {defaultTerminalMenuItems}
         {newBrowserMenuItem}
+        {newPersistentBrowserMenuItem}
         {newMarkdownMenuItem}
         {openMarkdownMenuItem}
       </>

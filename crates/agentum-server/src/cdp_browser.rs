@@ -49,6 +49,21 @@ fn cdp_port() -> u16 {
         .unwrap_or(DEFAULT_CDP_PORT)
 }
 
+/// Device-scale the headless browser captures the screencast at. **2 (Retina) by
+/// default.** `Page.startScreencast` fixes its surface scale at browser LAUNCH, so
+/// this is a `--force-device-scale-factor` flag; 2 = sharp on a hi-DPI display.
+/// Tunable via `AGENTUM_CDP_DEVICE_SCALE` (clamped to [1, 4]): drop to `1` (or
+/// `1.5`) to send much smaller frames over the screencast — faster, less sharp —
+/// which is the right trade-off on a big/low-DPI screen where 2× is heavy.
+fn cdp_device_scale() -> f64 {
+    std::env::var("AGENTUM_CDP_DEVICE_SCALE")
+        .ok()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(2.0)
+        .clamp(1.0, 4.0)
+}
+
 /// How long to wait for a freshly-launched Chromium to bind its CDP debug port.
 /// Default 45s (was a hard-coded 20s). A cold profile plus GPU/Metal init — and
 /// several per-worktree Chrome instances booting at once on a loaded machine —
@@ -137,7 +152,7 @@ pub async fn ensure_local_cdp_browser() -> Result<String> {
     }
 
     let user_data_dir = user_data_dir()?;
-    let argv = build_chrome_argv(&exe, port, &user_data_dir);
+    let argv = build_chrome_argv(&exe, port, &user_data_dir, BrowserMode::Headless);
     // Chromium needs no project context — run from $HOME so tmux has a valid cwd.
     let workdir = home_dir();
     agentum_tmux::new_session(CDP_TMUX_TARGET, &workdir, &argv, &[])
@@ -327,7 +342,7 @@ pub async fn ensure_local_cdp_browser_for(worktree_id: &str) -> Result<(String, 
         let _ = agentum_tmux::kill_session(&tmux).await;
     }
 
-    let argv = build_chrome_argv(&exe, port, &profile);
+    let argv = build_chrome_argv(&exe, port, &profile, BrowserMode::Headless);
     agentum_tmux::new_session(&tmux, &home_dir(), &argv, &[])
         .await
         .with_context(|| format!("start CDP-Chromium for worktree `{key}`"))?;
@@ -365,6 +380,96 @@ pub async fn stop_local_cdp_browser_for(worktree_id: &str) -> Result<()> {
         .lock()
         .ok()
         .and_then(|mut reg| reg.remove(canonical_worktree_key(worktree_id.trim())));
+    if let Some(b) = entry {
+        let _ = agentum_tmux::kill_session(&b.tmux).await;
+        let _ = std::fs::remove_dir_all(&b.profile);
+    }
+    Ok(())
+}
+
+/// Registry key for a worktree's **headed** browser. Mode-distinct (NUL separator,
+/// which never appears in a path) so a headed and a headless browser for one
+/// worktree never collide in the registry / tmux / profile.
+fn headed_reg_key(canonical_key: &str) -> String {
+    let base = if canonical_key.is_empty() {
+        "shared"
+    } else {
+        canonical_key
+    };
+    format!("{base}\u{0}headed")
+}
+
+/// Ensure a per-worktree **headed** Chrome (a real OS window) is running, returning
+/// `(endpoint, port)` to drive over CDP. This is the "Open Browser (persistent)"
+/// surface: native Chrome UX (sharp, zero stream lag) + agent-driven over the SAME
+/// CDP as any other browser, persisting in its own detached tmux. It uses a `-h`
+/// suffixed tmux session / profile and a mode-distinct registry key so it never
+/// collides with the worktree's headless (screencast) browser. See the
+/// headed-agent-browser design spec.
+pub async fn ensure_headed_cdp_browser_for(worktree_id: &str) -> Result<(String, u16)> {
+    let key = canonical_worktree_key(worktree_id.trim());
+    let reg_key = headed_reg_key(key);
+    let base = if key.is_empty() { "shared" } else { key };
+    let token = format!("{}-h", sanitize_worktree_token(base));
+    let tmux = format!("{CDP_TMUX_TARGET}-{token}");
+    let profile = worktree_profile_dir(&token)?;
+
+    if let Some(port) = registered_listening_port(&reg_key).await {
+        return Ok((cdp_endpoint_for(port), port));
+    }
+    let _guard = launch_lock().lock().await;
+    if let Some(port) = registered_listening_port(&reg_key).await {
+        return Ok((cdp_endpoint_for(port), port));
+    }
+
+    let exe = chromium_executable()?;
+    let port = worktree_registry()
+        .lock()
+        .ok()
+        .and_then(|reg| reg.get(&reg_key).map(|b| b.port))
+        .map_or_else(free_local_port, Ok)?;
+
+    if agentum_tmux::has_session(&tmux).await.unwrap_or(false) {
+        if wait_until_listening(port, cdp_leftover_grace()).await {
+            register_worktree_browser(&reg_key, port, &tmux, &profile);
+            return Ok((cdp_endpoint_for(port), port));
+        }
+        let _ = agentum_tmux::kill_session(&tmux).await;
+    }
+
+    let argv = build_chrome_argv(&exe, port, &profile, BrowserMode::Headed);
+    agentum_tmux::new_session(&tmux, &home_dir(), &argv, &[])
+        .await
+        .with_context(|| format!("start headed CDP-Chromium for worktree `{key}`"))?;
+
+    let ready = cdp_ready_timeout();
+    if wait_until_listening(port, ready).await {
+        register_worktree_browser(&reg_key, port, &tmux, &profile);
+        Ok((cdp_endpoint_for(port), port))
+    } else {
+        anyhow::bail!(
+            "headed Chromium for worktree `{key}` did not expose CDP on 127.0.0.1:{port} \
+             within {}s (tmux `{tmux}`). Set AGENTUM_CDP_READY_TIMEOUT_SECS to allow more time.",
+            ready.as_secs()
+        )
+    }
+}
+
+/// The CDP port of a worktree's **headed** browser, if one is registered and still
+/// listening. Lets the MCP/agent prefer the headed (persistent) browser the user
+/// opened — driving the SAME window the user sees — over launching a headless one.
+pub async fn registered_headed_port(worktree_id: &str) -> Option<u16> {
+    registered_listening_port(&headed_reg_key(canonical_worktree_key(worktree_id.trim()))).await
+}
+
+/// Tear down a worktree's **headed** browser (kill session, drop profile + registry
+/// entry). Idempotent. Mirrors [`stop_local_cdp_browser_for`] for the headed surface.
+pub async fn stop_headed_cdp_browser_for(worktree_id: &str) -> Result<()> {
+    let reg_key = headed_reg_key(canonical_worktree_key(worktree_id.trim()));
+    let entry = worktree_registry()
+        .lock()
+        .ok()
+        .and_then(|mut reg| reg.remove(&reg_key));
     if let Some(b) = entry {
         let _ = agentum_tmux::kill_session(&b.tmux).await;
         let _ = std::fs::remove_dir_all(&b.profile);
@@ -471,44 +576,79 @@ pub async fn ensure_remote_cdp_browser(host: &agentum_core::Host) -> Result<u16>
     }
 }
 
-/// Build the headless-Chromium argv. Split out so the flag shape is unit-testable
-/// without launching a browser.
+/// How a CDP-Chromium is launched: **streamed** into the pane (headless) vs a
+/// **real window** the user drives directly (headed).
 ///
-/// `--headless=new` runs Chrome's modern headless (full rendering + CDP
-/// `Page.startScreencast`, unlike the reduced `chromium_headless_shell`) — agentum
-/// renders the frames inside its own pane (009c-3), so there is no OS window.
-/// `--window-size` fixes the headless viewport so screencast frames have a sane
-/// default size (the screencast `maxWidth/maxHeight` caps it further).
-/// `--remote-debugging-address=127.0.0.1` keeps CDP loopback-only (never a public
-/// interface; 009c-2 reaches it solely via the authenticated SSH tunnel).
-/// `--no-first-run` / `--no-default-browser-check` suppress the first-run nags
-/// that would otherwise block automation. An isolated `--user-data-dir` keeps
-/// this browser off the user's real profile. `about:blank` is a benign initial
-/// page (the agent navigates its own tab afterwards).
+/// - `Headless` — `--headless=new`, no OS window; agentum renders the frames in
+///   its own pane via `Page.startScreencast` (009c-3). Used for the screencast and
+///   for remote/SSH browsers (where streaming is unavoidable).
+/// - `Headed` — a real Chrome window with its full UI (address bar, tabs); the user
+///   gets native Chrome UX (sharp, zero stream lag) and navigates directly, while the
+///   agent drives the SAME window over CDP. This is the "Open Browser (persistent)"
+///   surface — a return to the original 009c-1 headed design. See the
+///   headed-agent-browser design spec.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserMode {
+    Headless,
+    Headed,
+}
+
+/// Build the Chromium argv for a launch mode. Split out so the flag shape is
+/// unit-testable without launching a browser.
+///
+/// Common flags: `--remote-debugging-address=127.0.0.1` keeps CDP loopback-only
+/// (remote reaches it solely via the authenticated SSH tunnel); `--no-first-run` /
+/// `--no-default-browser-check` suppress nags; an isolated `--user-data-dir` keeps
+/// this browser off the user's real profile.
+///
+/// `Headless` adds `--headless=new` (full modern headless — has `Page.startScreencast`,
+/// unlike `chromium_headless_shell`), a fixed `--window-size` for sane frame sizes,
+/// and `--force-device-scale-factor` (see [`cdp_device_scale`]) — that MUST be a
+/// launch flag because `Page.startScreencast` fixes its surface scale at launch and
+/// ignores the per-frame `setDeviceMetricsOverride.deviceScaleFactor` the pane sends.
+///
+/// `Headed` drops `--headless` (so a real Chrome window appears with its full UI — the
+/// user navigates directly) and omits `--force-device-scale-factor`: a real window
+/// renders natively at the display scale (the force flag is only a screencast concern).
 fn build_chrome_argv(
     exe: &std::path::Path,
     port: u16,
     user_data_dir: &std::path::Path,
+    mode: BrowserMode,
 ) -> Vec<String> {
-    vec![
-        exe.to_string_lossy().into_owned(),
-        "--headless=new".to_string(),
-        "--hide-scrollbars".to_string(),
-        "--window-size=1280,800".to_string(),
-        // Capture the screencast at 2× device pixels (matches the pane's
-        // SCREENCAST_DEVICE_SCALE). MUST be a launch flag: `Page.startScreencast`
-        // fixes its compositor-surface scale at browser launch and IGNORES the
-        // per-frame `Emulation.setDeviceMetricsOverride.deviceScaleFactor` the pane
-        // sends (verified against `--headless=new` via a CDP probe). Without this
-        // the surface is 1× and the pane upscales it on a hi-DPI display → chunky.
-        "--force-device-scale-factor=2".to_string(),
-        "--remote-debugging-address=127.0.0.1".to_string(),
-        format!("--remote-debugging-port={port}"),
-        format!("--user-data-dir={}", user_data_dir.to_string_lossy()),
-        "--no-first-run".to_string(),
-        "--no-default-browser-check".to_string(),
-        "about:blank".to_string(),
-    ]
+    let mut argv = vec![exe.to_string_lossy().into_owned()];
+    match mode {
+        BrowserMode::Headless => {
+            argv.push("--headless=new".to_string());
+            argv.push("--window-size=1280,800".to_string());
+            argv.push(format!("--force-device-scale-factor={}", cdp_device_scale()));
+        }
+        BrowserMode::Headed => {
+            // A real Chrome window with its full UI (address bar, tabs) so the user
+            // navigates directly — native UX, zero stream lag — while the agent
+            // drives it over the SAME CDP. NO --force-device-scale-factor: a real
+            // window renders natively at the display scale (the force flag is only a
+            // screencast-capture concern). NO --hide-scrollbars: this is a real
+            // browsing surface, not a captured frame.
+            argv.push("--window-size=1280,900".to_string());
+            argv.push("--remote-debugging-address=127.0.0.1".to_string());
+            argv.push(format!("--remote-debugging-port={port}"));
+            argv.push(format!("--user-data-dir={}", user_data_dir.to_string_lossy()));
+            argv.push("--no-first-run".to_string());
+            argv.push("--no-default-browser-check".to_string());
+            argv.push("about:blank".to_string());
+            return argv;
+        }
+    }
+    // Headless (screencast) common flags.
+    argv.push("--hide-scrollbars".to_string());
+    argv.push("--remote-debugging-address=127.0.0.1".to_string());
+    argv.push(format!("--remote-debugging-port={port}"));
+    argv.push(format!("--user-data-dir={}", user_data_dir.to_string_lossy()));
+    argv.push("--no-first-run".to_string());
+    argv.push("--no-default-browser-check".to_string());
+    argv.push("about:blank".to_string());
+    argv
 }
 
 /// Candidate locations for a system-installed full Chrome/Chromium, by OS. Pure
@@ -766,8 +906,13 @@ mod tests {
 
     #[test]
     fn chrome_argv_is_headless_with_debugging_and_isolated_profile() {
-        let argv = build_chrome_argv(Path::new("/x/Chromium"), 9300, Path::new("/tmp/prof"));
-        // Headless since 009c-3 — agentum renders the frames in its own pane.
+        let argv = build_chrome_argv(
+            Path::new("/x/Chromium"),
+            9300,
+            Path::new("/tmp/prof"),
+            BrowserMode::Headless,
+        );
+        // Headless screencast path — agentum renders the frames in its own pane.
         // Must be the full `--headless=new` (screencast-capable), not the bare
         // legacy flag, and never windowed.
         assert!(argv.iter().any(|a| a == "--headless=new"));
@@ -779,10 +924,53 @@ mod tests {
         );
         // A fixed viewport so screencast frames have a sane default size.
         assert!(argv.iter().any(|a| a == "--window-size=1280,800"));
+        // Force the capture device-scale so the screencast is device-pixel sharp.
+        assert!(
+            argv.iter()
+                .any(|a| a.starts_with("--force-device-scale-factor=")),
+            "headless must force a capture device-scale: {argv:?}"
+        );
         // Isolated profile + first-run nags suppressed.
         assert!(argv.iter().any(|a| a == "--user-data-dir=/tmp/prof"));
         assert!(argv.iter().any(|a| a == "--no-first-run"));
         // argv[0] is the resolved executable.
+        assert_eq!(argv[0], "/x/Chromium");
+    }
+
+    #[test]
+    fn chrome_argv_headed_is_a_real_app_window_not_headless() {
+        let argv = build_chrome_argv(
+            Path::new("/x/Chromium"),
+            9301,
+            Path::new("/tmp/prof-h"),
+            BrowserMode::Headed,
+        );
+        // A real window: NEVER headless, NO forced device scale (renders natively),
+        // a real browsing surface (no --hide-scrollbars), opening about:blank.
+        assert!(
+            !argv.iter().any(|a| a == "--headless=new"),
+            "headed must NOT be headless: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a.starts_with("--force-device-scale-factor")),
+            "headed renders natively — no forced scale: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a == "--hide-scrollbars"),
+            "headed is a real browsing surface, not a captured frame: {argv:?}"
+        );
+        assert!(
+            argv.iter().any(|a| a == "about:blank"),
+            "headed opens about:blank initially: {argv:?}"
+        );
+        // Same CDP wiring + isolated profile as headless.
+        assert!(argv.iter().any(|a| a == "--remote-debugging-port=9301"));
+        assert!(
+            argv.iter()
+                .any(|a| a == "--remote-debugging-address=127.0.0.1")
+        );
+        assert!(argv.iter().any(|a| a == "--user-data-dir=/tmp/prof-h"));
+        assert!(argv.iter().any(|a| a == "--no-first-run"));
         assert_eq!(argv[0], "/x/Chromium");
     }
 
