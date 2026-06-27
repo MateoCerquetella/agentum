@@ -3,6 +3,7 @@ import { createRunningPullRequestGenerationRecord, getPullRequestGenerationRecor
 import { appendCommitFailureCustomInstruction, buildFixCommitFailurePrompt, buildResolveConflictsPrompt, CONFLICT_KIND_LABELS } from './source-control-prompts'
 import { normalizeSourceControlViewMode, requestSourceControlViewModePreferenceWrite, type SourceControlViewModePreferenceWriteState } from './source-control-view-mode'
 import { compareGitStatusEntries } from './source-control-status-sort'
+import { hostedReviewCreationCopy, hostedReviewLabel, hostedReviewStateClass } from './hosted-review-display'
 /* eslint-disable max-lines */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -391,27 +392,6 @@ type CreatedHostedReview = {
   url: string
 }
 
-function hostedReviewCreationCopy(provider: HostedReviewProvider | null | undefined): {
-  shortLabel: 'PR' | 'MR'
-  reviewLabel: 'pull request' | 'merge request'
-  titleLabel: 'Pull Request' | 'Merge Request'
-  providerName: 'GitHub' | 'GitLab'
-} {
-  return provider === 'gitlab'
-    ? {
-        shortLabel: 'MR',
-        reviewLabel: 'merge request',
-        titleLabel: 'Merge Request',
-        providerName: 'GitLab'
-      }
-    : {
-        shortLabel: 'PR',
-        reviewLabel: 'pull request',
-        titleLabel: 'Pull Request',
-        providerName: 'GitHub'
-      }
-}
-
 export function readCommitDraftForWorktree(
   drafts: CommitDraftsByWorktree,
   worktreeId: string | null | undefined
@@ -451,19 +431,6 @@ export function pickDefaultSourceControlAgent(
   return AGENT_CATALOG.find((entry) => enabledAgents.includes(entry.id))?.id ?? null
 }
 
-
-function hostedReviewStateClass(review: HostedReviewInfo): string {
-  if (review.state === 'merged') {
-    return 'text-purple-500/80'
-  }
-  if (review.state === 'open') {
-    return 'text-emerald-500/80'
-  }
-  if (review.state === 'closed') {
-    return 'text-muted-foreground/60'
-  }
-  return 'text-muted-foreground/50'
-}
 
 function resolveRemoteActionError(kind: RemoteOpKind, error: unknown): string {
   return resolveRemoteOperationErrorMessage(error, {
@@ -547,10 +514,6 @@ function HostedReviewIcon({
 }): React.JSX.Element {
   const Icon = review.provider === 'gitlab' ? GitMerge : PullRequestIcon
   return <Icon className={cn(className, hostedReviewStateClass(review))} />
-}
-
-function hostedReviewLabel(review: HostedReviewInfo): string {
-  return `${review.provider === 'gitlab' ? 'MR' : 'PR'} #${review.number}`
 }
 
 export function HostedReviewHeaderLink({
