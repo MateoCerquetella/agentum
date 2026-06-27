@@ -2,15 +2,10 @@ import { api } from '@/tauri'
 import { parseOwnerRepoFromItemUrl } from '@/lib/github-item-url'
 import { CHECK_SORT_ORDER, formatCheckTimestamp, getCheckConclusion, getCheckCounts, getCheckStatusLabel, getChecksSummaryLabel } from '@/lib/pr-check-format'
 import { getBrokenChecks } from './pr-checks-fix-prompt'
+import { MentionTextarea } from './pull-request-mention-textarea'
 import { PRReviewersPanel } from './pull-request-reviewers-panel'
 import { findNearestBraceBlock, getCheckDetailsKey, getPRFileContentCacheKey, getPRFileDiffResult, getPRFileSectionKey, getWorkItemDetailsCacheKey, gitHubPRFileToBranchEntry, isPRFileViewed } from '@/lib/github-pr-detail-helpers'
-import {
-  buildMentionOptions,
-  filterMentionOptions,
-  findMentionQuery,
-  type MentionOption,
-  type MentionQuery
-} from './pull-request-mentions'
+import { buildMentionOptions, type MentionOption } from './pull-request-mentions'
 import { getStateLabel, getStateTone, normalizeItemDialogTab } from '@/lib/github-work-item-state'
 import type { ItemDialogTab } from '@/shared/types'
 import {
@@ -2904,149 +2899,6 @@ function ChecksTab({
         {sorted.map(renderCheckRow)}
       </div>
     </>
-  )
-}
-
-function MentionTextarea({
-  value,
-  onValueChange,
-  onKeyDown,
-  placeholder,
-  rows,
-  className,
-  wrapperClassName,
-  mentionOptions,
-  textareaRef
-}: {
-  value: string
-  onValueChange: (value: string) => void
-  onKeyDown?: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void
-  placeholder: string
-  rows: number
-  className?: string
-  wrapperClassName?: string
-  mentionOptions: MentionOption[]
-  textareaRef: React.RefObject<HTMLTextAreaElement | null>
-}): React.JSX.Element {
-  const [mentionQuery, setMentionQuery] = useState<MentionQuery | null>(null)
-  const [activeIndex, setActiveIndex] = useState(0)
-  const suggestions = useMemo(
-    () => (mentionQuery ? filterMentionOptions(mentionOptions, mentionQuery.query) : []),
-    [mentionOptions, mentionQuery]
-  )
-  const showSuggestions = mentionQuery !== null && suggestions.length > 0
-
-  const syncMentionQuery = useCallback((textarea: HTMLTextAreaElement): void => {
-    const nextQuery = findMentionQuery(textarea.value, textarea.selectionStart)
-    setMentionQuery(nextQuery)
-    setActiveIndex(0)
-  }, [])
-
-  const insertMention = useCallback(
-    (option: MentionOption): void => {
-      const textarea = textareaRef.current
-      const caret = textarea?.selectionStart ?? value.length
-      const query = textarea ? findMentionQuery(value, caret) : mentionQuery
-      if (!query) {
-        return
-      }
-      const suffix = value[caret] && !/\s/.test(value[caret]) ? ' ' : ''
-      const inserted = `@${option.login}${suffix}`
-      const nextValue = `${value.slice(0, query.atIndex)}${inserted}${value.slice(caret)}`
-      const nextCaret = query.atIndex + inserted.length
-      onValueChange(nextValue)
-      setMentionQuery(null)
-      requestAnimationFrame(() => {
-        textarea?.focus()
-        textarea?.setSelectionRange(nextCaret, nextCaret)
-      })
-    },
-    [mentionQuery, onValueChange, textareaRef, value]
-  )
-
-  return (
-    <div className={cn('relative min-w-0 flex-1', wrapperClassName)}>
-      {showSuggestions && (
-        <div className="absolute right-0 bottom-[calc(100%+6px)] left-0 z-50 max-h-64 overflow-y-auto rounded-md border border-border/70 bg-popover p-1 text-popover-foreground shadow-lg scrollbar-sleek">
-          {suggestions.map((option, index) => (
-            <button
-              key={option.login}
-              type="button"
-              onMouseDown={(event) => {
-                event.preventDefault()
-                insertMention(option)
-              }}
-              className={cn(
-                'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[12px]',
-                index === activeIndex && 'bg-accent text-accent-foreground'
-              )}
-            >
-              {option.avatarUrl ? (
-                <img src={option.avatarUrl} alt="" className="size-5 shrink-0 rounded-full" />
-              ) : (
-                <div className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground">
-                  {option.login.slice(0, 1).toUpperCase()}
-                </div>
-              )}
-              <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-                <span className="shrink-0 font-medium">@{option.login}</span>
-                {option.name && (
-                  <>
-                    <span className="shrink-0 text-muted-foreground">|</span>
-                    <span className="truncate text-muted-foreground">{option.name}</span>
-                  </>
-                )}
-                <span className="shrink-0 text-muted-foreground">|</span>
-                <span className="shrink-0 text-[11px] text-muted-foreground">{option.source}</span>
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
-      <textarea
-        ref={textareaRef}
-        value={value}
-        onChange={(event) => {
-          onValueChange(event.target.value)
-          syncMentionQuery(event.currentTarget)
-        }}
-        onClick={(event) => syncMentionQuery(event.currentTarget)}
-        onKeyUp={(event) => {
-          if (!['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(event.key)) {
-            syncMentionQuery(event.currentTarget)
-          }
-        }}
-        onBlur={() => setMentionQuery(null)}
-        onKeyDown={(event) => {
-          if (showSuggestions) {
-            if (event.key === 'ArrowDown') {
-              event.preventDefault()
-              setActiveIndex((current) => (current + 1) % suggestions.length)
-              return
-            }
-            if (event.key === 'ArrowUp') {
-              event.preventDefault()
-              setActiveIndex((current) => (current - 1 + suggestions.length) % suggestions.length)
-              return
-            }
-            if (event.key === 'Enter' || event.key === 'Tab') {
-              event.preventDefault()
-              insertMention(suggestions[activeIndex] ?? suggestions[0])
-              return
-            }
-            if (event.key === 'Escape') {
-              event.preventDefault()
-              setMentionQuery(null)
-              return
-            }
-          }
-          onKeyDown?.(event)
-        }}
-        placeholder={placeholder}
-        rows={rows}
-        className={className}
-      />
-    </div>
   )
 }
 
