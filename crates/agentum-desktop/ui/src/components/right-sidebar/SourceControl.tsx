@@ -2,6 +2,7 @@ import { api } from '@/tauri'
 import { createRunningPullRequestGenerationRecord, getPullRequestGenerationRecordKey, resolvePullRequestGenerationCancel, resolvePullRequestGenerationFailure, resolvePullRequestGenerationSuccess, shouldHydratePullRequestGenerationResult, type PullRequestGenerationContext, type PullRequestGenerationFields, type PullRequestGenerationRecords } from './source-control-pr-generation'
 import { appendCommitFailureCustomInstruction, buildFixCommitFailurePrompt, buildResolveConflictsPrompt, CONFLICT_KIND_LABELS } from './source-control-prompts'
 import { normalizeSourceControlViewMode, requestSourceControlViewModePreferenceWrite, type SourceControlViewModePreferenceWriteState } from './source-control-view-mode'
+import { compareGitStatusEntries } from './source-control-status-sort'
 /* eslint-disable max-lines */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -6529,21 +6530,4 @@ export function ActionButton({
       </TooltipContent>
     </Tooltip>
   )
-}
-
-function compareGitStatusEntries(a: GitStatusEntry, b: GitStatusEntry): number {
-  return (
-    getConflictSortRank(a) - getConflictSortRank(b) ||
-    a.path.localeCompare(b.path, undefined, { numeric: true })
-  )
-}
-
-function getConflictSortRank(entry: GitStatusEntry): number {
-  if (entry.conflictStatus === 'unresolved') {
-    return 0
-  }
-  if (entry.conflictStatus === 'resolved_locally') {
-    return 1
-  }
-  return 2
 }
