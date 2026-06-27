@@ -2,10 +2,12 @@ import { api } from '@/tauri'
 import { parseOwnerRepoFromItemUrl } from '@/lib/github-item-url'
 import { CHECK_SORT_ORDER, formatCheckTimestamp, getCheckConclusion, getCheckCounts, getCheckStatusLabel, getChecksSummaryLabel } from '@/lib/pr-check-format'
 import { getBrokenChecks } from './pr-checks-fix-prompt'
+import { GHCommentComposer } from './pull-request-comment-composer'
+import { CommentReplyForm } from './pull-request-comment-reply-form'
 import { MentionTextarea } from './pull-request-mention-textarea'
 import { PRReviewersPanel } from './pull-request-reviewers-panel'
 import { findNearestBraceBlock, getCheckDetailsKey, getPRFileContentCacheKey, getPRFileDiffResult, getPRFileSectionKey, getWorkItemDetailsCacheKey, gitHubPRFileToBranchEntry, isPRFileViewed } from '@/lib/github-pr-detail-helpers'
-import { buildMentionOptions, type MentionOption } from './pull-request-mentions'
+import { buildMentionOptions } from './pull-request-mentions'
 import { getStateLabel, getStateTone, normalizeItemDialogTab } from '@/lib/github-work-item-state'
 import type { ItemDialogTab } from '@/shared/types'
 import {
@@ -31,7 +33,7 @@ import React, {
 } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { editor as monacoEditor } from 'monaco-editor'
-import { ArrowDown, ArrowRight, ArrowUp, Braces, Check, ChevronDown, ChevronLeft, CircleDashed, CircleDot, Copy, ExternalLink, FileText, FolderKanban, GitMerge, GitPullRequest, GitPullRequestClosed, ListChecks, LoaderCircle, MessageSquare, MessageSquarePlus, PanelLeftOpen, Pencil, Plus, RefreshCw, Send, UndoDot, Wrench, X } from 'lucide-react'
+import { ArrowDown, ArrowRight, ArrowUp, Braces, Check, ChevronDown, ChevronLeft, CircleDashed, CircleDot, Copy, ExternalLink, FileText, FolderKanban, GitMerge, GitPullRequest, GitPullRequestClosed, ListChecks, LoaderCircle, MessageSquare, MessageSquarePlus, PanelLeftOpen, Pencil, Plus, RefreshCw, UndoDot, Wrench, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { ButtonGroup } from '@/components/ui/button-group'
@@ -2111,83 +2113,6 @@ function PRActionsPanel({
   )
 }
 
-function CommentReplyForm({
-  className,
-  placeholder,
-  mentionOptions,
-  onCancel,
-  onSubmit
-}: {
-  className?: string
-  placeholder: string
-  mentionOptions: MentionOption[]
-  onCancel: () => void
-  onSubmit: (body: string) => Promise<boolean>
-}): React.JSX.Element {
-  const [body, setBody] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const mountedRef = useMountedRef()
-
-  useEffect(() => {
-    textareaRef.current?.focus()
-  }, [])
-
-  const submit = useCallback(async () => {
-    const trimmed = body.trim()
-    if (!trimmed || submitting) {
-      return
-    }
-    setSubmitting(true)
-    try {
-      const ok = await onSubmit(trimmed)
-      if (!mountedRef.current) {
-        return
-      }
-      if (ok) {
-        setBody('')
-      }
-    } finally {
-      if (mountedRef.current) {
-        setSubmitting(false)
-      }
-    }
-  }, [body, mountedRef, onSubmit, submitting])
-
-  return (
-    <div className={cn('rounded-md border border-border/50 bg-background/60 p-2', className)}>
-      <MentionTextarea
-        textareaRef={textareaRef}
-        value={body}
-        onValueChange={setBody}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') {
-            e.preventDefault()
-            onCancel()
-            return
-          }
-          if (isScreenSubmitShortcut(e)) {
-            e.preventDefault()
-            void submit()
-          }
-        }}
-        placeholder={placeholder}
-        rows={3}
-        mentionOptions={mentionOptions}
-        className="scrollbar-sleek min-h-20 w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 text-[13px] placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-      />
-      <div className="mt-2 flex justify-end gap-2">
-        <Button variant="ghost" size="sm" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button size="sm" disabled={!body.trim() || submitting} onClick={() => void submit()}>
-          {submitting ? 'Posting…' : 'Reply'}
-        </Button>
-      </div>
-    </div>
-  )
-}
-
 function buildFixBrokenChecksPrompt(item: GitHubWorkItem, checks: PRCheckDetail[]): string {
   const brokenChecks = getBrokenChecks(checks)
   const checkLines =
@@ -3496,117 +3421,6 @@ function GHEditSection({
       >
         Start workspace from issue
         <ArrowRight className="size-4" />
-      </Button>
-    </div>
-  )
-}
-
-function GHCommentComposer({
-  className,
-  repoPath,
-  repoId,
-  issueNumber,
-  itemType,
-  mentionOptions,
-  onCommentAdded
-}: {
-  className?: string
-  repoPath: string
-  repoId?: string | null
-  issueNumber: number
-  itemType: 'issue' | 'pr'
-  mentionOptions: MentionOption[]
-  onCommentAdded: (comment: PRComment) => void
-}): React.JSX.Element {
-  const [body, setBody] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const mountedRef = useMountedRef()
-
-  const autoGrow = useCallback(() => {
-    const el = textareaRef.current
-    if (!el) {
-      return
-    }
-    el.style.height = 'auto'
-    el.style.height = `${Math.max(80, Math.min(el.scrollHeight, 240))}px`
-  }, [])
-
-  const handleSubmit = useCallback(async () => {
-    const trimmed = body.trim()
-    if (!trimmed) {
-      return
-    }
-    setSubmitting(true)
-    try {
-      const result = await addIssueCommentForRepo({
-        repoPath,
-        repoId: repoId ?? undefined,
-        number: issueNumber,
-        body: trimmed,
-        type: itemType
-      })
-      if (!mountedRef.current) {
-        return
-      }
-      if (result.ok) {
-        setBody('')
-        requestAnimationFrame(autoGrow)
-        // Why: use the comment returned by GitHub so the optimistic row shows
-        // the real login/avatar immediately instead of waiting for a reopen.
-        onCommentAdded(result.comment)
-      } else {
-        toast.error(result.error ?? 'Failed to add comment')
-      }
-    } catch (err) {
-      if (mountedRef.current) {
-        toast.error(err instanceof Error ? err.message : 'Failed to add comment')
-      }
-    } finally {
-      if (mountedRef.current) {
-        setSubmitting(false)
-      }
-    }
-  }, [autoGrow, body, mountedRef, repoPath, repoId, issueNumber, itemType, onCommentAdded])
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (isScreenSubmitShortcut(e)) {
-        e.preventDefault()
-        handleSubmit()
-      }
-    },
-    [handleSubmit]
-  )
-
-  return (
-    <div className={cn('flex flex-col items-start gap-2', className)}>
-      <MentionTextarea
-        textareaRef={textareaRef}
-        value={body}
-        onValueChange={(nextValue) => {
-          setBody(nextValue)
-          requestAnimationFrame(autoGrow)
-        }}
-        onKeyDown={handleKeyDown}
-        placeholder="Add a comment…"
-        rows={4}
-        mentionOptions={mentionOptions}
-        wrapperClassName="flex min-h-20 w-full items-stretch"
-        className="scrollbar-sleek block h-20 max-h-[240px] min-h-20 w-full resize-none overflow-y-auto rounded-md border border-input bg-card px-3 py-2 text-[13px] leading-5 placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-      />
-      <Button
-        onClick={handleSubmit}
-        disabled={!body.trim() || submitting}
-        className="gap-2"
-        aria-label="Send comment"
-      >
-        {submitting ? (
-          <LoaderCircle className="size-3.5 animate-spin" />
-        ) : (
-          <Send className="size-3.5" />
-        )}
-        Comment
       </Button>
     </div>
   )
