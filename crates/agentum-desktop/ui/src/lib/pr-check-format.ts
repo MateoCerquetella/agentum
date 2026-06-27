@@ -92,3 +92,13 @@ export function getChecksSummaryLabel(checks: PRCheckDetail[]): string {
   }
   return `${counts.passing} of ${checks.length} checks passing`
 }
+
+export const CHECK_SORT_ORDER: Record<string, number> = {
+  failure: 0,
+  timed_out: 0,
+  cancelled: 1,
+  pending: 2,
+  neutral: 3,
+  skipped: 4,
+  success: 5
+}

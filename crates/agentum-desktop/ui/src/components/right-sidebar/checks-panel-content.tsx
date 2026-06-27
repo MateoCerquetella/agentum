@@ -1,5 +1,5 @@
 import { api } from '@/tauri'
-import { formatCheckTimestamp, getCheckConclusion, getCheckStatusLabel } from '@/lib/pr-check-format'
+import { CHECK_SORT_ORDER, formatCheckTimestamp, getCheckConclusion, getCheckStatusLabel } from '@/lib/pr-check-format'
 /* eslint-disable max-lines -- Why: co-locating all checks-panel sub-components (checks list,
 conflict sections, threaded PR comments) keeps the shared icon/color maps in one place. */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
@@ -336,16 +336,6 @@ export function PRTriageStrip({
       </div>
     </div>
   )
-}
-
-const CHECK_SORT_ORDER: Record<string, number> = {
-  failure: 0,
-  timed_out: 0,
-  cancelled: 1,
-  pending: 2,
-  neutral: 3,
-  skipped: 4,
-  success: 5
 }
 
 type CheckDetailsLoadState = {

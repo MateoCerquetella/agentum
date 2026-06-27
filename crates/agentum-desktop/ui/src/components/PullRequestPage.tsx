@@ -1,7 +1,7 @@
 import { api } from '@/tauri'
 import { parseOwnerRepoFromItemUrl } from '@/lib/github-item-url'
 import { buildRequestedReviewUsers, mergeReviewerSuggestions } from '@/lib/github-reviewers'
-import { formatCheckTimestamp, getCheckConclusion, getCheckCounts, getCheckStatusLabel, getChecksSummaryLabel } from '@/lib/pr-check-format'
+import { CHECK_SORT_ORDER, formatCheckTimestamp, getCheckConclusion, getCheckCounts, getCheckStatusLabel, getChecksSummaryLabel } from '@/lib/pr-check-format'
 import { getBrokenChecks } from './pr-checks-fix-prompt'
 import {
   findNearestBraceBlock,
@@ -2944,16 +2944,6 @@ function CommentReplyForm({
       </div>
     </div>
   )
-}
-
-const CHECK_SORT_ORDER: Record<string, number> = {
-  failure: 0,
-  timed_out: 0,
-  cancelled: 1,
-  pending: 2,
-  neutral: 3,
-  skipped: 4,
-  success: 5
 }
 
 function buildFixBrokenChecksPrompt(item: GitHubWorkItem, checks: PRCheckDetail[]): string {
