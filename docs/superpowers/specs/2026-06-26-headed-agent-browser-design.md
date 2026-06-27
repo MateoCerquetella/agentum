@@ -78,19 +78,34 @@ arg. `agentum_browser` "open"/launch for the persistent surface requests `Headed
 screencast subscribe path keeps requesting `Headless`. Tmux session naming gets a `-h`
 suffix for headed so a headed and a headless browser never collide on one profile/port.
 
-### 4.2 Annotation channel over CDP
+### 4.2 Annotation channel over CDP (implemented — Phase 1b)
 The WKWebView path posts annotations to `agentumgrab://annotation/add` (a Tauri scheme
-handler). Headed Chrome has no such handler, so:
-1. On each navigation, inject `INPAGE_ANNOTATE_JS` via **`Page.addScriptToEvaluateOnNewDocument`**
-   (so it survives reloads), with the submit path swapped from the `Image`→scheme trick to a
-   **CDP binding**: `Runtime.addBinding("__agentumAnnotation")`; the overlay calls
-   `window.__agentumAnnotation(JSON.stringify(payload))`.
-2. The server holds that CDP connection; on `Runtime.bindingCalled` it forwards the payload
-   to the same annotation sink the WKWebView path uses (element context + comment + intent +
-   optional `Page.captureScreenshot` of the element clip → the chosen agent).
+handler). Headed Chrome has no such handler. Rather than hold a persistent CDP connection
+for `Runtime.bindingCalled` (the one-shot `cdp_driver` model doesn't), the headed overlay
+**beacons over HTTP to agentum's own loopback server** — simpler and connection-free:
 
-This keeps **one** annotation format and reuses the picker/agent-send logic; only the
-transport changes (CDP binding vs custom scheme).
+1. **Inject** — a new `cdp_driver` op `annotate` (`cdp_annotate`) injects
+   `ANNOTATE_OVERLAY_JS` (the WKWebView overlay, byte-identical payload) via
+   `Runtime.evaluate`. It is **not** gated by `AGENTUM_BROWSER_ALLOW_EVAL` (a fixed trusted
+   script, not caller code). The overlay's `submit()` is the only change vs the WKWebView
+   one: `fetch(ANNOTATE_URL, {method:'POST', body, mode:'no-cors', keepalive:true})` (no
+   custom-scheme `Image`). `mode:'no-cors'` means no JSON content-type header, so the route
+   reads a raw string body.
+2. **Receive + broadcast** — `POST /api/cdp-browser/annotation/add` parses the raw body and
+   rebroadcasts it on the existing `/api/events` bus as a `browser.annotation` event
+   (`state.bus.send`). Reachable on the embedded loopback server (no_auth); the page can't
+   carry a token.
+3. **Surface** — `arm` is `POST /api/cdp-browser/annotate {worktreeId}` (resolves the
+   worktree's headed `cdpPort`, builds the loopback `annotateUrl` from `state.api_base_url`,
+   runs the `annotate` op). The desktop subscribes via `openBrowserAnnotationStream`
+   (`useServerBrowserAnnotations`, mounted by `App.tsx` next to `useIpcEvents`) and surfaces
+   each annotation as a toast with a **Copy for agent** action
+   (`formatHeadedAnnotationForAgent`). The headed window has no in-app tab, so it can't reuse
+   the per-tab WKWebView tray; auto-routing the prompt to a specific worktree agent (vs the
+   clipboard hand-off) is a Phase 1b+ refinement.
+
+UI entry: an **"Annotate persistent browser"** launcher item (`annotatePersistentBrowser`
+command). The annotation **payload shape stays identical** to the WKWebView path.
 
 ### 4.3 Pane / launcher UI (`#4`)
 The browser launcher (new-tab surface) offers two entries:
@@ -111,11 +126,12 @@ sharpness for speed. (Already implemented.)
   is needed), MCP prefers the headed browser, the `POST/DELETE /api/cdp-browser/headed`
   route, the "Open Browser (persistent)" launcher entry, and `#3`. This alone removes the
   laggy screencast for the local agent browser — the primary pain.
-- **Phase 1b (follow-up):** the CDP annotation channel (inject overlay via
-  `Page.addScriptToEvaluateOnNewDocument` + `Runtime.addBinding`, forward to the agent).
-  Tracked as its own issue/PR — the screencast annotation path (`AgentBrowserPickerOverlay`
-  + `node_at_point`) still works for the remaining remote/SSH screencast surface in the
-  meantime.
+- **Phase 1b (implemented — branch `feat/headed-browser-annotations`):** the annotation
+  channel via injected overlay → loopback `fetch` beacon → `/api/events` broadcast →
+  desktop toast (see §4.2). Server backbone is unit-tested; the injected overlay + the
+  end-to-end toast need GUI verification on a real Chrome window before release. The
+  screencast annotation path (`AgentBrowserPickerOverlay` + `node_at_point`) still works for
+  the remote/SSH screencast surface.
 - **Phase 2:** window-following so the Chrome window tracks the agentum pane bounds.
 - **Phase 3 (optional):** CEF for true in-pane Chromium embedding.
 

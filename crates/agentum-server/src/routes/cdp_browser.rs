@@ -13,8 +13,10 @@
 //! fail-loud message (with the `npx playwright install chromium` hint) in the
 //! response body, so the UI can show an actionable error instead of hanging.
 
+use agentum_core::Event;
 use axum::Json;
 use axum::Router;
+use axum::extract::State;
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -36,6 +38,66 @@ pub fn router() -> Router<AppState> {
             "/api/cdp-browser/headed",
             post(launch_headed).delete(stop_headed),
         )
+        // Phase 1b annotations for the headed window: `annotate` arms the in-page
+        // overlay (injected over CDP); `annotation/add` receives what the overlay
+        // beacons back and rebroadcasts it on /api/events for the desktop UI.
+        .route("/api/cdp-browser/annotate", post(arm_annotate))
+        .route("/api/cdp-browser/annotation/add", post(receive_annotation))
+}
+
+/// `POST /api/cdp-browser/annotate` — arm the in-page annotate overlay in a worktree's
+/// **headed** Chrome window (inject [`cdp_driver::cdp_annotate`] over CDP). Body
+/// `{worktreeId}`. The user then clicks an element in the real Chrome window and the
+/// overlay POSTs the annotation back to `annotation/add`. Requires a headed browser to
+/// be open for the worktree (open one via `/headed` first).
+async fn arm_annotate(
+    State(state): State<AppState>,
+    Json(body): Json<HeadedBody>,
+) -> Result<Json<Value>, ApiError> {
+    let port = cdp_browser::registered_headed_port(&body.worktree_id)
+        .await
+        .ok_or_else(|| {
+            ApiError::Internal(
+                "no persistent (headed) browser is open for this worktree — open one first".into(),
+            )
+        })?;
+    // The overlay beacons its submission back to THIS server's own loopback origin.
+    let base = state
+        .api_base_url
+        .clone()
+        .unwrap_or_else(|| "http://127.0.0.1:8822".to_string());
+    let annotate_url = format!(
+        "{}/api/cdp-browser/annotation/add",
+        base.trim_end_matches('/')
+    );
+    let args = json!({
+        "cdpPort": port,
+        "annotateUrl": annotate_url,
+        "pageId": body.worktree_id,
+    });
+    let result = crate::cdp_driver::run_browser_op("annotate", &args)
+        .await
+        .map_err(|e| ApiError::Internal(format!("{e:#}")))?;
+    Ok(Json(result))
+}
+
+/// `POST /api/cdp-browser/annotation/add` — receive an annotation the injected overlay
+/// beaconed from a headed Chrome window and rebroadcast it on `/api/events` as
+/// `browser.annotation` so the desktop UI surfaces it (same payload shape as the
+/// WKWebView `agentumgrab://` path). The page can't carry a bearer token and sends a
+/// raw (text/plain, `no-cors`) body — so this parses the body as a string itself rather
+/// than via the JSON extractor, and is reachable on the embedded loopback server
+/// (no_auth). Best-effort: a malformed body is a no-op, never an error to the page.
+async fn receive_annotation(State(state): State<AppState>, raw: String) -> Json<Value> {
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(payload) => {
+            let _ = state
+                .bus
+                .send(Event::new("browser.annotation").with_payload(payload));
+            Json(json!({ "ok": true }))
+        }
+        Err(e) => Json(json!({ "ok": false, "error": format!("invalid annotation body: {e}") })),
+    }
 }
 
 #[derive(Deserialize)]
