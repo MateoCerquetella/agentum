@@ -253,10 +253,6 @@ async fn ensure(mode: LaunchMode<'_>) -> Result<String> {
     }
 }
 
-/// A plain TCP connect is enough to know "something is serving here"; the
-/// agent's own MCP client performs the protocol handshake. Short timeout so a
-/// dead port fails fast on the launch hot-path.
-/// Poll the port until it accepts connections or the deadline passes.
 /// Fail loud when `npx` isn't installed. A PATH scan (no process spawn) keeps
 /// the launch hot-path cheap.
 fn ensure_npx_available() -> Result<()> {

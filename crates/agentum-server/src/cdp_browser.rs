@@ -633,10 +633,6 @@ fn user_data_dir() -> Result<PathBuf> {
 
 // --- small network/path helpers, mirroring `playwright_mcp`'s shape ---------
 
-/// A plain TCP connect is enough to know "something is serving here"; the bound
-/// MCP's CDP client performs the protocol handshake (with its own
-/// `--cdp-timeout`). Short timeout so a dead port fails fast on the hot path.
-/// Poll the port until it accepts connections or the deadline passes.
 /// `$HOME`, falling back to `/` so a spawn never fails on an unset HOME.
 fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
