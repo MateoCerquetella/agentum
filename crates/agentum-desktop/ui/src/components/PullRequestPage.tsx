@@ -14,6 +14,13 @@ import {
   isPRFileViewed,
   mapPRFileStatus
 } from '@/lib/github-pr-detail-helpers'
+import {
+  buildMentionOptions,
+  filterMentionOptions,
+  findMentionQuery,
+  type MentionOption,
+  type MentionQuery
+} from './pull-request-mentions'
 import { getStateLabel, getStateTone, normalizeItemDialogTab } from '@/lib/github-work-item-state'
 import type { ItemDialogTab } from '@/shared/types'
 import {
@@ -200,18 +207,6 @@ import type {
 // which matches the indicator's suppression rule.
 const MonacoCodeExcerpt = lazy(() => import('@/components/editor/MonacoCodeExcerpt'))
 
-type MentionOption = {
-  login: string
-  name?: string | null
-  avatarUrl?: string
-  source: string
-}
-
-type MentionQuery = {
-  atIndex: number
-  query: string
-}
-
 const CODE_CONTEXT_EXPAND_STEP = 5
 const CODE_CONTEXT_FALLBACK_LINES = 20
 const CODE_CONTEXT_MAX_BLOCK_LINES = CODE_CONTEXT_FALLBACK_LINES * 2 + 1
@@ -252,80 +247,6 @@ type PullRequestPageProps = {
    *  simultaneously (Project mode where the row also lives in the active
    *  workspace) — slug routing wins for writes. */
   projectOrigin?: PullRequestPageProjectOrigin
-}
-
-function findMentionQuery(value: string, caret: number): MentionQuery | null {
-  const beforeCaret = value.slice(0, caret)
-  const match = /(^|[\s([{,])@([A-Za-z0-9-]*)$/.exec(beforeCaret)
-  if (!match) {
-    return null
-  }
-  const query = match[2] ?? ''
-  return {
-    atIndex: beforeCaret.length - query.length - 1,
-    query
-  }
-}
-
-function buildMentionOptions({
-  item,
-  comments,
-  participants,
-  assignableUsers
-}: {
-  item: GitHubWorkItem
-  comments: PRComment[]
-  participants: GitHubAssignableUser[]
-  assignableUsers: GitHubAssignableUser[]
-}): MentionOption[] {
-  const byLogin = new Map<string, MentionOption>()
-  const add = (
-    login: string | null | undefined,
-    source: string,
-    avatarUrl?: string,
-    name?: string | null
-  ): void => {
-    if (!login || login === 'ghost') {
-      return
-    }
-    const key = login.toLowerCase()
-    const existing = byLogin.get(key)
-    if (existing) {
-      if (!existing.avatarUrl && avatarUrl) {
-        existing.avatarUrl = avatarUrl
-      }
-      if (!existing.name && name) {
-        existing.name = name
-      }
-      return
-    }
-    byLogin.set(key, { login, source, avatarUrl, name })
-  }
-
-  add(item.author, item.type === 'pr' ? 'PR author' : 'Issue author')
-  for (const comment of comments) {
-    add(comment.author, 'Commenter', comment.authorAvatarUrl)
-  }
-  for (const user of participants) {
-    add(user.login, 'Participant', user.avatarUrl, user.name)
-  }
-  for (const user of assignableUsers) {
-    add(user.login, 'Team member', user.avatarUrl, user.name)
-  }
-
-  return Array.from(byLogin.values())
-}
-
-function filterMentionOptions(options: MentionOption[], query: string): MentionOption[] {
-  const normalizedQuery = query.toLowerCase()
-  const filtered = normalizedQuery
-    ? options.filter(
-        (option) =>
-          option.login.toLowerCase().includes(normalizedQuery) ||
-          (option.name ?? '').toLowerCase().includes(normalizedQuery)
-      )
-    : options
-  return filtered.slice(0, 8)
 }
 
 function PRReviewersPanel({
