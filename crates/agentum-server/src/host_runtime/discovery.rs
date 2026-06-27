@@ -57,7 +57,7 @@ pub async fn list_all_tmux_sessions(host: &Host) -> Result<Vec<DiscoveredTmuxSes
 
 /// Parse [`TMUX_DISCOVER_FORMAT`] pane lines into ALL sessions regardless of
 /// the `agentum-*` naming convention.
-pub(crate) fn parse_tmux_panes_all(stdout: &str) -> Vec<DiscoveredTmuxSession> {
+fn parse_tmux_panes_all(stdout: &str) -> Vec<DiscoveredTmuxSession> {
     let mut sessions: Vec<DiscoveredTmuxSession> = Vec::new();
     for line in stdout.lines() {
         let line = line.trim_end_matches('\r');
@@ -148,7 +148,7 @@ pub(crate) fn parse_tmux_panes_managed(stdout: &str) -> Vec<DiscoveredTmuxSessio
 /// order. `managed = false` keeps only EXTERNAL sessions (discovery); `managed =
 /// true` keeps only agentum-MANAGED (`agentum-*`) ones (zombie sweep). Tolerant
 /// of trailing `\r` and malformed lines.
-pub(crate) fn parse_tmux_panes_filtered(stdout: &str, managed: bool) -> Vec<DiscoveredTmuxSession> {
+fn parse_tmux_panes_filtered(stdout: &str, managed: bool) -> Vec<DiscoveredTmuxSession> {
     let mut sessions: Vec<DiscoveredTmuxSession> = Vec::new();
     for line in stdout.lines() {
         let line = line.trim_end_matches('\r');

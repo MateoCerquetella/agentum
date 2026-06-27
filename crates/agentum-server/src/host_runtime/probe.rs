@@ -152,7 +152,7 @@ pub(crate) fn probe_local() -> ProbeOutput {
     }
 }
 
-pub(crate) fn detect_local_pkg_manager() -> String {
+fn detect_local_pkg_manager() -> String {
     for (bin, name) in [
         ("apt-get", "apt"),
         ("dnf", "dnf"),
