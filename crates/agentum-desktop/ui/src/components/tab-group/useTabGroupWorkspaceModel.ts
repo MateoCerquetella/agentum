@@ -24,7 +24,7 @@ import {
   isWebRuntimeSessionActive
 } from '../../runtime/web-runtime-session'
 import { openTabBarEntry, type TabCreateEntryArgs } from '../tab-bar/tab-create-entry-action'
-import { launchHeadedBrowser } from '../../runtime/headed-browser-client'
+import { armHeadedAnnotate, launchHeadedBrowser } from '../../runtime/headed-browser-client'
 import { toast } from 'sonner'
 
 export type GroupEditorItem = OpenFile & { tabId: string }
@@ -571,6 +571,23 @@ export function useTabGroupWorkspaceModel({
           } catch (err) {
             toast.error(
               err instanceof Error ? err.message : 'Could not launch the persistent browser.'
+            )
+          }
+        })()
+      },
+      // Arm the in-page annotate overlay in the (already-open) persistent Chrome
+      // window. The user clicks an element there; the overlay beacons the annotation
+      // back to the server, which broadcasts `browser.annotation` → surfaced by the
+      // events subscriber (see useServerBrowserAnnotations). Errors if no headed
+      // browser is open yet.
+      annotatePersistentBrowser: () => {
+        void (async () => {
+          try {
+            await armHeadedAnnotate(worktreeId)
+            toast.success('Annotate armed — click an element in the Chrome window.')
+          } catch (err) {
+            toast.error(
+              err instanceof Error ? err.message : 'Could not arm annotate (open a persistent browser first).'
             )
           }
         })()
