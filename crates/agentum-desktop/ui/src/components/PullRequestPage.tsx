@@ -2,13 +2,16 @@ import { api } from '@/tauri'
 import { parseOwnerRepoFromItemUrl } from '@/lib/github-item-url'
 import { CHECK_SORT_ORDER, formatCheckTimestamp, getCheckConclusion, getCheckCounts, getCheckStatusLabel, getChecksSummaryLabel } from '@/lib/pr-check-format'
 import { getBrokenChecks } from './pr-checks-fix-prompt'
+import { GHEditSection } from './pull-request-edit-section'
+import { PRActionsPanel } from './pull-request-actions-panel'
+import type { PullRequestPageProjectOrigin } from './pull-request-types'
 import { GHCommentComposer } from './pull-request-comment-composer'
 import { CommentReplyForm } from './pull-request-comment-reply-form'
 import { MentionTextarea } from './pull-request-mention-textarea'
 import { PRReviewersPanel } from './pull-request-reviewers-panel'
 import { findNearestBraceBlock, getCheckDetailsKey, getPRFileContentCacheKey, getPRFileDiffResult, getPRFileSectionKey, getWorkItemDetailsCacheKey, gitHubPRFileToBranchEntry, isPRFileViewed } from '@/lib/github-pr-detail-helpers'
 import { buildMentionOptions } from './pull-request-mentions'
-import { getStateLabel, getStateTone, normalizeItemDialogTab } from '@/lib/github-work-item-state'
+import { getStateLabel, normalizeItemDialogTab } from '@/lib/github-work-item-state'
 import type { ItemDialogTab } from '@/shared/types'
 import {
   addIssueCommentForRepo,
@@ -17,7 +20,7 @@ import {
   getWorkItemDetailsForRepo,
   setPRFileViewedForRepo
 } from '@/lib/github-repo-operations'
-import { CommentReactions, PRViewedCheckbox, WorkItemStateBadge } from './github-item-display'
+import { CommentReactions, PRViewedCheckbox } from './github-item-display'
 import { formatRelativeTime } from '@/lib/relative-time'
 /* eslint-disable max-lines -- Why: duplicated from GitHubItemDialog so the dedicated PR full-page surface can evolve its Primer-styled header without destabilizing the issue dialog; planned to refactor shared parts out later. */
 import React, {
@@ -33,12 +36,11 @@ import React, {
 } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { editor as monacoEditor } from 'monaco-editor'
-import { ArrowDown, ArrowRight, ArrowUp, Braces, Check, ChevronDown, ChevronLeft, CircleDashed, CircleDot, Copy, ExternalLink, FileText, FolderKanban, GitMerge, GitPullRequest, GitPullRequestClosed, ListChecks, LoaderCircle, MessageSquare, MessageSquarePlus, PanelLeftOpen, Pencil, Plus, RefreshCw, UndoDot, Wrench, X } from 'lucide-react'
+import { ArrowDown, ArrowRight, ArrowUp, Braces, Check, ChevronDown, ChevronLeft, CircleDashed, CircleDot, Copy, ExternalLink, FileText, FolderKanban, GitPullRequest, ListChecks, LoaderCircle, MessageSquare, MessageSquarePlus, PanelLeftOpen, Pencil, Plus, RefreshCw, UndoDot, Wrench, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { ButtonGroup } from '@/components/ui/button-group'
 import { useMountedRef } from '@/hooks/useMountedRef'
-import { useConfirmationDialog } from '@/components/confirmation-dialog'
 import {
   Accordion,
   AccordionContent,
@@ -47,14 +49,7 @@ import {
 } from '@/components/ui/accordion'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import CommentMarkdown from '@/components/sidebar/CommentMarkdown'
 import { detectLanguage } from '@/lib/language-detect'
 import { cn } from '@/lib/utils'
@@ -116,13 +111,7 @@ import { resolveCommentReplyTarget } from '@/components/comment-reply-target-sta
 import { useAppStore } from '@/store'
 import { useAllWorktrees } from '@/store/selectors'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
-import { useRepoLabels, useRepoAssignees, useImmediateMutation } from '@/hooks/useIssueMetadata'
-import { useRepoLabelsBySlug, useRepoAssigneesBySlug } from '@/hooks/useGitHubSlugMetadata'
-import { presentGitHubPRMergeState } from '@/components/github-pr-merge-state'
-import {
-  GITHUB_PR_MERGE_METHOD_LABELS,
-  resolveGitHubPRMergeMethods
-} from '../../../shared/github-pr-merge-methods'
+import { useRepoAssignees, useImmediateMutation } from '@/hooks/useIssueMetadata'
 import { pickDefaultAgent } from '@/lib/agent-catalog'
 import { getConnectionId } from '@/lib/connection-context'
 import { focusTerminalTabSurface } from '@/lib/focus-terminal-tab-surface'
@@ -133,7 +122,7 @@ import {
 import { launchAgentInNewTab } from '@/lib/launch-agent-in-new-tab'
 import { launchWorkItemDirect } from '@/lib/launch-work-item-direct'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
-import type { GitHubOwnerRepo, GitHubPRFile, GitHubPRFileContents, GitHubPRFileViewedState, GitHubWorkItem, GitHubWorkItemDetails, GitHubAssignableUser, GitHubPRMergeMethod, GitBranchChangeEntry, GitDiffResult, PRCheckDetail, PRComment } from '../../../shared/types'
+import type { GitHubOwnerRepo, GitHubPRFile, GitHubPRFileContents, GitHubPRFileViewedState, GitHubWorkItem, GitHubWorkItemDetails, GitHubAssignableUser, GitBranchChangeEntry, GitDiffResult, PRCheckDetail, PRComment } from '../../../shared/types'
 
 // Why: the GH item dialog can be opened from any work-item list surface and
 // doesn't have the full owner/repo context the list's cache entry carries.
@@ -154,16 +143,6 @@ const CODE_CONTEXT_MAX_BLOCK_LINES = CODE_CONTEXT_FALLBACK_LINES * 2 + 1
  *  Project view is showing rows from a different repo. See
  *  docs/design/github-project-view-tasks.md §Dialog editing from Project rows.
  */
-export type PullRequestPageProjectOrigin = {
-  owner: string
-  repo: string
-  number: number
-  type: 'issue' | 'pr'
-  projectId: string
-  projectItemId: string
-  cacheKey: string
-}
-
 type PullRequestPageProps = {
   workItem: GitHubWorkItem | null
   repoPath: string | null
@@ -1870,249 +1849,6 @@ function ConversationTab({
   )
 }
 
-function PRActionsPanel({
-  item,
-  repoPath,
-  repoId,
-  projectOrigin,
-  localState,
-  onStateChange,
-  onMutated
-}: {
-  item: GitHubWorkItem
-  repoPath: string | null
-  repoId: string | null
-  projectOrigin: PullRequestPageProjectOrigin | undefined
-  localState: GitHubWorkItem['state']
-  onStateChange: (state: GitHubWorkItem['state']) => void
-  onMutated: () => void
-}): React.JSX.Element {
-  const [statePending, setStatePending] = useState(false)
-  const [mergePending, setMergePending] = useState(false)
-  const patchWorkItem = useAppStore((s) => s.patchWorkItem)
-  const patchProjectRowContent = useAppStore((s) => s.patchProjectRowContent)
-  const confirm = useConfirmationDialog()
-  const actionItem = { ...item, state: localState }
-  const mergePresentation = presentGitHubPRMergeState(actionItem)
-  const mergeMethods = resolveGitHubPRMergeMethods(actionItem.mergeMethodSettings)
-  const canMutateState = localState !== 'merged' && (!!repoPath || !!projectOrigin)
-  const nextState: 'open' | 'closed' = localState === 'closed' ? 'open' : 'closed'
-  const mergeDisabled = !repoPath || mergePending || !mergePresentation.directMergeAvailable
-
-  const patchProjectRowIfNeeded = useCallback(
-    (state: GitHubWorkItem['state']) => {
-      if (!projectOrigin) {
-        return
-      }
-      patchProjectRowContent(projectOrigin.cacheKey, projectOrigin.projectItemId, { state })
-    },
-    [patchProjectRowContent, projectOrigin]
-  )
-
-  const applyStatePatch = useCallback(
-    (state: GitHubWorkItem['state']) => {
-      onStateChange(state)
-      patchWorkItem(item.id, { state }, item.repoId)
-      patchProjectRowIfNeeded(state)
-    },
-    [item.id, item.repoId, onStateChange, patchProjectRowIfNeeded, patchWorkItem]
-  )
-
-  const handleStateChange = async (): Promise<void> => {
-    if (!canMutateState || statePending) {
-      return
-    }
-    const label = nextState === 'closed' ? 'Close' : 'Reopen'
-    const confirmed = await confirm({
-      title: `${label} PR #${item.number}?`,
-      description:
-        nextState === 'closed'
-          ? 'This will close the pull request on GitHub.'
-          : 'This will reopen the pull request on GitHub.',
-      confirmLabel: label,
-      confirmVariant: nextState === 'closed' ? 'destructive' : 'default'
-    })
-    if (!confirmed) {
-      return
-    }
-    const previousState = localState
-    setStatePending(true)
-    applyStatePatch(nextState)
-    try {
-      await runPullRequestStateUpdate({
-        repoPath,
-        repoId,
-        projectOrigin,
-        number: item.number,
-        updates: { state: nextState }
-      })
-      toast.success(nextState === 'closed' ? 'Pull request closed' : 'Pull request reopened')
-      onMutated()
-    } catch (err) {
-      applyStatePatch(previousState)
-      toast.error(err instanceof Error ? err.message : `Failed to ${label.toLowerCase()} PR`)
-    } finally {
-      setStatePending(false)
-    }
-  }
-
-  const handleMerge = async (method: GitHubPRMergeMethod): Promise<void> => {
-    if (!repoPath || mergeDisabled) {
-      return
-    }
-    const label = GITHUB_PR_MERGE_METHOD_LABELS[method]
-    const confirmed = await confirm({
-      title: `${label} PR #${item.number}?`,
-      description: 'This will update the pull request on GitHub.',
-      confirmLabel: label
-    })
-    if (!confirmed) {
-      return
-    }
-    setMergePending(true)
-    try {
-      const result = await api.gh.mergePR({
-        repoPath,
-        repoId: repoId ?? undefined,
-        prNumber: item.number,
-        method,
-        prRepo: item.prRepo ?? null
-      })
-      if (!result.ok) {
-        toast.error(result.error)
-        return
-      }
-      applyStatePatch('merged')
-      toast.success('Pull request merged')
-      onMutated()
-    } catch {
-      toast.error('Failed to merge pull request')
-    } finally {
-      setMergePending(false)
-    }
-  }
-
-  const handleAutoMerge = async (): Promise<void> => {
-    if (!repoPath || !mergePresentation.autoMergeAction) {
-      return
-    }
-    const enabled = mergePresentation.autoMergeAction.kind === 'enable'
-    setMergePending(true)
-    try {
-      const result = await api.gh.setPRAutoMerge({
-        repoPath,
-        repoId: repoId ?? undefined,
-        prNumber: item.number,
-        enabled,
-        prRepo: item.prRepo ?? null
-      })
-      if (!result.ok) {
-        toast.error(result.error)
-        return
-      }
-      toast.success(enabled ? 'Auto-merge enabled' : 'Auto-merge disabled')
-      onMutated()
-    } catch {
-      toast.error(enabled ? 'Failed to enable auto-merge' : 'Failed to disable auto-merge')
-    } finally {
-      setMergePending(false)
-    }
-  }
-
-  return (
-    <aside className="rounded-lg border border-border/50 bg-card p-3 shadow-xs">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <GitPullRequest className="size-3.5 text-muted-foreground" />
-          <span className="text-[13px] font-medium text-foreground">Pull request</span>
-        </div>
-        <WorkItemStateBadge item={actionItem} />
-      </div>
-
-      <div className="grid gap-2">
-        <DropdownMenu modal={false}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  size="sm"
-                  className={cn(
-                    'w-full justify-center gap-2 bg-green-600 text-white hover:bg-green-700',
-                    'disabled:cursor-not-allowed disabled:opacity-50'
-                  )}
-                >
-                  {mergePending ? (
-                    <LoaderCircle className="size-3.5 animate-spin" />
-                  ) : (
-                    <GitMerge className="size-3.5" />
-                  )}
-                  {mergePresentation.autoMergeAction?.label ??
-                    (mergePresentation.directMergeAvailable
-                      ? mergeMethods.defaultLabel
-                      : mergePresentation.label)}
-                  <ChevronDown className="size-3 opacity-60" />
-                </Button>
-              </DropdownMenuTrigger>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" sideOffset={6}>
-              {!repoPath ? 'Merge requires a registered local repo' : mergePresentation.tooltip}
-            </TooltipContent>
-          </Tooltip>
-          <DropdownMenuContent align="start" className="w-52">
-            {mergePresentation.autoMergeAction && (
-              <DropdownMenuItem
-                disabled={!repoPath || mergePending}
-                onSelect={() => void handleAutoMerge()}
-              >
-                <GitMerge className="size-4" />
-                {mergePresentation.autoMergeAction.label}
-              </DropdownMenuItem>
-            )}
-            {mergePresentation.autoMergeAction && <DropdownMenuSeparator />}
-            {mergeMethods.methods.map(({ method, label }) => (
-              <DropdownMenuItem
-                key={method}
-                disabled={mergeDisabled}
-                onSelect={() => void handleMerge(method)}
-              >
-                <GitMerge className="size-4" />
-                {label}
-              </DropdownMenuItem>
-            ))}
-            <DropdownMenuItem onSelect={() => api.shell.openUrl(item.url)}>
-              <ExternalLink className="size-4" />
-              Open GitHub merge box
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <Button
-          type="button"
-          variant={nextState === 'closed' ? 'outline' : 'secondary'}
-          size="sm"
-          className={cn(
-            'w-full justify-center gap-2',
-            nextState === 'closed' &&
-              'border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50'
-          )}
-          disabled={!canMutateState || statePending}
-          onClick={() => void handleStateChange()}
-        >
-          {statePending ? (
-            <LoaderCircle className="size-3.5 animate-spin" />
-          ) : nextState === 'closed' ? (
-            <GitPullRequestClosed className="size-3.5 text-destructive" />
-          ) : (
-            <CircleDot className="size-3.5" />
-          )}
-          {nextState === 'closed' ? 'Close pull request' : 'Reopen PR'}
-        </Button>
-      </div>
-    </aside>
-  )
-}
-
 function buildFixBrokenChecksPrompt(item: GitHubWorkItem, checks: PRCheckDetail[]): string {
   const brokenChecks = getBrokenChecks(checks)
   const checkLines =
@@ -2962,468 +2698,6 @@ async function runPullRequestStateUpdate(args: {
   if (!res.ok) {
     throw new Error(res.error)
   }
-}
-
-function GHEditSection({
-  item,
-  repoPath,
-  repoId,
-  projectOrigin,
-  localState,
-  localLabels,
-  onStateChange,
-  onLabelsChange,
-  onMutated,
-  assignees,
-  onUse
-}: {
-  item: GitHubWorkItem
-  repoPath: string | null
-  repoId: string | null
-  projectOrigin: PullRequestPageProjectOrigin | undefined
-  localState: GitHubWorkItem['state']
-  localLabels: string[]
-  onStateChange: (state: GitHubWorkItem['state']) => void
-  onLabelsChange: (labels: string[]) => void
-  /** Why: called after a successful issue mutation so the parent dialog can
-   *  invalidate its work-item-details cache entry. Without this, reopening the
-   *  drawer in the FRESH_MS window would paint pre-mutation data. */
-  onMutated: () => void
-  assignees: string[]
-  onUse: (item: GitHubWorkItem) => void
-}): React.JSX.Element | null {
-  const [labelPopoverOpen, setLabelPopoverOpen] = useState(false)
-  const [assigneePopoverOpen, setAssigneePopoverOpen] = useState(false)
-  const [localAssignees, setLocalAssignees] = useState<string[]>(assignees)
-  const editedAssigneesItemKeyRef = useRef<string | null>(null)
-  const assigneesItemKey = `${item.repoId}\0${item.id}`
-  const patchWorkItem = useAppStore((s) => s.patchWorkItem)
-  const patchProjectRowContent = useAppStore((s) => s.patchProjectRowContent)
-  const { isPending, run } = useImmediateMutation()
-  // Why: when the dialog opens from a Project view, mutations route through
-  // *BySlug IPCs and we must keep `projectViewCache` in sync alongside
-  // `workItemsCache` — `patchWorkItem` only walks the latter, so without this
-  // helper the Project table would render stale data until manual refresh.
-  // See docs/design/github-project-view-tasks.md §Dialog editing from Project rows.
-  const patchProjectRowIfNeeded = useCallback(
-    (patch: Parameters<typeof patchProjectRowContent>[2]) => {
-      if (!projectOrigin) {
-        return
-      }
-      patchProjectRowContent(projectOrigin.cacheKey, projectOrigin.projectItemId, patch)
-    },
-    [projectOrigin, patchProjectRowContent]
-  )
-
-  // Why: when projectOrigin is set we MUST read labels/assignees from the
-  // row's repo, not from the workspace path — otherwise the popovers list
-  // values from a different repo than the writes target.
-  const slugOwner = projectOrigin?.owner ?? null
-  const slugRepo = projectOrigin?.repo ?? null
-  const repoLabelsByPath = useRepoLabels(
-    projectOrigin ? null : repoPath,
-    projectOrigin ? null : repoId
-  )
-  const repoLabelsBySlug = useRepoLabelsBySlug(slugOwner, slugRepo)
-  const repoLabels = projectOrigin ? repoLabelsBySlug : repoLabelsByPath
-  const repoAssigneesByPath = useRepoAssignees(
-    projectOrigin ? null : repoPath,
-    projectOrigin ? null : repoId
-  )
-  const repoAssigneesBySlug = useRepoAssigneesBySlug(slugOwner, slugRepo, assignees)
-  const repoAssignees = projectOrigin ? repoAssigneesBySlug : repoAssigneesByPath
-
-  // Why: sync local assignees when item changes or when the detail fetch
-  // resolves with real data — but skip if the user already made an
-  // optimistic edit so we don't clobber in-flight changes.
-  useEffect(() => {
-    if (editedAssigneesItemKeyRef.current === assigneesItemKey) {
-      return
-    }
-    setLocalAssignees(assignees)
-  }, [assigneesItemKey, assignees])
-
-  const handleStateChange = useCallback(
-    (newState: 'open' | 'closed') => {
-      if (newState === localState) {
-        return
-      }
-      const prevState = localState
-      run('state', {
-        mutate: () =>
-          runIssueUpdate({
-            repoId: item.repoId,
-            repoPath,
-            projectOrigin,
-            number: item.number,
-            updates: { state: newState }
-          }),
-        onOptimistic: () => {
-          onStateChange(newState)
-          patchWorkItem(item.id, { state: newState }, item.repoId)
-          patchProjectRowIfNeeded({ state: newState })
-        },
-        onRevert: () => {
-          onStateChange(prevState)
-          patchWorkItem(item.id, { state: prevState }, item.repoId)
-          patchProjectRowIfNeeded({ state: prevState })
-        },
-        onSuccess: () => {
-          patchWorkItem(item.id, { state: newState }, item.repoId)
-          patchProjectRowIfNeeded({ state: newState })
-          onMutated()
-        },
-        onError: (err) => toast.error(err)
-      })
-    },
-    [
-      item.id,
-      item.number,
-      item.repoId,
-      localState,
-      repoPath,
-      projectOrigin,
-      patchWorkItem,
-      patchProjectRowIfNeeded,
-      run,
-      onStateChange,
-      onMutated
-    ]
-  )
-
-  const handleLabelToggle = useCallback(
-    (label: string) => {
-      const isAdding = !localLabels.includes(label)
-      const prevLabels = localLabels
-      const newLabels = isAdding ? [...prevLabels, label] : prevLabels.filter((l) => l !== label)
-
-      if (isAdding) {
-        run('labels', {
-          mutate: () =>
-            runIssueUpdate({
-              repoId: item.repoId,
-              repoPath,
-              projectOrigin,
-              number: item.number,
-              updates: { addLabels: [label] }
-            }),
-          onOptimistic: () => {
-            onLabelsChange(newLabels)
-            patchWorkItem(item.id, { labels: newLabels }, item.repoId)
-            patchProjectRowIfNeeded({ labels: newLabels })
-          },
-          onSuccess: () => {
-            onMutated()
-          },
-          onRevert: () => {
-            onLabelsChange(prevLabels)
-            patchWorkItem(item.id, { labels: prevLabels }, item.repoId)
-            patchProjectRowIfNeeded({ labels: prevLabels })
-          },
-          onError: (err) => toast.error(err)
-        })
-      } else {
-        run('labels', {
-          mutate: () =>
-            runIssueUpdate({
-              repoId: item.repoId,
-              repoPath,
-              projectOrigin,
-              number: item.number,
-              updates: { removeLabels: [label] }
-            }),
-          onOptimistic: () => {
-            onLabelsChange(newLabels)
-            patchWorkItem(item.id, { labels: newLabels }, item.repoId)
-            patchProjectRowIfNeeded({ labels: newLabels })
-          },
-          onRevert: () => {
-            onLabelsChange(prevLabels)
-            patchWorkItem(item.id, { labels: prevLabels }, item.repoId)
-            patchProjectRowIfNeeded({ labels: prevLabels })
-          },
-          onSuccess: () => {
-            onMutated()
-          },
-          onError: (err) => toast.error(err)
-        })
-      }
-    },
-    [
-      item.id,
-      item.number,
-      item.repoId,
-      localLabels,
-      repoPath,
-      projectOrigin,
-      patchWorkItem,
-      patchProjectRowIfNeeded,
-      run,
-      onLabelsChange,
-      onMutated
-    ]
-  )
-
-  const handleAssigneeToggle = useCallback(
-    (login: string) => {
-      const isAssigned = localAssignees.includes(login)
-      const prevAssignees = localAssignees
-      const newAssignees = isAssigned
-        ? prevAssignees.filter((l) => l !== login)
-        : [...prevAssignees, login]
-
-      // Why: the optimistic guard is scoped to this repo item so switching
-      // items does not suppress the next item's assignee sync.
-      editedAssigneesItemKeyRef.current = assigneesItemKey
-      if (isAssigned) {
-        run('assignees', {
-          mutate: () =>
-            runIssueUpdate({
-              repoId: item.repoId,
-              repoPath,
-              projectOrigin,
-              number: item.number,
-              updates: { removeAssignees: [login] }
-            }),
-          onOptimistic: () => {
-            setLocalAssignees(newAssignees)
-            patchProjectRowIfNeeded({ assignees: newAssignees })
-          },
-          onRevert: () => {
-            setLocalAssignees(prevAssignees)
-            patchProjectRowIfNeeded({ assignees: prevAssignees })
-          },
-          onSuccess: () => {
-            onMutated()
-          },
-          onError: (err) => toast.error(err)
-        })
-      } else {
-        run('assignees', {
-          mutate: () =>
-            runIssueUpdate({
-              repoId: item.repoId,
-              repoPath,
-              projectOrigin,
-              number: item.number,
-              updates: { addAssignees: [login] }
-            }),
-          onOptimistic: () => {
-            setLocalAssignees(newAssignees)
-            patchProjectRowIfNeeded({ assignees: newAssignees })
-          },
-          onSuccess: () => {
-            onMutated()
-          },
-          onRevert: () => {
-            setLocalAssignees(prevAssignees)
-            patchProjectRowIfNeeded({ assignees: prevAssignees })
-          },
-          onError: (err) => toast.error(err)
-        })
-      }
-    },
-    [
-      item.number,
-      item.repoId,
-      assigneesItemKey,
-      repoPath,
-      projectOrigin,
-      localAssignees,
-      patchProjectRowIfNeeded,
-      run,
-      onMutated
-    ]
-  )
-
-  if (item.type === 'pr') {
-    return null
-  }
-
-  const checkIcon = (
-    <svg className="size-2.5" viewBox="0 0 12 12" fill="none">
-      <path
-        d="M2 6l3 3 5-5"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  )
-
-  return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/60 px-4 py-2.5">
-      {/* State */}
-      <Popover>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            className={cn(
-              'group/status inline-flex items-center gap-0.5 rounded-full border px-2 py-0.5 text-[11px] font-medium transition hover:brightness-125 hover:ring-1 hover:ring-white/10',
-              getStateTone({ ...item, state: localState })
-            )}
-          >
-            {getStateLabel({ ...item, state: localState })}
-            <ChevronDown className="size-2.5 opacity-50" />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent className="w-36 p-1" align="start">
-          <button
-            type="button"
-            onClick={() => handleStateChange('open')}
-            className={cn(
-              'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-[12px] hover:bg-accent',
-              localState === 'open' && 'bg-accent/50'
-            )}
-          >
-            <CircleDot className="size-3 text-emerald-500" />
-            Open
-          </button>
-          <button
-            type="button"
-            onClick={() => handleStateChange('closed')}
-            className={cn(
-              'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-[12px] hover:bg-accent',
-              localState === 'closed' && 'bg-accent/50'
-            )}
-          >
-            <CircleDashed className="size-3 text-rose-500" />
-            Closed
-          </button>
-        </PopoverContent>
-      </Popover>
-
-      {/* Labels */}
-      <Popover open={labelPopoverOpen} onOpenChange={setLabelPopoverOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            disabled={isPending('labels') || repoLabels.loading}
-            className="group/labels inline-flex items-center gap-1 rounded-full border border-border/30 bg-muted/20 px-2 py-0.5 text-[11px] transition hover:brightness-125 hover:ring-1 hover:ring-white/10 disabled:opacity-50"
-          >
-            {localLabels.length === 0 ? (
-              <span className="text-muted-foreground">+ Label</span>
-            ) : (
-              localLabels.map((name) => (
-                <span key={name} className="text-[10px] text-muted-foreground">
-                  {name}
-                </span>
-              ))
-            )}
-            {isPending('labels') ? (
-              <LoaderCircle className="size-3 animate-spin text-muted-foreground" />
-            ) : (
-              <ChevronDown className="size-2.5 opacity-50" />
-            )}
-          </button>
-        </PopoverTrigger>
-        <PopoverContent className="popover-scroll-content scrollbar-sleek w-52 p-1" align="start">
-          {repoLabels.error ? (
-            <div className="px-2 py-3 text-center text-[12px] text-destructive">
-              {repoLabels.error}
-            </div>
-          ) : (
-            <div>
-              {repoLabels.data.map((label) => (
-                <button
-                  key={label}
-                  type="button"
-                  onClick={() => handleLabelToggle(label)}
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-[12px] hover:bg-accent"
-                >
-                  <span
-                    className={cn(
-                      'flex size-3.5 items-center justify-center rounded-sm border',
-                      localLabels.includes(label)
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : 'border-input'
-                    )}
-                  >
-                    {localLabels.includes(label) && checkIcon}
-                  </span>
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
-        </PopoverContent>
-      </Popover>
-
-      {/* Assignees */}
-      <Popover open={assigneePopoverOpen} onOpenChange={setAssigneePopoverOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            disabled={isPending('assignees') || repoAssignees.loading}
-            className="group/assignees inline-flex items-center gap-1 rounded-full border border-border/30 bg-muted/20 px-2 py-0.5 text-[11px] transition hover:brightness-125 hover:ring-1 hover:ring-white/10 disabled:opacity-50"
-          >
-            {localAssignees.length === 0 ? (
-              <span className="text-muted-foreground">+ Assignee</span>
-            ) : (
-              localAssignees.map((login) => (
-                <span key={login} className="text-[10px] text-muted-foreground">
-                  {login}
-                </span>
-              ))
-            )}
-            {isPending('assignees') ? (
-              <LoaderCircle className="size-3 animate-spin text-muted-foreground" />
-            ) : (
-              <ChevronDown className="size-2.5 opacity-50" />
-            )}
-          </button>
-        </PopoverTrigger>
-        <PopoverContent className="popover-scroll-content scrollbar-sleek w-52 p-1" align="start">
-          {repoAssignees.error ? (
-            <div className="px-2 py-3 text-center text-[12px] text-destructive">
-              {repoAssignees.error}
-            </div>
-          ) : (
-            <div>
-              {repoAssignees.data.map((user) => (
-                <button
-                  key={user.login}
-                  type="button"
-                  onClick={() => handleAssigneeToggle(user.login)}
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-[12px] hover:bg-accent"
-                >
-                  <span
-                    className={cn(
-                      'flex size-3.5 items-center justify-center rounded-sm border',
-                      localAssignees.includes(user.login)
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : 'border-input'
-                    )}
-                  >
-                    {localAssignees.includes(user.login) && checkIcon}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate">{user.login}</span>
-                    {user.name && (
-                      <span className="block truncate text-[11px] text-muted-foreground">
-                        {user.name}
-                      </span>
-                    )}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </PopoverContent>
-      </Popover>
-
-      <Button
-        size="sm"
-        onClick={() => onUse(item)}
-        className="ml-auto gap-2"
-        aria-label="Start workspace from issue"
-      >
-        Start workspace from issue
-        <ArrowRight className="size-4" />
-      </Button>
-    </div>
-  )
 }
 
 // Why: the issue-source indicator is issue-only and lives on GitHubItemDialog;
