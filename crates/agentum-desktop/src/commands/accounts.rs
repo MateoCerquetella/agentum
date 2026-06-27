@@ -20,7 +20,7 @@
 //! Desktop is host-only — WSL runtime fields are emitted as `host`/null.
 
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use super::timestamps::now_ms;
 
 use base64::Engine;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -43,13 +43,6 @@ const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
-}
-
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 fn home() -> Result<PathBuf, String> {

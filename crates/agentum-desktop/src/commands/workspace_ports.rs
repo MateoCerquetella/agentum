@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use super::timestamps::now_millis;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -37,13 +37,6 @@ struct Listener {
     /// Address `lsof` reported the socket bound to (may be `*` / `0.0.0.0` / `::`).
     bind_host: String,
     port: u16,
-}
-
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|delta| delta.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 fn platform() -> &'static str {
