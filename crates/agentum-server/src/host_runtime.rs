@@ -4,7 +4,7 @@
 //! remote machine. The remote host never needs an `agentum` binary.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use agentum_core::{
@@ -166,7 +166,7 @@ async fn run_checked_local(cmd: &str) -> Result<()> {
 }
 
 mod probe;
-pub use probe::*;
+pub(crate) use probe::*;
 mod tmux;
 pub use tmux::*;
 

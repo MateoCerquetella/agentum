@@ -129,15 +129,15 @@ mod tests {
             // A full §10 file: the typed knobs parse; the rest (render_mode, viewport,
             // screencast, driver) are ignored without error (forward-compat).
             let src = r#"
-    [browser]
-    driver = "chromiumoxide"
-    render_mode = "auto"
-    allow_eval = true
-    allowed_origins = ["https://a.com", "http://localhost:3000"]
-    nav_timeout_ms = 8000
-    viewport = { width = 1280, height = 800 }
-    screencast = { enabled = true, fps_cap = 10, quality = 60 }
-    "#;
+[browser]
+driver = "chromiumoxide"
+render_mode = "auto"
+allow_eval = true
+allowed_origins = ["https://a.com", "http://localhost:3000"]
+nav_timeout_ms = 8000
+viewport = { width = 1280, height = 800 }
+screencast = { enabled = true, fps_cap = 10, quality = 60 }
+"#;
             let f: BrowserConfigFile = toml::from_str(src).expect("parse browser.toml");
             assert!(f.browser.allow_eval);
             assert_eq!(

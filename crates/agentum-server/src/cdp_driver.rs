@@ -889,7 +889,7 @@ fn stale_ref(ref_id: &str) -> Value {
 }
 
 mod pure_helpers;
-pub use pure_helpers::*;
+pub(crate) use pure_helpers::*;
 
 mod config;
 use config::*;
@@ -898,7 +898,7 @@ mod human_control;
 pub use human_control::*;
 
 mod ax_refs;
-pub use ax_refs::*;
+use ax_refs::*;
 
 /// `eval`: run arbitrary JS in the page and return its value. HIGH-RISK — gated
 /// off by default (§9); see [`eval_allowed`]. Every expression is audit-logged.
