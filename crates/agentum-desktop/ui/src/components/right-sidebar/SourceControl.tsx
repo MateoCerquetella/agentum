@@ -1,6 +1,6 @@
 import { api } from '@/tauri'
 import { createRunningPullRequestGenerationRecord, getPullRequestGenerationRecordKey, resolvePullRequestGenerationCancel, resolvePullRequestGenerationFailure, resolvePullRequestGenerationSuccess, shouldHydratePullRequestGenerationResult, type PullRequestGenerationContext, type PullRequestGenerationFields, type PullRequestGenerationRecords } from './source-control-pr-generation'
-import { appendCommitFailureCustomInstruction, buildFixCommitFailurePrompt, buildResolveConflictsPrompt, CONFLICT_KIND_LABELS } from './source-control-prompts'
+import { appendCommitFailureCustomInstruction, buildFixCommitFailurePrompt, buildResolveConflictsPrompt, CONFLICT_KIND_LABELS, getCommitFailureKindLabel } from './source-control-prompts'
 import { normalizeSourceControlViewMode, requestSourceControlViewModePreferenceWrite, type SourceControlViewModePreferenceWriteState } from './source-control-view-mode'
 import { compareGitStatusEntries } from './source-control-status-sort'
 import { hostedReviewCreationCopy, hostedReviewLabel, hostedReviewStateClass } from './hosted-review-display'
@@ -4982,18 +4982,6 @@ function CommitFailureFixSplitButton({
       </Dialog>
     </>
   )
-}
-
-function getCommitFailureKindLabel(summary: string): string | null {
-  if (/\blint\b/i.test(summary)) {
-    return 'Lint'
-  }
-
-  if (/\bhook\b|\bpre-commit\b/i.test(summary)) {
-    return 'Hook'
-  }
-
-  return null
 }
 
 type CommitAreaProps = {

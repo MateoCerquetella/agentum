@@ -280,3 +280,15 @@ export function buildResolvePullRequestConflictsPrompt({
     'Reply with decisions by file, validation run, the final git status, and anything left unsafe.'
   ].join('\n')
 }
+
+export function getCommitFailureKindLabel(summary: string): string | null {
+  if (/\blint\b/i.test(summary)) {
+    return 'Lint'
+  }
+
+  if (/\bhook\b|\bpre-commit\b/i.test(summary)) {
+    return 'Hook'
+  }
+
+  return null
+}
