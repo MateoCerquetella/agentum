@@ -42,6 +42,7 @@ mod logging;
 pub mod mcp_provision;
 pub mod planner;
 pub mod playwright_mcp;
+mod port_wait;
 pub mod ratelimit;
 mod routes;
 mod rules;
