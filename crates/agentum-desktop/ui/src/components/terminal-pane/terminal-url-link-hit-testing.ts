@@ -1,6 +1,6 @@
 import type { IBufferLine, IBufferRange, IDisposable, Terminal } from '@xterm/xterm'
 import { openHttpLink } from '@/lib/http-link-routing'
-import { buildCandidateLogicalLinesForBufferPosition } from './terminal-file-link-hit-testing'
+import { buildCandidateLogicalLinesForBufferPosition, rangeContainsBufferPosition } from './terminal-file-link-hit-testing'
 import { rangeForParsedFileLink } from './wrapped-terminal-link-ranges'
 
 type UrlLinkHitTestDeps = {
@@ -145,13 +145,3 @@ export function openHttpLinkAtBufferPosition(
   return false
 }
 
-function rangeContainsBufferPosition(
-  range: IBufferRange,
-  position: { x: number; y: number },
-  terminalColumns: number
-): boolean {
-  const lower = range.start.y * terminalColumns + range.start.x
-  const upper = range.end.y * terminalColumns + range.end.x
-  const current = position.y * terminalColumns + position.x
-  return lower <= current && current <= upper
-}
