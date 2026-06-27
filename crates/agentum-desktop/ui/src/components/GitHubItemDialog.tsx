@@ -19,7 +19,7 @@ import {
   getWorkItemDetailsForRepo,
   setPRFileViewedForRepo
 } from '@/lib/github-repo-operations'
-import { CommentReactions, ReviewerAvatar, WorkItemStateBadge } from './github-item-display'
+import { CommentReactions, PRViewedCheckbox, ReviewerAvatar, WorkItemStateBadge } from './github-item-display'
 import { formatRelativeTime } from '@/lib/relative-time'
 /* eslint-disable max-lines -- Why: the GH item dialog keeps its header, conversation, files, and checks tabs co-located so the read-only PR/Issue surface stays in one place while this view evolves. */
 import React, {
@@ -1207,60 +1207,6 @@ function loadPRFileContents(args: {
     })
   touchPRFileContentCache(cacheKey, request)
   return request
-}
-
-function PRViewedCheckbox({
-  checked,
-  pending,
-  filePath,
-  onToggle
-}: {
-  checked: boolean
-  pending: boolean
-  filePath: string
-  onToggle: () => void
-}): React.JSX.Element {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          role="checkbox"
-          aria-checked={checked}
-          aria-label={`${checked ? 'Unmark' : 'Mark'} ${filePath} as viewed`}
-          disabled={pending}
-          onClick={(event) => {
-            event.stopPropagation()
-            onToggle()
-          }}
-          className={cn(
-            'flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 text-[11px] text-muted-foreground transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-            checked && 'text-foreground',
-            pending && 'cursor-default opacity-60'
-          )}
-        >
-          <span
-            className={cn(
-              'flex size-4 items-center justify-center rounded-sm border transition-colors',
-              checked
-                ? 'border-foreground bg-foreground text-background'
-                : 'border-muted-foreground/50 bg-background text-transparent'
-            )}
-          >
-            {pending ? (
-              <LoaderCircle className="size-3 animate-spin text-muted-foreground" />
-            ) : checked ? (
-              <Check className="size-3" strokeWidth={3} />
-            ) : null}
-          </span>
-          <span>Viewed</span>
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={4}>
-        {checked ? 'Unmark viewed' : 'Mark viewed'}
-      </TooltipContent>
-    </Tooltip>
-  )
 }
 
 const PR_DIFF_OVERSCAN = 5
