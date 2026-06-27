@@ -113,6 +113,9 @@ export const AgentStateDot = React.memo(function AgentStateDot({
   )
 })
 
+// Narrow an agent status (which may include 'idle') to a renderable dot state,
+// falling back to 'idle' for any unknown value so an unexpected state never
+// crashes a row.
 export function asDotState(state: AgentStatusState | 'idle'): AgentDotState {
   switch (state) {
     case 'working':

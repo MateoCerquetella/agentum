@@ -14,9 +14,6 @@ import {
   type CmdJSettingsResult
 } from '@/components/cmd-j/palette-results'
 
-// Why: mirror WorktreeJumpPalette's section-id → settings-target mapping so a
-// `repo-<id>` row opens that repo's pane while every other row maps 1:1. Kept
-// local (a 4-line pure helper) rather than introducing a shared abstraction.
 // Cmd+Shift+P — a focused settings command palette. Reuses the proven Cmd+J
 // settings path: the single navigation registry (useSettingsNavigationMetadata)
 // feeds buildCmdJSettingsResults, so sections removed from the registry (e.g.

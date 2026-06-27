@@ -10,9 +10,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { DashboardAgentChildDisclosure } from './DashboardAgentChildDisclosure'
 import type { DashboardAgentRow as DashboardAgentRowData } from './useDashboardData'
 
-// Why: the dashboard tracks its own rollup states (incl. 'idle'); narrow to the
-// shared dot states for rendering, falling back to 'idle' for any unknown
-// value so an unexpected state never crashes a row.
 function formatTimeAgo(ts: number, now: number): string {
   const delta = now - ts
   if (delta < 60_000) {

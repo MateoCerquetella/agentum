@@ -292,6 +292,8 @@ export function useSettingsNavigationMetadata(): SettingsNavSection[] {
   )
 }
 
+// Map a settings section id to its nav target: a `repo-<id>` row opens that
+// repo's pane while every other row maps 1:1.
 export function getSettingsTargetFromSectionId(sectionId: string): {
   pane: SettingsNavTarget
   repoId: string | null
