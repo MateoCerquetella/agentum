@@ -1,6 +1,7 @@
 //! Shared route helpers.
 
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::ApiError;
 
@@ -104,4 +105,11 @@ mod tests {
             PathBuf::from("/abs/path")
         );
     }
+}
+
+pub(crate) fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|delta| delta.as_millis() as u64)
+        .unwrap_or(0)
 }
