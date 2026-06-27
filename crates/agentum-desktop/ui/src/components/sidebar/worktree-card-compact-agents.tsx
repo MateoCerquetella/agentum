@@ -1,7 +1,7 @@
 import React, { useCallback, useRef } from 'react'
 import { ChevronRight, SquareTerminal } from 'lucide-react'
 import { useAppStore } from '@/store'
-import { AgentStateDot, agentStateLabel, type AgentDotState } from '@/components/AgentStateDot'
+import { AgentStateDot, agentStateLabel, asDotState, type AgentDotState } from '@/components/AgentStateDot'
 import type { DashboardAgentRow as DashboardAgentRowData } from '@/components/dashboard/useDashboardData'
 import { AgentIcon } from '@/lib/agent-catalog'
 import { agentTypeToIconAgent, formatAgentTypeLabel } from '@/lib/agent-status'
@@ -10,18 +10,6 @@ import type { AgentStatusState } from '../../../../shared/agent-status-types'
 import CommentMarkdown from './CommentMarkdown'
 
 const MARKDOWN_IMAGE_PATTERN = /!\[[^\]\n]*\]\([^)]+\)/
-
-function asDotState(state: AgentStatusState | 'idle'): AgentDotState {
-  switch (state) {
-    case 'working':
-    case 'blocked':
-    case 'waiting':
-    case 'done':
-    case 'idle':
-      return state
-  }
-  return 'idle'
-}
 
 function getAgentDotState(agent: DashboardAgentRowData): AgentDotState {
   return agent.entry.interrupted === true ? 'interrupted' : asDotState(agent.state)

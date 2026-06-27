@@ -2,7 +2,7 @@
 import React, { useState, useCallback } from 'react'
 import { X, Wrench, ChevronDown, Send } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { AgentStateDot, agentStateLabel, type AgentDotState } from '@/components/AgentStateDot'
+import { AgentStateDot, agentStateLabel, asDotState, type AgentDotState } from '@/components/AgentStateDot'
 import { AgentIcon } from '@/lib/agent-catalog'
 import { agentTypeToIconAgent, formatAgentTypeLabel } from '@/lib/agent-status'
 import CommentMarkdown from '@/components/sidebar/CommentMarkdown'
@@ -14,18 +14,6 @@ import type { DashboardAgentRow as DashboardAgentRowData } from './useDashboardD
 // Why: the dashboard tracks its own rollup states (incl. 'idle'); narrow to the
 // shared dot states for rendering, falling back to 'idle' for any unknown
 // value so an unexpected state never crashes a row.
-function asDotState(state: AgentStatusState | 'idle'): AgentDotState {
-  switch (state) {
-    case 'working':
-    case 'blocked':
-    case 'waiting':
-    case 'done':
-    case 'idle':
-      return state
-  }
-  return 'idle'
-}
-
 function formatTimeAgo(ts: number, now: number): string {
   const delta = now - ts
   if (delta < 60_000) {

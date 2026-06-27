@@ -1,6 +1,7 @@
 import React from 'react'
 import { CircleCheck } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import type { AgentStatusState } from '@/shared/agent-status-types'
 
 // Why: shared state-indicator primitive so the dashboard and the sidebar's
 // agent hover share a single state vocabulary. Most states render as a dot;
@@ -111,3 +112,15 @@ export const AgentStateDot = React.memo(function AgentStateDot({
     </span>
   )
 })
+
+export function asDotState(state: AgentStatusState | 'idle'): AgentDotState {
+  switch (state) {
+    case 'working':
+    case 'blocked':
+    case 'waiting':
+    case 'done':
+    case 'idle':
+      return state
+  }
+  return 'idle'
+}
