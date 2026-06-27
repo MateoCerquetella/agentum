@@ -13,8 +13,7 @@ import {
   parseGitHubIssueOrPRLink,
   normalizeGitHubLinkQuery
 } from '@/lib/github-links'
-import { activateAndRevealWorktree } from '@/lib/worktree-activation'
-import { stashPendingSessionPrompt } from '@/lib/pending-session-prompt'
+import { openCreatedWorkspace } from '@/lib/open-created-workspace'
 import { filterEnabledTuiAgents, isTuiAgentEnabled } from '../../../shared/tui-agent-selection'
 import { isGitRepoKind } from '../../../shared/repo-kind'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
@@ -2045,21 +2044,19 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
               })
             }
           : undefined
-      // Why: creating a workspace no longer auto-launches an agent. Stash any
-      // prompt the user typed so the "Start a session" picker can deliver it as
-      // an editable draft once an agent is chosen — otherwise it would be lost.
-      // Then activate + reveal the worktree (branch selected, user lands on it);
-      // `skipCreatedAgentStartup` stops the activation fallback from relaunching
-      // the agent the composer stamped, so the WorkspaceAgentLauncher picker
-      // shows instead. Repo `setup`/`defaultTabs`/`issueCommand` still apply —
+      // Why: the composer already let the user pick the agent — open it directly
+      // instead of bouncing them to the "Start a session" picker to pick again.
+      // openCreatedWorkspace launches the selected agent (delivering the typed
+      // prompt as an editable draft) and only falls back to the picker when no
+      // agent was chosen. Repo `setup`/`defaultTabs`/`issueCommand` still apply —
       // those are project config, not the agent.
-      stashPendingSessionPrompt(worktree.id, submitStartupPrompt)
-      activateAndRevealWorktree(worktree.id, {
-        sidebarRevealBehavior: 'auto',
+      openCreatedWorkspace({
+        worktreeId: worktree.id,
+        agent: tuiAgent,
+        prompt: submitStartupPrompt,
         setup: result.setup,
         defaultTabs: result.defaultTabs,
-        issueCommand,
-        skipCreatedAgentStartup: true
+        issueCommand
       })
       setSidebarOpen(true)
       if (persistDraft) {
@@ -2238,25 +2235,20 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           return
         }
 
-        // Why: quick create no longer auto-launches the agent — it lands on the
-        // "Start a session" picker (WorkspaceAgentLauncher) so the user picks
-        // what to start. Resolve any linked/typed prompt and stash it so the
-        // picker can deliver it as an editable draft once an agent is chosen;
-        // otherwise the text would be silently dropped. Rich linked context wins
-        // over URL fallback; typed-only Linear entries use the note.
+        // Why: the user picked the agent in the quick-create form — open it
+        // directly instead of landing on the redundant "Start a session" picker.
+        // openCreatedWorkspace launches the selected agent (delivering any
+        // linked/typed prompt as an editable draft) and only falls back to the
+        // picker when no agent was chosen. Rich linked context wins over URL
+        // fallback; typed-only Linear entries use the note.
         const { prompt: quickPrompt, draftPrompt: quickDraftPrompt } =
           resolveQuickCreateLinkedWorkItemPrompt(submitLinkedWorkItem, trimmedNote)
-        stashPendingSessionPrompt(worktree.id, quickDraftPrompt || quickPrompt)
-
-        // Why: activate + reveal so the new branch is selected and the user
-        // lands on the picker. `skipCreatedAgentStartup` stops the activation
-        // fallback from relaunching the stamped agent. Repo setup/default-tabs
-        // still apply — they are project config, not the agent.
-        activateAndRevealWorktree(worktree.id, {
-          sidebarRevealBehavior: 'auto',
+        openCreatedWorkspace({
+          worktreeId: worktree.id,
+          agent,
+          prompt: quickDraftPrompt || quickPrompt,
           setup: result.setup,
-          defaultTabs: result.defaultTabs,
-          skipCreatedAgentStartup: true
+          defaultTabs: result.defaultTabs
         })
         setSidebarOpen(true)
         if (persistDraft) {
