@@ -38,6 +38,7 @@ use streaming::{stream_remote_session, stream_session};
 // lib.rs; the rest are used internally by the create/start handlers.
 mod provision;
 use provision::{Reprovision, reprovision_session};
+use super::util::parse_uuid;
 pub(crate) use provision::{boot_drift_rescan, spawn_agent_into_pane};
 
 const GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1021,10 +1022,6 @@ async fn hook(
     let _ = state.bus.send(ev);
 
     Ok(StatusCode::NO_CONTENT)
-}
-
-fn parse_uuid(s: &str) -> Result<Uuid, ApiError> {
-    Uuid::parse_str(s).map_err(|e| ApiError::BadRequest(e.to_string()))
 }
 
 /// Recognise `{"resize":{"cols":N,"rows":N}}` text frames. Returns the

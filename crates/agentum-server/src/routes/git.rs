@@ -42,6 +42,7 @@ use crate::host_runtime::{self, git_in_dir};
 
 mod history_routes;
 use history_routes::*;
+pub(crate) use super::util::parse_uuid;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -267,10 +268,6 @@ async fn host_and_cwd_for(state: &AppState, id: Uuid) -> Result<(Host, String), 
         .await?
         .ok_or_else(|| ApiError::BadRequest(format!("session host is missing: {host_id}")))?;
     Ok((host, session.effective_cwd().to_string()))
-}
-
-fn parse_uuid(s: &str) -> Result<Uuid, ApiError> {
-    Uuid::parse_str(s).map_err(|e| ApiError::BadRequest(e.to_string()))
 }
 
 /// Reject anything that could escape the worktree before it reaches
