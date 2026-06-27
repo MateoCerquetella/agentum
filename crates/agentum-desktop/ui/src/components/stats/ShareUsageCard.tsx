@@ -4,15 +4,14 @@ import type { CodexUsageSummary } from '../../../../shared/codex-usage-types'
 import {
   BackgroundGlows,
   CardFooter,
-  formatCost,
   formatDateRange,
-  formatTokens,
   getDailySegments,
   getDailyTotal,
   getLegendItems,
   AgentumLogo,
   RANGE_LABELS
 } from './share-card-utils'
+import { formatCost, formatTokens } from '@/lib/stats-format'
 import type { ClaudeShareData, CodexShareData } from './share-card-utils'
 
 export type ShareUsageCardProps = (ClaudeShareData | CodexShareData) & {

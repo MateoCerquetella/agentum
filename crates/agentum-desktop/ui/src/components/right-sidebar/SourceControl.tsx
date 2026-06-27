@@ -1,5 +1,5 @@
 import { api } from '@/tauri'
-import { appendCommitFailureCustomInstruction, buildFixCommitFailurePrompt, buildResolveConflictsPrompt } from './source-control-prompts'
+import { appendCommitFailureCustomInstruction, buildFixCommitFailurePrompt, buildResolveConflictsPrompt, CONFLICT_KIND_LABELS } from './source-control-prompts'
 import { normalizeSourceControlViewMode, requestSourceControlViewModePreferenceWrite, type SourceControlViewModePreferenceWriteState } from './source-control-view-mode'
 /* eslint-disable max-lines */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -161,7 +161,6 @@ import type {
   DiffComment,
   GitBranchChangeEntry,
   GitBranchCompareSummary,
-  GitConflictKind,
   GitConflictOperation,
   GitStatusEntry,
   SourceControlViewMode,
@@ -215,9 +214,6 @@ type SourceControlAiInstructionGuidance = {
 
 const EMPTY_GIT_STATUS_ENTRIES: GitStatusEntry[] = []
 const EMPTY_BRANCH_CHANGE_ENTRIES: GitBranchChangeEntry[] = []
-const COMMIT_FAILURE_PROMPT_OUTPUT_LIMIT = 12_000
-const COMMIT_FAILURE_REPLY_INSTRUCTION =
-  'Reply with the root cause, files changed, validation run, final git status, and anything left for the user.'
 
 // Why: directional signifiers ahead of each primary action label. Commit
 // (✓) is affirmative; Push (↑) points in the direction data flows; Sync
@@ -590,15 +586,6 @@ export function resolvePullRequestGenerationCancel(
   }
 }
 
-const CONFLICT_KIND_LABELS: Record<GitConflictKind, string> = {
-  both_modified: 'Both modified',
-  both_added: 'Both added',
-  deleted_by_us: 'Deleted by us',
-  deleted_by_them: 'Deleted by them',
-  added_by_us: 'Added by us',
-  added_by_them: 'Added by them',
-  both_deleted: 'Both deleted'
-}
 
 export function shouldRenderCommitArea(
   scope: SourceControlScope,

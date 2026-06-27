@@ -1,4 +1,18 @@
-import type { GitConflictOperation, GitStatusEntry } from '@/shared/git-status-types'
+import type { GitConflictKind, GitConflictOperation, GitStatusEntry } from '@/shared/git-status-types'
+
+const COMMIT_FAILURE_PROMPT_OUTPUT_LIMIT = 12_000
+const COMMIT_FAILURE_REPLY_INSTRUCTION =
+  'Reply with the root cause, files changed, validation run, final git status, and anything left for the user.'
+
+export const CONFLICT_KIND_LABELS: Record<GitConflictKind, string> = {
+  both_modified: 'Both modified',
+  both_added: 'Both added',
+  deleted_by_us: 'Deleted by us',
+  deleted_by_them: 'Deleted by them',
+  added_by_us: 'Added by us',
+  added_by_them: 'Added by them',
+  both_deleted: 'Both deleted'
+}
 
 function getConflictOperationPromptLabel(conflictOperation: GitConflictOperation): string {
   if (conflictOperation === 'merge') {
