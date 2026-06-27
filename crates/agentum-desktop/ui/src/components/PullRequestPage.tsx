@@ -120,13 +120,6 @@ const CODE_CONTEXT_EXPAND_STEP = 5
 const CODE_CONTEXT_FALLBACK_LINES = 20
 const CODE_CONTEXT_MAX_BLOCK_LINES = CODE_CONTEXT_FALLBACK_LINES * 2 + 1
 
-/** Why: Project-origin rows don't always belong to the active local repo.
- *  When set, GHEditSection routes label/assignee/state mutations through
- *  slug-addressed IPCs against `owner`/`repo` instead of through `repoPath`,
- *  preventing edits from silently landing on the workspace's repo when the
- *  Project view is showing rows from a different repo. See
- *  docs/design/github-project-view-tasks.md §Dialog editing from Project rows.
- */
 type PullRequestPageProps = {
   workItem: GitHubWorkItem | null
   repoPath: string | null
