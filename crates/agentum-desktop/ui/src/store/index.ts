@@ -27,6 +27,7 @@ import { createWorktreeNavHistorySlice } from './slices/worktree-nav-history'
 import { createDictationSlice } from './slices/dictation'
 import { createWorkspaceCleanupSlice } from './slices/workspace-cleanup'
 import { createHostsSlice } from './slices/hosts'
+import { createServerWorktreeActivitySlice } from './slices/server-worktree-activity'
 import { e2eConfig } from '@/lib/e2e-config'
 import { registerHttpLinkStoreAccessor } from '@/lib/http-link-routing'
 
@@ -57,7 +58,8 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createWorktreeNavHistorySlice(...a),
   ...createDictationSlice(...a),
   ...createWorkspaceCleanupSlice(...a),
-  ...createHostsSlice(...a)
+  ...createHostsSlice(...a),
+  ...createServerWorktreeActivitySlice(...a)
 }))
 
 registerHttpLinkStoreAccessor(() => useAppStore.getState())

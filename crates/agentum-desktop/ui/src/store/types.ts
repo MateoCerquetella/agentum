@@ -25,6 +25,7 @@ import type { WorktreeNavHistorySlice } from './slices/worktree-nav-history'
 import type { DictationSlice } from './slices/dictation'
 import type { WorkspaceCleanupSlice } from './slices/workspace-cleanup'
 import type { HostsSlice } from './slices/hosts'
+import type { ServerWorktreeActivitySlice } from './slices/server-worktree-activity'
 
 export type AppState = RepoSlice &
   SparsePresetsSlice &
@@ -52,4 +53,5 @@ export type AppState = RepoSlice &
   WorktreeNavHistorySlice &
   DictationSlice &
   WorkspaceCleanupSlice &
-  HostsSlice
+  HostsSlice &
+  ServerWorktreeActivitySlice

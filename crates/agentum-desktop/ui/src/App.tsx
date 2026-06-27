@@ -37,6 +37,7 @@ import {
 import { useAppStore } from './store'
 import { useShallow } from 'zustand/react/shallow'
 import { isRemoteWorkspaceSnapshotApplyInProgress, useIpcEvents } from './hooks/useIpcEvents'
+import { useServerWorktreeActivity } from './hooks/useServerWorktreeActivity'
 import { useServerBrowserAnnotations } from './hooks/useServerBrowserAnnotations'
 import RetainedAgentsSyncGate from './components/dashboard/RetainedAgentsSyncGate'
 import Sidebar from './components/Sidebar'
@@ -392,6 +393,10 @@ function App(): React.JSX.Element {
 
   // Subscribe to IPC push events
   useIpcEvents()
+  // Keep the sidebar's per-worktree running/working state in sync with the
+  // server (alive sessions + watchdog activity), so agents don't read as idle
+  // after an app relaunch before their pane is opened.
+  useServerWorktreeActivity()
   // Surface annotations beaconed from a persistent (headed) Chrome window.
   useServerBrowserAnnotations()
   // Why: retention must run at App level so the inline per-card agents list
