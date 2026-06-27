@@ -1,7 +1,8 @@
 import { api } from '@/tauri'
 import { parseOwnerRepoFromItemUrl } from '@/lib/github-item-url'
 import { buildRequestedReviewUsers, mergeReviewerSuggestions } from '@/lib/github-reviewers'
-import { formatCheckTimestamp, getCheckConclusion, getCheckStatusLabel } from '@/lib/pr-check-format'
+import { formatCheckTimestamp, getCheckConclusion, getCheckCounts, getCheckStatusLabel, getChecksSummaryLabel } from '@/lib/pr-check-format'
+import { getBrokenChecks } from './pr-checks-fix-prompt'
 import { formatRelativeTime } from '@/lib/relative-time'
 /* eslint-disable max-lines -- Why: the GH item dialog keeps its header, conversation, files, and checks tabs co-located so the read-only PR/Issue surface stays in one place while this view evolves. */
 import React, {
@@ -3090,56 +3091,6 @@ const CHECK_SORT_ORDER: Record<string, number> = {
   neutral: 3,
   skipped: 4,
   success: 5
-}
-
-function getCheckCounts(checks: PRCheckDetail[]): {
-  passing: number
-  failing: number
-  pending: number
-  skipped: number
-  neutral: number
-} {
-  return checks.reduce(
-    (counts, check) => {
-      const conclusion = getCheckConclusion(check)
-      if (conclusion === 'success') {
-        counts.passing += 1
-      } else if (['failure', 'cancelled', 'timed_out'].includes(conclusion)) {
-        counts.failing += 1
-      } else if (conclusion === 'skipped') {
-        counts.skipped += 1
-      } else if (conclusion === 'neutral') {
-        counts.neutral += 1
-      } else {
-        counts.pending += 1
-      }
-      return counts
-    },
-    { passing: 0, failing: 0, pending: 0, skipped: 0, neutral: 0 }
-  )
-}
-
-function getChecksSummaryLabel(checks: PRCheckDetail[]): string {
-  const counts = getCheckCounts(checks)
-  if (checks.length === 0) {
-    return 'No checks found'
-  }
-  if (counts.failing > 0) {
-    return `${counts.failing} ${counts.failing === 1 ? 'check' : 'checks'} failing`
-  }
-  if (counts.pending > 0) {
-    return `${counts.pending} ${counts.pending === 1 ? 'check' : 'checks'} pending`
-  }
-  if (counts.passing === checks.length) {
-    return 'All checks passing'
-  }
-  return `${counts.passing} of ${checks.length} checks passing`
-}
-
-function getBrokenChecks(checks: PRCheckDetail[]): PRCheckDetail[] {
-  return checks.filter((check) =>
-    ['failure', 'cancelled', 'timed_out'].includes(getCheckConclusion(check))
-  )
 }
 
 function buildFixBrokenChecksPrompt(item: GitHubWorkItem, checks: PRCheckDetail[]): string {
