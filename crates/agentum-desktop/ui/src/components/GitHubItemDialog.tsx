@@ -3,6 +3,14 @@ import { parseOwnerRepoFromItemUrl } from '@/lib/github-item-url'
 import { buildRequestedReviewUsers, mergeReviewerSuggestions } from '@/lib/github-reviewers'
 import { formatCheckTimestamp, getCheckConclusion, getCheckCounts, getCheckStatusLabel, getChecksSummaryLabel } from '@/lib/pr-check-format'
 import { getBrokenChecks } from './pr-checks-fix-prompt'
+import {
+  getCheckDetailsKey,
+  getPRFileDiffResult,
+  getPRFileSectionKey,
+  gitHubPRFileToBranchEntry,
+  isPRFileViewed,
+  mapPRFileStatus
+} from '@/lib/github-pr-detail-helpers'
 import { formatRelativeTime } from '@/lib/relative-time'
 /* eslint-disable max-lines -- Why: the GH item dialog keeps its header, conversation, files, and checks tabs co-located so the read-only PR/Issue surface stays in one place while this view evolves. */
 import React, {
@@ -970,10 +978,6 @@ function PRReviewersPanel({
   )
 }
 
-function isPRFileViewed(file: GitHubPRFile): boolean {
-  return file.viewerViewedState === 'VIEWED'
-}
-
 function findNearestBraceBlock(
   lines: string[],
   targetLine: number
@@ -1438,66 +1442,6 @@ function PRViewedCheckbox({
 }
 
 const PR_DIFF_OVERSCAN = 5
-
-function mapPRFileStatus(status: GitHubPRFile['status']): GitBranchChangeEntry['status'] {
-  switch (status) {
-    case 'added':
-      return 'added'
-    case 'removed':
-      return 'deleted'
-    case 'renamed':
-      return 'renamed'
-    case 'copied':
-      return 'copied'
-    case 'changed':
-    case 'modified':
-    case 'unchanged':
-      return 'modified'
-  }
-}
-
-function getPRFileSectionKey(path: string): string {
-  return `combined-commit:${path}`
-}
-
-function gitHubPRFileToBranchEntry(file: GitHubPRFile): GitBranchChangeEntry {
-  return {
-    path: file.path,
-    oldPath: file.oldPath,
-    status: mapPRFileStatus(file.status),
-    added: file.additions,
-    removed: file.deletions
-  }
-}
-
-function getPRFileDiffResult(contents: GitHubPRFileContents): GitDiffResult {
-  if (contents.originalIsBinary) {
-    return {
-      kind: 'binary',
-      originalContent: contents.original,
-      modifiedContent: contents.modified,
-      originalIsBinary: true,
-      modifiedIsBinary: contents.modifiedIsBinary
-    }
-  }
-  if (contents.modifiedIsBinary) {
-    return {
-      kind: 'binary',
-      originalContent: contents.original,
-      modifiedContent: contents.modified,
-      originalIsBinary: false,
-      modifiedIsBinary: true
-    }
-  }
-
-  return {
-    kind: 'text',
-    originalContent: contents.original,
-    modifiedContent: contents.modified,
-    originalIsBinary: false,
-    modifiedIsBinary: false
-  }
-}
 
 type PRFilesCombinedDiffViewerProps = {
   files: GitHubPRFile[]
@@ -3131,10 +3075,6 @@ function pickDefaultAgent(
     return defaultAgent
   }
   return AGENT_CATALOG.find((entry) => enabledAgents.includes(entry.id))?.id ?? null
-}
-
-function getCheckDetailsKey(check: PRCheckDetail): string {
-  return String(check.checkRunId ?? check.workflowRunId ?? check.url ?? check.name)
 }
 
 function ChecksTab({
