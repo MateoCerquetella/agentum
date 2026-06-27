@@ -17,7 +17,7 @@ use axum::Json;
 use axum::Router;
 use axum::routing::{get, post};
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::AppState;
 use crate::cdp_browser;
