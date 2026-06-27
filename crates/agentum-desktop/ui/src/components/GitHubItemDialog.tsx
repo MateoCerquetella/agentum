@@ -11,6 +11,7 @@ import {
   isPRFileViewed,
   mapPRFileStatus
 } from '@/lib/github-pr-detail-helpers'
+import { getStateLabel, getStateTone } from '@/lib/github-work-item-state'
 import { formatRelativeTime } from '@/lib/relative-time'
 /* eslint-disable max-lines -- Why: the GH item dialog keeps its header, conversation, files, and checks tabs co-located so the read-only PR/Issue surface stays in one place while this view evolves. */
 import React, {
@@ -154,7 +155,7 @@ import {
   GITHUB_PR_MERGE_METHOD_LABELS,
   resolveGitHubPRMergeMethods
 } from '../../../shared/github-pr-merge-methods'
-import { AGENT_CATALOG } from '@/lib/agent-catalog'
+import { AGENT_CATALOG, pickDefaultAgent } from '@/lib/agent-catalog'
 import { filterEnabledTuiAgents } from '../../../shared/tui-agent-selection'
 import { getConnectionId } from '@/lib/connection-context'
 import { focusTerminalTabSurface } from '@/lib/focus-terminal-tab-surface'
@@ -279,41 +280,6 @@ type GitHubItemDialogProps = {
    *  simultaneously (Project mode where the row also lives in the active
    *  workspace) — slug routing wins for writes. */
   projectOrigin?: GitHubItemDialogProjectOrigin
-}
-
-function getStateLabel(item: GitHubWorkItem): string {
-  if (item.type === 'pr') {
-    if (item.state === 'merged') {
-      return 'Merged'
-    }
-    if (item.state === 'draft') {
-      return 'Draft'
-    }
-    if (item.state === 'closed') {
-      return 'Closed'
-    }
-    return 'Open'
-  }
-  return item.state === 'closed' ? 'Closed' : 'Open'
-}
-
-function getStateTone(item: GitHubWorkItem): string {
-  if (item.type === 'pr') {
-    if (item.state === 'merged') {
-      return 'border-purple-500/30 bg-purple-500/10 text-purple-600 dark:text-purple-300'
-    }
-    if (item.state === 'draft') {
-      return 'border-slate-500/30 bg-slate-500/10 text-slate-600 dark:text-slate-300'
-    }
-    if (item.state === 'closed') {
-      return 'border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300'
-    }
-    return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
-  }
-  if (item.state === 'closed') {
-    return 'border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300'
-  }
-  return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
 }
 
 function WorkItemStateBadge({
@@ -3063,18 +3029,6 @@ function buildFixBrokenChecksPrompt(item: GitHubWorkItem, checks: PRCheckDetail[
     '',
     'Focus only on making the failing checks pass. Inspect the CI output first, make the smallest correct code or test changes, and do not work on unrelated cleanup.'
   ].join('\n')
-}
-
-function pickDefaultAgent(
-  defaultAgent: TuiAgent | 'blank' | null | undefined,
-  detectedAgents: TuiAgent[],
-  disabledAgents?: TuiAgent[]
-): TuiAgent | null {
-  const enabledAgents = filterEnabledTuiAgents(detectedAgents, disabledAgents)
-  if (defaultAgent && defaultAgent !== 'blank' && enabledAgents.includes(defaultAgent)) {
-    return defaultAgent
-  }
-  return AGENT_CATALOG.find((entry) => enabledAgents.includes(entry.id))?.id ?? null
 }
 
 function ChecksTab({
