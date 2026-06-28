@@ -165,6 +165,7 @@ import {
   GITHUB_TASK_STICKY_ID_CELL_CLASS,
   GITHUB_TASK_STICKY_TITLE_CELL_CLASS
 } from './task-page/github-grid-styles'
+import { DEFAULT_LINEAR_DISPLAY_PROPERTIES, LINEAR_BOARD_DRAG_ISSUE_MIME, LINEAR_CUSTOM_VIEW_MODEL_OPTIONS, LINEAR_DISPLAY_PROPERTIES, LINEAR_GROUP_OPTIONS, LINEAR_MODE_OPTIONS, LINEAR_ORDER_OPTIONS, LINEAR_PRESETS, LINEAR_VIEW_OPTIONS, LinearIssueListRow, LinearMode, LinearPresetId, LinearProjectTab, LinearViewMode } from './task-page/linear-view-config'
 
 type TaskSource = TaskProvider
 
@@ -193,80 +194,9 @@ const SOURCE_OPTIONS: SourceOption[] = [
   }
 ]
 
-type LinearPresetId = 'assigned' | 'created' | 'all' | 'completed'
-type LinearPreset = { id: LinearPresetId; label: string }
-
-const LINEAR_PRESETS: LinearPreset[] = [
-  { id: 'all', label: 'All' },
-  { id: 'assigned', label: 'My Issues' },
-  { id: 'created', label: 'Created' },
-  { id: 'completed', label: 'Completed' }
-]
-
 const TASK_SEARCH_DEBOUNCE_MS = 300
 const LINEAR_ITEM_LIMIT = 36
 const PR_CHECKS_EAGER_PREFETCH_LIMIT = 20
-
-type LinearViewMode = 'list' | 'board'
-type LinearMode = 'issues' | 'projects' | 'views'
-type LinearProjectTab = 'overview' | 'issues'
-type LinearIssueListRow =
-  | { type: 'section'; key: string; label: string; count: number }
-  | { type: 'issue'; issue: LinearIssue }
-
-const LINEAR_BOARD_DRAG_ISSUE_MIME = 'application/x-agentum-linear-issue-id'
-
-const LINEAR_MODE_OPTIONS: { id: LinearMode; label: string }[] = [
-  { id: 'issues', label: 'Issues' },
-  { id: 'projects', label: 'Projects' },
-  { id: 'views', label: 'Views' }
-]
-
-const LINEAR_CUSTOM_VIEW_MODEL_OPTIONS: { id: LinearCustomViewModel; label: string }[] = [
-  { id: 'issue', label: 'Issues' },
-  { id: 'project', label: 'Projects' }
-]
-
-const LINEAR_VIEW_OPTIONS: {
-  id: LinearViewMode
-  label: string
-  Icon: typeof List
-}[] = [
-  { id: 'list', label: 'List', Icon: List },
-  { id: 'board', label: 'Board', Icon: LayoutGrid }
-]
-
-const LINEAR_GROUP_OPTIONS: { id: LinearGroupBy; label: string }[] = [
-  { id: 'none', label: 'No grouping' },
-  { id: 'status', label: 'Status' },
-  { id: 'assignee', label: 'Assignee' },
-  { id: 'priority', label: 'Priority' },
-  { id: 'team', label: 'Team' }
-]
-
-const LINEAR_ORDER_OPTIONS: { id: LinearOrderBy; label: string }[] = [
-  { id: 'priority', label: 'Priority' },
-  { id: 'updated', label: 'Updated' },
-  { id: 'identifier', label: 'Identifier' }
-]
-
-const LINEAR_DISPLAY_PROPERTIES: { id: LinearDisplayProperty; label: string }[] = [
-  { id: 'state', label: 'Status' },
-  { id: 'priority', label: 'Priority' },
-  { id: 'assignee', label: 'Assignee' },
-  { id: 'team', label: 'Team' },
-  { id: 'labels', label: 'Labels' },
-  { id: 'updated', label: 'Updated' }
-]
-
-const DEFAULT_LINEAR_DISPLAY_PROPERTIES: LinearDisplayProperty[] = [
-  'state',
-  'priority',
-  'assignee',
-  'team',
-  'labels',
-  'updated'
-]
 
 // Why: type-guard predicate used to filter `perRepoSourceState` down to rows
 // whose issue-source and PR-source slugs differ. Hoisted to module scope so
