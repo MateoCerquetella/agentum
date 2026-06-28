@@ -166,60 +166,12 @@ import {
   GITHUB_TASK_STICKY_TITLE_CELL_CLASS
 } from './task-page/github-grid-styles'
 import { DEFAULT_LINEAR_DISPLAY_PROPERTIES, LINEAR_BOARD_DRAG_ISSUE_MIME, LINEAR_CUSTOM_VIEW_MODEL_OPTIONS, LINEAR_DISPLAY_PROPERTIES, LINEAR_GROUP_OPTIONS, LINEAR_MODE_OPTIONS, LINEAR_ORDER_OPTIONS, LINEAR_PRESETS, LINEAR_VIEW_OPTIONS, LinearIssueListRow, LinearMode, LinearPresetId, LinearProjectTab, LinearViewMode } from './task-page/linear-view-config'
-
-type TaskSource = TaskProvider
-
-type SourceOption = {
-  id: TaskSource
-  label: string
-  Icon: (props: { className?: string }) => React.JSX.Element
-  disabled?: boolean
-}
-
-const SOURCE_OPTIONS: SourceOption[] = [
-  {
-    id: 'github',
-    label: 'GitHub',
-    Icon: ({ className }) => <Github className={className} />
-  },
-  {
-    id: 'gitlab',
-    label: 'GitLab',
-    Icon: ({ className }) => <Gitlab className={className} />
-  },
-  {
-    id: 'linear',
-    label: 'Linear',
-    Icon: ({ className }) => <LinearIcon className={className} />
-  }
-]
+import { SOURCE_OPTIONS, TaskSource } from './task-page/source-config'
+import { hasDivergentSources, hasUpstreamCandidateDivergence } from './task-page/source-divergence'
 
 const TASK_SEARCH_DEBOUNCE_MS = 300
 const LINEAR_ITEM_LIMIT = 36
 const PR_CHECKS_EAGER_PREFETCH_LIMIT = 20
-
-// Why: type-guard predicate used to filter `perRepoSourceState` down to rows
-// whose issue-source and PR-source slugs differ. Hoisted to module scope so
-// the predicate isn't re-allocated on every TaskPage render.
-const hasDivergentSources = (
-  s: TaskPageRepoSourceState
-): s is TaskPageRepoSourceState & {
-  sources: { issues: GitHubOwnerRepo; prs: GitHubOwnerRepo }
-} => !!s.sources?.issues && !!s.sources.prs && !sameGitHubOwnerRepo(s.sources.issues, s.sources.prs)
-
-// Why: the selector keeps rendering even after the user picks 'origin' (which
-// collapses `sources.issues` onto origin). Upstream-candidate divergence is
-// the right render gate — a repo that has an `upstream` remote pointing
-// somewhere different from origin is always a candidate for the toggle,
-// regardless of the current effective preference.
-const hasUpstreamCandidateDivergence = (
-  s: TaskPageRepoSourceState
-): s is TaskPageRepoSourceState & {
-  sources: { prs: GitHubOwnerRepo; upstreamCandidate: GitHubOwnerRepo }
-} =>
-  !!s.sources?.prs &&
-  !!s.sources.upstreamCandidate &&
-  !sameGitHubOwnerRepo(s.sources.prs, s.sources.upstreamCandidate)
 
 export default function TaskPage(): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
