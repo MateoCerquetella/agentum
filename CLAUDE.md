@@ -305,7 +305,12 @@ All HTTP/WS routes live in `crates/agentum-server/src/routes/`:
 | `fs.rs`           | `/api/fs/list`             | Workdir picker. |
 | `mcp.rs`          | `/mcp`                     | agentum's own MCP server (see below). |
 | `harness.rs`      | `/api/harness/*` + `/events` WS | Harness Engine: drive agents one feature at a time behind a verify gate (see below). |
+| `git.rs`          | `/api/sessions/{id}/git/*` | Per-session git surface. Decomposed by domain into `git/` submodules — `history_routes`, `compare_routes` (commit/branch compare), `conflict_routes` (rebase/abort/discard/upstream), `sync_routes` (branches/log/fetch/pull/push), `write_routes` (stage/commit mutations), `content_routes` (diff/file), `file_links_routes` (remote URL/blob). The root keeps the router, shared git-exec/path-safety plumbing (`run_git`, `host_and_cwd_for`, `ensure_safe_relative`), and the shared status core (`parse_porcelain_z`/`GitStatus`) that `write_routes` reuses; submodules reach it via `use super::*`. |
 | `board.rs`, `notes.rs`, `channels.rs`, `watchdog.rs`, `doctor.rs` | various | Self-explanatory. |
+
+Shared route helpers live in `routes/util.rs` (`pub(crate)`): `parse_uuid`,
+`expand_workdir`, `now_millis` — import these rather than re-defining them
+per route module.
 
 Auth middleware (`crate::auth::require_token`) is applied at the
 top-level router merge — see `lib.rs::router`. Public paths are
