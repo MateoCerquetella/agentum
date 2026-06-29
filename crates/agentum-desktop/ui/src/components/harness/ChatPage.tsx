@@ -1,11 +1,13 @@
 // Chat — a real conversational front door to the Spec→tickets pipeline (#48).
 // Describe a feature in plain words and the server-side Socratic interviewer
 // (`POST /api/chat/stream`) asks a few clarifying questions, then proposes a task
-// breakdown the user can file into GitHub or Linear (toggle, when Linear is
-// connected). The reply streams in token-by-token; an optional extended-thinking
-// trace is shown above each answer. Conversations are kept in local history
-// (sidebar), and the model + thinking are user-pickable. The "Create issues"
-// button is the only mutation here — review and start-task happen on the Board.
+// breakdown the user can file as GitHub issues. The target repo is INFERRED from
+// the selected workspace (a picker in the toolbar) — that same workspace grounds
+// the interview — so there's no manual owner/repo entry. The reply streams in
+// token-by-token; an optional extended-thinking trace is shown above each answer.
+// Conversations are kept in local history (sidebar), and the workspace + model +
+// thinking are user-pickable. The "Create issues" button is the only mutation
+// here — review and start-task happen on the Board.
 import { type FormEvent, type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Brain,
@@ -13,6 +15,7 @@ import {
   ChevronDown,
   Columns3,
   Cpu,
+  FolderGit2,
   Github,
   Loader2,
   MessagesSquare,
@@ -25,14 +28,14 @@ import {
 
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
+import type { Repo } from '@/shared/types'
 import { DrillInHeader } from '@/components/nav/DrillInHeader'
-import { LinearIcon } from '@/components/icons/LinearIcon'
+import { AgentumMark } from '@/components/icons/AgentumMark'
 import CommentMarkdown from '@/components/sidebar/CommentMarkdown'
 import {
   CHAT_MODELS,
   createIssuesFromChat,
   DEFAULT_CHAT_MODEL,
-  type IssueProvider,
   resolveChatModel,
   streamChat
 } from '@/runtime/chat-client'
@@ -50,6 +53,7 @@ import {
 // (same client-persistence pattern as the planner tool / profiles).
 const MODEL_KEY = 'agentum.chat.model'
 const THINKING_KEY = 'agentum.chat.thinking'
+const WORKSPACE_KEY = 'agentum.chat.workspace'
 
 function readStoredModel(): string {
   try {
@@ -68,10 +72,8 @@ function readStoredThinking(): boolean {
 
 export default function ChatPage() {
   const repos = useAppStore((s) => s.repos)
+  const activeRepoId = useAppStore((s) => s.activeRepoId)
   const setActiveView = useAppStore((s) => s.setActiveView)
-  const linearStatus = useAppStore((s) => s.linearStatus)
-  const linearStatusChecked = useAppStore((s) => s.linearStatusChecked)
-  const checkLinearConnection = useAppStore((s) => s.checkLinearConnection)
 
   const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations())
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -99,10 +101,39 @@ export default function ChatPage() {
     }
   }, [thinking])
 
-  // Which tracker "Create issues" files into (only meaningful when Linear is
-  // connected; GitHub is the default and sole option otherwise) + the target repo.
-  const [provider, setProvider] = useState<IssueProvider>('github')
-  const [repoTarget, setRepoTarget] = useState('')
+  // Which workspace grounds the interview AND receives the issues. The selected
+  // project's GitHub repo is the (inferred) issue target — there is no manual
+  // owner/repo entry. Seeded from the app's active project; persisted.
+  const [workspaceId, setWorkspaceId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(WORKSPACE_KEY)
+    } catch {
+      return null
+    }
+  })
+  // Validate/seed the selection once projects have loaded. While `repos` is empty
+  // (store not yet hydrated) we MUST NOT run: the stored id would look stale
+  // against the empty list and get reset to repos[0] on every launch, destroying
+  // the user's saved choice. Once hydrated: keep a still-valid selection, else
+  // fall back to the active project, then the first one.
+  useEffect(() => {
+    if (repos.length === 0) return
+    setWorkspaceId((cur) => {
+      if (cur && repos.some((r) => r.id === cur)) return cur
+      return activeRepoId ?? repos[0]?.id ?? null
+    })
+  }, [repos, activeRepoId])
+  useEffect(() => {
+    try {
+      if (workspaceId) localStorage.setItem(WORKSPACE_KEY, workspaceId)
+    } catch {
+      /* storage may be unavailable — selection still works this session */
+    }
+  }, [workspaceId])
+  const workspace = useMemo(
+    () => repos.find((r) => r.id === workspaceId) ?? null,
+    [repos, workspaceId]
+  )
 
   // The in-flight stream's abort handle, so the Stop button can cancel it.
   const abortRef = useRef<AbortController | null>(null)
@@ -114,13 +145,6 @@ export default function ChatPage() {
     const t = setTimeout(() => saveConversations(conversations), 400)
     return () => clearTimeout(t)
   }, [conversations])
-
-  // Discover whether Linear is connected so we can offer it as a target.
-  useEffect(() => {
-    if (!linearStatusChecked) void checkLinearConnection()
-  }, [linearStatusChecked, checkLinearConnection])
-  const linearConnected = linearStatus.connected === true
-  const effectiveProvider: IssueProvider = linearConnected ? provider : 'github'
 
   const active = useMemo(
     () => conversations.find((c) => c.id === activeId) ?? null,
@@ -246,7 +270,7 @@ export default function ChatPage() {
       let reasoning = ''
       try {
         await streamChat(history, {
-          workdir: repos[0]?.path,
+          workdir: workspace?.path,
           model,
           thinking,
           signal: ac.signal,
@@ -281,7 +305,7 @@ export default function ChatPage() {
         setBusy(false)
       }
     },
-    [draft, busy, activeId, conversations, model, thinking, repos, updateLastAssistant]
+    [draft, busy, activeId, conversations, model, thinking, workspace, updateLastAssistant]
   )
 
   const stop = useCallback(() => abortRef.current?.abort(), [])
@@ -307,14 +331,11 @@ export default function ChatPage() {
     try {
       const result = await createIssuesFromChat(
         messages.map((m) => ({ role: m.role, content: m.content })),
-        {
-          workdir: repos[0]?.path,
-          provider: effectiveProvider,
-          repoSlug: effectiveProvider === 'github' ? repoTarget : undefined
-        }
+        // GitHub-only: the server infers the repo from the workspace's `origin`
+        // (no manual owner/repo). The workspace path is the sole hint it needs.
+        { workdir: workspace?.path }
       )
-      const where =
-        result.provider === 'linear' ? 'Linear' : result.repo ? `\`${result.repo}\`` : 'GitHub'
+      const where = result.repo ? `\`${result.repo}\`` : workspace ? workspace.displayName : 'GitHub'
       const lines: string[] = []
       if (result.created.length > 0) {
         const n = result.created.length
@@ -337,7 +358,7 @@ export default function ChatPage() {
     } finally {
       setCreating(false)
     }
-  }, [busy, creating, active, messages, repos, effectiveProvider, repoTarget, appendAssistant])
+  }, [busy, creating, active, messages, workspace, appendAssistant])
 
   const useExample = useCallback((text: string) => {
     setDraft(text)
@@ -420,8 +441,14 @@ export default function ChatPage() {
 
         {/* ---- chat column ---- */}
         <div className="flex min-h-0 flex-1 flex-col">
-          {/* model + thinking toolbar */}
+          {/* workspace + model + thinking toolbar */}
           <div className="flex h-11 flex-none items-center gap-2 border-b border-border px-4">
+            <WorkspacePicker
+              repos={repos}
+              workspaceId={workspaceId}
+              onChange={setWorkspaceId}
+              disabled={busy}
+            />
             <ModelPicker model={model} onChange={setModel} disabled={busy} />
             <ThinkingToggle on={thinking} onToggle={setThinking} disabled={busy} />
             <span className="ml-auto hidden font-mono text-[11px] text-muted-foreground md:inline">
@@ -459,84 +486,29 @@ export default function ChatPage() {
             {hasAssistantReply ? (
               <div className="mx-auto mb-2.5 flex max-w-[760px] flex-col gap-1.5">
                 <div className="flex flex-wrap items-center justify-end gap-2">
-                  {linearConnected ? (
-                    <div
-                      role="group"
-                      aria-label="Issue tracker"
-                      className="inline-flex overflow-hidden rounded-md border border-border"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setProvider('github')}
-                        disabled={creating}
-                        className={cn(
-                          'inline-flex items-center gap-1.5 px-2.5 py-1 text-[12.5px] font-medium hover:bg-accent disabled:opacity-40',
-                          effectiveProvider === 'github'
-                            ? 'bg-accent text-foreground'
-                            : 'text-muted-foreground'
-                        )}
-                      >
-                        <Github className="size-3.5" /> GitHub
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setProvider('linear')}
-                        disabled={creating}
-                        className={cn(
-                          'inline-flex items-center gap-1.5 border-l border-border px-2.5 py-1 text-[12.5px] font-medium hover:bg-accent disabled:opacity-40',
-                          effectiveProvider === 'linear'
-                            ? 'bg-accent text-foreground'
-                            : 'text-muted-foreground'
-                        )}
-                      >
-                        <LinearIcon className="size-3.5" /> Linear
-                      </button>
-                    </div>
-                  ) : null}
-                  {effectiveProvider === 'github' ? (
-                    <input
-                      type="text"
-                      value={repoTarget}
-                      onChange={(e) => setRepoTarget(e.target.value)}
-                      disabled={creating}
-                      placeholder="owner/repo"
-                      spellCheck={false}
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      aria-label="Target GitHub repository (owner/repo)"
-                      className="w-44 rounded-md border border-border bg-background px-2.5 py-1 font-mono text-[12.5px] text-foreground placeholder:text-muted-foreground focus:border-foreground/30 focus:outline-none disabled:opacity-40"
-                    />
-                  ) : null}
                   <button
                     type="button"
                     onClick={() => void createIssues()}
-                    disabled={
-                      busy ||
-                      creating ||
-                      messages.length === 0 ||
-                      (effectiveProvider === 'github' && repos.length === 0 && !repoTarget.trim())
-                    }
+                    disabled={busy || creating || messages.length === 0 || !workspace}
                     className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] font-medium hover:border-foreground/30 hover:bg-accent disabled:opacity-40"
                   >
                     {creating ? (
                       <Loader2 className="size-3.5 animate-spin" />
-                    ) : effectiveProvider === 'linear' ? (
-                      <LinearIcon className="size-3.5" />
                     ) : (
                       <Github className="size-3.5" />
                     )}
                     {creating
                       ? 'Creating issues…'
-                      : `Create ${effectiveProvider === 'linear' ? 'Linear' : 'GitHub'} issues`}
+                      : workspace
+                        ? `Create issues in ${workspace.displayName}`
+                        : 'Create issues'}
                   </button>
                 </div>
-                {effectiveProvider === 'github' ? (
-                  <div className="text-right text-[11px] text-muted-foreground">
-                    {repos.length === 0
-                      ? 'Enter the GitHub repo (owner/repo) to file these into.'
-                      : 'Blank files into your open project — or type owner/repo.'}
-                  </div>
-                ) : null}
+                <div className="text-right text-[11px] text-muted-foreground">
+                  {workspace
+                    ? `Files GitHub issues into ${workspace.displayName} — inferred from the workspace.`
+                    : 'Pick a workspace above to file issues into.'}
+                </div>
               </div>
             ) : null}
             <div className="mx-auto flex max-w-[760px] items-end gap-2.5 rounded-xl border border-border bg-card px-3 py-2.5 focus-within:border-foreground/30">
@@ -577,8 +549,9 @@ export default function ChatPage() {
   )
 }
 
-/** The assistant mark — a gradient tile with a clean hexagon-core glyph. Replaces
- *  the generic sparkle so the chat reads as agentum, not boilerplate AI. */
+/** The assistant mark — the agentum brand glyph (the stacked-square "A", from
+ *  `resources/logo.svg`) in white on a gradient tile, so the chat reads as
+ *  agentum rather than a generic AI. */
 function AssistantAvatar({ className }: { className?: string }) {
   return (
     <span
@@ -588,18 +561,102 @@ function AssistantAvatar({ className }: { className?: string }) {
       )}
       aria-hidden
     >
-      <svg
-        viewBox="0 0 24 24"
-        className="size-[62%]"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinejoin="round"
-      >
-        <path d="M12 2.5l8.2 4.7v9.6L12 21.5 3.8 16.8V7.2L12 2.5z" />
-        <circle cx="12" cy="12" r="2.9" fill="currentColor" stroke="none" />
-      </svg>
+      <AgentumMark className="size-[72%]" />
     </span>
+  )
+}
+
+/** Workspace dropdown — picks which open project grounds the interview and (since
+ *  the GitHub repo is inferred from it) receives the issues. Empty when no project
+ *  is open; remote projects are tagged (Chat files issues against the LOCAL repo,
+ *  so a remote selection grounds context but can't infer a local origin). */
+function WorkspacePicker({
+  repos,
+  workspaceId,
+  onChange,
+  disabled
+}: {
+  repos: Repo[]
+  workspaceId: string | null
+  onChange: (id: string) => void
+  disabled?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    return () => window.removeEventListener('mousedown', onDown)
+  }, [open])
+  const current = repos.find((r) => r.id === workspaceId) ?? null
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        disabled={disabled || repos.length === 0}
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] font-medium hover:border-foreground/30 hover:bg-accent disabled:opacity-50"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title="Workspace the chat is grounded in — and where issues are filed"
+      >
+        <FolderGit2 className="size-3.5 text-muted-foreground" />
+        <span className="max-w-[12rem] truncate">
+          {current ? current.displayName : 'No workspace'}
+        </span>
+        <ChevronDown
+          className={cn('size-3.5 text-muted-foreground transition-transform', open && 'rotate-180')}
+        />
+      </button>
+      {open ? (
+        <div
+          role="listbox"
+          className="absolute left-0 top-full z-30 mt-1 w-72 rounded-lg border border-border bg-card p-1 shadow-lg"
+        >
+          {repos.length === 0 ? (
+            <div className="px-2 py-1.5 text-[12px] text-muted-foreground">
+              No projects open — add one from the sidebar.
+            </div>
+          ) : (
+            repos.map((r) => {
+              const sel = r.id === workspaceId
+              const remote = !!(r.connectionId || r.hostId)
+              return (
+                <button
+                  key={r.id}
+                  type="button"
+                  role="option"
+                  aria-selected={sel}
+                  onClick={() => {
+                    onChange(r.id)
+                    setOpen(false)
+                  }}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent',
+                    sel && 'bg-accent/60'
+                  )}
+                >
+                  <FolderGit2 className="size-3.5 flex-none text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[13px] font-medium text-foreground">
+                      {r.displayName}
+                    </div>
+                    <div className="truncate font-mono text-[10.5px] text-muted-foreground">
+                      {remote ? 'remote · ' : ''}
+                      {r.path}
+                    </div>
+                  </div>
+                  {sel ? <Check className="size-4 flex-none text-primary" /> : null}
+                </button>
+              )
+            })
+          )}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -786,8 +843,8 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
       <AssistantAvatar className="size-12" />
       <h2 className="mt-4 text-lg font-semibold tracking-tight text-foreground">Describe a feature</h2>
       <p className="mt-1.5 text-[13.5px] leading-relaxed text-muted-foreground">
-        I'll ask a few sharp clarifying questions, then propose a task breakdown you can file into
-        GitHub or Linear.
+        I'll ask a few sharp clarifying questions, then propose a task breakdown you can file as
+        GitHub issues into your selected workspace.
       </p>
       <div className="mt-5 flex w-full flex-col gap-2">
         {examples.map((ex) => (
