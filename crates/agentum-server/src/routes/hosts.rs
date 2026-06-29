@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::error::ApiError;
 use crate::host_runtime::{DiscoveredTmuxSession, HostProbe};
+use super::util::parse_uuid;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -538,8 +539,4 @@ async fn kill_tmux_session_route(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-fn parse_uuid(s: &str) -> Result<Uuid, ApiError> {
-    Uuid::parse_str(s).map_err(|_| ApiError::BadRequest(format!("invalid uuid: {s}")))
 }

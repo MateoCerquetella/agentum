@@ -9,7 +9,7 @@
 //! are POST-with-body rather than `{id}` path params, which can't capture slashes.
 
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use super::util::now_millis;
 
 use agentum_core::{Host, HostKind};
 use axum::Json;
@@ -60,13 +60,6 @@ pub(crate) struct Worktree {
     last_activity_at: u64,
     #[serde(flatten)]
     extra: Map<String, Value>,
-}
-
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|delta| delta.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 fn registry_path() -> Result<PathBuf, ApiError> {

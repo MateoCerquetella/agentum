@@ -55,6 +55,7 @@ describe('selectWorktreeAgentActivitySummary', () => {
         [firstPaneKey]: makeAgentStatusEntry({ paneKey: firstPaneKey, state: 'working' })
       },
       migrationUnsupportedByPtyId: {},
+      awaitingInputByPaneKey: {},
       retainedAgentsByPaneKey: {
         'tab-2:0': {
           entry: makeAgentStatusEntry({ paneKey: 'tab-2:0', state: 'done' }),
@@ -93,7 +94,8 @@ describe('selectWorktreeAgentActivitySummary', () => {
         [paneKey]: entry
       },
       migrationUnsupportedByPtyId,
-      retainedAgentsByPaneKey
+      retainedAgentsByPaneKey,
+      awaitingInputByPaneKey: {}
     }
     const sameStatePing = {
       ...state,
@@ -115,6 +117,29 @@ describe('selectWorktreeAgentActivitySummary', () => {
     expect(nowSpy).toHaveBeenCalledTimes(1)
   })
 
+  it('marks a worktree as needing permission from the awaiting-input overlay', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(2_000)
+    const paneKey = makePaneKey('tab-1', LEAF_ID)
+    const state: AgentActivityInput = {
+      tabsByWorktree: {
+        'repo::/wt-1': [makeTab('tab-1', 'repo::/wt-1')]
+      },
+      agentStatusEpoch: 0,
+      // No explicit hook entry — the watchdog overlay alone must surface the
+      // "needs attention" signal (Claude's permission prompt only ever reaches
+      // the renderer as a working→idle title edge).
+      agentStatusByPaneKey: {},
+      migrationUnsupportedByPtyId: {},
+      retainedAgentsByPaneKey: {},
+      awaitingInputByPaneKey: { [paneKey]: true }
+    }
+
+    expect(selectWorktreeAgentActivitySummary(state, 'repo::/wt-1')).toMatchObject({
+      hasPermission: true,
+      hasLiveWorking: false
+    })
+  })
+
   it('rebuilds the summary when the agent status epoch changes', () => {
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(2_000)
     const paneKey = makePaneKey('tab-1', LEAF_ID)
@@ -130,7 +155,8 @@ describe('selectWorktreeAgentActivitySummary', () => {
         [paneKey]: makeAgentStatusEntry({ paneKey, state: 'working' })
       },
       migrationUnsupportedByPtyId,
-      retainedAgentsByPaneKey
+      retainedAgentsByPaneKey,
+      awaitingInputByPaneKey: {}
     }
     const changedState = {
       ...state,

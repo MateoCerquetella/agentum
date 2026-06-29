@@ -28,6 +28,7 @@ export type AgentActivityInput = Pick<
   | 'agentStatusByPaneKey'
   | 'migrationUnsupportedByPtyId'
   | 'retainedAgentsByPaneKey'
+  | 'awaitingInputByPaneKey'
 >
 
 type AgentActivityCache = {
@@ -35,6 +36,7 @@ type AgentActivityCache = {
   agentStatusEpoch: number
   migrationUnsupportedByPtyId: AppState['migrationUnsupportedByPtyId']
   retainedAgentsByPaneKey: AppState['retainedAgentsByPaneKey']
+  awaitingInputByPaneKey: AppState['awaitingInputByPaneKey']
   summaries: Map<string, WorktreeAgentActivitySummary>
 }
 
@@ -55,7 +57,8 @@ function getWorktreeAgentActivitySummaries(
     agentActivityCache.tabsByWorktree === state.tabsByWorktree &&
     agentActivityCache.agentStatusEpoch === state.agentStatusEpoch &&
     agentActivityCache.migrationUnsupportedByPtyId === state.migrationUnsupportedByPtyId &&
-    agentActivityCache.retainedAgentsByPaneKey === state.retainedAgentsByPaneKey
+    agentActivityCache.retainedAgentsByPaneKey === state.retainedAgentsByPaneKey &&
+    agentActivityCache.awaitingInputByPaneKey === state.awaitingInputByPaneKey
   ) {
     return agentActivityCache.summaries
   }
@@ -101,11 +104,24 @@ function getWorktreeAgentActivitySummaries(
     summaryForWorktree(retained.worktreeId).hasRetainedDone = true
   }
 
+  // Why: the watchdog's authoritative "agent is blocked on the user" signal.
+  // It outranks the title/byte-derived working/done state in resolveWorktreeStatus
+  // (hasPermission wins), so a Claude permission prompt — which looks like a plain
+  // working→idle edge to the renderer — surfaces as the amber "needs attention"
+  // dot instead of a misleading green ✓.
+  for (const paneKey of Object.keys(state.awaitingInputByPaneKey ?? {})) {
+    const worktreeId = worktreeIdForPaneKey(paneKey, tabIdToWorktreeId)
+    if (worktreeId) {
+      summaryForWorktree(worktreeId).hasPermission = true
+    }
+  }
+
   agentActivityCache = {
     tabsByWorktree: state.tabsByWorktree,
     agentStatusEpoch: state.agentStatusEpoch,
     migrationUnsupportedByPtyId: state.migrationUnsupportedByPtyId,
     retainedAgentsByPaneKey: state.retainedAgentsByPaneKey,
+    awaitingInputByPaneKey: state.awaitingInputByPaneKey,
     summaries
   }
   return summaries

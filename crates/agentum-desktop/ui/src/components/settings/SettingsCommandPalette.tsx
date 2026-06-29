@@ -7,27 +7,12 @@ import {
   CommandEmpty,
   CommandItem
 } from '@/components/ui/command'
-import { useSettingsNavigationMetadata } from '@/hooks/useSettingsNavigationMetadata'
+import { getSettingsTargetFromSectionId, useSettingsNavigationMetadata } from '@/hooks/useSettingsNavigationMetadata'
 import {
   buildCmdJSettingsResults,
   rankCmdJMiddleResults,
   type CmdJSettingsResult
 } from '@/components/cmd-j/palette-results'
-import type { SettingsNavTarget } from '@/lib/settings-navigation-types'
-
-// Why: mirror WorktreeJumpPalette's section-id → settings-target mapping so a
-// `repo-<id>` row opens that repo's pane while every other row maps 1:1. Kept
-// local (a 4-line pure helper) rather than introducing a shared abstraction.
-function getSettingsTargetFromSectionId(sectionId: string): {
-  pane: SettingsNavTarget
-  repoId: string | null
-  sectionId?: string
-} {
-  if (sectionId.startsWith('repo-')) {
-    return { pane: 'repo', repoId: sectionId.slice('repo-'.length) }
-  }
-  return { pane: sectionId as SettingsNavTarget, repoId: null }
-}
 
 // Cmd+Shift+P — a focused settings command palette. Reuses the proven Cmd+J
 // settings path: the single navigation registry (useSettingsNavigationMetadata)

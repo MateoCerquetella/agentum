@@ -35,6 +35,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
+use super::util::parse_uuid;
 
 /// Maximum upload body size. Matches what Claude Code accepts on its
 /// own attachment surface; larger images would push the daemon's
@@ -243,10 +244,6 @@ fn short_rand_hex() -> String {
         out.push_str(&format!("{b:02x}"));
     }
     out
-}
-
-fn parse_uuid(s: &str) -> Result<Uuid, ApiError> {
-    Uuid::parse_str(s).map_err(|e| ApiError::BadRequest(e.to_string()))
 }
 
 #[cfg(test)]

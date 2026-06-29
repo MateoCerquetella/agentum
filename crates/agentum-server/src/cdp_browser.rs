@@ -24,7 +24,8 @@
 //! browser isn't installed or never opens its CDP port — never a silent hang.
 
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::Ipv4Addr;
+use crate::port_wait::{port_listening, wait_until_listening};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -690,35 +691,6 @@ fn user_data_dir() -> Result<PathBuf> {
 }
 
 // --- small network/path helpers, mirroring `playwright_mcp`'s shape ---------
-
-/// A plain TCP connect is enough to know "something is serving here"; the bound
-/// MCP's CDP client performs the protocol handshake (with its own
-/// `--cdp-timeout`). Short timeout so a dead port fails fast on the hot path.
-async fn port_listening(port: u16) -> bool {
-    let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
-    matches!(
-        tokio::time::timeout(
-            Duration::from_millis(300),
-            tokio::net::TcpStream::connect(addr),
-        )
-        .await,
-        Ok(Ok(_))
-    )
-}
-
-/// Poll the port until it accepts connections or the deadline passes.
-async fn wait_until_listening(port: u16, max: Duration) -> bool {
-    let deadline = tokio::time::Instant::now() + max;
-    loop {
-        if port_listening(port).await {
-            return true;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
 
 /// `$HOME`, falling back to `/` so a spawn never fails on an unset HOME.
 fn home_dir() -> PathBuf {

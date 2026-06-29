@@ -18,6 +18,7 @@ import { detectAgentStatusFromTitle } from '@/lib/agent-status'
 import { makePaneKey } from '../../../../shared/stable-pane-id'
 import { createPaneActivityTracker, type PaneActivityTracker } from './pane-activity-tracker'
 import type { AgentType } from '../../../../shared/agent-status-types'
+import { registerServerSessionActivity } from '@/runtime/server-session-activity'
 
 /** The tab's launch agent (claude/codex/…) drives the server session's tool;
  *  a plain terminal tab has none, so it runs a shell. */
@@ -66,6 +67,10 @@ export function connectPaneServerSession(
   // When the server path fails, we hand the pane to connectPanePty and delegate
   // every binding method to it — the lifecycle hook never knows the difference.
   let localFallback: PanePtyBinding | null = null
+  // Unregisters this pane from the server-side agent-activity event stream (the
+  // watchdog's awaiting-input / working / finished verdicts). Set after the
+  // server session binds; called in dispose.
+  let unregisterActivity: (() => void) | null = null
   // Synthetic pty id so the sidebar's title-derived agent rows treat this pane
   // as a live PTY (buildTitleDerivedAgentRows gates on tabHasLivePty). Cleared
   // on dispose. `server:` prefix keeps it distinct from real local pty ids.
@@ -377,6 +382,65 @@ export function connectPaneServerSession(
         if (session.status === 'running' && session.tmux_target) {
           useAppStore.getState().markPaneTmux(paneKey)
         }
+
+        // ── Watchdog agent-activity → sidebar dot ───────────────────────────
+        // Subscribe to the server's authoritative activity verdicts for this
+        // session. The title/byte path above can't see "agent paused to ask
+        // you something" (it looks like a working→idle edge), and starts cold
+        // after a reload; the watchdog knows both. On connect the server
+        // replays the current state per session, so this also seeds the dot
+        // for an agent that was already running/blocked before this pane
+        // mounted.
+        unregisterActivity = registerServerSessionActivity(session.id, {
+          onAwaitingInput: () => {
+            if (disposed) {
+              return
+            }
+            const store = useAppStore.getState()
+            // Amber "needs attention" outranks the green ✓ the title/byte path
+            // may have just set on the working→idle edge.
+            store.markAwaitingInput(paneKey)
+            store.clearServerAgentDone(paneKey)
+          },
+          onInputResolved: (state) => {
+            if (disposed) {
+              return
+            }
+            const store = useAppStore.getState()
+            store.clearAwaitingInput(paneKey)
+            if (state === 'working' && !titleCarriesState) {
+              setByteWorkingStatus()
+            } else if (state !== 'working') {
+              // Prompt dismissed → idle: drop any byte/seed working override so
+              // the dot settles instead of spinning.
+              store.removeAgentStatus(paneKey)
+            }
+          },
+          onWorking: () => {
+            if (disposed) {
+              return
+            }
+            useAppStore.getState().clearAwaitingInput(paneKey)
+            // Seed the working dot only when the precise title path hasn't taken
+            // authority — for title-signaling agents (Claude/Cursor/Gemini) that
+            // path owns working/done and must not be double-driven.
+            if (!titleCarriesState) {
+              setByteWorkingStatus()
+            }
+          },
+          onFinished: () => {
+            if (disposed) {
+              return
+            }
+            const store = useAppStore.getState()
+            store.clearAwaitingInput(paneKey)
+            // Clear a byte/seed working override so a finished agent doesn't keep
+            // spinning. The title path owns the green ✓ for title-signaling agents.
+            if (!titleCarriesState) {
+              store.removeAgentStatus(paneKey)
+            }
+          }
+        })
       } catch (error) {
         if (!disposed) {
           if (pinnedSessionId) {
@@ -398,6 +462,11 @@ export function connectPaneServerSession(
       disposed = true
       clearIdleHold()
       disposeActivityTracker()
+      // Stop receiving watchdog activity for this (now gone) pane and drop any
+      // amber "needs attention" marker so a closed pane never lingers as blocked.
+      unregisterActivity?.()
+      unregisterActivity = null
+      useAppStore.getState().clearAwaitingInput(paneKey)
       // Clear any byte-derived working override so a torn-down pane doesn't
       // leave a stuck "working" row in the sidebar.
       useAppStore.getState().removeAgentStatus(paneKey)

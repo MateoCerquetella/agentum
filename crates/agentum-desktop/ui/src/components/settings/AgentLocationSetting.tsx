@@ -1,4 +1,5 @@
 import type { GlobalSettings } from '../../../../shared/types'
+import { getHostRuntimeLabel } from '@/lib/runtime-account-labels'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { SettingsRow, SettingsSegmentedControl } from './SettingsFormControls'
 
@@ -15,10 +16,6 @@ type AgentLocationSettingProps = {
   wslAvailable?: boolean
   wslDistros?: string[]
   wslCapabilitiesLoading?: boolean
-}
-
-function getHostRuntimeLabel(): string {
-  return navigator.userAgent.includes('Windows') ? 'Windows' : 'This device'
 }
 
 function getSelectedAgentRuntime(

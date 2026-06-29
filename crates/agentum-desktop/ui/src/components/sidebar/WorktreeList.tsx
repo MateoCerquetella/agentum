@@ -53,7 +53,10 @@ import type {
   WorkspaceStatus,
   WorkspaceStatusDefinition
 } from '../../../../shared/types'
-import { DEFAULT_SHOW_SLEEPING_WORKSPACES } from '../../../../shared/constants'
+import {
+  DEFAULT_SHOW_SLEEPING_WORKSPACES,
+  DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE
+} from '../../../../shared/constants'
 import { buildWorktreeComparator } from './smart-sort'
 import {
   buildAttentionByWorktree,
@@ -4654,6 +4657,15 @@ const WorktreeList = React.memo(function WorktreeList({
     [showSleepingWorkspaces, filterRepoIds, hideDefaultBranchWorkspace]
   )
   const hasFilters = sidebarHasActiveFilters(filterState)
+  // Why: hiding the primary is the default now, so a fresh repo whose only
+  // workspace is its main branch lands here with an empty list and no obvious
+  // cause. When that hide is the *sole* reason the list is empty, the recovery
+  // affordance should speak plainly ("Show default branches") instead of the
+  // generic "Clear Filters", which reads as a no-op to a user who never set one.
+  const defaultBranchHideIsOnlyFilter =
+    hideDefaultBranchWorkspace &&
+    showSleepingWorkspaces === DEFAULT_SHOW_SLEEPING_WORKSPACES &&
+    filterRepoIds.length === 0
   const setShowSleepingWorkspaces = useAppStore((s) => s.setShowSleepingWorkspaces)
   const setHideDefaultBranchWorkspace = useAppStore((s) => s.setHideDefaultBranchWorkspace)
   const setFilterRepoIds = useAppStore((s) => s.setFilterRepoIds)
@@ -4712,16 +4724,29 @@ const WorktreeList = React.memo(function WorktreeList({
       <div data-worktree-sidebar-container className="relative min-h-0 flex-1">
         <div className="worktree-sidebar-scrollbar flex h-full flex-col overflow-y-scroll overflow-x-hidden pl-1 scrollbar-sleek pt-px">
           <div className="flex flex-col items-center gap-2 px-4 py-6 text-center text-[11px] text-muted-foreground">
-            <span>No workspaces found</span>
-            {hasFilters && (
-              <button
-                onClick={clearFilters}
-                className="inline-flex items-center gap-1.5 bg-secondary/70 border border-border/80 text-foreground font-medium text-[11px] px-2.5 py-1 rounded-md cursor-pointer hover:bg-accent transition-colors"
-              >
-                <CircleX className="size-3.5" />
-                Clear Filters
-              </button>
-            )}
+            <span>
+              {defaultBranchHideIsOnlyFilter
+                ? 'The default-branch workspace is hidden'
+                : 'No workspaces found'}
+            </span>
+            {hasFilters &&
+              (defaultBranchHideIsOnlyFilter ? (
+                <button
+                  onClick={() => setHideDefaultBranchWorkspace(false)}
+                  className="inline-flex items-center gap-1.5 bg-secondary/70 border border-border/80 text-foreground font-medium text-[11px] px-2.5 py-1 rounded-md cursor-pointer hover:bg-accent transition-colors"
+                >
+                  <GitBranch className="size-3.5" />
+                  Show default branches
+                </button>
+              ) : (
+                <button
+                  onClick={clearFilters}
+                  className="inline-flex items-center gap-1.5 bg-secondary/70 border border-border/80 text-foreground font-medium text-[11px] px-2.5 py-1 rounded-md cursor-pointer hover:bg-accent transition-colors"
+                >
+                  <CircleX className="size-3.5" />
+                  Clear Filters
+                </button>
+              ))}
           </div>
         </div>
       </div>

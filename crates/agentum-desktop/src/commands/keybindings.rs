@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use super::platform::platform_label;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -41,16 +42,6 @@ pub struct KeybindingFileSnapshot {
     common_overrides: Overrides,
     platform_overrides: BTreeMap<String, Overrides>,
     diagnostics: Vec<KeybindingFileDiagnostic>,
-}
-
-fn platform_label() -> String {
-    if cfg!(target_os = "macos") {
-        "darwin".to_string()
-    } else if cfg!(target_os = "windows") {
-        "win32".to_string()
-    } else {
-        "linux".to_string()
-    }
 }
 
 fn keybindings_path() -> Result<PathBuf, String> {

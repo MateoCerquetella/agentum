@@ -50,7 +50,7 @@ import {
   queueBrowserFocusRequest
 } from '@/components/browser-pane/browser-focus'
 import { RepoBadgeMark } from '@/components/repo/RepoBadgeLabel'
-import { useSettingsNavigationMetadata } from '@/hooks/useSettingsNavigationMetadata'
+import { getSettingsTargetFromSectionId, useSettingsNavigationMetadata } from '@/hooks/useSettingsNavigationMetadata'
 import { runWorktreeDelete } from '@/components/sidebar/delete-worktree-flow'
 import {
   buildCmdJActionResults,
@@ -66,7 +66,6 @@ import {
   type CmdJActiveGroupSnapshot
 } from '@/components/cmd-j/quick-action-context'
 import { CMD_J_QUICK_ACTIONS } from '@/components/cmd-j/quick-actions'
-import type { SettingsNavTarget } from '@/lib/settings-navigation-types'
 import type { BrowserPage, BrowserWorkspace, Worktree } from '../../../shared/types'
 import { isGitRepoKind } from '../../../shared/repo-kind'
 
@@ -199,17 +198,6 @@ function findBrowserSelection(
     return null
   }
   return { page, workspace, worktree }
-}
-
-function getSettingsTargetFromSectionId(sectionId: string): {
-  pane: SettingsNavTarget
-  repoId: string | null
-  sectionId?: string
-} {
-  if (sectionId.startsWith('repo-')) {
-    return { pane: 'repo', repoId: sectionId.slice('repo-'.length) }
-  }
-  return { pane: sectionId as SettingsNavTarget, repoId: null }
 }
 
 export default function WorktreeJumpPalette(): React.JSX.Element | null {

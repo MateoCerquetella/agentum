@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { BellRing, FileAudio, Settings, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import type { GlobalSettings, NotificationPermissionStatusResult } from '../../../../shared/types'
+import { CHOOSE_CUSTOM_SOUND_VALUE, isNotificationSoundId, type NotificationSoundSelectValue } from '@/lib/notification-sound-select'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -27,18 +28,6 @@ export type NotificationDraft = {
 type NotificationStepProps = {
   settings: GlobalSettings | null
   updateSettings: (updates: Partial<GlobalSettings>) => Promise<void> | void
-}
-
-const CHOOSE_CUSTOM_SOUND_VALUE = 'choose-custom-file'
-
-type NotificationSoundSelectValue =
-  | GlobalSettings['notifications']['customSoundId']
-  | typeof CHOOSE_CUSTOM_SOUND_VALUE
-
-function isNotificationSoundId(
-  value: NotificationSoundSelectValue
-): value is GlobalSettings['notifications']['customSoundId'] {
-  return value !== CHOOSE_CUSTOM_SOUND_VALUE
 }
 
 export function NotificationStep({

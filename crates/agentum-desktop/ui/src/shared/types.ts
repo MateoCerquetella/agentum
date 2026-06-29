@@ -2867,3 +2867,5 @@ export type StatsSummary = {
 // the IPC payload is the same shape everywhere. Memory is in bytes; CPU
 // is a percentage (can exceed 100 on multi-core).
 
+// Tabs shown in the GitHub work-item detail dialog / PR page.
+export type ItemDialogTab = 'conversation' | 'checks' | 'files'

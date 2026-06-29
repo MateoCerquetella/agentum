@@ -5,6 +5,7 @@ import React from 'react'
 import { ClaudeIcon, DroidIcon, OpenAIIcon } from '@/components/status-bar/icons'
 import openClaudeLogoUrl from '../../resources/openclaude-logo.png?url'
 import type { TuiAgent } from '../../../shared/types'
+import { filterEnabledTuiAgents } from '../../../shared/tui-agent-selection'
 
 export type AgentCatalogEntry = {
   id: TuiAgent
@@ -450,4 +451,16 @@ export function AgentIcon({
   }
   const label = catalogEntry?.label ?? agent
   return <AgentLetterIcon letter={label.charAt(0).toUpperCase()} size={size} />
+}
+
+export function pickDefaultAgent(
+  defaultAgent: TuiAgent | 'blank' | null | undefined,
+  detectedAgents: TuiAgent[],
+  disabledAgents?: TuiAgent[]
+): TuiAgent | null {
+  const enabledAgents = filterEnabledTuiAgents(detectedAgents, disabledAgents)
+  if (defaultAgent && defaultAgent !== 'blank' && enabledAgents.includes(defaultAgent)) {
+    return defaultAgent
+  }
+  return AGENT_CATALOG.find((entry) => enabledAgents.includes(entry.id))?.id ?? null
 }

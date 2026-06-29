@@ -1,4 +1,5 @@
 import { api } from '@/tauri'
+import { getCodexAccountLabel, getHostRuntimeLabel } from '@/lib/runtime-account-labels'
 /* eslint-disable max-lines -- Why: AccountsPane owns all per-provider account UI
    (Claude, Codex, Gemini, OpenCode Go, and future providers). Each provider's
    add/select/reauth/remove flow is tightly coupled to the provider-specific
@@ -56,20 +57,6 @@ type AccountsPaneProps = {
   wslAvailable?: boolean
   wslDistros?: string[]
   wslCapabilitiesLoading?: boolean
-}
-
-function getHostRuntimeLabel(): string {
-  return navigator.userAgent.includes('Windows') ? 'Windows' : 'This device'
-}
-
-function getCodexAccountLabel(
-  state: CodexRateLimitAccountsState,
-  accountId: string | null | undefined
-): string {
-  if (accountId == null) {
-    return 'System default'
-  }
-  return state.accounts.find((account) => account.id === accountId)?.email ?? 'Codex account'
 }
 
 function getActiveCodexAccountIdForRuntime(

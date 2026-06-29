@@ -678,6 +678,22 @@ describe('createUISlice hydratePersistedUI', () => {
     expect(store.getState().hideDefaultBranchWorkspace).toBe(true)
   })
 
+  it('hides the default-branch workspace by default and respects an explicit persisted choice', () => {
+    // New baseline: brand-new profiles (no persisted value) start hidden.
+    expect(getDefaultUIState().hideDefaultBranchWorkspace).toBe(true)
+
+    // An explicit persisted choice is respected verbatim — no forced migration.
+    // A profile that opted to show the primary keeps it shown.
+    const shown = createUIStore()
+    shown.getState().hydratePersistedUI(makePersistedUI({ hideDefaultBranchWorkspace: false }))
+    expect(shown.getState().hideDefaultBranchWorkspace).toBe(false)
+
+    // A profile that opted to hide it keeps it hidden.
+    const hidden = createUIStore()
+    hidden.getState().hydratePersistedUI(makePersistedUI({ hideDefaultBranchWorkspace: true }))
+    expect(hidden.getState().hideDefaultBranchWorkspace).toBe(true)
+  })
+
   it('restores fixed card properties during hydration', () => {
     const store = createUIStore()
 

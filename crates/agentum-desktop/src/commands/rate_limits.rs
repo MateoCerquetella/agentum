@@ -3,7 +3,7 @@ use agentum_server::usage::{
     CodexUsageWindow,
 };
 use serde_json::{json, Value};
-use std::time::{SystemTime, UNIX_EPOCH};
+use super::timestamps::now_ms;
 
 // Rate-limit tracking maps the embedded server's on-disk usage scan
 // (`agentum_server::usage`) onto the renderer's `RateLimitState` shape
@@ -14,13 +14,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const SESSION_WINDOW_MINUTES: u32 = 300; // 5h rolling window
 const WEEKLY_WINDOW_MINUTES: u32 = 10_080; // 7d rolling window
-
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
 
 /// One `RateLimitWindow` (`{ usedPercent, windowMinutes, resetsAt, resetDescription }`).
 fn window(used_percent: f64, window_minutes: u32, resets_at_ms: Option<i64>) -> Value {
