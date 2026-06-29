@@ -798,7 +798,10 @@ async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
     // Default to the visible in-app webview; headless CDP is opt-in. This is the fix
     // for "MCP drives a separate headless Chrome the user never sees" — the driving
     // ops now land in the SAME tab the app shows (and `agentum tab list` reports).
-    let want_headless = args.get("headless").and_then(Value::as_bool).unwrap_or(false)
+    let want_headless = args
+        .get("headless")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
         || std::env::var("AGENTUM_BROWSER_HEADLESS")
             .map(|v| matches!(v.trim(), "1" | "true"))
             .unwrap_or(false);
@@ -1045,7 +1048,10 @@ mod tests {
             "annotate",
             "annotations",
         ] {
-            assert!(bridge_browser_op(op), "{op} should drive the in-app webview");
+            assert!(
+                bridge_browser_op(op),
+                "{op} should drive the in-app webview"
+            );
         }
         // CDP-only ops have no webview equivalent → always headless CDP, never bridged.
         for op in [
