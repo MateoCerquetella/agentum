@@ -50,18 +50,20 @@ fn cdp_port() -> u16 {
         .unwrap_or(DEFAULT_CDP_PORT)
 }
 
-/// Device-scale the headless browser captures the screencast at. **2 (Retina) by
+/// Device-scale the headless browser captures the screencast at. **1 (fast) by
 /// default.** `Page.startScreencast` fixes its surface scale at browser LAUNCH, so
-/// this is a `--force-device-scale-factor` flag; 2 = sharp on a hi-DPI display.
-/// Tunable via `AGENTUM_CDP_DEVICE_SCALE` (clamped to [1, 4]): drop to `1` (or
-/// `1.5`) to send much smaller frames over the screencast — faster, less sharp —
-/// which is the right trade-off on a big/low-DPI screen where 2× is heavy.
+/// this is a `--force-device-scale-factor` flag. 2× quadruples the pixels in EVERY
+/// JPEG frame streamed over the WebSocket — sharp on Retina but heavy and laggy,
+/// which is the "browser is super slow / unusable" users hit. 1× is ~4× less data
+/// per frame; it upscales on a Retina pane (slightly soft) but is the speed-over-
+/// sharpness trade we default to. Tunable via `AGENTUM_CDP_DEVICE_SCALE` (clamped
+/// to [1, 4]) — set `2` for a sharp (slower) capture on a Retina display.
 fn cdp_device_scale() -> f64 {
     std::env::var("AGENTUM_CDP_DEVICE_SCALE")
         .ok()
         .and_then(|s| s.trim().parse::<f64>().ok())
         .filter(|v| v.is_finite() && *v > 0.0)
-        .unwrap_or(2.0)
+        .unwrap_or(1.0)
         .clamp(1.0, 4.0)
 }
 
