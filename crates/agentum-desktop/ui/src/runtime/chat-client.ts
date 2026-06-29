@@ -9,6 +9,34 @@ import { apiUrl, getServerEndpoint } from './server-endpoint'
 /** One conversation turn — matches the server's `{role, content}` message shape. */
 export type ChatTurn = { role: 'user' | 'assistant'; content: string }
 
+/** A model offered in the Chat model picker. `id` is the Anthropic model id sent
+ *  to `/api/chat/stream`; `label`/`blurb` are display-only. */
+export type ChatModel = { id: string; label: string; blurb: string }
+
+/** The models the Chat picker offers. All current Claude models support extended
+ *  thinking, so the thinking toggle applies to any of them. Default = Sonnet, the
+ *  server's own default (`DEFAULT_MODEL` in `routes/chat.rs`). */
+export const CHAT_MODELS: readonly ChatModel[] = [
+  { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', blurb: 'Most capable' },
+  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', blurb: 'Balanced · default' },
+  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', blurb: 'Fastest' }
+] as const
+
+export const DEFAULT_CHAT_MODEL = 'claude-sonnet-4-6'
+
+/** Resolve a stored/unknown model id to a known {@link ChatModel}, falling back
+ *  to the default so a removed model never strands the picker on a blank label. */
+export function resolveChatModel(id: string | null | undefined): ChatModel {
+  return CHAT_MODELS.find((m) => m.id === id) ?? CHAT_MODELS.find((m) => m.id === DEFAULT_CHAT_MODEL) ?? CHAT_MODELS[0]
+}
+
+/** One delta from `/api/chat/stream` — mirrors the server's compact SSE events. */
+export type ChatStreamDelta =
+  | { type: 'text'; text: string }
+  | { type: 'thinking'; text: string }
+  | { type: 'error'; message: string }
+  | { type: 'done' }
+
 async function authHeaders(): Promise<Record<string, string>> {
   const { token } = await getServerEndpoint()
   return token ? { Authorization: `Bearer ${token}` } : {}
@@ -60,6 +88,119 @@ export async function sendChat(
     if (text) message = text
   }
   throw new Error(message)
+}
+
+/**
+ * `POST /api/chat/stream` — stream the assistant's next reply token-by-token.
+ * Invokes `onDelta` for each `text`/`thinking` chunk as it arrives and resolves
+ * with the fully assembled `{ content, thinking }` when the stream ends. The
+ * server sends compact one-line SSE `data:` events (`text` | `thinking` | `error`
+ * | `done`); we frame on the blank-line separator and JSON-parse each `data:`.
+ *
+ * Errors surface the same way as {@link sendChat}: an upstream non-2xx (no stream
+ * opened) throws the typed server message, and a mid-stream `error` event throws
+ * its message. Pass `opts.signal` to abort (the rejection is the caller's to
+ * swallow). Whatever streamed before the failure is preserved via `onDelta`.
+ */
+export async function streamChat(
+  messages: ChatTurn[],
+  opts: {
+    workdir?: string
+    repoSlug?: string
+    model?: string
+    thinking?: boolean
+    signal?: AbortSignal
+    onDelta?: (delta: ChatStreamDelta) => void
+  } = {}
+): Promise<{ content: string; thinking: string }> {
+  const url = await apiUrl('/api/chat/stream')
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(await authHeaders())
+    },
+    body: JSON.stringify({
+      // Send only the wire shape; any UI-only fields (e.g. stored `thinking`) are
+      // dropped so the server gets a clean `{role, content}[]`.
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      workdir: opts.workdir,
+      repo_slug: opts.repoSlug,
+      model: opts.model,
+      thinking: opts.thinking ?? false
+    }),
+    signal: opts.signal
+  })
+
+  // The stream never opened — decode the typed error envelope (string or object).
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => '')
+    let message = `chat ${res.status}`
+    try {
+      const parsed = JSON.parse(text) as { error?: { message?: string } | string }
+      if (parsed.error && typeof parsed.error === 'object') message = parsed.error.message ?? message
+      else if (typeof parsed.error === 'string') message = parsed.error
+    } catch {
+      if (text) message = text
+    }
+    throw new Error(message)
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  let content = ''
+  let thinking = ''
+
+  // Apply one parsed SSE event. Throws on `error` so the caller can surface it
+  // (partial `content`/`thinking` already delivered via onDelta is preserved).
+  const apply = (data: string): void => {
+    let ev: ChatStreamDelta
+    try {
+      ev = JSON.parse(data) as ChatStreamDelta
+    } catch {
+      return
+    }
+    if (ev.type === 'text') {
+      content += ev.text
+      opts.onDelta?.(ev)
+    } else if (ev.type === 'thinking') {
+      thinking += ev.text
+      opts.onDelta?.(ev)
+    } else if (ev.type === 'error') {
+      throw new Error(ev.message || 'the model stream errored')
+    }
+    // `done` is implied by stream end; nothing to accumulate.
+  }
+
+  try {
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      // SSE frames are separated by a blank line; each carries one `data:` JSON.
+      let idx = buf.indexOf('\n\n')
+      while (idx !== -1) {
+        const frame = buf.slice(0, idx)
+        buf = buf.slice(idx + 2)
+        for (const line of frame.split('\n')) {
+          const trimmed = line.replace(/^\s+/, '')
+          if (!trimmed.startsWith('data:')) continue
+          const data = trimmed.slice('data:'.length).trim()
+          if (data) apply(data)
+        }
+        idx = buf.indexOf('\n\n')
+      }
+    }
+  } finally {
+    try {
+      reader.releaseLock()
+    } catch {
+      // Lock may already be released after an abort/error — nothing to do.
+    }
+  }
+
+  return { content, thinking }
 }
 
 /** Which tracker the Chat files into. GitHub/Linear only (never the board). */

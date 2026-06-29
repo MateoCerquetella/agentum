@@ -19,16 +19,21 @@
 //! interviewer instructions follow in a second block. Dropping the identity block
 //! makes Anthropic reject the token (401, "only authorized for Claude Code").
 //!
-//! v1 is **non-streaming** (request → full reply). Token-streaming is a later
-//! polish (needs reqwest's `stream` feature + SSE re-emit).
+//! `/api/chat` is **non-streaming** (request → full reply); `/api/chat/stream`
+//! proxies Anthropic's token-by-token SSE through to the desktop and supports
+//! **extended thinking** (the reasoning is streamed as `thinking` deltas). Both
+//! accept an optional `model` override and share the auth/system/sanitize logic.
 
+use std::convert::Infallible;
 use std::time::Duration;
 
 use axum::Json;
 use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::post;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -39,6 +44,10 @@ use crate::task_sink::{NewFeature, SinkCtx, TaskSink};
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/chat", post(chat))
+        // Token-streaming variant of `/api/chat`: re-emits Anthropic's SSE deltas
+        // (answer text + extended-thinking) as our own compact `{type,text}`
+        // events so the desktop renders the reply live, reasoning included.
+        .route("/api/chat/stream", post(chat_stream))
         .route("/api/chat/issues", post(chat_issues))
 }
 
@@ -51,6 +60,16 @@ const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CL
 /// Default interview model — a fast, capable Sonnet for back-and-forth.
 const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// `max_tokens` for a plain (non-thinking) chat reply — interview turns are short.
+const MAX_TOKENS_REPLY: u32 = 1024;
+/// Extended-thinking reasoning budget. Anthropic requires `budget_tokens >= 1024`
+/// and `max_tokens > budget_tokens` — see [`MAX_TOKENS_THINKING`].
+const THINKING_BUDGET_TOKENS: u32 = 2048;
+/// `max_tokens` when thinking is on: must exceed the thinking budget (it caps
+/// reasoning **plus** answer), so leave headroom above [`THINKING_BUDGET_TOKENS`].
+const MAX_TOKENS_THINKING: u32 = 8192;
+/// Shown when neither credential is present — names BOTH recovery paths.
+const NO_CREDS_MSG: &str = "No LLM credentials for chat: set ANTHROPIC_API_KEY, or sign in to Claude (run `claude` once) so the chat can use your login.";
 
 /// How the chat authenticates to Anthropic.
 enum Auth {
@@ -93,6 +112,10 @@ struct ChatRequest {
     /// Optional model override.
     #[serde(default)]
     model: Option<String>,
+    /// Enable extended thinking (streaming route only). The reasoning is streamed
+    /// to the client as `thinking` deltas before the answer.
+    #[serde(default)]
+    thinking: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -172,12 +195,233 @@ async fn chat(
     let instructions = interviewer_instructions(body.workdir.as_deref(), body.repo_slug.as_deref());
     let system = build_system(&auth, &instructions);
 
-    let text = call_anthropic(&auth, model, system, &messages, 1024).await?;
+    let text = call_anthropic(&auth, model, system, &messages, MAX_TOKENS_REPLY).await?;
 
     Ok(Json(ChatResponse {
         role: "assistant",
         content: text,
     }))
+}
+
+/// Apply the auth-specific headers to an Anthropic request and return the secret
+/// (kept so it can be scrubbed from any error). An API key goes in `x-api-key`; an
+/// OAuth (subscription) token needs bearer + the oauth beta + the Claude Code UA
+/// (the identity gate itself lives in [`build_system`]). Shared by the
+/// non-streaming [`call_anthropic`] and the streaming [`chat_stream`].
+fn apply_auth(req: reqwest::RequestBuilder, auth: &Auth) -> (reqwest::RequestBuilder, String) {
+    match auth {
+        Auth::ApiKey(k) => (req.header("x-api-key", k), k.clone()),
+        Auth::Oauth(t) => (
+            req.bearer_auth(t)
+                .header("anthropic-beta", OAUTH_BETA_HEADER)
+                .header(reqwest::header::USER_AGENT, CLAUDE_CODE_USER_AGENT),
+            t.clone(),
+        ),
+    }
+}
+
+/// Build the `/v1/messages` body for the streaming route. With thinking on we add
+/// the `thinking` block and raise `max_tokens` above the budget (it caps reasoning
+/// **plus** answer); off, the small reply cap. `stream` is always true here, and
+/// temperature is never set (extended thinking requires the default).
+fn build_stream_payload(
+    model: &str,
+    system: serde_json::Value,
+    messages: &[serde_json::Value],
+    thinking: bool,
+) -> serde_json::Value {
+    let max_tokens = if thinking {
+        MAX_TOKENS_THINKING
+    } else {
+        MAX_TOKENS_REPLY
+    };
+    let mut payload = json!({
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": messages,
+        "stream": true,
+    });
+    if thinking {
+        payload["thinking"] = json!({ "type": "enabled", "budget_tokens": THINKING_BUDGET_TOKENS });
+    }
+    payload
+}
+
+/// `POST /api/chat/stream` — the same Socratic interview as [`chat`], streamed.
+/// Re-emits Anthropic's SSE as compact one-line `data:` JSON the desktop consumes
+/// incrementally: `{type:"text",text}` (answer), `{type:"thinking",text}`
+/// (reasoning, when `thinking` is on), then exactly one terminal event —
+/// `{type:"error",message}` or `{type:"done"}`. An upstream non-2xx (bad/expired
+/// credential, bad model) is returned as a normal typed error BEFORE the stream
+/// opens, so the client sees a clean failure rather than a 200 that errors.
+async fn chat_stream(
+    State(_state): State<AppState>,
+    Json(body): Json<ChatRequest>,
+) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    if body.messages.is_empty() {
+        return Err(ApiError::BadRequest(
+            "chat: messages cannot be empty".into(),
+        ));
+    }
+    let auth = resolve_auth().ok_or_else(|| ApiError::BadRequest(NO_CREDS_MSG.into()))?;
+
+    let model = body
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_MODEL)
+        .to_string();
+    let thinking = body.thinking.unwrap_or(false);
+
+    let raw: Vec<serde_json::Value> = body
+        .messages
+        .iter()
+        .map(|m| json!({ "role": m.role, "content": m.content }))
+        .collect();
+    // Same normalization the non-streaming path applies (open on user, alternate,
+    // end on user) so a converged transcript can never 400 the upstream call.
+    let messages = sanitize_messages(&raw);
+    if messages.is_empty() {
+        return Err(ApiError::BadRequest(
+            "chat: no user message to send to the model".into(),
+        ));
+    }
+
+    let instructions = interviewer_instructions(body.workdir.as_deref(), body.repo_slug.as_deref());
+    let system = build_system(&auth, &instructions);
+    let payload = build_stream_payload(&model, system, &messages, thinking);
+
+    let client = reqwest::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .map_err(|e| ApiError::Internal(format!("build http client: {e}")))?;
+
+    let (req, secret) = apply_auth(
+        client
+            .post(MESSAGES_URL)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::ACCEPT, "text/event-stream")
+            .json(&payload),
+        &auth,
+    );
+
+    let resp = req.send().await.map_err(|e| {
+        ApiError::Internal(format!(
+            "anthropic request failed: {}",
+            redact(&e.to_string(), &secret)
+        ))
+    })?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        // Resolve the credential complaint to an actionable hint BEFORE opening the
+        // stream — the client gets a clean typed error, not a 200 SSE that errors.
+        let raw = resp.text().await.unwrap_or_default();
+        let hint = if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            match auth {
+                Auth::ApiKey(_) => " (check ANTHROPIC_API_KEY)",
+                Auth::Oauth(_) => {
+                    " (your Claude login may have expired — run `claude` to refresh it, or set ANTHROPIC_API_KEY)"
+                }
+            }
+        } else {
+            ""
+        };
+        let detail = redact(raw.trim(), &secret);
+        let detail = detail.chars().take(300).collect::<String>();
+        return Err(ApiError::Custom(
+            StatusCode::BAD_GATEWAY,
+            json!({ "error": { "code": "llm_failed", "message": format!("chat model returned {status}{hint}: {detail}") } }),
+        ));
+    }
+
+    // Proxy: parse Anthropic's SSE frames as they arrive and re-emit our compact
+    // events. We buffer raw bytes and decode only whole frames (delimited by the
+    // ASCII `\n\n`) so a multi-byte char split across a chunk is never mangled.
+    // `resp`/`secret` are moved into the generator, making the stream `'static`.
+    let stream = async_stream::stream! {
+        let mut bytes = resp.bytes_stream();
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = bytes.next().await {
+            match chunk {
+                Ok(c) => buf.extend_from_slice(&c),
+                Err(e) => {
+                    let message = redact(&e.to_string(), &secret);
+                    yield Ok(Event::default().data(json!({ "type": "error", "message": message }).to_string()));
+                    return;
+                }
+            }
+            while let Some(pos) = find_double_newline(&buf) {
+                let frame = String::from_utf8_lossy(&buf[..pos]).into_owned();
+                buf.drain(..pos + 2);
+                for line in frame.lines() {
+                    let Some(data) = line.trim_start().strip_prefix("data:") else {
+                        continue;
+                    };
+                    let data = data.trim();
+                    if data.is_empty() {
+                        continue;
+                    }
+                    if let Some(ev) = parse_sse_delta(data) {
+                        let terminal = matches!(
+                            ev.get("type").and_then(|t| t.as_str()),
+                            Some("done") | Some("error")
+                        );
+                        yield Ok(Event::default().data(ev.to_string()));
+                        if terminal {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        // Stream closed without an explicit terminal — emit `done` so the client
+        // finalizes the turn without depending on socket-close detection.
+        yield Ok(Event::default().data(json!({ "type": "done" }).to_string()));
+    };
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+/// Index of the first `\n\n` (SSE frame separator) in `buf`, or `None`. `\n` is
+/// ASCII, so the returned offset is always a valid UTF-8 char boundary.
+fn find_double_newline(buf: &[u8]) -> Option<usize> {
+    buf.windows(2).position(|w| w == b"\n\n")
+}
+
+/// Map one Anthropic SSE `data:` JSON to our compact event, or `None` for frames
+/// we don't forward (`message_start`, `ping`, `content_block_start`/`_stop`,
+/// `message_delta`, `signature_delta`). Pure → unit-tested without a live stream.
+fn parse_sse_delta(data: &str) -> Option<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_str(data).ok()?;
+    match v.get("type").and_then(|t| t.as_str())? {
+        "content_block_delta" => {
+            let delta = v.get("delta")?;
+            match delta.get("type").and_then(|t| t.as_str())? {
+                "text_delta" => {
+                    Some(json!({ "type": "text", "text": delta.get("text")?.as_str()? }))
+                }
+                "thinking_delta" => {
+                    Some(json!({ "type": "thinking", "text": delta.get("thinking")?.as_str()? }))
+                }
+                // signature_delta / input_json_delta carry no user-visible text.
+                _ => None,
+            }
+        }
+        "error" => {
+            let message = v
+                .get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("the model stream errored");
+            Some(json!({ "type": "error", "message": message }))
+        }
+        "message_stop" => Some(json!({ "type": "done" })),
+        _ => None,
+    }
 }
 
 /// Build the `system` value for a request. An OAuth (subscription) token requires
@@ -284,26 +528,16 @@ async fn call_anthropic(
         .build()
         .map_err(|e| ApiError::Internal(format!("build http client: {e}")))?;
 
-    // Common headers; auth-specific headers differ for an API key vs an OAuth token.
-    let mut req = client
-        .post(MESSAGES_URL)
-        .header("anthropic-version", ANTHROPIC_VERSION)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .json(&payload);
-    let secret = match auth {
-        Auth::ApiKey(k) => {
-            req = req.header("x-api-key", k);
-            k.clone()
-        }
-        Auth::Oauth(t) => {
-            // OAuth (subscription) token: bearer + the oauth beta + Claude Code UA.
-            req = req
-                .bearer_auth(t)
-                .header("anthropic-beta", OAUTH_BETA_HEADER)
-                .header(reqwest::header::USER_AGENT, CLAUDE_CODE_USER_AGENT);
-            t.clone()
-        }
-    };
+    // Common headers + the auth-specific headers (x-api-key vs bearer+oauth-beta+UA),
+    // applied by `apply_auth` — shared byte-for-byte with the streaming route.
+    let (req, secret) = apply_auth(
+        client
+            .post(MESSAGES_URL)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .json(&payload),
+        auth,
+    );
     let resp = req.send().await.map_err(|e| {
         ApiError::Internal(format!(
             "anthropic request failed: {}",
@@ -871,5 +1105,91 @@ mod tests {
         assert!(!slug_matches("owner /repo"));
         assert!(!slug_matches("/repo"));
         assert!(!slug_matches("owner/"));
+    }
+
+    // --- streaming + extended thinking (the /api/chat/stream path) ---
+
+    #[test]
+    fn parse_sse_delta_extracts_answer_text() {
+        let ev = parse_sse_delta(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#,
+        )
+        .expect("text_delta → text event");
+        assert_eq!(ev["type"], "text");
+        assert_eq!(ev["text"], "Hello");
+    }
+
+    #[test]
+    fn parse_sse_delta_extracts_thinking() {
+        let ev = parse_sse_delta(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"let me think"}}"#,
+        )
+        .expect("thinking_delta → thinking event");
+        assert_eq!(ev["type"], "thinking");
+        assert_eq!(ev["text"], "let me think");
+    }
+
+    #[test]
+    fn parse_sse_delta_maps_message_stop_to_done() {
+        let ev = parse_sse_delta(r#"{"type":"message_stop"}"#).expect("message_stop → done");
+        assert_eq!(ev["type"], "done");
+    }
+
+    #[test]
+    fn parse_sse_delta_maps_error_frame() {
+        let ev = parse_sse_delta(
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"overloaded"}}"#,
+        )
+        .expect("error frame → error event");
+        assert_eq!(ev["type"], "error");
+        assert_eq!(ev["message"], "overloaded");
+    }
+
+    #[test]
+    fn parse_sse_delta_ignores_unforwarded_frames() {
+        // Control/metadata frames and signature deltas carry no user-visible text.
+        assert!(parse_sse_delta(r#"{"type":"ping"}"#).is_none());
+        assert!(parse_sse_delta(r#"{"type":"message_start","message":{}}"#).is_none());
+        assert!(
+            parse_sse_delta(
+                r#"{"type":"content_block_delta","delta":{"type":"signature_delta","signature":"x"}}"#
+            )
+            .is_none()
+        );
+        assert!(parse_sse_delta("not json").is_none());
+    }
+
+    #[test]
+    fn find_double_newline_locates_frame_boundary() {
+        // `event: x\ndata: {}\n\nrest` — the blank line (frame separator) is at 17.
+        assert_eq!(find_double_newline(b"event: x\ndata: {}\n\nrest"), Some(17));
+        assert_eq!(find_double_newline(b"partial frame, no blank line"), None);
+    }
+
+    #[test]
+    fn build_stream_payload_off_omits_thinking() {
+        let p = build_stream_payload(
+            "claude-sonnet-4-6",
+            json!("sys"),
+            &[json!({ "role": "user", "content": "hi" })],
+            false,
+        );
+        assert_eq!(p["stream"], true);
+        assert_eq!(p["max_tokens"], MAX_TOKENS_REPLY);
+        assert!(p.get("thinking").is_none());
+    }
+
+    #[test]
+    fn build_stream_payload_on_enables_thinking_with_headroom() {
+        let p = build_stream_payload(
+            "claude-opus-4-8",
+            json!("sys"),
+            &[json!({ "role": "user", "content": "hi" })],
+            true,
+        );
+        assert_eq!(p["thinking"]["type"], "enabled");
+        assert_eq!(p["thinking"]["budget_tokens"], THINKING_BUDGET_TOKENS);
+        // Anthropic rejects the call unless max_tokens > budget (it caps reasoning + answer).
+        assert!(p["max_tokens"].as_u64().unwrap() > u64::from(THINKING_BUDGET_TOKENS));
     }
 }
