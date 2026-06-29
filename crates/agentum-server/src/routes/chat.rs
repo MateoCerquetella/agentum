@@ -338,11 +338,33 @@ async fn chat_stream(
         ));
     }
 
+    // On the OAuth (subscription/login) path, extended-thinking reasoning is
+    // returned ENCRYPTED — Anthropic emits a `signature_delta` (a redacted
+    // thinking block), never the plaintext `thinking_delta` we forward — so the
+    // reasoning trace would be silently blank. Surface why, once, in the trace
+    // itself, and how to get it. The API-key path returns plaintext and is
+    // unaffected (so no notice there).
+    let redacted_thinking_notice: Option<String> = if thinking && matches!(auth, Auth::Oauth(_)) {
+        Some(
+            "_Extended reasoning ran, but Claude subscription (login) tokens return it \
+encrypted — the reasoning text can't be shown here. Set `ANTHROPIC_API_KEY` to view the \
+model's thinking._"
+                .to_string(),
+        )
+    } else {
+        None
+    };
+
     // Proxy: parse Anthropic's SSE frames as they arrive and re-emit our compact
     // events. We buffer raw bytes and decode only whole frames (delimited by the
     // ASCII `\n\n`) so a multi-byte char split across a chunk is never mangled.
     // `resp`/`secret` are moved into the generator, making the stream `'static`.
     let stream = async_stream::stream! {
+        // Lead with the redacted-thinking notice (OAuth path) so the reasoning
+        // panel explains the blank trace instead of showing nothing.
+        if let Some(note) = redacted_thinking_notice {
+            yield Ok(Event::default().data(json!({ "type": "thinking", "text": note }).to_string()));
+        }
         let mut bytes = resp.bytes_stream();
         let mut buf: Vec<u8> = Vec::new();
         while let Some(chunk) = bytes.next().await {
@@ -595,29 +617,31 @@ async fn call_anthropic(
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/chat/issues — turn the agreed task breakdown into tracker issues.
+// POST /api/chat/issues — turn the agreed breakdown into ONE tracker issue.
 //
 // Closes the loop on the Chat interviewer: once the conversation has converged
-// on a feature + task list, this endpoint asks the model to distil that into a
-// strict JSON array, then files one issue per task into the chosen tracker via
-// the shared `TaskSink` arm (GitHub `gh` or Linear GraphQL — so YOLO/argv/parse
-// stay in one place). `provider` selects the destination ("github" default, or
-// "linear"); an unknown provider is a 400 and an unconnected one a typed 422 —
-// the Chat rule is GitHub/Linear only, never the internal board. Partial success
-// is a 200 — created and failed are reported per-task so the UI can show exactly
-// which issues landed.
+// on a feature, this endpoint asks the model to distil it into a single feature
+// plan (a parent + ordered, prioritised sub-tasks), then files ONE issue — the
+// sub-tasks rendered as a priority-sorted checklist in the body — into the
+// chosen tracker via the shared `TaskSink` arm (GitHub `gh` or Linear GraphQL,
+// so YOLO/argv/parse stay in one place). One feature = one issue, not N flat
+// issues. `provider` selects the destination ("github" default, or "linear"); an
+// unknown provider is a 400 and an unconnected one a typed 422 — the Chat rule is
+// GitHub/Linear only, never the internal board. Created/failed are still returned
+// as arrays (now length 0 or 1) so the UI rendering is unchanged.
 // ---------------------------------------------------------------------------
 
-/// The system prompt that turns a conversation into a strict task array. Kept
-/// byte-exact; the lenient parser ([`extract_task_drafts`]) tolerates a model
-/// that still wraps it in prose or fences despite the instruction not to.
-const EXTRACT_INSTRUCTIONS: &str = "From this conversation, extract the agreed feature task breakdown as a JSON array of objects, each exactly {\"title\": string, \"body\": string} — title = a concise issue title, body = 1–3 sentences. Output ONLY the raw JSON array, no prose, no markdown code fences.";
+/// The system prompt that distils a conversation into ONE structured feature plan
+/// (a parent feature + ordered, prioritised sub-tasks) — not a flat list of
+/// separate issues. Kept byte-exact; the lenient parser ([`extract_feature_plan`])
+/// tolerates a model that still wraps it in prose or fences.
+const EXTRACT_INSTRUCTIONS: &str = "From this conversation, extract the agreed feature as a SINGLE JSON object: {\"title\": string, \"summary\": string, \"tasks\": [{\"title\": string, \"detail\": string, \"priority\": \"high\" | \"medium\" | \"low\"}]}. title = a concise feature title; summary = 1–2 sentences describing the feature; tasks = the sub-tasks needed to build it, each with a short title, a 1–2 sentence detail, and a priority. Order the tasks by priority and logical sequence (most important / earliest first). Output ONLY the raw JSON object, no prose, no markdown code fences.";
 
 /// The final user turn appended to the transcript for the extraction call. Ends
 /// the history on a `user` turn (Anthropic rejects a trailing-assistant array —
 /// the v0.33.0 "Create issues" 400) and gives the model a direct last-word
 /// instruction to emit the JSON now.
-const EXTRACT_USER_PROMPT: &str = "Output the agreed task breakdown now as the JSON array described above — only the raw JSON array, nothing else.";
+const EXTRACT_USER_PROMPT: &str = "Output the agreed feature plan now as the single JSON object described above — only the raw JSON object, nothing else.";
 
 #[derive(Deserialize)]
 struct ChatIssuesRequest {
@@ -639,11 +663,98 @@ struct ChatIssuesRequest {
     provider: Option<String>,
 }
 
-/// One extracted task — the minimal shape the model must emit.
+/// One sub-task of the feature. `detail`/`priority` are optional so a terse model
+/// reply still parses; a missing or garbled priority defaults to Medium.
 #[derive(Deserialize)]
-struct TaskDraft {
+struct SubTask {
     title: String,
-    body: String,
+    #[serde(default)]
+    detail: String,
+    #[serde(default)]
+    priority: Option<String>,
+}
+
+/// The whole agreed feature: a parent + its ordered, prioritised sub-tasks. This
+/// becomes ONE issue (sub-tasks as a checklist in the body), not N flat issues.
+#[derive(Deserialize)]
+struct FeaturePlan {
+    title: String,
+    #[serde(default)]
+    summary: String,
+    tasks: Vec<SubTask>,
+}
+
+/// Sub-task priority. Ordered High→Low; drives the checklist sort.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Priority {
+    High,
+    Medium,
+    Low,
+}
+
+impl Priority {
+    /// Sort key — High sorts first.
+    fn rank(self) -> u8 {
+        match self {
+            Priority::High => 0,
+            Priority::Medium => 1,
+            Priority::Low => 2,
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Priority::High => "High",
+            Priority::Medium => "Medium",
+            Priority::Low => "Low",
+        }
+    }
+}
+
+/// Map the model's free-form priority string to a [`Priority`], leniently — it
+/// may say "high"/"P1"/"critical"/etc., or omit it. Anything unrecognised (or
+/// absent) is Medium, so a sloppy reply never drops a task.
+fn parse_priority(raw: Option<&str>) -> Priority {
+    match raw.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("high") | Some("highest") | Some("critical") | Some("urgent") | Some("p0")
+        | Some("p1") | Some("1") => Priority::High,
+        Some("low") | Some("lowest") | Some("minor") | Some("trivial") | Some("p3")
+        | Some("p4") | Some("3") | Some("4") => Priority::Low,
+        _ => Priority::Medium,
+    }
+}
+
+/// Render a feature plan into ONE issue body: the summary, then the sub-tasks as
+/// a checklist sorted by priority (High→Low, stable within a priority so the
+/// model's sequence is preserved). This is what turns "5 flat tickets" into one
+/// ticket with ordered, prioritised sub-tasks.
+fn compose_issue_body(plan: &FeaturePlan) -> String {
+    let mut tasks: Vec<(usize, &SubTask, Priority)> = plan
+        .tasks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (i, t, parse_priority(t.priority.as_deref())))
+        .collect();
+    // Stable sort by priority; equal priorities keep the model's original order.
+    tasks.sort_by_key(|(i, _, p)| (p.rank(), *i));
+
+    let mut body = String::new();
+    let summary = plan.summary.trim();
+    if !summary.is_empty() {
+        body.push_str(summary);
+        body.push_str("\n\n");
+    }
+    body.push_str("## Sub-tasks (priority order)\n\n");
+    for (_, t, p) in &tasks {
+        body.push_str(&format!("- [ ] **[{}]** {}", p.label(), t.title.trim()));
+        let detail = t.detail.trim();
+        if !detail.is_empty() {
+            body.push_str(" — ");
+            body.push_str(detail);
+        }
+        body.push('\n');
+    }
+    body.push_str("\n_Created from an agentum Chat feature breakdown._");
+    body
 }
 
 /// Distil the agreed task breakdown from a chat transcript, then file each task
@@ -693,20 +804,20 @@ async fn chat_issues(
     let system = build_system(&auth, EXTRACT_INSTRUCTIONS);
     let text = call_anthropic(&auth, DEFAULT_MODEL, system, &messages, 2048).await?;
 
-    // Parse leniently (fences/prose tolerated). Empty or unparseable → 422.
-    let drafts = extract_task_drafts(&text).ok_or_else(|| {
+    // Parse leniently (fences/prose tolerated). No object / no tasks → 422.
+    let plan = extract_feature_plan(&text).ok_or_else(|| {
         ApiError::Custom(
             StatusCode::UNPROCESSABLE_ENTITY,
-            json!({ "error": { "code": "no_tasks", "message": "could not extract a task list from the conversation" } }),
+            json!({ "error": { "code": "no_tasks", "message": "could not extract a feature plan from the conversation" } }),
         )
     })?;
 
-    // Dispatch to the chosen tracker. Default GitHub preserves the v0.29.0 wire
-    // contract; Linear is the new path. Anything else is a hard 400 — the Chat
-    // rule is GitHub/Linear only, never the internal board.
+    // ONE issue per feature — sub-tasks as a priority-ordered checklist in the
+    // body, not N flat issues. Default GitHub; Linear the alt. Anything else is a
+    // hard 400 (the Chat rule is GitHub/Linear only, never the internal board).
     match resolve_provider(body.provider.as_deref()) {
-        Ok(IssueProvider::Github) => create_github_issues(&state, &body, &drafts, &secret).await,
-        Ok(IssueProvider::Linear) => create_linear_issues(&state, &drafts, &secret).await,
+        Ok(IssueProvider::Github) => create_github_issue(&state, &body, &plan, &secret).await,
+        Ok(IssueProvider::Linear) => create_linear_issue(&state, &plan, &secret).await,
         Err(other) => Err(ApiError::BadRequest(format!(
             "chat issues: unknown provider {other:?} (expected \"github\" or \"linear\")"
         ))),
@@ -737,14 +848,15 @@ fn resolve_provider(raw: Option<&str>) -> Result<IssueProvider, String> {
     }
 }
 
-/// File the extracted task drafts as GitHub issues. Resolves the repo slug (a
-/// well-formed client hint wins with no IO; else the LOCAL project's `origin` —
-/// Chat never files over SSH) and files one issue per task via the shared
-/// `TaskSink::Github` arm. Partial success is a 200 (`created`/`failed` per task).
-async fn create_github_issues(
+/// File the feature plan as ONE GitHub issue (sub-tasks = a priority-ordered
+/// checklist in the body). Resolves the repo slug (a well-formed client hint wins
+/// with no IO; else the LOCAL project's `origin` — Chat never files over SSH) and
+/// creates the single issue via the shared `TaskSink::Github` arm. A create
+/// failure is reported in `failed` (still a 200) so the UI surfaces the reason.
+async fn create_github_issue(
     state: &AppState,
     body: &ChatIssuesRequest,
-    drafts: &[TaskDraft],
+    plan: &FeaturePlan,
     secret: &str,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Resolve the GitHub slug: a well-formed client hint wins (no IO); else read
@@ -793,54 +905,50 @@ async fn create_github_issues(
         .map(std::path::PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
 
-    // File one issue per task; collect successes/failures independently so a
-    // single bad task never sinks the rest (partial success is a 200).
-    let mut created: Vec<serde_json::Value> = Vec::new();
-    let mut failed: Vec<serde_json::Value> = Vec::new();
-    for t in drafts {
-        let feature = NewFeature {
-            title: t.title.clone(),
-            body: Some(t.body.clone()),
-        };
-        let res = TaskSink::Github
-            .create_feature(
-                &SinkCtx {
-                    store: &state.store,
-                    workdir: &workdir_path,
-                    parent_goal_id: None,
-                    slug: Some(&slug),
-                },
-                &feature,
-            )
-            .await;
-        match res {
-            Ok(fref) => created.push(json!({
-                "title": t.title,
-                "url": fref.url.unwrap_or_default(),
-            })),
-            Err(e) => {
-                let detail = redact(&e.to_string(), secret);
-                let detail = detail.chars().take(300).collect::<String>();
-                failed.push(json!({ "title": t.title, "error": detail }));
-            }
+    // ONE issue: the feature, with its sub-tasks as a prioritised checklist.
+    let feature = NewFeature {
+        title: plan.title.clone(),
+        body: Some(compose_issue_body(plan)),
+    };
+    let res = TaskSink::Github
+        .create_feature(
+            &SinkCtx {
+                store: &state.store,
+                workdir: &workdir_path,
+                parent_goal_id: None,
+                slug: Some(&slug),
+            },
+            &feature,
+        )
+        .await;
+    match res {
+        Ok(fref) => Ok(Json(json!({
+            "provider": "github",
+            "repo": slug,
+            "created": [{ "title": plan.title, "url": fref.url.unwrap_or_default() }],
+            "failed": [],
+        }))),
+        Err(e) => {
+            let detail = redact(&e.to_string(), secret);
+            let detail = detail.chars().take(300).collect::<String>();
+            Ok(Json(json!({
+                "provider": "github",
+                "repo": slug,
+                "created": [],
+                "failed": [{ "title": plan.title, "error": detail }],
+            })))
         }
     }
-
-    Ok(Json(json!({
-        "provider": "github",
-        "repo": slug,
-        "created": created,
-        "failed": failed,
-    })))
 }
 
-/// File the extracted task drafts as Linear issues via the shared
-/// `TaskSink::Linear` arm (single-team resolution lives in `crate::linear`). A
-/// missing Linear connection is a loud typed 422 — never a silent board fallback.
-/// Partial success is a 200; each created issue reports its identifier + URL.
-async fn create_linear_issues(
+/// File the feature plan as ONE Linear issue (sub-tasks = a priority-ordered
+/// checklist in the body) via the shared `TaskSink::Linear` arm (single-team
+/// resolution lives in `crate::linear`). A missing Linear connection is a loud
+/// typed 422 — never a silent board fallback. A create failure is reported in
+/// `failed` (still a 200).
+async fn create_linear_issue(
     state: &AppState,
-    drafts: &[TaskDraft],
+    plan: &FeaturePlan,
     secret: &str,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Loud, actionable failure when Linear isn't connected — the Chat rule
@@ -855,64 +963,57 @@ async fn create_linear_issues(
     // Linear's create arm ignores `workdir`/`slug`/`parent_goal_id`; pass a
     // neutral ctx for shape only.
     let tmp = std::env::temp_dir();
-    let mut created: Vec<serde_json::Value> = Vec::new();
-    let mut failed: Vec<serde_json::Value> = Vec::new();
-    for t in drafts {
-        let feature = NewFeature {
-            title: t.title.clone(),
-            body: Some(t.body.clone()),
-        };
-        let res = TaskSink::Linear
-            .create_feature(
-                &SinkCtx {
-                    store: &state.store,
-                    workdir: &tmp,
-                    parent_goal_id: None,
-                    slug: None,
-                },
-                &feature,
-            )
-            .await;
-        match res {
-            Ok(fref) => created.push(json!({
-                "title": t.title,
-                "id": fref.id,
-                "url": fref.url.unwrap_or_default(),
-            })),
-            Err(e) => {
-                let detail = redact(&e.to_string(), secret);
-                let detail = detail.chars().take(300).collect::<String>();
-                failed.push(json!({ "title": t.title, "error": detail }));
-            }
+    let feature = NewFeature {
+        title: plan.title.clone(),
+        body: Some(compose_issue_body(plan)),
+    };
+    let res = TaskSink::Linear
+        .create_feature(
+            &SinkCtx {
+                store: &state.store,
+                workdir: &tmp,
+                parent_goal_id: None,
+                slug: None,
+            },
+            &feature,
+        )
+        .await;
+    match res {
+        Ok(fref) => Ok(Json(json!({
+            "provider": "linear",
+            "created": [{ "title": plan.title, "id": fref.id, "url": fref.url.unwrap_or_default() }],
+            "failed": [],
+        }))),
+        Err(e) => {
+            let detail = redact(&e.to_string(), secret);
+            let detail = detail.chars().take(300).collect::<String>();
+            Ok(Json(json!({
+                "provider": "linear",
+                "created": [],
+                "failed": [{ "title": plan.title, "error": detail }],
+            })))
         }
     }
-
-    Ok(Json(json!({
-        "provider": "linear",
-        "created": created,
-        "failed": failed,
-    })))
 }
 
-/// Pull a `Vec<TaskDraft>` out of a possibly-noisy model reply: strip markdown
-/// fences, slice from the first `[` to the last `]`, then parse. Returns `None`
-/// on no array / parse failure / an empty list — all of which the caller maps to
-/// the `no_tasks` 422.
-fn extract_task_drafts(raw: &str) -> Option<Vec<TaskDraft>> {
+/// Pull a `FeaturePlan` out of a possibly-noisy model reply: strip markdown
+/// fences, slice from the first `{` to the last `}`, then parse. Returns `None`
+/// on no object / parse failure / a missing title / an empty task list — all of
+/// which the caller maps to the `no_tasks` 422.
+fn extract_feature_plan(raw: &str) -> Option<FeaturePlan> {
     let cleaned = raw.replace("```json", "").replace("```", "");
-    let start = cleaned.find('[')?;
-    let end = cleaned.rfind(']')?;
+    let start = cleaned.find('{')?;
+    let end = cleaned.rfind('}')?;
     if end < start {
         return None;
     }
-    // `[` and `]` are ASCII, so these byte offsets are valid char boundaries.
+    // `{` and `}` are ASCII, so these byte offsets are valid char boundaries.
     let slice = &cleaned[start..=end];
-    let drafts: Vec<TaskDraft> = serde_json::from_str(slice).ok()?;
-    if drafts.is_empty() {
-        None
-    } else {
-        Some(drafts)
+    let plan: FeaturePlan = serde_json::from_str(slice).ok()?;
+    if plan.title.trim().is_empty() || plan.tasks.is_empty() {
+        return None;
     }
+    Some(plan)
 }
 
 /// A client `repo_slug` must look like `owner/repo` — exactly one `/`, both
@@ -1072,29 +1173,94 @@ mod tests {
     }
 
     #[test]
-    fn extract_task_drafts_parses_a_bare_array() {
-        let raw = r#"[{"title":"A","body":"first"},{"title":"B","body":"second"}]"#;
-        let drafts = extract_task_drafts(raw).expect("must parse");
-        assert_eq!(drafts.len(), 2);
-        assert_eq!(drafts[0].title, "A");
-        assert_eq!(drafts[1].body, "second");
+    fn extract_feature_plan_parses_object() {
+        let raw = r#"{"title":"CSV export","summary":"Export the board.","tasks":[{"title":"Add button","detail":"Toolbar button.","priority":"high"},{"title":"Serialize","detail":"Rows to CSV.","priority":"medium"}]}"#;
+        let plan = extract_feature_plan(raw).expect("must parse");
+        assert_eq!(plan.title, "CSV export");
+        assert_eq!(plan.tasks.len(), 2);
+        assert_eq!(plan.tasks[0].title, "Add button");
+        assert_eq!(plan.tasks[1].priority.as_deref(), Some("medium"));
     }
 
     #[test]
-    fn extract_task_drafts_tolerates_fences_and_prose() {
-        // The model sometimes wraps the array despite the instruction; the lenient
-        // slice-between-brackets parse must still recover it.
-        let raw = "Sure! Here you go:\n```json\n[{\"title\":\"X\",\"body\":\"y\"}]\n```\n";
-        let drafts = extract_task_drafts(raw).expect("must recover from fences/prose");
-        assert_eq!(drafts.len(), 1);
-        assert_eq!(drafts[0].title, "X");
+    fn extract_feature_plan_tolerates_fences_and_prose() {
+        // The model sometimes wraps the object despite the instruction; the lenient
+        // slice-between-braces parse must still recover it. detail/priority are
+        // optional, so a terse task still parses.
+        let raw = "Here you go:\n```json\n{\"title\":\"T\",\"summary\":\"s\",\"tasks\":[{\"title\":\"X\"}]}\n```\n";
+        let plan = extract_feature_plan(raw).expect("must recover from fences/prose");
+        assert_eq!(plan.title, "T");
+        assert_eq!(plan.tasks.len(), 1);
+        assert_eq!(plan.tasks[0].detail, "");
+        assert!(plan.tasks[0].priority.is_none());
     }
 
     #[test]
-    fn extract_task_drafts_rejects_empty_or_missing() {
-        assert!(extract_task_drafts("no array here").is_none());
-        assert!(extract_task_drafts("[]").is_none(), "empty list = no tasks");
-        assert!(extract_task_drafts("] [").is_none(), "reversed brackets");
+    fn extract_feature_plan_rejects_empty_or_missing() {
+        assert!(extract_feature_plan("no object here").is_none());
+        assert!(
+            extract_feature_plan(r#"{"title":"","summary":"s","tasks":[{"title":"a"}]}"#).is_none(),
+            "blank title = no plan"
+        );
+        assert!(
+            extract_feature_plan(r#"{"title":"T","summary":"s","tasks":[]}"#).is_none(),
+            "empty tasks = no plan"
+        );
+        assert!(extract_feature_plan("} {").is_none(), "reversed braces");
+    }
+
+    #[test]
+    fn parse_priority_is_lenient() {
+        assert_eq!(parse_priority(Some("high")), Priority::High);
+        assert_eq!(parse_priority(Some(" P1 ")), Priority::High);
+        assert_eq!(parse_priority(Some("CRITICAL")), Priority::High);
+        assert_eq!(parse_priority(Some("low")), Priority::Low);
+        assert_eq!(parse_priority(Some("p3")), Priority::Low);
+        assert_eq!(parse_priority(Some("medium")), Priority::Medium);
+        assert_eq!(parse_priority(Some("weird")), Priority::Medium);
+        assert_eq!(parse_priority(None), Priority::Medium);
+    }
+
+    #[test]
+    fn compose_issue_body_sorts_by_priority_keeps_order_and_renders_checklist() {
+        // Given low, high, medium → the checklist must come out High→Med→Low, each
+        // a checkbox with its priority tag, under one body led by the summary.
+        let plan = FeaturePlan {
+            title: "Feature".into(),
+            summary: "Does a thing.".into(),
+            tasks: vec![
+                SubTask {
+                    title: "C low".into(),
+                    detail: "cc".into(),
+                    priority: Some("low".into()),
+                },
+                SubTask {
+                    title: "A high".into(),
+                    detail: "aa".into(),
+                    priority: Some("high".into()),
+                },
+                SubTask {
+                    title: "B med".into(),
+                    detail: String::new(),
+                    priority: None,
+                },
+            ],
+        };
+        let body = compose_issue_body(&plan);
+        assert!(
+            body.starts_with("Does a thing.\n\n## Sub-tasks (priority order)"),
+            "summary then heading: {body}"
+        );
+        let a = body.find("A high").expect("high task present");
+        let b = body.find("B med").expect("med task present");
+        let c = body.find("C low").expect("low task present");
+        assert!(a < b && b < c, "ordered High→Med→Low: {body}");
+        assert!(body.contains("- [ ] **[High]** A high — aa"));
+        // No detail → no trailing " — detail".
+        assert!(
+            body.contains("- [ ] **[Medium]** B med\n"),
+            "med line: {body}"
+        );
     }
 
     #[test]
