@@ -215,6 +215,30 @@ export function findSiblingGroupId(root: TabGroupLayoutNode, targetGroupId: stri
   )
 }
 
+/** Dotted-segment path ('first'/'second') to the SPLIT node whose immediate `first` or
+ *  `second` child is the leaf for `groupId`. `[]` = the root split, `null` = not found.
+ *  Used to target a freshly created side-by-side split for `setTabGroupSplitRatio`
+ *  (whose `nodePath` is this path `.join('.')`). */
+export function findSplitPathForGroup(
+  root: TabGroupLayoutNode,
+  groupId: string,
+  path: string[] = []
+): string[] | null {
+  if (root.type !== 'split') {
+    return null
+  }
+  if (
+    (root.first.type === 'leaf' && root.first.groupId === groupId) ||
+    (root.second.type === 'leaf' && root.second.groupId === groupId)
+  ) {
+    return path
+  }
+  return (
+    findSplitPathForGroup(root.first, groupId, [...path, 'first']) ??
+    findSplitPathForGroup(root.second, groupId, [...path, 'second'])
+  )
+}
+
 function removeLeaf(root: TabGroupLayoutNode, targetGroupId: string): TabGroupLayoutNode | null {
   if (root.type === 'leaf') {
     return root.groupId === targetGroupId ? null : root

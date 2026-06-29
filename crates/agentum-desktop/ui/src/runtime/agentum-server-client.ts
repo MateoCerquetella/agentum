@@ -245,6 +245,18 @@ export function sendToSession(
   })
 }
 
+/** `POST /api/sessions/{id}/submit` — deliver a prompt to a RUNNING agent's REPL and
+ *  submit it robustly: the server types the body, waits for the paste to settle, then
+ *  sends a SEPARATE Enter so a multi-line prompt isn't swallowed as a "[Pasted text]"
+ *  block. Use this (not `sendToSession`) for "send to an agent"; it reaches any session
+ *  on the worktree, including tmux/MCP-spawned agents never opened as terminal tabs. */
+export function submitPromptToSession(id: string, text: string): Promise<void> {
+  return request<void>(`/api/sessions/${id}/submit`, {
+    method: 'POST',
+    body: JSON.stringify({ text })
+  })
+}
+
 /** `PATCH /api/sessions/{id}` — rename (pure metadata; allowed while running). */
 export function renameSession(id: string, name: string): Promise<Session> {
   return request<Session>(`/api/sessions/${id}`, {

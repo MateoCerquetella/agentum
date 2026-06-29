@@ -87,29 +87,39 @@ async fn screencast(ws: WebSocketUpgrade, Query(q): Query<ScreencastQuery>) -> i
     // (not just an agent-driven one) has a Chromium to attach to; the launch is
     // idempotent, so concurrent tabs reuse the one browser. An explicit `cdpPort`
     // is an external/tunneled browser (009a/SSH) we must never launch ourselves.
+    // We resolve the `(endpoint, port)` pair (not just the endpoint) so we can
+    // record the port as the foreground browser below.
     let worktree = q
         .worktree_id
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    let base = if q.cdp_port.is_some() {
+    let resolved: Result<(String, u16), String> = if let Some(port) = q.cdp_port {
         // Explicit/tunneled browser (009a/SSH) — attach as-is, never launch it.
-        Ok(q.cdp_http_base())
+        Ok((q.cdp_http_base(), port))
     } else if let Some(wt) = worktree {
         // Per-worktree isolation: launch/reuse THIS worktree's own Chromium so it
         // doesn't share tabs with other worktrees. The worktree's agent resolves
         // the same browser, so they still watch/drive one instance per worktree.
         cdp_browser::ensure_local_cdp_browser_for(wt)
             .await
-            .map(|(endpoint, _)| endpoint)
             .map_err(|e| format!("{e:#}"))
     } else {
         // Shared local browser — launch on demand (idempotent) so a plain
         // user-opened tab (no worktree context) has a Chromium to attach to.
         cdp_browser::ensure_local_cdp_browser()
             .await
+            .map(|endpoint| (endpoint, cdp_browser::port()))
             .map_err(|e| format!("{e:#}"))
     };
+    // Remember which browser the user is now watching: a contextless MCP
+    // `agentum_browser` op (no worktreeId/cdpPort) drives THIS port so the agent
+    // acts on the same browser the user sees. Last attach wins (the foreground
+    // pane); a failed resolve leaves the previous value untouched.
+    if let Ok((_, port)) = &resolved {
+        cdp_browser::set_foreground_cdp_port(*port);
+    }
+    let base = resolved.map(|(endpoint, _)| endpoint);
     ws.on_upgrade(move |socket| run(socket, base, opts))
 }
 

@@ -1710,6 +1710,7 @@ function createWebUiApi(): NonNullable<Partial<PreloadApi>['ui']> {
     onNewBrowserTab: () => noopUnsubscribe,
     onNewMarkdownTab: () => noopUnsubscribe,
     onRequestTabCreate: () => noopUnsubscribe,
+    onRequestSplitRatio: () => noopUnsubscribe,
     replyTabCreate: () => {},
     onRequestTabSetProfile: () => noopUnsubscribe,
     replyTabSetProfile: () => {},

@@ -119,10 +119,16 @@ pub async fn run_browser_op(op: &str, args: &Value) -> Result<Value> {
 
 // --- ops --------------------------------------------------------------------
 
-/// `open`: create a NEW page target navigated to `url`, returning its `tab` (the
-/// CDP target id) to pass to later ops. Unlike the old desktop-bridge `open`, this
-/// drives the SAME persistent Chromium as navigate/snapshot/click/fill, so the
-/// returned tab is real and addressable (fixes a second `open` being a no-op tab).
+/// `open`: navigate to `url` and return its `tab` (a CDP target id) for later ops.
+///
+/// Default: create a real new page target (headless multi-tab automation). Pass
+/// `reuse_active:true` to instead navigate the ACTIVE page in place (reuse the current
+/// tab). Both drive the SAME Chromium as navigate/snapshot/click/fill, so the returned
+/// tab is real and addressable.
+///
+/// NOTE: the VISIBLE in-app `open` does NOT reach here — it routes to the desktop bridge
+/// so a real pane appears (and a `split` places it beside the agent); see
+/// `routes::mcp::bridge_browser_op`. Only `headless:true` opens land in this function.
 pub(crate) async fn cdp_open(base: &str, args: &Value) -> Result<Value> {
     let url = args
         .get("url")
@@ -131,6 +137,13 @@ pub(crate) async fn cdp_open(base: &str, args: &Value) -> Result<Value> {
     // Same navigation policy as `navigate`: block file:// and off-allowlist origins.
     if let Some(reason) = navigation_block_reason(url, allowed_origins().as_deref()) {
         return Ok(json!({ "ok": false, "url": url, "error": "blocked", "reason": reason }));
+    }
+    if args
+        .get("reuse_active")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return cdp_open_reusing_active(base, url).await;
     }
     let mut conn = connect_browser(base).await?;
     let tgt = conn
@@ -142,6 +155,28 @@ pub(crate) async fn cdp_open(base: &str, args: &Value) -> Result<Value> {
         .ok_or_else(|| anyhow::anyhow!("createTarget returned no targetId"))?
         .to_string();
     Ok(json!({ "ok": true, "tab": target, "url": url }))
+}
+
+/// `open` for the visible single-page browser: navigate the ACTIVE page target (the
+/// one the screencast streams) to `url` in place, then report that page as the open
+/// `tab` so the result matches the multi-tab `open` shape and later ops address the
+/// same page. Reuses `cdp_navigate` (active page, load wait, `http_status`).
+async fn cdp_open_reusing_active(base: &str, url: &str) -> Result<Value> {
+    // No `tab`/`target` → the first page target, which is exactly what the pane renders.
+    let mut out = cdp_navigate(base, &json!({ "url": url })).await?;
+    // Best-effort: stamp the active target id as `tab` (a failed listing just omits it).
+    if let Ok(list) = cdp_http_json(&format!("{}/json/list", base.trim_end_matches('/'))).await {
+        if let Some(tab) = page_targets_from_listing(&list)
+            .into_iter()
+            .next()
+            .and_then(|t| t.get("tab").cloned())
+        {
+            if let Some(obj) = out.as_object_mut() {
+                obj.insert("tab".to_string(), tab);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// `tabs`: list the browser's open page targets (the agent's tabs). Each entry's

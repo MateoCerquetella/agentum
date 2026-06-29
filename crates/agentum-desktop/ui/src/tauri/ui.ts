@@ -63,6 +63,7 @@ export const ui = defineNamespace('ui', {
   onRenameTerminal: (cb: (p: any) => void) => subscribe('ui-rename-terminal', cb),
   onRequestTabClose: (cb: (p: any) => void) => subscribe('ui-request-tab-close', cb),
   onRequestTabCreate: (cb: (p: any) => void) => subscribe('ui-request-tab-create', cb),
+  onRequestSplitRatio: (cb: (p: any) => void) => subscribe('ui-request-split-ratio', cb),
   onRequestBrowserAnnotations: (cb: (p: any) => void) =>
     subscribe('ui-request-browser-annotations', cb),
   onRequestBrowserGrab: (cb: (p: any) => void) => subscribe('ui-request-browser-grab', cb),

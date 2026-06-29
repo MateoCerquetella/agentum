@@ -273,10 +273,24 @@ impl TauriBridge {
         let rx = registry.register(request_id.clone());
 
         // `worktreeId` is optional — the renderer defaults to the active worktree,
-        // which is what an agent that doesn't track worktree ids wants.
+        // which is what an agent that doesn't track worktree ids wants. Accept the
+        // snake_case `worktree_id` and the MCP-injected camelCase `worktreeId`.
         let mut payload = json!({ "requestId": request_id, "url": url });
-        if let Some(wt) = args.get("worktree_id").and_then(Value::as_str) {
+        if let Some(wt) = args
+            .get("worktree_id")
+            .or_else(|| args.get("worktreeId"))
+            .and_then(Value::as_str)
+        {
             payload["worktreeId"] = json!(wt);
+        }
+        // `split` (left|right|up|down) opens the browser BESIDE the agent as a layout
+        // split instead of a stacked tab; optional `ratio` (0–1) sizes it. Forwarded
+        // verbatim so the renderer can split the group before placing the tab.
+        if let Some(split) = args.get("split").and_then(Value::as_str) {
+            payload["split"] = json!(split);
+        }
+        if let Some(ratio) = args.get("ratio").and_then(Value::as_f64) {
+            payload["ratio"] = json!(ratio);
         }
         self.app
             .emit_to("main", "ui-request-tab-create", payload)
@@ -585,6 +599,9 @@ impl DesktopBridge for TauriBridge {
                 "grab" => return self.grab_element(&op).await,
                 "annotate" => return self.annotate_element(&op).await,
                 "snapshot" => return self.snapshot_page(&op).await,
+                // Resize the layout split holding the worktree's browser pane — a
+                // renderer-owned layout op (`ratio` 0–1). Round-trips like the others.
+                "set_split_ratio" => return self.renderer_op("ui-request-split-ratio", op).await,
                 _ => {}
             }
             self.browser_sync(&name, &op)

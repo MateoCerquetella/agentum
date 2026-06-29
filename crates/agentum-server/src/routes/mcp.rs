@@ -392,7 +392,7 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|screenshot|node_at_point|get_console|wait|eval|new_context|close_context|reap_contexts|connect_host|annotations|grab|annotate" },
+                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|screenshot|node_at_point|get_console|wait|eval|new_context|close_context|reap_contexts|connect_host|annotations|grab|annotate|set_split_ratio" },
                     "url": { "type": "string", "description": "Target URL for `open`/`navigate`" },
                     "tab": { "type": "string", "description": "Tab id to act on (default: the active tab)" },
                     "selector": { "type": "string", "description": "CSS selector for `click`/`fill`/`grab`/`annotate`" },
@@ -421,7 +421,9 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                     "browser_context_id": { "type": "string", "description": "`close_context`: the context id from `new_context` to dispose" },
                     "host": { "type": "string", "description": "`connect_host`: SSH host name/id to launch a headless Chromium on (over `ssh -L`); returns a `cdpPort`" },
                     "cdpPort": { "type": "integer", "description": "Drive a browser already reachable at 127.0.0.1:<port> (e.g. the `cdpPort` from `connect_host`) instead of the local one" },
-                    "headless": { "type": "boolean", "description": "Drive a hidden server-side Chromium instead of the visible in-app browser (default false). Use for QA / no-GUI; the user won't see it" }
+                    "headless": { "type": "boolean", "description": "Drive a hidden server-side Chromium instead of the visible in-app browser (default false). Use for QA / no-GUI; the user won't see it" },
+                    "split": { "type": "string", "description": "`open`: place the new browser pane BESIDE the worktree's agent (side by side) instead of as a stacked tab — left|right|up|down (e.g. right = browser to the right of the agent)" },
+                    "ratio": { "type": "number", "description": "Split size 0–1 for `open`+`split` and for `set_split_ratio`: the fraction of space given to the LEFT/TOP pane (default 0.5 = even). With split=right the agent is the left pane, so 0.6 = agent 60% / browser 40%" }
                 },
                 "required": ["op"],
                 "additionalProperties": true,
@@ -780,14 +782,19 @@ async fn tool_list_tasks(state: &AppState, args: &Value) -> anyhow::Result<Strin
     Ok(serde_json::to_string_pretty(&json!({ "tasks": tasks }))?)
 }
 
-/// `agentum_browser`: by DEFAULT drive the **visible in-app webview** (the desktop
-/// bridge) — the SAME browser the user sees and that the CLI `agentum tab`/`goto`
-/// populate — so MCP `open`/`navigate`/`click`/`fill`/`tabs` are visible live in the
-/// app (matching the tool's docs). The **headless** CDP Chromium (server-side, no
-/// GUI) is the QA-agent / no-desktop case and is now OPT-IN — via `headless:true` in
-/// the op args or `AGENTUM_BROWSER_HEADLESS=1` — and the automatic fallback when no
-/// desktop app is attached (no bridge). A few CDP-only ops (`eval`/`get_console`/
-/// `node_at_point`/`wait`/`*_context`) have no webview equivalent and always use CDP.
+/// `agentum_browser`: drive the **headless CDP Chromium that the screencast pane
+/// streams** — the SAME browser the user sees. The page-driving / perception ops
+/// (`open`/`navigate`/`tabs`/`click`/`fill`/`snapshot`/`screenshot`/`eval`/…) go to
+/// the CDP driver, resolved to the worktree's browser via `worktreeId` (or, for a
+/// contextless caller, the foreground pane's `cdpPort`), so they act live on the
+/// visible browser. Only the renderer-owned annotation ops (`grab`/`annotate`/
+/// `annotations`) round-trip to the desktop bridge. `headless:true` (or
+/// `AGENTUM_BROWSER_HEADLESS=1`) forces a hidden server-side Chromium for QA / a
+/// no-desktop daemon; the bridge is likewise skipped when no desktop is attached.
+///
+/// (Until v0.41.x the driving ops wrongly routed to the bridge, which drove Tauri
+/// `browser-page-*` child webviews that no longer exist — so `tabs` was always empty
+/// and `navigate`/`snapshot`/`screenshot` returned "no browser tab open".)
 async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
     let op = args.get("op").and_then(Value::as_str).unwrap_or_default();
     // F11: launch + tunnel a headless Chromium on an SSH host, returning the local
@@ -795,9 +802,10 @@ async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
     if op == "connect_host" {
         return tool_browser_connect_host(state, args).await;
     }
-    // Default to the visible in-app webview; headless CDP is opt-in. This is the fix
-    // for "MCP drives a separate headless Chrome the user never sees" — the driving
-    // ops now land in the SAME tab the app shows (and `agentum tab list` reports).
+    // `headless:true` (or AGENTUM_BROWSER_HEADLESS=1) forces a hidden server-side
+    // Chromium (QA / no-desktop daemon). Otherwise the page-driving ops use the CDP
+    // driver against the SAME Chromium the screencast pane streams (the visible
+    // browser); only the renderer-owned annotation ops fall through to the bridge.
     let want_headless = args
         .get("headless")
         .and_then(Value::as_bool)
@@ -837,6 +845,18 @@ async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
                 }
             }
         }
+        // No worktree context (e.g. a top-level agent not spawned into a worktree):
+        // drive the browser the user is currently watching — the most recent
+        // screencast pane attach — so the op still acts on the visible browser
+        // instead of a separate shared Chromium. A worktree-scoped agent keeps its
+        // own browser (the block above), so this only catches the contextless case.
+        if call_args.get("cdpPort").is_none() && call_args.get("worktreeId").is_none() {
+            if let Some(fg) = crate::cdp_browser::foreground_cdp_port() {
+                if let Some(obj) = call_args.as_object_mut() {
+                    obj.insert("cdpPort".to_string(), Value::from(fg));
+                }
+            }
+        }
         let result = crate::cdp_driver::run_browser_op(op, &call_args).await?;
         // screenshot → an MCP image content block (PNG) the agent can SEE, plus a
         // compact text meta line (NOT the giant base64) for width/height/path.
@@ -865,24 +885,20 @@ async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
     Ok(text_result(tool_bridge(state, "browser", args).await?))
 }
 
-/// Browser ops the desktop bridge (the visible in-app webview) can serve, so the MCP
-/// drives the SAME browser the user sees by default. The CDP-only perception/control
-/// ops (`eval`/`get_console`/`node_at_point`/`wait`/`new_context`/`close_context`/
-/// `reap_contexts`) are intentionally NOT here — they have no webview equivalent and
-/// always use the headless CDP driver.
+/// Browser ops that go to the desktop bridge (the renderer) rather than the CDP driver:
+/// - `open` — the renderer owns the browser-pane lifecycle, so opening a tab there makes
+///   a VISIBLE pane appear (and, with a `split`, places it beside the agent) and
+///   navigates it. The page PERCEPTION/DRIVE ops (`navigate`/`tabs`/`click`/`fill`/
+///   `snapshot`/`screenshot`) go to the CDP driver, which drives the SAME Chromium the
+///   screencast streams — they used to route here too, but the bridge drives Tauri
+///   `browser-page-*` webviews that no longer exist (the browser became a CDP
+///   screencast), so they returned "no browser tab open" / an empty tab list.
+/// - `grab`/`annotate`/`annotations` — live in the renderer's visual annotation store.
+/// - `set_split_ratio` — resizes a renderer layout split (no browser equivalent).
 fn bridge_browser_op(op: &str) -> bool {
     matches!(
         op,
-        "open"
-            | "tabs"
-            | "navigate"
-            | "click"
-            | "fill"
-            | "snapshot"
-            | "screenshot"
-            | "grab"
-            | "annotate"
-            | "annotations"
+        "open" | "grab" | "annotate" | "annotations" | "set_split_ratio"
     )
 }
 
@@ -1033,26 +1049,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bridge_serves_the_visible_driving_ops_cdp_only_ops_do_not() {
-        // The ops that drive/perceive a tab route to the visible in-app webview by
-        // default (the fix for "MCP drove a hidden headless Chrome").
+    fn browser_op_routing_splits_bridge_vs_cdp() {
+        // The renderer owns these: `open` (visible pane + split placement), the
+        // annotation store, and layout resize. They round-trip to the desktop bridge.
+        for op in ["open", "grab", "annotate", "annotations", "set_split_ratio"] {
+            assert!(bridge_browser_op(op), "{op} should route to the bridge");
+        }
+        // Every page PERCEPTION / DRIVE op is handled by the CDP driver instead — it
+        // drives the SAME Chromium the screencast streams, so the op acts on the
+        // browser the user sees. They MUST NOT route to the bridge (whose webview path
+        // is dead and returned "no browser tab open"). This is the fix.
         for op in [
-            "open",
             "tabs",
             "navigate",
             "click",
             "fill",
             "snapshot",
             "screenshot",
-            "grab",
-            "annotate",
-            "annotations",
         ] {
             assert!(
-                bridge_browser_op(op),
-                "{op} should drive the in-app webview"
+                !bridge_browser_op(op),
+                "{op} must be CDP-driven, not bridged"
+            );
+            assert!(
+                crate::cdp_driver::handles_op(op),
+                "{op} must be claimed by the CDP driver"
             );
         }
+        // `open` is special: bridged for the VISIBLE pane, but ALSO CDP-claimed so a
+        // `headless:true` open still gets a real new target server-side.
+        assert!(crate::cdp_driver::handles_op("open"));
         // CDP-only ops have no webview equivalent → always headless CDP, never bridged.
         for op in [
             "eval",

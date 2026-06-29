@@ -3,6 +3,7 @@ import { api } from '@/tauri'
 import { useEffect } from 'react'
 import { toast } from 'sonner'
 import { useAppStore } from '../store'
+import { findSplitPathForGroup } from '@/store/slices/tabs'
 import { formatBrowserAnnotationsAsMarkdown } from '../components/browser-pane/browser-annotation-output'
 import { getWorktreeMapFromState, getRepoMapFromState } from '@/store/selectors'
 import { applyUIZoom } from '@/lib/ui-zoom'
@@ -1456,15 +1457,33 @@ export function useIpcEvents(): void {
             api.ui.replyTabCreate({ requestId: data.requestId, error: 'No active worktree' })
             return
           }
-          // Why: CLI-created tabs should land in the same group as the active
-          // browser tab, not the terminal's group (which is typically the
-          // UI-active group when an agent is running commands).
-          const activeBrowserTabId = store.activeBrowserTabIdByWorktree[worktreeId]
-          const activeBrowserUnifiedTab = activeBrowserTabId
-            ? (store.unifiedTabsByWorktree[worktreeId] ?? []).find(
-                (t) => t.contentType === 'browser' && t.entityId === activeBrowserTabId
-              )
-            : undefined
+          // Side-by-side (`split` = left|right|up|down): open the browser BESIDE the
+          // worktree's agent by splitting its active group, instead of stacking it in
+          // the active browser group. No `split` → unchanged default placement.
+          const SPLIT_DIRS = ['left', 'right', 'up', 'down'] as const
+          const split = SPLIT_DIRS.find((d) => d === data.split)
+          let targetGroupId: string | undefined
+          let splitGroupId: string | null = null
+          if (split) {
+            const agentGroupId =
+              store.activeGroupIdByWorktree[worktreeId] ??
+              store.groupsByWorktree[worktreeId]?.[0]?.id
+            if (agentGroupId) {
+              splitGroupId = store.createEmptySplitGroup(worktreeId, agentGroupId, split)
+              targetGroupId = splitGroupId
+            }
+          }
+          if (!targetGroupId) {
+            // Why: CLI-created tabs should land in the same group as the active
+            // browser tab, not the terminal's group (which is typically the
+            // UI-active group when an agent is running commands).
+            const activeBrowserTabId = store.activeBrowserTabIdByWorktree[worktreeId]
+            targetGroupId = activeBrowserTabId
+              ? (store.unifiedTabsByWorktree[worktreeId] ?? []).find(
+                  (t) => t.contentType === 'browser' && t.entityId === activeBrowserTabId
+                )?.groupId
+              : undefined
+          }
 
           // Why: activate the tab so its native webview actually mounts (the
           // bootstrap lease alone left it unmounted, so `tabs`/navigate/click
@@ -1473,10 +1492,23 @@ export function useIpcEvents(): void {
           // non-surprising behaviour.
           const workspace = store.createBrowserTab(worktreeId, data.url, {
             title: data.url,
-            targetGroupId: activeBrowserUnifiedTab?.groupId,
+            targetGroupId,
             sessionProfileId: data.sessionProfileId,
             activate: true
           })
+          // Size the fresh side-by-side split when a ratio (0–1, exclusive) was given.
+          if (
+            splitGroupId &&
+            typeof data.ratio === 'number' &&
+            data.ratio > 0 &&
+            data.ratio < 1
+          ) {
+            const layout = useAppStore.getState().layoutByWorktree[worktreeId]
+            const path = layout ? findSplitPathForGroup(layout, splitGroupId) : null
+            if (path) {
+              store.setTabGroupSplitRatio(worktreeId, path.join('.'), data.ratio)
+            }
+          }
           // Why: registerGuest fires with the page ID (not workspace ID) as
           // browserPageId. Return the page ID so waitForTabRegistration can
           // correlate correctly.
@@ -1488,6 +1520,55 @@ export function useIpcEvents(): void {
           api.ui.replyTabCreate({
             requestId: data.requestId,
             error: err instanceof Error ? err.message : 'Tab creation failed'
+          })
+        }
+      })
+    )
+
+    // Why: the agentum MCP `agentum_browser {op:"set_split_ratio"}` round-trips here
+    // to RESIZE the layout split holding the worktree's browser pane (the renderer
+    // owns layout). Resolve the worktree's browser group, find its split, set the ratio.
+    unsubs.push(
+      api.ui.onRequestSplitRatio((data) => {
+        try {
+          if (isRuntimeEnvironmentActive()) {
+            api.ui.replyBrowserOp({
+              requestId: data.requestId,
+              error: 'split-ratio unavailable in this runtime'
+            })
+            return
+          }
+          const store = useAppStore.getState()
+          const worktreeId = data.worktreeId ?? store.activeWorktreeId
+          if (!worktreeId) {
+            api.ui.replyBrowserOp({ requestId: data.requestId, error: 'No active worktree' })
+            return
+          }
+          const layout = store.layoutByWorktree[worktreeId]
+          // Target the group showing the active browser tab, else the worktree's
+          // active group — whichever is in a split with the agent.
+          const activeBrowserTabId = store.activeBrowserTabIdByWorktree[worktreeId]
+          const browserGroupId =
+            (activeBrowserTabId
+              ? (store.unifiedTabsByWorktree[worktreeId] ?? []).find(
+                  (t) => t.contentType === 'browser' && t.entityId === activeBrowserTabId
+                )?.groupId
+              : undefined) ?? store.activeGroupIdByWorktree[worktreeId]
+          const path =
+            layout && browserGroupId ? findSplitPathForGroup(layout, browserGroupId) : null
+          if (!path) {
+            api.ui.replyBrowserOp({
+              requestId: data.requestId,
+              error: 'No split to resize (open a browser beside the agent first)'
+            })
+            return
+          }
+          store.setTabGroupSplitRatio(worktreeId, path.join('.'), data.ratio)
+          api.ui.replyBrowserOp({ requestId: data.requestId, result: { ok: true } })
+        } catch (err) {
+          api.ui.replyBrowserOp({
+            requestId: data.requestId,
+            error: err instanceof Error ? err.message : String(err)
           })
         }
       })

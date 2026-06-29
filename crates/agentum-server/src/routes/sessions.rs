@@ -99,6 +99,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/sessions/{id}/stop", post(stop))
         .route("/api/sessions/{id}/kill", post(kill))
         .route("/api/sessions/{id}/send", post(send))
+        .route("/api/sessions/{id}/submit", post(submit))
         .route("/api/sessions/{id}/pane", get(pane))
         .route("/api/sessions/{id}/stream", get(stream))
         .route("/api/sessions/{id}/worktree/prune", post(worktree_prune))
@@ -811,6 +812,64 @@ async fn send(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------- /submit ----------
+
+#[derive(Deserialize)]
+struct SubmitBody {
+    /// The prompt to deliver to the agent's REPL and submit.
+    text: String,
+}
+
+/// `POST /api/sessions/{id}/submit` — deliver a prompt to a RUNNING agent the robust
+/// way and submit it. Unlike `/send` (a single `send-keys`, which a modern REPL
+/// collapses into a swallowed "[Pasted text]" block for multi-line input), this reuses
+/// the harness's `inject_prompt`: wait for the REPL to be idle, type the body, then
+/// send a SEPARATE Enter after a settle delay so the turn actually executes.
+///
+/// This is what the browser-annotation "Send to an agent" uses so it reaches ANY
+/// session running on a worktree — including tmux/MCP-spawned agents the desktop never
+/// opened as terminal tabs. We validate the session up front (404 / 400) then deliver
+/// in the BACKGROUND: a busy agent can take tens of seconds to idle, and we must not
+/// block the HTTP response on that — the prompt is queued and lands when the REPL frees.
+async fn submit(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<SubmitBody>,
+) -> Result<StatusCode, ApiError> {
+    let id = parse_uuid(&id)?;
+    let session = state
+        .store
+        .get_session_by_id(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
+    let host = load_host_for_session(&state, &session).await?;
+    let target = session
+        .tmux_target
+        .as_deref()
+        .ok_or_else(|| ApiError::BadRequest("session is not running".into()))?;
+    let text = body.text.trim().to_string();
+    if text.is_empty() {
+        return Err(ApiError::BadRequest("`text` must not be empty".into()));
+    }
+    if !crate::host_runtime::has_session(&host, target)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+    {
+        return Err(ApiError::BadRequest(
+            "tmux session not active for this session".into(),
+        ));
+    }
+    // Robust two-step delivery in the background (see doc comment). Errors are logged,
+    // not surfaced — the up-front checks above already rejected a dead/missing session.
+    let state = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::harness::inject_prompt(&state, &session, &text).await {
+            tracing::warn!(target: "agentum::sessions::submit", error = %e, "submit delivery failed");
+        }
+    });
+    Ok(StatusCode::ACCEPTED)
 }
 
 // ---------- WS /stream ----------

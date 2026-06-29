@@ -102,6 +102,32 @@ pub fn port() -> u16 {
     cdp_port()
 }
 
+/// CDP port of the in-app browser the user is currently watching — the most recent
+/// screencast pane attach (set by `routes::cdp_screencast`). A contextless MCP
+/// `agentum_browser` op (no `worktreeId`/`cdpPort`, e.g. a top-level agent not
+/// spawned into a worktree) drives THIS port, so "the agent drives the browser you
+/// see" holds even without worktree context. `0` = no pane has attached yet.
+/// Process-global because there is one desktop app (one foreground browser); this
+/// keeps it out of `AppState` and every test constructor.
+fn foreground_port_cell() -> &'static std::sync::atomic::AtomicU16 {
+    static P: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+    &P
+}
+
+/// Record the browser the user is now watching (called on each screencast attach).
+/// Last attach wins — the foreground pane.
+pub fn set_foreground_cdp_port(port: u16) {
+    foreground_port_cell().store(port, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The foreground browser's CDP port, or `None` if no screencast pane has attached.
+pub fn foreground_cdp_port() -> Option<u16> {
+    match foreground_port_cell().load(std::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        p => Some(p),
+    }
+}
+
 /// Is the shared local CDP browser currently up (serving on its port)? Cheap
 /// probe; does NOT launch it. For a status surface that must not start a browser.
 pub async fn is_running() -> bool {

@@ -17,11 +17,11 @@ import {
   type AgentBrowserAnnotation,
   type AgentBrowserAnnotationIntent
 } from './agent-browser-annotation-output'
-import { useAppStore } from '@/store'
 import {
-  deriveRunningAgentSendTargets,
-  type RunningAgentSendTarget
-} from '@/lib/running-agent-targets'
+  deriveWorktreeAgentSessions,
+  type WorktreeAgentSession
+} from '@/lib/worktree-agent-sessions'
+import { listSessions, submitPromptToSession } from '@/runtime/agentum-server-client'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -62,12 +62,6 @@ type AgentBrowserPickerOverlayProps = {
 // Monotonic id source for annotation keys/markers (no Date.now/Math.random needed).
 let annotationSeq = 0
 
-/** Readable label for a running-agent send target (capitalized agent kind). */
-function agentTargetLabel(target: RunningAgentSendTarget): string {
-  const kind = target.entry.agentType == null ? '' : String(target.entry.agentType)
-  return kind.length > 0 ? kind.charAt(0).toUpperCase() + kind.slice(1) : 'Agent'
-}
-
 export default function AgentBrowserPickerOverlay({
   canvasRef,
   getMetadata,
@@ -80,15 +74,14 @@ export default function AgentBrowserPickerOverlay({
   const [draft, setDraft] = useState<DraftAnnotation | null>(null)
   const [annotations, setAnnotations] = useState<AgentBrowserAnnotation[]>([])
   const [sendOpen, setSendOpen] = useState(false)
-  // Send-to-agent uses the store's running-agent picker, which delivers via the
-  // working native PTY write (api.pty.write) — NOT the stubbed runtime RPC the old
-  // ReviewNotesSendMenuContent "active agent" path used (that always failed on the
-  // desktop). Targets are captured when the menu opens so the list is stable.
-  const openAgentSendMode = useAppStore((s) => s.openAgentSendPopoverTargetMode)
-  const sendPromptToTarget = useAppStore((s) => s.sendPromptToSidebarAgentTarget)
-  const closeAgentSendMode = useAppStore((s) => s.closeAgentSendPopoverTargetMode)
-  const [sendTargets, setSendTargets] = useState<RunningAgentSendTarget[]>([])
-  const sendModeId = `browser-annotations:${worktreeId}`
+  // "Send to an agent" targets come from the SERVER's session list — every pane the
+  // daemon owns (tmux/MCP/board-spawned agents), not just ones open as desktop terminal
+  // tabs. That renderer-tab-only source was why the menu showed "No running agents here"
+  // even with an agent running on the worktree. Captured when the menu opens so the
+  // list is stable while it's up; delivery goes through the server's robust two-step
+  // REPL injection (`submitPromptToSession`).
+  const [sendTargets, setSendTargets] = useState<WorktreeAgentSession[]>([])
+  const [sendError, setSendError] = useState<string | null>(null)
   const hoverTimerRef = useRef<number | null>(null)
   // One hit-test in flight at a time: hover fires often; don't pile up requests.
   const busyRef = useRef(false)
@@ -382,27 +375,26 @@ export default function AgentBrowserPickerOverlay({
       {annotations.length > 0 ? (
         <div className="absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-md border border-border bg-popover px-2 py-1 shadow-lg">
           <span className="text-[11px] text-muted-foreground">
-            {annotations.length} annotation{annotations.length === 1 ? '' : 's'} ready
+            {sendError ? (
+              <span className="text-red-400">{sendError}</span>
+            ) : (
+              `${annotations.length} annotation${annotations.length === 1 ? '' : 's'} ready`
+            )}
           </span>
           <DropdownMenu
+            modal={false}
             open={sendOpen}
             onOpenChange={(open) => {
               setSendOpen(open)
               if (open) {
-                // Capture the worktree's running agents + stage the prompt for the
-                // store's (working) PTY-paste send.
-                setSendTargets(deriveRunningAgentSendTargets(useAppStore.getState(), worktreeId))
-                openAgentSendMode({
-                  id: sendModeId,
-                  worktreeId,
-                  source: 'browser-annotations',
-                  prompt,
-                  label: 'Browser annotations',
-                  launchSource: 'notes_send',
-                  onPromptDelivered: () => setAnnotations([])
-                })
-              } else {
-                closeAgentSendMode(sendModeId)
+                setSendError(null)
+                // Pull the worktree's running agents from the SERVER (so tmux/MCP-spawned
+                // agents appear, not only open terminal tabs); captured for the menu's life.
+                void listSessions()
+                  .then((sessions) =>
+                    setSendTargets(deriveWorktreeAgentSessions(sessions, worktreeId))
+                  )
+                  .catch(() => setSendTargets([]))
               }
             }}
           >
@@ -415,30 +407,39 @@ export default function AgentBrowserPickerOverlay({
                 Send
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-[220px]">
+            <DropdownMenuContent
+              align="end"
+              className="min-w-[220px]"
+              onInteractOutside={preventAgentSendTargetOutsideDismiss}
+              onPointerDownOutside={preventAgentSendTargetOutsideDismiss}
+            >
               <DropdownMenuLabel>Send to an agent in this worktree</DropdownMenuLabel>
               {sendTargets.length === 0 ? (
                 <DropdownMenuItem disabled className="text-[11px] text-muted-foreground">
-                  No running agents here — open an agent in this worktree.
+                  No running agents here — start an agent in this worktree.
                 </DropdownMenuItem>
               ) : (
                 sendTargets.map((target) => (
                   <DropdownMenuItem
-                    key={target.paneKey}
-                    disabled={target.status !== 'eligible'}
-                    data-agent-send-target={target.status}
+                    key={target.sessionId}
+                    data-agent-send-target="eligible"
                     onSelect={() => {
-                      void sendPromptToTarget(target.paneKey)
+                      setSendOpen(false)
+                      // Deliver through the server's robust two-step REPL injection so a
+                      // multi-line prompt actually executes; clearing the banner is the
+                      // "sent" confirmation, an error keeps the annotations and shows why.
+                      void submitPromptToSession(target.sessionId, prompt)
+                        .then(() => setAnnotations([]))
+                        .catch((e: unknown) =>
+                          setSendError(
+                            e instanceof Error ? e.message : 'Could not send to the agent.'
+                          )
+                        )
                     }}
                     className="gap-2 text-[12px]"
                   >
                     <SquareTerminal className="size-3.5 shrink-0" />
-                    <span className="truncate">
-                      {agentTargetLabel(target)}
-                      {target.status !== 'eligible' && target.disabledReason
-                        ? ` — ${target.disabledReason}`
-                        : ''}
-                    </span>
+                    <span className="truncate">{target.label}</span>
                   </DropdownMenuItem>
                 ))
               )}
@@ -456,4 +457,23 @@ export default function AgentBrowserPickerOverlay({
       ) : null}
     </>
   )
+}
+
+/** Keep the send dropdown open when an outside interaction lands on a mirrored
+ *  agent-send-target row (the sidebar rows `revealWorktreeInSidebar` renders when the
+ *  menu opens). Even a `modal={false}` Radix menu dismisses on that interaction
+ *  without this guard, so no target could be selected. Mirrors the same guard in
+ *  NotesSendMenu / BrowserPane (the two send-menu surfaces that already work). */
+function preventAgentSendTargetOutsideDismiss(event: CustomEvent<{ originalEvent: Event }>) {
+  const target = event.detail.originalEvent.target
+  if (!(target instanceof Element)) {
+    return
+  }
+  if (
+    target.closest(
+      '[data-agent-send-target="eligible"], [data-agent-send-target="disabled"], [data-agent-send-target="sending"]'
+    )
+  ) {
+    event.preventDefault()
+  }
 }
